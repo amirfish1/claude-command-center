@@ -28,6 +28,7 @@ import uuid
 from ccc_server import core as _core
 from ccc_server.paths import _is_pid_alive
 from ccc_server import inject_receipts as _inject_receipts
+from ccc_server import liveness as _liveness
 from ccc_server import test_isolation_active as _test_isolation_active
 
 _pending_queued_meta: dict = {}
@@ -3423,9 +3424,13 @@ def _spawn_entry_active_tool_child(entry):
 _INJECT_TOOL_CHILD_MAX_HOLD_S = 600
 
 
-def _tool_child_blocks_inject(spawn, now=None, require_open_turn=False):
+def _tool_child_blocks_inject(spawn, now=None, require_open_turn=False, probe=None):
     """True if `spawn` has an active tool child young enough to justify holding
     queued input for it.
+
+    ``probe`` (a ``liveness.Probe`` for the same session) supplies the child
+    and turn state already read this attempt instead of forking a second
+    ``ps``; the gate is the one place a slightly earlier read is harmless.
 
     With ``require_open_turn`` a child only blocks while the main turn is
     still open. After the turn's ``result`` the child belongs to background
@@ -3438,11 +3443,19 @@ def _tool_child_blocks_inject(spawn, now=None, require_open_turn=False):
     process, where a false "not busy" would destroy real work. Here the only
     cost of being wrong is a message arriving at the next turn boundary.
     """
-    child = _core._spawn_entry_active_tool_child(spawn)
+    child = (
+        probe.tool_child() if probe is not None
+        else _core._spawn_entry_active_tool_child(spawn)
+    )
     if not child:
         return False
-    if require_open_turn and not _core._headless_turn_in_progress(spawn):
-        return False
+    if require_open_turn:
+        turn_open = (
+            probe.headless_turn() if probe is not None
+            else _core._headless_turn_in_progress(spawn)
+        )
+        if not turn_open:
+            return False
     started_at = child.get("started_at")
     if not started_at:
         return True
@@ -3623,13 +3636,18 @@ def _worker_owned_claude_input_state(session_id):
     return result
 
 
-def _terminal_queue_waits_for_headless_turn(session_id, status):
+def _terminal_queue_waits_for_headless_turn(session_id, status, probe=None):
     """Hold durable input while a CCC-owned Claude turn owes a result."""
     if isinstance(status, dict) and _core._is_real_tty(status.get("tty")):
         return False
-    spawn = _core._find_live_spawn_entry_for_session(session_id)
-    if spawn is not None and (spawn.get("engine") or "claude") == "claude":
-        return _core._headless_turn_in_progress(spawn)
+    if probe is None:
+        spawn = _core._find_live_spawn_entry_for_session(session_id)
+        if spawn is not None and (spawn.get("engine") or "claude") == "claude":
+            return _core._headless_turn_in_progress(spawn)
+    else:
+        spawn = probe.spawn()
+        if spawn is not None and (spawn.get("engine") or "claude") == "claude":
+            return probe.headless_turn()
     return bool(_worker_owned_claude_input_state(session_id).get("busy"))
 
 
@@ -5947,16 +5965,13 @@ def _start_resume_queue_watcher() -> None:
                     def _deliver_resume_queue_text():
                         if _core._is_codex_session(sid):
                             return _core.resume_session_codex(sid, text)
-                        if _core._is_gemini_session(sid):
-                            return _core.resume_session_gemini(sid, text)
-                        if _core._is_cursor_session(sid):
-                            return _core.resume_session_cursor(sid, text)
-                        if _core._is_antigravity_session(sid):
-                            return _core.resume_session_antigravity(sid, text)
-                        if _core._is_hermes_session(sid):
-                            return _core.resume_session_hermes(sid, text)
-                        if _core._is_opencode_session(sid):
-                            return _core.resume_session_opencode(sid, text)
+                        # Same ordered table as the inject router's tail
+                        # (ccc_server/delivery.py); the hand-written copy
+                        # that lived here had silently lost `aider`.
+                        from ccc_server import delivery as _delivery
+                        routed = _delivery.resume_via_transport(sid, text)
+                        if routed is not None:
+                            return routed
                         if _core._is_devin_cli_session(sid):
                             return _core._pump_devin_resume_queue(sid)
                         return {"ok": False}
@@ -6026,7 +6041,13 @@ def _start_resume_queue_watcher() -> None:
                     # hook resolves it (deny-reply, no tool_result ever lands)
                     # the request file is gone and the queue drains — a plain
                     # transcript scan here would deadlock forever.
-                    status = _core.session_live_status(sid, _core.find_session_cwd(sid))
+                    # One liveness snapshot for this sid this tick. Every
+                    # gate below and the router call at the end read from
+                    # it, so a status flicker between gate and delivery can
+                    # no longer re-park a message that was just cleared
+                    # (CCC-799), and the tool-child `ps` scan runs once.
+                    probe = _liveness.Probe(sid)
+                    status = probe.status
                     # `_archive_session_is_live` above admits fresh hook
                     # sidecars. That is intentionally broad for candidacy, but
                     # a just-exited `claude -p` leaves one fresh for 30 minutes:
@@ -6035,7 +6056,7 @@ def _start_resume_queue_watcher() -> None:
                     # the head, while retaining known worker/spawn channels
                     # whose registry status can momentarily lag.
                     if not status.get("live"):
-                        live_spawn = _core._find_live_spawn_entry_for_session(sid)
+                        live_spawn = probe.spawn()
                         wt_fifo = _core._wt_worker_fifo_entry_for_session(sid)
                         engine_worker = _worker_owned_claude_input_state(sid)
                         if (
@@ -6054,7 +6075,7 @@ def _start_resume_queue_watcher() -> None:
                     if status.get("live") and status.get("tty") and _core._session_status_is_busy(status):
                         _core._terminal_queue_hold_or_expire(sid, "tty_busy")
                         continue
-                    if _terminal_queue_waits_for_headless_turn(sid, status):
+                    if _terminal_queue_waits_for_headless_turn(sid, status, probe=probe):
                         _core._terminal_queue_hold_or_expire(sid, "headless_turn")
                         continue
                     if status.get("live") and status.get("kind") == "bg":
@@ -6068,9 +6089,9 @@ def _start_resume_queue_watcher() -> None:
                             _core._terminal_queue_hold_or_expire(sid, "bg_pty_recent_failure")
                             continue
                     if status.get("live") and not status.get("tty"):
-                        spawn = _core._find_live_spawn_entry_for_session(sid)
+                        spawn = probe.spawn()
                         if spawn is not None and _core._tool_child_blocks_inject(
-                            spawn, require_open_turn=True,
+                            spawn, require_open_turn=True, probe=probe,
                         ):
                             _core._terminal_queue_hold_or_expire(sid, "tool_child_blocks_inject")
                             continue
@@ -6138,6 +6159,7 @@ def _start_resume_queue_watcher() -> None:
                                 sid, text, _from_terminal_queue=True,
                                 skip_wt=(sid in _core._terminal_drain_skip_wt),
                                 source="terminal-queue-watcher",
+                                probe=probe,
                             ),
                         )
                     except Exception:

@@ -217,3 +217,50 @@ def outstanding(session_id, *, now=None, stale_after_s=None):
         settle(session_id, receipt.get("inject_id"), "expired")
         return None
     return dict(receipt, state="unproven", queue=None)
+
+
+# ── Resume transports (slice 4) ──────────────────────────────────────────────
+#
+# Engines whose delivery to a non-TTY session is "run `<engine> --resume` with
+# the text". The inject router's tail and the resume-queue watcher used to
+# carry two hand-written copies of this chain, and they drifted: the watcher
+# had no `aider` branch, so a queued aider follow-up failed every tick. One
+# ordered table, first match wins, router order preserved. Codex, Kimi/Grok
+# (ACP), Devin and Claude keep their own branches: they steer, cancel, or
+# queue instead of resuming.
+RESUME_TRANSPORTS = (
+    # (engine, session predicate on `_core`, resumer on `_core`)
+    ("gemini", "_is_gemini_session", "resume_session_gemini"),
+    ("cursor", "_is_cursor_session", "resume_session_cursor"),
+    ("antigravity", "_is_antigravity_session", "resume_session_antigravity"),
+    ("hermes", "_is_hermes_session", "resume_session_hermes"),
+    ("opencode", "_is_opencode_session", "resume_session_opencode"),
+    ("aider", "_is_aider_session", "resume_session_aider"),
+)
+
+# Resumers that accept the inject `mode` (send/steer/answer); the rest take
+# (session_id, text) only.
+_MODE_AWARE_RESUMERS = frozenset({"antigravity"})
+
+
+def resume_transport_for(session_id):
+    """``(engine, resumer)`` for the first transport that claims the session."""
+    for engine, predicate, resumer in RESUME_TRANSPORTS:
+        if getattr(_core, predicate)(session_id):
+            return engine, getattr(_core, resumer)
+    return None
+
+
+def resume_via_transport(session_id, text, *, mode="send"):
+    """Deliver ``text`` through the session's resume transport.
+
+    Returns the resumer's result dict, or None when no transport claims the
+    session so the caller continues down its own routing.
+    """
+    found = resume_transport_for(session_id)
+    if found is None:
+        return None
+    engine, resumer = found
+    if engine in _MODE_AWARE_RESUMERS:
+        return resumer(session_id, text, mode=mode)
+    return resumer(session_id, text)

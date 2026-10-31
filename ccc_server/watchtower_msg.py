@@ -32,6 +32,7 @@ import uuid
 
 from ccc_server import core as _core
 from ccc_server import test_isolation_active as _test_isolation_active
+from ccc_server import liveness as _liveness
 
 # ---------------------------------------------------------------------------
 # Stage 2 of the WatchTower messaging handover (docs/messaging-design.md in
@@ -1748,6 +1749,7 @@ def _inject_text_into_session_router(
     queued_steer_batch=False,
     attr=None,
     replace_queued_ids=None,
+    probe=None,
 ):
     """Route `text` to a session using the same fall-through as /api/inject-input:
     terminal-control AppleScript when there's a TTY, FIFO write to a live spawn,
@@ -1795,6 +1797,12 @@ def _inject_text_into_session_router(
     slash_command = bool(_core._SLASH_COMMAND_TRIGGER_RE.match(text))
     mode_value = str(mode or "").strip().lower()
     mode = mode_value if mode_value in ("answer", "steer", "send_queue") else "send"
+    # One liveness snapshot for this attempt. The terminal-queue watcher
+    # hands in the probe it already gated on, so the gate and this routing
+    # see the same status/spawn/tool-child instead of re-probing a beat
+    # later and parking the message on a flicker (CCC-799). Direct callers
+    # get a fresh, lazily-probed one.
+    probe = _liveness.ensure(probe, session_id)
     if compact_command and not is_codex:
         # Steered /compact: clear the wedge first, then compact. `mode` used to
         # be parsed BELOW this early return, so a steered /compact silently
@@ -1804,7 +1812,7 @@ def _inject_text_into_session_router(
         # only the interrupt is added, because "/compact" written to a FIFO as
         # user text is prompt text, not a command.
         if mode == "steer":
-            spawn = _core._find_live_spawn_entry_for_session(session_id)
+            spawn = probe.spawn()
             if spawn is not None and (spawn.get("engine") or "claude") == "claude":
                 _core._write_stream_json_interrupt(spawn)
         return _core.compact_session_context(
@@ -1818,18 +1826,18 @@ def _inject_text_into_session_router(
         # user text (Claude executes it, but CCC then has no idea the session
         # was reset and the transcript view goes stale).
         if mode == "steer":
-            spawn = _core._find_live_spawn_entry_for_session(session_id)
+            spawn = probe.spawn()
             if spawn is not None and (spawn.get("engine") or "claude") == "claude":
                 _core._write_stream_json_interrupt(spawn)
         return _core.clear_session_context(
             session_id,
             _from_terminal_queue=_from_terminal_queue,
         )
-    cwd = _core.find_session_cwd(session_id)
-    status = _core.session_live_status(session_id, cwd)
+    cwd = probe.cwd
+    status = probe.status
     tty = status.get("tty")
     term_app = status.get("terminal_app")
-    has_tty = _core._is_real_tty(tty)
+    has_tty = probe.has_tty
     is_cursor = _core._is_cursor_session(session_id)
     is_hermes = _core._is_hermes_session(session_id)
     is_kimi = _core._is_kimi_session(session_id)
@@ -1921,7 +1929,7 @@ def _inject_text_into_session_router(
                     session_id, text, status,
                     reason_hint=_core._TERMINAL_QUEUE_ORDER_REASON,
                 )
-            submit_key = "tab" if _core._session_status_is_busy(status) else "return"
+            submit_key = "tab" if probe.busy else "return"
             return _core.inject_input_via_keystroke(
                 tty,
                 term_app or "Terminal",
@@ -2046,7 +2054,7 @@ def _inject_text_into_session_router(
         # to read the next stdin message (both verified against claude 2.1.216).
         # Order matters — write the interrupt first, then the text, so Claude
         # consumes the abort before it reads the follow-up as a fresh turn.
-        spawn = _core._find_live_spawn_entry_for_session(session_id)
+        spawn = probe.spawn()
         if spawn is not None and (spawn.get("engine") or "claude") == "claude":
             if _core._write_stream_json_interrupt(spawn):
                 delivered = _core._write_stream_json_user_message(spawn, text)
@@ -2076,7 +2084,7 @@ def _inject_text_into_session_router(
         if not _from_terminal_queue and not answering_tty_question:
             busy_or_pending = (
                 _core._terminal_input_queue_has_pending(session_id)
-                or _core._session_status_is_busy(status)
+                or probe.busy
             )
             # Codex/Cursor keep their own busy-turn delivery (resume/steer) —
             # their TUIs aren't driven by raw keystrokes the way Claude's is.
@@ -2099,7 +2107,7 @@ def _inject_text_into_session_router(
             # the TUI's own mid-turn keystroke acceptance and hold for the
             # next turn boundary even though nothing is queued yet.
             _already_pending = _core._terminal_input_queue_has_pending(session_id)
-            if _already_pending or (force_queue and _core._session_status_is_busy(status)):
+            if _already_pending or (force_queue and probe.busy):
                 return _core._queue_terminal_input(
                     session_id, text, status,
                     reason_hint=_core._TERMINAL_QUEUE_ORDER_REASON if _already_pending else None,
@@ -2269,24 +2277,19 @@ def _inject_text_into_session_router(
             # the transport's busy failure.
             return _core._queue_terminal_input(session_id, text, {"status": "running"})
         return result
-    if _core._is_gemini_session(session_id):
-        return _core.resume_session_gemini(session_id, text)
-    if is_cursor:
-        return _core.resume_session_cursor(session_id, text)
-    if _core._is_antigravity_session(session_id):
-        return _core.resume_session_antigravity(session_id, text, mode=mode)
-    if is_hermes:
-        return _core.resume_session_hermes(session_id, text)
-    if is_opencode:
-        return _core.resume_session_opencode(session_id, text)
-    if _core._is_aider_session(session_id):
-        return _core.resume_session_aider(session_id, text)
+    # Resume-style engines share one ordered transport table with the
+    # resume-queue watcher (ccc_server/delivery.py), so a new engine is one
+    # row and the two paths cannot drift apart again.
+    from ccc_server import delivery as _delivery
+    routed = _delivery.resume_via_transport(session_id, text, mode=mode)
+    if routed is not None:
+        return routed
     if _core._is_devin_cli_session(session_id):
         # A Devin ACP process launched outside CCC owns its stdio connection.
         # `devin --resume` cannot attach to it; retrying only duplicates the
         # pending message when the CLI rejects the parallel session start.
         raw_id = _core._devin_cli_raw_id(session_id)
-        live_spawn = _core._find_live_spawn_entry_for_session(session_id)
+        live_spawn = probe.spawn()
         # A session lock held by a live pid that is neither a CCC `devin -p`
         # spawn nor our own ACP connection means another ACP host (Devin
         # Desktop / Next, a sibling CCC) owns the writer slot.
@@ -2368,7 +2371,7 @@ def _inject_text_into_session_router(
                     pass
         # No terminal found — fall through to headless delivery.
     if not status.get("live") or not has_tty:
-        spawn = _core._find_live_spawn_entry_for_session(session_id)
+        spawn = probe.spawn()
         if spawn is not None:
             # Soft-block: if we're about to send to the headless but we detect
             # a live terminal on this session that we couldn't route to (TTY
@@ -2397,7 +2400,7 @@ def _inject_text_into_session_router(
                         ),
                         "session_id": session_id,
                     }
-            active_child = _core._spawn_entry_active_tool_child(spawn)
+            active_child = probe.tool_child()
             if not _from_terminal_queue:
                 # mode="send" (default, e.g. the composer's Send button):
                 # only queue when input is ALREADY queued, to preserve
@@ -2415,8 +2418,8 @@ def _inject_text_into_session_router(
                 # for legacy spawn records that predate that state.
                 if force_queue:
                     is_busy = (
-                        _core._session_status_is_busy(status)
-                        or _core._headless_turn_in_progress(spawn)
+                        probe.busy
+                        or probe.headless_turn()
                         or _core._terminal_input_queue_has_pending(session_id)
                     )
                 else:
@@ -2438,6 +2441,8 @@ def _inject_text_into_session_router(
             # the authoritative mid-turn signal across thinking, text
             # streaming, and between-tool gaps; a tool child is additional
             # defense for legacy entries. Never retire while either is active.
+            # Read FRESH here, not from `probe`: this branch kills a process,
+            # and the probe's snapshot may be a watcher tick old.
             if (
                 spawn.get("engine") == "claude"
                 and not _core._headless_turn_in_progress(spawn)

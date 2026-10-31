@@ -1,0 +1,1 @@
+- Queued messages recover faster: the terminal-queue watcher and the inject router now share one liveness snapshot per delivery attempt, so a status flicker between the two reads no longer re-parks a cleared message for a minute, and the tool-child process scan runs once per tick instead of twice.

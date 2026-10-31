@@ -100,7 +100,7 @@ def test_dead_target_drop_is_loud_and_clears_the_entire_terminal_queue(monkeypat
 def test_watcher_drops_a_fresh_but_dead_target_before_retrying_delivery():
     """A fresh sidecar must not let a one-shot Claude process enter retries."""
     source = inspect.getsource(server._start_resume_queue_watcher)
-    status_at = source.find("status = _core.session_live_status")
+    status_at = source.find("status = probe.status")
     dead_drop_at = source.find(
         '_core._drop_dead_terminal_queue(sid, code="dead_target")'
     )
