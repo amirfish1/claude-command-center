@@ -10920,6 +10920,9 @@
       cwd: cwd || null,
       cwdExists: !!cwdExists,
       source: source,
+      // Read at the queued-card Steer decision (queuedSteerSource): source
+      // alone says 'interactive' for a CCC-spawned Codex session.
+      engine: (row && row.engine) || null,
       spawnPid: spawnPid || null,
       repoPath: repoPath || null,
       can_headless_resume: source === 'antigravity' ? !!(row && row.can_headless_resume === true) : true,
@@ -24150,6 +24153,7 @@
       id: CONV_POPOUT_TARGET,
       session_id: sessionId || undefined,
       source,
+      engine: popoutParam('engine') || undefined,
       display_name: popoutParam('title') || '',
       status_rail_title: popoutParam('status_rail_title') || '',
       first_message: popoutParam('first_message') || '',
@@ -24227,7 +24231,7 @@
   function switchPopoutConversation(conv) {
     if (conv === CONV_POPOUT_TARGET && currentConversation === conv) return;
     CONV_POPOUT_TARGET = conv;
-    ['conv', 'conversation', 'session_id', 'source', 'title', 'cwd', 'repo_path'].forEach(k => _bootUrlParams.delete(k));
+    ['conv', 'conversation', 'session_id', 'source', 'engine', 'title', 'cwd', 'repo_path'].forEach(k => _bootUrlParams.delete(k));
     _bootUrlParams.set('conv', conv);
     try {
       const u = new URL(window.location.href);
@@ -46724,6 +46728,10 @@
     if (row) {
       const source = row.source || '';
       addParam('source', source, 40);
+      // A CCC-spawned Codex session is a registry row with source
+      // 'interactive' and engine 'codex'; the popout decides queued-card
+      // Steer from the engine, so it must travel with the source.
+      addParam('engine', row.engine || '', 40);
       addParam('session_id', row.session_id || (source === 'backlog' ? '' : convId), 120);
       addParam('title', paneTitleForRow(row), 180);
       addParam('status_rail_title', row.status_rail_title || '', 500);

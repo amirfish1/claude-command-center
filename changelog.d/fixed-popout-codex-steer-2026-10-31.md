@@ -1,0 +1,1 @@
+- Queued messages in a popped-out conversation show the Steer button again for CCC-spawned Codex sessions: the popout URL now carries the row's engine, not just its source.
