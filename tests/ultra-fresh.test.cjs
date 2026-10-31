@@ -11,7 +11,7 @@ const rowActions = app.slice(app.indexOf('  // Row actions are model-authored re
 test('a submitted turn survives delivery acknowledgment over an old finished snapshot', () => {
   let sending = true;
   const entry = {at: 1, userAt: 0, text: 'Old completed work.'};
-  const context = { Date, _ultraFresh: {entries: new Map([['reopened', entry]])},
+  const context = { Date, _SENDING_TIMEOUT_MS: 300000, _ultraFresh: {entries: new Map([['reopened', entry]])},
     sessionIsOptimisticallySending: () => sending, preSendPreviewFor: () => 'Old completed work.' };
   vm.createContext(context);
   for (const name of ['_ultraFreshTime', '_ultraFreshSendBarrier', '_ultraFreshCurrent']) {
@@ -23,6 +23,10 @@ test('a submitted turn survives delivery acknowledgment over an old finished sna
   sending = false; // The transcript acknowledges the send before the list updates.
   assert.equal(context._ultraFreshCurrent(old).state, 'working');
   assert.equal(context._ultraFreshCurrent(old).last_assistant_text, '');
+  const sentAt = entry.sendAt;
+  entry.at = entry.userAt = entry.sendAt = Date.now() - 300001;
+  assert.equal(context._ultraFreshCurrent(old).state, 'ended', 'unacknowledged local activity is bounded');
+  entry.at = entry.userAt = entry.sendAt = sentAt;
   entry.at = entry.sendAt + 10;
   entry.text = 'Choose the next step.';
   entry.sessionState = {next_step_user:'Choose the next step.'};
@@ -122,6 +126,7 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
         source:'claude', state:'working', is_live:true, last_assistant_text:'Original message '+i}));
       let archiveData = [];
       let sending = false, preSend = null;
+      const _SENDING_TIMEOUT_MS = 300000;
       const sessionIsOptimisticallySending = () => sending;
       const preSendPreviewFor = () => preSend;
       const _applyLiveOverlayToRow = c => c;

@@ -3588,7 +3588,8 @@
     const entry = _ultraFresh.entries.get(String(c.session_id || c.id));
     if (!entry) return c;
     _ultraFreshSendBarrier(entry, c.session_id || c.id);
-    if (entry.userAt > entry.at || (entry.sendAt && entry.userAt === entry.at && !entry.text)) return Object.assign({}, c,
+    if (entry.userAt > entry.at || (entry.sendAt && entry.userAt === entry.at && !entry.text
+        && Date.now() - entry.sendAt < _SENDING_TIMEOUT_MS)) return Object.assign({}, c,
       { last_event_type: 'user', state: 'working', needs_approval: false, question_waiting: false,
         session_state: null, last_assistant_text: '', last_assistant_preview: '' });
     if (!entry.text) return c;
