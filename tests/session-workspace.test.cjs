@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { loadRowOutcomeView } = require('./row_outcome_view_harness.cjs');
 const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
-function load() {
+function load(stubs = {}) {
   const start = source.indexOf('  function ticketSessionSection(');
   const end = source.indexOf('  // The finished row\'s one action:', start);
   const helpers = ['_archiveWindowTsSec', '_archiveWindowRowTs'].map(name => {
@@ -13,7 +13,9 @@ function load() {
   }).join('\n');
   return vm.runInNewContext(helpers + '\n' + source.slice(start, end) + '\n({ ticketSessionSection, stableTicketSessionGroups });', {
     _applyLiveOverlayToRow: c => c,
+    _ultraFreshCurrent: c => c,
     rowOutcomeView: loadRowOutcomeView(),
+    ...stubs,
   });
 }
 const row = (id, extra = {}) => ({ session_id: id, idea_ticket: { ref: 'TASK-' + id }, ...extra });
@@ -74,4 +76,16 @@ test('ticket identity survives a new representative session and categories stay 
   groups([row('b')], 'features');
   assert.equal(groups([question], 'features', 'b').active.length, 1);
   assert.equal(groups([question], 'bugs', 'b')['needs-you'].length, 1);
+});
+test('selected session leaves Needs you as soon as work resumes', () => {
+  const { stableTicketSessionGroups: groups } = load();
+  const ask = { session_state: { next_step_user: 'Choose a region.' } };
+  assert.equal(groups([row('a', ask)], 'features', 'a')['needs-you'].length, 1);
+  assert.equal(groups([row('a', { ...ask, state: 'working' })], 'features', 'a').active.length, 1);
+});
+test('section membership uses the same fresh state as the rendered status', () => {
+  const { ticketSessionSection: section } = load({
+    _ultraFreshCurrent: c => ({ ...c, state: 'working', last_event_type: 'user', session_state: null }),
+  });
+  assert.equal(section(row('a', { session_state: { next_step_user: 'Choose a region.' } })), 'active');
 });

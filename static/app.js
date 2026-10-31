@@ -3664,6 +3664,10 @@
         row.classList.remove('is-ready-to-close');
       }
       if (!offerClose) row.querySelectorAll('.conv-ready-archive:not(.is-restore)').forEach(el => el.remove());
+      // The status stream can resume work before the list snapshot catches up.
+      // Reconcile section membership through the normal renderer as well.
+      if (info.kind === 'working'
+          && row.closest('[data-session-section="needs-you"]')) _scheduleSidebarRender();
     }
     // Live activity invalidates any pending one-tap reply immediately.
     syncRowQuickActions(sid);
@@ -3885,6 +3889,7 @@
   function ticketSessionSection(c) {
     if (c.trashed) return 'archived';
     if (c.archived || c.idea_ticket?.closed) return 'finished';
+    c = _ultraFreshCurrent(c);
     const live = _applyLiveOverlayToRow(c);
     if (live.needs_approval || live.question_waiting) return 'needs-you';
     const outcome = rowOutcomeView(c);
@@ -3906,11 +3911,10 @@
       const key = keyFor(c);
       let section = ticketSessionSection(c);
       const before = previous.get(key);
-      // Keep the open conversation anchored while reading. Explicit closure
-      // still takes effect immediately; this only holds attention transitions.
+      // Keep new questions anchored while reading. Resumed work must leave
+      // Needs you immediately, even when this conversation is selected.
       if ((c.session_id || c.id) === selectedId && before
-          && ['active', 'needs-you'].includes(section)
-          && ['active', 'needs-you'].includes(before.section)) section = before.section;
+          && section === 'needs-you' && before.section === 'active') section = before.section;
       next.set(key, { section });
       groups[section].push(c);
     });
