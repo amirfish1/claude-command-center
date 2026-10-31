@@ -209,3 +209,14 @@ test('row speaker shows only for rows with an answer, and only on hover with a m
     await browser.close();
   }
 });
+
+test('decision chips share their line with the row speaker (CCC-281)', () => {
+  const css = fs.readFileSync('static/app.css', 'utf8');
+  const rule = css.match(/\.conv-quick-action-slot\.is-decision \{([^}]*)\}/);
+  assert.ok(rule, 'decision slot rule exists');
+  assert.doesNotMatch(rule[1], /flex:\s*1 1 100%/, 'a full-width chip slot pushes the speaker to its own line');
+  assert.match(rule[1], /min-width:\s*0/);
+  const app = fs.readFileSync('static/app.js', 'utf8');
+  const slotInserts = app.match(/host\.insertBefore\(slot, host\.querySelector\(':scope > \[data-role="read-row-answer"\]'\)\)/g) || [];
+  assert.equal(slotInserts.length, 2, 'chip slots go before an existing speaker');
+});

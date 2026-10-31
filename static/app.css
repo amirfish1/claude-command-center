@@ -33121,7 +33121,9 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 /* A decision gets one chip per option on its own line under the choice (CCC-276). */
 #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action-slot.is-decision) { flex-wrap: wrap; }
 #convList#convList .conv-item .conv-outcome:has(.conv-quick-action-slot.is-decision) .conv-outcome-step { flex-basis: 100%; }
-.conv-quick-action-slot.is-decision { flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
+/* The chips share their line with the row speaker instead of filling it
+   and pushing the speaker onto a line of its own (CCC-281). */
+.conv-quick-action-slot.is-decision { flex: 1 1 0; min-width: 0; flex-wrap: wrap; gap: 6px; }
 .conv-quick-action-slot.is-decision .conv-quick-action { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-row-read {
   display: inline-flex; align-items: center; justify-content: center;

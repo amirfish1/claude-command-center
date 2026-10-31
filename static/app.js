@@ -17611,7 +17611,7 @@
           if (!slot) {
             slot = document.createElement('span');
             slot.className = 'conv-quick-action-slot';
-            host.appendChild(slot);
+            host.insertBefore(slot, host.querySelector(':scope > [data-role="read-row-answer"]'));
           }
           delete slot.dataset.quickActionKey;
           if (slot.dataset.feedbackState === feedback.state) return;
@@ -17636,7 +17636,8 @@
         if (!slot) {
           slot = document.createElement('span');
           slot.className = 'conv-quick-action-slot';
-          host.appendChild(slot);
+          // Chips first, then the row speaker on the same line (CCC-281).
+          host.insertBefore(slot, host.querySelector(':scope > [data-role="read-row-answer"]'));
         }
         paintRowQuickAction(slot, source);
       });
