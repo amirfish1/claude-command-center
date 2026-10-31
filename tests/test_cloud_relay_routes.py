@@ -2,7 +2,8 @@
 
 The pairing/enable/unpair endpoints and the status read are localhost-only:
 a tailnet peer, a reverse proxy on loopback (tailscale serve), or a foreign
-Origin must never pair this machine or read its pairing state.
+Origin must never pair this machine or read its full settings. The read-only
+indicator exposes only masked identity and connection state to dashboard peers.
 """
 import email
 import io
@@ -28,6 +29,12 @@ class FakeManager:
 
     def get_config(self):
         return {"enabled": False}
+
+    def indicator(self):
+        self.calls.append("indicator")
+        return {"ok": True, "paired": True, "enabled": True,
+                "env_disabled": False, "state": "online",
+                "account_email_masked": "a***@example.com", "device_id": "test-device"}
 
     def start_pairing(self, code, url):
         self.calls.append(("pair", code, url))
@@ -120,3 +127,45 @@ def test_status_read_is_localhost_only(fake):
     status, out = _call(server, "GET", "/api/cloud-relay/status")
     assert status == 200 and out["paired"] is False
     assert mgr.calls == ["status"]
+
+
+@pytest.mark.parametrize("ip,headers", [
+    ("100.64.0.7", {}),
+    ("127.0.0.1", {"X-Forwarded-For": "100.64.0.7"}),
+])
+def test_remote_indicator_does_not_allow_settings_or_signout(fake, ip, headers):
+    server, mgr = fake
+    status, out = _call(server, "GET", "/api/cloud-relay/indicator", ip=ip, headers=headers)
+    assert status == 200 and out["state"] == "online"
+    assert set(out) == {"ok", "paired", "enabled", "env_disabled", "state",
+                        "account_email_masked", "device_id"}
+    status, _ = _call(server, "GET", "/api/cloud-relay/status", ip=ip, headers=headers)
+    assert status == 403
+    status, _ = _call(server, "POST", "/api/cloud-relay/unpair", ip=ip, headers=headers)
+    assert status == 403
+    assert mgr.calls == ["indicator"]
+
+
+def test_indicator_rejects_foreign_origin(fake):
+    server, mgr = fake
+    status, _ = _call(server, "GET", "/api/cloud-relay/indicator",
+                      headers={"Origin": "https://foreign.example"})
+    assert status == 403 and mgr.calls == []
+
+
+def test_indicator_allowlist_excludes_sensitive_config(monkeypatch):
+    from types import SimpleNamespace
+    from ccc_server import cloud_relay
+    mgr = cloud_relay.CloudRelayManager.__new__(cloud_relay.CloudRelayManager)
+    mgr.paths = object()
+    mgr.config = {"enabled": True, "account_email_masked": "a***@example.com",
+                  "device_id": "test-device", "relay_url": "https://private.example",
+                  "device_secret": "test-secret"}
+    mgr.loop = SimpleNamespace(state="online", last_error="private diagnostic")
+    monkeypatch.setattr(cloud_relay, "load_credentials", lambda paths: {"device_secret": "test-secret"})
+    monkeypatch.setattr(cloud_relay, "cloud_disabled_env", lambda: False)
+    out = mgr.indicator()
+    assert set(out) == {"ok", "paired", "enabled", "env_disabled", "state",
+                        "account_email_masked", "device_id"}
+    assert out["paired"] and out["state"] == "online"
+    assert "private" not in json.dumps(out) and "test-secret" not in json.dumps(out)

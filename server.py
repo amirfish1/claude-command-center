@@ -29227,6 +29227,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 "released_count": released_count})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/cloud-relay/indicator":
+            # Read-only masked identity for the dashboard, including trusted
+            # remote views. Full settings and all controls stay local-only.
+            if not self._check_same_origin():
+                return
+            try:
+                self.send_json(cloud_relay_manager().indicator())
+            except Exception:
+                self.send_json({"ok": False, "error": "status_unavailable"}, 503)
         elif path in ("/api/cloud-relay/status", "/api/cloud-relay/config"):
             # CCC Cloud settings panel. Localhost-only like the POSTs: it
             # reveals pairing state. No secrets (device_id is opaque, the

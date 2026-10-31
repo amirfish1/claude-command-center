@@ -184,6 +184,9 @@
       const s = await r.json();
       if (!r.ok) { el.status.textContent = s.error || 'CCC Cloud status unavailable.'; return; }
       render(s || {});
+      // The rail's account avatar repaints on this event instead of waiting
+      // for its poll, so pair/confirm/unpair/config changes show at once.
+      try { window.dispatchEvent(new CustomEvent('ccc-cloud-relay-change')); } catch (_) {}
     } catch (_) {
       el.status.textContent = 'CCC Cloud status unavailable.';
     }

@@ -2235,6 +2235,23 @@ class CloudRelayManager:
 
     # -- status / config -----------------------------------------------------
 
+    def indicator(self) -> dict:
+        """Trimmed pairing/loop read for the applications rail's account
+        avatar, including trusted remote dashboard views. Return only the
+        masked identity and connection state: no credentials, relay URLs,
+        errors or timestamps. Full settings and controls remain local-only.
+        """
+        creds = load_credentials(self.paths)
+        return {
+            "ok": True,
+            "paired": bool(creds),
+            "enabled": bool(self.config.get("enabled")),
+            "env_disabled": cloud_disabled_env(),
+            "state": self.loop.state if self.loop else "off",
+            "account_email_masked": self.config.get("account_email_masked") or "",
+            "device_id": self.config.get("device_id") or "",
+        }
+
     def status(self) -> dict:
         creds = load_credentials(self.paths)
         loop_state = {

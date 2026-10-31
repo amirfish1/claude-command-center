@@ -71,7 +71,7 @@
     "  width: var(--ccc-rail-w, " + RAIL_DEFAULT + "px);",
     "  background: #0f1115; border-right: 1px solid #20252c;",
     "  display: flex; flex-direction: column; align-items: center;",
-    "  padding: 12px 0 64px; gap: 6px; z-index: 1000; overflow-y: auto;",
+    "  padding: 12px 0 76px; gap: 6px; z-index: 1000; overflow-y: auto;",
     "  overflow-x: hidden; scrollbar-width: none;",
     "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;",
     "}",
@@ -130,14 +130,16 @@
     ".ccc-rail-resizer:hover::before,",
     ".ccc-rail-resizer.dragging::before { background: #5ac8fa; }",
     "body.ccc-rail-dragging { cursor: col-resize; user-select: none; }",
-    /* Report-a-problem flag: pinned to the rail's foot on every page. */
+    /* Report-a-problem flag rides in the rail flow between the app list and
+     * the account avatar: the auto margins centre it in whatever free space
+     * is left, so it lands mid-rail on short pages and simply scrolls with
+     * the icons when the app list outgrows the window — never overlapping. */
     ".ccc-report-flag {",
-    "  position: fixed; left: 0; bottom: 8px; z-index: 1000;",
-    "  width: var(--ccc-rail-w, " + RAIL_DEFAULT + "px); display: flex;",
-    "  justify-content: center; pointer-events: none;",
+    "  margin-top: auto; margin-bottom: auto; flex-shrink: 0;",
+    "  width: 100%; display: flex; justify-content: center; padding: 4px 0;",
     "}",
     ".ccc-report-flag button {",
-    "  pointer-events: auto; position: relative; display: flex;",
+    "  position: relative; display: flex;",
     "  flex-direction: column; align-items: center; gap: 2px;",
     "  width: calc(var(--ccc-rail-w, " + RAIL_DEFAULT + "px) - 12px);",
     "  padding: 6px 3px; border-radius: 7px; cursor: pointer;",
@@ -151,11 +153,76 @@
     "  content: ''; position: absolute; top: 4px; right: 6px; width: 7px;",
     "  height: 7px; border-radius: 50%; background: #f85149;",
     "}",
+    /* Account avatar: fixed at the viewport's bottom-left over the rail, so
+     * a long app list can scroll underneath without pushing it off-screen.
+     * The dot reports the CCC Cloud connection state — green only when
+     * paired, enabled and online. */
+    ".ccc-account-wrap {",
+    "  position: fixed; left: 0; bottom: 8px; z-index: 1000;",
+    "  width: var(--ccc-rail-w, " + RAIL_DEFAULT + "px);",
+    "  display: flex; justify-content: center;",
+    "}",
+    ".ccc-account {",
+    "  position: relative; flex-shrink: 0;",
+    "  display: flex; flex-direction: column; align-items: center; gap: 3px;",
+    "  width: calc(var(--ccc-rail-w, " + RAIL_DEFAULT + "px) - 12px);",
+    "  padding: 6px 3px; border: 0; border-radius: 7px; background: none;",
+    "  color: #888; cursor: pointer; text-align: center;",
+    "  font: 9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;",
+    "  text-transform: uppercase; letter-spacing: 0.2px; line-height: 1.2;",
+    "}",
+    ".ccc-account:hover { background: #1a1d23; color: #ccc; }",
+    ".ccc-account[aria-expanded=\"true\"] { background: #23272e; color: #ccc; }",
+    ".ccc-account-ava {",
+    "  position: relative; width: 34px; height: 34px; border-radius: 50%;",
+    "  background: #23272e; border: 1px solid #333a44; color: #cfd4db;",
+    "  display: grid; place-items: center; font-size: 15px; font-weight: 600;",
+    "  text-transform: none; letter-spacing: 0; line-height: 1;",
+    "}",
+    ".ccc-account-ava svg { display: block; width: 18px; height: 18px; }",
+    ".ccc-account-dot {",
+    "  position: absolute; right: -2px; bottom: -2px; width: 11px; height: 11px;",
+    "  border-radius: 50%; border: 2px solid #0f1115; background: #5f6772;",
+    "}",
+    ".ccc-account-dot.on { background: #3fb950; }",
+    ".ccc-account-dot.warn { background: #f0b43c; }",
+    /* Account popover: anchored just right of the rail's bottom corner. */
+    ".ccc-account-pop {",
+    "  position: fixed; left: calc(var(--ccc-rail-w, " + RAIL_DEFAULT + "px) + 10px);",
+    "  bottom: 10px; z-index: 4500; width: 248px; padding: 13px;",
+    "  background: #14171d; border: 1px solid #2a303a; border-radius: 11px;",
+    "  box-shadow: 0 14px 44px rgba(0,0,0,.5); color: #cfd4db;",
+    "  font: 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;",
+    "}",
+    ".ccc-account-pop .acc-head { display: flex; align-items: center; gap: 10px; }",
+    ".ccc-account-pop .acc-ava { width: 32px; height: 32px; font-size: 14px; flex-shrink: 0; }",
+    ".ccc-account-pop .acc-ava svg { width: 17px; height: 17px; }",
+    ".ccc-account-pop .acc-who { font-weight: 600; color: #e6e9ee; word-break: break-all; }",
+    ".ccc-account-pop .acc-state { color: #8a929e; font-size: 11px; margin-top: 2px; }",
+    ".ccc-account-pop .acc-machine {",
+    "  color: #69707a; font-size: 10.5px; margin-top: 9px; word-break: break-all;",
+    "}",
+    ".ccc-account-pop .acc-err { color: #f0883e; font-size: 11px; margin-top: 8px; }",
+    ".ccc-account-pop .acc-actions {",
+    "  display: flex; flex-direction: column; gap: 6px; margin-top: 11px;",
+    "}",
+    ".ccc-account-pop .acc-btn {",
+    "  width: 100%; padding: 7px 10px; border-radius: 7px; cursor: pointer;",
+    "  border: 1px solid #333a44; background: #1c2027; color: #cfd4db;",
+    "  font: 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;",
+    "  text-align: left;",
+    "}",
+    ".ccc-account-pop .acc-btn:hover { background: #23272e; color: #e6e9ee; }",
+    ".ccc-account-pop .acc-btn.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }",
+    ".ccc-account-pop .acc-btn.primary:hover { background: #388bfd; }",
+    ".ccc-account-pop .acc-btn.danger { color: #f0a29b; }",
+    ".ccc-account-pop .acc-btn.danger:hover { border-color: #8c3f39; }",
+    ".ccc-account-pop .acc-btn:disabled { opacity: .55; cursor: default; }",
     /* Morning's own wrappers hug the old nav; keep them off the rail. */
     ".mv-wrap, .mk-wrap { padding-left: 20px !important; }",
     /* Phones and the PWA have no room for the gutter. */
     "@media (max-width: 700px) {",
-    "  .ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag { display: none; }",
+    "  .ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag, .ccc-account-wrap, .ccc-account-pop { display: none; }",
     "  body { padding-left: 0; }",
     "}"
   ].join("\n");
@@ -274,6 +341,353 @@
     window.location.href = "/?report_problem=" + encodeURIComponent(from || "page");
   });
 
+  /* Account affordance: an avatar at the foot of the rail reporting this
+   * machine's CCC Cloud state, with a click popover for identity and
+   * sign in/out. All state comes from /api/cloud-relay/status, which is
+   * localhost-only on the server — anything the endpoint cannot confirm is
+   * shown as grey/amber and described honestly, never faked green. */
+  var ACCOUNT_CACHE_KEY = "ccc-rail-account-v1";
+  var ACCOUNT_POLL_MS = 30000;
+  var NETWORK_HANDOFF_PARAM = "open_network";
+  // Static icon for the signed-out avatar; identity text never goes through
+  // innerHTML — the paired letter is written with textContent like the rest.
+  var PERSON_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path fill="currentColor" d="M12 12a4.2 4.2 0 1 0-4.2-4.2A4.2 4.2 0 0 0 ' +
+    '12 12Zm0 2.1c-3.2 0-6.3 1.6-6.3 4.2v1.2h12.6v-1.2c0-2.6-3.1-4.2-6.3-4.2Z"/>' +
+    "</svg>";
+
+  var accountBtn = document.createElement("button");
+  accountBtn.className = "ccc-account";
+  accountBtn.type = "button";
+  accountBtn.title = "Account";
+  accountBtn.setAttribute("aria-haspopup", "dialog");
+  accountBtn.setAttribute("aria-expanded", "false");
+  accountBtn.setAttribute("aria-controls", "ccc-account-pop");
+  var accAva = document.createElement("span");
+  accAva.className = "ccc-account-ava";
+  accAva.setAttribute("aria-hidden", "true");
+  var accGlyph = document.createElement("span");
+  var accDot = document.createElement("span");
+  accDot.className = "ccc-account-dot off";
+  accAva.appendChild(accGlyph);
+  accAva.appendChild(accDot);
+  accountBtn.appendChild(accAva);
+  var accLabel = document.createElement("span");
+  accLabel.textContent = "Account";
+  accountBtn.appendChild(accLabel);
+  // Fixed wrapper keeps the avatar at the viewport bottom no matter how far
+  // down the app list the nav has scrolled.
+  var accWrap = document.createElement("div");
+  accWrap.className = "ccc-account-wrap";
+  accWrap.appendChild(accountBtn);
+
+  var pop = document.createElement("div");
+  pop.className = "ccc-account-pop";
+  pop.id = "ccc-account-pop";
+  pop.setAttribute("role", "dialog");
+  pop.setAttribute("aria-label", "Account");
+  pop.style.display = "none";
+  var popHead = document.createElement("div");
+  popHead.className = "acc-head";
+  var popAva = document.createElement("span");
+  popAva.className = "ccc-account-ava acc-ava";
+  popAva.setAttribute("aria-hidden", "true");
+  var popGlyph = document.createElement("span");
+  var popDot = document.createElement("span");
+  popDot.className = "ccc-account-dot off";
+  popAva.appendChild(popGlyph);
+  popAva.appendChild(popDot);
+  var popHeadText = document.createElement("div");
+  var popWho = document.createElement("div");
+  popWho.className = "acc-who";
+  var popSub = document.createElement("div");
+  popSub.className = "acc-state";
+  popHeadText.appendChild(popWho);
+  popHeadText.appendChild(popSub);
+  popHead.appendChild(popAva);
+  popHead.appendChild(popHeadText);
+  var popMachine = document.createElement("div");
+  popMachine.className = "acc-machine";
+  var popErr = document.createElement("div");
+  popErr.className = "acc-err";
+  popErr.style.display = "none";
+  var popActions = document.createElement("div");
+  popActions.className = "acc-actions";
+  // Stable action buttons: repaints update label/class/handler instead of
+  // rebuilding nodes, so a focused button keeps focus across refreshes.
+  var popPrimary = document.createElement("button");
+  popPrimary.type = "button";
+  var popSecondary = document.createElement("button");
+  popSecondary.type = "button";
+  popSecondary.className = "acc-btn";
+  popSecondary.textContent = "Connection settings…";
+  popActions.appendChild(popPrimary);
+  popActions.appendChild(popSecondary);
+  pop.appendChild(popHead);
+  pop.appendChild(popMachine);
+  pop.appendChild(popErr);
+  pop.appendChild(popActions);
+
+  var lastStatus = cachedStatus();
+  var statusFresh = false;
+  var popOpen = false;
+  var signingOut = false;
+
+  function cachedStatus() {
+    try {
+      var v = JSON.parse(localStorage.getItem(ACCOUNT_CACHE_KEY) || "null");
+      return (v && typeof v === "object") ? v : undefined;
+    } catch (e) { return undefined; }
+  }
+
+  function letterFor(s) {
+    var ch = (String((s && s.account_email_masked) || "").match(/[A-Za-z0-9]/) || [""])[0];
+    return ch.toUpperCase();
+  }
+
+  // Pure status → presentation mapping, kept free of DOM so tests can
+  // exercise every state. Green is only ever paired + enabled + loop online;
+  // everything else is amber (transitional/error) or grey.
+  function cccAccountState(s, fresh) {
+    if (s === undefined || !fresh)
+      return { key: "loading", dot: "off", letter: "", who: "Checking…",
+               sub: "Reading connection status.", paired: false, machine: "" };
+    if (s === null)
+      return { key: "unavailable", dot: "warn", letter: "", who: "Status unavailable",
+               sub: "Could not read CCC Cloud status on this machine.",
+               paired: false, machine: "" };
+    var who = s.account_email_masked || "Paired device";
+    var machine = String(s.device_id || "");
+    if (s.env_disabled)
+      return { key: "env_disabled", dot: "off", letter: letterFor(s), who: who,
+               sub: "CCC Cloud is disabled for this run.", paired: !!s.paired,
+               machine: machine };
+    if (!s.paired)
+      return { key: "unpaired", dot: "off", letter: "", who: "Not signed in",
+               sub: "Local only. Sign in to reach this machine from CCC Cloud.",
+               paired: false, machine: machine };
+    if (!s.enabled)
+      return { key: "disabled", dot: "off", letter: letterFor(s), who: who,
+               sub: "Paired, cloud connection off.", paired: true, machine: machine };
+    var loopState = (s.loop && s.loop.state) || "off";
+    if (loopState === "online")
+      return { key: "online", dot: "on", letter: letterFor(s), who: who,
+               sub: "Connected", paired: true, machine: machine };
+    if (loopState === "connecting")
+      return { key: "connecting", dot: "warn", letter: letterFor(s), who: who,
+               sub: "Connecting…", paired: true, machine: machine };
+    if (loopState === "error")
+      return { key: "error", dot: "warn", letter: letterFor(s), who: who,
+               sub: "Connection error" +
+                 (s.loop && s.loop.last_error ? ": " + s.loop.last_error : ""),
+               paired: true, machine: machine };
+    return { key: "offline", dot: "warn", letter: letterFor(s), who: who,
+             sub: "Offline", paired: true, machine: machine };
+  }
+
+  function setGlyph(el, letter) {
+    if (letter) { el.textContent = letter; return; }
+    el.textContent = "";
+    el.innerHTML = PERSON_SVG;
+  }
+
+  function paintAccount() {
+    var st = cccAccountState(lastStatus, statusFresh);
+    accDot.className = "ccc-account-dot " + st.dot;
+    setGlyph(accGlyph, st.letter);
+    accountBtn.title = "Account: " + st.sub;
+    if (popOpen) renderPop();
+  }
+
+  function shortId(id) {
+    id = String(id || "");
+    return id.length > 10 ? id.slice(0, 8) + "…" : id;
+  }
+
+  function renderPop() {
+    var st = cccAccountState(lastStatus, statusFresh);
+    popWho.textContent = st.who;
+    popSub.textContent = st.sub;
+    popDot.className = "ccc-account-dot " + st.dot;
+    setGlyph(popGlyph, st.letter);
+    if (st.machine) {
+      popMachine.textContent = "Machine " + shortId(st.machine);
+      popMachine.title = "This machine's device id: " + st.machine;
+      popMachine.style.display = "";
+    } else {
+      popMachine.textContent = "";
+      popMachine.title = "";
+      popMachine.style.display = "none";
+    }
+    if (st.paired) {
+      popPrimary.className = "acc-btn danger";
+      popPrimary.textContent = "Sign out of this machine";
+      popPrimary.disabled = signingOut;
+      popPrimary.onclick = doSignOut;
+      popSecondary.style.display = "";
+      popSecondary.onclick = openAccountSettings;
+    } else {
+      popPrimary.className = "acc-btn primary";
+      popPrimary.textContent =
+        (st.key === "unavailable") ? "Connection settings…" : "Sign in";
+      popPrimary.disabled = signingOut;
+      popPrimary.onclick = openAccountSettings;
+      popSecondary.style.display = "none";
+      popSecondary.onclick = null;
+    }
+  }
+
+  var STATUS_TIMEOUT_MS = 8000;
+  var statusSeq = 0;
+
+  function fetchStatus() {
+    // cccPriority "user" keeps this out of the dashboard's background-fetch
+    // pool (static/app.js installConnectionSlotGate): the dot is visible
+    // state, and a poll parked behind the streams would show stale state.
+    var seq = ++statusSeq;
+    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var timer = ctrl
+      ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, STATUS_TIMEOUT_MS)
+      : 0;
+    var opts = { cache: "no-store", cccPriority: "user" };
+    if (ctrl) opts.signal = ctrl.signal;
+    // /api/cloud-relay/indicator is the trimmed read added for this dot;
+    // fall back to the fuller /api/cloud-relay/status on servers that do not
+    // have it yet. Other failures are honest "unavailable", not a fallback.
+    function get(url) {
+      return fetch(url, opts).then(function (r) {
+        if (r.ok) return r.json();
+        if (url === "/api/cloud-relay/indicator" && (r.status === 404 || r.status === 405))
+          return get("/api/cloud-relay/status");
+        return null;
+      });
+    }
+    return get("/api/cloud-relay/indicator")
+      .catch(function () { return null; })
+      .then(function (d) {
+        if (timer) clearTimeout(timer);
+        if (seq !== statusSeq) return;   // a newer request already owns the paint
+        statusFresh = true;
+        lastStatus = (d && typeof d === "object") ? d : null;
+        // The indicator answer carries `state`/`last_error` flat; normalize
+        // to the status shape the state mapper reads.
+        if (lastStatus && lastStatus.state !== undefined && !lastStatus.loop)
+          lastStatus.loop = { state: lastStatus.state, last_error: lastStatus.last_error };
+        if (lastStatus) {
+          try { localStorage.setItem(ACCOUNT_CACHE_KEY, JSON.stringify(lastStatus)); } catch (e) {}
+        } else {
+          try { localStorage.removeItem(ACCOUNT_CACHE_KEY); } catch (e) {}
+        }
+        paintAccount();
+      });
+  }
+
+  // Sign in always lands on the real Network access dialog: the dashboard
+  // owns it (#networkAccessBtn → networkOpen, which also opens the CCC Cloud
+  // pairing section). Other rail pages hand off with ?open_network=1, which
+  // the rail itself consumes on the dashboard below.
+  function openAccountSettings() {
+    closePop(false);
+    var btn = document.getElementById("networkAccessBtn");
+    if (btn) { btn.click(); return; }
+    window.location.href = "/?" + NETWORK_HANDOFF_PARAM + "=1";
+  }
+
+  function openNetworkFromLocation() {
+    var url;
+    try { url = new URL(window.location.href); } catch (e) { return; }
+    if (!url.searchParams.has(NETWORK_HANDOFF_PARAM)) return;
+    url.searchParams.delete(NETWORK_HANDOFF_PARAM);
+    try { history.replaceState(history.state, "", url.pathname + url.search + url.hash); } catch (e) {}
+    var tries = 0;
+    (function attempt() {
+      var btn = document.getElementById("networkAccessBtn");
+      if (btn) { btn.click(); return; }
+      if (++tries < 20) setTimeout(attempt, 250);
+    })();
+  }
+
+  function doSignOut() {
+    if (signingOut) return;
+    signingOut = true;
+    popErr.textContent = "";
+    popErr.style.display = "none";
+    renderPop();
+    fetch("/api/cloud-relay/unpair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; })
+          .then(function (d) { return { ok: !!(r.ok && d && d.ok), err: d && d.error }; });
+      })
+      .catch(function () { return { ok: false, err: "request failed" }; })
+      .then(function (res) {
+        signingOut = false;
+        if (!res.ok) {
+          popErr.textContent = "Sign out failed" + (res.err ? ": " + res.err : ".");
+          popErr.style.display = "";
+          renderPop();
+          return;
+        }
+        try { localStorage.removeItem(ACCOUNT_CACHE_KEY); } catch (e) {}
+        // Repaint from the server's own word, not an assumed outcome.
+        fetchStatus();
+      });
+  }
+
+  function openPop() {
+    if (popOpen) return;
+    popOpen = true;
+    accountBtn.setAttribute("aria-expanded", "true");
+    renderPop();
+    pop.style.display = "";
+    document.addEventListener("pointerdown", onDocPointer, true);
+    document.addEventListener("keydown", onPopKey, true);
+    fetchStatus();
+    var first = pop.querySelector(".acc-btn");
+    if (first) first.focus();
+  }
+
+  function closePop(restoreFocus) {
+    if (!popOpen) return;
+    popOpen = false;
+    accountBtn.setAttribute("aria-expanded", "false");
+    pop.style.display = "none";
+    document.removeEventListener("pointerdown", onDocPointer, true);
+    document.removeEventListener("keydown", onPopKey, true);
+    if (restoreFocus !== false) accountBtn.focus();
+  }
+
+  function onDocPointer(e) {
+    if (pop.contains(e.target) || accountBtn.contains(e.target)) return;
+    closePop(false);
+  }
+
+  // Capture phase so Escape dismisses only the popover, not a modal that may
+  // be open underneath it on the dashboard.
+  function onPopKey(e) {
+    if (e && (e.isComposing || e.keyCode === 229)) return;
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      closePop();
+    }
+  }
+
+  accountBtn.addEventListener("click", function () {
+    if (popOpen) closePop();
+    else openPop();
+  });
+  // Pairing, unpairing and config saves in the Network dialog notify the
+  // rail through this event (static/cloud-relay.js), so the avatar repaints
+  // without waiting for the next poll.
+  window.addEventListener("ccc-cloud-relay-change", function () { fetchStatus(); });
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) fetchStatus();
+  });
+  setInterval(function () { if (!document.hidden) fetchStatus(); }, ACCOUNT_POLL_MS);
+
   var nav = document.createElement("nav");
   nav.className = "ccc-side-nav";
   nav.setAttribute("aria-label", "Applications");
@@ -358,6 +772,11 @@
     add.textContent = "+";
     add.onclick = openApps;
     nav.appendChild(add);
+    // The report flag centres itself in whatever space is left between the
+    // app list and the rail's bottom padding — around the middle on short
+    // pages, in the scroll flow on long ones. The account avatar is not a
+    // nav child: it hangs off the viewport bottom via .ccc-account-wrap.
+    nav.appendChild(flag);
   }
 
   // A failed or non-OK fetch retries with backoff instead of leaving the
@@ -416,10 +835,14 @@
     applyWidth(railW);
     render(cachedApps() || FALLBACK);
     document.body.appendChild(nav);
-    document.body.appendChild(flag);
+    document.body.appendChild(accWrap);
+    document.body.appendChild(pop);
     mountResizer();
     refresh();
     reportArrival();
+    paintAccount();
+    fetchStatus();
+    openNetworkFromLocation();
   }
 
   // The Applications settings page calls this after a toggle, reorder, or
