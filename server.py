@@ -21049,6 +21049,123 @@ def _launchd_restart_targets_pid(label, expected_pid, timeout=3):
     return int(running_pid) == int(expected_pid)
 
 
+# ── Restart without 502s (CCC-282) ──────────────────────────────────────────
+# Behind `tailscale serve`, an in-place restart used to surface as bursts of
+# HTTP 502: execvp closed the listening socket (Python sockets are
+# non-inheritable), so every request during the ~10s cold start was refused,
+# and requests already being handled died with their connection -- even ones
+# whose work had finished (a delivered message showed "Resume failed: HTTP
+# 502", and the retry delivered it twice). Now the restart (1) stops
+# accepting, so new connections wait in the kernel backlog, (2) lets
+# in-flight requests finish (bounded), and (3) hands the listening socket to
+# the new process, which accepts that backlog once it is ready.
+_LISTEN_FD_ENV = "CCC_INHERITED_LISTEN_FD"
+_RESTART_DRAIN_TIMEOUT_S = 10.0
+_HTTPD_SERVER = None
+_ACCEPT_PAUSED = threading.Event()
+_INFLIGHT_LOCK = threading.Lock()
+_INFLIGHT_REQUESTS = {}  # id(handler) -> path; long-lived streams excluded
+
+
+def _inflight_begin(handler):
+    with _INFLIGHT_LOCK:
+        _INFLIGHT_REQUESTS[id(handler)] = str(getattr(handler, "path", "") or "")
+
+
+def _inflight_end(handler):
+    with _INFLIGHT_LOCK:
+        _INFLIGHT_REQUESTS.pop(id(handler), None)
+
+
+def _inflight_snapshot():
+    with _INFLIGHT_LOCK:
+        return list(_INFLIGHT_REQUESTS.values())
+
+
+def _drain_inflight_requests(timeout=_RESTART_DRAIN_TIMEOUT_S, exclude=None, poll=0.05):
+    """Wait until no counted request (other than `exclude`) is in flight.
+
+    Returns the paths still running when `timeout` expired (empty = drained).
+    """
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while True:
+        with _INFLIGHT_LOCK:
+            left = [p for k, p in _INFLIGHT_REQUESTS.items() if k != exclude]
+        if not left or time.monotonic() >= deadline:
+            return left
+        time.sleep(poll)
+
+
+def _prepare_listen_socket_handoff(sock):
+    """Mark `sock` inheritable and publish its fd for the exec'd successor."""
+    if sock is None:
+        return False
+    try:
+        fd = sock.fileno()
+        if fd < 0:
+            return False
+        os.set_inheritable(fd, True)
+        os.environ[_LISTEN_FD_ENV] = str(fd)
+        return True
+    except Exception:
+        os.environ.pop(_LISTEN_FD_ENV, None)
+        return False
+
+
+def _take_inherited_listen_socket(bind_host, port):
+    """Adopt the listening socket a restarting predecessor handed over.
+
+    Returns a listening socket bound to `port` (and to `bind_host` when it is
+    an IP literal), or None, in which case the caller binds normally. The
+    env var is always consumed so engine subprocesses never see it, and the
+    adopted fd is made non-inheritable again.
+    """
+    raw = os.environ.pop(_LISTEN_FD_ENV, None)
+    if not raw:
+        return None
+    try:
+        fd = int(raw)
+    except ValueError:
+        return None
+    try:
+        sock = socket.socket(fileno=fd)
+    except OSError:
+        return None
+    try:
+        sock.set_inheritable(False)
+        name = sock.getsockname()
+        listening = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN)
+        host_ok = True
+        try:
+            want = ipaddress.ip_address(str(bind_host))
+            host_ok = ipaddress.ip_address(str(name[0])) == want
+        except ValueError:
+            host_ok = True  # hostname bind: the port check is what matters
+        if listening and int(name[1]) == int(port) and host_ok:
+            return sock
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+    return None
+
+
+def _quiesce_http_for_restart(timeout=_RESTART_DRAIN_TIMEOUT_S):
+    """Stop accepting, let in-flight requests finish, hand off the listener."""
+    server = _HTTPD_SERVER
+    if server is None:
+        return
+    _ACCEPT_PAUSED.set()
+    left = _drain_inflight_requests(timeout)
+    if left:
+        print(f"[restart] drain timed out after {timeout:.0f}s; "
+              f"cutting {len(left)} request(s): {', '.join(sorted(set(left))[:8])}",
+              flush=True)
+    _prepare_listen_socket_handoff(getattr(server, "socket", None))
+
+
 def _schedule_restart(delay=0.5):
     """Arm a launchctl kickstart or os.execvp() that replaces this process with a fresh
     `python server.py` after `delay` seconds. Called AFTER the HTTP response
@@ -21075,6 +21192,10 @@ def _schedule_restart(delay=0.5):
                 except Exception:
                     pass
                 break
+        try:
+            _quiesce_http_for_restart()
+        except Exception:
+            pass
         os.execvp(sys.executable, [sys.executable, str(Path(__file__).resolve())])
     t = threading.Timer(delay, _go)
     t.daemon = True
@@ -42640,6 +42761,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # http.server's default behaviour. Swallow it.
             pass
 
+    def parse_request(self):
+        # Count the request as in flight once its request line parsed, so a
+        # restart can let it finish (CCC-282). Idle keep-alive waits never
+        # reach this point and are not counted.
+        ok = super().parse_request()
+        if ok:
+            _inflight_begin(self)
+        return ok
+
+    def send_header(self, keyword, value):
+        # Long-lived event streams never "finish"; a restart must not wait
+        # on them (the client reconnects on its own).
+        if (str(keyword).lower() == "content-type"
+                and str(value).lower().startswith("text/event-stream")):
+            _inflight_end(self)
+        return super().send_header(keyword, value)
+
     def handle_one_request(self):
         # Same disconnect-while-writing guard at the request-handler level
         # so any other endpoint (not just send_json) doesn't dump a
@@ -42663,6 +42801,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _record_server_error()
             raise
         finally:
+            _inflight_end(self)
             # Threshold-gated slow-request log. Fast requests stay silent;
             # only the hot endpoints surface, e.g.:
             #   [SLOW] GET /api/group-chat/active 1840ms
@@ -44917,6 +45056,15 @@ def main():
         allow_reuse_address = True
         daemon_threads = True
         request_queue_size = 128
+
+        def _handle_request_noblock(self):
+            # While a restart drains (CCC-282), leave new connections in the
+            # kernel backlog; the exec'd successor inherits the socket and
+            # accepts them instead of the proxy seeing a refusal (502).
+            if _ACCEPT_PAUSED.is_set():
+                time.sleep(0.05)
+                return
+            return super()._handle_request_noblock()
     # Parse CLI overrides for this server instance. Env var PORT and the
     # module-level default still apply when the flags are absent.
     port = PORT
@@ -45093,6 +45241,18 @@ def main():
     bind_attempts = 0
     max_bind_attempts = 30
     server = None
+    inherited = _take_inherited_listen_socket(bind_host, port)
+    if inherited is not None:
+        # In-place restart: keep serving the predecessor's listening socket,
+        # so connections queued during the restart are accepted, not refused.
+        server = ThreadedHTTPServer(
+            (bind_host, port), CommandCenterHandler, bind_and_activate=False)
+        server.socket.close()
+        server.socket = inherited
+        server.server_address = inherited.getsockname()
+        server.server_name = socket.getfqdn(str(server.server_address[0]))
+        server.server_port = server.server_address[1]
+        print(f"  [restart] adopted inherited listening socket (fd {inherited.fileno()})")
     while server is None:
         try:
             server = ThreadedHTTPServer((bind_host, port), CommandCenterHandler)
@@ -45349,6 +45509,8 @@ def main():
     except Exception as e:
         print(f"  [cloud-relay] not started: {e}")
     print()
+    global _HTTPD_SERVER
+    _HTTPD_SERVER = server
     try:
         server.serve_forever()
     except KeyboardInterrupt:
