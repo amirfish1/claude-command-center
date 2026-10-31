@@ -1,0 +1,1 @@
+- Make green completion checkmarks visibly heavier in both session row layouts.

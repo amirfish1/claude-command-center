@@ -33899,7 +33899,8 @@ body:has(#settingsModal.open) #ideaTicketsIntroBanner { visibility:hidden; point
   content: "✓ ";
   display: inline;
   color: var(--green, #3fb950);
-  font-weight: 700;
+  font-weight: 900;
+  -webkit-text-stroke: 0.65px currentColor;
   border: 0;
   padding: 0;
   margin-right: 4px;
