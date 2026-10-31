@@ -33363,8 +33363,8 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
   #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-idea-avatar {
     top: 50%;
     transform: translateY(-50%);
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
   }
   #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step .conv-avatar-number { font-size: 11px; }
   #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step .conv-avatar-initials { font-size: 8px; }
