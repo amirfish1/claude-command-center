@@ -5377,7 +5377,9 @@ def test_send_json_reuses_encoded_body_for_memoised_payload():
 
     real = server.json.dumps
     calls = []
-    server.json.dumps = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+    me = threading.get_ident()  # json.dumps is process-global; count this thread only
+    server.json.dumps = lambda *a, **k: (
+        calls.append(1) if threading.get_ident() == me else None, real(*a, **k))[1]
     try:
         cache = {}
         payload = {"items": [{"ref": "X-%d" % i, "note": "n" * 80} for i in range(500)]}

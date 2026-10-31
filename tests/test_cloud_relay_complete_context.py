@@ -3,6 +3,7 @@ input, full prose question, non-empty turns, plain folder labels). No server."""
 import json
 import os
 import sys
+import threading
 import time
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -138,8 +139,10 @@ def test_last_assistant_text_cached_by_mtime_size(tmp_path, monkeypatch):
     p = _write(tmp_path / "s.jsonl", [_text("assistant", "Want me to proceed?")])
     calls = []
     real = rc.read_tail_lines
+    me = threading.get_ident()  # relay background threads read tails too
     monkeypatch.setattr(rc, "read_tail_lines",
-                        lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+                        lambda *a, **k: (calls.append(1) if threading.get_ident() == me
+                                         else None, real(*a, **k))[1])
     assert rc.last_assistant_text(p) == "Want me to proceed?"
     n = len(calls)
     assert rc.last_assistant_text(p) == "Want me to proceed?"
