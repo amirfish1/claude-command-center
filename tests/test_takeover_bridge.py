@@ -84,6 +84,24 @@ class TakeoverBridgeTest(unittest.TestCase):
         self.assertEqual(self.calls, [["answer", "DEMO-1", "Proceed"]])
         self.assertEqual(self.injects, [])
 
+    def test_unsupported_engine_rejected_before_ticket_creation(self):
+        before = tickets.load_state()
+        result = tickets.handoff("devincli-example")
+        self.assertEqual(result["code"], "unsupported_engine")
+        self.assertIn("Claude and Codex", result["error"])
+        self.assertEqual(tickets.load_state(), before)
+        self.assertEqual(self.calls, [])
+
+    def test_failed_unsupported_adoption_stops_retrying(self):
+        tickets._set_handoff("DEMO-1", owner="watchtower", session="devincli-example",
+                             state="waiting", adoption_pending=True)
+        bridge.sync_once()
+        self.assertEqual(self.handoff()["state"], "unsupported")
+        self.assertFalse(self.handoff()["adoption_pending"])
+        bridge.sync_once()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.injects, [])
+
     def test_legacy_import_preserves_budget_and_is_fenced_before_call(self):
         tickets._set_handoff("DEMO-1", state="blocked", session="session-a",
                              at=100, nudges=2, nudged_at=200, question="Approve?", auto=True)

@@ -26,6 +26,19 @@ def available():
     return _available is True
 
 
+def unsupported_reason(sid):
+    from . import idea_tickets as tickets
+    engine = "devin" if str(sid).startswith("devincli-") else ""
+    try:
+        if not engine:
+            engine = tickets._core._detect_session_engine(sid) or ""
+    except (AttributeError, TypeError):
+        pass
+    if engine and engine not in ("claude", "codex"):
+        return f"WatchTower takeover supports Claude and Codex sessions; {engine} is not supported yet."
+    return ""
+
+
 def _marker():
     from . import idea_tickets as tickets
     return tickets._state_path().parent / "watchtower-takeover.json"
@@ -94,6 +107,14 @@ def adopt(sid, ref, *, auto=False, legacy=None):
     from . import idea_tickets as tickets
     # Caller holds the effect lock, which also guards all old CCC effects.
     current = (tickets.load_state()["tickets"].get(ref) or {}).get("handoff") or {}
+    error = unsupported_reason(sid)
+    if error:
+        if current.get("adoption_pending") and not current.get("supervision_id"):
+            tickets._set_handoff(ref, state="unsupported", adoption_pending=False,
+                                 supervision_state="unsupported", sync_error=error,
+                                 waiting_on="")
+            tickets._restamp_rows()
+        return {"ok": False, "ref": ref, "error": error, "code": "unsupported_engine"}
     tickets._set_handoff(ref, owner="watchtower", session=sid,
                          state=current.get("state") or "running", auto=bool(auto),
                          adoption_pending=True)
@@ -150,7 +171,7 @@ def sync_once(statuses=None):
     for ref, ticket in list(data["tickets"].items()):
         h = ticket.get("handoff") or {}
         sid = h.get("session")
-        if not sid or ticket.get("closed"):
+        if not sid or ticket.get("closed") or h.get("state") == "unsupported":
             continue
         legacy_states = {*tickets._ACTIVE_HANDOFF, "taken_back"}
         if h.get("owner") != "watchtower" and h.get("state") not in legacy_states:
