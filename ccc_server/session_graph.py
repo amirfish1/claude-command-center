@@ -23,6 +23,11 @@ import time
 import urllib.request
 import uuid
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
 from ccc_server import core as _core
 from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
@@ -1713,17 +1718,25 @@ def close_github_issue_with_commit(issue_number, conv):
         return False
 
 
+_session_name_lock = threading.RLock()
+
+
 def _save_session_name_override(session_id, name):
     """Write a user-set name to the side-car file. Names are clamped to
     SESSION_NAME_MAX_CHARS so no upstream path can persist a multi-kilobyte
     "title" that bloats the row and the wire payload."""
     _core.LOG_VIEWER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    current = _core._load_session_name_overrides()
-    if name:
-        current[session_id] = _core._truncate_session_name(name)
-    else:
-        current.pop(session_id, None)
-    _core.SESSION_NAMES_FILE.write_text(json.dumps(current, indent=2))
+    # More than one server/worker can rename sessions. Read inside the lock
+    # and replace atomically so peers cannot lose names or read partial JSON.
+    with _session_name_lock, open(str(_core.SESSION_NAMES_FILE) + ".lock", "a") as lock:
+        if fcntl is not None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        current = _core._load_session_name_overrides()
+        if name:
+            current[session_id] = _core._truncate_session_name(name)
+        else:
+            current.pop(session_id, None)
+        _core._atomic_write_json(_core.SESSION_NAMES_FILE, current)
     return current
 
 

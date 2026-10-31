@@ -67,6 +67,7 @@ def find_codex_conversations(
     resolve_worktree_dirty=True,
 ):
     rows = _core._codex_fetch_threads(limit=limit)
+    task_titles = _core._auto_titled_session_ids()
     if repo_only:
         repo_path = _core.resolve_repo_path(repo_path)
         repo_path_obj = Path(repo_path)
@@ -251,6 +252,7 @@ def find_codex_conversations(
             "agent_task_name": agent_task_name,
             "status_rail_title": status_rail_title,
             "ai_title": codex_ai_title,
+            "task_title": task_titles.get(sid) or "",
             "name_overridden": bool(name_overrides.get(sid)),
             "last_prompt": (tail.get("last_prompt") or "")[:200],
             "size": st.st_size,

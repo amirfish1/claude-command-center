@@ -5103,7 +5103,7 @@
     const topicRow = named || origin;
     const topic = rowLocalTitle(topicRow);
     const topicTitle = String(topic.rawTitle || '').trim();
-    const taskTitle = String(c.ai_title || local.rawTitle || '').trim();
+    const taskTitle = String(c.ai_title || c.task_title || local.rawTitle || '').trim();
     if (!topicTitle || topicTitle === '(untitled)' || isContinuationBoilerplateTitle(topicTitle)) return local;
     if (!taskTitle || taskTitle === '(untitled)' || isContinuationBoilerplateTitle(taskTitle)) return topic;
     const norm = s => s.toLowerCase().replace(/\s+/g, ' ').trim();

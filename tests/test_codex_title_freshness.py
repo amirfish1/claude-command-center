@@ -62,6 +62,22 @@ class CodexTitleRehydrateTests(unittest.TestCase):
         self.assertEqual(out["display_name"], "my name")
         self.assertTrue(out["name_overridden"])
 
+    def test_saved_task_title_survives_copied_prompt_refresh(self):
+        server = self.server
+        sid = "019f-cached-thread"
+        cached = {"session_id": sid, "engine": "codex", "display_name": "old"}
+        first = "You are continuing a task from an earlier session"
+        with mock.patch.object(server, "_codex_titles_snapshot",
+                               return_value=self.snapshot(sid, first, first)), \
+             mock.patch.object(server, "_load_session_name_overrides", return_value={}), \
+             mock.patch.object(server, "_auto_titled_session_ids",
+                               return_value={sid: "Fix attention sections"}):
+            first_row = server._rehydrate_archive_cached_rows([cached])[0]
+            next_row = server._rehydrate_archive_cached_rows([first_row])[0]
+        self.assertEqual(first_row["task_title"], "Fix attention sections")
+        self.assertEqual(next_row["task_title"], "Fix attention sections")
+        self.assertIn("task_title", server._ARCHIVE_LIST_FIELDS)
+
     def test_a_copied_prompt_is_not_reported_as_an_ai_title(self):
         """Codex stores the raw ask as `title` when it did not summarize."""
         server = self.server

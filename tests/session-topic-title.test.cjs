@@ -35,6 +35,13 @@ test('a manual name leads the AI title in the same session', () => {
   const row = { session_id: 'root', display_name: 'My project', name_overridden: true, ai_title: 'Fix sorting' };
   assert.equal(load([row])(row).rawTitle, 'My project: Fix sorting');
 });
+test('persisted task title survives refreshes that only supply continuation boilerplate', () => {
+  const root = { session_id: 'root', display_name: 'Dashboard design', name_overridden: true };
+  const leg = { session_id: 'leg', continued_from_session_id: 'root',
+    display_name: 'You are continuing a task from earlier', ai_title: null,
+    task_title: 'Fix attention sections' };
+  assert.equal(load([root, leg])(leg).rawTitle, 'Dashboard design: Fix attention sections');
+});
 test('identical, already augmented, missing and boilerplate titles stay readable', () => {
   const root = { session_id: 'root', ai_title: 'Improve dashboard' };
   const title = load([root]);

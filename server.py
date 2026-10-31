@@ -16492,7 +16492,7 @@ _ARCHIVE_LIST_FIELDS = (
     "hermes_source", "hermes_origin", "hermes_profile", "hermes_chat_type",
     "hermes_tool_calls", "folder_label", "folder_path", "slug", "pinned_repo",
     "session_cwd", "session_cwd_exists", "session_cwd_is_worktree", "mtime",
-    "modified", "last_interacted", "size", "first_message", "ai_title",
+    "modified", "last_interacted", "size", "first_message", "ai_title", "task_title",
     "branch", "git_branch", "effective_branch", "effective_kind", "display_name",
     "spawn_named", "spawn_pid", "name_overridden", "auto_titled", "archived", "trashed",
     "recently_unarchived", "verified", "pinned", "pin_rank", "all_lane_override",
@@ -17964,6 +17964,7 @@ def _rehydrate_archive_cached_rows(rows):
     # "(untitled)" until an unrelated change invalidates the cache. Loaded lazily
     # so a corpus with no Codex rows never touches the DB at all.
     _codex_titles = None
+    _task_titles = None
 
     hydrated = []
     for raw in rows or []:
@@ -17981,6 +17982,10 @@ def _rehydrate_archive_cached_rows(rows):
         if row.get("engine") == "codex" and str(sid or "") in deleted_codex:
             continue
         if sid:
+            if row.get("engine") == "codex":
+                if _task_titles is None:
+                    _task_titles = _auto_titled_session_ids()
+                row["task_title"] = _task_titles.get(sid) or ""
             override = name_overrides.get(sid)
             if override:
                 row["display_name"] = override
