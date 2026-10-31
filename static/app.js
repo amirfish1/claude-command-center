@@ -26457,7 +26457,12 @@
     const ref = ideaTicketsOn() && c && c.idea_ticket && String(c.idea_ticket.ref || '');
     // CCC-139: Small bugs rows get the same numbered avatar as Ideas.
     const match = ref && ref.match(/^(IDEAS|SMALL-BUGS)-(\d+)$/);
-    if (!match) return '';
+    if (!match) {
+      if (!childLane) return '';
+      // Unticketed lanes use the same compact engine mark as ticketed lanes.
+      return '<span class="conv-idea-avatar is-child-mini conv-session-icon" role="img" aria-label="' + escapeAttr(sessionIconPresentation(c, false).title) + '">'
+        + _avatarModelBadgeHtml(sessionIconPresentation(c, false)) + '</span>';
+    }
     const num = match[2];
     const noun = match[1] === 'IDEAS' ? 'idea' : 'small bug';
     const repo = String(c.folder_label || c.folder_label_chip || c.folder_path || c.session_cwd || '');

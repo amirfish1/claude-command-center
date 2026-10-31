@@ -33615,6 +33615,7 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   box-shadow: none;
 }
 #convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-model {
+  transform: none !important;
   position: static;
   width: 14px;
   height: 14px;
