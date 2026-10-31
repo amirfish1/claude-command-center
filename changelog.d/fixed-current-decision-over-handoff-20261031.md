@@ -1,0 +1,1 @@
+- Update session rows and reply buttons from the latest owner decision even when automation retains a waiting or takeover flag.

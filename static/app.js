@@ -3651,7 +3651,8 @@
       text: did || 'Closed session.' });
     if (ready) return Object.assign(base, { label: '✓', kind: 'ready',
       text: did || 'Reviewed as complete; archive when ready.' });
-    const attn = (hasNext && !rowHandoff(c)) ? null : sessionAttentionStep(c);
+    // A current owner step outranks retained automation supervision flags.
+    const attn = hasNext ? null : sessionAttentionStep(c);
     if (attn) return Object.assign(base, { label: attn.label, kind: attn.kind, text: attn.text, attn });
     // An open task's pending work is more useful than its completed milestone.
     const completion = summary.completion;
