@@ -55,6 +55,8 @@
     let completion = null, action = null;
     try { completion = JSON.parse(source.fields.COMPLETION || 'null'); } catch (_) {}
     try { action = JSON.parse(source.fields.NEXT_ACTION || 'null'); } catch (_) {}
+    // A decision's NEXT_ACTION is an array of chips (CCC-276); the first is checked.
+    if (Array.isArray(action)) action = action[0] || null;
     if (source.answer && !working && (!completion || completion.version !== 1)) add('unknown', 'The latest answer has no valid completion assessment; Close remains unassessed.');
     const questions = [...new Map([...String(source.fields.NEXT_STEP_USER || source.prose).matchAll(/\[Q(\d+):([a-z0-9-]+)\]/g)].map(m => [m[1], {n: +m[1], tag: m[0]}])).values()];
     if (!source.answer) add('unknown', 'No assistant answer in this transcript window; freshness is unassessed.');

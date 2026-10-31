@@ -62,6 +62,28 @@ class QuickActionTests(unittest.TestCase):
         self.assertNotIn("next_action", parsed)
         self.assertEqual(parsed["next_step_user"], "Approve restart.")
 
+    def test_decision_array_gives_one_chip_per_option(self):
+        chips = [{"label": "Keep all", "reply": "[Q12:intake-scope] Keep all intake questions."},
+                 {"label": "Shorter form", "reply": "[Q12:intake-scope] Use the shorter intake."}]
+        parsed = self.parse(json.dumps(chips), "Choose: keep all intake questions or use the shorter form.")
+        self.assertEqual(parsed["next_actions"], chips)
+        self.assertEqual(parsed["next_action"], chips[0])
+
+    def test_decision_array_is_all_or_nothing(self):
+        good = {"label": "Keep all", "reply": "Keep all."}
+        for raw in [[], [good, {"label": "Bad label 123", "reply": "x"}], [good, dict(good)],
+                    [dict(good, label=label) for label in ("A", "B", "C", "D", "E")]]:
+            with self.subTest(raw=raw):
+                parsed = self.parse(json.dumps(raw))
+                self.assertNotIn("next_actions", parsed)
+                self.assertNotIn("next_action", parsed)
+
+    def test_prompt_requires_chips_for_decisions(self):
+        prompt = self.server._CCC_SESSION_STATE_SYSTEM_PROMPT
+        self.assertIn("one chip per option", prompt)
+        self.assertIn('never a bare "Answer Q12"', prompt)
+        self.assertNotIn("Never choose between alternatives", prompt)
+
     def test_originating_model_instructions_request_metadata(self):
         prompt = self.server._CCC_SESSION_STATE_SYSTEM_PROMPT
         self.assertIn("NEXT_ACTION:", prompt)

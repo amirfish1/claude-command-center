@@ -26,7 +26,7 @@ import uuid
 from ccc_server import core as _core
 from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
-from ccc_server.quick_actions import _validated_quick_action
+from ccc_server.quick_actions import _validated_quick_action, _validated_quick_actions
 
 # ---------------------------------------------------------------------------
 # SessionGraph — unified parent-child adjacency list
@@ -1254,20 +1254,26 @@ End your final reply with a compact CCC session-state block:
 DID: one sentence describing what you changed or learned
 INSIGHT: one sentence with the main finding, root cause, or surprise
 NEXT_STEP_USER: the exact action requiring the user, or None.
-NEXT_ACTION: null or a single-line JSON object as described below
+NEXT_ACTION: null, or a single-line JSON object or array as described below
 COMPLETION: a single-line JSON object using the schema below
 </session-state>
 
 Write NEXT_ACTION yourself in this same answer; the dashboard renders it
-directly without another model call. Use {"label":"Restart","reply":"Yes, restart the dashboard and worker."}
-(on ONE line) only when NEXT_STEP_USER offers exactly one concrete, scoped
-next step and needs the user's go-ahead. Prefer one short verb for the label;
-up to three words and 24 characters are allowed when needed for clarity.
-Reply is the exact text to send back to this session (at most
-400 characters), preserving the scope and qualifications. Otherwise use null.
-Never choose between alternatives, invent missing information, claim the user
-performed a task, or turn a request to review/read/check something into approval.
-Do authorized work first; do not invent a pending action just to provide a button.
+directly as one-tap chips without another model call. Use {"label":"Restart","reply":"Yes, restart the dashboard and worker."}
+(on ONE line) when NEXT_STEP_USER offers exactly one concrete, scoped
+next step and needs the user's go-ahead. When NEXT_STEP_USER is a decision
+between alternatives (including answering a tagged question), you MUST use a
+one-line JSON array with one chip per option, 2 to 4 chips, e.g.
+[{"label":"Keep all","reply":"[Q12:intake-scope] Keep all intake questions."},{"label":"Shorter form","reply":"[Q12:intake-scope] Use the shorter intake."}].
+For a decision, NEXT_STEP_USER states the choice itself ("Choose: keep all
+intake questions or use the shorter form"), never a bare "Answer Q12".
+Prefer one short verb for the label; up to three words and 24 characters are
+allowed when needed for clarity. Reply is the exact text to send back to this
+session (at most 400 characters), preserving the scope and qualifications and
+repeating any question tag verbatim. Otherwise use null. Never pick an option
+for the user, invent missing information, claim the user performed a task, or
+turn a request to review/read/check something into approval. Do authorized
+work first; do not invent a pending action just to provide a button.
 
 COMPLETION is a self-assessment of the entire requested task, not just this turn.
 Use version 1 and four axes, each with score (number 0..1) and evidence (a short,
@@ -1415,12 +1421,18 @@ def _parse_session_state(text):
         val = fm.group(2).strip()
         if key == "NEXT_ACTION":
             out.pop("next_action", None)
+            out.pop("next_actions", None)
             try:
-                action = _validated_quick_action(json.loads(val)) if len(val) <= 2000 else None
+                raw = json.loads(val) if len(val) <= 2000 else None
             except (ValueError, TypeError, RecursionError):
-                action = None
-            if action:
-                out["next_action"] = action
+                raw = None
+            # One object = a single go-ahead; an array = one chip per
+            # option of a decision (CCC-276). next_action stays the first
+            # chip so older clients keep working.
+            actions = _validated_quick_actions(raw)
+            if actions:
+                out["next_action"] = actions[0]
+                out["next_actions"] = actions
         elif key == "COMPLETION":
             try:
                 raw = json.loads(val) if len(val) <= 32000 else None
@@ -1433,6 +1445,7 @@ def _parse_session_state(text):
     if not next_step or re.fullmatch(
             r"(?:none|nothing|no action(?: is)? needed|n/a|not applicable)[.!]?", next_step, re.I):
         out.pop("next_action", None)
+        out.pop("next_actions", None)
     if not any(out.values()):
         return None
     return out

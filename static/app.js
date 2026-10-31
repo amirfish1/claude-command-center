@@ -3571,8 +3571,15 @@
       text: (offerClose ? 'Ready to close · ' : '') + (did || 'Reviewed as complete; archive when ready.') });
     const attn = (hasNext && !rowHandoff(c)) ? null : sessionAttentionStep(c);
     if (attn) return Object.assign(base, { label: attn.label, kind: attn.kind, text: attn.text, attn });
-    return Object.assign(base, { label: hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update',
-      text: (hasNext && next) || did || text || 'Completion assessment pending.' });
+    // A decision with chips reads "Decide: <the choice>", never
+    // "Next: Answer Q12 ..." (CCC-276). info.next keeps the raw step so the
+    // quick-action source still matches it.
+    const decide = hasNext && (sessionQuickActions(summary, next).length > 1
+      || /^(?:answer|choose|decide|pick)\b/i.test(next));
+    const shown = decide ? next.replace(/^(?:answer|choose|decide|pick)(?:\s+on)?\s*:?\s*/i, '') : next;
+    return Object.assign(base, { label: decide ? 'Decide' : hasNext ? 'Next' : 'Update', kind: hasNext ? 'next' : 'update',
+      next: hasNext ? next : '',
+      text: (hasNext && (shown || next)) || did || text || 'Completion assessment pending.' });
   }
   function _ultraFreshPaint(sid) {
     const entry = _ultraFresh.entries.get(sid);
@@ -3928,7 +3935,7 @@
     if (attn.handoff === 'running') {
       return '';
     }
-    if (attn.needsYou && !sessionQuickAction((c.session_state || {}).next_action)) {
+    if (attn.needsYou && !sessionQuickActions(c.session_state).length) {
       return '<button type="button" class="conv-attn-chip is-primary" data-role="attn-open" title="Open the session to decide">Open</button>';
     }
     return '';
@@ -17443,6 +17450,37 @@
         || /[\x00-\x1f]/.test(value.reply)) return null;
     return { label: value.label, reply: value.reply.trim() };
   }
+  // "Answer [Q12:slug]: keep all questions or use the shorter form." is a
+  // decision, and a decision always gets one chip per option (CCC-276).
+  // Footers written before NEXT_ACTION accepted arrays only carry the prose,
+  // so derive the chips from its alternatives; the reply repeats the tag.
+  function decisionQuickActions(next) {
+    const s = String(next || '').trim();
+    const m = s.match(/^(?:answer|choose|decide|pick)\b(.*?):\s+(.+)$/i);
+    if (!m) return [];
+    const tag = (m[1].match(/\[Q\d+(?::[a-z0-9-]+)?\]|\bQ\d+\b/i) || [''])[0];
+    const body = m[2].replace(/[.?!]+$/, '').replace(/^(?:whether(?: to)?|between)\s+/i, '').trim();
+    if (!/\sor\s/i.test(body)) return [];
+    const options = body.split(/\s*,\s*or\s+|\s*,\s*|\s+or\s+/i).map(o => o.trim()).filter(Boolean);
+    if (options.length < 2 || options.length > 4
+        || options.some(o => o.split(/\s+/).length > 14 || /[\x00-\x1f]/.test(o))) return [];
+    return options.map(o => {
+      const text = o.charAt(0).toUpperCase() + o.slice(1);
+      let label = text;
+      if (label.length > 32) label = label.slice(0, 32).replace(/\s+\S*$/, '') + '…';
+      return { label, reply: (tag ? tag + ' ' : '') + text + '.', derived: true };
+    });
+  }
+  // Model-authored chips (NEXT_ACTION object or array), else chips derived
+  // from a decision's alternatives. Always returns an array.
+  function sessionQuickActions(state, next) {
+    state = state || {};
+    const many = Array.isArray(state.next_actions) ? state.next_actions.map(sessionQuickAction) : [];
+    if (many.length && many.every(Boolean)) return many.slice(0, 4);
+    const one = sessionQuickAction(state.next_action);
+    if (one) return [one];
+    return decisionQuickActions(next == null ? state.next_step_user : next);
+  }
   function rowQuickActionSource(c) {
     if (!c || c.archived || c.trashed || c.pending_spawn) return null;
     const sid = String(c.session_id || c.id || '');
@@ -17451,9 +17489,9 @@
         || c.last_event_type === 'user') return null;
     const info = rowOutcomeView(c);
     const next = String((c.session_state || {}).next_step_user || '').trim();
-    const action = sessionQuickAction((c.session_state || {}).next_action);
-    if (!action || !next || info.kind !== 'next' || info.text !== next) return null;
-    return { sid, action, key: JSON.stringify([sid, next, action]) };
+    const actions = sessionQuickActions(c.session_state, next);
+    if (!actions.length || !next || info.kind !== 'next' || (info.next || info.text) !== next) return null;
+    return { sid, actions, action: actions[0], key: JSON.stringify([sid, next, actions]) };
   }
   function currentRowQuickActionSource(sid) {
     const base = _ultraFreshRow(sid);
@@ -17464,15 +17502,19 @@
     slot.replaceChildren();
     delete slot.dataset.feedbackState;
     slot.dataset.quickActionKey = source.key;
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'conv-quick-action';
-    btn.dataset.role = 'quick-action';
-    btn.dataset.quickActionKey = source.key;
-    btn.textContent = source.action.label;
-    btn.title = 'Send to this session: ' + source.action.reply;
-    btn.setAttribute('aria-label', btn.title);
-    slot.appendChild(btn);
+    slot.classList.toggle('is-decision', source.actions.length > 1);
+    source.actions.forEach((action, index) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'conv-quick-action';
+      btn.dataset.role = 'quick-action';
+      btn.dataset.quickActionKey = source.key;
+      btn.dataset.quickActionIndex = String(index);
+      btn.textContent = action.label;
+      btn.title = 'Send to this session: ' + action.reply;
+      btn.setAttribute('aria-label', btn.title);
+      slot.appendChild(btn);
+    });
   }
   function syncRowQuickActions(sid) {
     const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
@@ -17528,7 +17570,8 @@
       showOpToast('This action changed. Review the updated row before sending.', 'error');
       return;
     }
-    const { sid, action } = current;
+    const { sid } = current;
+    const action = current.actions[Number(btn.dataset.quickActionIndex) || 0] || current.action;
     const feedback = { key: current.key, action, state: 'sending' };
     _rowQuickActionFeedback.set(sid, feedback);
     _rowQuickActionSending.add(sid);
@@ -17807,11 +17850,12 @@
     }
     const hasUserAction = !!nextStep && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(nextStep);
     if (hasUserAction) {
-      let action = null;
-      try { action = sessionQuickAction(JSON.parse(fields.NEXT_ACTION || 'null')); } catch (_) {}
-      const actions = action
-        ? '<button type="button" class="ssb-action ssb-act-say" data-ssb-act="say" data-ssb-value="' + escapeAttr(action.reply)
-          + '" title="' + escapeAttr('Send to this session: ' + action.reply) + '">' + escapeHtml(action.label) + '</button>'
+      let authored = null;
+      try { authored = JSON.parse(fields.NEXT_ACTION || 'null'); } catch (_) {}
+      const chips = sessionQuickActions(Array.isArray(authored) ? { next_actions: authored } : { next_action: authored }, nextStep);
+      const actions = chips.length
+        ? chips.map(action => '<button type="button" class="ssb-action ssb-act-say" data-ssb-act="say" data-ssb-value="' + escapeAttr(action.reply)
+          + '" title="' + escapeAttr('Send to this session: ' + action.reply) + '">' + escapeHtml(action.label) + '</button>').join(' ')
         : needsYouActionsHtml(nextStep);
       rows.push('<div class="ssb-row ssb-primary ssb-next"><span class="ssb-key">Needs you</span>' + renderInline(nextStep) + (actions ? ' <span class="ssb-actions">' + actions + '</span>' : '') + '</div>');
     } else if (fields.DID) {

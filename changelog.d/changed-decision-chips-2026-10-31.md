@@ -1,0 +1,1 @@
+- Sidebar rows that wait on a decision now read "Decide" and show one tap-to-send chip per option, instead of "Next: Answer Q…". Agents are asked to supply the option chips; older answers get chips derived from their "A or B" wording.

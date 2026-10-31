@@ -33118,6 +33118,11 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
   width: auto;
 }
 .conv-quick-action-slot { display: inline-flex; flex: 0 0 auto; min-height: 1px; min-width: 1px; }
+/* A decision gets one chip per option on its own line under the choice (CCC-276). */
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action-slot.is-decision) { flex-wrap: wrap; }
+#convList#convList .conv-item .conv-outcome:has(.conv-quick-action-slot.is-decision) .conv-outcome-step { flex-basis: 100%; }
+.conv-quick-action-slot.is-decision { flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
+.conv-quick-action-slot.is-decision .conv-quick-action { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-row-read {
   display: inline-flex; align-items: center; justify-content: center;
   flex: 0 0 auto; min-width: 32px; min-height: 32px; margin-left: 4px;
