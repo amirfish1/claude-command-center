@@ -30890,6 +30890,7 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   z-index: 3;
 }
 .conv-avatar-number { font: 700 15px/1 system-ui, sans-serif; }
+.conv-avatar-project { display: none; }
 .conv-avatar-model {
   position: absolute;
   bottom: -5px;
@@ -33690,7 +33691,7 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 #convList.session-workspace .conv-archived-section { border-top: 0; margin-top: 0; padding-top: 0; }
 #convList.session-workspace .conv-archived-tools { border: 0; padding: 8px 4px; margin: 0; }
 #convList#convList.session-workspace .conv-item:not(.is-current-child-row) {
-  --conv-content-left: calc(var(--conv-icon-left) + 46px);
+  --conv-content-left: calc(var(--conv-icon-left) + 52px);
   padding-top: 13px !important; padding-bottom: 13px !important;
   border-radius: 8px !important; margin: 2px 0 !important;
   border-bottom-color: color-mix(in srgb, var(--text) 7%, transparent) !important;
@@ -33700,17 +33701,30 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   background: color-mix(in srgb, var(--accent) 10%, var(--surface)) !important;
   box-shadow: inset 3px 0 var(--accent);
 }
-#convList#convList.session-workspace .conv-item .conv-idea-avatar:not(.is-child-mini) {
-  width: 34px; height: 34px; border-radius: 8px; top: 14px;
+#convList#convList.session-workspace .conv-item:not(.is-current-child-row) .conv-idea-avatar:not(.is-child-mini),
+#convList#convList .conv-item:not(.is-current-child-row) .conv-idea-avatar:not(.is-child-mini) {
+  width: 40px; height: 40px; border-radius: 6px; top: 14px;
+  flex: 0 0 40px; padding: 0; align-items: center; justify-content: center;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface-2));
   box-shadow: none; animation: none;
 }
+#convList#convList .conv-item:not(.is-current-child-row) { --conv-content-left: calc(var(--conv-icon-left) + 52px); }
+#convList#convList .conv-item:not(.is-current-child-row) .conv-idea-avatar > :is(.conv-avatar-model, .conv-avatar-background, .session-activity-dot),
+#convList#convList .conv-item:not(.is-current-child-row) .conv-avatar-number { display: none; }
+#convList#convList .conv-item:not(.is-current-child-row) .conv-avatar-stack { gap: 0; text-shadow: none; }
+#convList#convList .conv-item:not(.is-current-child-row) :is(.conv-avatar-initials, .conv-avatar-project) {
+  display: block; color: var(--text); font: 650 13px/1 system-ui, sans-serif; letter-spacing: .02em;
+}
+#convList .conv-item:not(.is-current-child-row) .wa-av-col { width: 40px; flex: 0 0 40px; align-self: flex-start; }
+#convList#convList .conv-item:not(.is-current-child-row) .wa-avatar.conv-idea-avatar { top: auto; margin-top: 0; }
+.conv-project-meta { margin-top: 5px; line-height: 16px; }
+#convList .conv-project-meta .ccc-idea-ticket { font-size: 10px; font-weight: 500; color: var(--text-muted); }
 #convList.session-workspace .conv-idea-avatar > .conv-avatar-background { display: none; }
 #convList.session-workspace .conv-avatar-stack { text-shadow: none; gap: 3px; }
 #convList#convList.session-workspace .conv-avatar-initials { font-size: 10px; }
 #convList#convList.session-workspace .conv-avatar-stack > .conv-avatar-number { font-size: 9px; opacity: .7; }
-#convList#convList.session-workspace .conv-item:not(.is-current-child-row) .conv-main-row > .conv-auto-switch { top: 53px; left: calc(var(--conv-icon-left) + 2px); }
+#convList#convList.session-workspace .conv-item:not(.is-current-child-row) .conv-main-row > .conv-auto-switch { top: 59px; left: calc(var(--conv-icon-left) + 2px); }
 #convList.session-workspace .conv-avatar-model { filter: none; transform: scale(.8); }
 #convList#convList.session-workspace .conv-main-row.has-inline-step .conv-title { font-size: 15px !important; line-height: 21px !important; font-weight: 550; }
 #convList#convList.session-workspace .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step { font-size: 13px; line-height: 19px; }
@@ -33739,7 +33753,7 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 .sidebar:has(.session-workspace) .conv-search-input { border-radius: 7px; min-height: 36px; font-size: 13px; }
 @media (max-width: 1200px) {
   #convList#convList.session-workspace .conv-item .wa-body { min-height: 78px; }
-  #convList#convList.session-workspace .conv-item .wa-row > .conv-idea-avatar:not(.is-child-mini) { position: relative; top: auto; flex: 0 0 34px; }
+  #convList#convList.session-workspace .conv-item:not(.is-current-child-row) .wa-row > .conv-idea-avatar:not(.is-child-mini) { position: relative; top: auto; flex: 0 0 40px; }
   #convList.session-workspace .wa-title { font-size: 15px; }
   #convList.session-workspace .wa-preview { font-size: 13px; line-height: 19px; }
   .session-usage-drawer { padding: 6px 14px; }
