@@ -22,7 +22,7 @@ Everything ships to github.com/amirfish1/claude-command-center.
 
 ## API and security
 - `/api/*` is public API: adding fields/endpoints is fine; renaming/removing/reshaping is a major bump.
-- Read `SECURITY.md` before touching binding, origin checks, or path validation. Don't loosen the `/api/repo/switch` allow-list.
+- Read `SECURITY.md` before touching binding, origin checks, or path validation. `/api/repo/switch` is a deprecated compatibility shim that returns 410 — repo-scoped APIs must receive an explicit `repo_path` instead.
 
 ## Conventions
 - `server.py` is stdlib-only (no pip deps at runtime). `static/index.html` is a single-file app (no bundler/npm).

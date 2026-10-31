@@ -1,0 +1,63 @@
+# Caddyfile — TLS + HTTP Basic auth in front of Claude Command Center.
+#
+# Caddy is the remote-facing surface in this opt-in stack. It:
+#   - Terminates TLS on :8443 using a locally-generated cert (Caddy's own
+#     internal CA — no public ACME, since this is localhost/private).
+#   - Requires HTTP Basic auth before proxying anything to CCC.
+#   - Forwards authenticated traffic to the `ccc` service on the internal
+#     Docker network. Native Linux host programs can bypass Caddy by
+#     connecting directly to the backend bridge IP; host isolation is not provided.
+#
+# The username + bcrypt hash come from the environment (set in
+# .env.hardened): CCC_BASIC_AUTH_USER and CCC_BASIC_AUTH_HASH. Generate a
+# hash with:
+#   docker run --rm caddy caddy hash-password --plaintext 'your-password'
+{
+	# Quiet, predictable admin surface: disable the admin API (we don't
+	# drive Caddy at runtime) so it isn't listening inside the container.
+	admin off
+	# Use Caddy's internal CA for the local/self-signed cert.
+	# No outbound ACME calls for a localhost deployment.
+	local_certs
+	# Which hostname's internal cert to present when a client connects
+	# without SNI (e.g. by raw IP). Must match a subject below.
+	default_sni localhost
+}
+
+# Serve the local hostname and loopback IPs. Caddy issues certificates for
+# these individual subjects. Clients without SNI receive the localhost cert
+# via default_sni, so use https://localhost:8443 for hostname-verified TLS;
+# an IP-only client without SNI cannot validate that hostname certificate.
+# Add your VPN/LAN hostname here before using it from another device.
+https://localhost:8443, https://127.0.0.1:8443, https://[::1]:8443 {
+	tls internal
+
+	# ---- Authentication gate -------------------------------------------
+	# Every request must carry valid Basic credentials. Caddy compares
+	# against the bcrypt hash; no plaintext password is stored anywhere.
+	basic_auth {
+		{$CCC_BASIC_AUTH_USER} {$CCC_BASIC_AUTH_HASH}
+	}
+
+	# ---- Reverse proxy to CCC ------------------------------------------
+	# Only reached AFTER auth passes. `ccc` resolves on the internal Docker
+	# network to the CCC container; :8090 is its in-container listen port.
+	reverse_proxy ccc:8090 {
+		# CCC ingests Server-Sent Events (/api/sessions/events and the live
+		# transcript stream). Disable response buffering so SSE flushes
+		# through the proxy in real time instead of being held.
+		flush_interval -1
+
+		# Note: Caddy forwards X-Forwarded-Host / -Proto to the upstream by
+		# default, so no explicit header_up directives are needed here.
+	}
+
+	# Reasonable security headers for a browser-facing dashboard.
+	header {
+		# Don't leak the proxied server details.
+		-Server
+		# HSTS is intentionally NOT set: this uses a self-signed local cert,
+		# and pinning HTTPS-only via HSTS on localhost can wedge other local
+		# services sharing the hostname. Add it only for a real domain+cert.
+	}
+}
