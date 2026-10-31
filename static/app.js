@@ -10589,7 +10589,9 @@
       const response = await fetch('/api/pending-input/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sid, text }),
+        // The id names this one queued message, so cancelling one of two
+        // identical sends removes that one; text alone is the fallback.
+        body: JSON.stringify({ session_id: sid, text, delivery_id: queuedRowDeliveryId(row) || undefined }),
       });
       let data = {};
       try { data = await response.json(); } catch (_) {}
@@ -12323,7 +12325,32 @@
       delivered: !!p.delivered,
       queued: !!p.queued && !p.delivered,
       queuedLabel: p.queuedLabel || '',
+      deliveryId: p.deliveryId || '',
     }));
+  }
+
+  // The server names each message on its way into a session with one
+  // delivery_id (inject response, queued event, cancel). A row that knows its
+  // id is matched by identity; rows from before the id arrived still match by
+  // normalised text.
+  function queuedRowDeliveryId(el) {
+    if (!el) return '';
+    if (el.dataset && el.dataset.deliveryId) return String(el.dataset.deliveryId);
+    const entry = el._pendingRef && el._pendingRef.entry;
+    return (entry && entry.deliveryId) ? String(entry.deliveryId) : '';
+  }
+
+  function bindPendingSendDeliveryId(pending, deliveryId) {
+    const id = String(deliveryId || '').trim();
+    if (!pending || !id) return;
+    if (pending.entry) pending.entry.deliveryId = id;
+    if (pending.element && pending.element.dataset) pending.element.dataset.deliveryId = id;
+    const pid = pending.paneId || activePaneId();
+    const pane = paneByPaneId(pid);
+    const convId = pending.conversationId || (pane && pane.conversationId);
+    if (pane && convId && pane.conversationId === convId && pending.list) {
+      syncPendingSendsMapForConv(pane, convId, pending.list);
+    }
   }
 
   function appendPendingSendEcho(text, sid, paneId, restoredEntry) {
@@ -12346,6 +12373,7 @@
 
       const entry = restoredEntry || { text, sid, ts: Date.now(), timer: null };
       if (entry.timer) clearTimeout(entry.timer);
+      if (entry.deliveryId) pendingDiv.dataset.deliveryId = String(entry.deliveryId);
       entry.element = pendingDiv;
       pending.element = pendingDiv;
       pendingDiv._pendingRef = pending;
@@ -12743,7 +12771,10 @@
       const text = row && row.text;
       if (!text) continue;
       const normed = _normSend(text);
+      const savedId = String(row.deliveryId || '');
       const shownIndex = shown.findIndex(el => {
+        const shownId = queuedRowDeliveryId(el);
+        if (savedId && shownId) return shownId === savedId;
         const userMsg = el.querySelector('.user-msg');
         if (!userMsg) return false;
         const raw = userMsg.getAttribute('data-raw-text') || userMsg.textContent;
@@ -12766,6 +12797,7 @@
             _pendingSends.push(entry);
           }
           if (!pending) pending = { text, sid, paneId, conversationId: convId, list: _pendingSends, entry };
+          if (savedId) { entry.deliveryId = savedId; existing.dataset.deliveryId = savedId; }
           entry.element = existing;
           pending.element = existing;
           existing._pendingRef = pending;
@@ -12783,7 +12815,8 @@
           && !p.element?.isConnected && _normSend(p.text) === normed
           && Number(p.ts) === Number(row.ts));
         const restored = appendPendingSendEcho(text, sid, paneId,
-          detached || { text, sid, ts: Number(row.ts) || now, timer: null });
+          detached || { text, sid, ts: Number(row.ts) || now, timer: null, deliveryId: savedId });
+        if (savedId && restored) bindPendingSendDeliveryId(restored, savedId);
         // Re-create it in the delivered state so it keeps the "✓ Delivered"
         // note and stops re-arming the not-acknowledged timer (CCC-154).
         if (row.delivered && restored) markPendingSendDelivered(restored, null);
@@ -13324,6 +13357,7 @@
         }
       }
       sendAccepted = !!(res.ok && data.ok && !data.soft_block && data.submitted !== false);
+      if (sendAccepted && data.delivery_id) bindPendingSendDeliveryId(pendingSend, data.delivery_id);
       if (sendAccepted) clearAcceptedComposerInput($input, text, draftConversation, submittedRevision);
       if (res.ok && data.ok && data.submitted === false) {
         removePendingSendEcho(pendingSend);
@@ -64906,6 +64940,7 @@
     // occurrence. Keep the local node (and its request/bookkeeping reference),
     // consuming matches one-to-one so intentional repeated messages survive.
     const localByText = new Map();
+    const localById = new Map();
     const queuedRowText = el => {
       const msg = el.querySelector('.user-msg');
       return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
@@ -64918,12 +64953,33 @@
       if (!text) return;
       if (!localByText.has(text)) localByText.set(text, []);
       localByText.get(text).push(el);
+      const id = queuedRowDeliveryId(el);
+      if (id && !localById.has(id)) localById.set(id, el);
     });
     $view.querySelectorAll('[data-queued-steer-server="true"]').forEach(serverRow => {
       const text = queuedRowText(serverRow);
       if (steerIsInFlight(sessionId, text)) return;
-      const local = (localByText.get(text) || []).shift();
+      // Pair by the shared delivery_id when both sides know it; otherwise by
+      // text, skipping an echo whose id says it is a different send.
+      const serverId = queuedRowDeliveryId(serverRow);
+      let local = serverId ? localById.get(serverId) : null;
+      if (local) {
+        const bucket = localByText.get(text) || [];
+        const at = bucket.indexOf(local);
+        if (at >= 0) bucket.splice(at, 1);
+      } else {
+        const bucket = localByText.get(text) || [];
+        const at = bucket.findIndex(el => {
+          const id = queuedRowDeliveryId(el);
+          return !(id && serverId && id !== serverId);
+        });
+        local = at >= 0 ? bucket.splice(at, 1)[0] : null;
+      }
       if (!local) return;
+      if (serverId && !queuedRowDeliveryId(local)) {
+        if (local._pendingRef) bindPendingSendDeliveryId(local._pendingRef, serverId);
+        else local.dataset.deliveryId = serverId;
+      }
       if (local._pendingRef && !local.classList.contains('send-queued')) {
         markPendingSendQueued(local._pendingRef, serverRow.dataset.queuedReason || undefined, { sync: false });
       } else {
@@ -64976,7 +65032,7 @@
     for (let i = trayRows.length - 1; i >= 0; i--) {
       const el = trayRows[i];
       if (el.dataset.queuedSteerServer !== 'true') continue;
-      const key = queuedRowText(el) || '';
+      const key = queuedRowDeliveryId(el) || ('text:' + (queuedRowText(el) || ''));
       if (seenServerQueuedText.has(key)) {
         el.remove();
         trayRows.splice(i, 1);
@@ -68104,12 +68160,17 @@
         // this row against the tray emptied it on every other poll (CCC-246).
         // Render it fresh then; the sync swaps it in for the old card.
         const _queuedText = _normSend(ev.text);
+        const _queuedId = String(ev.delivery_id || '');
         const _queuedScope = $view.closest('.conv-pane');
         const _replacesTray = !opts.provisionalOverlay && !opts.prepending
           && !!(opts.initialLoad || opts.queueSnapshot !== false);
         const _queuedDup = [!_replacesTray && _queuedScope && _queuedScope.querySelector('.queued-steer-tray'), $view]
           .some(scope => scope && [...scope.querySelectorAll('.event.user_text[data-queued-steer-server]')]
             .some(el => {
+              // Two queued sends with the same words are two messages once
+              // the server names them; only id-less rows fall back to text.
+              const elId = queuedRowDeliveryId(el);
+              if (_queuedId && elId) return elId === _queuedId;
               const msg = el.querySelector('.user-msg');
               return msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent) === _queuedText;
             }));
@@ -68129,6 +68190,7 @@
         // ends. Say so, with the engine's own reason when it gave one.
         div.classList.add('server-queued');
         if (ev.queued_reason) div.dataset.queuedReason = String(ev.queued_reason);
+        if (ev.delivery_id) div.dataset.deliveryId = String(ev.delivery_id);
       }
       if (ev.line != null) div.dataset.jsonlLine = String(ev.line);
       if (ev.turn_id != null) div.dataset.turnId = String(ev.turn_id);
@@ -80139,6 +80201,7 @@
         let data = {};
         try { data = await res.json(); } catch (_) {}
         sendAccepted = !!(res.ok && data.ok && !data.soft_block && data.submitted !== false);
+        if (sendAccepted && data.delivery_id) bindPendingSendDeliveryId(pendingSend, data.delivery_id);
         if (sendAccepted) clearAcceptedComposerInput($cpInput, text, draftConversation, submittedRevision);
         if (res.ok && data.ok && data.submitted === false) {
           removePendingSendEcho(pendingSend);

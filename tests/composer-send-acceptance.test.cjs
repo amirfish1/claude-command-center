@@ -36,12 +36,13 @@ function harness(split, options = {}) {
     removePendingSendEcho: pending => removed.push(pending),
     renderInlineWakeError: noop, formatInjectFailure: () => 'Rejected',
     isCursorUsageLimitFailure: () => false, repoNotAllowedToastAction: noop,
-    moveInputCaretToEnd: noop,
+    moveInputCaretToEnd: noop, isTouchPrimary: () => false,
+    bound: [], bindPendingSendDeliveryId: (pending, id) => ctx.bound.push([pending, id]),
   };
   vm.createContext(ctx);
   vm.runInContext(fn('composerUserEditRevision') + '\n' + fn('clearAcceptedComposerInput') + '\n' + fn('restoreInputAfterSendFailure') + '\n' + fn(split ? 'sendToSplitTerminal' : 'sendToTerminal', split ? 4 : 2), ctx);
   const send = split ? ctx.sendToSplitTerminal : ctx.sendToTerminal;
-  return { input, edit(value) { input.value = value; inputListeners.forEach(listener => listener({ isTrusted: true })); }, switchConversation() { ctx.currentConversation = 'other'; }, button, notices, removed, warnings, send, respond(data, ok = true) { resolve({ ok, status: ok ? 200 : 500, json: async () => data }); } };
+  return { input, bound: ctx.bound, edit(value) { input.value = value; inputListeners.forEach(listener => listener({ isTrusted: true })); }, switchConversation() { ctx.currentConversation = 'other'; }, button, notices, removed, warnings, send, respond(data, ok = true) { resolve({ ok, status: ok ? 200 : 500, json: async () => data }); } };
 }
 for (const split of [false, true]) {
   const label = split ? 'split composer' : 'pane composer';
@@ -49,12 +50,14 @@ for (const split of [false, true]) {
     const h = harness(split);
     const sending = h.send();
     assert.equal(h.input.value, '');
-    h.respond({ ok: true, queued: true, via: 'codex-app-queued' });
+    h.respond({ ok: true, queued: true, via: 'codex-app-queued', delivery_id: 'inject:one' });
     await sending;
     assert.equal(h.input.value, '');
     assert.equal(h.removed.length, 0);
     assert.equal(h.warnings.length, 0);
     assert.equal(h.button.disabled, false);
+    // The server's id for this send lands on the echo it already painted.
+    assert.deepEqual(h.bound, [[{ id: 'echo' }, 'inject:one']]);
   });
   test(label + ': accepted message stays cleared even if status rendering fails', async () => {
     const h = harness(split, { uiError: true });

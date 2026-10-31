@@ -107,6 +107,20 @@ def _queued_text_key(value):
     return attribution.strip_header(str(value or "")).strip()
 
 
+def _new_pending_entry(text):
+    """A queue row for a message being enqueued right now.
+
+    Only enqueue sites call this; decode paths rebuild rows with the id they
+    already carry. A row created while a send is being routed takes that
+    send's delivery_id, so the browser can match the queued card to the echo
+    it already painted (ccc_server/delivery.py).
+    """
+    if isinstance(text, (_PendingInputEntry, _PendingInputHandoff)):
+        return text
+    from ccc_server import delivery as _delivery
+    return _PendingInputEntry(text, _delivery.adopt(text))
+
+
 class _PendingInputEntry(str):
     """String-compatible durable queue row with stable plain-entry identity."""
 
@@ -2140,11 +2154,8 @@ def _apply_pending_input_operations(
                 with queue_lock:
                     queue = queue_map.setdefault(session_id, [])
                     value = op.get("value")
-                    if (
-                        action in ("append_tail", "insert_front", "insert_before_matching")
-                        and not isinstance(value, (_PendingInputEntry, _PendingInputHandoff))
-                    ):
-                        value = _PendingInputEntry(value)
+                    if action in ("append_tail", "insert_front", "insert_before_matching"):
+                        value = _new_pending_entry(value)
                     if action == "append_tail":
                         if not op.get("dedupe") or value not in queue:
                             queue.append(value)
@@ -2672,6 +2683,11 @@ def _get_queued_events_for_session(session_id):
             "pending": True,
             "queued_for_s": max(0, int(now - since)),
         }
+        # The same id the inject response returned, so the browser keys the
+        # card by identity instead of normalised text.
+        delivery_id = getattr(text, "pending_id", None)
+        if delivery_id:
+            ev["delivery_id"] = str(delivery_id)
         reason = meta.get("reason")
         if reason:
             ev["queued_reason"] = str(reason)
@@ -3495,11 +3511,7 @@ def _queue_terminal_input_unlocked(session_id, text, status=None, reason_hint=No
             ):
                 deduped = True
             else:
-                queue.append(
-                    text if isinstance(
-                        text, (_PendingInputEntry, _PendingInputHandoff)
-                    ) else _PendingInputEntry(text)
-                )
+                queue.append(_new_pending_entry(text))
             return deduped, len(queue)
     transaction = _core._mutate_pending_inputs({session_id}, enqueue)
     if not transaction.get("ok"):

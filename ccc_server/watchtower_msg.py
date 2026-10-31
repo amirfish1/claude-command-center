@@ -1613,6 +1613,11 @@ def _inject_text_into_session(session_id, text, **kwargs):
         kwargs.pop("attr", None)
     requested = str(kwargs.pop("requested_verb", "") or "")
     mode = str(kwargs.get("mode", "send"))
+    # One id for the whole trip: response, queue row, receipt, browser card.
+    from ccc_server import delivery as _delivery
+    delivery_id = _delivery.mint(
+        attr=kwargs.get("attr"), idempotency_key=kwargs.get("idempotency_key"),
+    )
     fields = dict(kwargs.pop("contract_fields", None) or {})
     allow_duplicate = bool(kwargs.pop("allow_duplicate", False))
     dedupe_sid = kwargs.pop("_dedupe_session_id", None) or session_id
@@ -1674,7 +1679,10 @@ def _inject_text_into_session(session_id, text, **kwargs):
         )
     try:
         result = _annotate_inject_result(
-            attribution.during(kwargs.get("attr"), lambda: _core._inject_text_into_session_router(session_id, text, **kwargs)),
+            attribution.during(kwargs.get("attr"), lambda: _delivery.within(
+                delivery_id, text,
+                lambda: _core._inject_text_into_session_router(session_id, text, **kwargs),
+            )),
             requested=requested,
             force_queue=bool(kwargs.get("force_queue", False)),
             fields=fields,
@@ -1682,6 +1690,9 @@ def _inject_text_into_session(session_id, text, **kwargs):
         if attribution.enabled("ccc"):
             result["message_id"] = attr["message_id"]
             result["attribution_recorded"] = attribution_recorded
+        # A worker-routed result already names the id its queue row took.
+        if not result.get("delivery_id"):
+            result["delivery_id"] = delivery_id
         log_owned_by_worker = bool(result.pop("_log_owned_by_worker", False))
     except BaseException:
         if dedupe_owner:

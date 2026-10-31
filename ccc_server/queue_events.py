@@ -1646,7 +1646,7 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
         # verifier report landing on a finished Codex thread) cannot pile up
         # duplicate queued copies that get re-injected repeatedly.
             if text not in queue:
-                queue.append(_core._PendingInputEntry(text))
+                queue.append(_core._new_pending_entry(text))
                 _core._pending_resume_queue[session_id] = queue
             return True
 

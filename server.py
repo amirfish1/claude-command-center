@@ -40220,9 +40220,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = {}
             sid = str(payload.get("session_id") or "").strip()
             text = str(payload.get("text") or "").strip()
-            if not sid or not text:
-                self.send_json({"ok": False, "error": "session_id and text required"}, 400)
-            elif _consume_matching_pending_input(sid, text):
+            delivery_id = str(payload.get("delivery_id") or "").strip()
+            by_id = None
+            if sid and delivery_id:
+                from ccc_server import delivery as _delivery
+                by_id = _delivery.cancel(sid, delivery_id)
+            if not sid or not (text or delivery_id):
+                self.send_json({"ok": False, "error": "session_id and text or delivery_id required"}, 400)
+            elif by_id is not None and not by_id.get("ok"):
+                self.send_json(dict(by_id, session_id=sid), 503)
+            elif by_id and by_id.get("cancelled"):
+                self.send_json({"ok": True, "cancelled": by_id["cancelled"], "session_id": sid,
+                                "delivery_id": delivery_id, "queue": by_id.get("queue")})
+            elif text and _consume_matching_pending_input(sid, text):
                 self.send_json({"ok": True, "cancelled": 1, "session_id": sid})
             else:
                 self.send_json({
@@ -40670,7 +40680,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     from ccc_server import inject_receipts as _inject_receipts
                     _inject_receipts.open_receipt(
                         sid,
-                        payload.get("idempotency_key") or uuid.uuid4().hex,
+                        result.get("delivery_id")
+                        or payload.get("idempotency_key") or uuid.uuid4().hex,
                         text,
                         source=str(payload.get("source") or "composer"),
                     )
