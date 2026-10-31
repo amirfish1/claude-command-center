@@ -14,6 +14,12 @@ import time
 _available = None
 _started = False
 _start_lock = threading.Lock()
+_wake = threading.Event()
+
+
+def request_publish():
+    """Coalesce association updates into the next full snapshot publication."""
+    _wake.set()
 
 
 def available():
@@ -254,6 +260,7 @@ def _loop():
     if _marker().exists():
         _available = True
     while True:
+        _wake.clear()
         try:
             if tickets._enabled():
                 result = _call(["status"])
@@ -271,4 +278,4 @@ def _loop():
                 publish_candidates(enabled=False)
         except Exception as exc:
             tickets._core._log_activity("idea", "IDEA_TICKET_ERR", f"takeover bridge {exc}")
-        time.sleep(60)
+        _wake.wait(60)

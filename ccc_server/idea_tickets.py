@@ -691,6 +691,8 @@ def _file_new(sid, queue, text, cwd, *, label=""):
         d["sessions"][sid] = {"ref": ref, "kind": "started", "at": int(time.time())}
         d["pending"].pop(sid, None)
     _mutate(_record)
+    from . import takeover_bridge
+    takeover_bridge.request_publish()
     _restamp_rows()
     _core._log_activity("idea", "IDEA_TICKET", f"{sid} -> {ref} ({label or queue})")
     return {"ok": True, "ref": ref, "queue": queue}
@@ -810,6 +812,8 @@ def _attach(sid, ref, kind, origin):
         d["sessions"][sid] = {"ref": ref, "kind": kind, "from": origin, "at": int(time.time())}
         d["pending"].pop(sid, None)
     _mutate(_record)
+    from . import takeover_bridge
+    takeover_bridge.request_publish()
     _restamp_rows()
     note = (f"Continued in session {sid} (from {origin})." if kind == "continued"
             else f"Child session {sid} spawned by {origin}.")
