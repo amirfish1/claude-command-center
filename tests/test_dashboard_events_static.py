@@ -61,7 +61,12 @@ def test_dashboard_invalidations_are_coalesced_by_resource_and_id():
     assert "function scheduleDashboardInvalidation(resource, id)" in source
     assert "_dashboardEventState.invalidations.has(key)" in source
     assert "queueMicrotask(_flushDashboardInvalidations)" in source
-    assert "_uxqItemsVersion += 1" in source
+    # A passive invalidation must not bump _uxqItemsVersion: that discarded
+    # every in-flight /api/queue/list read and starved the ticket cache
+    # (3361ee98).
+    flush = source[source.index("function _flushDashboardInvalidations()"):]
+    flush = flush[:flush.index("\n  function ", 1)]
+    assert "_uxqItemsVersion += 1" not in flush
     assert "_archiveRefreshAfterInflight = true" in source
     assert "_uxqHealthAppliedSeq = ++_uxqHealthReqSeq" in source
     assert "_wtWorkersVersion += 1" in source

@@ -17,7 +17,9 @@ class TestSidebarRowLayout(unittest.TestCase):
         main_row = row_html[row_html.index("+ '<div class=\"conv-main-row"):]
         row_end = row_html[row_html.index("+ '<span class=\"conv-row-end\">'"):]
 
-        self.assertIn("+ sessionIconHtml\n            + _nyaChevronHtml", main_row)
+        # The icon is the first child of the main row (left rail); later
+        # markers such as the AUTO switch follow it.
+        self.assertIn("\'\">\'\n            + sessionIconHtml\n", main_row)
         self.assertNotIn("+   sessionIconHtml", row_end)
 
         item_css = app_css[

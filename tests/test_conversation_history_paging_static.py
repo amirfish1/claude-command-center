@@ -57,8 +57,8 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         """Hover warming must not full-parse huge transcripts."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         prefetch_js = app_js[
-            app_js.index("function _prefetchConversationTail(id)"):
-            app_js.index("function _convPrefetchCancel(id)", app_js.index("function _prefetchConversationTail(id)"))
+            app_js.index("function _prefetchConversationTail(id, user)"):
+            app_js.index("function _convPrefetchCancel(id)", app_js.index("function _prefetchConversationTail(id, user)"))
         ]
 
         # Fresh opens (and their hover prefetch) use the small first window;

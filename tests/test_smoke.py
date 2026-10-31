@@ -2002,7 +2002,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         sidebar_tab = app_js.index("const _sidebarTab = (() => {")
-        archive_action = app_js.index("const lifecycleContext = opts.lifecycleContext")
+        archive_action = app_js.index("const _lifecycleContext0 = opts.lifecycleContext")
         self.assertLess(sidebar_tab, archive_action)
 
     def test_all_tab_archive_action_uses_explicit_button_intent(self):
@@ -16162,7 +16162,7 @@ class TestModelPicker(unittest.TestCase):
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         self.assertIn("/api/conversations/[^/]+/files", src)
         self.assertIn("class=\"conv-pin-btn", js)
-        self.assertIn("mergeBtn + startBtn + pinBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons", js)
+        self.assertIn("mergeBtn + startBtn + pinBtn + handoffBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons", js)
         self.assertIn("Pinned to top", js)
         self.assertIn("_minPinnedRank", js)
         self.assertNotIn("conv-pinned-section", js)
@@ -18222,7 +18222,7 @@ class TestPendingInputs(unittest.TestCase):
             source.index('elif path == "/api/session/compact"')
         ]
         inject_pos = branch.index("_inject_text_into_session(")
-        finalize_pos = branch.index("_finalize_queued_steer_result(sid, text, result)")
+        finalize_pos = branch.index("_finalize_queued_steer_result(\n                        sid, text, result,")
 
         self.assertLess(inject_pos, finalize_pos)
         self.assertIn('inject_options["preserve_queued_steer"] = True', branch)
@@ -19176,10 +19176,9 @@ class TestQuestionRelay(unittest.TestCase):
                 for h in entry.get("hooks", [])
                 if "command-center/hooks/" in h.get("command", "")
             ]
-            # 4 pre-seeded (PreToolUse/PostToolUse/Notification/Stop, migrated
-            # to an absolute interpreter) + 4 freshly installed (PermissionRequest/
-            # SessionStart/PreCompact/PostCompact, absent from the fixture above).
-            self.assertEqual(len(commands), 8)
+            # The 4 pre-seeded entries are migrated to an absolute interpreter
+            # and every other spec is freshly installed: one command per spec.
+            self.assertEqual(len(commands), len(self.server.config_consent.CLAUDE_HOOK_SPECS))
             expected_python = "/usr/bin/python3" if self.server.sys.platform == "darwin" else "/opt/ccc-test/python3"
             for command in commands:
                 self.assertTrue(command.startswith(expected_python + " "), command)

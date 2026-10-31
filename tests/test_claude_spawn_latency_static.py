@@ -158,7 +158,7 @@ def test_critical_spawn_can_preempt_background_api_reads():
     assert "function backgroundApiFetch(" in source
     assert "new AbortController()" in source
     assert "window.fetch = function trackedApiFetch" not in source
-    assert "backgroundApiFetch(" in _function_source("loadArchiveAll", 4000)
+    assert "backgroundApiFetch(" in _function_source("loadArchiveAll", 8000)
     assert "backgroundApiFetch(repoUrl('/api/sessions'" in _function_source(
         "loadConversationList", 1200,
     )
