@@ -1,0 +1,1 @@
+Group repeated Hermes CLI batch tasks under a collapsible task row, even when generated titles differ or other sessions appear between runs. Individual sessions remain accessible as indented rows, with separate groups for each profile, model, and folder.

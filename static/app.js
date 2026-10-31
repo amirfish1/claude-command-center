@@ -41054,7 +41054,19 @@
     // Same chain the rows themselves title by, so a group header can never
     // disagree with the rows it collapses.
     const _repeatGroupRawTitle = (c) => (c ? rowRawTitle(c).rawTitle : '');
-    const _repeatGroupTitle = (c) => sidebarRowDisplayTitle(_repeatGroupRawTitle(c) || '(untitled)');
+    // Batch CLI tasks can have a different generated title for every input.
+    // Their shared opening paragraph describes the task; later paragraphs
+    // carry the individual input. Keep profiles and transports separate.
+    const _repeatTaskTitle = (c) => {
+      if (!c || c.engine !== 'hermes' || c.hermes_source !== 'cli' || c.name_overridden) return '';
+      const prompt = String(c.first_message || '').trim();
+      const split = prompt.search(/\r?\n\s*\r?\n/);
+      if (split < 0) return '';
+      const opening = prompt.slice(0, split).replace(/\s+/g, ' ').trim();
+      if (opening.length < 40 || opening.split(/\s+/).length < 6) return '';
+      return opening.replace(/[.!:]+$/, '');
+    };
+    const _repeatGroupTitle = (c) => sidebarRowDisplayTitle(_repeatTaskTitle(c) || _repeatGroupRawTitle(c) || '(untitled)');
     // The key has to be self-consistent: the previous rule keyed titles of 48
     // chars or less on their full text but longer ones on a 32-char prefix, so
     // a title could never group with its own longer variant --
@@ -41084,12 +41096,15 @@
       return words.slice(0, _REPEAT_KEY_WORDS).join(' ');
     };
     const _repeatGroupKey = (c) => {
-      const title = _repeatGroupTitleKey(_repeatGroupTitle(c));
+      const task = _repeatTaskTitle(c);
+      const title = task ? 'task:' + task.toLowerCase() : _repeatGroupTitleKey(_repeatGroupTitle(c));
       if (!title || title === '(untitled)') return '';
       const engine = String(c.engine || c.source || '').trim().toLowerCase();
       const model = String(c.model || '').trim().toLowerCase();
       const folder = String(c.folder_path || c.folder_label_chip || '').trim().toLowerCase();
-      return [title, engine, model, folder].join('\n');
+      const profile = String(c.hermes_profile || c.repeat_group_profile || '').trim();
+      const transport = String(c.hermes_source || '').trim();
+      return [title, engine, model, folder, profile, transport].join('\n');
     };
     const _repeatGroupStorageKey = (key) => 'ccc-repeat-row-group-expanded:' + _repeatGroupHash(key);
     const _repeatGroupExpanded = (key, cards) => {
@@ -43526,7 +43541,29 @@
       });
       return clusters;
     };
-    const _allTabClusters = _allTabRowsToClusters(_allTabTreeRows);
+    // Gather batch runs across the whole visible lane, even when unrelated
+    // sessions are interleaved. Real parent/child trees stay intact. The first
+    // occurrence anchors the group, preserving the chosen list ordering.
+    const _foldRepeatTaskClusters = (clusters) => {
+      const groups = new Map();
+      const out = [];
+      for (const cluster of clusters) {
+        const card = cluster.rows.length === 1 && cluster.rows[0].card;
+        const key = card && _repeatTaskTitle(card) && _repeatGroupKey(card);
+        if (!key) { out.push(cluster); continue; }
+        const existing = groups.get(key);
+        if (existing) {
+          existing.rows.push(...cluster.rows);
+          existing.repeatKey = key;
+        } else {
+          const group = { rows: cluster.rows.slice() };
+          groups.set(key, group);
+          out.push(group);
+        }
+      }
+      return out;
+    };
+    const _allTabClusters = _foldRepeatTaskClusters(_allTabRowsToClusters(_allTabTreeRows));
     const _allTabClusterPinRank = (cluster) => (cluster.rows || []).reduce((best, item) => (
       item.card.pinned ? Math.min(best, _pinRankValue(item.card)) : best
     ), Infinity);
@@ -43553,6 +43590,13 @@
       };
       (clusters || []).forEach(cluster => {
         if (!cluster || !cluster.rows || !cluster.rows.length) return;
+        if (cluster.repeatKey) {
+          flushRepeats();
+          chunks.push(_renderRepeatGroup(cluster.rows.map(item => item.card), {
+            lifecycleContext: 'all-main', suppressFolderChip, goalIconOnly: true, hideTrash
+          }, cluster.repeatKey));
+          return;
+        }
         if (cluster.rows.length > 1) {
           flushRepeats();
           chunks.push(_renderSubagentCluster(cluster, {
@@ -78308,6 +78352,7 @@
           thread_source: c.thread_source || '',
           source_platform: c.source_platform || '',
           hermes_source: c.hermes_source || '',
+          repeat_group_profile: c.hermes_profile || '',
           hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
           all_lane_override: c.all_lane_override || '',
         });
@@ -78457,6 +78502,8 @@
         thread_source: c.thread_source || '',
         source_platform: c.source_platform || '',
         hermes_source: c.hermes_source || '',
+        // Preserve grouping scope without changing the row's existing lane.
+        repeat_group_profile: c.hermes_profile || '',
         hermes_tool_calls: Number(c.hermes_tool_calls || c.tool_call_count || 0),
         all_lane_override: c.all_lane_override || '',
         // Codex cloud (dot/aeon) threads: the row renderer reads codex_cloud
