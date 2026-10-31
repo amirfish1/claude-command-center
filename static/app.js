@@ -3647,10 +3647,10 @@
     if (working) return Object.assign(base, { label: 'Working', kind: 'working',
       text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') });
     // Closed rows don't invite the user to close them again.
-    if (c.archived || c.trashed) return Object.assign(base, { label: (c.trashed || (c.explicitly_archived ?? c.idea_ticket?.explicitly_archived)) ? 'Archived' : 'Finished', kind: 'ready',
+    if (c.archived || c.trashed) return Object.assign(base, { label: (c.trashed || (c.explicitly_archived ?? c.idea_ticket?.explicitly_archived)) ? 'Archived' : '✓', kind: 'ready',
       text: did || 'Closed session.' });
-    if (ready) return Object.assign(base, { label: 'Ready to close', kind: 'ready',
-      text: (offerClose ? 'Ready to close · ' : '') + (did || 'Reviewed as complete; archive when ready.') });
+    if (ready) return Object.assign(base, { label: '✓', kind: 'ready',
+      text: did || 'Reviewed as complete; archive when ready.' });
     const attn = (hasNext && !rowHandoff(c)) ? null : sessionAttentionStep(c);
     if (attn) return Object.assign(base, { label: attn.label, kind: attn.kind, text: attn.text, attn });
     // An open task's pending work is more useful than its completed milestone.
@@ -3711,8 +3711,7 @@
         outcome.title = 'Ultra-fresh · agent message\n' + info.text;
         let step = outcome.querySelector('.conv-outcome-step');
         if (!step) { step = document.createElement('span'); step.className = 'conv-outcome-step'; outcome.prepend(step); }
-        if (closeBtn) delete step.dataset.label;
-        else step.dataset.label = info.label;
+        step.dataset.label = info.label;
         // Compare against the text we last painted, not textContent:
         // question-tags.js chipifies [Q<n>:slug] to "Q<n>", so textContent
         // never matches and every tick re-wrote the raw tag (CCC-167 flicker).
@@ -3736,13 +3735,9 @@
         if (offerClose && waLine && !waLine.querySelector('.conv-ready-close')) {
           waLine.insertAdjacentHTML('beforeend', readyToCloseArchiveHtml());
         }
-        const waClose = offerClose && row.querySelector('.wa-line2 .conv-ready-close');
-        if (waClose) { if (label) label.remove(); }
-        else {
-          if (!label) { label = document.createElement('span'); label.className = 'wa-explanation-label'; preview.appendChild(label); }
-          label.textContent = info.label + ':';
-          label.dataset.status = info.label.toLowerCase();
-        }
+        if (!label) { label = document.createElement('span'); label.className = 'wa-explanation-label'; preview.appendChild(label); }
+        label.textContent = info.label === '✓' ? '✓' : info.label + ':';
+        label.dataset.status = info.label.toLowerCase();
         if (preview.dataset.ultraFreshText !== info.text) {
           for (const node of [...preview.childNodes]) {
             if (node.nodeType === 3 || (node.nodeType === 1 && node.matches('.qtag-chip'))) node.remove();
@@ -41147,7 +41142,7 @@
         const _closeBtn = _readyToCloseRow && _outView.offerClose;
         outcomeHtml = _stepText
           ? '<div class="conv-outcome is-next-step is-inline is-' + _kind + (_closeBtn ? ' has-close-btn' : '') + '" title="' + escapeAttr(_outTip) + '">'
-            + '<span class="conv-outcome-step"' + (_closeBtn ? '' : ' data-label="' + escapeAttr(_label) + '"') + '>' + escapeHtml(_stepText) + '</span>'
+            + '<span class="conv-outcome-step" data-label="' + escapeAttr(_label) + '">' + escapeHtml(_stepText) + '</span>'
             + (_closeBtn ? readyToCloseArchiveHtml() : '')
             + (_childLaneRow ? '' : attentionChipsHtml(c, _attn))
             + '</div>'
@@ -41230,7 +41225,7 @@
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Ticket identity stays inside the avatar.
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview && !_readyToCloseRow ? '<span class="wa-explanation-label" data-status="' + escapeAttr(_waExplanationLabel.toLowerCase()) + '">' + escapeHtml(_waExplanationLabel) + ':</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview ? '<span class="wa-explanation-label" data-status="' + escapeAttr(_waExplanationLabel.toLowerCase()) + '">' + escapeHtml(_waExplanationLabel) + (_waExplanationLabel === '✓' ? '' : ':') + '</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
         + '<div class="wa-row-footer">' + sessionIdChipHtml + '</div>'
         + '</div>'
         + '</div>';
@@ -41599,10 +41594,9 @@
       const parentId = _subagentRowId(rootItem.card);
       const total = presentation.total;
       const isCollapsible = total > 0;
-      // Small families start open; explicit collapse always wins, including
-      // when a child needs attention, so polling respects the user's choice.
+      // Lanes start collapsed; only an explicit saved expansion opens them.
       const expanded = !_subagentCollapsedParents.has(parentId)
-        && (total <= 2 || _subagentExpandedParents.has(parentId) || presentation.attention > 0);
+        && _subagentExpandedParents.has(parentId);
       const clusterCostUsd = (cluster.rows || []).reduce((sum, item) => (
         sum + (Number(item.card.cost_usd) || 0)
       ), 0);

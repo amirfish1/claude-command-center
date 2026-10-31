@@ -41,7 +41,7 @@ test('new work and real approval signals override an earlier completion summary'
 const reviewedRow = { ...completed, mtime: 100, modified: 100,
   session_state: {}, idea_ticket: { ready_to_close_reviewed_at: 110 } };
 
-test('ready explanation ends in a Close button instead of a CLOSE label (CCC-136)', () => {
+test('ready explanation shows a completion check and ends in an Archive button', () => {
   const start = app.indexOf('      // Outcome line (GOAL-1)');
   const outcome = app.slice(start, app.indexOf('      const _outcomeInline =', start));
   const html = vm.runInNewContext(code + '\n(function(){\n' + outcome + '\nreturn outcomeHtml;})()', {
@@ -52,11 +52,12 @@ test('ready explanation ends in a Close button instead of a CLOSE label (CCC-136
     _applyLiveOverlayToRow: row => row, escapeHtml: String, escapeAttr: String,
   });
   assert.match(html, /Reviewed as complete; archive when ready/);
-  assert.doesNotMatch(html, /data-label=/);
+  assert.match(html, /data-label="✓"/);
+  assert.doesNotMatch(html, /Ready to close/);
   // The button follows the text, inside the explanation box.
-  assert.match(html, /archive when ready\.<\/span><button [^>]*conv-ready-close[^>]*>Close<\/button><\/div>$/);
+  assert.match(html, /archive when ready\.<\/span><button [^>]*conv-ready-close[^>]*>Archive<\/button><\/div>$/);
   assert.match(vm.runInNewContext(code + "\nreadyToCloseArchiveHtml();"), /data-role="archive" data-archived="true"/);
-  assert.doesNotMatch(vm.runInNewContext(code + "\nreadyToCloseArchiveHtml();"), />Archive</);
+  assert.match(vm.runInNewContext(code + "\nreadyToCloseArchiveHtml();"), />Archive</);
   assert.doesNotMatch(html, /data-label="Next"/);
 });
 
@@ -153,4 +154,16 @@ test('first paint and the live patcher share one status rule set (CCC-273)', () 
   assert.equal(view(reviewed, { childLane: true }).offerClose, false);
   assert.equal(view(reviewed, { childLane: true }).kind, 'ready');
   assert.equal(view({ ...reviewed, archived: true }).offerClose, false);
+});
+
+
+test('ready parents, child lanes and finished rows use a check without a completion prefix', () => {
+  const outcome = loadRowOutcomeView();
+  for (const childLane of [false, true]) {
+    const result = outcome(reviewedRow, { childLane });
+    assert.equal(result.label, '✓');
+    assert.doesNotMatch(result.text, /Ready to close/);
+  }
+  assert.equal(outcome({ ...reviewedRow, archived: true }).label, '✓');
+  assert.equal(outcome({ ...reviewedRow, archived: true, explicitly_archived: true }).label, 'Archived');
 });

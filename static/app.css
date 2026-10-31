@@ -33881,3 +33881,20 @@ body:has(#settingsModal.open) #ideaTicketsIntroBanner { visibility:hidden; point
     animation: session-working-glow 2.8s ease-in-out infinite alternate;
   }
 }
+
+/* Completion and decisions stay distinct when scanning session summaries. */
+#convList#convList .conv-item .wa-explanation-label[data-status="✓"],
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step[data-label="✓"]::before {
+  content: "✓ ";
+  display: inline;
+  color: var(--green, #3fb950);
+  font-weight: 700;
+  border: 0;
+  padding: 0;
+  margin-right: 4px;
+}
+#convList#convList .conv-item .wa-explanation-label[data-status="decide"],
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step[data-label="Decide"]::before {
+  color: var(--orange, #d29922);
+  font-weight: 700;
+}

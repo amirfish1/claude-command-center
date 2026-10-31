@@ -49,3 +49,29 @@ test('a nested lane that also has its own row elsewhere is dropped from the nest
     await browser.close();
   }
 });
+
+
+test('lanes start collapsed regardless of family size or attention; saved expansion wins', () => {
+  const start = app.indexOf('    const _renderSubagentCluster = (cluster, opts = {}) => {');
+  const end = app.indexOf('\n    };', start) + 7;
+  const expanded = new Set();
+  const collapsed = new Set();
+  const render = require('node:vm').runInNewContext(app.slice(start, end) + '\n_renderSubagentCluster;', {
+    _subagentClusterPresentation: cluster => ({ rootItem: cluster.rows[0], ...cluster }),
+    _subagentRowId: card => card.id,
+    _subagentExpandedParents: expanded,
+    _subagentCollapsedParents: collapsed,
+    _renderRow: () => '<div class="conv-item"></div>',
+    escapeAttr: String,
+  });
+  const cluster = (total, attention) => ({ total, attention, active: total,
+    rows: Array.from({ length: total + 1 }, (_, i) => ({ card: { id: i ? 'child-' + i : 'parent' }, depth: i ? 1 : 0 })),
+  });
+  for (const total of [1, 2, 4]) {
+    for (const attention of [0, 1]) assert.doesNotMatch(render(cluster(total, attention)), /is-expanded/);
+  }
+  expanded.add('parent');
+  assert.match(render(cluster(1, 0)), /is-expanded/);
+  collapsed.add('parent');
+  assert.doesNotMatch(render(cluster(1, 1)), /is-expanded/);
+});
