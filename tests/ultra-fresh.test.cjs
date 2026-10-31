@@ -8,6 +8,28 @@ const app = fs.readFileSync('static/app.js', 'utf8');
 const block = app.slice(app.indexOf('  // Ultra-fresh:'), app.indexOf('  // The server derives readiness'));
 const rowActions = app.slice(app.indexOf('  // Row actions are model-authored replies'), app.indexOf('  // CCC-1218:'));
 
+test('a submitted turn survives delivery acknowledgment over an old finished snapshot', () => {
+  let sending = true;
+  const entry = {at: 1, userAt: 0, text: 'Old completed work.'};
+  const context = { Date, _ultraFresh: {entries: new Map([['reopened', entry]])},
+    sessionIsOptimisticallySending: () => sending, preSendPreviewFor: () => 'Old completed work.' };
+  vm.createContext(context);
+  for (const name of ['_ultraFreshTime', '_ultraFreshSendBarrier', '_ultraFreshCurrent']) {
+    const start = app.indexOf('  function ' + name + '(');
+    vm.runInContext(app.slice(start, app.indexOf('\n  }\n', start) + 4), context);
+  }
+  const old = {session_id:'reopened', archived:true, state:'ended', last_assistant_text:'Old completed work.'};
+  assert.equal(context._ultraFreshCurrent(old).state, 'working');
+  sending = false; // The transcript acknowledges the send before the list updates.
+  assert.equal(context._ultraFreshCurrent(old).state, 'working');
+  assert.equal(context._ultraFreshCurrent(old).last_assistant_text, '');
+  entry.at = entry.sendAt + 10;
+  entry.text = 'Choose the next step.';
+  entry.sessionState = {next_step_user:'Choose the next step.'};
+  assert.equal(context._ultraFreshCurrent(old).session_state.next_step_user, 'Choose the next step.');
+  assert.equal(context._ultraFreshCurrent(old).archived, false);
+});
+
 test('spawn text deltas expose authored choices when the complete footer arrives', () => {
   const frames = [];
   const context = { _ultraFresh: { entries: new Map([['s0', {}]]) },

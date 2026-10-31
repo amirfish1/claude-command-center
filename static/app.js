@@ -3489,8 +3489,8 @@
       + '<span class="grouping-opt' + (on ? ' is-active' : '') + '" data-tracked-table-toggle="1">Table</span>'
       + '</span>';
   }
-  // Ultra-fresh: one bounded stream for the first four sessions intersecting
-  // the list viewport. Message updates touch only the existing explanation
+  // Ultra-fresh: one bounded stream for the selected session and visible
+  // rows, up to four sessions. Message updates touch the existing explanation
   // slots; row identity, ordering, selection and scroll stay under list control.
   function sessionCompletionDetails(assessment) {
     const scope = assessment && assessment.scope;
@@ -3588,19 +3588,23 @@
     const entry = _ultraFresh.entries.get(String(c.session_id || c.id));
     if (!entry) return c;
     _ultraFreshSendBarrier(entry, c.session_id || c.id);
-    if (entry.userAt > entry.at) return Object.assign({}, c,
-      { last_event_type: 'user', state: 'working', session_state: null, last_assistant_text: '', last_assistant_preview: '' });
+    if (entry.userAt > entry.at || (entry.sendAt && entry.userAt === entry.at && !entry.text)) return Object.assign({}, c,
+      { last_event_type: 'user', state: 'working', needs_approval: false, question_waiting: false,
+        session_state: null, last_assistant_text: '', last_assistant_preview: '' });
     if (!entry.text) return c;
     if (sessionIsOptimisticallySending(c.session_id || c.id) && entry.at <= entry.sendAt) return c;
     // A newer user event from the ordinary list also invalidates a live reply.
     if (c.last_event_type === 'user'
         && _ultraFreshTime(c.modified || c.mtime) > Math.max(entry.at, entry.sourceAt || 0)) return c;
+    const reopened = !!entry.sendAt || entry.userAt > _ultraFreshTime(c.modified || c.mtime);
     return Object.assign({}, c, { last_assistant_text: entry.text, last_assistant_preview: entry.text,
+      archived: reopened && !(c.explicitly_archived ?? c.idea_ticket?.explicitly_archived) ? false : c.archived,
       session_state: entry.sessionState, last_event_type: 'assistant',
       modified: Math.max(Number(c.modified) || 0, entry.at / 1000) });
   }
   function sidebarSessionWorking(c, live = c) {
     const sending = sessionIsOptimisticallySending(c.session_id || c.id);
+    if (sending) return !c.trashed;
     const finishedTicket = c.idea_ticket && !(c.explicitly_archived ?? c.idea_ticket.explicitly_archived);
     return (!c.archived || finishedTicket || sending) && !c.trashed && !live.needs_approval && !live.question_waiting
       && (sessionIsOptimisticallySending(c.session_id || c.id) || c.pending_spawn
@@ -3815,10 +3819,19 @@
     if (list && !document.hidden) {
       const bounds = list.getBoundingClientRect();
       const byId = new Map(conversationsData.map(c => [String(c.session_id || c.id), c]));
+      const eligible = (c, sid) => c && !c.trashed
+        && !(c.archived && !c.idea_ticket && !sessionIsOptimisticallySending(sid))
+        && (!(c.explicitly_archived ?? c.idea_ticket?.explicitly_archived) || sessionIsOptimisticallySending(sid))
+        && !['backlog', 'github_pr', 'group-chat'].includes(c.source);
+      // The open composer's activity must survive a collapsed category or
+      // scrolling its row away while delivery is acknowledged in the pane.
+      const selected = typeof currentConversation === 'string' ? currentConversation : '';
+      if (eligible(byId.get(selected), selected)) ids.push(selected);
       for (const row of list.querySelectorAll('.conv-item[data-session-id]')) {
+        if (ids.length === 4) break;
         const sid = row.dataset.sessionId;
         const c = byId.get(sid);
-        if (!c || c.archived || c.trashed || ['backlog', 'github_pr', 'group-chat'].includes(c.source)) continue;
+        if (!eligible(c, sid)) continue;
         const rect = row.getBoundingClientRect();
         if (rect.height <= 0 || rect.bottom <= Math.max(0, bounds.top) || rect.top >= Math.min(innerHeight, bounds.bottom)) continue;
         if (!ids.includes(sid)) ids.push(sid);
@@ -12625,6 +12638,14 @@
 
   function removePendingSendEcho(pending) {
     if (!pending) return;
+    // A cancelled/refused send has no durable user event. Undo only its
+    // local barrier; a later transcript event already proves real activity.
+    const fresh = pending.sid && _ultraFresh.entries.get(String(pending.sid));
+    if (fresh && fresh.sendAt && fresh.userAt === fresh.sendAt && !fresh.text) {
+      fresh.at = fresh.userAt = fresh.sendAt = 0;
+      fresh.sending = false;
+      _preSendPreview.delete(pending.sid);
+    }
     if (pending.element && pending.element.parentNode) {
       pending.element.parentNode.removeChild(pending.element);
     }
