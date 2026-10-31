@@ -7,7 +7,11 @@ const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 function load() {
   const start = source.indexOf('  function ticketSessionSection(');
   const end = source.indexOf('  // The finished row\'s one action:', start);
-  return vm.runInNewContext(source.slice(start, end) + '\n({ ticketSessionSection, stableTicketSessionGroups });', {
+  const helpers = ['_archiveWindowTsSec', '_archiveWindowRowTs'].map(name => {
+    const begin = source.indexOf('  function ' + name + '(');
+    return source.slice(begin, source.indexOf('\n  }\n', begin) + 4);
+  }).join('\n');
+  return vm.runInNewContext(helpers + '\n' + source.slice(start, end) + '\n({ ticketSessionSection, stableTicketSessionGroups });', {
     _applyLiveOverlayToRow: c => c,
     rowOutcomeView: loadRowOutcomeView(),
   });
@@ -32,12 +36,26 @@ test('real questions need attention; stale previous-turn next steps do not', () 
   assert.equal(section(row('a', { ...ask, last_event_type: 'user' })), 'active');
   assert.equal(section(row('a', { ...ask, state: 'working' })), 'active');
 });
-test('polls and changing timestamps preserve order; new tickets lead', () => {
+test('new activity moves an existing row ahead of older sessions, even when selected', () => {
   const { stableTicketSessionGroups: groups } = load();
   const ids = g => Array.from(g.active, r => r.session_id);
-  assert.deepEqual(ids(groups([row('a'), row('b')], 'features')), ['a', 'b']);
-  assert.deepEqual(ids(groups([row('b', { modified: 99 }), row('a')], 'features')), ['a', 'b']);
-  assert.deepEqual(ids(groups([row('b'), row('c'), row('a')], 'features')), ['c', 'a', 'b']);
+  assert.deepEqual(ids(groups([row('a', { modified: 20 }), row('b', { modified: 10 })], 'features')), ['a', 'b']);
+  assert.deepEqual(ids(groups([row('a', { modified: 20 }), row('b', { modified: 30 })], 'features', 'b')), ['b', 'a']);
+  assert.deepEqual(ids(groups([row('c', { modified: 5 }), row('a', { modified: 20 }), row('b', { modified: 30 })], 'features')), ['b', 'a', 'c']);
+});
+test('equal timestamps have deterministic order across shuffled polls', () => {
+  const { stableTicketSessionGroups: groups } = load();
+  const ids = g => Array.from(g.active, r => r.session_id);
+  const a = row('a', { modified: 20 }), b = row('b', { modified: 20 });
+  assert.deepEqual(ids(groups([b, a], 'features')), ['a', 'b']);
+  assert.deepEqual(ids(groups([a, b], 'features')), ['a', 'b']);
+});
+test('Finished also sorts newest first and honors timestamp units and interaction recency', () => {
+  const { stableTicketSessionGroups: groups } = load();
+  const items = [row('old', { archived: true, modified: 1700000000000 }),
+    row('recent', { archived: true, modified: 1700000020 }),
+    row('touched', { archived: true, modified: 1700000000, last_interacted: 1700000030 })];
+  assert.deepEqual(Array.from(groups(items, 'bugs').finished, r => r.session_id), ['touched', 'recent', 'old']);
 });
 test('selected row stays anchored until deselection; explicit close moves immediately', () => {
   const { stableTicketSessionGroups: groups } = load();
@@ -52,5 +70,8 @@ test('ticket identity survives a new representative session and categories stay 
   groups([row('a'), row('b')], 'features');
   const continuation = row('new', { idea_ticket: { ref: 'TASK-a' } });
   assert.equal(groups([row('b'), continuation], 'features').active[0].session_id, 'new');
-  assert.equal(groups([row('b'), row('a')], 'bugs').active[0].session_id, 'b');
+  const question = row('b', { question_waiting: true });
+  groups([row('b')], 'features');
+  assert.equal(groups([question], 'features', 'b').active.length, 1);
+  assert.equal(groups([question], 'bugs', 'b')['needs-you'].length, 1);
 });

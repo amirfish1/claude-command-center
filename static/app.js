@@ -3891,18 +3891,18 @@
     return outcome.kind === 'next' ? 'needs-you' : 'active';
   }
 
-  // Keep the order first seen in each category through polling updates. New
-  // tickets lead the list; status/mtime changes don't shuffle existing rows.
+  // Activity determines order; equal timestamps use ticket identity so polls
+  // cannot shuffle ties. Remember only the selected row's lifecycle section.
   const _ticketSessionLayouts = new Map();
   function stableTicketSessionGroups(rows, lane, selectedId) {
     const previous = _ticketSessionLayouts.get(lane) || new Map();
     const next = new Map();
     const keyFor = c => c.idea_ticket?.ref || c.session_id || c.id;
-    const ordered = rows.filter(c => !previous.has(keyFor(c))).concat(
-      rows.filter(c => previous.has(keyFor(c))).sort((a, b) =>
-        previous.get(keyFor(a)).rank - previous.get(keyFor(b)).rank));
+    const ordered = rows.slice().sort((a, b) =>
+      _archiveWindowRowTs(b) - _archiveWindowRowTs(a)
+      || String(keyFor(a)).localeCompare(String(keyFor(b))));
     const groups = { 'needs-you': [], active: [], finished: [], archived: [] };
-    ordered.forEach((c, rank) => {
+    ordered.forEach(c => {
       const key = keyFor(c);
       let section = ticketSessionSection(c);
       const before = previous.get(key);
@@ -3911,7 +3911,7 @@
       if ((c.session_id || c.id) === selectedId && before
           && ['active', 'needs-you'].includes(section)
           && ['active', 'needs-you'].includes(before.section)) section = before.section;
-      next.set(key, { rank, section });
+      next.set(key, { section });
       groups[section].push(c);
     });
     _ticketSessionLayouts.set(lane, next);

@@ -1,0 +1,1 @@
+- Restore newest-first ordering within session lifecycle sections. New activity now moves an existing ticket above older sessions; equal timestamps use a deterministic tie-breaker to prevent polling jitter. Pinned rows and explicit project/cost grouping retain their existing priority.
