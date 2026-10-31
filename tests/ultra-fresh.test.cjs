@@ -12,7 +12,7 @@ test('a submitted turn survives delivery acknowledgment over an old finished sna
   let sending = true;
   const entry = {at: 1, userAt: 0, text: 'Old completed work.'};
   const context = { Date, _SENDING_TIMEOUT_MS: 300000, _ultraFresh: {entries: new Map([['reopened', entry]])},
-    _sessionLiveOverlay: new Map(), _LIVE_OVERLAY_KEYS: ['is_live','sidecar_ts','needs_approval','question_waiting'],
+    _sessionLiveOverlay: new Map(), _LIVE_OVERLAY_KEYS: ['is_live','state','codex_state','sidecar_ts','needs_approval','question_waiting'],
     sessionIsOptimisticallySending: () => sending, preSendPreviewFor: () => 'Old completed work.' };
   vm.createContext(context);
   for (const name of ['_ultraFreshTime', '_ultraFreshWaitingAt', '_ultraFreshSendBarrier', '_ultraFreshCurrent', '_applyLiveOverlayToRow']) {
@@ -43,6 +43,13 @@ test('a submitted turn survives delivery acknowledgment over an old finished sna
   assert.equal(context._applyLiveOverlayToRow(fresh).needs_approval, true, 'a newer live approval still takes precedence');
   waiting.sidecar_ts = entry.at + 1000;
   assert.equal(context._ultraFreshCurrent(waiting).needs_approval, true, 'a genuinely newer approval remains pending');
+  entry.userAt = entry.at + 2000;
+  context._sessionLiveOverlay.set('reopened', {is_live:true, state:'waiting', codex_state:'idle',
+    sidecar_ts:entry.at + 1000, question_waiting:true});
+  const resumed = context._ultraFreshCurrent(old);
+  assert.equal(context._applyLiveOverlayToRow(resumed).state, 'working', 'new user activity supersedes stale idle status');
+  context._sessionLiveOverlay.get('reopened').sidecar_ts = entry.userAt + 1000;
+  assert.equal(context._applyLiveOverlayToRow(resumed).state, 'waiting', 'genuinely newer activity still wins');
 });
 
 test('spawn text deltas expose authored choices when the complete footer arrives', () => {

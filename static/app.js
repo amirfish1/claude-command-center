@@ -6221,15 +6221,14 @@
     if (!sid) return c;
     const ov = _sessionLiveOverlay.get(sid);
     if (!ov || (!ov.is_live && !ov.codex_state)) return c;
+    // An owner event supersedes the entire older activity snapshot, not
+    // just its waiting flags: its idle state would erase Working as well.
+    if (c._ownerInputAt && _ultraFreshWaitingAt(ov) <= c._ownerInputAt) return c;
     const merged = Object.assign({}, c);
     const ovTs = ov.sidecar_ts || 0;
     const rowTs = merged.sidecar_ts || 0;
     if (ovTs >= rowTs || !merged.is_live || ov.codex_state) {
       for (const k of _LIVE_OVERLAY_KEYS) {
-        // A previous question snapshot must not hide the new reply's
-        // authored choices after the owner has already answered it.
-        if ((k === 'needs_approval' || k === 'question_waiting') && c._ownerInputAt
-            && _ultraFreshWaitingAt(ov) <= c._ownerInputAt) continue;
         if (ov[k] !== undefined) merged[k] = ov[k];
       }
     }
