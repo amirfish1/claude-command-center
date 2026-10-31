@@ -1,0 +1,1 @@
+Redesigned Jobs around attention, upcoming schedules, recent results, and a searchable inventory. Added explicit statuses, project and status filters, accessible expandable run details, and clear labels for estimated or outdated schedule data.

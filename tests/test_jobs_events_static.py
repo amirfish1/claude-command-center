@@ -1,28 +1,24 @@
-"""Jobs tab day view renders CCC_EVENT rows (static wiring checks)."""
+"""Job activity remains accessible in the redesigned job details."""
 
 import pathlib
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 JS = (ROOT / "static" / "jobs-tab.js").read_text()
-CSS = (ROOT / "static" / "app.css").read_text()
 
 
-class JobsDayEventsTest(unittest.TestCase):
-    def test_day_view_merges_events_into_slots(self):
-        self.assertIn("(j.events || []).forEach", JS)
-        self.assertIn("slots.push({ j: j, min: minuteOf(d), sec: d.getSeconds(), event: ev })", JS)
-        self.assertIn("sl.event", JS)
+class JobsActivityTest(unittest.TestCase):
+    def test_details_preserve_activity_and_links(self):
+        self.assertIn('Recent activity', JS)
+        self.assertIn('j.events.slice(-8).reverse()', JS)
+        self.assertIn('esc(nodash(event.text))', JS)
+        self.assertIn('esc(fmtLocal(event.at))', JS)
+        self.assertIn('chipsHtml(j.tickets, 50)', JS)
 
-    def test_event_rows_have_key_label_and_state(self):
-        self.assertIn("key: sl.j.id + '#ev'", JS)
-        self.assertIn("state: 'event'", JS)
-        self.assertIn("opt.event", JS)
-        self.assertIn('class="job-event"', JS)
-
-    def test_event_row_styles_exist(self):
-        self.assertIn(".job-row.slot-event .job-dot", CSS)
-        self.assertIn(".job-event {", CSS)
+    def test_rows_use_accessible_disclosure(self):
+        self.assertIn('data-job-toggle aria-expanded=', JS)
+        self.assertIn('class="job-status"', JS)
+        self.assertIn('data-jobs-search aria-label="Search jobs"', JS)
 
 
 if __name__ == "__main__":

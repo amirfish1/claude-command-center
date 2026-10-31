@@ -20,20 +20,19 @@
     try { const v = localStorage.getItem(HOST_KEY); if (v === 'all' || v === 'hermes' || v === 'laptop') return v; } catch (_) {}
     return null;
   })();
-  const _expanded = new Set(); // row keys (job id, or job id + '#' + slot in the Day view)
-  const _collapsed = new Set((function () { try { return JSON.parse(localStorage.getItem('ccc-jobs-collapsed') || '[]'); } catch (_) { return []; } })());
+  const _expanded = new Set(); // expanded job IDs
   const _logs = new Map(); // job id -> text | null (loading)
-  const SORT_KEY = 'ccc-jobs-sort';
-  let _sort = (function () {
-    try { const v = localStorage.getItem(SORT_KEY); if (v === 'project' || v === 'recent' || v === 'day') return v; } catch (_) {}
-    return 'project';
-  })();
+  const SORT_KEY = 'ccc-jobs-view-v2';
+  let _sort = 'overview';
+  try { const v = localStorage.getItem(SORT_KEY); if (['overview', 'upcoming', 'recent', 'all'].includes(v)) _sort = v; } catch (_) {}
+  let _query = '';
+  let _project = '';
+  let _filter = 'all';
+  let _fetchError = '';
   // Live tail of a running job's current invocation: job id -> {cursor, running, done}
   const _live = new Map();
   const _stick = new Map(); // row key -> false when the user scrolled the log up
   const LIVE_MS = 4000;
-  let _lastMountAt = 0;
-  let _needDayScroll = true;
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -108,12 +107,6 @@
   // No em-dashes in user copy.
   function nodash(t) { return String(t == null ? '' : t).replace(/ — /g, ': ').replace(/—/g, ':'); }
 
-  function hueOf(str) {
-    let h = 0;
-    for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
-    return h;
-  }
-
   function fmtLocal(iso) {
     const d = new Date(iso);
     if (isNaN(d)) return '';
@@ -133,66 +126,64 @@
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
+  function needsAttention(j) { return j.enabled !== false && ['failed', 'stale'].includes(j.status); }
+  function statusLabel(j) {
+    if (j.enabled === false) return 'Disabled';
+    return {ok: 'Succeeded', failed: 'Failed', stale: 'Overdue', running: 'Running', unknown: 'Unverified', disabled: 'Disabled'}[j.status] || 'Unverified';
+  }
   function headerHtml() {
-    const hosts = _data.hosts || {};
-    const h = hosts.hermes || {};
+    const jobs = visibleJobs();
     const host = activeHost();
-    const sum = (_data.summary || {})[host] || {};
-    const parts = [];
-    if (host !== 'laptop') {
-      if (h.status === 'online') parts.push('hermes-gcp online');
-      else if (h.status === 'loading') parts.push('hermes-gcp loading');
-      else {
-        const age = h.age_s != null ? ' (data ' + rel(new Date(Date.now() - h.age_s * 1000).toISOString()).replace(' ago', '') + ' old)' : '';
-        parts.push('hermes-gcp offline' + age);
-      }
-    } else {
-      parts.push('Laptop');
-    }
-    const active = (sum.total || 0) - (sum.disabled || 0);
-    parts.push(active + ' job' + (active === 1 ? '' : 's'));
-    if (sum.failed) parts.push(sum.failed + ' failed');
-    if (sum.stale) parts.push(sum.stale + ' stale');
-    if (sum.disabled) parts.push(sum.disabled + ' disabled');
-    const bad = (h.status === 'offline' && host !== 'laptop') || sum.failed;
-    const segKeys = _data.local_host === 'hermes' ? ['hermes'] : ['hermes', 'laptop', 'all'];
-    const seg = segKeys.map(k => {
-      const label = k === 'all' ? 'All' : k === 'hermes' ? 'hermes-gcp' : 'Laptop';
-      return '<button type="button" class="jobs-seg-btn' + (k === host ? ' is-active' : '') + '" data-jobs-host="' + k + '">' + label + '</button>';
-    }).join('');
-    const sortOpts = [['project', 'project'], ['recent', 'recent'], ['day', 'day']].map(x =>
-      '<span class="grouping-opt' + (_sort === x[0] ? ' is-active' : '') + '" data-jobs-sort="' + x[0] + '">' + x[1] + '</span>').join('');
-    return '<div class="jobs-head"><div class="jobs-seg">' + seg
-      + '<button type="button" class="jobs-add-btn" data-jobs-add title="Create a scheduled job: an agent session writes and enables it">+ Add</button></div>'
-      + '<div class="jobs-sub"><div class="jobs-summary' + (bad ? ' is-bad' : '') + '">' + esc(parts.join(' · ')) + '</div>'
-      + '<span class="conv-grouping-toggle jobs-sort-toggle" title="Group by project, most recent run first, or the day\'s launches in clock order">' + sortOpts + '</span></div></div>';
+    const hosts = _data.hosts || {};
+    const selected = host === 'all' ? Object.values(hosts) : [hosts[host] || {}];
+    const unavailable = selected.some(h => h.status === 'offline' || h.stale_data);
+    const loading = selected.some(h => h.status === 'loading');
+    const attention = jobs.filter(needsAttention).length;
+    const running = jobs.filter(j => j.status === 'running').length;
+    const disabled = jobs.filter(j => j.enabled === false).length;
+    const hostKeys = _data.local_host === 'hermes' ? ['hermes'] : ['all', 'hermes', 'laptop'];
+    const hostOptions = hostKeys.map(k => '<option value="' + k + '"' + (host === k ? ' selected' : '') + '>' + (k === 'all' ? 'All machines' : k === 'hermes' ? 'hermes-gcp' : 'Laptop') + '</option>').join('');
+    const views = [['overview', 'Overview'], ['upcoming', 'Upcoming'], ['recent', 'Recent runs'], ['all', 'All jobs']];
+    const projects = [...new Set(jobs.map(j => j.project || 'Other'))].sort();
+    return '<div class="jobs-head">'
+      + '<div class="jobs-titlebar"><h2>Scheduled jobs</h2><button type="button" class="jobs-add-btn" data-jobs-add>New job</button></div>'
+      + '<div class="jobs-source"><label>Machine <select data-jobs-machine aria-label="Machine">' + hostOptions + '</select></label><span>' + jobs.length + ' jobs · ' + (unavailable ? 'Offline / cached data' : loading ? 'Syncing…' : 'Connected') + '</span><button type="button" class="jobs-refresh" data-jobs-refresh>Refresh</button></div>'
+      + ((_fetchError || unavailable) ? '<div class="jobs-notice" role="status">' + esc(_fetchError || 'Machine unavailable. These are the last known results; schedules may have changed.') + '</div>' : '')
+      + '<div class="jobs-health"><span class="' + (attention ? 'needs-attention' : '') + '">' + (attention ? attention + (attention === 1 ? ' needs attention' : ' need attention') : 'No reported issues') + '</span><span>' + running + ' running · ' + disabled + ' disabled</span></div>'
+      + '<nav class="jobs-views" aria-label="Job views">' + views.map(([k, label]) => '<button type="button" data-jobs-sort="' + k + '" aria-pressed="' + (_sort === k) + '" class="' + (_sort === k ? 'is-active' : '') + '">' + label + '</button>').join('') + '</nav>'
+      + '<div class="jobs-tools"><input type="search" data-jobs-search aria-label="Search jobs" placeholder="Search jobs…" value="' + esc(_query) + '"><select data-jobs-project aria-label="Filter by project"><option value="">All projects</option>' + projects.map(k => '<option' + (_project === k ? ' selected' : '') + ' value="' + esc(k) + '">' + esc(k) + '</option>').join('') + '</select>'
+      + (_sort === 'all' ? '<select data-jobs-filter aria-label="Filter by status">' + [['all','Any status'],['attention','Needs attention'],['running','Running'],['disabled','Disabled'],['unknown','Unverified']].map(([k,v]) => '<option value="' + k + '"' + (_filter === k ? ' selected' : '') + '>' + v + '</option>').join('') + '</select>' : '') + '</div></div>';
   }
 
-  // 24h strip: ticks at launch times (local), a "now" marker, weekday label for
-  // weekly jobs, and a filled band for short intervals.
-  function stripHtml(j) {
-    const tl = j.timeline || {};
-    let ticks = '';
-    let label = '';
-    if (tl.kind === 'interval' && tl.interval_s) {
-      if (tl.interval_s <= 3600) {
-        ticks = '<i class="job-band' + (tl.interval_s <= 900 ? ' dense' : '') + '"></i>';
-      } else if (tl.interval_s >= 86400) {
-        ticks = '<i class="job-tick" style="left:0"></i>';
-        label = 'every ' + Math.round(tl.interval_s / 86400) + 'd';
-      } else {
-        for (let m = 0; m < 1440; m += tl.interval_s / 60) ticks += '<i class="job-tick" style="left:' + (m / 14.4).toFixed(2) + '%"></i>';
-      }
-    } else if (tl.kind === 'times') {
-      ticks = (tl.minutes || []).map(m => '<i class="job-tick" style="left:' + (m / 14.4).toFixed(2) + '%"></i>').join('');
-      if (tl.weekdays && tl.weekdays.length) label = tl.weekdays.length > 2 ? tl.weekdays[0] + '+' : tl.weekdays.join(',');
-    }
-    const n = new Date();
-    const nowPct = ((n.getHours() * 60 + n.getMinutes()) / 14.4).toFixed(2);
-    const tip = j.schedule + (j.next_run_at ? '\nNext: ' + fmtLocal(j.next_run_at) + ' (' + rel(j.next_run_at) + ')' : '');
-    return '<span class="job-strip" title="' + esc(tip) + '"><span class="job-track">' + ticks
-      + '<i class="job-now" style="left:' + nowPct + '%"></i></span>'
-      + '<span class="job-wd">' + esc(label) + '</span></span>';
+  function sectionHtml(title, jobs, hint, limit) {
+    const shown = limit ? jobs.slice(0, limit) : jobs;
+    return '<section class="jobs-section"><div class="jobs-section-heading"><h3>' + esc(title) + '</h3><span>' + jobs.length + '</span></div>'
+      + (hint ? '<p class="jobs-section-hint">' + esc(hint) + '</p>' : '')
+      + shown.map(j => rowHtml(j)).join('') + '</section>';
+  }
+
+  function nextTime(j) { return Date.parse(j.next_run_at || '') || Infinity; }
+  function upcomingHtml(jobs, preview) {
+    const enabled = jobs.filter(j => j.enabled !== false);
+    const repeating = enabled.filter(j => j.timeline && j.timeline.kind === 'interval' && j.timeline.interval_s < 3600);
+    const scheduled = enabled.filter(j => !repeating.includes(j) && Number.isFinite(nextTime(j))).sort((a,b) => nextTime(a) - nextTime(b));
+    const unknown = enabled.filter(j => !repeating.includes(j) && !Number.isFinite(nextTime(j)));
+    return sectionHtml('Next scheduled', scheduled, 'Next run per job · ' + Intl.DateTimeFormat().resolvedOptions().timeZone + '. Estimates are marked.', preview ? 5 : 0)
+      + (!scheduled.length ? '<p class="jobs-section-hint">No upcoming run times available.</p>' : '')
+      + (!preview && repeating.length ? sectionHtml('Repeats throughout the day', repeating, 'Frequent jobs, separate from the daily schedule.') : '')
+      + (!preview && unknown.length ? sectionHtml('Schedule not available', unknown, 'Open a job to inspect its schedule and last result.') : '');
+  }
+
+  function overviewHtml(jobs) {
+    const attention = jobs.filter(needsAttention);
+    const running = jobs.filter(j => j.status === 'running');
+    return (attention.length ? sectionHtml('Needs attention', attention, 'Failed or overdue. Open a job for its last result and logs.')
+      : '<div class="jobs-clear"><strong>' + (_query.trim() || _project ? 'No matching jobs need attention' : 'No jobs need attention') + '</strong><span>Based on the latest reported status.</span></div>')
+      + (running.length ? sectionHtml('Running now', running, 'Open a job to follow its output live.') : '')
+      + upcomingHtml(jobs, true)
+      + '<button type="button" class="jobs-more" data-jobs-sort="upcoming">See the full schedule</button>'
+      + sectionHtml('Latest results', jobs.filter(j => j.last_run_at && j.status !== 'running').sort((a,b) => lastRunMs(b)-lastRunMs(a)).slice(0, 4), 'Latest reported run per job.')
+      + '<button type="button" class="jobs-more" data-jobs-sort="recent">See all recent runs</button>';
   }
 
   function chipHtml(t) {
@@ -210,13 +201,6 @@
     const list = tickets || [];
     const shown = list.slice(0, max);
     return shown.map(chipHtml).join('') + (list.length > max ? '<span class="job-chip-more">+' + (list.length - max) + '</span>' : '');
-  }
-
-  function outcomeHtml(j) {
-    if (!j.outcome) return '';
-    const text = nodash(j.outcome);
-    return '<span class="job-outcome' + (j.outcome_kind === 'output' ? ' is-raw' : '') + '" title="' + esc(text) + '">'
-      + (j.outcome_kind === 'output' ? '<span class="job-out-label">output </span>' : '') + esc(text) + '</span>';
   }
 
   // Where the running indicator goes. A WatchTower ticket the current run
@@ -242,51 +226,43 @@
     const key = opt.key || j.id;
     const open = _expanded.has(key);
     const running = j.status === 'running';
-    const ev = opt.event || null;
-    const tipBits = ['Status: ' + j.status];
-    if (ev) tipBits.push('Event: ' + fmtLocal(ev.at) + ': ' + nodash(ev.text));
-    if (j.last_run_at) tipBits.push('Last run: ' + fmtLocal(j.last_run_at));
-    if (j.last_duration_s != null) tipBits.push('Duration: ' + dur(j.last_duration_s || 0.4));
-    if (j.exit_code) tipBits.push('Exit code: ' + j.exit_code);
-    const mid = ev
-      ? '<span class="job-event" title="' + esc(nodash(ev.text)) + '">' + esc(nodash(ev.text)) + '</span>'
-      : ((j.outcome_kind === 'summary' || !(j.tickets && j.tickets.length))
-        ? outcomeHtml(j) : '<span class="job-chips">' + chipsHtml(j.tickets, 5) + '</span>');
-    const slotCls = opt.state ? ' slot-' + opt.state : '';
-    let h = '<div class="job-row st-' + esc(j.status) + (open ? ' is-open' : '') + slotCls + '" data-job-id="' + esc(j.id) + '" data-row-key="' + esc(key) + '">'
-      + '<div class="job-line1">'
-      + (opt.label ? '<span class="job-slot">' + esc(opt.label) + '</span>' : '')
-      + '<span class="job-dot" title="' + esc(j.status) + '"></span>'
-      + '<span class="job-name" title="' + esc(j.name) + '">' + esc(shortName(j.name)) + '</span>'
-      + (running ? liveHtml(j) : '')
-      + (activeHost() === 'all' ? '<span class="job-host">' + (j.host === 'hermes' ? 'hermes-gcp' : 'Laptop') + '</span>' : '')
-      + '<span class="job-desc-inline" title="' + esc(nodash(j.description)) + '">' + esc(nodash(j.description)) + '</span>'
-      + (_sort !== 'day' && j.next_run_at && j.enabled !== false ? '<span class="job-next" title="Next run: ' + esc(fmtLocal(j.next_run_at)) + ' (' + esc(rel(j.next_run_at)) + ')">Next ' + esc(nextLabel(j.next_run_at)) + '</span>' : '')
-      + '</div>'
-      + '<div class="job-line2">' + stripHtml(j) + '<span class="job-mid">' + mid + '</span>'
-      + '<span class="job-when" title="' + esc(tipBits.join('\n')) + '">' + esc(ev ? rel(ev.at) : (j.last_run_at ? rel(j.last_run_at) : '')) + '</span></div>';
+    const label = statusLabel(j);
+    const name = shortName(j.name).replace(/[-_]+/g, ' ').replace(/\b\w/, c => c.toUpperCase());
+    const next = j.enabled === false ? 'Not scheduled' : j.next_run_at
+      ? (nextTime(j) < Date.now() ? 'Awaiting schedule update' : (j.next_run_estimated ? 'Est. next ' : 'Next ') + nextLabel(j.next_run_at))
+      : 'Next run unavailable';
+    const result = j.outcome_kind === 'summary' && j.outcome ? nodash(j.outcome) : '';
+    let h = '<article class="job-row st-' + esc(j.enabled === false ? 'disabled' : j.status) + (open ? ' is-open' : '') + '" data-job-id="' + esc(j.id) + '" data-row-key="' + esc(key) + '">'
+      + '<button type="button" class="job-toggle" data-job-toggle aria-expanded="' + open + '" aria-label="' + esc(name + ': ' + label + '. ' + (open ? 'Hide' : 'Show') + ' details') + '">'
+      + '<span class="job-line1"><span class="job-name">' + esc(name) + '</span><span class="job-status">' + esc(label) + '</span><span class="job-chevron" aria-hidden="true">' + (open ? '−' : '+') + '</span></span>'
+      + '<span class="job-purpose">' + esc(nodash(j.description) || shortName(j.name)) + '</span>'
+      + '<span class="job-meta"><span>' + esc(j.project || 'Other') + '</span><span>' + esc(j.schedule || 'Schedule unknown') + '</span>' + (activeHost() === 'all' ? '<span>' + esc(j.host === 'hermes' ? 'hermes-gcp' : 'Laptop') + '</span>' : '') + '</span>'
+      + '<span class="job-timing"><span title="' + esc(j.last_run_at ? fmtLocal(j.last_run_at) : '') + '">' + esc(j.last_run_at ? (running ? 'Started ' : 'Last run ') + rel(j.last_run_at) : 'No recorded run') + '</span><span title="' + esc(j.next_run_at ? fmtLocal(j.next_run_at) : '') + '">' + esc(next) + '</span></span>'
+      + (result ? '<span class="job-result">' + esc(result) + '</span>' : '') + '</button>';
     if (open) {
       const log = _logs.get(j.id);
       const lv = _live.get(j.id);
       const facts = [];
-      facts.push(j.schedule);
-      if (j.next_run_at) facts.push('next ' + rel(j.next_run_at));
+      facts.push('Schedule: ' + (j.schedule || 'Unknown'));
+      facts.push('Job ID: ' + j.name);
+      if (j.next_run_at && j.enabled !== false) facts.push((j.next_run_estimated ? 'Estimated next: ' : 'Next: ') + fmtLocal(j.next_run_at));
       if (j.last_run_at) facts.push('last ' + fmtLocal(j.last_run_at));
-      if (j.last_duration_s != null) facts.push('took ' + dur(j.last_duration_s || 0.4));
+      if (j.last_duration_s != null) facts.push('took ' + dur(j.last_duration_s));
       if (j.exit_code) facts.push('exit ' + j.exit_code);
       const liveNote = running && lv && !lv.done ? '<div class="job-facts job-livenote"><i></i>Live, updating every few seconds</div>'
         : (lv && lv.done ? '<div class="job-facts job-livenote is-done">Finished. Showing the final output.</div>' : '');
       h += '<div class="job-detail">'
         + (j.description ? '<div class="job-desc">' + esc(nodash(j.description)) + '</div>' : '')
-        + '<div class="job-facts">' + esc(facts.join(' · ')) + '</div>'
+        + '<div class="job-facts">' + esc(facts.join('\n')) + '</div>'
         + (j.repo_path ? '<div class="job-facts">' + esc(j.repo_path) + '</div>' : '')
-        + (j.history && j.history.length ? '<div class="job-facts">7d ' + historyHtml(j.history) + '</div>' : '')
+        + (j.history && j.history.length ? '<div class="job-facts">Recent recorded runs ' + historyHtml(j.history) + '</div>' : '')
         + (j.outcome ? '<div class="job-outcome-full">' + (j.outcome_kind === 'output' ? '<span class="job-out-label">last output </span>' : '') + esc(nodash(j.outcome)) + '</div>' : '')
+        + (j.events && j.events.length ? '<div class="job-events"><h4 class="job-log-title">Recent activity</h4>' + j.events.slice(-8).reverse().map(event => '<div class="job-event"><time>' + esc(fmtLocal(event.at)) + '</time> ' + esc(nodash(event.text)) + '</div>').join('') + '</div>' : '')
         + (j.tickets && j.tickets.length ? '<div class="job-chips">' + chipsHtml(j.tickets, 50) + '</div>' : '')
-        + liveNote
-        + '<pre class="job-log">' + (log == null ? 'Loading log...' : esc(log)) + '</pre></div>';
+        + (running ? liveHtml(j) : '') + liveNote
+        + '<h4 class="job-log-title">Run output</h4><pre class="job-log">' + (log == null ? 'Loading log...' : esc(log)) + '</pre></div>';
     }
-    return h + '</div>';
+    return h + '</article>';
   }
 
   function historyHtml(hist) {
@@ -295,137 +271,32 @@
 
   function lastRunMs(j) { const t = Date.parse(j.last_run_at || ''); return isNaN(t) ? 0 : t; }
 
-  // Recent: flat, running first, then newest last run first.
-  function recentHtml(jobs) {
-    const list = jobs.slice().sort((a, b) => {
-      const ra = a.status === 'running' ? 1 : 0, rb = b.status === 'running' ? 1 : 0;
-      if (ra !== rb) return rb - ra;
-      return lastRunMs(b) - lastRunMs(a);
-    });
-    return list.map(j => rowHtml(j)).join('');
-  }
-
-  // ── Day view ────────────────────────────────────────────────────────────
-  const _WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  function firesToday(weekdays, dow) {
-    if (!weekdays || !weekdays.length) return true;
-    const name = _WD[dow];
-    return weekdays.some(w => String(w).split(',').some(part => {
-      part = part.trim();
-      const r = part.split('-');
-      if (r.length === 2 && _WD.indexOf(r[0]) >= 0 && _WD.indexOf(r[1]) >= 0) {
-        const a = _WD.indexOf(r[0]), b = _WD.indexOf(r[1]);
-        return a <= b ? (dow >= a && dow <= b) : (dow >= a || dow <= b);
-      }
-      return part === name;
-    }));
-  }
-
-  function hhmm(min) { return String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0'); }
-  function minuteOf(d) { return d.getHours() * 60 + d.getMinutes(); }
-  function sameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
-
-  // Runs we know about (history + last run), as local Date + ok flag.
-  function runsOf(j) {
-    const out = (j.history || []).map(x => ({ d: new Date(x.at), ok: !!x.ok }));
-    if (j.last_run_at) {
-      const d = new Date(j.last_run_at);
-      if (!out.some(x => Math.abs(x.d - d) < 120000)) out.push({ d: d, ok: j.status !== 'failed', running: j.status === 'running' });
-    }
-    return out.filter(x => !isNaN(x.d));
-  }
-
-  function slotState(j, slot, nowMin, today) {
-    if (slot > nowMin) return 'future';
-    // A run today that began at or after this slot and before the next 45 minutes.
-    const hit = runsOf(j).find(r => sameDay(r.d, today) && minuteOf(r.d) >= slot && minuteOf(r.d) < slot + 45);
-    if (!hit) return 'muted';
-    return hit.running ? 'run' : (hit.ok ? 'ok' : 'bad');
-  }
-
-  function repeatLabel(j) {
-    const sch = String(j.schedule || '');
-    const m = sch.match(/^Hourly\s*:(\d\d)/i);
-    if (m) return 'hourly at :' + m[1];
-    return sch ? sch.charAt(0).toLowerCase() + sch.slice(1) : 'repeating';
-  }
-
-  function dayHtml(jobs) {
-    const now = new Date();
-    const nowMin = minuteOf(now), dow = now.getDay();
-    const repeating = [], slots = [];
-    jobs.forEach(j => {
-      if (j.enabled === false) return;
-      const tl = j.timeline || {};
-      if (tl.kind === 'interval' && tl.interval_s && tl.interval_s < 86400) {
-        repeating.push(j);
-      } else if (tl.kind === 'interval' && j.next_run_at && sameDay(new Date(j.next_run_at), now)) {
-        slots.push({ j: j, min: minuteOf(new Date(j.next_run_at)) });
-      } else if (tl.kind === 'times' && firesToday(tl.weekdays, dow)) {
-        (tl.minutes || []).forEach(m => slots.push({ j: j, min: m }));
-      }
-      // CCC_EVENT lines the job emitted: each becomes its own timeline row so
-      // a repeating job's real work shows up between the rows around it.
-      (j.events || []).forEach(ev => {
-        // Enqueue acknowledgments are routine bookkeeping, not completed work.
-        // Keep them in job details without filling the day with launch receipts.
-        if (/^Dispatched [\w.@-]+$/.test(String(ev.text || '').trim())) return;
-        const d = new Date(ev.at);
-        if (!isNaN(d) && sameDay(d, now)) slots.push({ j: j, min: minuteOf(d), sec: d.getSeconds(), event: ev });
-      });
-    });
-    slots.sort((a, b) => a.min - b.min || (a.sec || 0) - (b.sec || 0) || String(a.j.name).localeCompare(String(b.j.name)));
-    let h = '';
-    if (repeating.length) {
-      h += '<div class="jobs-day-band">Repeating</div>'
-        + repeating.map(j => rowHtml(j, { key: j.id + '#rep', label: repeatLabel(j), state: 'rep' })).join('');
-    }
-    h += '<div class="jobs-day-band">Today, ' + esc(now.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })) + '</div>';
-    let marked = false;
-    const marker = '<div class="jobs-now" id="jobsNowMarker"><span class="jobs-now-arrow">&#9654;</span> now ' + esc(hhmm(nowMin)) + '<i></i></div>';
-    slots.forEach((sl, i) => {
-      if (!marked && sl.min > nowMin) { h += marker; marked = true; }
-      h += sl.event
-        ? rowHtml(sl.j, { key: sl.j.id + '#ev' + i, label: hhmm(sl.min), state: 'event', event: sl.event })
-        : rowHtml(sl.j, { key: sl.j.id + '#' + sl.min, label: hhmm(sl.min), state: slotState(sl.j, sl.min, nowMin, now) });
-    });
-    if (!marked) h += marker;
-    if (!slots.length) h += '<div class="jobs-empty">Nothing else scheduled today.</div>';
-    return h;
-  }
-
-  function groupsHtml(jobs) {
-    const groups = new Map(); // server order = most recent run first, so groups inherit that order
-    jobs.forEach(j => {
-      const k = j.project || 'Other';
-      if (!groups.has(k)) groups.set(k, []);
-      groups.get(k).push(j);
-    });
-    return Array.from(groups.entries()).map(([name, list]) => {
-      const collapsed = _collapsed.has(name);
-      return '<div class="conv-folder-group jobs-group">'
-        + '<div class="conv-folder-group-header" style="--chip-hue:' + hueOf(name) + ';" role="button" tabindex="0" data-jobs-group="' + esc(name) + '">'
-        + '<button type="button" class="conv-folder-group-arrow" tabindex="-1">' + (collapsed ? '▸' : '▾') + '</button>'
-        + '<span class="conv-folder-group-chip">' + esc(name) + '</span>'
-        + '<span class="conv-folder-group-count">' + list.length + '</span></div>'
-        + (collapsed ? '' : list.map(rowHtml).join('')) + '</div>';
-    }).join('');
-  }
-
   function render() {
     const el = document.getElementById('sidebarJobsHost');
     if (!el) return;
     let html;
     if (!_data) {
-      html = '<div class="jobs-empty">Loading jobs...</div>';
+      html = '<div class="jobs-empty" role="status">' + (_fetchError ? 'Could not load jobs. <button type="button" class="jobs-more" data-jobs-refresh>Try again</button>' : 'Loading scheduled jobs…') + '</div>';
     } else {
-      const jobs = visibleJobs();
-      html = headerHtml()
-        + (jobs.length ? '<div class="jobs-list">' + (_sort === 'day' ? dayHtml(jobs) : _sort === 'recent' ? recentHtml(jobs) : groupsHtml(jobs)) + '</div>'
-          : '<div class="jobs-empty">No scheduled jobs' + (activeHost() === 'hermes' && (_data.hosts.hermes || {}).status !== 'online' ? ' (hermes-gcp unreachable)' : '') + '.</div>');
+      const all = visibleJobs();
+      const query = _query.trim().toLowerCase();
+      const jobs = all.filter(j => (!_project || (j.project || 'Other') === _project)
+        && (!query || [j.name, j.description, j.project, j.outcome].join(' ').toLowerCase().includes(query))
+        && (_sort !== 'all' || _filter === 'all' || (_filter === 'attention' ? needsAttention(j) : _filter === 'disabled' ? j.enabled === false : j.status === _filter)));
+      html = headerHtml() + '<div class="jobs-list">'
+        + (!jobs.length ? '<div class="jobs-empty"><strong>' + (all.length ? 'No matching jobs' : 'No scheduled jobs') + '</strong><p>' + (all.length ? 'Try a different search or project.' : 'Create a job to automate recurring work.') + '</p>' + (all.length ? '<button type="button" class="jobs-more" data-jobs-clear>Clear filters</button>' : '') + '</div>'
+          : _sort === 'overview' ? overviewHtml(jobs) : _sort === 'upcoming' ? upcomingHtml(jobs) : _sort === 'recent' ? sectionHtml('Recent runs', jobs.slice().sort((a,b) => lastRunMs(b)-lastRunMs(a)), 'Latest reported run per job. Open one for recorded history and output.') : sectionHtml('All jobs', jobs.slice().sort((a,b) => String(a.name).localeCompare(String(b.name))), 'Search, inspect, and check the schedule of any job.'))
+        + '</div>';
+
     }
     if (html !== _lastHtml || !el.firstChild) {
       const scroll = el.scrollTop;
+      const searchFocused = document.activeElement && document.activeElement.matches('[data-jobs-search]');
+      const caret = searchFocused ? document.activeElement.selectionStart : null;
+      const focusedRow = document.activeElement && document.activeElement.closest('[data-job-toggle]');
+      const focusedKey = focusedRow ? focusedRow.closest('[data-row-key]').getAttribute('data-row-key') : null;
+      const controlAttr = ['data-jobs-project', 'data-jobs-filter', 'data-jobs-machine', 'data-jobs-sort', 'data-jobs-refresh', 'data-jobs-add'].find(a => document.activeElement && document.activeElement.hasAttribute(a));
+      const controlValue = controlAttr ? document.activeElement.getAttribute(controlAttr) : null;
       // Remember whether each open log was pinned to the bottom; the rebuild
       // resets it, and a user who scrolled up must not be yanked down.
       const tops = new Map();
@@ -436,6 +307,9 @@
         tops.set(k, pre.scrollTop);
       });
       el.innerHTML = html;
+      if (searchFocused) { const input = el.querySelector('[data-jobs-search]'); if (input) { input.focus({preventScroll:true}); if (caret !== null) input.setSelectionRange(caret, caret); } }
+      if (controlAttr) { const control = [...el.querySelectorAll('[' + controlAttr + ']')].find(e => e.getAttribute(controlAttr) === controlValue); if (control) control.focus({preventScroll:true}); }
+      if (focusedKey) { const row = [...el.querySelectorAll('[data-row-key]')].find(r => r.getAttribute('data-row-key') === focusedKey); if (row) row.querySelector('[data-job-toggle]').focus({preventScroll:true}); }
       el.scrollTop = scroll;
       el.querySelectorAll('[data-row-key] .job-log').forEach(pre => {
         const k = pre.closest('[data-row-key]').getAttribute('data-row-key');
@@ -631,6 +505,8 @@
   let _repoPaths = [];
 
   function onClick(ev) {
+    if (ev.target.closest('[data-jobs-refresh]')) { poll(); return; }
+    if (ev.target.closest('[data-jobs-clear]')) { _query = ''; _project = ''; _filter = 'all'; render(); return; }
     if (ev.target.closest('[data-jobs-add]')) { openAddDialog(); return; }
     const liveEl = ev.target.closest('[data-job-live]');
     if (liveEl) { ev.stopPropagation(); focusLive(liveEl.getAttribute('data-job-live')); return; }
@@ -639,9 +515,8 @@
     if (sortEl) {
       _sort = sortEl.getAttribute('data-jobs-sort');
       try { localStorage.setItem(SORT_KEY, _sort); } catch (_) {}
-      if (_sort === 'day') _needDayScroll = true;
       render();
-      dayScroll();
+      const host = document.getElementById('sidebarJobsHost'); if (host) host.scrollTop = 0;
       return;
     }
     const seg = ev.target.closest('[data-jobs-host]');
@@ -652,15 +527,8 @@
       render();
       return;
     }
-    const grp = ev.target.closest('[data-jobs-group]');
-    if (grp) {
-      const g = grp.getAttribute('data-jobs-group');
-      if (_collapsed.has(g)) _collapsed.delete(g); else _collapsed.add(g);
-      try { localStorage.setItem('ccc-jobs-collapsed', JSON.stringify(Array.from(_collapsed))); } catch (_) {}
-      render();
-      return;
-    }
     if (ev.target.closest('.job-detail') || ev.target.closest('a.job-chip')) return;
+    if (!ev.target.closest('[data-job-toggle]')) return;
     const row = ev.target.closest('[data-job-id]');
     if (!row) return;
     const id = row.getAttribute('data-job-id');
@@ -679,7 +547,9 @@
       const res = await (window.__cccBackgroundApiFetch || fetch)('/api/jobs', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const d = await res.json();
-      if (d && d.ok) {
+      if (!d || !d.ok) throw new Error('Jobs feed unavailable');
+      if (d.ok) {
+        _fetchError = '';
         _data = d;
         _lastFetch = Date.now();
         // A finished live tail is dropped once the feed agrees the job is no longer running.
@@ -688,34 +558,30 @@
         render();
       }
     } catch (_) {
-      // keep last-good data; retry next tick
+      _fetchError = 'Could not refresh jobs. Showing the last known results. Try Refresh.';
+      render();
     } finally {
       _inflight = false;
     }
   }
 
-  // Day view: bring the "now" marker into view once per tab open, not on every
-  // sidebar rebuild (that would fight the user's own scrolling).
-  function dayScroll() {
-    if (_sort !== 'day' || !_needDayScroll) return;
-    const host = document.getElementById('sidebarJobsHost');
-    const m = document.getElementById('jobsNowMarker');
-    if (!host || !m) return;
-    _needDayScroll = false;
-    const head = host.querySelector('.jobs-head');
-    const off = m.getBoundingClientRect().top - host.getBoundingClientRect().top - (head ? head.offsetHeight : 0) - 90;
-    host.scrollTop = Math.max(0, host.scrollTop + off);
-  }
-
   function mount() {
     const el = document.getElementById('sidebarJobsHost');
     if (!el) return;
-    if (Date.now() - _lastMountAt > 8000) _needDayScroll = true;
-    _lastMountAt = Date.now();
     _lastHtml = '';
-    if (!el._jobsWired) { el.addEventListener('click', onClick); el._jobsWired = true; }
+    if (!el._jobsWired) {
+      el.addEventListener('click', onClick);
+      el.addEventListener('input', e => { if (e.target.matches('[data-jobs-search]')) { _query = e.target.value; render(); } });
+      el.addEventListener('change', e => {
+        if (e.target.matches('[data-jobs-project]')) _project = e.target.value;
+        else if (e.target.matches('[data-jobs-filter]')) _filter = e.target.value;
+        else if (e.target.matches('[data-jobs-machine]')) { _host = e.target.value; _project = ''; try { localStorage.setItem(HOST_KEY, _host); } catch (_) {} updateBadge(); }
+        else return;
+        render();
+      });
+      el._jobsWired = true;
+    }
     render();
-    dayScroll();
     if (Date.now() - _lastFetch > POLL_MS) poll();
   }
 
@@ -727,7 +593,7 @@
     const loading = _data && _data.hosts && _data.hosts.hermes && _data.hosts.hermes.status === 'loading';
     const anyRunning = visibleJobs().some(j => j.status === 'running');
     if (Date.now() - _lastFetch >= (loading ? 5000 : anyRunning ? 10000 : POLL_MS)) poll();
-    else render(); // keep relative times / the Day view's now marker fresh
+    else render(); // keep relative times fresh
   }, 5000);
   setInterval(liveTick, LIVE_MS);
 
