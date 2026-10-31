@@ -33716,6 +33716,7 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   display: block; color: var(--text); font: 650 13px/1 system-ui, sans-serif; letter-spacing: .02em;
 }
 #convList .conv-item:not(.is-current-child-row) .wa-av-col { width: 40px; flex: 0 0 40px; align-self: flex-start; }
+#convList#convList.session-workspace .conv-item:not(.is-current-child-row) .wa-avatar.conv-idea-avatar,
 #convList#convList .conv-item:not(.is-current-child-row) .wa-avatar.conv-idea-avatar { top: auto; margin-top: 0; }
 #convList.session-workspace .conv-idea-avatar > .conv-avatar-background { display: none; }
 #convList.session-workspace .conv-avatar-stack { text-shadow: none; gap: 3px; }
