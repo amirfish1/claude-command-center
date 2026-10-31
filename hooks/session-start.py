@@ -86,6 +86,13 @@ def _label(cmd):
 
 
 def _claude_env(pid):
+    # Linux ps does not support macOS's -E option. Read procfs directly;
+    # retain the ps fallback for macOS and hosts without readable procfs.
+    try:
+        with open("/proc/%d/environ" % pid, "rb") as f:
+            return f.read().decode("utf-8", errors="replace").replace("\0", " ")
+    except OSError:
+        pass
     try:
         return subprocess.run(
             ["/bin/ps", "-Eww", "-p", str(pid), "-o", "command="],

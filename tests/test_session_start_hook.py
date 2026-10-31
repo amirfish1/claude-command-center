@@ -1,9 +1,11 @@
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import mock_open, patch
 from pathlib import Path
 
 import server
@@ -48,6 +50,30 @@ class HookLabelTests(unittest.TestCase):
         self.assertEqual(
             L("/opt/homebrew/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python my-eval-script.py"),
             "my-eval-script.py")
+
+    def test_linux_parent_environment(self):
+        env = b"OTHER=value\0CLAUDE_CODE_SESSION_ID=parent-0001\0CCC_CALLER_NAME=worker.sh\0"
+        with patch("builtins.open", mock_open(read_data=env)), patch.object(self.mod.subprocess, "run") as ps:
+            result = self.mod._claude_env(123)
+        self.assertEqual(self.mod.ENV_SID_RE.search(result).group(1), "parent-0001")
+        self.assertEqual(self.mod.ENV_CALLER_RE.search(result).group(1), "worker.sh")
+        ps.assert_not_called()
+
+    def test_environment_falls_back_without_procfs(self):
+        with patch("builtins.open", side_effect=FileNotFoundError), patch.object(self.mod.subprocess, "run") as ps:
+            ps.return_value.stdout = "claude CCC_PARENT_SESSION_ID=parent-0002"
+            result = self.mod._claude_env(123)
+        self.assertEqual(self.mod.ENV_PARENT_RE.search(result).group(1), "parent-0002")
+
+    def test_start_records_linux_parent(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(self.mod, "MARKERS_DIR", d), \
+                patch.object(self.mod.sys, "stdin", io.StringIO('{"session_id":"child-0001"}')), \
+                patch.object(self.mod.os, "getppid", return_value=123), \
+                patch.object(self.mod, "_ps_table", return_value={123: (1, "claude -p task")}), \
+                patch.object(self.mod, "_claude_env", return_value="CLAUDE_CODE_SESSION_ID=parent-0001 CCC_CALLER_NAME=worker.sh"):
+            self.mod.main()
+            marker = json.loads((Path(d) / "child-0001.json").read_text())
+        self.assertEqual(marker, {"caller": "worker.sh", "parent_session_id": "parent-0001"})
 
     def test_bad_payload_is_silent(self):
         r = subprocess.run([sys.executable, str(HOOK)], input="not json", capture_output=True, text=True)
