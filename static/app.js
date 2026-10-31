@@ -41165,7 +41165,10 @@
     const _repeatTaskTitle = (c) => {
       if (!c || c.engine !== 'hermes' || c.hermes_source !== 'cli' || c.name_overridden) return '';
       const prompt = String(c.first_message || '').trim();
-      const split = prompt.search(/\r?\n\s*\r?\n/);
+      // Sidebar API previews remove empty lines. Match the opening line in
+      // both raw prompts and normalized previews rather than requiring a
+      // paragraph separator that no longer exists in the live response.
+      const split = prompt.search(/\r?\n/);
       if (split < 0) return '';
       const opening = prompt.slice(0, split).replace(/\s+/g, ' ').trim();
       if (opening.length < 40 || opening.split(/\s+/).length < 6) return '';

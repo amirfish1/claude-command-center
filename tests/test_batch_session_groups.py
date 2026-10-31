@@ -24,6 +24,19 @@ assert.equal(_repeatGroupKey(a), _repeatGroupKey(b));
 assert.equal(_repeatGroupKey(a), _repeatGroupKey({...b, hermes_profile:'', repeat_group_profile:'support'}));
 assert.notEqual(_repeatGroupKey(a), _repeatGroupKey({...b, hermes_profile:'', repeat_group_profile:'other'}));
 assert.equal(_repeatGroupTitle(a), opening.slice(0, -1));
+// /api/conversations/list removes blank lines from transcript previews.
+// Group identity must survive that projection and CRLF input alike.
+for (const separator of ['\\n', '\\n\\n', '\\r\\n', '\\r\\n\\r\\n']) {
+  const preview = row('normalized', 'A different generated title', {
+    first_message: opening + separator + 'Channel: normalized' + separator + 'Messages: 1'
+  });
+  assert.equal(_repeatGroupKey(preview), _repeatGroupKey(a));
+  const folded = _foldRepeatTaskClusters([
+    {rows:[{card:a, depth:0}]}, {rows:[{card:preview, depth:0}]}
+  ]);
+  assert.equal(folded.length, 1);
+  assert.equal(folded[0].rows.length, 2);
+}
 for (const extra of [{hermes_profile:'other'}, {model:'other'}, {folder_path:'/example/other'},
   {hermes_source:'chat'}, {name_overridden:true}, {engine:'codex'},
   {first_message:'A different task that has enough words to qualify here.\\n\\nInput: b'}]) {
