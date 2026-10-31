@@ -150,7 +150,12 @@ def test_no_transcript_read_without_candidates(tmp_path, monkeypatch):
     p = _write(tmp_path / "s.jsonl", [_text("assistant", "hi")])
     monkeypatch.setattr(rc, "read_tail_lines",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("read")))
-    api = API([_row(p, state="working")], [])
+    # is_live=False keeps operator presence (32b41829, which legitimately
+    # scans LIVE transcripts) out of this attention-candidate check; it only
+    # passed before when an earlier test had warmed presence's global memo.
+    api = API([_row(p, state="working", is_live=False)], [])
+    from ccc_server import presence
+    presence.reset_for_tests()
     cr.build_snapshot(api, {"share_titles": True})
     assert [c[0] for c in api.calls] == ["/api/sessions", "/api/attention",
                                          "/api/ux-fixes/health"]

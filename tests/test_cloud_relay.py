@@ -356,7 +356,15 @@ def test_snapshot_reads_bounded_projected_cached_feeds():
             seen.append((path, dict(query or {})))
             return super().get(path, query)
 
-    cr.build_snapshot(RecordingAPI(), {"share_titles": True})
+    # Presence fetches transcript paths once for a live session and memoises
+    # by row mtime, so the per-push budget is a warm push (presence state is
+    # module-global: reset it, warm once, then measure).
+    from ccc_server import presence
+    presence.reset_for_tests()
+    api = RecordingAPI()
+    cr.build_snapshot(api, {"share_titles": True})
+    seen.clear()
+    cr.build_snapshot(api, {"share_titles": True})
     paths = [p for p, _ in seen]
     assert paths == ["/api/sessions", "/api/attention", "/api/ux-fixes/health"]
     sq = seen[0][1]
