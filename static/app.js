@@ -59984,10 +59984,21 @@
       if (!(beforeLine > 1)) return;
       pane.loadBeforeLine = beforeLine;
       pane.loadBeforeTail = lines;
+      // fetchConversationEvents(paneId) makes its pane active and never
+      // switches back. This backfill is background work, so give focus back
+      // once the fetch has captured its pane (it re-anchors to that pane
+      // after each await). Otherwise "Move to split view" lands focus on the
+      // moved pane instead of the newly loaded left one (CCC-280).
+      const prevActive = splitState.activeIndex;
+      const backfillIdx = paneIndexByPaneId(paneId);
       try {
         const r = fetchConversationEvents(paneId);
         if (r && typeof r.catch === 'function') r.catch(() => {});
       } catch (_) {}
+      if (prevActive !== backfillIdx && splitState.activeIndex === backfillIdx
+          && splitState.panes[prevActive]) {
+        splitState.activeIndex = prevActive;
+      }
     }, 0));
   }
 

@@ -1,0 +1,1 @@
+- "Move to split view" now leaves focus on the newly loaded left pane, instead of the moved pane taking it back a moment later.
