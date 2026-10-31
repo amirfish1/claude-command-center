@@ -69,6 +69,7 @@ def test_dashboard_link_prefers_public_url(monkeypatch):
 
 def test_dead_session_emitter_alerts_off_dashboard(monkeypatch):
     from ccc_server import notify, popups
+    monkeypatch.delenv("CCC_ALERT_SESSION_DEATHS", raising=False)
     calls = []
     monkeypatch.setattr(popups, "APPROVED", frozenset(popups.ALL))
     monkeypatch.setattr(notify, "_dedupe_hit", lambda item, now: None)
@@ -80,3 +81,13 @@ def test_dead_session_emitter_alerts_off_dashboard(monkeypatch):
     notify._emit_session_deaths({}, NOW, publish=lambda item: None)
     assert calls and calls[0][0] == "death:s9:42"
     assert "stopped mid-turn" in calls[0][1] and "s9" in calls[0][3]
+
+
+def test_session_death_phone_opt_out_preserves_other_alerts(monkeypatch):
+    from ccc_server import notify
+    calls = []
+    monkeypatch.setenv("CCC_ALERT_SESSION_DEATHS", "0")
+    monkeypatch.setattr(ah, "send", lambda key, *a, **kw: calls.append(key) or ah.OFF)
+    notify._alert_off_dashboard("death:s1:42", {"title": "Stopped"})
+    notify._alert_off_dashboard("wake:s1:refused:42", {"title": "Wake refused"})
+    assert calls == ["wake:s1:refused:42"]

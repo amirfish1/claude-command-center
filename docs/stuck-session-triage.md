@@ -67,6 +67,9 @@ Facts that trip people up:
   message on stdin. CCC runs it for dead sessions and refused wakes, once per
   incident, at most 10 per hour (`alert-hook.json`; `ALERT_HOOK` in
   `activity.log`).
+  Set `CCC_ALERT_SESSION_DEATHS=0` to silence stopped-session phone alerts
+  while keeping dashboard notifications and refused-wake alerts. Restart
+  the dashboard server after changing this environment setting.
 - Dead sessions are notify-only by default. A session can opt in to one
   automatic rerun (`POST /api/auto-rerun {"session_id", "enabled"}`); a
   scheduled job that starts a fresh session each run gets a host-only rule in
