@@ -33788,3 +33788,5 @@ body:has(#settingsModal.open) #ideaTicketsIntroBanner { visibility:hidden; point
 }
 .settings-section-links { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 20px; }
 .settings-modal.is-first-run .settings-section-links { display:none; }
+#settingsSection-defaults .settings-data-card { display:block; padding:18px; }
+@media(max-width:700px) { #settingsSection-defaults .settings-data-card { padding:14px; } }

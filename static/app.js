@@ -93018,6 +93018,7 @@
       const active = btn.getAttribute('data-section-target') === sectionId;
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      if (active && window.innerWidth <= 700) btn.scrollIntoView({block:'nearest', inline:'nearest'});
     });
     _settingsCurrentSection = sectionId;
     if (sectionId === 'defaults') refreshSettingsUsage();
