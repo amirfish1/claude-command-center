@@ -70,7 +70,8 @@ def test_archive_engine_filter_has_compact_accessible_icon_styles():
 
 def test_archive_engine_filter_options_open_right_from_trigger_in_narrow_rail():
     app_css = _source(APP_CSS)
-    options_start = app_css.index(".conv-archived-engine-options {")
+    # Anchor on the base popup rule, not the ⋮ menu-row variant (CCC-283).
+    options_start = app_css.index("\n  .conv-archived-engine-options {")
     options_end = app_css.index(".conv-archived-engine-filter.is-expanded", options_start)
     options_css = app_css[options_start:options_end]
 

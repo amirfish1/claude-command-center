@@ -8605,7 +8605,46 @@
   /* CCC-1158: on narrow sidebars the right-hand pill stack wrapped into ~4
      rows. Grouping/density are view settings — below the breakpoint they fold
      into a ⋮ overflow menu so the toolbar stays one row. */
-  #convList .conv-archived-overflow { display: none; position: relative; }
+  /* CCC-283: the ⋮ is always shown -- it also holds the engine filter and the
+     Table view toggle at every width. The grouping/density copies inside it
+     only show once their inline originals fold away (container query below). */
+  #convList .conv-archived-overflow { display: inline-flex; align-items: center; position: relative; }
+  #convList .conv-archived-overflow-menu > [data-role="archived-grouping-toggle"],
+  #convList .conv-archived-overflow-menu > [data-role="wrap-toggle"],
+  #convList .conv-archived-overflow-menu > [data-role="details-toggle"],
+  #convList .conv-archived-overflow-menu > [data-role="session-density-toggle"] { display: none; }
+  /* Engine filter as an always-open row of buttons inside the menu. */
+  #convList .conv-archived-engine-filter.is-menu-row { position: static; }
+  #convList .conv-archived-engine-filter.is-menu-row .conv-archived-engine-options {
+    position: static;
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    box-shadow: none;
+  }
+  #convList .conv-menu-check-opt {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
+    padding: 3px 8px;
+    border: 1px solid var(--border, #2a2a2a);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text, #eee);
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+  #convList .conv-menu-check-opt:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
+  #convList .conv-menu-check-opt .conv-check {
+    display: inline-flex;
+    width: 14px;
+    justify-content: center;
+    color: var(--green, #3fb950);
+    font-weight: 700;
+  }
   #convList .conv-archived-overflow-trigger {
     list-style: none;
     cursor: pointer;
@@ -8653,7 +8692,10 @@
     #convList .conv-archived-tools-right > [data-role="session-density-toggle"] {
       display: none;
     }
-    #convList .conv-archived-overflow { display: inline-flex; align-items: center; }
+    #convList .conv-archived-overflow-menu > [data-role="archived-grouping-toggle"],
+    #convList .conv-archived-overflow-menu > [data-role="wrap-toggle"],
+    #convList .conv-archived-overflow-menu > [data-role="details-toggle"],
+    #convList .conv-archived-overflow-menu > [data-role="session-density-toggle"] { display: inline-flex; }
   }
   #convList .conv-inprogress-list > .conv-item {
     padding-left: 8px;
@@ -32842,6 +32884,7 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
   }
   #convList .conv-archived-engine-filter.is-menu-row .conv-archived-engine-btn svg,
   #convList .conv-archived-engine-filter.is-menu-row .conv-archived-engine-btn .conv-session-svg { width: 20px; height: 20px; }
+  #convList .conv-menu-check-opt { min-height: 44px; padding: 0 10px; border-radius: 8px; font-size: 15px; gap: 10px; }
   #convList .conv-other-machines-opt {
     align-items: center;
     gap: 10px;

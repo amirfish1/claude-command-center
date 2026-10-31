@@ -19,13 +19,26 @@ test('archived toolbar renders a ⋮ overflow menu with the display controls', (
   assert.match(block, /_arcDenseToggle/, 'density control included');
 });
 
-test('CSS folds inline controls and shows the overflow below the breakpoint', () => {
-  assert.match(css, /\.conv-archived-overflow\s*{[^}]*display:\s*none/, 'overflow hidden by default');
+test('CSS folds inline controls into the always-visible overflow below the breakpoint', () => {
+  // CCC-283: the ⋮ is always shown (it holds the engine filter + Table view).
+  assert.match(css, /#convList \.conv-archived-overflow\s*{[^}]*display:\s*inline-flex/, 'overflow always shown');
   const cq = css.match(/@container sidebar \(max-width: 600px\)\s*{([\s\S]*?)}\s*}/);
   assert.ok(cq, 'sidebar container query at 600px exists');
   assert.match(cq[1], /data-role="archived-grouping-toggle"/, 'grouping folded');
   assert.match(cq[1], /data-role="session-density-toggle"/, 'density folded');
-  assert.match(cq[1], /\.conv-archived-overflow { display: inline-flex/, 'overflow shown');
+});
+
+test('engine filter and Table view live only in the ⋮ menu (CCC-283)', () => {
+  const start = app.indexOf("const _arcTools = '<div class=\"conv-archived-tools\"");
+  assert.ok(start >= 0, 'toolbar markup found');
+  const row = app.slice(start, start + 600);
+  assert.doesNotMatch(row, /_arcEngineToggle|_trackedTableToggleHtml/, 'not inline in the toolbar row');
+  const menuStart = app.indexOf('const _arcDisplayControls');
+  const menu = app.slice(menuStart, menuStart + 600);
+  assert.match(menu, /_arcEngineMenuRow/, 'engine row in menu');
+  assert.match(menu, /_arcTrackedTableOpt/, 'Table view item in menu');
+  assert.match(app, /const _arcEngineMenuRow = '<span class="conv-archived-engine-filter is-menu-row" data-role/, 'engine row not phone-only');
+  assert.match(app, /conv-tracked-table-opt[\s\S]{0,200}role="menuitemcheckbox" aria-checked=/, 'Table item shows on/off state');
 });
 
 test('menu copies are bound: toggles use querySelectorAll, not first-match', () => {

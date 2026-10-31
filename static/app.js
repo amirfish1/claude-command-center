@@ -4159,7 +4159,14 @@
   }
   function setTrackedTableOpen(on) {
     try { localStorage.setItem(TRACKED_TABLE_OPEN_KEY, on ? '1' : '0'); } catch (_) {}
-    document.querySelectorAll('[data-tracked-table-toggle]').forEach(o => o.classList.toggle('is-active', !!on));
+    document.querySelectorAll('[data-tracked-table-toggle]').forEach(o => {
+      o.classList.toggle('is-active', !!on);
+      if (o.getAttribute('role') === 'menuitemcheckbox') {
+        o.setAttribute('aria-checked', on ? 'true' : 'false');
+        const c = o.querySelector('.conv-check');
+        if (c) c.innerHTML = on ? '&#10003;' : '';
+      }
+    });
     renderTrackedTable();
   }
   function renderTrackedTable() {
@@ -44254,27 +44261,8 @@
           + ' aria-label="' + escapeAttr(title) + '" aria-pressed="' + active + '"'
           + ' title="' + escapeAttr(title) + '">' + svg + '</button>';
       };
-      // Collapsed by default to a single trigger icon (the active engine's,
-      // or Claude's when no filter is set) to save toolbar space -- hover to
-      // reveal the six options, click one to filter (re-collapses since the
-      // filter click re-renders this toolbar), or move away for 2s to
-      // auto-close without changing the filter (CCC-1006, hover model CCC-1015).
-      const _arcEngineTriggerTitle = _arcEngineFilter
-        ? 'Filtered by ' + _arcEngineFilterLabel + ' -- click to clear; hover to change'
-        : 'Filter by engine';
-      const _arcEngineToggle = '<span class="conv-archived-engine-filter" data-role="archived-engine-filter" role="group" aria-label="Filter All sessions by engine">'
-          + '<button type="button" class="conv-archived-engine-trigger' + (_arcEngineFilter ? ' is-filtered ' + _arcEngineFilter : '') + '" data-archive-engine-trigger'
-            + ' aria-label="' + escapeAttr(_arcEngineTriggerTitle) + '" aria-expanded="false"'
-            + ' title="' + escapeAttr(_arcEngineTriggerTitle) + '">' + getEngineSvg(_arcEngineFilter || 'claude') + '</button>'
-          + '<span class="conv-archived-engine-options">'
-            + _arcEngineButton('claude', 'Claude', getEngineSvg('claude'))
-            + _arcEngineButton('codex', 'Codex', getEngineSvg('codex'))
-            + _arcEngineButton('kimi', 'Kimi', getEngineSvg('kimi'))
-            + _arcEngineButton('devin', 'Devin', getEngineSvg('devin'))
-            + _arcEngineButton('antigravity', 'Antigravity', getEngineSvg('antigravity'))
-            + _arcEngineButton('grok', 'Grok', getEngineSvg('grok'))
-          + '</span>'
-        + '</span>';
+      // The engine filter lives in the ⋮ menu as an always-open row of engine
+      // buttons (CCC-283; it used to be a hover-popup icon in the toolbar).
       // Wrap toggle (mirrors the In progress toolbar's): lets session titles
       // break across two lines instead of truncating to one. Shares the
       // 'wrap-titles' class + localStorage key with the In progress view.
@@ -44468,7 +44456,7 @@
       // Phones also fold the time window, the engine filter (as an always-open
       // row of engine buttons, no hover popup) and the Other machines toggle
       // into this menu; .is-phone-menu-only hides these copies elsewhere.
-      const _arcEngineMenuRow = '<span class="conv-archived-engine-filter is-menu-row is-phone-menu-only" role="group" aria-label="Filter by engine">'
+      const _arcEngineMenuRow = '<span class="conv-archived-engine-filter is-menu-row" data-role="archived-engine-filter" role="group" aria-label="Filter by engine">'
           + '<span class="conv-archived-engine-options">'
             + _arcEngineButton('claude', 'Claude', getEngineSvg('claude'))
             + _arcEngineButton('codex', 'Codex', getEngineSvg('codex'))
@@ -44482,21 +44470,28 @@
           + (_showOtherMachines() ? ' is-active' : '') + '" data-other-machines-toggle="1"'
           + ' role="menuitemcheckbox" aria-checked="' + (_showOtherMachines() ? 'true' : 'false') + '">'
           + '<span class="conv-check" aria-hidden="true">' + (_showOtherMachines() ? '&#10003;' : '') + '</span>Show other machines</button>';
+      const _arcTrackedTableOn = trackedTableOpen();
+      const _arcTrackedTableOpt = '<button type="button" class="conv-menu-check-opt conv-tracked-table-opt'
+          + (_arcTrackedTableOn ? ' is-active' : '') + '" data-tracked-table-toggle="1"'
+          + ' role="menuitemcheckbox" aria-checked="' + (_arcTrackedTableOn ? 'true' : 'false') + '"'
+          + ' title="Show tracked sessions as a table in the main pane (ticket, name, status, next step)">'
+          + '<span class="conv-check" aria-hidden="true">' + (_arcTrackedTableOn ? '&#10003;' : '') + '</span>Table view</button>';
       const _arcDisplayControls = _arcGroupingToggle
         + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle)
         + _arcWindowToggle.replace('class="conv-grouping-toggle conv-window-toggle"', 'class="conv-grouping-toggle conv-window-toggle is-phone-menu-only"')
         + _arcEngineMenuRow
+        + _arcTrackedTableOpt
         + _arcOtherMachinesOpt;
       const _arcOverflow = _arcDisplayControls
         ? '<details class="conv-archived-overflow" data-role="archived-overflow">'
-          + '<summary class="conv-archived-overflow-trigger" aria-label="Grouping and density options" title="Grouping and density options">&#8942;</summary>'
+          + '<summary class="conv-archived-overflow-trigger" aria-label="View options" title="View options">&#8942;</summary>'
           + '<span class="conv-archived-overflow-menu">' + _arcDisplayControls + '</span>'
           + '</details>'
         : '';
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + _arcToolsLeft
-          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcEngineToggle + _arcGroupingToggle
-            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + _trackedTableToggleHtml() + _arcOverflow + '</span>'
+          + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcGroupingToggle
+            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + _arcOverflow + '</span>'
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
