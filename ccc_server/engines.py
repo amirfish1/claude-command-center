@@ -5612,6 +5612,33 @@ def _parent_session_id_from_transcript_return_address(path):
     return ""
 
 
+def _codex_rollout_user_message_text(ev):
+    """User-message text from a codex rollout ``response_item`` event.
+
+    Codex rollouts carry no ``type == "user"`` rows; a user turn is a
+    ``response_item`` whose payload is ``{"type": "message", "role": "user",
+    "content": [{"type": "input_text", "text": ...}]}``. Injected instruction
+    blocks (AGENTS.md, session-state instructions) arrive as earlier user-role
+    messages, so callers scan every user message for the marker rather than
+    stopping at the first.
+    """
+    if ev.get("type") != "response_item":
+        return ""
+    payload = ev.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    if payload.get("type") != "message" or payload.get("role") != "user":
+        return ""
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        str(item.get("text") or "")
+        for item in content
+        if isinstance(item, dict) and item.get("type") in ("input_text", "text")
+    ).strip()
+
+
 def _continued_from_session_id_from_transcript(path):
     """Read a transcript's first user prompt and extract the continuation origin."""
     try:
@@ -5625,6 +5652,12 @@ def _continued_from_session_id_from_transcript(path):
                 try:
                     ev = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                codex_text = _codex_rollout_user_message_text(ev)
+                if codex_text:
+                    origin = _continued_from_session_id_from_text(codex_text)
+                    if origin:
+                        return origin
                     continue
                 if ev.get("type") != "user" or ev.get("isMeta"):
                     continue

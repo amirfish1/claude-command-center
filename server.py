@@ -16694,6 +16694,13 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
         _idea_tickets.backfill_recent_once(projected)
     except Exception:
         pass
+    # One-time relabel: codex successors recorded as "child" before the
+    # origin-marker scan learned the rollout format become "continued" and
+    # lead-eligible (marker-gated, runs once per machine).
+    try:
+        _idea_tickets.relabel_continued_once()
+    except Exception:
+        pass
     if idea_tickets_by_sid:
         for out in projected:
             ticket = idea_tickets_by_sid.get(out.get("session_id") or out.get("id"))

@@ -623,11 +623,7 @@ def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint
                    text_hint=""):
     """Give ``sid`` its ticket: inherit from a continuation origin or parent,
     file a new one for a UI-started session, or record a skip."""
-    jsonl = None
-    try:
-        jsonl = _core._find_session_jsonl(sid)
-    except Exception:
-        jsonl = None
+    jsonl = _session_transcript_path(sid)
     continued_from = ""
     if jsonl:
         try:
@@ -792,6 +788,76 @@ def backfill_recent_once(rows):
             dated.append((ts, sid))
     dated.sort(key=lambda pair: pair[0])
     backfill([sid for _, sid in dated[:_RECENT_BACKFILL_MAX]])
+
+
+_CONTINUED_RELABEL_MARKER_NAME = "idea-tickets-continued-relabel-done"
+_CONTINUED_RELABEL_MAX = 500
+
+
+def _session_transcript_path(sid):
+    """Claude .jsonl or codex rollout path for a recorded session."""
+    try:
+        path = _core._find_session_jsonl(sid)
+        if path:
+            return path
+    except Exception:
+        pass
+    try:
+        rollout = _core._resolve_codex_rollout_path(sid)
+        return Path(rollout) if rollout else None
+    except Exception:
+        return None
+
+
+def relabel_continued_once():
+    """Re-label recorded ``child`` sessions that are really continuations.
+
+    The origin-marker scan used to read only Claude-format ``type:"user"``
+    events, so codex successors attached as ``child`` and were skipped in
+    cluster lead election. Any child whose transcript carries the "Origin
+    session id:" marker pointing at a session on the SAME ticket becomes
+    ``continued`` -- which is lead-eligible. Runs once per machine (marker
+    file); transcript reads are bounded by _CONTINUED_RELABEL_MAX.
+    """
+    if not _enabled():
+        return
+    marker = Path(_core.COMMAND_CENTER_STATE_DIR) / _CONTINUED_RELABEL_MARKER_NAME
+    if marker.exists():
+        return
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(str(int(time.time())))
+    except OSError:
+        return
+    data = load_state()
+    children = [sid for sid, e in (data.get("sessions") or {}).items()
+                if isinstance(e, dict) and e.get("kind") == "child"]
+    relabeled = []
+    for sid in children[:_CONTINUED_RELABEL_MAX]:
+        path = _session_transcript_path(sid)
+        if not path:
+            continue
+        try:
+            origin = _core._continued_from_session_id_from_transcript(path) or ""
+        except Exception:
+            origin = ""
+        if not origin:
+            continue
+        entry = data["sessions"].get(sid) or {}
+        origin_entry = data["sessions"].get(origin) or {}
+        if origin_entry.get("ref") and origin_entry.get("ref") == entry.get("ref"):
+            relabeled.append(sid)
+    if not relabeled:
+        return
+
+    def _apply(d):
+        for sid in relabeled:
+            e = d["sessions"].get(sid)
+            if isinstance(e, dict) and e.get("kind") == "child":
+                e["kind"] = "continued"
+    _mutate(_apply)
+    _core._log_activity("idea", "IDEA_TICKET_RELABEL",
+                        f"child->continued {len(relabeled)}")
 
 
 def _restamp_rows():
