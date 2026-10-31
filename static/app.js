@@ -92808,6 +92808,135 @@
   let _settingsSearchIndex = null;
   let _settingsCurrentSection = 'appearance';
 
+  // Settings insight panels are refreshed on entry, not by a polling timer.
+  let settingsQueueSnapshot = null;
+  let settingsQueueBusy = false;
+  async function settingsJSON(url, body) {
+    const response = await fetch(url, body === undefined ? {cache:'no-store'} : {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+    });
+    const data = await response.json();
+    if (!response.ok || data.ok === false) throw new Error(data.error || 'Unable to load settings');
+    return data;
+  }
+  async function refreshSettingsUsage() {
+    const host = document.getElementById('settingsModelUsage');
+    if (!host) return;
+    host.textContent = 'Loading session counts…';
+    try {
+      const data = await settingsJSON('/api/settings/model-usage');
+      const max = Math.max(1, ...data.models.map(row => row.count));
+      host.innerHTML = data.total ? '<div class="settings-metric-total">' + data.total + ' <span>recorded sessions</span></div><div class="settings-usage-list">' + data.models.map(row =>
+        '<div class="settings-usage-row"><div><strong>' + escapeHtml(row.model) + '</strong><small>' + escapeHtml(row.engine) + '</small></div><div class="settings-usage-track"><span style="width:' + (row.count / max * 100) + '%"></span></div><b>' + row.count + '</b></div>'
+      ).join('') + '</div>' : '<p class="settings-empty">No recorded starts in the last 7 days.</p>';
+    } catch (error) { host.textContent = 'Session counts unavailable: ' + error.message; }
+  }
+  async function refreshSettingsQueues() {
+    const host = document.getElementById('settingsQueueTable');
+    if (!host || settingsQueueBusy) return;
+    settingsQueueSnapshot = null;
+    document.getElementById('settingsQueuePreviewBody').hidden = true;
+    host.textContent = 'Loading queue routing…';
+    try {
+      const data = await settingsJSON('/api/settings/queue-engines');
+      settingsQueueSnapshot = data;
+      const rows = data.queues.filter(row => row.auto_drain);
+      host.innerHTML = rows.length ? '<p class="settings-row-desc">' + rows.length + ' auto-drain queues · ' + rows.reduce((sum,row)=>sum+Number(row.workers || 0),0) + ' configured worker slots</p><div class="settings-table-wrap"><table class="settings-routing-table"><thead><tr><th>Queue</th><th>Next engine / model</th><th>Effort</th><th>Source</th><th>Workers</th></tr></thead><tbody>' + rows.map(row =>
+        '<tr><th scope="row">' + escapeHtml(row.queue) + '</th><td><strong>' + escapeHtml(row.engine) + '</strong><small>' + escapeHtml(row.model) + '</small></td><td>' + escapeHtml(row.effort) + '</td><td><span class="settings-source-badge">' + (Object.keys(row.pins).length ? 'Pinned: ' + escapeHtml(Object.keys(row.pins).join(', ')) : 'Inherited') + '</span><small>Fallback: ' + (row.fallback === true ? 'On' : row.fallback === false ? 'Off' : 'Default') + '</small></td><td>' + Number(row.workers || 0) + '</td></tr>'
+      ).join('') + '</tbody></table></div>' : '<p class="settings-empty">No auto-drain queues. Enable auto-drain from a queue to see its routing here.</p>';
+    } catch (error) { host.textContent = 'Queue routing unavailable: ' + error.message; }
+  }
+  document.getElementById('settingsUsageRefresh')?.addEventListener('click', refreshSettingsUsage);
+  document.getElementById('settingsQueueRefresh')?.addEventListener('click', refreshSettingsQueues);
+  document.getElementById('settingsQueueScope')?.addEventListener('change', () => { document.getElementById('settingsQueuePreviewBody').hidden = true; });
+  document.getElementById('settingsQueuePreview')?.addEventListener('click', async () => {
+    if (settingsQueueBusy) return;
+    await refreshSettingsQueues();
+    const data = settingsQueueSnapshot;
+    if (!data) return;
+    const scope = document.getElementById('settingsQueueScope').value;
+    const rows = data.queues.filter(row => (scope === 'all' || row.auto_drain) && Object.keys(row.pins).length);
+    const host = document.getElementById('settingsQueuePreviewBody');
+    const target = data.worker_default;
+    host.hidden = false;
+    if (target.engine === 'WatchTower default') {
+      host.innerHTML = '<p>Choose and save a worker engine before applying it to queues.</p><button type="button" class="settings-action-btn" data-settings-go="defaults">Choose worker default →</button>';
+      return;
+    }
+    host.innerHTML = '<strong>' + rows.length + ' queues will follow ' + escapeHtml(target.engine) + '</strong><p>' + escapeHtml(target.model) + ' · ' + escapeHtml(target.effort) + '</p><p>Clear engine, model and effort pins for: ' + escapeHtml(rows.map(row => row.queue).join(', ') || 'none — already inherited') + '.</p><p>Auto-drain status, worker counts, fallback rules and running workers stay as they are.</p>' + (rows.length ? '<button type="button" class="settings-action-btn eng-primary" id="settingsQueueConfirm">Apply to ' + rows.length + ' queues</button> ' : '') + '<button type="button" class="settings-action-btn" id="settingsQueueCancel">Cancel</button>';
+    document.getElementById('settingsQueueCancel').onclick = () => { host.hidden = true; };
+    document.getElementById('settingsQueueConfirm')?.addEventListener('click', async (event) => {
+      if (settingsQueueBusy) return;
+      settingsQueueBusy = true;
+      event.target.disabled = true;
+      const status = document.getElementById('settingsQueueStatus');
+      status.textContent = 'Applying queue defaults…';
+      try {
+        const result = await settingsJSON('/api/settings/queue-engines/apply', {scope, revision:data.revision, defaults_revision:data.defaults_revision});
+        status.textContent = 'Saved. ' + result.changed.length + ' queues now follow the worker default.';
+        host.hidden = true;
+      } catch (error) { status.textContent = 'Not applied: ' + error.message; }
+      finally { settingsQueueBusy = false; await refreshSettingsQueues(); }
+    });
+  });
+
+  // Keep existing controls/handlers intact when grouping related preferences.
+  function organizeSettings() {
+    const rail = document.getElementById('settingsRail');
+    const pane = document.getElementById('settingsPane');
+    function addSection(id, title) {
+      const tab = document.createElement('button');
+      tab.type = 'button'; tab.className = 'settings-rail-item'; tab.id = 'settingsRailTab-' + id;
+      tab.dataset.sectionTarget = id; tab.setAttribute('role','tab'); tab.setAttribute('aria-selected','false');
+      tab.setAttribute('aria-controls','settingsSection-' + id); tab.textContent = title; rail.append(tab);
+      const section = document.createElement('section'); section.className = 'settings-section';
+      section.id = 'settingsSection-' + id; section.dataset.sectionId = id; section.setAttribute('role','tabpanel');
+      section.setAttribute('aria-labelledby',tab.id);
+      section.innerHTML = '<div class="settings-section-eyebrow">' + title + '</div>'; pane.append(section);
+      return section;
+    }
+    const voice = addSection('voice','Voice & sound');
+    for (const source of ['appearance','layout','network']) {
+      document.querySelectorAll('[data-section-id="' + source + '"] .settings-row').forEach(row => {
+        const label = row.querySelector('.settings-row-label')?.textContent || '';
+        if (/voice|completion sounds|floating call|car mode/i.test(label) && !/debug/i.test(label)) voice.append(row);
+        if (/debug/i.test(label)) document.getElementById('settingsSection-maintenance').append(row);
+      });
+    }
+    const notes = {appearance:'Make the workspace comfortable to read.',layout:'Choose how sessions, issues and queues appear.',notifications:'Choose which updates deserve your attention.',engines:'Install and connect your agent engines. Choose launch defaults in Session defaults.',voice:'Configure speaking, listening and hands-free access.',vault:'Manage secrets stored on this machine.',network:'Connect devices and manage access to this dashboard.',tools:'Open workspace tools and find past work.',sessions:'Set plan costs used for subscription estimates.',maintenance:'Inspect services, troubleshoot and restart individual processes.',help:'Get help or revisit the guided setup.',routing:'Choose fallback order and capability-based model routes.', 'api-keys':'Connect provider credentials and inspect their recorded usage.'};
+    for (const [id,note] of Object.entries(notes)) {
+      const section = pane.querySelector('[data-section-id="' + id + '"]');
+      if (!section || section.querySelector(':scope > .settings-section-note')) continue;
+      const p = document.createElement('p'); p.className='settings-section-note'; p.textContent=note;
+      section.querySelector('.settings-section-eyebrow')?.after(p);
+    }
+    const groups = [['Workspace',['appearance','layout','notifications','voice']],['Agents & automation',['engines','defaults','queues','routing','free','limits','leftover']],['Connections & data',['vault','api-keys','network','sessions']],['Tools & system',['tools','experimental','maintenance','help']]];
+    for (const [title,ids] of groups) {
+      const label=document.createElement('div'); label.className='settings-rail-group'; label.textContent=title; rail.append(label);
+      ids.forEach(id=>{const tab=rail.querySelector('[data-section-target="'+id+'"]');if(tab)rail.append(tab)});
+    }
+    // Optional panels register after the main app. Place them in the same group.
+    const pendingTabs = new Set(['limits', 'leftover']);
+    const observer = new MutationObserver(() => {
+      for (const id of [...pendingTabs]) {
+        const tab = rail.querySelector('[data-section-target="' + id + '"]');
+        if (!tab) continue;
+        pendingTabs.delete(id);
+        rail.querySelector('[data-section-target="routing"]')?.after(tab);
+      }
+      if (!pendingTabs.size) observer.disconnect();
+    });
+    observer.observe(rail, {childList:true});
+    rail.setAttribute('aria-orientation','vertical');
+    // Associate visible row labels with native controls instead of relying on placeholders.
+    pane.querySelectorAll('.settings-row').forEach((row,index)=>{
+      const label=row.querySelector('.settings-row-label'); if(!label)return;
+      if(!label.id)label.id='settingsLabel-'+index;
+      row.querySelectorAll('select,input').forEach(control=>{if(!control.hasAttribute('aria-label')&&!control.hasAttribute('aria-labelledby'))control.setAttribute('aria-labelledby',label.id)});
+    });
+  }
+  organizeSettings();
+
   function settingsModalFocusables() {
     if (!$settingsModal) return [];
     return Array.from($settingsModal.querySelectorAll(
@@ -92855,15 +92984,16 @@
     if (!ae) return;
     if ($settingsRail && $settingsRail.contains(ae)) {
       e.preventDefault();
-      const items = Array.from($settingsRail.querySelectorAll('.settings-rail-item'));
+      const items = Array.from($settingsRail.querySelectorAll('.settings-rail-item')).filter(item => !item.hidden && item.offsetParent !== null);
       const idx = items.indexOf(ae);
       if (idx === -1) return;
       const next = e.key === 'ArrowDown'
         ? items[(idx + 1) % items.length]
         : items[(idx - 1 + items.length) % items.length];
-      if (next) next.focus();
+      if (next) { next.focus(); next.click(); }
       return;
     }
+    if (isSettingsFormField(ae) && ae !== $settingsSearchInput) return;
     if (ae === $settingsSearchInput || (($settingsPane && $settingsPane.contains(ae)))) {
       e.preventDefault();
       const controls = settingsVisibleRowControls();
@@ -92890,6 +93020,8 @@
       btn.setAttribute('aria-selected', active ? 'true' : 'false');
     });
     _settingsCurrentSection = sectionId;
+    if (sectionId === 'defaults') refreshSettingsUsage();
+    if (sectionId === 'queues') refreshSettingsQueues();
     // Single-panel mode (kimi-web parity): one section at a time. Search
     // mode overrides this via .is-searching (shows all matches).
     $settingsPane.querySelectorAll('.settings-section').forEach(sec => {
@@ -92916,7 +93048,7 @@
 
   function buildSettingsSearchIndex() {
     if (!$settingsPane) { _settingsSearchIndex = []; return; }
-    _settingsSearchIndex = Array.from($settingsPane.querySelectorAll('.settings-row')).map(row => {
+    _settingsSearchIndex = Array.from($settingsPane.querySelectorAll('.settings-row, .eng-list')).map(row => {
       const section = row.closest('.settings-section');
       const eyebrow = section ? section.querySelector('.settings-section-eyebrow') : null;
       const label = row.querySelector('.settings-row-label');
@@ -92929,6 +93061,7 @@
           label ? label.textContent : '',
           desc ? desc.textContent : '',
           row.getAttribute('data-keywords') || '',
+          section ? section.querySelector('.settings-section-eyebrow')?.textContent || '' : '',
         ].join(' ').toLowerCase(),
       };
     });
@@ -92941,6 +93074,7 @@
     if (!q) {
       $settingsModalInner.classList.remove('is-searching');
       _settingsSearchIndex.forEach(entry => { entry.el.hidden = false; });
+      $settingsPane.querySelectorAll('.settings-section').forEach(el => { el.classList.remove('settings-search-miss'); el.setAttribute('aria-hidden', el.dataset.sectionId === _settingsCurrentSection ? 'false' : 'true'); });
       $settingsPane.querySelectorAll('.settings-section-eyebrow, .settings-reset-row').forEach(el => { el.hidden = false; });
       $settingsPane.querySelectorAll('.settings-modal-tools-slot').forEach(el => {
         el.style.display = '';
@@ -93010,6 +93144,8 @@
     $settingsPane.querySelectorAll('.settings-section').forEach(section => {
       const sid = section.getAttribute('data-section-id');
       const has = !!sectionMatchCount[sid];
+      section.classList.toggle('settings-search-miss', !has);
+      section.setAttribute('aria-hidden', has ? 'false' : 'true');
       const eyebrow = section.querySelector('.settings-section-eyebrow');
       if (eyebrow) eyebrow.hidden = !has;
       const resetRow = section.querySelector('.settings-reset-row');
@@ -93574,7 +93710,7 @@
       const item = e.target.closest('.settings-rail-item');
       if (!item) return;
       const sid = item.getAttribute('data-section-target');
-      if (sid) setActiveSettingsRailSection(sid);
+      if (sid) { clearSettingsSearch(); setActiveSettingsRailSection(sid); }
       if (sid === 'vault') refreshVaultSettings();
     });
   }
@@ -93590,6 +93726,8 @@
     // per-section reset buttons. Every mutation fires the ✓ Saved pulse;
     // the Fleet Pulse launcher (an action, not a setting) does not.
     $settingsModal.addEventListener('click', (e) => {
+      const destination = e.target.closest('[data-settings-go]');
+      if (destination) { clearSettingsSearch(); setActiveSettingsRailSection(destination.dataset.settingsGo); return; }
       const themeBtn = e.target.closest('[data-theme]');
       if (themeBtn) {
         const v = themeBtn.getAttribute('data-theme');

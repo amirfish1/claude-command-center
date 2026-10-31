@@ -2644,7 +2644,7 @@
   <div id="settingsModal" class="settings-modal-overlay" hidden role="dialog" aria-modal="true" aria-label="Settings">
     <div class="settings-modal-backdrop" id="settingsModalBackdrop"></div>
     <div class="settings-modal">
-      <div class="settings-modal-header">
+      <div class="settings-modal-header"><strong class="settings-title">Settings</strong>
         <div class="settings-search-wrap">
           <svg class="settings-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="11" cy="11" r="7"/>
@@ -2676,10 +2676,14 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
             <span>Engines</span>
           </button>
+<button type="button" class="settings-rail-item" id="settingsRailTab-defaults" data-section-target="defaults" role="tab" aria-selected="false" aria-controls="settingsSection-defaults"><span>Session defaults</span></button>
+<button type="button" class="settings-rail-item" id="settingsRailTab-queues" data-section-target="queues" role="tab" aria-selected="false" aria-controls="settingsSection-queues"><span>Queue engines</span></button>
+<button type="button" class="settings-rail-item" id="settingsRailTab-routing" data-section-target="routing" role="tab" aria-selected="false" aria-controls="settingsSection-routing"><span>Model routing</span></button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-vault" data-section-target="vault" role="tab" aria-selected="false" aria-controls="settingsSection-vault">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/><circle cx="12" cy="15.5" r="1.4"/></svg>
             <span>Vault</span>
           </button>
+<button type="button" class="settings-rail-item" id="settingsRailTab-api-keys" data-section-target="api-keys" role="tab" aria-selected="false" aria-controls="settingsSection-api-keys"><span>Provider API keys</span></button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-network" data-section-target="network" role="tab" aria-selected="false" aria-controls="settingsSection-network">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="12" cy="19" r="2.3"/><path d="M8 6.6h8M9.3 8.3 11 16.7M14.7 8.3 13 16.7"/></svg>
             <span>Fleet &amp; Network</span>
@@ -2706,6 +2710,7 @@
           </button>
         </div>
         <div class="settings-pane" id="settingsPane">
+          <div class="settings-row-note" id="spawnDefaultsError" role="status" aria-live="polite" hidden></div>
 
           <section class="settings-section" id="appearancePopover" data-section-id="appearance" role="tabpanel" aria-labelledby="settingsRailTab-appearance">
             <div class="settings-section-eyebrow">Appearance</div>
@@ -3013,6 +3018,7 @@
           <section class="settings-section" id="settingsSection-engines" data-section-id="engines" role="tabpanel" aria-labelledby="settingsRailTab-engines">
             <div class="settings-section-eyebrow">Engines</div>
 
+            <div class="settings-section-links"><button type="button" class="settings-action-btn" data-settings-go="defaults">Session defaults &amp; 7-day usage →</button><button type="button" class="settings-action-btn" data-settings-go="queues">Queue engines →</button></div>
             <!-- First-run only (app.js openEnginesFirstRun): the same Engines page, shown once before anything else. -->
             <div class="eng-first-run-intro" id="engFirstRunIntro" hidden>
               <h2 class="eng-first-run-title">Review the engines that are installed</h2>
@@ -3027,7 +3033,55 @@
               <div class="eng-hero-stats" id="engHeroStats" role="group" aria-label="Filter engines"></div>
             </div>
 
-            <div class="eng-defaults">
+            <div class="eng-list-head">
+              <div class="settings-subsection-label" id="engListLabel">All engines</div>
+            </div>
+            <div class="eng-list" id="engList" data-keywords="engine claude codex cursor antigravity gemini kilo opencode kimi hermes devin grok aider droid pi command install login sign in authenticate verify usage quota enable disable">
+              <div class="eng-list-empty">Checking installed engines…</div>
+            </div>
+            <div class="eng-first-run-defaults" id="engFirstRunDefaults" hidden>
+              <span class="efd-label">Default for new sessions</span>
+              <select id="efdEngine" class="bug-input" aria-label="Default engine for new sessions"></select>
+              <select id="efdModel" class="bug-input" aria-label="Default model" hidden></select>
+              <select id="efdEffort" class="bug-input" aria-label="Default effort" hidden></select>
+            </div>
+            <!-- First-run step 2 (optional, never required): Tailscale for phone / other machines. -->
+            <div class="eng-tailscale-step" id="engTailscaleStep" hidden>
+              <h2 class="eng-first-run-title">Use CCC from your phone or other machines</h2>
+              <p class="eng-first-run-body">Connect through Tailscale (free, private to your own devices) to open CCC on your phone or link other machines, like a VM or cloud server.</p>
+              <div class="ets-status" id="etsStatus" role="status" aria-live="polite"></div>
+              <div class="ets-install" id="etsInstall" hidden>
+                <a class="settings-action-btn" id="etsAppStore" href="https://apps.apple.com/app/tailscale/id1475387142" target="_blank" rel="noopener">Open in the Mac App Store</a>
+                <span class="ets-or">or run</span>
+                <code class="ets-cmd">brew install --cask tailscale</code>
+                <button type="button" class="settings-action-btn" id="etsCopyBrew">Copy</button>
+              </div>
+              <div class="ets-signin" id="etsSignin" hidden></div>
+              <div class="ets-actions">
+                <button type="button" class="settings-action-btn" id="etsLater">Later</button>
+                <button type="button" class="settings-action-btn eng-primary" id="etsSetup">Set up</button>
+              </div>
+              <p class="eng-first-run-body ets-peers">To link another machine as a peer, use Settings, Nodes &amp; peers.</p>
+            </div>
+
+            <div class="settings-subsection-label">Updates</div>
+            <div class="settings-row" data-keywords="engine cli automatic updates versions install latest claude codex cursor antigravity">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Automatic CLI updates</div>
+                <div class="settings-row-desc engine-update-summary" id="engineUpdateStatusDesc">Checking installed engines…</div>
+              </div>
+              <div class="settings-row-control">
+                <span class="settings-row-value" id="engineUpdateLastRun"></span>
+                <button type="button" class="settings-action-btn" id="engineUpdateNowBtn">Update now</button>
+                <button type="button" class="settings-toggle is-on" id="engineAutoUpdateToggle" role="switch" aria-checked="true" aria-label="Automatic CLI updates">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
+          </section>
+
+<section class="settings-section" id="settingsSection-defaults" data-section-id="defaults" role="tabpanel" aria-labelledby="settingsRailTab-defaults"><div class="settings-section-eyebrow">Session defaults</div><p class="settings-section-note">Choose what starts next. Changes save automatically; queue pins take precedence over worker defaults.</p><div class="settings-row settings-data-card" data-keywords="model usage sessions seven days statistics"><div class="settings-row-main"><div class="settings-row-label">Sessions started · last 7 days</div><p class="settings-row-desc">Indexed local Claude and Codex sessions plus retained CCC launches, grouped by starting model. Resumes count once; missing initial models are shown separately.</p><div id="settingsModelUsage" aria-live="polite">Loading session counts…</div><button type="button" class="settings-action-btn" id="settingsUsageRefresh">Refresh counts</button></div></div>            <div class="eng-defaults">
               <div class="eng-card eng-defaults-card">
                 <div class="eng-card-head">
                   <div class="eng-card-title" title="What you get when you spawn without choosing.">New sessions</div>
@@ -3158,7 +3212,14 @@
                   </div>
               </div>
             </div>
-            <div class="eng-card model-routing-card" id="workerFallbackSettings" data-keywords="fallback quota exhausted models worker watchtower managed">
+</section>
+<section class="settings-section" id="settingsSection-queues" data-section-id="queues" role="tabpanel" aria-labelledby="settingsRailTab-queues"><div class="settings-section-eyebrow">Queue engines</div><p class="settings-section-note">Review auto-drain queues and their next worker launch. Existing workers keep their current model.</p>
+<div class="settings-row settings-data-card" data-keywords="queues engines workers auto drain bulk apply override inherit"><div class="settings-row-main">
+<div class="settings-row-label">Apply the saved worker default</div><p class="settings-row-desc">Choose the worker engine, model and effort in Session defaults first. Applying clears queue pins so these queues follow future worker-default changes too.</p>
+<div class="settings-bulk-toolbar"><select id="settingsQueueScope" aria-label="Queues to update"><option value="auto">Auto-drain queues only</option><option value="all">All active queues</option></select><button type="button" class="settings-action-btn" id="settingsQueuePreview">Preview changes</button><button type="button" class="settings-action-btn" id="settingsQueueRefresh">Refresh</button></div>
+<div id="settingsQueuePreviewBody" hidden></div><div id="settingsQueueStatus" role="status" aria-live="polite"></div>
+</div></div><div class="settings-row settings-data-card" data-keywords="auto drain queue engine model effort pinned inherited"><div class="settings-row-main"><div class="settings-row-label">Auto-drain queues</div><div id="settingsQueueTable" aria-live="polite">Loading queue routing…</div></div></div></section>
+<section class="settings-section" id="settingsSection-routing" data-section-id="routing" role="tabpanel" aria-labelledby="settingsRailTab-routing"><div class="settings-section-eyebrow">Model routing</div>            <div class="eng-card model-routing-card" id="workerFallbackSettings" data-keywords="fallback quota exhausted models worker watchtower managed">
               <div class="eng-card-head"><div class="eng-card-title">Worker and managed model fallback</div><div class="eng-card-sub">Try the next configured provider when a model runs out of quota.</div></div>
               <div class="settings-row">
                 <div class="settings-row-main"><div class="settings-row-label">Enable fallback by default</div><div class="settings-row-desc">Applies to new worker launches and apps using WatchTower managed model runs. Queue On/Off overrides this default. Active runs finish with their current model.</div></div>
@@ -3175,91 +3236,9 @@
               <div style="padding:12px 16px;"><button type="button" class="settings-action-btn" id="modelProfileAdd">Add profile model</button></div>
               <p class="settings-row-desc" style="padding:0 16px 16px;">The first model is the primary route. Later providers are used only when fallback is enabled above and quota is exhausted. An empty profile has no route. Profile names describe your intended capability; choose models accordingly. The managed runtime currently supports Claude with schema and no-tools guarantees. Unsupported providers fail visibly; Codex is supported for queue worker fallback above.</p>
             </div>
-            <div class="settings-row-note" id="spawnDefaultsError" hidden></div>
 
-            <div class="eng-list-head">
-              <div class="settings-subsection-label" id="engListLabel">All engines</div>
-            </div>
-            <div class="eng-list" id="engList" data-keywords="engine claude codex cursor antigravity gemini kilo opencode kimi hermes devin grok aider droid pi command install login sign in authenticate verify usage quota enable disable">
-              <div class="eng-list-empty">Checking installed engines…</div>
-            </div>
-            <div class="eng-first-run-defaults" id="engFirstRunDefaults" hidden>
-              <span class="efd-label">Default for new sessions</span>
-              <select id="efdEngine" class="bug-input" aria-label="Default engine for new sessions"></select>
-              <select id="efdModel" class="bug-input" aria-label="Default model" hidden></select>
-              <select id="efdEffort" class="bug-input" aria-label="Default effort" hidden></select>
-            </div>
-            <!-- First-run step 2 (optional, never required): Tailscale for phone / other machines. -->
-            <div class="eng-tailscale-step" id="engTailscaleStep" hidden>
-              <h2 class="eng-first-run-title">Use CCC from your phone or other machines</h2>
-              <p class="eng-first-run-body">Connect through Tailscale (free, private to your own devices) to open CCC on your phone or link other machines, like a VM or cloud server.</p>
-              <div class="ets-status" id="etsStatus" role="status" aria-live="polite"></div>
-              <div class="ets-install" id="etsInstall" hidden>
-                <a class="settings-action-btn" id="etsAppStore" href="https://apps.apple.com/app/tailscale/id1475387142" target="_blank" rel="noopener">Open in the Mac App Store</a>
-                <span class="ets-or">or run</span>
-                <code class="ets-cmd">brew install --cask tailscale</code>
-                <button type="button" class="settings-action-btn" id="etsCopyBrew">Copy</button>
-              </div>
-              <div class="ets-signin" id="etsSignin" hidden></div>
-              <div class="ets-actions">
-                <button type="button" class="settings-action-btn" id="etsLater">Later</button>
-                <button type="button" class="settings-action-btn eng-primary" id="etsSetup">Set up</button>
-              </div>
-              <p class="eng-first-run-body ets-peers">To link another machine as a peer, use Settings, Nodes &amp; peers.</p>
-            </div>
 
-            <div class="settings-subsection-label">Updates</div>
-            <div class="settings-row" data-keywords="engine cli automatic updates versions install latest claude codex cursor antigravity">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Automatic CLI updates</div>
-                <div class="settings-row-desc engine-update-summary" id="engineUpdateStatusDesc">Checking installed engines…</div>
-              </div>
-              <div class="settings-row-control">
-                <span class="settings-row-value" id="engineUpdateLastRun"></span>
-                <button type="button" class="settings-action-btn" id="engineUpdateNowBtn">Update now</button>
-                <button type="button" class="settings-toggle is-on" id="engineAutoUpdateToggle" role="switch" aria-checked="true" aria-label="Automatic CLI updates">
-                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
-                </button>
-              </div>
-            </div>
-
-            <div class="settings-subsection-label">API keys</div>
-            <div class="settings-row" data-keywords="byok bring your own key api key openrouter tokenrouter anthropic openai xai moonshot google keychain">
-              <div class="settings-row-main">
-                <div class="settings-row-label">BYOK - bring your own key</div>
-                <div class="settings-row-desc" id="byokBackendDesc">Checking key storage…</div>
-              </div>
-            </div>
-
-            <div class="settings-row byok-add-row" data-keywords="byok add key profile provider">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Add a key</div>
-                <div class="settings-row-desc">Stored on this machine only - never committed, never sent anywhere but the provider you pick.</div>
-                <div class="byok-add-form">
-                  <input type="text" id="byokProfileInput" class="settings-text-input" placeholder="Profile name (e.g. personal)" autocomplete="off">
-                  <select id="byokProviderSelect" class="settings-select"></select>
-                  <input type="password" id="byokKeyInput" class="settings-text-input" placeholder="API key" autocomplete="off">
-                  <button type="button" class="settings-action-btn" id="byokSaveKeyBtn">Save key</button>
-                </div>
-                <div class="settings-row-desc" id="byokSaveStatus"></div>
-              </div>
-            </div>
-
-            <div class="settings-row" data-keywords="byok profiles configured keys spend usage cost">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Profiles</div>
-                <div class="settings-row-desc" id="byokProfilesList">No profiles yet.</div>
-              </div>
-            </div>
-
-            <div class="settings-row" data-keywords="byok spend cost usage tokens dollars">
-              <div class="settings-row-main">
-                <div class="settings-row-label">BYOK spend (last 30 days)</div>
-                <div class="settings-row-desc" id="byokUsageDesc">No BYOK usage recorded yet.</div>
-              </div>
-            </div>
-          </section>
-
+</section>
           <!-- Vault: any kind of secret (API keys, tokens, logins), stored in
                the Keychain (service ccc-vault) or an encrypted file. Values
                are write-only here; agents read them via `ccc vault exec`.
@@ -3333,6 +3312,42 @@
             </div>
           </section>
 
+<section class="settings-section" id="settingsSection-api-keys" data-section-id="api-keys" role="tabpanel" aria-labelledby="settingsRailTab-api-keys"><div class="settings-section-eyebrow">Provider API keys</div>            <div class="settings-subsection-label">API keys</div>
+            <div class="settings-row" data-keywords="byok bring your own key api key openrouter tokenrouter anthropic openai xai moonshot google keychain">
+              <div class="settings-row-main">
+                <div class="settings-row-label">BYOK - bring your own key</div>
+                <div class="settings-row-desc" id="byokBackendDesc">Checking key storage…</div>
+              </div>
+            </div>
+
+            <div class="settings-row byok-add-row" data-keywords="byok add key profile provider">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Add a key</div>
+                <div class="settings-row-desc">Stored on this machine only - never committed, never sent anywhere but the provider you pick.</div>
+                <div class="byok-add-form">
+                  <input type="text" id="byokProfileInput" class="settings-text-input" placeholder="Profile name (e.g. personal)" autocomplete="off">
+                  <select id="byokProviderSelect" class="settings-select"></select>
+                  <input type="password" id="byokKeyInput" class="settings-text-input" placeholder="API key" autocomplete="off">
+                  <button type="button" class="settings-action-btn" id="byokSaveKeyBtn">Save key</button>
+                </div>
+                <div class="settings-row-desc" id="byokSaveStatus"></div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="byok profiles configured keys spend usage cost">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Profiles</div>
+                <div class="settings-row-desc" id="byokProfilesList">No profiles yet.</div>
+              </div>
+            </div>
+
+            <div class="settings-row" data-keywords="byok spend cost usage tokens dollars">
+              <div class="settings-row-main">
+                <div class="settings-row-label">BYOK spend (last 30 days)</div>
+                <div class="settings-row-desc" id="byokUsageDesc">No BYOK usage recorded yet.</div>
+              </div>
+            </div>
+</section>
           <section class="settings-section" id="settingsSection-network" data-section-id="network" role="tabpanel" aria-labelledby="settingsRailTab-network">
             <div class="settings-section-eyebrow">Fleet &amp; Network</div>
 

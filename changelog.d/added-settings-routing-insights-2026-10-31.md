@@ -1,0 +1,1 @@
+Settings now groups engine setup, session defaults, queue engines, model routing, provider keys, and voice controls into focused panels. Inspect seven-day starting-model counts and effective auto-drain queue routing, preview applying worker defaults to auto-drain or all active queues, and use clearer labels, keyboard navigation, search results, and mobile layouts.

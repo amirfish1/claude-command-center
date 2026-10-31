@@ -32055,6 +32055,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "config": config, "headroom": _headroom.headroom_payload()})
             except (OSError, ValueError) as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/settings/model-usage":
+            from ccc_server.settings_insights import model_usage, transcript_starts
+            with _ARCHIVE_RESPONSE_CACHE_LOCK:
+                rows = [row for entry in _ARCHIVE_RESPONSE_CACHE.values()
+                        for row in (entry.get("conversations") or [])]
+            now = time.time()
+            records = transcript_starts(rows, now)
+            records += list(_load_spawn_registry() or []) + list(_load_spawn_history() or [])
+            self.send_json(model_usage(records, now))
+        elif path == "/api/settings/queue-engines":
+            from ccc_server.settings_insights import queue_overview
+            resolver = None
+            if _WT_CONFIG_AVAILABLE and _wt_config is not None:
+                resolver = lambda name: (_wt_config.engine(name), _wt_config.model(name), _wt_config.effort(name))
+            self.send_json(queue_overview(_wt_read_config(), _load_spawn_defaults(), resolver))
         elif path == "/api/spawn-defaults":
             defaults = _load_spawn_defaults()
             self.send_json({
@@ -33028,6 +33043,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return "ui"
         return "api"
 
+    from ccc_server.settings_insights import serialize_queue_settings
+
+    @serialize_queue_settings
     def do_POST(self):
         if not self._check_proxy_secret():
             return
@@ -35877,6 +35895,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if result.get("ok"):
                 _log_activity("queue", "ROLES", f"queue={result.get('queue')} roles={','.join(sorted((payload.get('roles') or {}).keys()))}")
             self.send_json(result, 200 if result.get("ok") else 400)
+            return
+        if path == "/api/settings/queue-engines/apply":
+            from ccc_server.settings_insights import apply_worker_defaults
+            try:
+                payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                if not isinstance(payload, dict):
+                    raise ValueError("Expected an object")
+                defaults = _load_spawn_defaults()
+                engine = defaults.get("worker_engine") or ""
+                model = defaults.get("worker_model") or (defaults.get("models") or {}).get(engine)
+                policy_error = _model_policy_error(model)
+                if policy_error:
+                    raise ValueError(policy_error)
+                changed = apply_worker_defaults(_wt_config_path(), payload, defaults)
+                for queue in changed:
+                    _wt_log_queue_config_change(queue, "engine, model and effort pins cleared; follows worker defaults")
+                _reconcile_once_async()
+                self.send_json({"ok": True, "changed": changed})
+            except (ValueError, OSError) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
             return
         if path == "/api/queue/config-options":
             # Suggestions and the current durable config for the Queue manager.
