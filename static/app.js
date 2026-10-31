@@ -3888,37 +3888,27 @@
   // belongs in Finished; an idle turn and a recommendation to close stay Active.
   function ticketSessionSection(c) {
     if (c.trashed) return 'archived';
-    if (c.archived || c.idea_ticket?.closed) return 'finished';
+    if (c.archived) return 'finished';
     c = _ultraFreshCurrent(c);
     const live = _applyLiveOverlayToRow(c);
     if (live.needs_approval || live.question_waiting) return 'needs-you';
     const outcome = rowOutcomeView(c);
-    return outcome.kind === 'next' ? 'needs-you' : 'active';
+    if (outcome.kind === 'next') return 'needs-you';
+    if (outcome.kind === 'working') return 'active';
+    return c.idea_ticket?.closed ? 'finished' : 'active';
   }
 
   // Activity determines order; equal timestamps use ticket identity so polls
-  // cannot shuffle ties. Remember only the selected row's lifecycle section.
-  const _ticketSessionLayouts = new Map();
+  // cannot shuffle ties. Selection never freezes a session's current category.
   function stableTicketSessionGroups(rows, lane, selectedId) {
-    const previous = _ticketSessionLayouts.get(lane) || new Map();
-    const next = new Map();
     const keyFor = c => c.idea_ticket?.ref || c.session_id || c.id;
     const ordered = rows.slice().sort((a, b) =>
       _archiveWindowRowTs(b) - _archiveWindowRowTs(a)
       || String(keyFor(a)).localeCompare(String(keyFor(b))));
     const groups = { 'needs-you': [], active: [], finished: [], archived: [] };
     ordered.forEach(c => {
-      const key = keyFor(c);
-      let section = ticketSessionSection(c);
-      const before = previous.get(key);
-      // Keep new questions anchored while reading. Resumed work must leave
-      // Needs you immediately, even when this conversation is selected.
-      if ((c.session_id || c.id) === selectedId && before
-          && section === 'needs-you' && before.section === 'active') section = before.section;
-      next.set(key, { section });
-      groups[section].push(c);
+      groups[ticketSessionSection(c)].push(c);
     });
-    _ticketSessionLayouts.set(lane, next);
     return groups;
   }
 

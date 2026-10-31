@@ -59,11 +59,11 @@ test('Finished also sorts newest first and honors timestamp units and interactio
     row('touched', { archived: true, modified: 1700000000, last_interacted: 1700000030 })];
   assert.deepEqual(Array.from(groups(items, 'bugs').finished, r => r.session_id), ['touched', 'recent', 'old']);
 });
-test('selected row stays anchored until deselection; explicit close moves immediately', () => {
+test('selected row follows current attention state; explicit close moves immediately', () => {
   const { stableTicketSessionGroups: groups } = load();
   groups([row('a')], 'features');
   const question = row('a', { question_waiting: true });
-  assert.equal(groups([question], 'features', 'a').active.length, 1);
+  assert.equal(groups([question], 'features', 'a')['needs-you'].length, 1);
   assert.equal(groups([question], 'features', 'b')['needs-you'].length, 1);
   assert.equal(groups([row('a', { archived: true })], 'features', 'a').finished.length, 1);
 });
@@ -74,8 +74,16 @@ test('ticket identity survives a new representative session and categories stay 
   assert.equal(groups([row('b'), continuation], 'features').active[0].session_id, 'new');
   const question = row('b', { question_waiting: true });
   groups([row('b')], 'features');
-  assert.equal(groups([question], 'features', 'b').active.length, 1);
+  assert.equal(groups([question], 'features', 'b')['needs-you'].length, 1);
   assert.equal(groups([question], 'bugs', 'b')['needs-you'].length, 1);
+});
+test('a closed ticket does not hide a current continuation decision or work', () => {
+  const { ticketSessionSection: section } = load();
+  const closed = { idea_ticket: { ref: 'TASK-a', closed: true } };
+  assert.equal(section(row('a', { ...closed, session_state: { next_step_user: 'Choose a region.' } })), 'needs-you');
+  assert.equal(section(row('a', { ...closed, state: 'working' })), 'active');
+  assert.equal(section(row('a', { ...closed, needs_approval: true })), 'needs-you');
+  assert.equal(section(row('a', { ...closed, archived: true })), 'finished');
 });
 test('selected session leaves Needs you as soon as work resumes', () => {
   const { stableTicketSessionGroups: groups } = load();
