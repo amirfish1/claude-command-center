@@ -43485,7 +43485,6 @@
             + '<span class="grouping-opt" data-objects-collapse="1">Collapse all</span>'
           + '</span>'
         : '';
-      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _trackedTableToggleHtml() + '</span>';
       // Wrap toggle: lets session titles break across two lines instead of
       // truncating to one, so long titles are more readable at a glance.
       const _ipWrapToggle = '<span class="conv-grouping-toggle conv-wrap-toggle" data-role="wrap-toggle" title="Wrap session titles across two lines">'
