@@ -1,0 +1,1 @@
+- The session-row thumbs-down button now opens a small optional description field before sending a report. Your note is saved with the ticket and its captured evidence.

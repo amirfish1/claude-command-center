@@ -16,6 +16,7 @@ from ccc_server.ultra_fresh import message_text
 QUEUE = "DECISIONS-FIX"
 MAX_REQUEST = 12 * 1024 * 1024
 MAX_TEXT = 160_000
+MAX_REPORTER_NOTE = 2000
 
 
 def _bounded(value, limit=MAX_TEXT):
@@ -38,6 +39,10 @@ def create_report(payload):
     sid = str(payload.get("session_id") or "")
     if not re.fullmatch(r"[\w.:-]{1,160}", sid):
         return {"ok": False, "error": "Invalid session ID"}, 400
+    reporter_note = payload.get("reporter_note", "")
+    if not isinstance(reporter_note, str) or len(reporter_note) > MAX_REPORTER_NOTE:
+        return {"ok": False, "error": "Report note must be text of at most 2000 characters"}, 400
+    reporter_note = reporter_note.strip()
     try:
         visible = _snapshot(payload.get("visible_row"))
         client = _snapshot(payload.get("client_state"))
@@ -73,6 +78,7 @@ def create_report(payload):
                                  text=_bounded(e.get("text") or message_text(e), 8000))
                             for e in events[-30:] if isinstance(e, dict)],
         "server_code_rev": core._SERVER_CODE_REV,
+        "reporter_note": reporter_note,
         "visible_row": visible, "client_state": client,
         "client_latest_assistant_text": _bounded(payload.get("latest_assistant_text")),
         "latest_transcript_assistant": latest,
@@ -82,7 +88,7 @@ def create_report(payload):
         "viewport": _snapshot(payload.get("viewport"), 4000),
         "screenshot_warning": _bounded(payload.get("screenshot_warning"), 500),
     }
-    note = "Session row status or reply choices do not match the latest assistant message"
+    note = reporter_note or "Session row status or reply choices do not match the latest assistant message"
     annotation = core.create_annotation({
         "note": note, "session_id": sid, "source": "ccc-decisions-fix",
         "url": bundle["url"], "title": _bounded(visible.get("title"), 200),
@@ -108,6 +114,7 @@ def create_report(payload):
         "sid": sid, "visible": visible, "client_state": client,
         "latest": latest, "client_latest": bundle["client_latest_assistant_text"],
         "rev": bundle["server_code_rev"],
+        "reporter_note": reporter_note,
     }, sort_keys=True, default=str).encode()).hexdigest()
     text = (
         "Investigate and repair this reported session-row decision mismatch.\n"
@@ -116,7 +123,8 @@ def create_report(payload):
         f"Transcript: {bundle['transcript_path']}\n"
         f"Screenshot: {bundle['screenshot_path'] or bundle['screenshot_warning']}\n"
         f"URL: {bundle['url']}\nSelector: {selector}\n\n"
-        "The visible_row and client_state are what the browser showed at the click. "
+        + ("Reporter description:\n" + reporter_note + "\n\n" if reporter_note else "")
+        + "The visible_row and client_state are what the browser showed at the click. "
         "The latest_transcript_assistant and fresh_session_state were independently read from a bounded, uncached transcript tail. "
         "Compare them with client_latest_assistant_text (which may be a newer live stream). "
         "Check timestamps and continuation IDs before deciding whether the discrepancy is stale data, parser/validation loss, status precedence, rendering, or agent-authored missing choices. "

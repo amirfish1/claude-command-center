@@ -110,3 +110,29 @@ def test_request_size_is_bounded_without_reading_body():
     reports.handle_post(handler)
     assert handler.send_json.call_args.args[1] == 413
     assert handler.rfile.tell() == 0
+
+
+def test_reporter_description_reaches_ticket_annotation_and_evidence(report_env):
+    report_env.payload["reporter_note"] = "  The row needs a review button.\nThe video is ready.  "
+    response, status = reports.create_report(report_env.payload)
+    assert status == 200
+    note = "The row needs a review button.\nThe video is ready."
+    evidence = json.loads(Path(response["evidence_path"]).read_text())
+    assert evidence["reporter_note"] == note
+    args = report_env.queue.enqueue.call_args.kwargs
+    assert args["note"] == note
+    assert "Reporter description:\n" + note in args["text"]
+    assert report_env.annotation.call_args.args[0]["note"] == note
+    first_key = args["dedupe_key"]
+    report_env.payload["reporter_note"] = "The row status is also wrong."
+    reports.create_report(report_env.payload)
+    assert report_env.queue.enqueue.call_args.kwargs["dedupe_key"] != first_key
+
+
+@pytest.mark.parametrize("note", [None, [], {}, 12, "x" * 2001])
+def test_invalid_reporter_notes_are_rejected_before_filing(report_env, note):
+    report_env.payload["reporter_note"] = note
+    result, status = reports.create_report(report_env.payload)
+    assert status == 400 and not result["ok"]
+    report_env.annotation.assert_not_called()
+    report_env.queue.enqueue.assert_not_called()

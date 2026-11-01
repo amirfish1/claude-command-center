@@ -17695,11 +17695,12 @@
   const _rowQuickActionSending = new Set();
   const _rowQuickActionFeedback = new Map();
   const _rowDecisionReportSending = new Set();
+  let _rowDecisionReportEditor = null;
   function rowDecisionReportButton(c) {
     if (!c || c.pending_spawn || c.backlog_type === 'github' || c.source === 'backlog'
         || c.source === 'github_pr' || !/^[\w.:-]{1,160}$/.test(String(c.session_id || c.id || ''))) return '';
     return '<button type="button" class="conv-decision-report-btn" data-role="report-decision"'
-      + ' title="Report wrong status or missing choices" aria-label="Report wrong status or missing choices">'
+      + ' title="Report wrong status or missing choices" aria-label="Report wrong status or missing choices" aria-haspopup="dialog" aria-expanded="false">'
       + '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">'
       + '<path d="M17 3h4v11h-4zM17 4H7a2 2 0 0 0-2 1.6L3.3 13A2 2 0 0 0 5.2 15H10l-1 4.5a2 2 0 0 0 3.5 1.7L17 14z"/></svg></button>';
   }
@@ -17787,6 +17788,81 @@
       }
     });
   }
+  function openRowDecisionReportEditor(btn, submit) {
+    const form = document.createElement('form');
+    form.className = 'conv-report-editor';
+    form.setAttribute('role', 'dialog');
+    form.setAttribute('aria-label', 'Report a row problem');
+    form.setAttribute('popover', 'auto');
+    form.innerHTML = '<label for="rowReportNote">What is wrong? <span>(optional)</span></label>'
+      + '<textarea id="rowReportNote" name="reporter_note" rows="3" maxlength="2000"'
+      + ' placeholder="For example: this row needs an approval button."></textarea>'
+      + '<p class="conv-report-error" role="alert" hidden></p>'
+      + '<div class="conv-report-controls"><button type="button" data-report-cancel>Cancel</button>'
+      + '<button type="submit">Send report</button></div>';
+    const input = form.querySelector('textarea');
+    const send = form.querySelector('[type="submit"]');
+    const cancel = form.querySelector('[data-report-cancel]');
+    const error = form.querySelector('[role="alert"]');
+    const sid = btn.closest('.conv-item')?.dataset.sessionId;
+    let busy = false;
+    const position = () => {
+      const viewport = window.visualViewport;
+      const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
+      const width = viewport?.width || innerWidth, height = viewport?.height || innerHeight;
+      const anchor = btn.isConnected ? btn.getBoundingClientRect() : { right: left + width / 2, bottom: top + 12, top: top + 12 };
+      form.style.width = Math.min(340, width - 24) + 'px';
+      form.style.maxHeight = Math.max(120, height - 24) + 'px';
+      form.style.left = Math.max(left + 12, Math.min(anchor.right - form.offsetWidth, left + width - form.offsetWidth - 12)) + 'px';
+      const below = anchor.bottom + 8;
+      form.style.top = Math.max(top + 12, Math.min(below + form.offsetHeight > top + height - 12
+        ? anchor.top - form.offsetHeight - 8 : below, top + height - form.offsetHeight - 12)) + 'px';
+    };
+    const close = () => {
+      if (_rowDecisionReportEditor !== form) return;
+      _rowDecisionReportEditor = null;
+      window.removeEventListener('resize', position);
+      window.visualViewport?.removeEventListener('resize', position);
+      window.visualViewport?.removeEventListener('scroll', position);
+      btn.setAttribute('aria-expanded', 'false');
+      form.remove();
+      const trigger = btn.isConnected ? btn : document.querySelector('.conv-item[data-session-id="' + CSS.escape(sid || '') + '"] [data-role="report-decision"]');
+      trigger?.focus({ preventScroll: true });
+    };
+    cancel.addEventListener('click', close);
+    form.addEventListener('toggle', ev => { if (ev.newState === 'closed' && !busy) close(); });
+    form.addEventListener('keydown', ev => {
+      if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); if (!busy) close(); }
+    });
+    form.addEventListener('click', ev => ev.stopPropagation());
+    form.addEventListener('submit', async ev => {
+      ev.preventDefault();
+      if (busy) return;
+      busy = true; send.disabled = true; cancel.disabled = true; input.disabled = true;
+      send.textContent = 'Sending…'; error.hidden = true;
+      try {
+        await submit(input.value.trim());
+        close();
+      } catch (failure) {
+        error.textContent = String(failure.message || failure);
+        error.hidden = false;
+        if (form.showPopover && !form.matches(':popover-open')) form.showPopover();
+        position();
+      } finally {
+        busy = false; send.disabled = false; cancel.disabled = false; input.disabled = false;
+        send.textContent = 'Send report';
+      }
+    });
+    _rowDecisionReportEditor = form;
+    document.body.appendChild(form);
+    btn.setAttribute('aria-expanded', 'true');
+    if (form.showPopover) form.showPopover();
+    position();
+    window.addEventListener('resize', position);
+    window.visualViewport?.addEventListener('resize', position);
+    window.visualViewport?.addEventListener('scroll', position);
+    input.focus({ preventScroll: true });
+  }
   document.addEventListener('click', async ev => {
     const btn = ev.target.closest && ev.target.closest('[data-role="report-decision"]');
     if (!btn) return;
@@ -17794,31 +17870,34 @@
     const row = btn.closest('.conv-item[data-session-id]');
     const sid = row && row.dataset.sessionId;
     if (!sid || _rowDecisionReportSending.has(sid)) return;
+    if (_rowDecisionReportEditor) { _rowDecisionReportEditor.querySelector('textarea').focus(); return; }
     const base = _ultraFreshRow(sid) || { session_id: sid, row_data_unavailable: true };
     // Stale list data is itself reportable; the DOM still anchors the report.
     // Capture the displayed DOM and its data before any async refresh or send.
     const payload = rowDecisionReportSnapshot(row, base);
-    _rowDecisionReportSending.add(sid);
-    btn.disabled = true; btn.setAttribute('aria-busy', 'true');
-    try {
-      payload.screenshot_b64 = await Promise.race([
-        captureRowDecisionScreenshot(row, payload.rect).catch(() => null),
-        new Promise(resolve => setTimeout(() => resolve(null), 1800)),
-      ]);
-      if (!payload.screenshot_b64) payload.screenshot_warning = 'Browser row screenshot was unavailable; structured row and message evidence were captured.';
-      const response = await fetch('/api/decisions-fix/report', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-      });
-      const result = await response.json();
-      if (!response.ok || !result.ok || !result.ref) throw new Error(result.error || 'Could not file the report');
-      showOpToast('Decisions Fix: reported as ' + result.ref + (result.screenshot_warning ? ' (screenshot unavailable)' : ''), 'success');
-      btn.title = 'Reported as ' + result.ref + ' — click to report another mismatch';
-    } catch (error) {
-      showOpToast(String(error.message || error), 'error');
-    } finally {
-      _rowDecisionReportSending.delete(sid);
-      btn.disabled = false; btn.removeAttribute('aria-busy');
-    }
+    const screenshot = Promise.race([
+      captureRowDecisionScreenshot(row, payload.rect).catch(() => null),
+      new Promise(resolve => setTimeout(() => resolve(null), 1800)),
+    ]);
+    openRowDecisionReportEditor(btn, async note => {
+      payload.reporter_note = note;
+      _rowDecisionReportSending.add(sid);
+      btn.disabled = true; btn.setAttribute('aria-busy', 'true');
+      try {
+        payload.screenshot_b64 = await screenshot;
+        if (!payload.screenshot_b64) payload.screenshot_warning = 'Browser row screenshot was unavailable; structured row and message evidence were captured.';
+        const response = await fetch('/api/decisions-fix/report', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.ok || !result.ref) throw new Error(result.error || 'Could not file the report');
+        showOpToast('Decisions Fix: reported as ' + result.ref + (result.screenshot_warning ? ' (screenshot unavailable)' : ''), 'success');
+        btn.title = 'Reported as ' + result.ref + ' — click to report another mismatch';
+      } finally {
+        _rowDecisionReportSending.delete(sid);
+        btn.disabled = false; btn.removeAttribute('aria-busy');
+      }
+    });
   }, true);
   function sessionQuickAction(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)
