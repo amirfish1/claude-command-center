@@ -74402,8 +74402,9 @@
     }, 70);
   }
   $convSearch.addEventListener('input', () => {
-    if ($convSearch.value.trim()) $convSearch.setAttribute('list', 'convSearchHistoryList');
-    else $convSearch.removeAttribute('list');
+    // No native <datalist> popup: it renders as an unstyled "old UI" chip
+    // under the box while typing (OPS-1538). Keep the attribute off.
+    $convSearch.removeAttribute('list');
     updateConversationSearchClear();
     // Filter render is debounced (see _scheduleConvSearchRender) so fast typing
     // doesn't block the paint; the input field itself updates natively/instantly.
