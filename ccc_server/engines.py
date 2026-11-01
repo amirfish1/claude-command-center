@@ -6716,7 +6716,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
 
 
 @_continuation_topics.track_spawn
-def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort="", parent_session_id=None):
+def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort="", parent_session_id=None, timeline_t0_epoch_ms=None):
     """Spawn a headless Codex run and return tracking info.
 
     Spawning goes through the Codex app-server exclusively: it creates fresh
@@ -6747,9 +6747,21 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
             "model": model,
             "reasoning_effort": reasoning_effort,
             "parent_session_id": parent_session_id,
+            "timeline_t0_epoch_ms": timeline_t0_epoch_ms,
         },
         idempotency_key=_core._take_control_plane_action_id(),
     )
+    # A dashboard may update before its drain-aware worker restart runs.
+    # Retry only an explicit signature rejection, before any spawn happened.
+    if _unexpected_keyword_argument(routed) == "timeline_t0_epoch_ms":
+        routed = _core._control_plane_engine_call(
+            "codex", "spawn", {
+                "prompt": prompt, "name": name, "cwd": cwd,
+                "repo_path": repo_path, "worktree": bool(worktree),
+                "model": model, "reasoning_effort": reasoning_effort,
+                "parent_session_id": parent_session_id,
+            }, idempotency_key=str(uuid.uuid4()),
+        )
     if routed is not None:
         return routed
     prompt = _core._strip_ccc_session_state_instruction(prompt)
@@ -6791,6 +6803,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         worktree_path=worktree_path,
         worktree_branch=worktree_branch,
         parent_repo=ctx["repo_path"],
+        timeline_t0_epoch_ms=timeline_t0_epoch_ms,
     )
     if app_server_spawn is not None:
         return app_server_spawn

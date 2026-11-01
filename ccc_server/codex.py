@@ -2625,6 +2625,22 @@ def _codex_app_server_handle_notification(method, params):
         thread_id = str(thread["id"])
     if not thread_id:
         return
+    # Notifications can race the turn/start response and telemetry registration.
+    # Read the local marks first so streamed tokens do not trigger disk syncs.
+    timeline = _core._SPAWN_TIMELINE.get(thread_id)
+    if timeline:
+        marks = timeline.get("marks") or {}
+        names = ["codex_first_notification"]
+        if method in ("item/reasoning/summaryTextDelta", "item/reasoning/textDelta") and params.get("delta"):
+            names.append("codex_first_reasoning")
+        if method == "item/agentMessage/delta" and params.get("delta"):
+            names.append("codex_first_text_delta")
+        timeline_dirty = False
+        for name in names:
+            if name not in marks:
+                timeline_dirty = _core._spawn_timeline_mark(thread_id, name) or timeline_dirty
+        if timeline_dirty:
+            _core._spawn_timeline_save()
     pump_after_notification = False
     delivered_user_text = None
     _core._CODEX_APP_SERVER_EVENT_SEQ += 1
@@ -6717,6 +6733,7 @@ def _codex_spawn_via_app_server(
     worktree_path=None,
     worktree_branch=None,
     parent_repo=None,
+    timeline_t0_epoch_ms=None,
 ):
     """Start a fresh Codex thread through the app-server.
 
@@ -6791,17 +6808,14 @@ def _codex_spawn_via_app_server(
     # when the user actually asked, not from when Codex answered.
     _core._spawn_timeline_start(
         thread_id,
+        t0_epoch_ms=timeline_t0_epoch_ms or (time.time() - (time.monotonic() - total_start)) * 1000,
         engine="codex",
         name=session_name,
         cwd=spawn_cwd,
         model=model_to_use or "",
         app_server_warm=app_server_warm,
     )
-    with _SPAWN_TIMELINE_LOCK:
-        _entry = _core._SPAWN_TIMELINE.get(thread_id)
-        if _entry:
-            _entry["t0"] = time.time() - (time.monotonic() - total_start)
-    _core._spawn_timeline_mark(thread_id, "thread_start_done", thread_start_ms)
+    _core._spawn_timeline_mark(thread_id, "thread_start_done")
 
     # thread/name/set costs a measured ~1.7s and turn/start does not depend on
     # it (turn/start takes only threadId and returns in 1-2ms). Running it here

@@ -4316,7 +4316,7 @@
     } else {
       let tab = '';
       try { tab = localStorage.getItem('ccc-sidebar-tab') || ''; } catch (_) {}
-      // Active uses the older Wrap / Details controls for these densities.
+      // Active retains its saved row display preferences.
       if (tab !== 'inprogress' || (compactRowsOn() && !wrapTitlesOn())) return '';
     }
     const age = sessionStuckAge(c);
@@ -25108,6 +25108,7 @@
       // endpoint the post-completion stats banner reads, rendered expanded.
       // The id arrives with the POST response AFTER this view first renders,
       // so read it lazily from the card on every tick.
+      if (card.source === 'codex') renderPendingCodexStats(card, $view);
       if (spawnStatsEnabled()) {
         const livePaneId = paneId || activePaneId();
         let liveSid = '';
@@ -25118,6 +25119,7 @@
           const stillThisCard = pane && (pane.conversationId === card.id || (liveSid && pane.conversationId === liveSid));
           if (!stillThisCard || ++liveTicks > 90) { clearInterval(liveTimer); return; }
           if (liveSid) renderSpawnStatsPanel(liveSid, $view, { open: true });
+          else if (card.source === 'codex') renderPendingCodexStats(card, $view);
         }, 2000);
       }
     }
@@ -43483,20 +43485,7 @@
             + '<span class="grouping-opt" data-objects-collapse="1">Collapse all</span>'
           + '</span>'
         : '';
-      // Wrap toggle: lets session titles break across two lines instead of
-      // truncating to one, so long titles are more readable at a glance.
-      const _ipWrapToggle = '<span class="conv-grouping-toggle conv-wrap-toggle" data-role="wrap-toggle" title="Wrap session titles across two lines">'
-          + '<span class="grouping-opt' + (wrapTitlesOn() ? ' is-active' : '') + '" data-wrap-toggle="1">Wrap</span>'
-        + '</span>';
-      // Details toggle: shows/hides the outcome-card under each row (git
-      // state signals, ask preview). Was the row-style rail's "Comfortable"
-      // swatch; moved here next to Wrap since both are per-row display
-      // knobs a user reaches for from the session list itself, not from the
-      // typography rail. (CCC-291 originally lived here too.)
-      const _ipDetailsToggle = '<span class="conv-grouping-toggle conv-details-toggle" data-role="details-toggle" title="Show the outcome/detail line under each row">'
-          + '<span class="grouping-opt' + (!compactRowsOn() ? ' is-active' : '') + '" data-details-toggle="1">Details</span>'
-        + '</span>';
-      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _ipWrapToggle + _ipDetailsToggle + _trackedTableToggleHtml() + '</span>';
+      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _trackedTableToggleHtml() + '</span>';
       const _ipToolbarHtml = _ipTools
         ? '<div class="conv-inprogress-toolbar" data-role="inprogress-toolbar">' + _ipTools + '</div>'
         : '';
@@ -44323,6 +44312,10 @@
     let _trashHtml = '';
     let _ideaArchivedHtml = '';
     const _ticketLifecycleView = _allTabView === 'ideas' || _allTabView === 'smallbugs' || _allTabView === 'alltickets';
+    const _sessionsByState = (() => {
+      try { return localStorage.getItem('ccc-session-state-grouping') !== 'list'; }
+      catch (_) { return true; }
+    })();
     const _lifecycleSection = (label, key, rows) => {
       if (!rows.length) return '';
       let collapsed = !_hideGroupChatsForSearch;
@@ -44344,7 +44337,9 @@
         clusters.sort((a, b) => {
           const pinDelta = _allTabClusterPinRank(a) - _allTabClusterPinRank(b);
           if (!Number.isNaN(pinDelta) && pinDelta !== 0) return pinDelta;
-          return _arcGrouping === 'cost' ? _allTabClusterCost(b) - _allTabClusterCost(a) : 0;
+          return _arcGrouping === 'cost'
+            ? _allTabClusterCost(b) - _allTabClusterCost(a)
+            : _allTabClusterMtime(b) - _allTabClusterMtime(a);
         });
         if (!_arcShouldGroupByFolder) return _renderAllTabClusters(clusters, _isSpecificFolderFilter, false);
         const folders = new Map();
@@ -44386,11 +44381,18 @@
             : '<div class="session-lifecycle-empty">' + ({ 'needs-you': 'Nothing needs your attention.', active: 'No active sessions in this view.', finished: 'No finished sessions in this view.', archived: 'No archived sessions in this view.' }[key]) + '</div>')
           + '</div></section>';
       };
-      if (!_ipSearchActive) {
-        _arcRows = sectionHtml('active', 'Active', 'Questions and decisions first, followed by working sessions');
+      if (!_sessionsByState) {
+        const rows = _allTabMainConvs.concat(lifecycleRows);
+        _arcRows = _ipSearchActive
+          ? rows.map(c => _renderRow(c, { lifecycleContext: 'all-main', suppressFolderChip: _isSpecificFolderFilter, goalIconOnly: true })).join('')
+          : renderSectionRows(rows);
+      } else {
+        if (!_ipSearchActive) {
+          _arcRows = sectionHtml('active', 'Active', 'Questions and decisions first, followed by working sessions');
+        }
+        _ideaArchivedHtml = sectionHtml('finished', 'Finished', 'Completed work; a new message returns it to Active')
+          + sectionHtml('archived', 'Archived', 'Sessions explicitly put away; restore one to resume work');
       }
-      _ideaArchivedHtml = sectionHtml('finished', 'Finished', 'Completed work; a new message returns it to Active')
-        + sectionHtml('archived', 'Archived', 'Sessions explicitly put away; restore one to resume work');
     } else if (_allTabView !== 'workers') {
       const _trashItems = [];
       for (const c of _allTabTrashConvs) {
@@ -44474,18 +44476,6 @@
       };
       // The engine filter lives in the ⋮ menu as an always-open row of engine
       // buttons (CCC-283; it used to be a hover-popup icon in the toolbar).
-      // Wrap toggle (mirrors the In progress toolbar's): lets session titles
-      // break across two lines instead of truncating to one. Shares the
-      // 'wrap-titles' class + localStorage key with the In progress view.
-      const _arcWrapToggle = '<span class="conv-grouping-toggle conv-wrap-toggle" data-role="wrap-toggle" title="Wrap session titles across two lines">'
-          + '<span class="grouping-opt' + (wrapTitlesOn() ? ' is-active' : '') + '" data-wrap-toggle="1">Wrap</span>'
-        + '</span>';
-      // Details toggle (mirrors the In progress toolbar's): shows/hides the
-      // outcome-card under each row. Shares 'ccc-compact-rows' with the
-      // In progress view and the (now-removed) row-style rail toggle.
-      const _arcDetailsToggle = '<span class="conv-grouping-toggle conv-details-toggle" data-role="details-toggle" title="Show the outcome/detail line under each row">'
-          + '<span class="grouping-opt' + (!compactRowsOn() ? ' is-active' : '') + '" data-details-toggle="1">Details</span>'
-        + '</span>';
       // Expand-all lives in its own left-hand slot, separate from the
       // window/engine/grouping group on the right. It only renders when
       // grouped by project with multiple folders, so its own slot can
@@ -44688,7 +44678,7 @@
           + ' title="Show tracked sessions as a table in the main pane (ticket, name, status, next step)">'
           + '<span class="conv-check" aria-hidden="true">' + (_arcTrackedTableOn ? '&#10003;' : '') + '</span>Table view</button>';
       const _arcDisplayControls = _arcGroupingToggle
-        + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle)
+        + _arcDenseToggle
         + _arcWindowToggle.replace('class="conv-grouping-toggle conv-window-toggle"', 'class="conv-grouping-toggle conv-window-toggle is-phone-menu-only"')
         + _arcEngineMenuRow
         + _arcTrackedTableOpt
@@ -44699,14 +44689,25 @@
           + '<span class="conv-archived-overflow-menu">' + _arcDisplayControls + '</span>'
           + '</details>'
         : '';
+      const _sessionStateTools = _ticketLifecycleView
+        ? '<div class="conv-session-state-tools" data-role="session-state-toggle" role="group" aria-label="Group sessions by state">'
+          + '<span class="conv-grouping-toggle">'
+          + ['state', 'list'].map(mode => '<button type="button" class="grouping-opt'
+            + ((_sessionsByState ? 'state' : 'list') === mode ? ' is-active' : '')
+            + '" data-session-state-grouping="' + mode + '" aria-pressed="'
+            + ((_sessionsByState ? 'state' : 'list') === mode) + '">'
+            + (mode === 'state' ? 'By state' : 'One list') + '</button>').join('')
+          + '</span></div>'
+        : '';
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + _arcToolsLeft
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcGroupingToggle
-            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + _arcOverflow + '</span>'
+            + _arcDenseToggle + _arcOverflow + '</span>'
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
         + _workersActivityHtml
+        + _sessionStateTools
         + _arcTools
         + _workersUniformHtml
         + _wtPendingHtml
@@ -45160,6 +45161,13 @@
     // querySelectorAll + forEach: the control also renders inside the narrow-
     // sidebar ⋮ overflow menu (CCC-1158), and querySelector would bind only
     // the first copy.
+    $convList.querySelectorAll('[data-session-state-grouping]').forEach(button => {
+      button.addEventListener('click', ev => {
+        ev.stopPropagation();
+        try { localStorage.setItem('ccc-session-state-grouping', button.getAttribute('data-session-state-grouping')); } catch (_) {}
+        renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
+      });
+    });
     $convList.querySelectorAll('[data-role="archived-grouping-toggle"]').forEach($archivedGroupingToggle => {
       $archivedGroupingToggle.addEventListener('click', (ev) => {
         ev.stopPropagation();
@@ -45709,27 +45717,6 @@
       });
     }
     $convList.classList.toggle('wrap-titles', wrapTitlesOn());
-    // querySelectorAll + forEach: these controls also render inside the
-    // narrow-sidebar ⋮ overflow menu (CCC-1158), and querySelector would bind
-    // only the first copy.
-    $convList.querySelectorAll('[data-role="wrap-toggle"]').forEach($wrapToggle => {
-      $wrapToggle.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const next = localStorage.getItem('ccc-wrap-titles') !== '1';
-        try { localStorage.setItem('ccc-wrap-titles', next ? '1' : '0'); } catch (_) {}
-        $convList.classList.toggle('wrap-titles', next);
-        $convList.querySelectorAll('[data-wrap-toggle]').forEach(o => o.classList.toggle('is-active', next));
-      });
-    });
-    $convList.querySelectorAll('[data-role="details-toggle"]').forEach($detailsToggle => {
-      $detailsToggle.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const compactNext = !compactRowsOn();
-        try { localStorage.setItem('ccc-compact-rows', compactNext ? '1' : '0'); } catch (_) {}
-        $convList.classList.toggle('compact-rows', compactNext);
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
-      });
-    });
     // Density re-renders rather than just toggling a class: grouping and
     // continuation folding happen while building the row list, so the DOM has
     // to be rebuilt. applyRowDensityToggles runs first so the classes are
@@ -55413,6 +55400,11 @@
       + '</div>';
 
     document.body.appendChild(modal);
+    if (window.CCCTicketProse && window.CCCTicketProse.hydrateBlocked) {
+      const latestBlock = timeline.filter(ev => ev && ev.event === 'block').slice(-1)[0];
+      window.CCCTicketProse.hydrateBlocked(modal,
+        item.needs_input && latestBlock ? String(latestBlock.question || '').trim() : '');
+    }
     _uxqLoadLinkedConversation(modal, ref);
     _uxqInitTicketZoom(modal);
 
@@ -59572,6 +59564,9 @@
           : ((data.engine === 'cursor' || engine === 'cursor')
             ? renderCursorLogHtml(data)
             : renderCodexLogHtml(data)));
+      if (engine === 'codex' && card.expected_session_id) {
+        await renderSpawnStatsPanel(card.expected_session_id, $view, { open: !!data.running });
+      }
       if (atBottom) scrollConversationToEnd($view);
       else updateConversationEndAffordance($view);
       // Process exited — stop polling. Final render already in place.
@@ -60457,6 +60452,10 @@
   const SPAWN_STAT_ROWS = [
     ['thread_start_done',        'Codex created the thread'],
     ['turn_accepted',            'Turn accepted by Codex'],
+    ['codex_first_notification', 'Codex emitted its first event'],
+    ['codex_first_reasoning',    'Codex began streaming reasoning'],
+    ['codex_first_text_delta',   'Codex emitted its first text'],
+    ['client_first_visible_output', 'First assistant text painted'],
     ['spawn_response_sent',      'CCC answered the browser'],
     ['client_response_received', 'Browser got the response'],
     ['rollout_file_created',     'Transcript file created'],
@@ -60490,6 +60489,18 @@
     return ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : Math.round(ms) + 'ms';
   }
 
+  function renderPendingCodexStats(card, $view) {
+    if (!spawnStatsEnabled()) return;
+    if (!card.spawn_requested_at) card.spawn_requested_at = Date.now();
+    const elapsed = Math.max(0, Date.now() - card.spawn_requested_at);
+    const html = '<details class="spawn-stats" open><summary class="spawn-stats-summary">&#9201; Session start: <strong>'
+      + fmtStatMs(elapsed) + '</strong> elapsed</summary><div class="spawn-stats-body">'
+      + '<div class="spawn-stats-note">Waiting for CCC to create the Codex thread and accept the turn. Detailed timings appear when the spawn request returns.</div></div></details>';
+    const existing = $view.querySelector('.spawn-stats');
+    if (existing) existing.outerHTML = html;
+    else $view.insertAdjacentHTML('afterbegin', html);
+  }
+
   async function renderSpawnStatsPanel(sid, $view, opts) {
     if (!sid || !$view || !spawnStatsEnabled()) return;
     let data = null;
@@ -60498,7 +60509,7 @@
         { cache: 'no-store', signal: convScopeSignal() });
       data = await r.json();
     } catch (_) { return; }
-    if (!data || !data.ok || !data.timeline) return;
+    if (!data || !data.ok || !data.timeline || !$view.isConnected) return;
     const marks = (data.timeline.marks) || {};
     if (!Object.keys(marks).length) return;
     const statRows = data.timeline.engine === 'claude'
@@ -60509,14 +60520,12 @@
         + escapeHtml(label) + '</span><span class="spawn-stat-val">'
         + fmtStatMs(marks[k]) + '</span></div>').join('');
     // "Visible" is the honest headline: the number the user actually felt.
-    const visible = marks.client_first_visible_output != null ? marks.client_first_visible_output
-      : marks.client_first_paint != null ? marks.client_first_paint
-      : (marks.rollout_has_user_message != null ? marks.rollout_has_user_message : null);
+    const visible = marks.client_first_visible_output != null ? marks.client_first_visible_output : null;
     const existing = $view.querySelector('.spawn-stats');
-    const forceOpen = !!(opts && opts.open);
+    const forceOpen = !!(opts && opts.open) || (data.timeline.engine === 'codex' && visible == null);
     const html = '<details class="spawn-stats"' + ((forceOpen || (existing && existing.open)) ? ' open' : '') + '>'
       + '<summary class="spawn-stats-summary">&#9201; Session start: '
-      + '<strong>' + fmtStatMs(visible) + '</strong> to first visible output'
+      + (visible == null ? '<strong>Waiting for first visible output</strong>' : '<strong>' + fmtStatMs(visible) + '</strong> to first visible output')
       + '<span class="spawn-stats-sub"> &middot; accepted in '
       + fmtStatMs(marks.spawn_response_sent) + '</span>'
       + '<button type="button" class="spawn-stats-copy" title="Copy timeline">&#128203;</button></summary>'
@@ -60959,6 +60968,9 @@
         // wait actually ends from the user's point of view.
         if (Array.isArray(data.events) && data.events.length) {
           spawnStatsMark(id, 'first_paint');
+          if (spawnStatsT0.has(id) && $view.querySelector('.event.assistant .assistant-text')) {
+            requestAnimationFrame(() => requestAnimationFrame(() => spawnStatsMark(id, 'first_visible_output')));
+          }
           const renderedPane = paneByPaneId(fetchPaneId);
           const renderedSid = (renderedPane && renderedPane.currentSession
             && renderedPane.currentSession.id) || id;
@@ -91274,6 +91286,7 @@
       cwd: launchCwd,
       session_cwd: launchCwd,
       session_cwd_exists: true,
+      spawn_requested_at: spawnAskedAt,
       fast_path: engine === 'claude',
       spawn_pane_id: spawnPaneId,
       no_auto_select: !clearSubmittedComposer,

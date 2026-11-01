@@ -1,0 +1,1 @@
+Show live startup diagnostics for new Codex sessions, including pre-response elapsed time, thread creation, turn acceptance, first event, reasoning, and first text. Keep the timeline visible in the spawn log and measure browser and server milestones from the same submit action.

@@ -37686,6 +37686,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     if engine == "codex":
                         result = spawn_session_codex(
                             prompt,
+                            timeline_t0_epoch_ms=payload.get("timeline_t0_epoch_ms"),
                             name=name,
                             cwd=spawn_cwd,
                             repo_path=payload.get("repo_path"),
@@ -38066,6 +38067,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     ) + prompt
                     result = spawn_session_codex(
                         prompt,
+                        timeline_t0_epoch_ms=payload.get("timeline_t0_epoch_ms"),
                         name=name,
                         cwd=str(cwd_resolved) if cwd_resolved else None,
                         repo_path=payload.get("repo_path"),
