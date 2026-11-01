@@ -1,0 +1,1 @@
+Decision Inbox now has numbered expandable rows, question references, local timestamps, search, status/source filters, sorting, paginated history, and explicit feed freshness/error states. Retained history is no longer truncated to 200 API items.

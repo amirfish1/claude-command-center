@@ -6,6 +6,19 @@ Once an hour, CCC checks for stalled work and uses an analyst model to prepare
 three-option cards. You choose an option; CCC spawns or steers the follow-up.
 Open **Decisions** from the app rail or `/decision-inbox.html`.
 
+## Browsing decisions
+
+The inbox shows ten compact rows per page. Expand a row to read its context,
+created/updated timestamps, and options. Browse numbers reflect the current
+filtered order; question references (such as Q123) and card IDs stay attached
+to their original items. Search accepts those references, ticket names, and
+text from the title or context. Filter by status or source and sort by creation
+or update time. History includes all retained closed items.
+
+Dates use the browser's local timezone, named above the list. Feed refresh and
+scanner time are shown separately: a successful scan does not prove that every
+older decision still applies. Connection failures and overdue scans are visible.
+
 ## What it checks
 
 - **Strategy board, optional:** a Markdown table with `Task | Status | ETA`

@@ -1088,7 +1088,8 @@ def decision_inbox_api_payload(*, cards=None, cfg=None, review_cards=None):
         findings_at = _last_findings["at"]
     return {
         "ok": True,
-        "cards": ordered[:200],
+        "cards": ordered,
+        "total_count": len(ordered),
         "open_count": sum(1 for c in ordered if c.get("status") == "open"),
         "governor": {"findings": findings, "at": findings_at},
         "queue_repos": queue_github_repos(),

@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict');
+const root=process.cwd();
+const puppeteer=require(root+'/require-puppeteer.js');
+const {findChromePath}=require(root+'/puppeteer-browser-config.js');
+(async()=>{const browser=await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});try {
+const page=await browser.newPage();await page.setViewport({width:1440,height:1050});
+const errors=[];page.on('pageerror',e=>errors.push(e.message));
+await page.goto((process.env.CCC_SERVER || 'http://127.0.0.1:8090')+'/decision-inbox.html');await page.waitForSelector('.decision-row');
+assert.equal(await page.$eval('#cards',e=>e.children.length),10);
+await page.click('.decision-row summary');assert.ok(await page.$eval('.decision-row',e=>e.open));
+await page.screenshot({path:'/tmp/decision-desktop.png'});
+await page.click('#next');assert.match(await page.$eval('#pageCount',e=>e.textContent),/Page 2/);
+const ref=await page.$eval('.row-ref',e=>e.textContent); await page.type('#search',ref);assert.equal(await page.$$eval('.decision-row',e=>e.length),1);
+await page.$eval('#search',e=>{e.value='';e.dispatchEvent(new Event('input'));});
+await page.select('#statusFilter','closed');assert.ok(await page.$$eval('.decision-row',e=>e.length)>0);
+await page.select('#statusFilter','open');
+await page.setViewport({width:390,height:844});await page.screenshot({path:'/tmp/decision-mobile.png'});
+assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);
+console.log('PASS desktop, mobile, expansion, pagination, search, history, no JS errors');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});

@@ -8,7 +8,7 @@
 <style>
   :root {
     --bg: #0f1115; --panel: #151920; --line: #232830; --ink: #e6e9ee; --mute: #8a929e;
-    --dim: #5f6772; --accent: #5ac8fa; --ok: #34c759; --warn: #ffb340; --bad: #ff6b6b;
+    --dim: #939ca9; --accent: #5ac8fa; --ok: #34c759; --warn: #ffb340; --bad: #ff6b6b;
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
   html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 var(--font); }
@@ -70,6 +70,53 @@
   .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #1b2029; border: 1px solid var(--line);
            color: var(--ink); padding: 8px 14px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   .toast.show { opacity: 1; }
+
+  * { box-sizing: border-box; }
+  :root { color-scheme: dark; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .wrap { max-width: 1240px; }
+  .toolbar { display:flex; gap:12px; flex-wrap:wrap; padding:18px 0; border-block:1px solid var(--line); margin:24px 0 12px; }
+  .toolbar label { display:flex; flex-direction:column; gap:5px; color:var(--mute); font-size:12px; }
+  .toolbar .search { flex:1; min-width:200px; }
+  input, select { font:14px var(--font); color:var(--ink); background:var(--panel); border:1px solid #414955; border-radius:7px; padding:10px; min-height:40px; }
+  .browse-meta, .pager { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0; color:var(--mute); }
+  .pager { justify-content:center; }
+  .decision-row { border-bottom:1px solid var(--line); color:var(--ink); font-size:14px; }
+  .decision-row > summary { display:grid; grid-template-columns:40px 85px minmax(0,1fr) 155px; gap:12px; padding:18px 8px; cursor:pointer; align-items:start; list-style:none; }
+  .decision-row > summary:hover { background:var(--panel); }
+  .decision-row[open] > summary { background:var(--panel); }
+  .row-number, .row-date { color:var(--mute); font-size:12px; font-variant-numeric:tabular-nums; }
+  .row-ref::after { content:""; display:block; width:6px; height:6px; border-right:1px solid currentColor; border-bottom:1px solid currentColor; transform:rotate(-45deg); margin:10px 0 0 3px; }
+  .decision-row[open] .row-ref::after { transform:rotate(45deg); }
+  .row-ref { color:var(--accent); font-size:12px; overflow-wrap:anywhere; }
+  .row-title { overflow-wrap:anywhere; min-width:0; font-weight:600; font-size:15px; }
+  .row-preview { color:var(--mute); display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; margin-top:4px; font-weight:400; font-size:13px; }
+  .row-date { text-align:right; }
+  .row-date span { display:block; }
+  .decision-row .card { border:0; border-radius:0; padding:20px; margin:0 0 12px; }
+  .card .top, .foot { flex-wrap:wrap; }
+  .card .ctx { max-width:75ch; white-space:pre-line; }
+  .timestamps { display:flex; flex-wrap:wrap; gap:8px 24px; color:var(--mute); font-size:12px; margin:12px 0; font-variant-numeric:tabular-nums; }
+  .card.closed { opacity:1; }
+  .freshness { color:var(--mute); font-size:12px; margin-top:8px; }
+  .freshness.bad { color:var(--bad); }
+  .gov-disclosure { margin-top:28px; }
+  .gov-disclosure > summary { cursor:pointer; color:var(--mute); font-size:13px; }
+  .opts { grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr)); }
+  .foot, .ctx, .det { overflow-wrap:anywhere; }
+  .toast { z-index:1000; }
+  @media(max-width:700px) {
+    .wrap { padding:20px 16px 50px; }
+    .meta { margin-left:0; flex-wrap:wrap; }
+    .decision-row > summary { grid-template-columns:28px 65px minmax(0,1fr); gap:8px; }
+    .row-date { grid-column:3; text-align:left; }
+    .row-date span { display:inline; margin-right:8px; }
+    .toolbar label { flex:1; }
+    .decision-row .card { padding:14px 8px; }
+    .card .title { flex-basis:100%; }
+    .browse-meta { align-items:start; font-size:12px; }
+    .gov .row { flex-wrap:wrap; }
+  }
 </style>
 </head>
 <body>
@@ -82,29 +129,26 @@
       <button id="scanBtn" title="Run the stalled-work scan now (hourly otherwise)">Scan now</button>
     </div>
   </header>
-  <p class="sub">CCC wakes up every hour, looks at what is stuck, does the thinking, and leaves you a choice.
-    Pick an option and CCC spawns or steers the follow-through. Nothing here needs a reply.</p>
+  <p class="sub">Find a decision, review the context, and choose the next step.</p>
+  <div id="freshness" class="freshness" role="status">Connecting to the inbox…</div>
+  <div class="toolbar" role="search" aria-label="Browse decisions">
+    <label class="search">Search decisions<input id="search" type="search" placeholder="Question number, ticket, title or context"></label>
+    <label>Status<select id="statusFilter"><option value="open">Needs decision</option><option value="closed">History</option><option value="monitoring">Monitoring</option><option value="all">All items</option></select></label>
+    <label>Source<select id="sourceFilter"><option value="all">All sources</option></select></label>
+    <label>Sort<select id="sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="updated">Recently updated</option></select></label>
+  </div>
+  <div class="browse-meta"><span id="resultCount" role="status"></span><span id="timezone"></span></div>
+  <div id="cards"><div class="empty">Loading decisions…</div></div>
+  <nav class="pager" aria-label="Decision pages"><button id="prev">Previous</button><span id="pageCount"></span><button id="next">Next</button></nav>
+  <details class="gov-disclosure"><summary>Session health <span id="governorCount"></span></summary><div class="gov" id="governor"></div></details>
 
-  <h2>Token governor</h2>
-  <div class="gov" id="governor"><div class="empty">No live session looks stuck or wasteful.</div></div>
-
-  <h2>Needs your decision</h2>
-  <div id="cards"><div class="empty">Nothing waiting. Sababa.</div></div>
-
-  <details class="monitoring" id="monitoringWrap">
-    <summary>Monitoring <span class="tag count" id="monitoringCount">0</span></summary>
-    <div id="monitoring"></div>
-  </details>
-
-  <h2>Recently closed</h2>
-  <div id="closed"><div class="empty">Nothing yet.</div></div>
 </div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status"></div>
 
 <script>
 (function () {
   "use strict";
-  var state = { cards: [], governor: [], queueRepos: {}, busy: {} };
+  var state = { cards: [], governor: [], queueRepos: {}, busy: {}, page: 0, expanded: new Set() };
   var $ = function (id) { return document.getElementById(id); };
 
   function esc(s) {
@@ -120,14 +164,23 @@
     if (s < 86400) return Math.round(s / 3600) + " h ago";
     return Math.round(s / 86400) + " d ago";
   }
+  function exact(iso) {
+    var d = new Date(iso);
+    return !iso || !Number.isFinite(d.getTime()) ? "Unknown" : d.toLocaleString(undefined, {year:"numeric", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
+  }
+  function reference(c) {
+    var q = String(c.title || "").match(/\[Q(\d+):[^\]]+\]/);
+    return q ? "Q" + q[1] : String(c.id || "").replace(/^dc_/, "D-");
+  }
+  function cleanTitle(c) { return String(c.title || "Untitled decision").replace(/^\[Q\d+:[^\]]+\]\s*/, ""); }
   function toast(msg, bad) {
     var t = $("toast"); t.textContent = msg; t.style.color = bad ? "var(--bad)" : "var(--ink)";
     t.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(function () { t.classList.remove("show"); }, 2600);
   }
   async function post(url, body) {
-    var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    try { var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
     var j = null; try { j = await r.json(); } catch (e) { j = { ok: false, error: "bad response" }; }
-    return j;
+    return j; } catch (e) { return {ok:false, error:"Connection failed. Try again."}; }
   }
 
   function actionVerb(a) {
@@ -194,7 +247,7 @@
       (c.seen_count > 1 ? '<span class="tag">seen ' + esc(c.seen_count) + "x</span>" : "") +
       '<span class="tag ' + esc(c.kind) + '">' + esc(c.kind) + "</span>" +
       (closed ? '<span class="tag">' + esc(c.status) + "</span>" : "") + "</div>" +
-      '<div class="ctx">' + esc(c.context || "") + "</div>" +
+      '<div class="timestamps"><span>Created ' + esc(exact(c.created_at)) + '</span><span>Updated ' + esc(exact(c.updated_at)) + '</span>' + (c.last_seen_at ? '<span>Last reported ' + esc(exact(c.last_seen_at)) + '</span>' : '') + '</div><div class="ctx">' + esc(c.context || "") + "</div>" +
       '<div class="opts">' + opts + "</div>" +
       '<div class="foot"><span>' + esc(c.source_id) + " · " + ago(c.created_at) + " · " + analyst + "</span>" +
       (srcLine ? '<details><summary>source</summary><pre>' + esc(srcLine) + "</pre></details>" : "") +
@@ -221,36 +274,62 @@
 
   var DECISION_KINDS = { external: 1, wt: 1, board: 1, wt_review: 1 };
 
+  function browse() {
+    var query = $("search").value.trim().toLowerCase(), status = $("statusFilter").value;
+    var cards = state.cards.filter(function(c) {
+      return (status === "all" || (status === "closed" ? c.status !== "open" : c.status === "open" && (!!DECISION_KINDS[c.kind] === (status === "open")))) &&
+        ($("sourceFilter").value === "all" || c.kind === $("sourceFilter").value) &&
+        (!query || [reference(c), c.title, c.context, c.source_id, c.id].join(" ").toLowerCase().includes(query));
+    });
+    var order = $("sort").value;
+    cards.sort(function(a,b) { var key = order === "updated" ? "updated_at" : "created_at"; return (String(a[key] || "").localeCompare(String(b[key] || "")) || String(a.id).localeCompare(String(b.id))) * (order === "oldest" ? 1 : -1); });
+    var pages = Math.max(1, Math.ceil(cards.length / 10)); state.page = Math.min(state.page, pages-1);
+    var start = state.page * 10;
+    $("resultCount").textContent = cards.length ? (start+1) + "–" + Math.min(start+10,cards.length) + " of " + cards.length + " items" : "0 matching items";
+    $("pageCount").textContent = "Page " + (state.page+1) + " of " + pages;
+    $("prev").disabled = state.page === 0; $("next").disabled = state.page === pages-1;
+    $("cards").innerHTML = cards.slice(start,start+10).map(function(c,i) {
+      return '<details class="decision-row" data-id="' + esc(c.id) + '"' + (state.expanded.has(c.id) ? ' open' : '') + '><summary><span class="row-number">' + (start+i+1) + '</span><span class="row-ref">' + esc(reference(c)) + '</span><span class="row-title">' + esc(cleanTitle(c)) + '<span class="row-preview">' + esc(c.kind + ' · ' + c.status + ' · ' + (c.context || 'Review options')) + '</span></span><span class="row-date"><span>' + esc(exact(c.created_at)) + '</span><span>' + esc(ago(c.created_at)) + '</span></span></summary>' + renderCard(c) + '</details>';
+    }).join("") || '<div class="empty">No decisions match this view. Try another status or clear your search.</div>';
+    document.querySelectorAll('.decision-row').forEach(function(el) { el.addEventListener('toggle', function() { if (el.open) state.expanded.add(el.dataset.id); else state.expanded.delete(el.dataset.id); }); });
+  }
   function render(data) {
-    state.cards = data.cards || [];
-    state.governor = (data.governor && data.governor.findings) || [];
-    state.queueRepos = data.queue_repos || {};
-    var open = state.cards.filter(function (c) { return c.status === "open"; });
-    var closed = state.cards.filter(function (c) { return c.status !== "open"; }).slice(0, 12);
-    var decisions = open.filter(function (c) { return DECISION_KINDS[c.kind]; });
-    var monitoring = open.filter(function (c) { return !DECISION_KINDS[c.kind]; });
-    $("openCount").textContent = open.length + " open";
-    $("cards").innerHTML = decisions.length ? decisions.map(renderCard).join("") : '<div class="empty">Nothing waiting. Sababa.</div>';
-    $("monitoringWrap").style.display = monitoring.length ? "" : "none";
-    $("monitoringCount").textContent = monitoring.length;
-    $("monitoring").innerHTML = monitoring.map(renderCard).join("");
-    $("closed").innerHTML = closed.length ? closed.map(renderCard).join("") : '<div class="empty">Nothing yet.</div>';
-    renderGovernor(state.governor);
-    var lr = data.last_run;
-    var txt = data.running_since ? "scanning since " + ago(data.running_since) :
-      lr ? "last scan " + ago(lr.finished_at || lr.started_at) + " · " + (lr.created || []).length + " new" +
-        (lr.errors && lr.errors.length ? " · " + lr.errors.length + " error(s)" : "") : "no scan yet";
-    if (data.config && data.config.strategy_board === false) txt += " · no board configured";
-    $("lastRun").textContent = txt;
+    state.cards = data.cards || []; state.queueRepos = data.queue_repos || {};
+    var selected = $("sourceFilter").value;
+    var kinds = Array.from(new Set(state.cards.map(function(c) { return c.kind; }))).sort();
+    $("sourceFilter").innerHTML = '<option value="all">All sources</option>' + kinds.map(function(k) { return '<option value="' + esc(k) + '">' + esc(k) + '</option>'; }).join('');
+    $("sourceFilter").value = kinds.includes(selected) ? selected : "all";
+    $("openCount").textContent = (data.open_count == null ? state.cards.filter(function(c) { return c.status === "open"; }).length : data.open_count) + " open";
+    var fingerprint = JSON.stringify([state.cards, state.queueRepos]);
+    if (fingerprint !== state.fingerprint) { browse(); state.fingerprint = fingerprint; }
+    var findings = (data.governor && data.governor.findings) || [];
+    renderGovernor(findings); $("governorCount").textContent = findings.length ? "· " + findings.length + " findings" : "· No findings";
+    var lr = data.last_run, stamp = lr && (lr.finished_at || lr.started_at);
+    $("lastRun").textContent = data.running_since ? "Scan in progress since " + exact(data.running_since) : stamp ? "Last scan · " + exact(stamp) : "No scan recorded";
+    var stale = !stamp || Date.now() - new Date(stamp).getTime() > ((data.config && data.config.interval_s) || 3600) * 2000;
+    var errors = lr && lr.errors && lr.errors.length;
+    $("freshness").classList.toggle("bad", stale || !!errors);
+    $("freshness").textContent = "Feed refreshed " + exact(new Date().toISOString()) + " · " +
+      (data.config && data.config.enabled === false ? "Automatic scans disabled" : stale ? "Scan overdue or unavailable" : "Scanner on schedule") +
+      (errors ? " · Last scan reported " + errors + " error(s)" : "") +
+      ". Older items may need rechecking against their source." + (data.total_count > state.cards.length ? " Showing the latest " + state.cards.length + " of " + data.total_count + " stored items." : "");
     $("scanBtn").disabled = !!data.running_since;
   }
-
   async function load() {
     try {
       var r = await fetch("/api/decision-inbox", { cache: "no-store" });
-      render(await r.json());
-    } catch (e) { /* server restarting; next poll */ }
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      var data = await r.json(); if (!data.ok) throw new Error(data.error || "Unavailable");
+      render(data);
+    } catch (e) {
+      $("freshness").textContent = "Cannot refresh the inbox. Displayed items may be out of date. Retrying automatically.";
+      $("freshness").classList.add("bad");
+    }
   }
+  $("timezone").textContent = "Times in " + Intl.DateTimeFormat().resolvedOptions().timeZone;
+  ["search", "statusFilter", "sourceFilter", "sort"].forEach(function(id) { $(id).addEventListener(id === "search" ? "input" : "change", function() { state.page = 0; browse(); }); });
+  $("prev").onclick = function() { state.page--; browse(); };
+  $("next").onclick = function() { state.page++; browse(); };
 
   document.addEventListener("click", async function (ev) {
     var b = ev.target.closest("button"); if (!b) return;
