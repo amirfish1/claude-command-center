@@ -331,12 +331,17 @@ def usage_limit_resume_at_for_session(session_id, resumes=None):
 
 
 def _attach_usage_limit_resume_fields(rows):
-    """Mutate `rows` in place, adding usage_limit_resume_at to any row whose
-    session is tracked as parked on a usage-limit auto-resume. Cheap: one
-    in-memory dict lookup per row, no file I/O (see
-    usage_limit_resume_at_for_session)."""
+    """Attach durable continuation topics and parked usage-limit timestamps.
+
+    Resume timestamps use in-memory lookups; topic metadata uses bounded,
+    indexed local-state reads shared across the batch.
+    """
     if not rows:
         return
+    # Shared final row-metadata pass for sessions/conversations, including
+    # archive and fresh sidebar responses (even when no resume is parked).
+    from ccc_server import continuation_topics
+    continuation_topics.attach_topics(rows)
     tracked = _core._load_usage_limit_resumes()
     if not tracked:
         return

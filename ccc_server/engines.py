@@ -42,6 +42,7 @@ from ccc_server import core as _core
 from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
 from ccc_server import free_runtime as _free_runtime
 from ccc_server import domestic_providers as _domestic_providers
+from ccc_server import continuation_topics as _continuation_topics
 
 # ---------------------------------------------------------------------------
 # Installed-engines inventory (First Flight tour welcome chips).
@@ -6301,6 +6302,7 @@ def _route_claude_call_with_kwarg_fallback(operation, route_args, idempotency_ke
         result = retried
 
 
+@_continuation_topics.track_spawn
 def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
                   parent_session_id=None, timeline_t0_epoch_ms=None, prewarm_id=None,
                   auto_compact_k=None, reasoning_effort="", runtime=""):
@@ -6713,6 +6715,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
     return final
 
 
+@_continuation_topics.track_spawn
 def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort="", parent_session_id=None):
     """Spawn a headless Codex run and return tracking info.
 
@@ -6966,6 +6969,7 @@ def spawn_session_opencode(prompt, name=None, cwd=None, repo_path=None, worktree
     return final
 
 
+@_continuation_topics.track_spawn
 def spawn_session_kimi(
     prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None,
     parent_session_id=None, effort=None,

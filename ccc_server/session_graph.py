@@ -15,6 +15,7 @@ import re
 import shlex
 import shutil
 import signal
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -1820,9 +1821,19 @@ def rename_session(session_id, name, source="user"):
     Returns {ok, method, live, error?}.
     """
     result = {"ok": False, "method": None, "live": False}
+    def finish():
+        if result.get("ok") and source == "user" and name:
+            from ccc_server import continuation_topics
+            try:
+                continuation_topics.rename_topic(session_id, name)
+            except (OSError, sqlite3.Error) as exc:
+                result["topic_error"] = str(exc)
+                print(f"[continuation-topics] could not persist user topic rename: {exc}")
+        return result
+
     if not session_id:
         result["error"] = "missing session_id"
-        return result
+        return finish()
     if name:
         # Clamp before writing through to the JSONL custom-title event,
         # so a multi-kilobyte paste cannot be picked up by `claude --resume`
@@ -1854,10 +1865,10 @@ def rename_session(session_id, name, source="user"):
                 result["ok"] = True
                 result["method"] = "sidecar"
                 result["error"] = f"jsonl append failed, used side-car: {e}"
-                return result
+                return finish()
             except OSError as e2:
                 result["error"] = f"both paths failed: {e2}"
-                return result
+                return finish()
         # Side-car is the "user explicitly chose this name from the command
         # center" marker. Only write it for source="user" so that auto-titlers
         # (summarize_session_title etc.) stay out of name_overridden territory
@@ -1871,7 +1882,7 @@ def rename_session(session_id, name, source="user"):
                 pass  # non-fatal
         result["ok"] = True
         result["method"] = "jsonl"
-        return result
+        return finish()
 
     # Side-car path: live session, missing jsonl, or clearing a name
     try:
@@ -1880,10 +1891,10 @@ def rename_session(session_id, name, source="user"):
             _core._sync_codex_thread_title(session_id, name)
     except OSError as e:
         result["error"] = f"side-car write failed: {e}"
-        return result
+        return finish()
     result["ok"] = True
     result["method"] = "sidecar"
-    return result
+    return finish()
 
 
 _SIBLING_PROMPT_PREFIX = "you are a sibling claude code session"

@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -336,6 +337,12 @@ def _spawn_continuation(query, prompt="", model=None, effort=None, report_to=Non
         )
 
     new_sid = (spawn_result or {}).get("session_id")
+    if new_sid:
+        from ccc_server import continuation_topics
+        try:
+            continuation_topics.record_continuation(ctx["latest"], new_sid, title=ctx["title"])
+        except (OSError, sqlite3.Error) as exc:
+            print(f"[continuation-topics] could not persist resolved source topic: {exc}")
     if report_route and new_sid:
         try:
             _report_routes.set_child(report_route, new_sid)
