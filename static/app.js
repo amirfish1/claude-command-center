@@ -17706,7 +17706,9 @@
   function rowDecisionReportSnapshot(row, c) {
     const visible = selector => [...row.querySelectorAll(selector)].filter(el => el.getClientRects().length);
     const actions = visible('[data-role="quick-action"]').map(btn => ({
-      label: btn.textContent.trim(), reply: (btn.title || '').replace(/^Send to this session: /, ''),
+      label: btn.textContent.trim(),
+      ...(btn.dataset.reviewUrl ? { href: btn.dataset.reviewUrl }
+        : { reply: (btn.title || '').replace(/^Send to this session: /, '') }),
       disabled: btn.disabled,
     }));
     const r = row.getBoundingClientRect();
@@ -17831,6 +17833,15 @@
   // so derive the chips from its alternatives; the reply repeats the tag.
   function decisionQuickActions(next) {
     const s = String(next || '').trim();
+    // A delivered artifact still needs an action when its author omitted
+    // NEXT_ACTION. Open the literal review URL; never imply it was approved.
+    const review = s.match(/^(watch|review|read|open|listen to)\s+(https?:\/\/\S+)\s+(.+)$/i);
+    if (review && s.length <= 600 && !/[\x00-\x1f]/.test(s)
+        && /\b(?:say|tell|give|share|provide)\b.*\b(?:whether|feedback|verdict|think|works|direction)\b/i.test(review[3])
+        && /^https?:\/\/[a-z0-9.-]+(?::\d{1,5})?(?:[/?#][^\s<>"`\\]*)?$/i.test(review[2])) {
+      const label = /^watch$/i.test(review[1]) ? 'Watch video' : 'Open review';
+      return [{ label, href: review[2], derived: true }];
+    }
     const m = s.match(/^(?:answer|choose|decide|pick)\b(.*?):\s+(.+)$/i);
     if (!m) {
       // Older answers often ask for a category without authoring chips.
@@ -17901,7 +17912,8 @@
       btn.dataset.quickActionKey = source.key;
       btn.dataset.quickActionIndex = String(index);
       btn.textContent = action.label;
-      btn.title = 'Send to this session: ' + action.reply;
+      btn.title = action.href ? 'Open for review: ' + action.href : 'Send to this session: ' + action.reply;
+      if (action.href) btn.dataset.reviewUrl = action.href;
       btn.setAttribute('aria-label', btn.title);
       slot.appendChild(btn);
     });
@@ -17963,6 +17975,10 @@
     }
     const { sid } = current;
     const action = current.actions[Number(btn.dataset.quickActionIndex) || 0] || current.action;
+    if (action.href) {
+      window.open(action.href, '_blank', 'noopener,noreferrer');
+      return;
+    }
     const feedback = { key: current.key, action, state: 'sending' };
     _rowQuickActionFeedback.set(sid, feedback);
     _rowQuickActionSending.add(sid);
