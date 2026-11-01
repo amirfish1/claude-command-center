@@ -77769,7 +77769,7 @@
     'continued_from_session_id', 'hermes_parent_session_id', 'hermes_continued_from',
     'hermes_source', 'hermes_profile', 'hermes_chat_type', 'spawned_via',
     'model', 'runtime', 'git_branch', 'effective_branch', 'effective_kind',
-    'worktree_label',
+    'worktree_label', 'explicitly_archived', 'spawned_kind', 'codex_cloud',
   ];
   function _archiveSidebarCacheRow(row) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
@@ -77783,6 +77783,20 @@
       } else if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) {
         out[key] = value;
       }
+    }
+    // Ticket identity determines which session tab owns this row. Without
+    // it, cached sessions all fall into Other until the network list lands.
+    // Keep only routing/lifecycle fields, never handoff questions or actions.
+    const ticket = row.idea_ticket;
+    if (ticket && typeof ticket === 'object' && !Array.isArray(ticket)) {
+      out.idea_ticket = {};
+      for (const key of ['ref', 'queue']) {
+        if (typeof ticket[key] === 'string') out.idea_ticket[key] = ticket[key].slice(0, 120);
+      }
+      for (const key of ['closed', 'pending', 'explicitly_archived']) {
+        if (typeof ticket[key] === 'boolean') out.idea_ticket[key] = ticket[key];
+      }
+      if (Number.isFinite(ticket.moved_at)) out.idea_ticket.moved_at = ticket.moved_at;
     }
     return out;
   }
@@ -77804,7 +77818,12 @@
       // Leave room for the small envelope; count serialized characters so
       // UTF-16 localStorage usage stays below 512 KiB even with long titles.
       let chars = 256;
-      for (const row of rows.slice(0, ARCHIVE_SIDEBAR_CACHE_MAX_ROWS)) {
+      // Reserve the bounded preview for ticket rows first: a busy worker
+      // fleet must not crowd every Features/Small bugs session out of cache.
+      const ordered = rows.filter(row => row && row.idea_ticket)
+        .concat(rows.filter(row => !row || !row.idea_ticket));
+      for (const row of ordered) {
+        if (entries.length >= ARCHIVE_SIDEBAR_CACHE_MAX_ROWS) break;
         const projected = _archiveSidebarCacheRow(row);
         if (!projected) continue;
         const entry = JSON.stringify(projected);

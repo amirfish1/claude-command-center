@@ -156,3 +156,35 @@ test('each window keeps its own snapshot so tabs on different windows do not evi
   assert.equal(c.read('all')[0].id, 'all');
   assert.equal(c.read('8h'), null);
 });
+
+test('cached ticket rows retain tab identity and lifecycle without handoff actions', () => {
+  const { context: c } = harness();
+  c.write([{ id: 'feature', explicitly_archived: true, idea_ticket: {
+    ref: 'FEATURES-1', queue: 'IDEAS', closed: true, pending: false,
+    explicitly_archived: true, moved_at: 123,
+    handoff: { question: 'Stale question', state: 'waiting' },
+  } }, { id: 'bug', idea_ticket: { ref: 'BUGS-1', queue: 'SMALL-BUGS', closed: false } },
+  { id: 'pending', idea_ticket: { ref: '', queue: 'IDEAS', pending: true } }], '7d');
+  c.paint();
+  const rows = c.state().archiveData;
+  assert.equal(rows[0].idea_ticket.ref, 'FEATURES-1');
+  assert.equal(rows[0].idea_ticket.queue, 'IDEAS');
+  assert.equal(rows[0].idea_ticket.closed, true);
+  assert.equal(rows[0].explicitly_archived, true);
+  assert.equal(rows[0].idea_ticket.moved_at, 123);
+  assert.equal('handoff' in rows[0].idea_ticket, false);
+  assert.equal(rows[1].idea_ticket.queue, 'SMALL-BUGS');
+  assert.equal(rows[2].idea_ticket.pending, true);
+  // Network rows remain authoritative when tickets move or disappear.
+});
+
+test('worker volume cannot evict all ticket rows from the bounded preview', () => {
+  const { context: c } = harness();
+  const workers = Array.from({ length: 600 }, (_, i) => ({ id: `worker-${i}` }));
+  c.write(workers.concat([{ id: 'feature', idea_ticket: { ref: 'FEATURES-1', queue: 'IDEAS' } },
+    { id: 'bug', idea_ticket: { ref: 'BUGS-1', queue: 'SMALL-BUGS' } }]), '7d');
+  const rows = c.read('7d');
+  assert.equal(rows.length, 500);
+  assert.equal(rows[0].id, 'feature');
+  assert.equal(rows[1].id, 'bug');
+});
