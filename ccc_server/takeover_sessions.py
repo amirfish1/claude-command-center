@@ -650,14 +650,17 @@ def observe(session_id, engine='', nonce=''):
         settings = {k: spawn[k] for k in ('model', 'reasoning_effort', 'permission_mode', 'permissions', 'runtime') if spawn.get(k) is not None}
         settings.update(meta.get('settings') or {})
         snap = _snapshot(engine, sid)
-        if snap.get('model'):
+        # Native session settings are authoritative. ACP facade state may
+        # retain an ambient default even for a loaded session; disconnected
+        # state cannot supply current configuration at all.
+        if snap.get('loaded') and snap.get('model') and not settings.get('model'):
             settings['model'] = snap['model']
-        for option in snap.get('config_options') or []:
+        for option in (snap.get('config_options') or []) if snap.get('loaded') else []:
             if not isinstance(option, dict):
                 continue
             key = option.get('category') or option.get('id')
             value = option.get('currentValue')
-            if key and value is not None:
+            if key and value is not None and settings.get(str(key)) in (None, ''):
                 settings[str(key)] = value
         settings.update(_core._get_session_override(sid) or {})
         cwd = meta.get('cwd') or spawn.get('cwd') or ''

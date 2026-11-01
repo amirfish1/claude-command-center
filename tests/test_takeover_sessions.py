@@ -66,6 +66,29 @@ def test_unknown_engine_pauses_instead_of_rejecting_enrollment(core):
     assert 'not supported' not in str(result['error'])
 
 
+@pytest.mark.parametrize('loaded', [False, True])
+def test_native_settings_win_over_acp_facade_defaults(core, tmp_path, monkeypatch, loaded):
+    broker.register_adapter(broker.Adapter('fixture', read=reader(
+        tmp_path, settings={'model': 'native-model', 'respect_workspace_trust': False})))
+    monkeypatch.setattr(broker, '_snapshot', lambda *args: {
+        'loaded': loaded, 'status': 'idle', 'model': 'ambient-model',
+        'config_options': [{'category': 'model', 'currentValue': 'ambient-option'},
+                           {'id': 'respect_workspace_trust', 'currentValue': True},
+                           {'id': 'unpersisted_option', 'currentValue': 'current-value'}],
+    })
+    result = broker.observe('exact-session', 'fixture')
+    assert result['settings']['model'] == 'native-model'
+    assert result['settings']['respect_workspace_trust'] is False
+    assert ('unpersisted_option' in result['settings']) is loaded
+
+
+def test_current_acp_model_fills_missing_native_setting(core, tmp_path, monkeypatch):
+    broker.register_adapter(broker.Adapter('fixture', read=reader(tmp_path)))
+    monkeypatch.setattr(broker, '_snapshot', lambda *args: {
+        'loaded': True, 'status': 'idle', 'model': 'current-model', 'config_options': []})
+    assert broker.observe('exact-session', 'fixture')['settings']['model'] == 'current-model'
+
+
 @pytest.mark.parametrize('role,synthetic,confirmed', [
     ('assistant', False, False), ('user_text', True, False),
     ('user_text', False, True), ('tool_result', False, False),
