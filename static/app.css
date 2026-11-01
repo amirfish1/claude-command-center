@@ -1600,6 +1600,7 @@
   }
   .img-lightbox-back,
   .img-lightbox-download,
+  .img-lightbox-zoom button,
   .img-lightbox-close {
     appearance: none;
     border: 1px solid rgba(255, 255, 255, 0.22);
@@ -1622,6 +1623,14 @@
   .img-lightbox-close:hover {
     background: rgba(255, 255, 255, 0.18);
   }
+  .img-lightbox-zoom {
+    display: flex; justify-content: center; gap: 8px; padding: 8px 12px;
+    background: rgba(13, 17, 23, 0.92); cursor: default; flex-shrink: 0;
+  }
+  .img-lightbox-zoom[hidden] { display: none; }
+  .img-lightbox-zoom button { min-width: 44px; min-height: 44px; }
+  .img-lightbox-zoom button:disabled { opacity: 0.45; cursor: default; }
+  .img-lightbox-zoom button:focus-visible { outline: 2px solid #58a6ff; outline-offset: 2px; }
   .img-lightbox-title {
     flex: 1;
     min-width: 0;
@@ -1650,6 +1659,12 @@
     border-radius: 6px;
     box-shadow: 0 4px 30px rgba(0,0,0,0.5);
     object-fit: contain;
+  }
+  .img-lightbox-stage.is-image {
+    box-sizing: border-box; align-items: flex-start; justify-content: flex-start; cursor: default;
+  }
+  .img-lightbox-stage.is-image img {
+    max-width: none; max-height: none; flex: none; margin: auto; border-radius: 0;
   }
   .img-lightbox-video {
     max-width: 95vw;

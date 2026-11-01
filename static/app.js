@@ -20052,6 +20052,27 @@
 
   let _imgLightbox = null;
   let _lightboxHistoryPushed = false;
+  let _lightboxZoom = 0; // Zero follows the viewport; other values use natural image size.
+  function setMediaLightboxZoom(scale) {
+    if (!_imgLightbox || !_imgLightbox.classList.contains('open')) return;
+    const stage = _imgLightbox.querySelector('.img-lightbox-stage');
+    const img = stage.querySelector('img');
+    if (!img || !img.naturalWidth) return;
+    const fit = Math.min(1, (stage.clientWidth - 24) / img.naturalWidth,
+      (stage.clientHeight - 24) / img.naturalHeight);
+    const next = scale === 0 ? fit : Math.max(fit, Math.min(8, scale));
+    const centerX = stage.scrollWidth > stage.clientWidth ? (stage.scrollLeft + stage.clientWidth / 2) / stage.scrollWidth : 0.5;
+    const centerY = stage.scrollHeight > stage.clientHeight ? (stage.scrollTop + stage.clientHeight / 2) / stage.scrollHeight : 0.5;
+    _lightboxZoom = scale === 0 ? 0 : next;
+    img.style.width = img.naturalWidth * next + 'px';
+    img.style.height = img.naturalHeight * next + 'px';
+    img.dataset.scale = String(next);
+    _imgLightbox.querySelector('[data-image-zoom="actual"]').textContent = Math.round(next * 100) + '%';
+    _imgLightbox.querySelector('[data-image-zoom="out"]').disabled = next <= fit + 0.001;
+    _imgLightbox.querySelector('[data-image-zoom="in"]').disabled = next >= 8;
+    stage.scrollLeft = scale === 0 ? 0 : centerX * stage.scrollWidth - stage.clientWidth / 2;
+    stage.scrollTop = scale === 0 ? 0 : centerY * stage.scrollHeight - stage.clientHeight / 2;
+  }
   function _ensureMediaLightbox() {
     if (_imgLightbox) return _imgLightbox;
     _imgLightbox = document.createElement('div');
@@ -20063,14 +20084,28 @@
       + '<a class="img-lightbox-download" download aria-label="Download file">Download</a>'
       + '<button type="button" class="img-lightbox-close" data-lightbox-close aria-label="Close">\u2715</button>'
       + '</div>'
+      + '<div class="img-lightbox-zoom" role="group" aria-label="Image zoom">'
+      + '<button type="button" data-image-zoom="out" aria-label="Zoom out">−</button>'
+      + '<button type="button" data-image-zoom="actual" aria-label="Actual size (100%)" title="Actual size (100%)">100%</button>'
+      + '<button type="button" data-image-zoom="in" aria-label="Zoom in">+</button>'
+      + '<button type="button" data-image-zoom="fit">Fit</button>'
+      + '</div>'
       + '<div class="img-lightbox-stage"><img alt=""></div>';
     _imgLightbox.addEventListener('click', (ev) => {
+      const zoom = ev.target.closest('[data-image-zoom]');
+      if (zoom) {
+        const action = zoom.dataset.imageZoom;
+        const img = _imgLightbox.querySelector('.img-lightbox-stage img');
+        const scale = Number(img && img.dataset.scale) || 1;
+        setMediaLightboxZoom(action === 'fit' ? 0 : action === 'actual' ? 1 : scale * (action === 'in' ? 1.5 : 1 / 1.5));
+        return;
+      }
       if (ev.target.closest('[data-lightbox-close]')) {
         ev.preventDefault();
         closeMediaLightbox();
         return;
       }
-      if (ev.target.closest('.img-lightbox-bar, .img-lightbox-video, .img-lightbox-frame')) {
+      if (ev.target.closest('.img-lightbox-bar, .img-lightbox-zoom, .img-lightbox-stage.is-image, .img-lightbox-video, .img-lightbox-frame')) {
         return;
       }
       closeMediaLightbox();
@@ -20104,6 +20139,11 @@
     const $title = lb.querySelector('.img-lightbox-title');
     const $dl = lb.querySelector('.img-lightbox-download');
     const $stage = lb.querySelector('.img-lightbox-stage');
+    const isImage = kind !== 'video' && kind !== 'frame';
+    lb.querySelector('.img-lightbox-zoom').hidden = !isImage;
+    $stage.classList.toggle('is-image', isImage);
+    $stage.scrollTop = $stage.scrollLeft = 0;
+    _lightboxZoom = 0;
     if ($title) $title.textContent = title;
     if ($dl) {
       $dl.href = src;
@@ -20118,10 +20158,15 @@
       $stage.querySelector('iframe').src = src;
     } else {
       $stage.innerHTML = '<img alt="' + escapeAttr(title) + '">';
-      $stage.querySelector('img').src = src;
+      const img = $stage.querySelector('img');
+      img.addEventListener('load', () => {
+        if (img === $stage.querySelector('img')) setMediaLightboxZoom(0);
+      });
+      img.src = src;
     }
     const wasOpen = lb.classList.contains('open');
     lb.classList.add('open');
+    if (isImage) setMediaLightboxZoom(0);
     if (!wasOpen && !_lightboxHistoryPushed) {
       try {
         history.pushState({ ...(history.state || {}), cccMediaLightbox: true }, '');
@@ -20131,6 +20176,7 @@
   }
   window.openMediaLightbox = openMediaLightbox;
   window.closeMediaLightbox = closeMediaLightbox;
+  window.addEventListener('resize', () => setMediaLightboxZoom(_lightboxZoom));
   window.addEventListener('popstate', () => {
     if (_imgLightbox && _imgLightbox.classList.contains('open')) {
       _lightboxHistoryPushed = false;
