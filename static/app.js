@@ -4316,7 +4316,7 @@
     } else {
       let tab = '';
       try { tab = localStorage.getItem('ccc-sidebar-tab') || ''; } catch (_) {}
-      // Active uses the older Wrap / Details controls for these densities.
+      // Active retains its saved row display preferences.
       if (tab !== 'inprogress' || (compactRowsOn() && !wrapTitlesOn())) return '';
     }
     const age = sessionStuckAge(c);
@@ -43485,20 +43485,7 @@
             + '<span class="grouping-opt" data-objects-collapse="1">Collapse all</span>'
           + '</span>'
         : '';
-      // Wrap toggle: lets session titles break across two lines instead of
-      // truncating to one, so long titles are more readable at a glance.
-      const _ipWrapToggle = '<span class="conv-grouping-toggle conv-wrap-toggle" data-role="wrap-toggle" title="Wrap session titles across two lines">'
-          + '<span class="grouping-opt' + (wrapTitlesOn() ? ' is-active' : '') + '" data-wrap-toggle="1">Wrap</span>'
-        + '</span>';
-      // Details toggle: shows/hides the outcome-card under each row (git
-      // state signals, ask preview). Was the row-style rail's "Comfortable"
-      // swatch; moved here next to Wrap since both are per-row display
-      // knobs a user reaches for from the session list itself, not from the
-      // typography rail. (CCC-291 originally lived here too.)
-      const _ipDetailsToggle = '<span class="conv-grouping-toggle conv-details-toggle" data-role="details-toggle" title="Show the outcome/detail line under each row">'
-          + '<span class="grouping-opt' + (!compactRowsOn() ? ' is-active' : '') + '" data-details-toggle="1">Details</span>'
-        + '</span>';
-      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _ipWrapToggle + _ipDetailsToggle + _trackedTableToggleHtml() + '</span>';
+      const _ipTools = '<span class="conv-inprogress-tools">' + _currentSessionsModeToggle + _ipObjectsExpandAll + _ipWindowToggle + _ipGroupingToggle + _trackedTableToggleHtml() + '</span>';
       const _ipToolbarHtml = _ipTools
         ? '<div class="conv-inprogress-toolbar" data-role="inprogress-toolbar">' + _ipTools + '</div>'
         : '';
@@ -44489,18 +44476,6 @@
       };
       // The engine filter lives in the ⋮ menu as an always-open row of engine
       // buttons (CCC-283; it used to be a hover-popup icon in the toolbar).
-      // Wrap toggle (mirrors the In progress toolbar's): lets session titles
-      // break across two lines instead of truncating to one. Shares the
-      // 'wrap-titles' class + localStorage key with the In progress view.
-      const _arcWrapToggle = '<span class="conv-grouping-toggle conv-wrap-toggle" data-role="wrap-toggle" title="Wrap session titles across two lines">'
-          + '<span class="grouping-opt' + (wrapTitlesOn() ? ' is-active' : '') + '" data-wrap-toggle="1">Wrap</span>'
-        + '</span>';
-      // Details toggle (mirrors the In progress toolbar's): shows/hides the
-      // outcome-card under each row. Shares 'ccc-compact-rows' with the
-      // In progress view and the (now-removed) row-style rail toggle.
-      const _arcDetailsToggle = '<span class="conv-grouping-toggle conv-details-toggle" data-role="details-toggle" title="Show the outcome/detail line under each row">'
-          + '<span class="grouping-opt' + (!compactRowsOn() ? ' is-active' : '') + '" data-details-toggle="1">Details</span>'
-        + '</span>';
       // Expand-all lives in its own left-hand slot, separate from the
       // window/engine/grouping group on the right. It only renders when
       // grouped by project with multiple folders, so its own slot can
@@ -44703,7 +44678,7 @@
           + ' title="Show tracked sessions as a table in the main pane (ticket, name, status, next step)">'
           + '<span class="conv-check" aria-hidden="true">' + (_arcTrackedTableOn ? '&#10003;' : '') + '</span>Table view</button>';
       const _arcDisplayControls = _arcGroupingToggle
-        + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle)
+        + _arcDenseToggle
         + _arcWindowToggle.replace('class="conv-grouping-toggle conv-window-toggle"', 'class="conv-grouping-toggle conv-window-toggle is-phone-menu-only"')
         + _arcEngineMenuRow
         + _arcTrackedTableOpt
@@ -44727,7 +44702,7 @@
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + _arcToolsLeft
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcGroupingToggle
-            + (_arcHasDensity ? _arcDenseToggle : _arcWrapToggle + _arcDetailsToggle) + _arcOverflow + '</span>'
+            + _arcDenseToggle + _arcOverflow + '</span>'
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
@@ -45742,27 +45717,6 @@
       });
     }
     $convList.classList.toggle('wrap-titles', wrapTitlesOn());
-    // querySelectorAll + forEach: these controls also render inside the
-    // narrow-sidebar ⋮ overflow menu (CCC-1158), and querySelector would bind
-    // only the first copy.
-    $convList.querySelectorAll('[data-role="wrap-toggle"]').forEach($wrapToggle => {
-      $wrapToggle.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const next = localStorage.getItem('ccc-wrap-titles') !== '1';
-        try { localStorage.setItem('ccc-wrap-titles', next ? '1' : '0'); } catch (_) {}
-        $convList.classList.toggle('wrap-titles', next);
-        $convList.querySelectorAll('[data-wrap-toggle]').forEach(o => o.classList.toggle('is-active', next));
-      });
-    });
-    $convList.querySelectorAll('[data-role="details-toggle"]').forEach($detailsToggle => {
-      $detailsToggle.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const compactNext = !compactRowsOn();
-        try { localStorage.setItem('ccc-compact-rows', compactNext ? '1' : '0'); } catch (_) {}
-        $convList.classList.toggle('compact-rows', compactNext);
-        renderArchiveList(document.getElementById('convSearch')?.value || '');
-      });
-    });
     // Density re-renders rather than just toggling a class: grouping and
     // continuation folding happen while building the row list, so the DOM has
     // to be rebuilt. applyRowDensityToggles runs first so the classes are
