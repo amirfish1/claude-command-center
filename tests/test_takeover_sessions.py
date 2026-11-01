@@ -535,9 +535,25 @@ def test_observe_uses_one_request_local_owner_snapshot(core, tmp_path):
     assert len(calls) == 2  # Fresh owner state on the next observation.
 
 
+def test_dashboard_owned_acp_snapshot_stays_with_its_owner(core, tmp_path):
+    core._ACP_HARNESSES = {'glm': {}}
+    core._ACP_WORKER_HARNESSES = ('devin',)
+    core._control_plane_routes_engines = lambda: True
+    calls = []
+    def snapshot(engine, sid):
+        calls.append((engine, sid))
+        return {'loaded': True, 'status': 'idle', 'model': 'current-model'}
+    core._acp_session_snapshot = snapshot
+    broker.register_adapter(broker.Adapter('glm', read=reader(tmp_path)))
+    result = broker.observe('native-session', 'glm')
+    assert result['state'] == 'idle' and result['error'] is None
+    assert calls == [('glm', 'native-session')]
+
+
 def test_worker_snapshot_has_bounded_read_budget_and_failure_pauses(core, tmp_path, monkeypatch):
     import control_plane
     core._ACP_HARNESSES = {'devin': {}}
+    core._ACP_WORKER_HARNESSES = ('devin',)
     core._control_plane_routes_engines = lambda: True
     core._CONTROL_PLANE_ENGINE_CLIENT = SimpleNamespace(path=tmp_path / 'worker.sock', token_file=tmp_path / 'token')
     calls = []
@@ -560,6 +576,7 @@ def test_stalled_worker_socket_observation_returns_within_wt_budget(core, tmp_pa
     import tempfile
     import time
     core._ACP_HARNESSES = {'devin': {}}
+    core._ACP_WORKER_HARNESSES = ('devin',)
     core._control_plane_routes_engines = lambda: True
     broker.register_adapter(broker.Adapter('devin', read=reader(tmp_path)))
     with tempfile.TemporaryDirectory(prefix='ccc-observe-') as directory:

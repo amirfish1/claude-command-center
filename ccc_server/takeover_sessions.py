@@ -107,7 +107,8 @@ def _snapshot(engine, sid):
     if engine not in getattr(_core, '_ACP_HARNESSES', {}):
         return {}
     raw = _native_sid(engine, sid)
-    if getattr(_core, '_control_plane_routes_engines', lambda: False)():
+    if (engine in getattr(_core, '_ACP_WORKER_HARNESSES', ())
+            and getattr(_core, '_control_plane_routes_engines', lambda: False)()):
         # Snapshot is a read of already-owned state, never native initialization.
         # General engine calls allow 45 seconds; WT observation has a five-
         # second HTTP budget, so a stalled worker must instead pause takeover.
