@@ -2,7 +2,7 @@
 
 The hook is run as a real subprocess with HOME pointed at a temp dir, the same
 way Claude Code runs it: a held session's prompt gets a block decision, any
-other session's prompt passes with no output.
+other session's prompt passes with reply-chip guidance.
 """
 import json
 import os
@@ -21,6 +21,16 @@ def run_hook(home, sid):
                          capture_output=True, text=True, env=env, timeout=10)
     assert out.returncode == 0
     return out.stdout.strip()
+
+
+def assert_chip_context(output):
+    data = json.loads(output)
+    assert "decision" not in data
+    context = data["hookSpecificOutput"]
+    assert context["hookEventName"] == "UserPromptSubmit"
+    assert "NEXT_ACTION" in context["additionalContext"]
+    assert "categorical questions" in context["additionalContext"]
+    assert "preserve the exact question tag" in context["additionalContext"]
 
 
 def test_hold_release_round_trip(tmp_path):
@@ -57,15 +67,15 @@ def test_codex_hold_pauses_goal_and_release_resumes_only_what_it_paused(tmp_path
 
 def test_hook_blocks_only_held_sessions(tmp_path):
     state = tmp_path / ".claude" / "command-center"
-    assert run_hook(tmp_path, "held") == ""  # no holds file at all
+    assert_chip_context(run_hook(tmp_path, "held"))  # no holds file at all
     state.mkdir(parents=True)
     (state / "runaway-holds.json").write_text(json.dumps({"held": {"at": 1, "engine": "claude"}}))
     decision = json.loads(run_hook(tmp_path, "held"))
     assert decision["decision"] == "block" and "Hold" in decision["reason"]
-    assert run_hook(tmp_path, "other") == ""
+    assert_chip_context(run_hook(tmp_path, "other"))
     assert (state / "runaway-hold-blocks.log").read_text().split()[1] == "held"
     (state / "runaway-holds.json").write_text("{not json")
-    assert run_hook(tmp_path, "held") == ""  # a broken file never blocks
+    assert_chip_context(run_hook(tmp_path, "held"))  # a broken file never blocks
 
 
 def test_hook_is_registered_and_synced():
@@ -73,3 +83,12 @@ def test_hook_is_registered_and_synced():
     import server
     assert ("UserPromptSubmit", "user-prompt-submit.py", 5) in config_consent.CLAUDE_HOOK_SPECS
     assert "user-prompt-submit.py" in server.CCC_HOOK_SCRIPT_NAMES
+
+
+def test_hook_ignores_invalid_input(tmp_path):
+    for raw in ['not json', 'null', '[]', '{}']:
+        out = subprocess.run([sys.executable, str(HOOK)], input=raw,
+                             capture_output=True, text=True,
+                             env=dict(os.environ, HOME=str(tmp_path)), timeout=10)
+        assert out.returncode == 0
+        assert out.stdout == ""
