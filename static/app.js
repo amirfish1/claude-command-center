@@ -20944,7 +20944,7 @@
     const _menuBtn = nav.querySelector('[data-mobile-nav-menu]');
     if (_menuBtn) _menuBtn.classList.toggle('is-active',
       activeNavKey === 'jobs' || activeNavKey === 'queues' || activeNavKey === 'ask'
-        || activeNavKey === 'alltickets' || activeNavKey === 'archived');
+        || activeNavKey === 'archived');
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
       btn.classList.toggle('is-active', active);
