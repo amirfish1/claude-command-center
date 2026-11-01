@@ -33179,7 +33179,7 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 /* The chips share their line with the row speaker instead of filling it
    and pushing the speaker onto a line of its own (CCC-281). */
 .conv-quick-action-slot.is-decision { flex: 1 1 0; min-width: 0; flex-wrap: wrap; gap: 6px; }
-.conv-quick-action-slot.is-decision .conv-quick-action { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-quick-action-slot.is-decision .conv-quick-action { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
 .conv-row-read {
   display: inline-flex; align-items: center; justify-content: center;
   flex: 0 0 auto; min-width: 32px; min-height: 32px; margin-left: 4px;
@@ -33201,7 +33201,7 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) {
   display: flex !important; align-items: flex-end; gap: 4px;
 }
-#convList#convList .conv-item .conv-outcome:has(.conv-row-read) .conv-outcome-step {
+#convList#convList .conv-item .conv-outcome:has(.conv-row-read):not(:has(.conv-quick-action-slot.is-decision)) .conv-outcome-step {
   flex: 1 1 auto; min-width: 0; width: auto;
 }
 /* The inline step clamps at two lines; reserve both so a streamed message
@@ -33247,6 +33247,8 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
      basis clips them when a two-line title and the session footer share it. */
   .conv-item .wa-line2 { flex: 0 0 auto; flex-wrap: wrap; row-gap: 4px; }
   .conv-item .wa-preview { flex: 1 1 140px; min-width: min(100%, 140px); }
+  /* Put decision choices below the preview, with room for full labels. */
+  .conv-item .wa-line2:has(.conv-quick-action-slot.is-decision) .wa-preview { flex-basis: 100%; }
   .conv-item .wa-row-footer { flex: 0 0 auto; }
   .conv-item.is-ready-to-close .wa-body { height: auto; min-height: 128px; }
   .conv-item .wa-row-footer .conv-ready-archive { min-height: 32px; }

@@ -1,0 +1,1 @@
+- Keep decision buttons below their prompt and wrap long labels so phone users can read every choice beside the audio control.
