@@ -611,3 +611,43 @@ def test_owner_timeout_on_delivery_recheck_never_falls_back_to_native(core, monk
     monkeypatch.setattr(broker, '_snapshot', lambda *args: {'status': 'unknown', 'observation_error': 'timed out'})
     result = broker.deliver('devincli-native-session', 'must not start native writer', 'devin')
     assert result['code'] == 'session_unknown' and not result['queued']
+
+
+def test_devin_native_read_selects_complete_recent_messages_within_byte_budget(core, tmp_path, monkeypatch):
+    db = tmp_path / 'sessions.db'
+    con = sqlite3.connect(db)
+    con.executescript('CREATE TABLE sessions(id TEXT PRIMARY KEY,working_directory TEXT,model TEXT,agent_mode TEXT,last_activity_at INTEGER);'
+                      'CREATE TABLE message_nodes(row_id INTEGER PRIMARY KEY,session_id TEXT,chat_message TEXT,created_at INTEGER);')
+    con.execute('INSERT INTO sessions VALUES(?,?,?,?,?)', ('native-session', str(tmp_path), 'saved-model', 'ask', 1700000000))
+    con.executemany('INSERT INTO message_nodes VALUES(?,?,?,?)', [
+        (1, 'native-session', json.dumps({'role': 'assistant', 'content': 'x' * 4096}), 1700000000),
+        (2, 'native-session', json.dumps({'role': 'user', 'content': 'input'}), 1700000001),
+        (3, 'native-session', json.dumps({'role': 'assistant', 'content': 'full final reply'}), 1700000002),
+    ])
+    con.commit()
+    con.close()
+    def connect(source):
+        connection = sqlite3.connect(source)
+        connection.row_factory = sqlite3.Row
+        return connection
+    parsed_bytes = []
+    def parse(raw, created_at, seen, sidekick):
+        parsed_bytes.append(len(raw.encode()))
+        message = json.loads(raw)
+        return {'type': 'assistant' if message['role'] == 'assistant' else 'user_text', 'text': message['content']}
+    core._devin_cli_db_paths = lambda: [db]
+    core._devin_cli_connect = connect
+    core._devin_cli_parse_message_row = parse
+    core._devin_cli_session_live = lambda sid: False
+    monkeypatch.setattr(broker, 'MAX_BYTES', 512)
+    result = broker.observe('devincli-native-session', 'devin')
+    assert result['state'] == 'idle' and result['completed_text'] == 'full final reply'
+    assert len(parsed_bytes) == 2 and sum(parsed_bytes) <= 512
+    con = sqlite3.connect(db)
+    con.execute('INSERT INTO message_nodes VALUES(?,?,?,?)',
+                (4, 'native-session', json.dumps({'role': 'user', 'content': 'x' * 4096}), 1700000003))
+    con.commit()
+    con.close()
+    result = broker.observe('devincli-native-session', 'devin')
+    assert result['state'] == 'unknown' and not result['completed_text']
+    assert 'byte budget' in result['error']

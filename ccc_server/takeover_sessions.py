@@ -164,9 +164,27 @@ def _devin_read(sid, nonce):
             if row is None:
                 continue
             row = dict(row)
-            rows = con.execute('SELECT row_id, chat_message, created_at FROM message_nodes '
-                               'WHERE session_id=? ORDER BY row_id DESC LIMIT ?',
-                               (raw, MAX_EVENTS)).fetchall()
+            # Modern SQLite can obtain octet_length from the record header.
+            # Older builds compute sizes inside SQLite, still avoiding Python
+            # materialization of hundreds of multi-MB context snapshots.
+            size_expr = ('octet_length(chat_message)' if sqlite3.sqlite_version_info >= (3, 43, 0)
+                         else 'length(CAST(chat_message AS BLOB))')
+            candidates = con.execute(f'SELECT row_id,{size_expr} AS takeover_bytes '
+                                     'FROM message_nodes WHERE session_id=? ORDER BY row_id DESC LIMIT ?',
+                                     (raw, MAX_EVENTS)).fetchall()
+            selected, remaining = [], MAX_BYTES
+            for candidate in candidates:
+                size = candidate['takeover_bytes'] or 0
+                if size > remaining:
+                    break  # Keep a contiguous recent suffix, never skip newer input.
+                selected.append(candidate['row_id'])
+                remaining -= size
+            rows = []
+            if selected:
+                marks = ','.join('?' for _ in selected)
+                rows = con.execute('SELECT row_id,chat_message,created_at FROM message_nodes '
+                                   f'WHERE session_id=? AND row_id IN ({marks}) ORDER BY row_id DESC',
+                                   (raw, *selected)).fetchall()
             events, seen = [], set()
             for item in reversed(rows):
                 event = _core._devin_cli_parse_message_row(item['chat_message'], item['created_at'], seen, '')
@@ -178,7 +196,7 @@ def _devin_read(sid, nonce):
                 # prompt_history is independently persisted native input, not
                 # a CCC acceptance log or synthetic conversation bubble.
                 try:
-                    hit = con.execute('SELECT rowid, content FROM prompt_history WHERE session_id=? '
+                    hit = con.execute('SELECT rowid FROM prompt_history WHERE session_id=? '
                                       'AND is_shell=0 AND instr(content,?)>0 ORDER BY rowid DESC LIMIT 1',
                                       (raw, nonce)).fetchone()
                     if hit:
@@ -189,8 +207,11 @@ def _devin_read(sid, nonce):
             settings = {'model': row.get('model') or '', 'permission_mode': {
                 'bypass': 'dangerous', 'ask': 'auto', 'code': 'accept-edits',
             }.get(mode, mode), 'native_mode': mode}
-            return events, {'source': str(db), 'cwd': row.get('working_directory') or '',
-                            'settings': settings, 'activity_at': row.get('last_activity_at')}, proof
+            meta = {'source': str(db), 'cwd': row.get('working_directory') or '',
+                    'settings': settings, 'activity_at': row.get('last_activity_at')}
+            if candidates and not selected:
+                meta.update(state='unknown', error='Latest native message exceeds observation byte budget')
+            return events, meta, proof
         finally:
             con.close()
     return [], {}, None
@@ -686,8 +707,8 @@ def observe(session_id, engine='', nonce=''):
                       transcript=meta.get('source') or '', settings=settings, cwd=cwd,
                       source=meta.get('source') or 'native:' + engine,
                       activity_at=meta.get('activity_at'), state=_state(sid, engine, meta, events, snap))
-        if snap.get('observation_error'):
-            result['error'] = snap['observation_error']
+        if snap.get('observation_error') or meta.get('error'):
+            result['error'] = snap.get('observation_error') or meta['error']
         if events:
             result['cursor'] = str(events[-1].get('line') or len(events))
             result['activity_at'] = result['activity_at'] or events[-1].get('ts')
