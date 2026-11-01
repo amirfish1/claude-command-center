@@ -29,6 +29,15 @@ os.environ.setdefault(
 )
 
 
+# Archive projections materialize continuation topics in the ship index. Tests
+# must never contend with (or write fixture rows into) the running dashboard.
+# Set before importing server; focused index tests may override it themselves.
+os.environ.setdefault(
+    "CCC_SHIP_GRAPH_DB",
+    os.path.join(tempfile.mkdtemp(prefix="ccc-test-ship-"), "ship_graph.sqlite"),
+)
+
+
 @pytest.fixture(autouse=True)
 def _reset_ccc_ttl_caches():
     def _reset():
