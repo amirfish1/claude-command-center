@@ -55166,7 +55166,9 @@
       }
       if (type === 'claim') return _tlEvt('uxq-tl-claimed', _tlHead('Claimed', ev), '');
       if (type === 'progress') return _tlEvt('uxq-tl-progress', _tlHead('Progress', ev), _tlText(ev.text, 'uxq-tl-sub-note'));
-      if (type === 'block') return _tlEvt('uxq-tl-blocked', _tlHead('Blocked', ev), _tlText(ev.question));
+      if (type === 'block') return _tlEvt('uxq-tl-blocked', _tlHead('Blocked', ev),
+        window.CCCTicketProse && window.CCCTicketProse.renderBlocked
+          ? window.CCCTicketProse.renderBlocked(ev.question) : _tlText(ev.question));
       if (type === 'answer') return _tlEvt('uxq-tl-answer', _tlHead('Answered', ev), _tlText(ev.text, 'uxq-tl-sub-note uxq-tl-sub-answer'));
       if (type === 'comment') return _tlEvt('uxq-tl-comment', _tlHead('Comment', ev), _tlText(ev.text));
       if (type === 'reopen') return _tlEvt('uxq-tl-reopen', _tlHead('Reopened', ev), _tlText(ev.reason));
@@ -55479,6 +55481,11 @@
       + '</div>';
 
     document.body.appendChild(modal);
+    if (window.CCCTicketProse && window.CCCTicketProse.hydrateBlocked) {
+      const latestBlock = timeline.filter(ev => ev && ev.event === 'block').slice(-1)[0];
+      window.CCCTicketProse.hydrateBlocked(modal,
+        status === 'blocked' && item.needs_input && latestBlock ? String(latestBlock.question || '').trim() : '');
+    }
     _uxqLoadLinkedConversation(modal, ref);
     _uxqInitTicketZoom(modal);
 

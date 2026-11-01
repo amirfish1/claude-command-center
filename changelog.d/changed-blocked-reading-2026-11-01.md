@@ -1,0 +1,1 @@
+Blocked ticket messages now lead with the decision and offer a cached plain-English explanation of the proposal, tradeoff, and alternatives. Technical wording stays expandable, and the current question links directly to the reply box. Explanations use the optional Claude CLI with tools disabled; the original remains readable if it is unavailable.

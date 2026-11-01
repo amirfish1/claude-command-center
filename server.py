@@ -38814,6 +38814,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(reply_to_issue(num, comment_body, action, repo_path=ctx["repo_path"]))
             except RepoContextError as e:
                 self.send_json(e.as_payload(), e.status)
+        elif path == "/api/queue/explain-block":
+            from ccc_server.blocked_reading import explain
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length < 0 or length > 100000:
+                    self.send_json({"ok": False, "error": "Message too large"}, 413)
+                    return
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(payload, dict):
+                    raise ValueError("Expected an object")
+                binary = _resolve_claude_bin()
+                self.send_json(explain(
+                    payload.get("text"), claude_bin=binary.get("bin") if binary.get("available") else None,
+                    cache_dir=Path.home() / ".claude" / "command-center" / "blocked-reading",
+                    scratch_dir=_SCRATCH_DIR,
+                ))
+            except (ValueError, TypeError):
+                self.send_json({"ok": False, "error": "Invalid request"}, 400)
         elif re.match(r"^/api/issues/\d+/summarize-title$", path):
             num = path.split("/")[3]
             try:

@@ -151,6 +151,147 @@
     return out.join('');
   }
 
+  // Blocked notes are often a single paragraph ending in the actual ask.
+  // Rearrange explicit source boundaries only; never synthesize a decision.
+  function renderBlocked(text) {
+    var original = String(text || '').trim();
+    if (!original) return '';
+    var tag = original.match(/^\[Q\d+(?::[^\]]+)?\]\s*/);
+    var source = tag ? original.slice(tag[0].length) : original;
+    var ask = '';
+    var question = source.match(/(?:^|[.!]\s+|\n+)((?:Approve|Choose|Should|Can|Could|Would|Do|Which|What|How|May|Is|Are)\b[^\n]*\?)\s*$/i);
+    if (question) {
+      ask = question[1];
+      source = source.slice(0, question.index).trim() + (/^[.!]/.test(question[0]) ? question[0][0] : '');
+    }
+    var parts = source.split(/\b(Recommended|Recommendation|Alternatives|Tradeoff|Trade-off|Risk|Impact):\s*/i);
+    var sections = [];
+    for (var i = 1; i < parts.length; i += 2) {
+      sections.push({label: /recommend/i.test(parts[i]) ? 'Recommended approach' : parts[i], text: parts[i + 1].trim()});
+    }
+    function prose(value) {
+      // Sentence breaks add breathing room without changing words or numbers.
+      return render(value.replace(/;\s*(?=\([A-Z](?:\+[A-Z])*\)\s)/g, '\n\n')
+        .replace(/([.!?]) +(?=[A-Z][a-z])/g, '$1\n\n'));
+    }
+    var html = '<section class="tp-blocked" aria-label="Blocked message" data-block-source="' + escAttr(original) + '">'
+      + '<div class="tp-reading" aria-live="polite"><button type="button" class="tp-explain">Explain in plain English</button></div>'
+      + '<div class="tp-blocked-source">';
+    html += '<h3 class="tp-blocked-title">' + (ask ? 'The decision' : 'What’s blocking progress') + '</h3>';
+    if (ask) html += '<div class="tp-blocked-ask">' + decorate(esc(ask)) + '</div>';
+    if (tag) html += '<div class="tp-blocked-tag">' + esc(tag[0].trim()) + '</div>';
+    sections.filter(function (s) { return s.label === 'Recommended approach'; }).forEach(function (s) {
+      html += '<section class="tp-blocked-recommend"><h4>' + esc(s.label) + '</h4>' + prose(s.text) + '</section>';
+    });
+    if (parts[0].trim()) html += '<section><h4>' + (ask ? 'Why it paused' : 'Context') + '</h4>' + prose(parts[0].trim()) + '</section>';
+    sections.filter(function (s) { return s.label !== 'Recommended approach'; }).forEach(function (s) {
+      html += '<section><h4>' + esc(s.label) + '</h4>' + prose(s.text) + '</section>';
+    });
+    html += '<details class="tp-blocked-original"><summary>Original message</summary>' + render(original) + '</details></div></section>';
+    return html;
+  }
+
+  function renderReading(reading, source) {
+    var option = String(source || '').match(/\bRecommend(?:ed|ation):\s*\(([A-Z](?:\+[A-Z])*)\)/i);
+    function line(tag, cls, text) { return '<' + tag + ' class="' + cls + '">' + esc(text) + '</' + tag + '>'; }
+    var html = line('h3', 'tp-reading-question', reading.question)
+      + '<section><h4>The proposal' + (option ? ' (' + esc(option[1]) + ')' : '') + '</h4>' + line('p', '', reading.proposal) + '</section>'
+      + '<section class="tp-reading-consequence"><h4>What changes for you</h4>' + line('p', '', reading.consequence) + '</section>'
+      + '<section><h4>Why it paused</h4>' + line('p', '', reading.context) + '</section>';
+    if (Array.isArray(reading.alternatives) && reading.alternatives.length) {
+      html += '<section><h4>Other options</h4><ul class="tp-reading-options">'
+        + reading.alternatives.map(function (option) {
+          return '<li><strong>' + esc(option.label) + '</strong><p>' + esc(option.explanation) + '</p></li>';
+        }).join('') + '</ul></section>';
+    }
+    return html + '<p class="tp-reading-note">AI explanation · Check the original for exact wording.</p>';
+  }
+
+  function hydrateBlocked(root, currentQuestion) {
+    var cards = Array.from(root.querySelectorAll('.tp-blocked'));
+    cards.forEach(function (card) {
+      var button = card.querySelector('.tp-explain');
+      var slot = card.querySelector('.tp-reading');
+      var source = card.getAttribute('data-block-source');
+      var busy = false;
+      async function explain() {
+        if (busy || !card.isConnected) return;
+        busy = true;
+        button.disabled = true;
+        button.textContent = 'Making this easier to read…';
+        var abort = new AbortController();
+        var timer = setTimeout(function () { abort.abort(); }, 65000);
+        try {
+          var response = await fetch('/api/queue/explain-block', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({text: source}), signal: abort.signal
+          });
+          var data = await response.json();
+          if (!response.ok || !data.ok || !data.reading) throw new Error(data.error || 'Explanation unavailable.');
+          if (!card.isConnected) return;
+          slot.innerHTML = renderReading(data.reading, source);
+          var sourceView = card.querySelector('.tp-blocked-source');
+          var details = document.createElement('details');
+          details.className = 'tp-reading-source';
+          var summary = document.createElement('summary');
+          summary.textContent = 'Read the original & technical details';
+          details.appendChild(summary);
+          sourceView.replaceWith(details);
+          details.appendChild(sourceView);
+          var tag = source.match(/^\[Q\d+(?::[^\]]+)?\]/);
+          if (tag) {
+            var tagLine = document.createElement('p');
+            tagLine.className = 'tp-blocked-tag';
+            tagLine.textContent = tag[0];
+            slot.insertBefore(tagLine, slot.querySelector('section'));
+          }
+          if (source === currentQuestion) {
+            var reply = document.createElement('button');
+            reply.type = 'button'; reply.className = 'tp-reading-reply';
+            reply.textContent = 'Write your reply';
+            reply.addEventListener('click', function () {
+              var input = root.querySelector('.uxq-answer-input');
+              if (input) { input.scrollIntoView({block: 'center', behavior: 'smooth'}); input.focus({preventScroll: true}); }
+            });
+            if (root.querySelector('.uxq-answer-input')) {
+              slot.insertBefore(reply, slot.querySelector('section'));
+              var hint = document.createElement('p');
+              hint.className = 'tp-reply-hint';
+              hint.textContent = /\bApprove\b[^?]*\?\s*$/i.test(source)
+                ? 'Reply yes or no, or suggest another option.'
+                : 'Reply with your choice or a short answer.';
+              slot.insertBefore(hint, slot.querySelector('section'));
+            }
+          }
+        } catch (error) {
+          if (!card.isConnected) return;
+          button.disabled = false; button.textContent = 'Try plain English again';
+          var message = slot.querySelector('.tp-reading-error') || document.createElement('p');
+          message.className = 'tp-reading-error';
+          message.textContent = 'The explanation isn’t available right now. You can still read the full message below.';
+          slot.appendChild(message);
+        } finally { clearTimeout(timer); busy = false; }
+      }
+      button.addEventListener('click', explain);
+      // Historical notes stay opt-in; only the current block gets one automatic
+      // explanation when brought into view. No calls from a hidden timeline.
+      if (source === currentQuestion && typeof IntersectionObserver !== 'undefined') {
+        var observer = new IntersectionObserver(function (entries) {
+          if (!root.isConnected) { observer.disconnect(); return; }
+          if (entries.some(function (entry) { return entry.isIntersecting; })) {
+            observer.disconnect(); explain();
+          }
+        });
+        observer.observe(card);
+        // Disconnect when the modal closes, even if this note was never seen.
+        var removal = new MutationObserver(function () {
+          if (!root.isConnected) { observer.disconnect(); removal.disconnect(); }
+        });
+        removal.observe(root.parentNode, {childList: true});
+      }
+    });
+  }
+
   // ------------------------------------------------------------ body render --
   // Turns a raw ticket body into readable HTML: hidden machine comments, a
   // key/value meta strip (Studio: / Evidence time: …), then paragraphs,
@@ -311,6 +452,9 @@
     esc: esc,
     cleanForTitle: cleanForTitle,
     render: render,
+    renderBlocked: renderBlocked,
+    renderReading: renderReading,
+    hydrateBlocked: hydrateBlocked,
     renderTranscript: renderTranscript,
   };
 })();
