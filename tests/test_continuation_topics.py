@@ -1,5 +1,6 @@
 """Durable continuation prefixes without loaded ancestors or parent guessing."""
 import sqlite3
+from collections import OrderedDict
 
 import pytest
 
@@ -265,3 +266,36 @@ def test_cold_native_archived_root_title_uses_one_exact_lookup(store, monkeypatc
     topics.attach_topics(rows, names={})
     assert calls == [root]
     assert all(item['continuation_topic_title'] == 'NATIVE TOPIC' for item in rows)
+
+
+def test_revision_invalidates_sidebar_caches_only_on_changes(store):
+    before = topics.revision()
+    topics.attach_topics([row('root-session', 'TOPIC')], names={})
+    established = topics.revision()
+    assert established == before
+    topics.attach_topics([row('root-session', 'Generated task')], names={})
+    assert topics.revision() == established
+    topics.record_continuation('root-session', 'child-session')
+    continued = topics.revision()
+    assert continued == established
+    topics.rename_topic('root-session', 'RENAMED')
+    assert topics.revision() > continued
+
+
+def test_fresh_sidebar_projection_resolves_topic_after_live_names(store, monkeypatch):
+    topics.record_continuation('root-session', 'child-session')
+    monkeypatch.setattr(server, '_archive_list_title_overlays', lambda: {
+        'child-session': {'task_title': 'Current task'}})
+    monkeypatch.setattr(server, '_load_session_name_overrides', lambda: {'root-session': 'PROJECT: original'})
+    rows = server._archive_list_project_rows([row('child-session', 'Current task')])
+    assert rows[0]['continuation_topic_title'] == 'PROJECT'
+    assert rows[0]['continuation_topic_session_id'] == 'root-session'
+    assert rows[0]['task_title'] == 'Current task'
+
+
+def test_topic_revision_rejects_delta_even_when_renamed_root_is_unloaded(monkeypatch):
+    monkeypatch.setattr(server, '_ARCHIVE_DELTA_CTX_HIST', OrderedDict())
+    monkeypatch.setattr(server._session_graph, 'parent_snapshot', lambda: {})
+    server._archive_delta_ctx_remember('before', 'scope', 'all', {}, {}, {}, 1)
+    server._archive_delta_ctx_remember('after', 'scope', 'all', {}, {}, {}, 2)
+    assert server._archive_delta_ctx_changed_sids('before', 'after') is None

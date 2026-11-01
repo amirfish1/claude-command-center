@@ -56,3 +56,34 @@ test('cyclic lineage terminates and unrelated worker parents do not rename a tas
   assert.equal(typeof load([a, b])(a).rawTitle, 'string');
   assert.equal(load([a])({ parent_session_id: 'a', ai_title: 'Verify results' }).rawTitle, 'Verify results');
 });
+
+
+test('server-persisted topic survives missing or archived origin rows', () => {
+  const title = load([]);
+  const c = { session_id: 'latest', continued_from_session_id: 'unloaded-origin',
+    ai_title: 'Repair reply choices', continuation_topic_title: 'Workspace design',
+    continuation_topic_session_id: 'root' };
+  assert.equal(title(c).rawTitle, 'Workspace design: Repair reply choices');
+  c.ai_title = 'Workspace design: Repair reply choices';
+  assert.equal(title(c).rawTitle, 'Workspace design: Repair reply choices');
+  c.ai_title = 'You are continuing a task from earlier';
+  c.task_title = 'Repair status';
+  assert.equal(title(c).rawTitle, 'Workspace design: Repair status');
+});
+
+test('the topic before the colon remains stable across later legs', () => {
+  const root = { session_id: 'root', display_name: 'Workspace design: First task', name_overridden: true };
+  const c = { session_id: 'latest', continued_from_session_id: 'root', ai_title: 'Second task' };
+  assert.equal(load([root])(c).rawTitle, 'Workspace design: Second task');
+});
+
+ test('a durable topic remains canonical when the latest task is missing or identical', () => {
+  const title = load([]);
+  const c = {session_id: 'latest', continued_from_session_id: 'unloaded',
+    continuation_topic_title: 'Workspace design'};
+  assert.equal(title(c).rawTitle, 'Workspace design');
+  c.ai_title = 'You are continuing a task from earlier';
+  assert.equal(title(c).rawTitle, 'Workspace design');
+  c.ai_title = 'Workspace design';
+  assert.equal(title(c).rawTitle, 'Workspace design');
+});

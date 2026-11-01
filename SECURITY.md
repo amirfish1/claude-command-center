@@ -64,6 +64,16 @@ remote listener, keychain integration or cloud/federation forwarding is installe
 
 Spawn logs under `<repo>/.claude/logs/spawn-*.log` capture the full prompt and Claude output. If Claude reads a file containing a token or credential, it ends up in that log. The `.gitignore` excludes `.claude/logs/`, but the files are local and readable by other users on the same machine. `chmod 700` the logs directory if that's a concern.
 
+## Session-row reports
+
+The row report button saves a local evidence bundle with the visible row,
+reply choices, browser metadata, a row image when available, and an independently
+read transcript tail. Bundles live in the command-center state directory under
+`decision-reports/` with owner-only permissions; screenshots use the existing
+local annotation store. These files can contain private conversation content.
+The `DECISIONS-FIX` queue uses the local file backend and points workers at those
+files. Reporting never sends a reply to the reported conversation.
+
 ## Reporting a vulnerability
 
 For non-sensitive issues, open a GitHub issue. For anything that could enable arbitrary code execution, credential theft, or escape the localhost boundary, **do not file a public issue**. Email the maintainer (see `LICENSE` for the contact handle) with:

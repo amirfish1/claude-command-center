@@ -5230,13 +5230,15 @@
     }
     const topicRow = named || origin;
     const topic = rowLocalTitle(topicRow);
-    const topicTitle = String(topic.rawTitle || '').trim();
-    const taskTitle = String(c.ai_title || c.task_title || local.rawTitle || '').trim();
+    const durableTopic = String(c.continuation_topic_title || '').split(':', 1)[0].trim();
+    const topicTitle = durableTopic || String(topic.rawTitle || '').split(':', 1)[0].trim();
+    const taskTitle = [c.ai_title, c.task_title, local.rawTitle].map(t => String(t || '').trim())
+      .find(t => t && t !== '(untitled)' && !isContinuationBoilerplateTitle(t)) || '';
     if (!topicTitle || topicTitle === '(untitled)' || isContinuationBoilerplateTitle(topicTitle)) return local;
-    if (!taskTitle || taskTitle === '(untitled)' || isContinuationBoilerplateTitle(taskTitle)) return topic;
+    if (!taskTitle) return { rawTitle: topicTitle, titleSource: topic.titleSource };
     const norm = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
-    if (norm(taskTitle) === norm(topicTitle)) return topic;
-    if (norm(taskTitle).startsWith(norm(topicTitle) + ':')) return { ...local, titleSource: topic.titleSource };
+    if (norm(taskTitle) === norm(topicTitle)) return { rawTitle: topicTitle, titleSource: topic.titleSource };
+    if (norm(taskTitle).startsWith(norm(topicTitle) + ':')) return { rawTitle: taskTitle, titleSource: topic.titleSource };
     return { rawTitle: topicTitle + ': ' + taskTitle, titleSource: topic.titleSource,
       topicTitle, taskTitle };
   }
@@ -17692,6 +17694,130 @@
   }, true);
   const _rowQuickActionSending = new Set();
   const _rowQuickActionFeedback = new Map();
+  const _rowDecisionReportSending = new Set();
+  function rowDecisionReportButton(c) {
+    if (!c || c.pending_spawn || c.backlog_type === 'github' || c.source === 'backlog'
+        || c.source === 'github_pr' || !/^[\w.:-]{1,160}$/.test(String(c.session_id || c.id || ''))) return '';
+    return '<button type="button" class="conv-decision-report-btn" data-role="report-decision"'
+      + ' title="Report wrong status or missing choices" aria-label="Report wrong status or missing choices">'
+      + '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">'
+      + '<path d="M17 3h4v11h-4zM17 4H7a2 2 0 0 0-2 1.6L3.3 13A2 2 0 0 0 5.2 15H10l-1 4.5a2 2 0 0 0 3.5 1.7L17 14z"/></svg></button>';
+  }
+  function rowDecisionReportSnapshot(row, c) {
+    const visible = selector => [...row.querySelectorAll(selector)].filter(el => el.getClientRects().length);
+    const actions = visible('[data-role="quick-action"]').map(btn => ({
+      label: btn.textContent.trim(), reply: (btn.title || '').replace(/^Send to this session: /, ''),
+      disabled: btn.disabled,
+    }));
+    const r = row.getBoundingClientRect();
+    const rect = { x: r.x, y: r.y, width: r.width, height: r.height };
+    const fresh = _ultraFresh.entries.get(String(c.session_id || c.id));
+    const fields = ['session_id', 'id', 'engine', 'source', 'node_id', 'node_name', 'ref',
+      'display_name', 'ai_title', 'task_title', 'name_overridden', 'session_state', 'state', 'row_data_unavailable',
+      'last_event_type', 'modified', 'mtime', 'sidecar_ts', 'sidecar_status',
+      'needs_approval', 'question_waiting', 'question_text', 'question_options',
+      'continued_from_session_id', 'continuation_topic_title', 'continuation_topic_session_id', 'parent_session_id', 'archived', 'trashed'];
+    const clientState = Object.fromEntries(fields.filter(k => c[k] !== undefined).map(k => [k, c[k]]));
+    clientState.row_outcome = rowOutcomeView(c);
+    clientState.live_overlay = fresh ? { at: fresh.at, userAt: fresh.userAt, sendAt: fresh.sendAt,
+      line: fresh.line, sessionState: fresh.sessionState } : null;
+    return {
+      session_id: String(c.session_id || c.id), url: location.href,
+      visible_row: {
+        title: visible('.wa-title, .conv-title').map(el => el.textContent.trim()).join(' | ') || rowRawTitle(c).rawTitle,
+        text: row.innerText.slice(0, 24000),
+        outcome: visible('.conv-outcome, .wa-preview').map(el => el.innerText.trim()),
+        labels: visible('.conv-outcome-step, .wa-explanation-label').map(el => ({
+          label: el.dataset.label || el.textContent.trim(),
+          before: getComputedStyle(el, '::before').content,
+        })),
+        actions, lifecycle_group: row.dataset.lifecycleGroup || '', class_name: row.className,
+      },
+      client_state: clientState,
+      latest_assistant_text: String((fresh && fresh.text) || c.last_assistant_text || c.last_assistant_preview || '').slice(0, 160000),
+      rect, screen: annEstimateScreenRect(rect),
+      viewport: { width: innerWidth, height: innerHeight, device_pixel_ratio: devicePixelRatio,
+        browser: navigator.userAgent, captured_at: new Date().toISOString() },
+      native_app: typeof isCccMacApp === 'function' && isCccMacApp(),
+    };
+  }
+  function captureRowDecisionScreenshot(row, rect) {
+    return annCaptureDomRegionB64(rect, row, row, clone => {
+      // Freeze reply-chip widths so SVG serialization cannot reflow them,
+      // and materialize status pseudo-elements that live outside the clone.
+      const originals = row.querySelectorAll('.conv-quick-action, .conv-outcome-step');
+      const copies = clone.querySelectorAll('.conv-quick-action, .conv-outcome-step');
+      originals.forEach((el, i) => {
+        const copy = copies[i];
+        if (!copy) return;
+        if (el.classList.contains('conv-quick-action')) {
+          const box = el.getBoundingClientRect();
+          if (!box.width) return;
+          for (const prop of ['width', 'min-width', 'max-width', 'inline-size', 'min-inline-size', 'max-inline-size']) {
+            copy.style.setProperty(prop, box.width + 'px', 'important');
+          }
+          copy.style.setProperty('height', box.height + 'px', 'important');
+          copy.style.setProperty('box-sizing', 'border-box', 'important');
+          copy.style.setProperty('flex-shrink', '0', 'important');
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          if (range.getClientRects().length === 1) {
+            copy.style.setProperty('white-space', 'nowrap', 'important');
+          }
+        } else {
+          const before = getComputedStyle(el, '::before');
+          if (!before.content || before.content === 'none' || before.content === 'normal') return;
+          let text;
+          try { text = JSON.parse(before.content); } catch (_) { text = (el.dataset.label || '') + ': '; }
+          const label = document.createElement('span');
+          label.textContent = text;
+          label.style.color = before.color; label.style.fontWeight = before.fontWeight;
+          copy.prepend(label);
+        }
+      });
+      let parent = row;
+      while (parent) {
+        const bg = getComputedStyle(parent).backgroundColor;
+        if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
+          clone.style.backgroundColor = bg; break;
+        }
+        parent = parent.parentElement;
+      }
+    });
+  }
+  document.addEventListener('click', async ev => {
+    const btn = ev.target.closest && ev.target.closest('[data-role="report-decision"]');
+    if (!btn) return;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+    const row = btn.closest('.conv-item[data-session-id]');
+    const sid = row && row.dataset.sessionId;
+    if (!sid || _rowDecisionReportSending.has(sid)) return;
+    const base = _ultraFreshRow(sid) || { session_id: sid, row_data_unavailable: true };
+    // Stale list data is itself reportable; the DOM still anchors the report.
+    // Capture the displayed DOM and its data before any async refresh or send.
+    const payload = rowDecisionReportSnapshot(row, base);
+    _rowDecisionReportSending.add(sid);
+    btn.disabled = true; btn.setAttribute('aria-busy', 'true');
+    try {
+      payload.screenshot_b64 = await Promise.race([
+        captureRowDecisionScreenshot(row, payload.rect).catch(() => null),
+        new Promise(resolve => setTimeout(() => resolve(null), 1800)),
+      ]);
+      if (!payload.screenshot_b64) payload.screenshot_warning = 'Browser row screenshot was unavailable; structured row and message evidence were captured.';
+      const response = await fetch('/api/decisions-fix/report', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok || !result.ref) throw new Error(result.error || 'Could not file the report');
+      showOpToast('Decisions Fix: reported as ' + result.ref + (result.screenshot_warning ? ' (screenshot unavailable)' : ''), 'success');
+      btn.title = 'Reported as ' + result.ref + ' — click to report another mismatch';
+    } catch (error) {
+      showOpToast(String(error.message || error), 'error');
+    } finally {
+      _rowDecisionReportSending.delete(sid);
+      btn.disabled = false; btn.removeAttribute('aria-busy');
+    }
+  }, true);
   function sessionQuickAction(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || typeof value.label !== 'string' || value.label.length > 24 || !/^\p{L}+(?: \p{L}+){0,2}$/u.test(value.label)
@@ -41252,7 +41378,7 @@
           : _waAvatarHtml(c, _waTitle, _childLaneRow))
         + '<div class="wa-body">'
         +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
-        +     waLaneHtml + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
+        +     waLaneHtml + rowDecisionReportButton(c) + '<span class="wa-time">' + escapeHtml(_waTimeLabel(_relTs || c.modified))
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Ticket identity stays inside the avatar.
@@ -41320,6 +41446,7 @@
             // Both share the same screen real estate, so the row stays
             // narrow and there's no per-row layout shift between hover
             // states (CSS uses `position: absolute` for one of them).
+            + rowDecisionReportButton(c)
             + '<span class="conv-row-end">'
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             +   '<span class="conv-row-hover-slot">'
@@ -84012,7 +84139,7 @@
   // `root` is the already-chosen context element. Callers pass the widened
   // context rect, so re-deriving the root from it would climb another level
   // (e.g. toolbar -> whole conversation pane) and clone thousands of nodes.
-  function annCaptureDomRegionB64(rect, element, root) {
+  function annCaptureDomRegionB64(rect, element, root, prepareClone) {
     if (!rect || rect.width < 2 || rect.height < 2) return Promise.resolve(null);
     root = root || annContextElement(element, rect) || element;
     if (!root || !root.cloneNode || !root.getBoundingClientRect) return Promise.resolve(null);
@@ -84026,6 +84153,7 @@
     const offsetY = rect.y - rootRect.top;
     const clone = root.cloneNode(true);
     annInlineCloneStyles(root, clone);
+    if (prepareClone) prepareClone(clone);
     const xhtmlNs = 'http://www.w3.org/1999/xhtml';
     const svgNs = 'http://www.w3.org/2000/svg';
     const wrap = document.createElementNS(xhtmlNs, 'div');

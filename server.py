@@ -16133,11 +16133,13 @@ def _archive_list_delta_state(key, rows, window, from_cache):
     # change invalidates every older token (the client gets a full body).
     # Overlay rows stay out: every delta resends them whole.
     titles = _archive_list_title_overlays()
+    from ccc_server import continuation_topics
+    topic_revision = continuation_topics.revision()
     ctx = hashlib.sha1(json.dumps(
-        [key, window, _session_graph.parent_revision(), resumes, ideas, titles],
+        [key, window, _session_graph.parent_revision(), resumes, ideas, titles, topic_revision],
         sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:12]
-    _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles)
+    _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles, topic_revision)
     ovl = hashlib.sha1(json.dumps(
         extra, sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:8] if extra else "0"
@@ -16168,13 +16170,13 @@ def _archive_delta_ctx_fingerprints(mapping):
     return out
 
 
-def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles=None):
+def _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles=None, topic_revision=0):
     with _archive_delta_ctx_lock:
         if ctx in _ARCHIVE_DELTA_CTX_HIST:
             _ARCHIVE_DELTA_CTX_HIST.move_to_end(ctx)
             return
     entry = {
-        "scope": (key, window),
+        "scope": (key, window, topic_revision),
         "parents": _session_graph.parent_snapshot(),
         "resumes": _archive_delta_ctx_fingerprints(resumes),
         "ideas": _archive_delta_ctx_fingerprints(ideas),
@@ -16505,6 +16507,7 @@ _ARCHIVE_LIST_FIELDS = (
     "stale_tool_threshold_s", "stale_tool_queued_input", "subagent_count",
     "subagent_in_flight_count", "subagent_recent", "workflows", "session_state", "goal",
     "goal_status", "parent_session_id", "continued_from_session_id", "idea_ticket",
+    "continuation_topic_title", "continuation_topic_session_id", "continuation_topic_root_session_id",
     "hermes_parent_session_id", "spawned_via", "spawn_caller", "runtime",
     "hermes_continued_from", "hermes_child_session_ids",
     "hermes_lineage_session_ids", "hermes_lineage_count", "hermes_is_parent",
@@ -16675,6 +16678,10 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
     titles = _archive_list_title_overlays()
     for out in projected:
         out.update(titles.get(out.get("session_id") or out.get("id"), {}))
+    # Resolve topic identity independently of which ancestors are loaded in
+    # this response, after applying the current explicit title overrides.
+    from ccc_server import continuation_topics
+    continuation_topics.attach_topics(projected)
     # Engines without a Stop hook (Codex etc.) get their ticket step here,
     # gated to pending UI spawns and children of ticketed sessions.
     try:
@@ -33380,6 +33387,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server import free_router
             if free_router.handle_api_post(self, path):
                 return
+        if path == "/api/decisions-fix/report":
+            # Local evidence only; inherits the POST origin/PIN checks above.
+            from ccc_server import decision_reports
+            decision_reports.handle_post(self)
+            return
         if path == "/api/auto-rerun":
             # Toggle a session's "rerun once if it dies" opt-in (same-origin
             # enforced at the top of do_POST; rules are host-file only).
@@ -42653,7 +42665,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # other every poll.
         # A new family edge changes the projection even if transcripts and
         # the archive snapshot are unchanged. Preserve replay until it does.
-        body_key = (cache_key, window, bool(from_cache), snap_ver, _session_graph.parent_revision())
+        from ccc_server import continuation_topics
+        body_key = (cache_key, window, bool(from_cache), snap_ver, _session_graph.parent_revision(),
+                    continuation_topics.revision())
         raw = gzip_body = etag_val = None
 
         def _cached_body():

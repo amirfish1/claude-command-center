@@ -1,0 +1,1 @@
+Session rows now have a one-click mismatch report button that files a Decisions Fix ticket with the observed status and choices, an independent transcript snapshot, session identity, and screenshot evidence when available.

@@ -28,7 +28,15 @@ def _connection(conn=None):
         sid TEXT PRIMARY KEY, origin TEXT NOT NULL DEFAULT '',
         root_sid TEXT NOT NULL DEFAULT '', topic_title TEXT NOT NULL DEFAULT '',
         user_named INTEGER NOT NULL DEFAULT 0)''')
+    conn.execute('CREATE TABLE IF NOT EXISTS continuation_topic_meta (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL)')
     return conn
+
+
+def revision():
+    """Indexed cross-process cache token; changes only when topic data changes."""
+    conn = _connection()
+    row = conn.execute('SELECT revision FROM continuation_topic_meta WHERE id=1').fetchone()
+    return row[0] if row else 0
 
 
 @contextmanager
@@ -106,11 +114,16 @@ class _Batch:
 
     def put(self, sid, origin, root, title, user_named=0):
         value = (origin, root, title, user_named)
-        if self.record(sid) != value:
+        previous = self.record(sid)
+        if previous != value:
             self.conn.execute('''INSERT INTO continuation_topics VALUES (?,?,?,?,?)
                 ON CONFLICT(sid) DO UPDATE SET origin=excluded.origin,
                 root_sid=excluded.root_sid, topic_title=excluded.topic_title,
                 user_named=excluded.user_named''', (sid, *value))
+            # New rows already change the archive snapshot. Invalidate cached
+            # projections when an established root/title is corrected or renamed.
+            if previous != ('', '', '', 0) and previous[1:] != value[1:]:
+                self.conn.execute('INSERT INTO continuation_topic_meta VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET revision=revision+1')
             self.records[sid] = value
 
     def indexed_origin(self, sid):
