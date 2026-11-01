@@ -41446,8 +41446,8 @@
             // Both share the same screen real estate, so the row stays
             // narrow and there's no per-row layout shift between hover
             // states (CSS uses `position: absolute` for one of them).
-            + rowDecisionReportButton(c)
             + '<span class="conv-row-end">'
+            + rowDecisionReportButton(c)
             +   '<span class="conv-rel" data-role="rel" title="Last activity">' + escapeHtml(rel) + '</span>'
             +   '<span class="conv-row-hover-slot">'
             +     quickTrashBtn

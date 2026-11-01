@@ -33941,3 +33941,14 @@ body:has(#settingsModal.open) #ideaTicketsIntroBanner { visibility:hidden; point
   .conv-decision-report-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .conv-decision-report-btn:disabled { opacity: .35; cursor: progress; }
   .wa-line1 > .conv-decision-report-btn { flex-basis: 32px; width: 32px; height: 32px; margin-block: -4px; }
+
+  /* Keep the report inside the existing edge cell in flex and grid rows. */
+  #convList#convList .conv-item .conv-main-row > .conv-row-end:has(> .conv-decision-report-btn) {
+    box-sizing: border-box; padding-left: 30px;
+    flex-basis: 64px; width: 64px; min-width: 64px; max-width: 64px;
+  }
+  .conv-row-end > .conv-decision-report-btn {
+    position: absolute; left: 0; top: 50%; transform: translateY(-50%); z-index: 9;
+  }
+
+  .conv-item.is-actions-open .conv-row-end > .conv-decision-report-btn { visibility: hidden; }
