@@ -36,6 +36,7 @@ def test_multihop_survives_missing_ancestors_and_database_reopen(store):
     topics.attach_topics([latest], conn=fresh, names={})
     assert latest['continuation_topic_title'] == 'PROJECT DESIGN'
     assert latest['continuation_topic_root_session_id'] == 'root-session'
+    assert latest['continuation_topic_session_id'] == 'root-session'
     fresh.close()
 
 
@@ -48,6 +49,7 @@ def test_archived_unloaded_root_uses_index_and_cached_metadata(store, monkeypatc
     topics.attach_topics([latest], names={})
     assert latest['continuation_topic_title'] == 'RESEARCH'
     assert latest['continuation_topic_root_session_id'] == 'root-session'
+    assert latest['continuation_topic_session_id'] == 'root-session'
 
 
 def test_root_user_rename_wins_over_snapshots_and_auto_titles(store, monkeypatch):
@@ -75,6 +77,7 @@ def test_worker_parent_is_not_a_continuation_and_child_rename_is_local(store):
     worker['parent_session_id'] = 'root-session'
     topics.attach_topics([row('root-session', 'TOPIC: task'), worker], names={})
     assert 'continuation_topic_title' not in worker
+    assert 'continuation_topic_session_id' not in worker
     topics.record_continuation('root-session', 'child-session')
     topics.rename_topic('child-session', 'LOCAL: rename')
     child = row('child-session')
@@ -246,6 +249,7 @@ def test_durable_chain_outlives_legacy_walk_bound(store):
     topics.attach_topics([latest], names={})
     assert latest['continuation_topic_title'] == 'TOPIC'
     assert latest['continuation_topic_root_session_id'] == 'root-session'
+    assert latest['continuation_topic_session_id'] == 'root-session'
     assert len([q for q in queries if q.startswith('SELECT ')]) <= 4
 
 

@@ -171,7 +171,7 @@ class _Batch:
 
 
 def attach_topics(rows, *, conn=None, names=None):
-    """Add continuation_topic_title/root_session_id to explicit continuations.
+    """Add continuation_topic_title and root identity to explicit continuations.
 
     Empty title means the root title is not known yet. Existing metadata is
     retried on later loads; generated child titles never change the topic.
@@ -198,9 +198,11 @@ def attach_topics(rows, *, conn=None, names=None):
                     batch.put(root, '', root, updated, root_record[3])
                 row['continuation_topic_title'] = updated or title
                 row['continuation_topic_root_session_id'] = root
+                row['continuation_topic_session_id'] = root
             else:
                 row.pop('continuation_topic_title', None)
                 row.pop('continuation_topic_root_session_id', None)
+                row.pop('continuation_topic_session_id', None)
 
 
 def record_continuation(origin, sid, *, title='', conn=None):

@@ -1,1 +1,1 @@
-- Persist continuation topic titles independently of loaded ancestor rows, preserving the root topic across multiple continuations and generated task-title updates while honoring explicit root renames.
+- Persist continuation topic titles and expose stable root session identity independently of loaded ancestor rows, preserving the root topic across multiple continuations and generated task-title updates while honoring explicit root renames.
