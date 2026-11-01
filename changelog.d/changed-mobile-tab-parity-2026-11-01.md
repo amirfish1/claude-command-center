@@ -1,0 +1,1 @@
+Phone layout now shows the same sidebar tab bar as desktop (All / Features / Small bugs / Workers / Jobs / Other), scrollable sideways, and the bottom-nav More menu gains All and Other destinations — every tab is reachable on mobile.

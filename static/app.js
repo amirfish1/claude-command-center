@@ -20824,7 +20824,7 @@
   // ── Mobile bottom nav ──
   // One #mobileBottomNav for both Simple and Advanced. Simple drives
   // Home/Tasks/Helpers/More. Advanced is Coding / Workers / Queues / Ask.
-  // Coding/Workers/Queues reuse the sidebar tab bar (data-conv-tab);
+  // The nav destinations reuse the sidebar tab bar (data-conv-tab);
   // Ask shares the existing rail pane, preserving its draft and history.
   var _coreApp = 'sessions';
   const _sessionsDocumentTitle = document.title;
@@ -20879,9 +20879,9 @@
   }
   function _activateSidebarTabFromMobileNav(targetTab) {
     // Reuse the existing tab bar's own click handler by clicking its
-    // matching button when present. Coding/Workers/Queues still work
-    // when that button is missing from the bar (separate-tabs pref, or
-    // the bar is hidden on mobile) — same localStorage + host + render
+    // matching button when present. Destinations still work when that
+    // button is missing from the bar (separate-tabs pref, or a tab that
+    // only renders when non-empty) — same localStorage + host + render
     // sequence the tab bar uses.
     const existingTabBtn = document.querySelector('[data-conv-tab="' + targetTab + '"]');
     if (existingTabBtn) {
@@ -20918,23 +20918,16 @@
       } else if (typeof _simpleHomeShowing !== 'undefined' && _simpleHomeShowing
         && document.getElementById('simpleHome')) activeNavKey = 'home';
     } else {
-      // Phone Advanced has no Active/Other. If the stored tab is one of
-      // those, land on Coding so the hidden top bar cannot strand us.
-      if (_coreApp !== 'queues' && tab !== 'coding' && tab !== 'workers' && tab !== 'queues' && tab !== 'jobs' && tab !== 'ideas' && tab !== 'smallbugs' && tab !== 'alltickets') {
-        try { localStorage.setItem('ccc-sidebar-tab', 'coding'); } catch (_) {}
-        if (document.querySelector('[data-role="conv-tab-bar"]')) {
-          _activateSidebarTabFromMobileNav('coding');
-          return;
-        }
-        tab = 'coding';
-      }
+      // The in-list tab bar is visible on phones, so every sidebar tab is
+      // reachable — no remapping of stored tabs the bottom nav doesn't
+      // cover (All / Other / Active).
       activeNavKey = _coreApp === 'queues' ? 'q2'
-        : (tab === 'workers' ? 'workers' : tab === 'queues' ? 'queues' : tab === 'jobs' ? 'jobs'
-          : tab === 'smallbugs' ? 'smallbugs' : 'coding');
+        : ({ workers: 'workers', queues: 'queues', jobs: 'jobs', smallbugs: 'smallbugs',
+            alltickets: 'alltickets', archived: 'archived', ideas: 'coding', coding: 'coding' })[tab] || '';
     }
     if (!isSimpleMode() && document.body.classList.contains('mobile-ask-open')) activeNavKey = 'ask';
-    // Idea tickets: the phone has no top tab bar, so with the flag on the
-    // Coding button becomes Ideas and a Bugs button opens Small bugs.
+    // Idea tickets: with the flag on the Coding button becomes Features
+    // and a Bugs button opens Small bugs; the tab bar carries the rest.
     const _ideasNav = ideaTicketsOn();
     nav.querySelectorAll('[data-ff-only="idea_tickets"]').forEach(btn => {
       btn.style.display = _ideasNav ? '' : 'none';
@@ -20949,7 +20942,9 @@
       _codingNavBtn.setAttribute('aria-label', label);
     }
     const _menuBtn = nav.querySelector('[data-mobile-nav-menu]');
-    if (_menuBtn) _menuBtn.classList.toggle('is-active', activeNavKey === 'jobs' || activeNavKey === 'queues' || activeNavKey === 'ask');
+    if (_menuBtn) _menuBtn.classList.toggle('is-active',
+      activeNavKey === 'jobs' || activeNavKey === 'queues' || activeNavKey === 'ask'
+        || activeNavKey === 'alltickets' || activeNavKey === 'archived');
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
       btn.classList.toggle('is-active', active);
@@ -21001,7 +20996,8 @@
         return;
       }
       _setMobileAskOpen(false);
-      if (dest === 'coding' || dest === 'workers' || dest === 'queues' || dest === 'jobs' || dest === 'smallbugs') {
+      if (dest === 'coding' || dest === 'workers' || dest === 'queues' || dest === 'jobs'
+          || dest === 'smallbugs' || dest === 'alltickets' || dest === 'archived') {
         if (typeof cccSwitchCoreApp === 'function') cccSwitchCoreApp('sessions');
         _activateSidebarTabFromMobileNav(dest === 'coding' && ideaTicketsOn() ? 'ideas' : dest);
         if (typeof isMobile === 'function' && isMobile() && typeof mobileShowMain === 'function') {
