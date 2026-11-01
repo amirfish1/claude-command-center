@@ -33774,7 +33774,8 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 .sidebar:has(.session-workspace) .new-session-primary-row { flex-wrap: wrap; gap: 8px; }
 .sidebar:has(.session-workspace) #sidebarNewBtn { background: var(--accent); color: var(--bg, #101318); border-color: var(--accent); border-radius: 7px; font-size: 13px; }
 .sidebar:has(.session-workspace) #sidebarNewTicketBtn { border-radius: 7px; font-size: 13px; background: transparent; }
-.sidebar:has(.session-workspace) .search-wrap { order: 10; flex: 1 0 100%; }
+/* Share the action row when a usable search field fits; otherwise wrap it. */
+.sidebar:has(.session-workspace) .search-wrap { order: 10; flex: 1 1 120px; }
 .sidebar:has(.session-workspace) .conv-search-input { border-radius: 7px; min-height: 36px; font-size: 13px; }
 @media (max-width: 1200px) {
   #convList#convList.session-workspace .conv-item .wa-body { min-height: 78px; }
