@@ -57,3 +57,29 @@ test('pending agent work replaces a completed milestone without asking the user'
   assert.equal(rowOutcomeView({ ...row(pending), state: 'working' }).label, 'Working');
   assert.equal(rowOutcomeView(row({ ...pending, next_step_user: 'Choose a region.' })).label, 'Decide');
 });
+
+
+test('explicit category questions get literal reply chips without inventing actions', () => {
+  const app = require('node:fs').readFileSync(require.resolve('../static/app.js'), 'utf8');
+  const start = app.indexOf('  function decisionQuickActions(');
+  const end = app.indexOf('\n  }\n', start);
+  const derive = require('node:vm').runInNewContext(app.slice(start, end + 4) + '\ndecisionQuickActions;');
+  const next = "Say which notification you're seeing (SMS, iOS push, in-app bell, or email), or whether to add an opt-out.";
+  const chips = derive(next);
+  assert.deepEqual(Array.from(chips, c => c.label), ['SMS', 'iOS push', 'in app bell', 'email']);
+  assert.deepEqual(Array.from(chips, c => c.reply), ['SMS.', 'iOS push.', 'in-app bell.', 'email.']);
+  assert.equal(rowOutcomeView(row({ next_step_user: next })).label, 'Decide');
+  assert.equal(derive('Tell me [Q42:channel] which channel (SMS or email).')[0].reply, '[Q42:channel] SMS.');
+  for (const next of [
+    'Sign the form (place or date).',
+    'Review and send the message (email or SMS).',
+    'Tell me which account you mean.',
+    'Tell me which option (A, B, C, D, or E).',
+    'Tell me which channel (SMS, sms, or email).',
+    'Tell me which channel (SMS/email or push).',
+    'Tell me which channel (SMS, or email,).',
+    'Tell me which notification (a very long multi word option or email).',
+  ]) assert.equal(derive(next).length, 0, next);
+  const authored = [{ label: 'Other', reply: 'Another channel.' }];
+  assert.equal(rowOutcomeView(row({ next_step_user: next, next_actions: authored })).label, 'Next');
+});

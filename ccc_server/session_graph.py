@@ -1280,6 +1280,12 @@ one-line JSON array with one chip per option, 2 to 4 chips, e.g.
 [{"label":"Keep all","reply":"[Q12:intake-scope] Keep all intake questions."},{"label":"Shorter form","reply":"[Q12:intake-scope] Use the shorter intake."}].
 For a decision, NEXT_STEP_USER states the choice itself ("Choose: keep all
 intake questions or use the shorter form"), never a bare "Answer Q12".
+Categorical clarification questions also need chips: for example, asking which
+notification the user sees should offer SMS, iOS push, In app bell, and Email,
+with a scoped reply for each. Do not leave NEXT_ACTION null for a short list of
+explicit answer choices just because the question is phrased as "tell me which".
+For real-world tasks (signing a form, reviewing a document, sending a message),
+do not create a chip that falsely claims the user has completed the task.
 Prefer one short verb for the label; up to three words and 24 characters are
 allowed when needed for clarity. Reply is the exact text to send back to this
 session (at most 400 characters), preserving the scope and qualifications and

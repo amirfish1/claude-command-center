@@ -17706,7 +17706,22 @@
   function decisionQuickActions(next) {
     const s = String(next || '').trim();
     const m = s.match(/^(?:answer|choose|decide|pick)\b(.*?):\s+(.+)$/i);
-    if (!m) return [];
+    if (!m) {
+      // Older answers often ask for a category without authoring chips.
+      // Only copy short, explicit alternatives from a selection question;
+      // never turn an offline task or inferred approval into a reply.
+      const listed = s.match(/^([^()]+)\(([^()]+)\)/);
+      if (!listed || s.length > 600 || /[\x00-\x1f]/.test(s)
+          || !/^(?:say|tell me|choose|pick|select)\b/i.test(listed[1])
+          || !/\b(?:which|what|type|one)\b/i.test(listed[1])
+          || !/\sor\s/i.test(listed[2])) return [];
+      const options = listed[2].split(/\s*,\s*or\s+|\s*,\s*|\s+or\s+/i).map(o => o.trim());
+      if (options.length < 2 || options.length > 4
+          || options.some(o => o.length > 24 || !/^\p{L}+(?:[ -]\p{L}+){0,2}$/u.test(o))
+          || new Set(options.map(o => o.toLowerCase().replace(/-/g, ' '))).size !== options.length) return [];
+      const tag = (listed[1].match(/\[Q\d+(?::[a-z0-9-]+)?\]|\bQ\d+\b/i) || [''])[0];
+      return options.map(o => ({ label: o.replace(/-/g, ' '), reply: (tag ? tag + ' ' : '') + o + '.', derived: true }));
+    }
     const tag = (m[1].match(/\[Q\d+(?::[a-z0-9-]+)?\]|\bQ\d+\b/i) || [''])[0];
     const body = m[2].replace(/[.?!]+$/, '').replace(/^(?:whether(?: to)?|between)\s+/i, '').trim();
     if (!/\sor\s/i.test(body)) return [];
