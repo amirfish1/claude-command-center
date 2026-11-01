@@ -1,1 +1,1 @@
-Phone layout now shows the same sidebar tab bar as desktop (All / Features / Small bugs / Workers / Jobs / Other), scrollable sideways, and the bottom-nav More menu gains All and Other destinations — every tab is reachable on mobile.
+Phone Advanced keeps tabs in a single strip — the bottom nav — with All/Other under its More menu. The new-session screen now shows the selected repo as 'Auto · repo · Change' (tap to expand the full picker), and spawning lands on a sidebar tab that actually lists the new session.

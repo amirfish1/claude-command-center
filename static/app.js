@@ -25472,6 +25472,18 @@
       try { localStorage.setItem('ccc-sidebar-tab', card.idea_ticket.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas'); } catch (_) {}
       if (typeof _setSharedQueuePanelHost === 'function') _setSharedQueuePanelHost('rail');
     }
+    if (!card.no_auto_select && !userIdeaSpawn && !ideaTicketsOn()) {
+      // Land on a tab that actually renders the placeholder. Spawning while
+      // Other/Jobs/Queues was active left the new session invisible — worst
+      // on phones, where the tab bar is hidden and the stored tab is the
+      // only list view.
+      const _laneTab = card.spawned_lane === 'workers' ? 'workers'
+        : card.spawned_lane === 'other' ? 'archived' : 'coding';
+      const _curTab = _currentSidebarTabKey();
+      if (_curTab !== 'inprogress' && _curTab !== _laneTab) {
+        try { localStorage.setItem('ccc-sidebar-tab', _laneTab); } catch (_) {}
+      }
+    }
     pendingSpawns.set(pid, card);
     conversationsData = [card, ...conversationsData];
     // Pin to Working column for the moment
@@ -88770,7 +88782,9 @@
     if (!host) return;
     let jevOn = false;
     try { jevOn = smartRepoConfigured === true; } catch (_) {}   // declared below; may be in TDZ at boot
-    const collapsed = jevOn && !spawnCwdExpanded;
+    // Phones also start collapsed: the full picker is desktop chrome, but
+    // the summary keeps the auto-selected repo visible (with Change).
+    const collapsed = (jevOn || isMobile()) && !spawnCwdExpanded;
     document.body.classList.toggle('ccc-spawn-cwd-collapsed', collapsed);
     host.hidden = !collapsed;
     if (!collapsed) { host.textContent = ''; return; }
