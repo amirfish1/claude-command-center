@@ -87634,24 +87634,79 @@
   if ($voiceMobileBtn) {
     let drag = null;
     let suppressClick = false;
+    let holdTimer = null;
+    const options = document.createElement('div');
+    options.id = 'voiceButtonOptions';
+    options.className = 'voice-button-options';
+    options.hidden = true;
+    options.setAttribute('role', 'group');
+    options.setAttribute('aria-label', 'Call button options');
+    options.innerHTML = '<button type="button" class="upd-btn">Hide call button</button>' +
+      '<p>Show it again in Settings. This keeps any active call running.</p>';
+    document.body.appendChild(options);
+    const hideButton = options.querySelector('button');
+    const clearHold = () => { clearTimeout(holdTimer); holdTimer = null; };
+    const closeOptions = () => { options.hidden = true; };
+    const openOptions = () => {
+      clearHold();
+      suppressClick = true;
+      if (drag) drag.held = true;
+      options.hidden = false;
+      const rect = $voiceMobileBtn.getBoundingClientRect();
+      options.style.left = Math.max(12, Math.min(rect.left, window.innerWidth - options.offsetWidth - 12)) + 'px';
+      const above = rect.top - options.offsetHeight - 8;
+      options.style.top = Math.max(12, Math.min(above >= 12 ? above : rect.bottom + 8,
+        window.innerHeight - options.offsetHeight - 12)) + 'px';
+      hideButton.focus({preventScroll: true});
+    };
+    hideButton.addEventListener('click', () => {
+      closeOptions();
+      setVoiceMobileBtnPref(false);
+      showOpToast('Call button hidden. Show it again in Settings.', 'ok');
+    });
+    document.addEventListener('pointerdown', (ev) => {
+      if (!options.contains(ev.target)) closeOptions();
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape' && !options.hidden) {
+        ev.preventDefault();
+        closeOptions();
+        $voiceMobileBtn.focus({preventScroll: true});
+      }
+    });
+    $voiceMobileBtn.title = 'Call voice assistant; drag to move; hold to hide';
+    $voiceMobileBtn.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      openOptions();
+    });
+    $voiceMobileBtn.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ContextMenu' || (ev.shiftKey && ev.key === 'F10')) {
+        ev.preventDefault();
+        openOptions();
+      }
+    });
     $voiceMobileBtn.addEventListener('pointerdown', (ev) => {
       if (!ev.isPrimary || ev.button !== 0) return;
+      clearHold();
       const rect = $voiceMobileBtn.getBoundingClientRect();
-      drag = {id: ev.pointerId, x: ev.clientX, y: ev.clientY, left: rect.left, top: rect.top, moved: false};
+      drag = {id: ev.pointerId, x: ev.clientX, y: ev.clientY, left: rect.left, top: rect.top, moved: false, held: false};
       suppressClick = false;
       $voiceMobileBtn.setPointerCapture(ev.pointerId);
+      holdTimer = setTimeout(openOptions, 600);
     });
     $voiceMobileBtn.addEventListener('pointermove', (ev) => {
-      if (!drag || ev.pointerId !== drag.id) return;
+      if (!drag || ev.pointerId !== drag.id || drag.held) return;
       const dx = ev.clientX - drag.x;
       const dy = ev.clientY - drag.y;
       if (!drag.moved && Math.hypot(dx, dy) < 8) return;
+      clearHold();
       drag.moved = true;
       voiceButtonPosition = voiceMoveButton(drag.left + dx, drag.top + dy);
     });
     const finishDrag = (ev) => {
       if (!drag || ev.pointerId !== drag.id) return;
-      suppressClick = drag.moved;
+      clearHold();
+      suppressClick = drag.moved || drag.held || ev.type !== 'pointerup';
       if (drag.moved) {
         try { localStorage.setItem(VOICE_BUTTON_POSITION_KEY, JSON.stringify(voiceButtonPosition)); } catch (_) {}
       }
@@ -87659,6 +87714,8 @@
     };
     $voiceMobileBtn.addEventListener('pointerup', finishDrag);
     $voiceMobileBtn.addEventListener('pointercancel', finishDrag);
+    $voiceMobileBtn.addEventListener('lostpointercapture', finishDrag);
+    window.addEventListener('blur', () => { clearHold(); drag = null; closeOptions(); });
     $voiceMobileBtn.addEventListener('click', (ev) => {
       if (suppressClick && ev.detail !== 0) { suppressClick = false; return; }
       voiceOpenPanel();

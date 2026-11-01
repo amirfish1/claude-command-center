@@ -13212,6 +13212,14 @@
     border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
   .voice-panel[hidden] { display: none; }
   .voice-mobile-btn { display: none; }
+  .voice-button-options {
+    position: fixed; z-index: 9600; width: min(260px, calc(100vw - 24px));
+    box-sizing: border-box; padding: 12px; border-radius: 10px;
+    background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  }
+  .voice-button-options[hidden] { display: none; }
+  .voice-button-options .upd-btn { width: 100%; min-height: 44px; }
+  .voice-button-options p { margin: 8px 0 0; font-size: 12px; line-height: 1.5; }
   body.hide-voice-mobile-btn .voice-mobile-btn { display: none !important; }
   @media (max-width: 1200px) {
     .voice-mobile-btn {
