@@ -4062,12 +4062,6 @@
   function autonomySwitchHtml(c, canHandOff) {
     const h = rowHandoff(c);
     if (!h && !canHandOff) return '';
-    const sid = String(c.session_id || c.id || '');
-    const engine = String(c.engine || c.source || (sid.startsWith('devincli-') ? 'devin' : 'claude')).toLowerCase();
-    if (!h && engine !== 'claude' && engine !== 'codex') {
-      const reason = 'Auto unavailable: WatchTower takeover supports Claude and Codex; ' + engine + ' is not supported yet.';
-      return '<button type="button" class="conv-auto-switch is-off" disabled aria-disabled="true" aria-pressed="false" title="' + escapeAttr(reason) + '" aria-label="' + escapeAttr(reason) + '"><span class="conv-auto-label">AUTO</span></button>';
-    }
     const state = !h ? 'off' : h.state === 'blocked' ? 'paused' : 'on';
     const title = state === 'off' ? 'Interactive: you drive this. Click to enable WatchTower takeover through completion.'
       : state === 'paused' ? 'Autonomous, paused on your answer. Click to take it back.'
