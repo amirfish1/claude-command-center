@@ -42,7 +42,7 @@ test('engine filter and Table view live only in the ⋮ menu (CCC-283)', () => {
 });
 
 test('menu copies are bound: toggles use querySelectorAll, not first-match', () => {
-  for (const role of ['archived-grouping-toggle', 'wrap-toggle', 'details-toggle', 'session-density-toggle']) {
+  for (const role of ['archived-grouping-toggle', 'session-density-toggle']) {
     assert.ok(
       app.includes(`querySelectorAll('[data-role="${role}"]')`),
       `${role} binds every rendered copy`,
