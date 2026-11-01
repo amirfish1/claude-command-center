@@ -105,6 +105,13 @@
   .opts { grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr)); }
   .foot, .ctx, .det { overflow-wrap:anywhere; }
   .toast { z-index:1000; }
+  .inbox-help { margin-top:16px; font-size:14px; color:var(--mute); max-width:75ch; }
+  .inbox-help summary { color:var(--ink); cursor:pointer; padding:8px 0; }
+  .inbox-help li { margin:8px 0; }
+  .origin { margin:16px 0; padding-block:14px; border-block:1px solid var(--line); max-width:75ch; }
+  .origin h3 { font-size:14px; margin:0 0 6px; }
+  .origin p { margin:4px 0; color:var(--mute); overflow-wrap:anywhere; }
+
   @media(max-width:700px) {
     .wrap { padding:20px 16px 50px; }
     .meta { margin-left:0; flex-wrap:wrap; }
@@ -131,6 +138,17 @@
   </header>
   <p class="sub">Find a decision, review the context, and choose the next step.</p>
   <div id="freshness" class="freshness" role="status">Connecting to the inbox…</div>
+  <details class="inbox-help">
+    <summary>When and why do decisions appear?</summary>
+    <ul>
+      <li><strong>Scheduled scans:</strong> <span id="scanExplanation">The scanner checks for stalled work.</span> It looks for blocked or overdue board items, stalled queues, idle sessions with unfinished work, and session health warnings.</li>
+      <li><strong>Agent and routine reports:</strong> A connected tool can submit a decision as soon as it finds something needing your attention. These reports do not wait for the next scan.</li>
+      <li><strong>Review requests:</strong> Tickets awaiting review appear directly from the queue and leave this view when their review state changes.</li>
+    </ul>
+    <p>Each expanded item shows its source and recorded trigger below. Repeated reports usually update an existing item instead of creating another. A new timestamp can mean a repeat report, not a new decision.</p>
+    <p>Creating a card does not choose an option. Read the option’s action before selecting it: it may start or steer work, record that you will handle it, or snooze the item.</p>
+    <p><strong>On your phone:</strong> open this same page through your configured remote connection, then bookmark it or add it to your home screen. Localhost addresses only work on the computer running CCC.</p>
+  </details>
   <div class="toolbar" role="search" aria-label="Browse decisions">
     <label class="search">Search decisions<input id="search" type="search" placeholder="Question number, ticket, title or context"></label>
     <label>Status<select id="statusFilter"><option value="open">Needs decision</option><option value="closed">History</option><option value="monitoring">Monitoring</option><option value="all">All items</option></select></label>
@@ -216,6 +234,22 @@
     }).join("");
   }
 
+  function originExplanation(c) {
+    var src = c.source || {}, route;
+    if (c.kind === "external") {
+      route = "Submitted by " + (src.source || "a connected tool") + ". This report was filed directly, independently of the scheduled scan.";
+    } else if (c.kind === "wt_review") {
+      route = "This ticket is awaiting review in its queue. Its review state is read live when the inbox refreshes.";
+    } else {
+      route = ({wt:"A scan found a stalled queue.", board:"A scan found a blocked or overdue board item.", session:"A scan found an idle session with unfinished work.", governor:"A scan detected a session health warning."})[c.kind] || "This item was recorded by an inbox source.";
+    }
+    var trigger = src.reason || src.detail;
+    return '<section class="origin"><h3>Why this appeared</h3><p>' + esc(route) + '</p>' +
+      (trigger ? '<p><strong>Recorded trigger:</strong> ' + esc(trigger) + '</p>' : '<p>The report’s explanation is in the context below; no separate trigger was recorded.</p>') +
+      '<p><strong>Source reference:</strong> ' + esc(c.source_id || "Not recorded") + '</p>' +
+      (c.seen_count > 1 ? '<p>Reported ' + esc(c.seen_count) + ' times. Latest report: ' + esc(exact(c.last_seen_at)) + '.</p>' : '') + '</section>';
+  }
+
   function renderCard(c) {
     var closed = c.status !== "open";
     var opts = (c.options || []).map(function (o, i) {
@@ -236,7 +270,7 @@
       c.kind === "session" ? (src.goal || src.last_assistant_text || "") :
       c.kind === "board" ? [src.category, src.status, src.eta, src.notes].filter(Boolean).join(" · ") : (src.detail || "");
     var analyst = c.analyst ? (c.analyst.error ? "analyst failed (" + esc(c.analyst.error) + "), generic options" :
-      esc(c.analyst.model || "") + " · " + (c.analyst.duration_s || 0) + "s") : c.kind === "wt_review" ? "WatchTower review gate" : "governor";
+      esc(c.analyst.model || "") + " · " + (c.analyst.duration_s || 0) + "s") : c.kind === "wt_review" ? "WatchTower review gate" : c.kind === "external" ? "submitted report" : "governor";
     var dres = c.decided && c.decided.result;
     var money = (String(c.title || "") + " " + String(c.context || "")).match(/\$\s?\d[\d,]*(?:\.\d+)?/);
     return '<div class="card' + (closed ? " closed" : "") + '" id="card-' + esc(c.id) + '">' +
@@ -247,7 +281,7 @@
       (c.seen_count > 1 ? '<span class="tag">seen ' + esc(c.seen_count) + "x</span>" : "") +
       '<span class="tag ' + esc(c.kind) + '">' + esc(c.kind) + "</span>" +
       (closed ? '<span class="tag">' + esc(c.status) + "</span>" : "") + "</div>" +
-      '<div class="timestamps"><span>Created ' + esc(exact(c.created_at)) + '</span><span>Updated ' + esc(exact(c.updated_at)) + '</span>' + (c.last_seen_at ? '<span>Last reported ' + esc(exact(c.last_seen_at)) + '</span>' : '') + '</div><div class="ctx">' + esc(c.context || "") + "</div>" +
+      '<div class="timestamps"><span>Created ' + esc(exact(c.created_at)) + '</span><span>Updated ' + esc(exact(c.updated_at)) + '</span>' + (c.last_seen_at ? '<span>Last reported ' + esc(exact(c.last_seen_at)) + '</span>' : '') + '</div>' + originExplanation(c) + '<div class="ctx">' + esc(c.context || "") + "</div>" +
       '<div class="opts">' + opts + "</div>" +
       '<div class="foot"><span>' + esc(c.source_id) + " · " + ago(c.created_at) + " · " + analyst + "</span>" +
       (srcLine ? '<details><summary>source</summary><pre>' + esc(srcLine) + "</pre></details>" : "") +
@@ -294,6 +328,8 @@
     document.querySelectorAll('.decision-row').forEach(function(el) { el.addEventListener('toggle', function() { if (el.open) state.expanded.add(el.dataset.id); else state.expanded.delete(el.dataset.id); }); });
   }
   function render(data) {
+    var cfg = data.config || {};
+    $("scanExplanation").textContent = (cfg.enabled === false ? "Automatic scans are currently disabled." : "Automatic scans run every " + Math.round((cfg.interval_s || 3600) / 60) + " minutes.") + " Each scan creates at most " + (cfg.max_cards_per_run || 5) + " new cards. " + (cfg.strategy_board === false ? "No strategy board is currently configured." : "");
     state.cards = data.cards || []; state.queueRepos = data.queue_repos || {};
     var selected = $("sourceFilter").value;
     var kinds = Array.from(new Set(state.cards.map(function(c) { return c.kind; }))).sort();

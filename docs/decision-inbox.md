@@ -19,6 +19,19 @@ Dates use the browser's local timezone, named above the list. Feed refresh and
 scanner time are shown separately: a successful scan does not prove that every
 older decision still applies. Connection failures and overdue scans are visible.
 
+## Why an item appeared
+
+Open **When and why do decisions appear?** for the configured scan interval,
+per-scan creation limit, and the difference between scan-generated cards,
+reports from connected tools, and live queue reviews. Expand an item to see
+**Why this appeared**, including its source reference and recorded trigger
+when available. Report submission does not itself choose an option.
+
+For mobile access, open the same remotely accessible inbox URL on the phone.
+If that URL uses a private network connection, connect the phone to that network
+first. Bookmark the page or add it to the phone's home screen. A localhost URL
+points to the phone itself and cannot reach a dashboard on another computer.
+
 ## What it checks
 
 - **Strategy board, optional:** a Markdown table with `Task | Status | ETA`
