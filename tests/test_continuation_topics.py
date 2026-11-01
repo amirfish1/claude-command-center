@@ -299,3 +299,51 @@ def test_topic_revision_rejects_delta_even_when_renamed_root_is_unloaded(monkeyp
     server._archive_delta_ctx_remember('before', 'scope', 'all', {}, {}, {}, 1)
     server._archive_delta_ctx_remember('after', 'scope', 'all', {}, {}, {}, 2)
     assert server._archive_delta_ctx_changed_sids('before', 'after') is None
+
+
+def test_archive_topics_remain_readable_while_index_writer_is_busy(store):
+    store.execute('PRAGMA journal_mode=WAL')
+    topics.record_continuation('root-session', 'child-session', title='TOPIC', conn=store)
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    writer = sqlite3.connect(filename)
+    store.execute('PRAGMA busy_timeout=50')
+    writer.execute('BEGIN IMMEDIATE')
+    try:
+        rows = [row('child-session'), row('new-child', origin='root-session')]
+        topics.attach_topics(rows, conn=store, names={})
+        assert [item['continuation_topic_title'] for item in rows] == ['TOPIC', 'TOPIC']
+        assert not store.in_transaction
+        with pytest.raises(sqlite3.OperationalError, match='locked'):
+            topics.record_continuation('root-session', 'durable-child', conn=store)
+        assert store.execute('PRAGMA busy_timeout').fetchone()[0] == 50
+    finally:
+        writer.rollback()
+        writer.close()
+    topics.attach_topics(rows, conn=store, names={})
+    assert store.execute('SELECT root_sid FROM continuation_topics WHERE sid=?',
+                         ('new-child',)).fetchone() == ('root-session',)
+
+
+def test_native_title_lookup_releases_writer_and_rechecks_peer_rename(store, monkeypatch):
+    root = '00000000-0000-4000-8000-000000000099'
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    peer = sqlite3.connect(filename, timeout=0.05)
+    topics.attach_topics([row(root, 'OLD TOPIC')], conn=store, names={})
+    # Missing title requires native lookup, concurrent with a user rename.
+    store.execute('UPDATE continuation_topics SET topic_title=? WHERE sid=?', ('', root))
+    store.commit()
+    def native_title(sid):
+        assert not store.in_transaction
+        topics.rename_topic(sid, 'USER TOPIC', conn=peer)
+        return {'title': 'STALE GENERATED TOPIC'}
+    monkeypatch.setattr(server, '_conv_meta_cache', {})
+    monkeypatch.setattr(server, '_codex_titles_cache', {'data': {}})
+    monkeypatch.setattr(server, '_codex_thread_row', native_title)
+    child = row('new-child', origin=root)
+    try:
+        topics.attach_topics([child], conn=store, names={})
+        assert child['continuation_topic_title'] == 'USER TOPIC'
+        assert store.execute('SELECT topic_title, user_named FROM continuation_topics WHERE sid=?',
+                             (root,)).fetchone() == ('USER TOPIC', 1)
+    finally:
+        peer.close()

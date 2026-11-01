@@ -40,16 +40,23 @@ def revision():
 
 
 @contextmanager
-def _transaction(conn):
+def _transaction(conn, *, wait=True):
     # Dashboard and worker may snapshot or rename the same root concurrently.
     # Acquire the writer lock before the first read, rather than letting a
     # stale read overwrite a peer's explicit rename during a later upsert.
     if conn.in_transaction:
         yield
     else:
-        with conn:
-            conn.execute('BEGIN IMMEDIATE')
-            yield
+        timeout = conn.execute('PRAGMA busy_timeout').fetchone()[0]
+        try:
+            if not wait:
+                conn.execute('PRAGMA busy_timeout=0')
+            with conn:
+                conn.execute('BEGIN IMMEDIATE')
+                yield
+        finally:
+            if not wait:
+                conn.execute(f'PRAGMA busy_timeout={timeout}')
 
 
 def _sid(row):
@@ -70,6 +77,8 @@ class _Batch:
         self.indexed_origins = {}
         self.cached_titles = None
         self.titles = {}
+        self.pending = {}
+        self.allow_native_lookup = True
 
     def record(self, sid):
         if sid not in self.records:
@@ -103,7 +112,7 @@ class _Batch:
             # Consult it in memory; never fetch all native threads per row.
             native = getattr(_core, '_codex_titles_cache', {}).get('data', {}).get(sid, {})
             cached = native.get('title') or native.get('agent_nickname')
-        if not cached and _NATIVE_ID_RE.fullmatch(sid):
+        if not cached and self.allow_native_lookup and _NATIVE_ID_RE.fullmatch(sid):
             # On a fresh process an archived Codex root may not be in either
             # in-memory cache. This is an indexed id=? lookup, once per root,
             # not the full native-session enumeration used by title refresh.
@@ -116,15 +125,22 @@ class _Batch:
         value = (origin, root, title, user_named)
         previous = self.record(sid)
         if previous != value:
+            self.pending[sid] = value
+            self.records[sid] = value
+
+    def flush(self):
+        for sid, value in self.pending.items():
+            previous = self.conn.execute(
+                'SELECT origin, root_sid, topic_title, user_named FROM continuation_topics WHERE sid=?',
+                (sid,)).fetchone()
             self.conn.execute('''INSERT INTO continuation_topics VALUES (?,?,?,?,?)
                 ON CONFLICT(sid) DO UPDATE SET origin=excluded.origin,
                 root_sid=excluded.root_sid, topic_title=excluded.topic_title,
                 user_named=excluded.user_named''', (sid, *value))
-            # New rows already change the archive snapshot. Invalidate cached
-            # projections when an established root/title is corrected or renamed.
-            if previous != ('', '', '', 0) and previous[1:] != value[1:]:
+            # New rows already change the archive snapshot. Established root
+            # corrections must invalidate cached projections in other processes.
+            if previous and previous[1:] != value[1:]:
                 self.conn.execute('INSERT INTO continuation_topic_meta VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET revision=revision+1')
-            self.records[sid] = value
 
     def indexed_origin(self, sid):
         if sid not in self.indexed_origins:
@@ -183,12 +199,33 @@ class _Batch:
         return result
 
 
-def attach_topics(rows, *, conn=None, names=None):
-    """Add continuation_topic_title and root identity to explicit continuations.
+def _project_topics(batch, rows):
+    for row in rows:
+        sid = _sid(row)
+        if not sid:
+            continue
+        root, title = batch.resolve(sid)
+        origin = batch.record(sid)[0]
+        if origin and root:
+            root_record = batch.record(root)
+            updated = root_record[2] or batch.title(root)
+            if updated and updated != root_record[2]:
+                batch.put(root, '', root, updated, root_record[3])
+            row['continuation_topic_title'] = updated or title
+            row['continuation_topic_root_session_id'] = root
+            row['continuation_topic_session_id'] = root
+        else:
+            row.pop('continuation_topic_title', None)
+            row.pop('continuation_topic_root_session_id', None)
+            row.pop('continuation_topic_session_id', None)
 
-    Empty title means the root title is not known yet. Existing metadata is
-    retried on later loads; generated child titles never change the topic.
-    Work is indexed and bounded per distinct ancestor; no transcript scans.
+
+def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False):
+    """Project topics without waiting behind the ship index's bulk writer.
+
+    Archive materialization is opportunistic: a busy writer leaves the computed
+    titles available and persistence is retried on the next load. Explicit
+    spawn snapshots/edges wait for durable storage instead.
     """
     if not rows:
         return
@@ -196,26 +233,24 @@ def attach_topics(rows, *, conn=None, names=None):
     names = _core._load_session_name_overrides() if names is None else names
     rows = [row for row in rows if isinstance(row, dict)]
     batch = _Batch(conn, rows, names)
-    with _transaction(conn):
-        for row in rows:
-            sid = _sid(row)
-            if not sid:
-                continue
-            root, title = batch.resolve(sid)
-            origin = batch.record(sid)[0]
-            if origin and root:
-                # A root initially missing its title can become known later.
-                root_record = batch.record(root)
-                updated = root_record[2] or batch.title(root)
-                if updated and updated != root_record[2]:
-                    batch.put(root, '', root, updated, root_record[3])
-                row['continuation_topic_title'] = updated or title
-                row['continuation_topic_root_session_id'] = root
-                row['continuation_topic_session_id'] = root
-            else:
-                row.pop('continuation_topic_title', None)
-                row.pop('continuation_topic_root_session_id', None)
-                row.pop('continuation_topic_session_id', None)
+    # Native title reads may perform I/O. Never do them while holding the
+    # shared index's writer lock, including on a cold archive projection.
+    _project_topics(batch, rows)
+    if not batch.pending:
+        return
+    try:
+        with _transaction(conn, wait=wait_for_writer):
+            # Re-read after acquiring the lock so a concurrent explicit rename
+            # wins over the earlier snapshot. Reuse only external title reads.
+            current = _Batch(conn, rows, names)
+            current.allow_native_lookup = False
+            current.titles = batch.titles
+            current.cached_titles = batch.cached_titles
+            _project_topics(current, rows)
+            current.flush()
+    except sqlite3.OperationalError as exc:
+        if wait_for_writer or getattr(exc, 'sqlite_errorcode', None) != sqlite3.SQLITE_BUSY:
+            raise
 
 
 def record_continuation(origin, sid, *, title='', conn=None):
@@ -225,7 +260,7 @@ def record_continuation(origin, sid, *, title='', conn=None):
     conn = _connection(conn)
     rows = [{'session_id': origin, 'display_name': title},
             {'session_id': sid, 'continued_from_session_id': origin}]
-    attach_topics(rows, conn=conn)
+    attach_topics(rows, conn=conn, wait_for_writer=True)
 
 
 def rename_topic(sid, title, *, conn=None):
@@ -233,11 +268,18 @@ def rename_topic(sid, title, *, conn=None):
     if not sid or not title:
         return
     conn = _connection(conn)
-    batch = _Batch(conn, [], {})
+    rows = [{'session_id': sid, 'display_name': title}]
+    prepared = _Batch(conn, rows, {})
+    prepared.resolve(sid)
     with _transaction(conn):
+        batch = _Batch(conn, rows, {})
+        batch.allow_native_lookup = False
+        batch.titles = prepared.titles
+        batch.cached_titles = prepared.cached_titles
         root, _ = batch.resolve(sid)
         if root == sid:
             batch.put(sid, '', sid, _topic(title), 1)
+        batch.flush()
 
 
 def track_spawn(fn):
@@ -247,7 +289,7 @@ def track_spawn(fn):
         match = _sg.CONTINUATION_ORIGIN_RE.search(str(prompt or ''))
         if match:
             try:
-                attach_topics([{'session_id': match.group(1)}])
+                attach_topics([{'session_id': match.group(1)}], wait_for_writer=True)
             except (OSError, sqlite3.Error) as exc:
                 print(f'[continuation-topics] could not snapshot source topic: {exc}')
         result = fn(prompt, *args, **kwargs)
