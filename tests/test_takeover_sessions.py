@@ -651,3 +651,35 @@ def test_devin_native_read_selects_complete_recent_messages_within_byte_budget(c
     result = broker.observe('devincli-native-session', 'devin')
     assert result['state'] == 'unknown' and not result['completed_text']
     assert 'byte budget' in result['error']
+
+
+@pytest.mark.parametrize('loaded', [False, True])
+def test_native_devin_db_settings_survive_unrelated_acp_defaults(core, tmp_path, monkeypatch, loaded):
+    db = tmp_path / 'sessions.db'
+    con = sqlite3.connect(db)
+    con.executescript('CREATE TABLE sessions(id TEXT PRIMARY KEY,working_directory TEXT,model TEXT,agent_mode TEXT,last_activity_at INTEGER);'
+                      'CREATE TABLE message_nodes(row_id INTEGER PRIMARY KEY,session_id TEXT,chat_message TEXT,created_at INTEGER);')
+    con.execute('INSERT INTO sessions VALUES(?,?,?,?,?)', ('native-session', str(tmp_path), 'saved-model', 'ask', 1700000000))
+    con.execute('INSERT INTO message_nodes VALUES(?,?,?,?)',
+                (1, 'native-session', json.dumps({'role': 'assistant', 'content': 'finished'}), 1700000000))
+    con.commit()
+    con.close()
+    def connect(source):
+        connection = sqlite3.connect(source)
+        connection.row_factory = sqlite3.Row
+        return connection
+    core._devin_cli_db_paths = lambda: [db]
+    core._devin_cli_connect = connect
+    core._devin_cli_parse_message_row = server._devin_cli_parse_message_row
+    core._devin_cli_session_live = lambda sid: False
+    monkeypatch.setattr(broker, '_snapshot', lambda *args: {
+        'loaded': loaded, 'status': 'idle', 'model': 'ambient-model',
+        'config_options': [{'category': 'model', 'currentValue': 'ambient-option'},
+                           {'id': 'permission_mode', 'currentValue': 'dangerous'},
+                           {'id': 'unpersisted_option', 'currentValue': 'ambient-value'}],
+    })
+    result = broker.observe('devincli-native-session', 'devin')
+    assert result['settings']['model'] == 'saved-model'
+    assert result['settings']['permission_mode'] == 'auto'
+    assert ('unpersisted_option' in result['settings']) is loaded
+    assert result['engine'] == 'devin' and result['session_id'] == 'devincli-native-session'
