@@ -518,3 +518,79 @@ def test_generic_acp_family_reads_persisted_events_without_acceptance_proof(core
     result = broker.observe('native-session', 'glm', 'right-nonce')
     assert result['completed_text'] == 'finished' and result['activity_at'] > 0, result
     assert not result['receipt_confirmed']  # Local ACP acceptance is not native input proof.
+
+
+def test_observe_uses_one_request_local_owner_snapshot(core, tmp_path):
+    calls = []
+    core._ACP_HARNESSES = {'devin': {}}
+    def snapshot(engine, sid):
+        calls.append((engine, sid))
+        return {'loaded': True, 'status': 'idle', 'model': 'owner-model'}
+    core._acp_session_snapshot = snapshot
+    broker.register_adapter(broker.Adapter('devin', read=reader(tmp_path)))
+    result = broker.observe('devincli-native-session', 'devin')
+    assert calls == [('devin', 'native-session')]
+    assert result['state'] == 'idle' and result['settings']['model'] == 'owner-model'
+    broker.observe('devincli-native-session', 'devin')
+    assert len(calls) == 2  # Fresh owner state on the next observation.
+
+
+def test_worker_snapshot_has_bounded_read_budget_and_failure_pauses(core, tmp_path, monkeypatch):
+    import control_plane
+    core._ACP_HARNESSES = {'devin': {}}
+    core._control_plane_routes_engines = lambda: True
+    core._CONTROL_PLANE_ENGINE_CLIENT = SimpleNamespace(path=tmp_path / 'worker.sock', token_file=tmp_path / 'token')
+    calls = []
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs['timeout'] == 1.0
+        def request(self, method, args):
+            calls.append((method, args))
+            return {'ok': False, 'available': True, 'ambiguous': True, 'error': 'timed out'}
+    monkeypatch.setattr(control_plane, 'ControlPlaneClient', Client)
+    broker.register_adapter(broker.Adapter('devin', read=reader(tmp_path)))
+    result = broker.observe('devincli-native-session', 'devin')
+    assert result['state'] == 'unknown' and result['error'] == 'timed out'
+    assert calls == [('engine.query', {'engine': 'devin', 'operation': 'snapshot', 'args': {'session_id': 'native-session'}})]
+    assert broker.deliver('devincli-native-session', 'no retry', 'devin')['code'] == 'session_unknown'
+
+
+def test_stalled_worker_socket_observation_returns_within_wt_budget(core, tmp_path):
+    import socket
+    import tempfile
+    import time
+    core._ACP_HARNESSES = {'devin': {}}
+    core._control_plane_routes_engines = lambda: True
+    broker.register_adapter(broker.Adapter('devin', read=reader(tmp_path)))
+    with tempfile.TemporaryDirectory(prefix='ccc-observe-') as directory:
+        endpoint = Path(directory) / 'worker.sock'
+        token = Path(directory) / 'token'
+        token.write_text('test-token')
+        core._CONTROL_PLANE_ENGINE_CLIENT = SimpleNamespace(path=endpoint, token_file=token)
+        release = threading.Event()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+            listener.listen(1)
+            def stall():
+                connection, _ = listener.accept()
+                with connection:
+                    connection.recv(65536)
+                    release.wait(3)
+            thread = threading.Thread(target=stall, daemon=True)
+            thread.start()
+            start = time.monotonic()
+            try:
+                result = broker.observe('devincli-native-session', 'devin')
+            finally:
+                release.set()
+                thread.join(timeout=2)
+            assert time.monotonic() - start < 3
+            assert result['state'] == 'unknown' and 'timed out' in result['error']
+
+
+def test_owner_timeout_on_delivery_recheck_never_falls_back_to_native(core, monkeypatch):
+    core._ACP_HARNESSES = {'devin': {}}
+    monkeypatch.setattr(broker, 'observe', lambda *args: {'engine': 'devin', 'state': 'idle'})
+    monkeypatch.setattr(broker, '_snapshot', lambda *args: {'status': 'unknown', 'observation_error': 'timed out'})
+    result = broker.deliver('devincli-native-session', 'must not start native writer', 'devin')
+    assert result['code'] == 'session_unknown' and not result['queued']

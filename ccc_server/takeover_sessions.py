@@ -106,7 +106,21 @@ def _native_sid(engine, sid):
 def _snapshot(engine, sid):
     if engine not in getattr(_core, '_ACP_HARNESSES', {}):
         return {}
-    return _core._acp_session_snapshot(engine, _native_sid(engine, sid)) or {}
+    raw = _native_sid(engine, sid)
+    if getattr(_core, '_control_plane_routes_engines', lambda: False)():
+        # Snapshot is a read of already-owned state, never native initialization.
+        # General engine calls allow 45 seconds; WT observation has a five-
+        # second HTTP budget, so a stalled worker must instead pause takeover.
+        from control_plane import ControlPlaneClient
+        owner = _core._CONTROL_PLANE_ENGINE_CLIENT
+        client = ControlPlaneClient(path=owner.path, token_file=owner.token_file, timeout=1.0)
+        response = client.request('engine.query', {
+            'engine': engine, 'operation': 'snapshot', 'args': {'session_id': raw},
+        })
+        if response.get('ok'):
+            return response.get('snapshot') or {}
+        return {'status': 'unknown', 'observation_error': response.get('error') or 'Worker snapshot unavailable'}
+    return _core._acp_session_snapshot(engine, raw) or {}
 
 
 def _evidence(sid, nonce, source, line):
@@ -566,14 +580,17 @@ def _read(adapter, sid, nonce):
     return [], {}, None
 
 
-def _state(sid, engine, meta, events):
+def _state(sid, engine, meta, events, snap=None):
     with _LOCK:
         proc = _RUNNING.get(sid)
         if proc is not None:
             if proc.poll() is None:
                 return 'busy'
             _RUNNING.pop(sid, None)
-    snap = _snapshot(engine, sid)
+    if snap is None:
+        snap = _snapshot(engine, sid)
+    if snap.get('observation_error'):
+        return 'unknown'
     if snap.get('pending_permissions') or snap.get('status') == 'active':
         return 'busy'
     if snap.get('loaded') and snap.get('status') == 'idle':
@@ -667,7 +684,9 @@ def observe(session_id, engine='', nonce=''):
         result.update(repo_path=meta.get('repo_path') or spawn.get('repo_path') or cwd,
                       transcript=meta.get('source') or '', settings=settings, cwd=cwd,
                       source=meta.get('source') or 'native:' + engine,
-                      activity_at=meta.get('activity_at'), state=_state(sid, engine, meta, events))
+                      activity_at=meta.get('activity_at'), state=_state(sid, engine, meta, events, snap))
+        if snap.get('observation_error'):
+            result['error'] = snap['observation_error']
         if events:
             result['cursor'] = str(events[-1].get('line') or len(events))
             result['activity_at'] = result['activity_at'] or events[-1].get('ts')
@@ -852,6 +871,10 @@ def deliver(session_id, text, engine='', *, local=False):
                 except BlockingIOError:
                     return refuse('session_busy', 'Another operation owns this session')
             current = _snapshot(engine, sid)
+            if current.get('observation_error'):
+                return refuse('session_unknown', current['observation_error'])
+            if current.get('pending_permissions') or current.get('status') == 'active':
+                return refuse('session_busy', 'Owner became active before delivery')
             if current.get('loaded'):
                 return _deliver_acp(engine, sid, text)
         if engine == 'antigravity':
