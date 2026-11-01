@@ -263,9 +263,11 @@ def test_cold_native_archived_root_title_uses_one_exact_lookup(store, monkeypatc
     monkeypatch.setattr(server, '_codex_titles_cache', {'data': {}})
     monkeypatch.setattr(server, '_codex_thread_row', native_title)
     rows = [row(f'child-{i}', 'Generated child', root) for i in range(20)]
+    # Unrelated untitled native rows must not trigger one disk lookup each.
+    rows.extend(row(f'00000000-0000-4000-8000-{i:012d}') for i in range(2, 32))
     topics.attach_topics(rows, names={})
     assert calls == [root]
-    assert all(item['continuation_topic_title'] == 'NATIVE TOPIC' for item in rows)
+    assert all(item['continuation_topic_title'] == 'NATIVE TOPIC' for item in rows[:20])
 
 
 def test_revision_invalidates_sidebar_caches_only_on_changes(store):

@@ -79,6 +79,8 @@ class _Batch:
         self.titles = {}
         self.pending = {}
         self.allow_native_lookup = True
+        self.capture_root_titles = False
+        self.ancestors = set()
 
     def record(self, sid):
         if sid not in self.records:
@@ -112,7 +114,9 @@ class _Batch:
             # Consult it in memory; never fetch all native threads per row.
             native = getattr(_core, '_codex_titles_cache', {}).get('data', {}).get(sid, {})
             cached = native.get('title') or native.get('agent_nickname')
-        if not cached and self.allow_native_lookup and _NATIVE_ID_RE.fullmatch(sid):
+        if (not cached and self.allow_native_lookup
+                and (self.capture_root_titles or sid in self.ancestors)
+                and _NATIVE_ID_RE.fullmatch(sid)):
             # On a fresh process an archived Codex root may not be in either
             # in-memory cache. This is an indexed id=? lookup, once per root,
             # not the full native-session enumeration used by title refresh.
@@ -180,6 +184,8 @@ class _Batch:
                     break
             origin = explicit or origin or self.indexed_origin(current)
             if not origin:
+                if chain:
+                    self.ancestors.add(current)
                 title = title or self.title(current)
                 if not title and chain:
                     title = self.record(chain[-1][0])[2]
@@ -208,6 +214,7 @@ def _project_topics(batch, rows):
         origin = batch.record(sid)[0]
         if origin and root:
             root_record = batch.record(root)
+            batch.ancestors.add(root)
             updated = root_record[2] or batch.title(root)
             if updated and updated != root_record[2]:
                 batch.put(root, '', root, updated, root_record[3])
@@ -233,6 +240,7 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False):
     names = _core._load_session_name_overrides() if names is None else names
     rows = [row for row in rows if isinstance(row, dict)]
     batch = _Batch(conn, rows, names)
+    batch.capture_root_titles = wait_for_writer
     # Native title reads may perform I/O. Never do them while holding the
     # shared index's writer lock, including on a cold archive projection.
     _project_topics(batch, rows)
