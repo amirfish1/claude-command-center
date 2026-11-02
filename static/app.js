@@ -44814,7 +44814,18 @@
           + ' role="menuitemcheckbox" aria-checked="' + (_arcTrackedTableOn ? 'true' : 'false') + '"'
           + ' title="Show tracked sessions as a table in the main pane (ticket, name, status, next step)">'
           + '<span class="conv-check" aria-hidden="true">' + (_arcTrackedTableOn ? '&#10003;' : '') + '</span>Table view</button>';
-      const _arcDisplayControls = _arcGroupingToggle
+      const _sessionStateTools = _ticketLifecycleView
+        ? '<span class="conv-session-state-tools" data-role="session-state-toggle" role="group" aria-label="Group sessions by state">'
+          + '<span class="conv-grouping-toggle">'
+          + ['state', 'list'].map(mode => '<button type="button" class="grouping-opt'
+            + ((_sessionsByState ? 'state' : 'list') === mode ? ' is-active' : '')
+            + '" data-session-state-grouping="' + mode + '" aria-pressed="'
+            + ((_sessionsByState ? 'state' : 'list') === mode) + '">'
+            + (mode === 'state' ? 'By state' : 'One list') + '</button>').join('')
+          + '</span></span>'
+        : '';
+      const _arcDisplayControls = _sessionStateTools
+        + _arcGroupingToggle
         + _arcDenseToggle
         + _arcWindowToggle.replace('class="conv-grouping-toggle conv-window-toggle"', 'class="conv-grouping-toggle conv-window-toggle is-phone-menu-only"')
         + _arcEngineMenuRow
@@ -44826,16 +44837,6 @@
           + '<span class="conv-archived-overflow-menu">' + _arcDisplayControls + '</span>'
           + '</details>'
         : '';
-      const _sessionStateTools = _ticketLifecycleView
-        ? '<div class="conv-session-state-tools" data-role="session-state-toggle" role="group" aria-label="Group sessions by state">'
-          + '<span class="conv-grouping-toggle">'
-          + ['state', 'list'].map(mode => '<button type="button" class="grouping-opt'
-            + ((_sessionsByState ? 'state' : 'list') === mode ? ' is-active' : '')
-            + '" data-session-state-grouping="' + mode + '" aria-pressed="'
-            + ((_sessionsByState ? 'state' : 'list') === mode) + '">'
-            + (mode === 'state' ? 'By state' : 'One list') + '</button>').join('')
-          + '</span></div>'
-        : '';
       const _arcTools = '<div class="conv-archived-tools" data-role="archived-tools">'
           + _arcToolsLeft
           + '<span class="conv-archived-tools-right">' + _arcWindowToggle + _arcGroupingToggle
@@ -44844,7 +44845,6 @@
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
         + _workersActivityHtml
-        + _sessionStateTools
         + _arcTools
         + _workersUniformHtml
         + _wtPendingHtml
