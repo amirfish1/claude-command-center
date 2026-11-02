@@ -50,6 +50,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
@@ -1333,6 +1334,9 @@ def decision_inbox_decide(card_id, option_index, *, cards=None, now=None, persis
     card = cards.get(str(card_id))
     if not card:
         return {"ok": False, "error": "unknown card"}
+    source_request = (card.get('source') or {}).get('source_request')
+    if isinstance(source_request, dict) and source_request.get('delivery_owner') == 'ccc-outbox':
+        return {"ok": False, "error": "This source request requires the canonical answer workflow; legacy card actions are disabled."}
     if card.get("status") != "open":
         return {"ok": False, "error": f"card already {card.get('status')}"}
     try:
@@ -1546,6 +1550,17 @@ def decision_inbox_ingest(payload, *, cards=None, now=None, persist=True, cfg=No
     fields, err = validate_external_card(payload)
     if err:
         return {"ok": False, "error": err}
+    if 'source_request' in payload:
+        from ccc_server.decision_source_reports import bind_source_request
+        if any(option['action']['kind'] not in ('human', 'snooze') for option in fields['options']):
+            return {'ok': False, 'error': 'Source-bound options must record an answer or snooze; direct actions are unsupported.',
+                    'code': 'source_request_conflict'}
+        try:
+            fields['extra']['source_request'] = bind_source_request(payload['source_request'])
+        except ValueError as error:
+            return {'ok': False, 'error': str(error), 'code': 'source_request_conflict'}
+        except (OSError, sqlite3.Error):
+            return {'ok': False, 'error': 'Source request registry is unavailable', 'code': 'source_request_unavailable'}
     cards = load_cards() if cards is None else cards
     qualified = fields["source_id"]
     existing = None
@@ -1557,6 +1572,13 @@ def decision_inbox_ingest(payload, *, cards=None, now=None, persist=True, cfg=No
             if existing is None or (_di_parse_iso(c.get("updated_at")) or 0) > (_di_parse_iso(existing.get("updated_at")) or 0):
                 existing = c
     if existing is not None:
+        if (existing.get('source') or {}).get('source_request') != fields['extra'].get('source_request'):
+            return {'ok': False, 'error': 'Source binding is frozen; use a new producer source_id or report revision.',
+                    'code': 'source_request_conflict'}
+        if fields['extra'].get('source_request') and (existing.get('title') != fields['title']
+                                                     or existing.get('options') != fields['options']):
+            return {'ok': False, 'error': 'Source-bound choices are frozen; use a new report revision.',
+                    'code': 'source_request_conflict'}
         status = existing.get("status")
         blocked = status == "open"
         if status == "snoozed":
@@ -1593,12 +1615,14 @@ def decision_inbox_ingest(payload, *, cards=None, now=None, persist=True, cfg=No
     }
     cards[card["id"]] = card
     superseded = []
-    family = source_family(qualified)
+    family = None if fields['extra'].get('source_request') else source_family(qualified)
     if family:
         for c in cards.values():
             if not isinstance(c, dict) or c.get("id") == card["id"]:
                 continue
             if c.get("status") != "open" or source_family(c.get("source_id")) != family:
+                continue
+            if (c.get('source') or {}).get('source_request'):
                 continue
             # Same recurring producer, previous firing: close it. Status
             # "superseded" stays out of CLOSED_STATUSES so it never feeds

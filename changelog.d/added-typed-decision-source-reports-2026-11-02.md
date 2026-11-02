@@ -1,0 +1,1 @@
+- Preserve validated producer links to exact owner-question episodes and freeze their source binding; reject stale links and legacy actions on outbox-owned cards while retaining existing references.

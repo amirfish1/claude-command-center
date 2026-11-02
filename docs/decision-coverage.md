@@ -79,3 +79,36 @@ including its revision token, separately from display text. Receipts must match
 the ticket, immutable answer ID and exact submitted payload. Unsupported sources
 are refused; it never falls back to an ordinary unguarded `wt answer` call.
 Routing details remain separate from source acceptance and work completion.
+
+## Typed producer reports
+
+An external card may include `source_request` to link its explanation to an
+exact owner-question episode. Ticket tags alone remain possible links and
+never become canonical bindings. The typed object has:
+
+- `version: 1`, `adapter: "watchtower-block"`, `origin_id`, `generation`, and
+  `source_revision` from the source receipt.
+- `source_snapshot`: the exact `store_id`, `blocked_at`, untrimmed
+  `block_question`, `wait_kind: "owner"`, and entire `wait` object or null.
+- `delivery_owner: "routine"` or `"ccc-outbox"`, naming the single bridge
+  responsible for delivery. Declaring an owner does not activate that bridge.
+
+CCC validates the link against its bound, open canonical question and retains
+it as `card.source.source_request`, enriched with `request_id` and
+`request_revision`. Producers may supply those two identity assertions too;
+they must match exactly. Unsupported fields, other stores, changed snapshots,
+withdrawn questions, rationale approvals and review gates are rejected before
+a card is created. Source validation reads only CCC's registry, never a source
+or transcript. A source can change after validation; answer delivery still
+requires the conditional source check.
+
+The binding is frozen. Reposting a different episode, revision or delivery
+owner under an existing producer source ID is refused. Use a new explicit
+report revision; an old tag-only card is not silently rebound to today's
+question. Source-bound titles and choices are also frozen on a repost; direct
+spawn/inject options cannot bypass conditional delivery. Date-family heuristics
+never resolve source-bound questions. Existing Q/D references and card IDs remain intact. No semantic
+merge occurs. Outbox-owned cards refuse legacy card actions until the
+canonical answer workflow is enabled. Routine-owned cards require the
+corresponding conditional bridge to be activated; this metadata alone does
+not make an old unguarded routine safe.
