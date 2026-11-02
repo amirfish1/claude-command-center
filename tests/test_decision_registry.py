@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from ccc_server.decision_registry import DecisionRegistry
+from ccc_server.decision_registry import DecisionRegistry, Registry
 
 
 @pytest.fixture
@@ -21,6 +21,22 @@ def source(**changes):
               "provenance": {"origin": "example", "observed_at": "2026-01-01"}}
     record.update(changes)
     return record
+
+
+def test_parent_projection_api(tmp_path):
+    registry = Registry(tmp_path / "requests.sqlite3")
+    request = source(kind="review", body="Select an option", source_revision=3,
+                     visibility="visible")
+    row = registry.upsert_requests([request])[0]
+    assert row["installation_id"] == registry.installation_id
+    for field in ("adapter", "origin_id", "kind", "title", "body",
+                  "source_revision", "visibility"):
+        assert row[field] == request[field]
+    assert row["generation"] == "1"
+    assert registry.list_requests() == [row]
+    assert row["content"] == request
+    with pytest.raises(ValueError, match="generation"):
+        registry.upsert_requests([{k: v for k, v in request.items() if k != "generation"}])
 
 
 def test_import_is_idempotent_across_restart_and_preserves_legacy(registry):
@@ -38,7 +54,7 @@ def test_import_is_idempotent_across_restart_and_preserves_legacy(registry):
     assert first["revision"] == 1
     assert first["status"] == "snoozed"
     assert first["content"] == original["dc_example"]
-    assert set(first["aliases"]) == {"dc_example", "D12", "Q007", "D0012", "[Q7:color]"}
+    assert set(first["aliases"]) == {"dc_example", "D12", "D-12", "Q007", "D0012", "[Q7:color]"}
     assert cards == original
 
 

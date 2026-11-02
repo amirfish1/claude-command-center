@@ -11,6 +11,7 @@ copies. No source files, services, tickets or action handlers are accessed.
 """
 
 import json
+import re
 import sqlite3
 import uuid
 from collections.abc import Mapping
@@ -35,6 +36,7 @@ def _aliases(record):
     ):
         raise ValueError("aliases must be nonempty strings in a list")
     result = list(aliases)
+    result.extend(re.findall(r'\[Q\d+:[a-z0-9-]+\]', str(record.get('title') or '')))
     for key in ("q_alias", "question_id", "decision_ref"):
         value = record.get(key)
         if isinstance(value, str) and value:
@@ -44,6 +46,8 @@ def _aliases(record):
         value = record.get(key)
         if type(value) is int and value > 0:
             result.append(f"{prefix}{value}")
+            if prefix == 'D':
+                result.append(f"D-{value}")
         elif isinstance(value, str) and value:
             result.append(value if value.startswith(prefix) else prefix + value)
     return sorted(set(result))
@@ -57,6 +61,8 @@ class DecisionRegistry:
     aliases (exact strings scoped to this record's installation and origin),
     status, answer_state and delivery_state. Aliases are never lookup keys for
     deduplication. Updates preserve historical aliases.
+    Supplied kind/title/body/source_revision/visibility fields are also exposed
+    directly on returned records for projection consumers.
     """
 
     def __init__(self, db_path):
@@ -103,6 +109,9 @@ class DecisionRegistry:
         record = dict(row)
         record["content"] = json.loads(record["content"])
         record["aliases"] = json.loads(record["aliases"])
+        for field in ("kind", "title", "body", "source_revision", "visibility"):
+            if field in record["content"]:
+                record[field] = record["content"][field]
         return record
 
     def _upsert(self, db, *, adapter, origin_id, generation, content, aliases,
@@ -188,3 +197,7 @@ class DecisionRegistry:
                 "SELECT * FROM requests ORDER BY adapter, origin_id, generation")]
         finally:
             db.close()
+
+
+# Short public spelling for callers composing registry and source projections.
+Registry = DecisionRegistry
