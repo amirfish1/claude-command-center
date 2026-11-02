@@ -14,6 +14,7 @@ const app = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
 const html = fs.readFileSync(path.join(root, 'static/index.html'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'static/app.css'));
 const moduleJS = fs.readFileSync(path.join(root, 'static/settings-context.js'));
+const navigationJS = fs.readFileSync(path.join(root, 'static/sidebar-navigation.js'));
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-context-'));
 function between(start, end) {
   const i=app.indexOf(start); assert(i>=0,start); const j=app.indexOf(end,i+start.length); assert(j>=0,end);return app.slice(i,j);
@@ -43,7 +44,7 @@ function fixture() {return `<!doctype html><html><head><meta charset="utf-8"><me
 body{display:block;margin:0;overflow:auto}.fixture-header{display:flex;gap:12px;padding:8px;position:relative;height:48px}.fixture-grid{display:flex;align-items:flex-start}.fixture-sidebar{width:350px;flex:0 0 350px}.fixture-main{flex:1;min-width:0;padding:8px}.conv-pane{display:block!important}.fixture-reader{min-height:120px}.fixture-dormant{display:none}.sh-more-menu{z-index:12000}.fixture-sidebar #convList{overflow:visible}.conv-pane-header{display:flex!important}.conv-pane-title{display:block}.conv-pane-more-menu{z-index:100}.fixture-main #convInputContext{display:block}.fixture-main .spawn-cwd-row{display:flex;flex-wrap:wrap}.fixture-main #spawnCwdSummary{display:none}#settingsModal{z-index:1000}.fixture-main .status-rail{display:none}
 @media(max-width:1200px){.fixture-grid{display:block}.fixture-sidebar{width:100%}.fixture-main{padding:12px}#convList .conv-archived-tools{display:flex!important}}
 </style></head><body><header class="fixture-header"></header><div class="fixture-grid"><aside class="fixture-sidebar"><div id="convList"></div></aside><main class="fixture-main"><div id="convSplit"></div><div id="queueParking"></div></main></div><div class="fixture-dormant"></div>
-<script>
+<script src="/sidebar-navigation.js"></script><script>
 const parsed=new DOMParser().parseFromString(${encoded},'text/html');
 document.body.append(parsed.getElementById('settingsModal'));
 const header=document.querySelector('.fixture-header');header.append(parsed.getElementById('settingsBtn'),parsed.getElementById('sidebarMoreBtn').closest('.sh-more-wrap'));
@@ -97,7 +98,7 @@ const escapeHtml=text=>String(text).replaceAll('&','&amp;').replaceAll('<','&lt;
 let tab='coding';
 function renderArchiveList(){
  const panel=get('queuePanel');if(panel) get('queueParking').append(panel);
- tab=localStorage.getItem('ccc-sidebar-tab')||'coding';
+ tab=window.CCCNavigation.getTab()||'coding';
  const repoPath='repo-alpha',archiveObjectId='',newSession='<button type="button" data-role="folder-new-session">+</button>',ship='';
  ${nativeRepoAction}
  get('convList').innerHTML=tab==='queues'?'<div id="sidebarQueueHost"></div>':'<div class="conv-archived-tools"><details class="conv-archived-overflow"><summary class="conv-archived-overflow-trigger" aria-label="View options">View options</summary><span class="conv-archived-overflow-menu"><button type="button" data-native-view>Native view option</button></span></details></div><div class="conv-folder-group"><div class="conv-folder-group-header" role="button" tabindex="0"><span>Alpha repository</span>'+repoActions+'</div></div>';
@@ -123,6 +124,7 @@ test.before(async()=>{
  server=http.createServer(async(req,res)=>{
   const u=new URL(req.url,'http://fixture');
   if(u.pathname==='/app.css'){res.setHeader('Content-Type','text/css');return res.end(css);}
+  if(u.pathname==='/sidebar-navigation.js'){res.setHeader('Content-Type','text/javascript; charset=utf-8');return res.end(navigationJS);}
   if(u.pathname==='/settings-context.js'){res.setHeader('Content-Type','text/javascript; charset=utf-8');return res.end(moduleJS);}
   if(u.pathname==='/api/repo/avatar'&&req.method==='GET'){res.setHeader('Content-Type','image/svg+xml');return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" rx="6" fill="#58a6ff"/></svg>');}
   if(u.pathname.startsWith('/api/')){
@@ -158,10 +160,12 @@ for(const width of [1440,390]){
   await page.focus('#settingsGhIssuesToggle');await page.keyboard.press('Enter');
   await page.waitForFunction(()=>localStorage.getItem('ccc-view-gh')==='hide');
   await listMenu(page);assert.equal(await page.$eval('#settingsGhIssuesToggle',el=>el.getAttribute('aria-checked')),'false');
-  await page.evaluate(()=>localStorage.setItem('ccc-sidebar-tab','coding'));
+  await page.evaluate(()=>{localStorage.setItem('ccc-sidebar-tab','coding');window.CCCNavigation.setTab('coding');});
   await page.focus('#settingsSeparateTabsToggle');await page.keyboard.press('Space');
   assert.equal(await page.evaluate(()=>localStorage.getItem('ccc-separate-tabs')),'on');
-  assert.equal(await page.evaluate(()=>localStorage.getItem('ccc-sidebar-tab')),'inprogress');
+  assert.equal(await page.evaluate(()=>window.CCCNavigation.getTab()),'inprogress');
+  assert.equal(await page.evaluate(()=>sessionStorage.getItem('ccc-sidebar-tab')),'inprogress');
+  assert.equal(await page.evaluate(()=>localStorage.getItem('ccc-sidebar-tab')),'coding');
   await listMenu(page);await page.screenshot({path:path.join(scratch,`list-before-${width}.png`)});await page.click('[data-chips-mode="muted"]');
   assert.equal(await page.evaluate(()=>localStorage.getItem('ccc-chips-mode')),'muted');assert.equal(await page.evaluate(()=>document.body.classList.contains('chips-muted')),true);
   await page.evaluate(()=>{window.__rerender();_syncSidebarMoreFilters();});await listMenu(page);
