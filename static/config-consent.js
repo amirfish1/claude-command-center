@@ -225,6 +225,8 @@
     $modal = document.createElement('div');
     $modal.id = 'cfgConsentModal';
     $modal.className = 'upd-overlay';
+    // Setup must stay above the fixed announcement banner (z-index 10000).
+    $modal.setAttribute('style', 'z-index:10001');
     $modal.setAttribute('role', 'dialog');
     $modal.setAttribute('aria-modal', 'true');
     $modal.setAttribute('aria-labelledby', 'cfgConsentTitle');
