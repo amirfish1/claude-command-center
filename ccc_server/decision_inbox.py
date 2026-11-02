@@ -220,6 +220,37 @@ def last_run(path=None):
     return None
 
 
+def sweep_llm_usage(run, cards):
+    """Prefer explicit request counts; recover older usage only with evidence."""
+    calls = run.get("llm_calls")
+    if isinstance(calls, int) and calls >= 0:
+        return calls > 0, "Recorded requests"
+    if isinstance(run.get("llm_used"), bool):
+        return run["llm_used"], "Recorded usage"
+    unknown = False
+    for item in run.get("created") or []:
+        card = cards.get(item.get("id"), {})
+        if card.get("run_id") != run["run_id"]:
+            card = {}
+        kind = item.get("kind") or card.get("kind") or str(item.get("source_id") or "").split(":")[0]
+        if kind == "governor":
+            continue
+        meta = item.get("analyst") or card.get("analyst")
+        if isinstance(meta, dict) and "error" in meta:
+            meta_calls = meta.get("llm_calls")
+            if isinstance(meta_calls, int) and meta_calls >= 0:
+                if meta_calls:
+                    return True, "Recorded decision requests"
+                continue
+            error = str(meta.get("error") or "")
+            if not error:
+                return True, "Historical analyst response"
+            if error.startswith("claude exited ") or "timed out" in error.lower():
+                return True, "Historical failed request"
+        unknown = True
+    return (None, "Historical usage not recorded") if unknown else (False, "Historical script-only run")
+
+
 def decision_inbox_runs_payload(*, offset=0, limit=10, path=None, cards=None):
     """Read every retained run; paginate newest first without starting work."""
     try:
@@ -248,9 +279,13 @@ def decision_inbox_runs_payload(*, offset=0, limit=10, path=None, cards=None):
     except OSError:
         return {"ok": False, "error": "Cannot read sweep history"}
     records.reverse()
-    page = records[offset:offset + limit]
     retained = load_cards() if cards is None else cards
-    for run in page:
+    for run in records:
+        run["llm_used"], run["llm_usage_basis"] = sweep_llm_usage(run, retained)
+    activity = [run for run in records if run.get("created") or run["llm_used"] is True]
+    page = records[offset:offset + limit]
+    activity_page = activity[offset:offset + limit]
+    for run in page + activity_page:
         for item in run.get("created") or []:
             card = retained.get(item.get("id"), {})
             # Match the original run, never attach a later report's source.
@@ -262,7 +297,8 @@ def decision_inbox_runs_payload(*, offset=0, limit=10, path=None, cards=None):
                     item["details_from"] = "retained decision"
     return {"ok": True, "runs": page,
             "total": len(records), "offset": offset, "limit": limit,
-            "invalid_records": invalid}
+            "invalid_records": invalid, "activity_runs": activity_page,
+            "activity_total": len(activity), "hidden_count": len(records) - len(activity)}
 
 
 def _di_iso(ts):
@@ -801,7 +837,7 @@ def parse_analyst_json(raw):
     return {"title": title, "context": str(obj.get("context") or "")[:800], "options": options}
 
 
-def run_analyst(candidate, cfg, *, timeout=180):
+def run_analyst(candidate, cfg, *, timeout=180, on_call=None):
     """Headless `claude -p` round trip. Returns the parsed card body; raises
     on CLI absence, timeout, non-zero exit, or unparseable JSON (one retry
     on the JSON case only, like the queue brief)."""
@@ -828,7 +864,14 @@ def run_analyst(candidate, cfg, *, timeout=180):
         cwd = None
     last_err = None
     for attempt in (1, 2):
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        except subprocess.TimeoutExpired:
+            if on_call:
+                on_call()
+            raise
+        if on_call:
+            on_call()
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or "").strip()[:300] or f"claude exited {proc.returncode}")
         try:
@@ -962,7 +1005,7 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
     blocked = blocked_source_ids(cards, now=now, dedupe_days=cfg.get("dedupe_days"))
     record = {"run_id": run_id, "trigger": trigger, "started_at": _di_iso(now), "sources": {}, "created": [],
               "expired": expired, "skipped_dedupe": 0, "skipped_cap": 0,
-              "skipped_muted": 0, "errors": []}
+              "skipped_muted": 0, "errors": [], "llm_calls": 0, "llm_used": False}
 
     # Governor first: cheap, and a burning session outranks a stale board row.
     try:
@@ -1014,24 +1057,30 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
         if _admit(source_id):
             new_cards.append(governor_card(f, now=now, run_id=run_id))
 
-    analyst_fn = analyst or (lambda c: run_analyst(c, cfg))
+    def _count_llm_call():
+        record["llm_calls"] += 1
+        record["llm_used"] = True
+
+    analyst_fn = analyst or (lambda c: run_analyst(c, cfg, on_call=_count_llm_call))
     for cand in candidates:
         if not _admit(cand["source_id"]):
             continue
         t0 = time.time()
+        calls_before = record["llm_calls"]
         meta = {"model": cfg.get("model"), "duration_s": 0.0, "error": None}
         try:
             body = analyst_fn(cand)
         except Exception as e:
             meta["error"] = str(e)[:300]
             body = fallback_card_body(cand)
+        meta["llm_calls"] = record["llm_calls"] - calls_before
         meta["duration_s"] = round(time.time() - t0, 1)
         new_cards.append(analyst_card(cand, body, now=now, run_id=run_id, analyst_meta=meta))
 
     for c in new_cards:
         cards[c["id"]] = c
         record["created"].append({k: c.get(k) for k in
-                                  ("id", "source_id", "title", "kind", "source", "created_at")})
+                                  ("id", "source_id", "title", "kind", "source", "created_at", "analyst")})
     record["duration_s"] = round(time.time() - started, 1)
     record["finished_at"] = _di_iso(time.time())
     if persist:

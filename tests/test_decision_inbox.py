@@ -12,6 +12,8 @@ import pathlib
 import tempfile
 import time
 import unittest
+from unittest import mock
+from types import SimpleNamespace
 
 di = importlib.import_module("ccc_server.decision_inbox")
 
@@ -229,6 +231,42 @@ class AnalystParse(unittest.TestCase):
         self.assertIn('"recommended"', p)
 
 
+class AnalystRequestAccounting(unittest.TestCase):
+    def test_run_records_request_count_and_snapshots_it_with_the_decision(self):
+        def analyst(candidate, cfg, *, on_call):
+            on_call()
+            on_call()
+            return di.fallback_card_body(candidate)
+        with mock.patch.object(di, "run_analyst", analyst):
+            run = di.run_once(cfg=_cfg(), cards={}, rows=[], live_ids=set(), now=NOW,
+                              board_text="| Cat | Task | Status | ETA | Notes |\n|---|---|---|---|---|\n| x | Example | Blocked | - | waiting |\n",
+                              wt_runner=lambda a: None, persist=False)
+        self.assertTrue(run["llm_used"])
+        self.assertEqual(run["llm_calls"], 2)
+        self.assertEqual(run["created"][0]["analyst"]["llm_calls"], 2)
+
+    def test_counts_success_retries_failure_timeout_and_missing_executable(self):
+        good = json.dumps({"title": "Decision", "options": [{"label": "Proceed", "recommended": True, "action": {"kind": "human"}}]})
+        success = SimpleNamespace(returncode=0, stdout=good, stderr="")
+        invalid = SimpleNamespace(returncode=0, stdout="invalid", stderr="")
+        failed = SimpleNamespace(returncode=1, stdout="", stderr="request failed")
+        cases = [("success", [success], 1, False), ("retry", [invalid, success], 2, False),
+                 ("failed", [failed], 1, True),
+                 ("timeout", [di.subprocess.TimeoutExpired("example-cli", 1)], 1, True),
+                 ("missing", [FileNotFoundError("missing")], 0, True)]
+        for name, responses, expected, raises in cases:
+            with self.subTest(name=name), \
+                 mock.patch.object(di, "_core", SimpleNamespace(_resolve_claude_bin=lambda: {"available": True, "bin": "example-cli"})), \
+                 mock.patch.object(di.subprocess, "run", side_effect=responses):
+                calls = []
+                if raises:
+                    with self.assertRaises(Exception):
+                        di.run_analyst({}, _cfg(), on_call=lambda: calls.append(1))
+                else:
+                    di.run_analyst({}, _cfg(), on_call=lambda: calls.append(1))
+                self.assertEqual(len(calls), expected)
+
+
 class RunContract(unittest.TestCase):
     def _run(self, cards, **kw):
         kw.setdefault("cfg", _cfg(max_cards_per_run=5, strategy_board="", dedupe_days=7))
@@ -419,6 +457,39 @@ class Persistence(unittest.TestCase):
             self.assertEqual(added[0]["details_from"], "retained decision")
             self.assertNotIn("source", added[1])
             self.assertNotIn("source", json.loads(runs.read_text())["created"][0])
+
+    def test_activity_filters_before_pagination_but_keeps_empty_llm_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = pathlib.Path(tmp) / "runs.jsonl"
+            for row in [
+                {"run_id": "empty-script", "created": [], "llm_calls": 0},
+                {"run_id": "governor", "created": [{"id": "g", "source_id": "governor:s:context_high"}]},
+                {"run_id": "empty-llm", "created": [], "llm_calls": 1},
+                {"run_id": "legacy-llm", "created": [{"id": "w", "source_id": "wt:EXAMPLE"}]},
+            ]:
+                di._append_run(row, path=runs)
+            cards = {"w": {"run_id": "legacy-llm", "analyst": {"error": "claude exited 1"}}}
+            first = di.decision_inbox_runs_payload(path=runs, cards=cards, limit=2)
+            self.assertEqual(first["total"], 4)  # Existing API remains unfiltered.
+            self.assertEqual(first["activity_total"], 3)
+            self.assertEqual(first["hidden_count"], 1)
+            self.assertEqual([r["run_id"] for r in first["activity_runs"]], ["legacy-llm", "empty-llm"])
+            self.assertTrue(all(r["llm_used"] for r in first["activity_runs"]))
+            second = di.decision_inbox_runs_payload(path=runs, cards=cards, offset=2, limit=2)
+            self.assertEqual([r["run_id"] for r in second["activity_runs"]], ["governor"])
+            self.assertFalse(second["activity_runs"][0]["llm_used"])
+
+    def test_legacy_llm_usage_does_not_guess_from_a_different_run(self):
+        run = {"run_id": "r1", "created": [{"id": "c", "source_id": "wt:EXAMPLE"}]}
+        cards = {"c": {"run_id": "r2", "analyst": {"error": None}}}
+        self.assertIsNone(di.sweep_llm_usage(run, cards)[0])
+        cards["c"]["run_id"] = "r1"
+        cards["c"]["analyst"] = {}
+        self.assertIsNone(di.sweep_llm_usage(run, cards)[0])
+        cards["c"]["analyst"] = {"error": None}
+        self.assertTrue(di.sweep_llm_usage(run, cards)[0])
+        run["llm_calls"] = 0
+        self.assertFalse(di.sweep_llm_usage(run, cards)[0])
 
     def test_config_defaults_and_overlay(self):
         with tempfile.TemporaryDirectory() as tmp:

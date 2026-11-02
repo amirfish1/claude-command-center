@@ -21,19 +21,23 @@ older decision still applies. Connection failures and overdue scans are visible.
 
 ## Why an item appeared
 
-**Sweep history** shows every retained sweep, newest first, with pagination.
-Expand a run for its exact start/end timestamps (local time and UTC), duration,
-candidate counts by source, skip counts, errors, and every added decision's
-title, ID, and source ID. Runs that created nothing are included. New runs also
-retain source details and the manual/scheduled trigger. Older runs show source
-details and creation times from their original retained decision where available;
-missing details and run types are labeled as unrecorded. Connected-tool reports and live queue reviews are not
-sweep results. Expand a decision for its own **Why this appeared** details.
-Reading history never starts a sweep or chooses an option.
+**Sweep history** is a table with exact start/end and decision creation times
+in Pacific time (`America/Los_Angeles`, automatically PST or PDT). Each row
+lists added decision titles and source IDs, with an explicit **LLM used** column.
+Empty script-only sweeps are hidden; runs that attempted an LLM request remain
+visible even when they added no decision. Pagination applies after filtering.
 
-`GET /api/decision-inbox/runs?offset=0&limit=10` returns `runs`, `total`,
-`offset`, `limit`, and `invalid_records`. Limits are clamped to 1–100;
-malformed log lines are counted and skipped rather than hiding other runs.
+New runs record request counts, including retries and failed requests; a missing
+executable does not count as a request. Older usage is inferred from retained
+analyst records and labeled historical; unavailable usage is **Unknown**.
+Sources and creation times for older decisions come from their original retained
+card when available. Reading history never starts work or chooses an option.
+
+`GET /api/decision-inbox/runs?offset=0&limit=10` keeps the original unfiltered
+`runs` and `total` fields and adds filtered `activity_runs`, `activity_total`,
+and `hidden_count`. Run records include `llm_used` and `llm_usage_basis`;
+new records also include `llm_calls`. Limits are clamped to 1–100.
+Malformed log lines are counted in `invalid_records` and skipped.
 
 On mobile, open **More → Decisions** in CCC. The More menu includes the same
 app catalog as the desktop rail. Apps keep the bottom bar visible so you can
