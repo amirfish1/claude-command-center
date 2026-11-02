@@ -1,0 +1,1 @@
+- Apply notification policies consistently to informational alerts and browser/native banner sounds; queued alerts respect subsequent policy changes.

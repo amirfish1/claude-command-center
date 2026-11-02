@@ -124,3 +124,40 @@ test('desktop notification leaves the reader header focus target unobstructed', 
     assert.equal(result.hit,true);assert(result.toastTop>result.bottom);
   } finally { await page.close(); }
 });
+
+for (const native of [false,true]) test('notification policies govern banner delivery and sound; native='+native,async()=>{
+ const page=await browser.newPage();try{
+  await page.goto(url,{waitUntil:'load'});
+  const result=await page.evaluate(native=>{
+   localStorage.clear();const messages=[];
+   Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
+   Object.defineProperty(navigator,'serviceWorker',{configurable:true,value:undefined});
+   class FakeNotification{static permission='granted';constructor(title,opts){messages.push({title,...opts});}}
+   window.Notification=FakeNotification;
+   if(native)window.webkit={messageHandlers:{cccNotify:{postMessage:value=>messages.push(value)}}};
+   let serial=0;const send=kind=>cccNotify({id:'ntf_test_policy_'+serial++,title:kind,kind});
+   cccNotify.applyPolicy('quiet');const quiet=['task','needs_input','digest','info','error'].map(send);
+   cccNotify.applyPolicy('action');const action=['task','needs_input','session_died','error','info','success','digest','milestone'].map(send);
+   const actionMessages=messages.splice(0);
+   cccNotify.applyPolicy('all');const all=['task','digest','info'].map(send);const allMessages=messages.splice(0);
+   cccNotify.applyPolicy('action');cccNotify.setPref('digest',true);const custom={policy:cccNotify.policy(),info:send('info')};
+   return {quiet,action,actionMessages,all,allMessages,custom};
+  },native);
+  assert.deepEqual(result.quiet,[false,false,false,false,false]);
+  assert.deepEqual(result.action,[true,true,true,true,false,false,false,false]);
+  assert.equal(result.actionMessages.length,4);assert(result.actionMessages.every(m=>native?m.kind==='silent':m.silent===true));
+  assert.deepEqual(result.all,[true,true,true]);assert(result.allMessages.every(m=>native?m.kind!=='silent':m.silent===false));
+  assert.deepEqual(result.custom,{policy:'custom',info:true});
+ }finally{await page.close();}
+});
+
+test('queued alerts cannot bypass a later Quiet policy',async()=>{
+ const page=await browser.newPage();try{
+  await page.goto(url,{waitUntil:'load'});
+  await page.evaluate(()=>{localStorage.clear();Object.defineProperty(document,'hidden',{configurable:true,get:()=>false});document.hasFocus=()=>true;cccNotify.applyPolicy('all');for(let i=0;i<4;i++)cccNotify({id:'ntf_test_queue_'+i,title:'Queued '+i,kind:'task'});cccNotify.applyPolicy('quiet');});
+  assert.equal(await page.$$('.ccc-toast').then(rows=>rows.length),3);
+  await page.click('.ccc-toast-close');
+  await page.waitForFunction(()=>document.querySelectorAll('.ccc-toast').length===2);
+  assert.doesNotMatch(await page.$eval('#cccNotifyStack',n=>n.textContent),/Queued 3/);
+ }finally{await page.close();}
+});

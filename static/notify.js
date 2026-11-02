@@ -308,7 +308,9 @@
     var stack = document.getElementById('cccNotifyStack');
     var visible = stack ? stack.children.length : 0;
     while (_toastQueue.length && visible < MAX_TOASTS) {
-      toast(_toastQueue.shift());
+      var item = _toastQueue.shift();
+      if (!enabled() || !_kindAllowed(String(item.kind || 'info'))) continue;
+      toast(item);
       visible += 1;
     }
   }
@@ -324,7 +326,8 @@
           title: String(item.title || ''),
           body: String(item.body || ''),
           url: String(item.url || ''),
-          kind: String(item.kind || 'info'),
+          // The existing native bridge uses kind=silent to omit its sound.
+          kind: _lsGet('ccc-sounds-enabled') === '0' ? 'silent' : String(item.kind || 'info'),
           // Same session -> one banner that updates instead of a pile.
           tag: item.session_id ? 'session-' + item.session_id : '',
         });
@@ -338,6 +341,7 @@
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return false;
     var opts = {
       body: String(item.body || ''),
+      silent: _lsGet('ccc-sounds-enabled') === '0',
       icon: '/static/icon.svg',
       tag: String(item.id || ('ccc-' + Date.now())),
       data: { url: item.url || '/', session_id: item.session_id || '' },
@@ -382,6 +386,7 @@
     if (kind === 'task' || kind === 'needs_input') return pref('tasks');
     if (kind === 'digest') return pref('digest');
     if (kind === 'milestone') return pref('milestones');
+    if (notificationPolicy() === 'action') return kind === 'session_died' || kind === 'error';
     return true;
   }
 
