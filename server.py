@@ -8325,8 +8325,27 @@ def _seed_model_policy_once():
         print(f"[model-policy] could not seed {MODEL_POLICY_FILE}: {e}", file=sys.stderr)
 
 
+_MODEL_POLICY_TLS = threading.local()
+
+
+@contextlib.contextmanager
+def _model_policy_snapshot():
+    """Within this block, this thread reads the model policy once."""
+    if getattr(_MODEL_POLICY_TLS, "blocked", None) is not None:
+        yield
+        return
+    _MODEL_POLICY_TLS.blocked = _model_policy_blocked_models()
+    try:
+        yield
+    finally:
+        _MODEL_POLICY_TLS.blocked = None
+
+
 def _model_policy_blocked_models():
     """Return the frozenset of blocked catalog keys (env + policy file)."""
+    snap = getattr(_MODEL_POLICY_TLS, "blocked", None)
+    if snap is not None:
+        return snap
     blocked = set()
     for token in str(os.environ.get("CCC_BLOCKED_MODELS") or "").split(","):
         key = _model_catalog_key(token)
@@ -9344,7 +9363,27 @@ def _refresh_engine_model_catalog_bg():
         _MODEL_CATALOG_REFRESHING.clear()
 
 
+_MODEL_CATALOG_BUILD_LOCK = threading.RLock()
+
+
 def _build_engine_model_catalog(force_refresh=False):
+    """Model catalog, cached; one rebuild at a time (CCC-142).
+
+    After a restart the cache is empty and every first poll rebuilt it at
+    once. Each rebuild also consulted the model policy ~4,400 times, each a
+    stat() that hands off the GIL: 0.3 s alone stretched to tens of seconds
+    under the boot burst. A rebuild now reads the policy once.
+    """
+    if not force_refresh and _MODEL_CATALOG_CACHE["data"] is not None:
+        return _build_engine_model_catalog_impl(False)
+    with _MODEL_CATALOG_BUILD_LOCK:
+        if not force_refresh and _MODEL_CATALOG_CACHE["data"] is not None:
+            return _build_engine_model_catalog_impl(False)
+        with _model_policy_snapshot():
+            return _build_engine_model_catalog_impl(force_refresh)
+
+
+def _build_engine_model_catalog_impl(force_refresh=False):
     now = time.monotonic()
     cached = _MODEL_CATALOG_CACHE["data"]
     if not force_refresh and cached is not None:
