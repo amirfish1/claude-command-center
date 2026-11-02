@@ -63605,8 +63605,9 @@
         + (u._auto_handover_pending ? ' is-pending' : '') + '"'
         + ' data-auto-handover-toggle data-mode="' + escapeHtml(handoverMode) + '"'
         + ' aria-pressed="' + (handoverOn ? 'true' : 'false') + '"'
+        + ' aria-label="' + escapeHtml(handoverTip) + '"'
         + ' title="' + escapeHtml(handoverTip) + '">'
-        + '<span class="wp-handover-dot"></span>token-sitter: ' + escapeHtml(handoverLabel)
+        + '<span class="wp-handover-dot"></span>TS: ' + (handoverOn ? 'ON' : 'OFF')
         + '</button>';
     }
     // Model pill renders LAST in the wp-usage cluster — rightmost slot,

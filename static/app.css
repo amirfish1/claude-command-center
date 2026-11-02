@@ -4566,14 +4566,12 @@
     font-weight: 500;
     vertical-align: middle;
   }
-  /* Workspace context strip — branch, path, usage, and model beside
-     the composer. Narrow panes wrap the workspace and usage groups
-     instead of hiding essential session details. */
+  /* Workspace context strip — keep usage and model on one line beside
+     the composer, letting the workspace path yield space first. */
   .conv-input-context {
     display: none;
     align-items: center; gap: 10px 12px;
-    /* Wide panes share a line; existing-session groups may wrap below.
-       Long paths ellipsify and retain their full value in the tooltip. */
+    /* Long paths ellipsify and retain their full value in the tooltip. */
     flex-wrap: nowrap;
     overflow: hidden;
     white-space: nowrap;
@@ -4655,24 +4653,32 @@
      with the font so this holds across font-size changes. */
   @container conv-ctx (max-width: 800px) {
     .conv-input-context .wp-row {
-      flex: 1 1 100%;
-      flex-wrap: wrap;
+      flex: 1 1 0;
     }
     .conv-input-context .wp-path { max-width: 28ch; }
-    .conv-input-context .wp-branch { max-width: 18ch; }
+    .conv-input-context .wp-row > .wp-branch,
+    .conv-input-context .wp-icon,
+    .conv-input-context .wp-even { display: none; }
     .conv-input-context .wp-usage {
-      flex: 1 1 100%;
-      flex-wrap: wrap;
+      flex: 0 1 auto;
       min-width: 0;
       margin-left: 0;
     }
     .conv-input-context .wp-usage > * { flex-shrink: 0; }
+    .conv-input-context .wp-usage > .wp-model-pill {
+      flex-shrink: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   }
-  /* A container cannot query itself; allow wrapping here, then size
-     its child groups in the container query, including split panes. */
-  .conv-input-context:not(.is-new-session) { flex-wrap: wrap; }
   @container conv-ctx (max-width: 600px) {
     .conv-input-context .wp-path { max-width: 18ch; }
+  }
+  @container conv-ctx (max-width: 450px) {
+    .conv-input-context .wp-usage > .wp-handover-toggle,
+    .conv-input-context .wp-usage-pct { display: none; }
   }
   .conv-input-context.visible { display: flex; }
   .conv-input-context .wp-icon { opacity: 0.7; font-size: 11px; }
