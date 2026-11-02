@@ -91634,7 +91634,7 @@
     msg.className = 'emn-msg';
     msg.textContent = _emnBusy === engine
       ? 'Finish the install in the terminal that just opened. This updates on its own.'
-      : label + " isn't installed on this Mac." + (none ? ' No agent is installed yet.' : '');
+      : label + " isn't installed on this machine." + (none ? ' No agent is installed yet.' : '');
     el.appendChild(msg);
     const add = (text, cls, fn, disabled) => {
       const b = document.createElement('button');
@@ -91645,10 +91645,10 @@
     };
     if (none) {
       add('Review engines', 'emn-primary', () => {
-        if (typeof openSettingsModal === 'function') { _settingsCurrentSection = 'engines'; openSettingsModal(); }
+        installMissingEngine(engine);
       });
     } else {
-      add('Install ' + label, 'emn-primary', () => installMissingEngine(engine), _emnBusy === engine);
+      add('Set up ' + label, 'emn-primary', () => installMissingEngine(engine), _emnBusy === engine);
     }
     if (!none && others.length) {
       const alt = others.includes('claude') ? 'claude' : others[0];
@@ -91657,33 +91657,8 @@
     el.hidden = false;
   }
   async function installMissingEngine(engine) {
-    _emnBusy = engine;
-    renderEngineMissingNotice();
-    let opened = false;
-    try {
-      const res = await fetch('/api/onboarding/install-terminal', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine }),
-      });
-      const data = await res.json().catch(() => ({}));
-      opened = !!(data && data.ok);
-    } catch (_) {}
-    if (!opened) {
-      _emnBusy = '';
-      showOpToast('Could not open a terminal. Open Settings, Engines to install ' + _emnLabel(engine) + '.', 'error');
-      renderEngineMissingNotice();
-      return;
-    }
-    // Re-detect on a short loop until it appears (cheap lookup, capped).
-    let tries = 0;
-    const tick = async () => {
-      tries += 1;
-      await refreshEngineMissingNotice({ fresh: true });
-      if (_emnInstalled && _emnInstalled[engine]) { _emnBusy = ''; _emnForced = ''; renderEngineMissingNotice(); return; }
-      if (tries < 60 && _emnBusy === engine) setTimeout(tick, 4000);
-      else { _emnBusy = ''; renderEngineMissingNotice(); }
-    };
-    setTimeout(tick, 4000);
+    if (window.cccEngineConnection?.open(engine)) return;
+    _settingsCurrentSection = 'engines'; openSettingsModal();
   }
   window.addEventListener('focus', () => { if (_emnInstalled) refreshEngineMissingNotice({ fresh: true }); });
 
@@ -92799,11 +92774,11 @@
   }
 
   // ── Engines hub (Settings > Engines) ──
-  // One row per engine: installed / signed in / usage, an on-off switch every
-  // engine picker honours, and a drawer with the next setup step. Composed
+  // Native data/actions back the single connection flow; legacy row rendering
+  // remains a fallback when that optional script is unavailable. Composed
   // client-side from endpoints that already exist (doctor, onboarding status,
   // usage, update-status), all cheap and cached server-side. Status keeps
-  // itself fresh while the pane is showing; there is no refresh control.
+  // itself fresh while the pane is showing; explicit checks force a refresh.
   const ENGINE_HUB_META = {
     claude: { mono: 'Cl', cmd: 'claude', label: 'Claude Code', vendor: 'Anthropic', hue: 24, docs: 'https://docs.claude.com/en/docs/claude-code' },
     codex: { mono: 'Cx', cmd: 'codex', label: 'Codex', vendor: 'OpenAI', hue: 160, docs: 'https://developers.openai.com/codex/cli' },
@@ -92833,6 +92808,8 @@
   let _engHubOpen = '';
   let _engHubTimer = null;
   let _engHubKimiVersion = '';
+  const _engHubChecking = new Set();
+  let _engHubUnavailable = false, _engHubRequest = 0;
   const _engHubNotes = {};   // engine -> { kind, text } outcome of the last action
 
   function _engHubVisible() {
@@ -93083,6 +93060,7 @@
     const list = document.getElementById('engList');
     if (!list || !_engHubData) return;
     const rows = _engHubRows();
+    if (window.cccEngineConnection?.mounted()) { window.cccEngineConnection.render(rows, {notes:_engHubNotes, unavailable:_engHubUnavailable}); return; }
     const counts = { all: rows.length, ready: 0, setup: 0, off: 0 };
     rows.forEach(r => { counts[r.state] += 1; });
     const sig = JSON.stringify([rows.map(r => [r.engine, r.state, r.installed, r.auth, r.usage, r.version, r.email,
@@ -93118,19 +93096,24 @@
 
   async function refreshEnginesHub(opts) {
     if (!document.getElementById('engList')) return;
-    const get = url => fetch(url, { cache: 'no-store' }).then(r => r.json()).catch(() => null);
+    const get = url => fetch(url, { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null);
     const fresh = opts && opts.fresh;
+    const request = ++_engHubRequest;
     const [doctor, onboarding, usage, updates] = await Promise.all([
       get('/api/engines/doctor' + (fresh ? '?fresh=1' : '')), get('/api/onboarding/status'),
       get('/api/usage/current'), get('/api/engines/update-status'),
     ]);
+    if (request !== _engHubRequest) return null;
     if (!doctor || !doctor.engines) {
+      _engHubUnavailable = true;
+      window.cccEngineConnection?.render(_engHubRows(), {notes:_engHubNotes, unavailable:true});
       if (!_engHubData) {
         const list = document.getElementById('engList');
         if (list) list.innerHTML = '<div class="eng-list-empty">Engine status is unavailable right now. Retrying on its own.</div>';
       }
       return null;
     }
+    _engHubUnavailable = false;
     _engHubData = { doctor, onboarding, usage, updates };
     renderEnginesHub();
     refreshEnginesFirstRunFoot();
@@ -93151,7 +93134,7 @@
     applyDisabledEnginesToPickers();
     if (!_engHubVisible()) { _engHubSchedule(); return; }
     refreshEnginesHub();
-    if (!_engHubKimiVersion) {
+    if (!_engHubKimiVersion && !window.cccEngineConnection?.mounted()) {
       // Slow probe (spawns `kimi --version`), so once per page, not per poll.
       fetch('/api/engines/kimi/setup-status', { cache: 'no-store' }).then(r => r.json()).then(st => {
         _engHubKimiVersion = String((st && st.version) || '');
@@ -93167,8 +93150,8 @@
   }
 
   async function _engHubCopy(text, what) {
-    try { await navigator.clipboard.writeText(text); showOpToast('Copied ' + what, 'ok'); }
-    catch (_) { showOpToast('Could not copy. Select the command and copy it by hand.', 'err'); }
+    try { await navigator.clipboard.writeText(text); showOpToast('Copied ' + what, 'ok'); return true; }
+    catch (_) { showOpToast('Could not copy. Select the command and copy it by hand.', 'err'); return false; }
   }
 
   // Switching off a default engine must not dead-end: hand the default to the
@@ -93220,49 +93203,64 @@
 
   async function _engHubTerminal(engine, kind, row) {
     const cmd = kind === 'install' ? row.install : row.login;
-    try {
-      const res = await fetch('/api/onboarding/' + kind + '-terminal', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (data && data.ok) {
-        _engHubNote(engine, 'busy', 'Opened ' + (data.terminal_app || 'a terminal') + ' running "' + (data.command || cmd)
-          + '". Finish there. This page updates on its own.');
-        return;
-      }
-    } catch (_) {}
-    if (cmd) {
-      await _engHubCopy(cmd, 'command');
-      _engHubNote(engine, 'busy', 'Copied "' + cmd + '". Run it in a terminal. This page updates on its own.');
-    }
-  }
-
-  async function _engHubVerify(engine, btn) {
-    btn.disabled = true;
-    btn.textContent = 'Verifying…';
-    _engHubNote(engine, 'busy', 'Checking the CLI and sign-in…');
-    const data = await refreshEnginesHub({ fresh: true });
-    const row = _engHubRows().find(r => r.engine === engine);
-    if (!data || !row) { _engHubNote(engine, 'error', 'Could not reach the status check. Try again in a moment.'); return; }
-    if (!row.installed) { _engHubNote(engine, 'error', 'CLI not found on this machine. Install it, then verify again.'); return; }
-    if (row.auth === false) { _engHubNote(engine, 'error', 'Installed at ' + row.bin + ', but not signed in.'); return; }
-    if (engine === 'kimi') {
-      // Real roundtrip: one ACP session/new, no prompt, no tokens spent.
-      _engHubNote(engine, 'busy', 'Installed. Opening a smoke-test session over ACP…');
-      try {
-        const res = await fetch('/api/engines/kimi/verify', { method: 'POST' });
-        const v = await res.json().catch(() => ({}));
-        if (v && v.ok) _engHubNote(engine, 'ok', 'Working. Smoke-test session opened over ACP. Kimi is ready.');
-        else _engHubNote(engine, 'error', 'Not working yet: ' + ((v && v.error) || 'unknown error') + '. Run "kimi login" and verify again.');
-      } catch (err) {
-        _engHubNote(engine, 'error', 'Verify failed: ' + ((err && err.message) || 'network'));
-      }
+    const cli = _engHubData?.onboarding?.clis?.[engine];
+    const inline = () => startInlineOnboardingLogin(engine, cli,
+      window.cccEngineConnection?.loginHost(engine));
+    if (kind === 'login' && cli && window.cccEngineConnection?.mounted() && shouldUseInlineOnboardingLogin()) {
+      if (!onbLoginSessions[engine]?.running) await inline();
       return;
     }
-    _engHubNote(engine, 'ok', row.auth === true
-      ? 'Looks good: CLI found at ' + row.bin + ' and signed in' + (row.email ? ' as ' + row.email : '') + '.'
-      : 'CLI found at ' + row.bin + '. CCC cannot read this engine\'s sign-in state, so spawn a session to confirm.');
+    if (!(kind === 'install' && shouldUseInlineOnboardingLogin()) && !(kind === 'login' && !cli)) {
+      try {
+        const res = await fetch('/api/onboarding/' + kind + '-terminal', {
+          method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({engine}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data?.ok) {
+          _engHubNote(engine, 'busy', 'Opened ' + (data.terminal_app || 'a host terminal') + '. Finish there, then recheck installation and sign-in.');
+          return;
+        }
+        if (kind === 'login' && cli && data.inline_login && window.cccEngineConnection?.mounted()) { await inline(); return; }
+      } catch (_) {}
+    }
+    if (cmd) {
+      const copied = await _engHubCopy(cmd, 'command');
+      _engHubNote(engine, copied ? 'busy' : 'error', copied
+        ? 'Copied command. Run it in a terminal on the machine running CCC, then recheck.'
+        : 'Could not open a host terminal or copy. Select the displayed command and run it on the machine running CCC.');
+    } else _engHubNote(engine, 'error', 'No native command is registered. Follow the setup guide.');
+  }
+
+  async function _engHubVerify(engine, btn, live = false) {
+    if (_engHubChecking.has(engine)) return;
+    const triggerId = btn?.id;
+    _engHubChecking.add(engine);
+    _engHubNote(engine, 'busy', 'Checking binary and local sign-in evidence…');
+    try {
+      const data = await refreshEnginesHub({fresh:true});
+      const row = _engHubRows().find(r => r.engine === engine);
+      if (!data || !row) { _engHubNote(engine, 'error', 'Status check unavailable. Retry; the last snapshot is not current.'); return; }
+      if (!row.installed) { _engHubNote(engine, 'error', 'CLI not found on this machine. Install it, then recheck.'); return; }
+      if (row.auth === false) { _engHubNote(engine, 'error', 'CLI detected, but no local sign-in evidence. Sign in, then recheck.'); return; }
+      if (live && engine === 'kimi') {
+        _engHubNote(engine, 'busy', 'Starting the explicit Kimi ACP connection test…');
+        const res = await fetch('/api/engines/kimi/verify', {method:'POST'});
+        const result = await res.json().catch(() => ({}));
+        _engHubNote(engine, res.ok && result.ok ? 'ok' : 'error', res.ok && result.ok
+          ? 'Kimi ACP test succeeded: a test session opened without a prompt. Model access, quota and a prompted session remain untested.'
+          : 'Kimi ACP test failed: ' + (result.error || 'Unknown error') + '. Review sign-in and try again.');
+        return;
+      }
+      _engHubNote(engine, row.auth === true ? 'ok' : 'busy', row.auth === true
+        ? 'Binary and local sign-in evidence detected. No live connection or prompted session was tested.'
+        : 'Binary detected. Sign-in is unchecked for this engine; a session must confirm access.');
+    } catch (err) { _engHubNote(engine, 'error', 'Check failed: ' + (err.message || 'Network error') + '. Retry when available.'); }
+    finally {
+      const restore = document.activeElement === document.body || document.activeElement === btn;
+      _engHubChecking.delete(engine); renderEnginesHub();
+      const target = triggerId && document.getElementById(triggerId);
+      if (restore && target?.getClientRects().length && !target.disabled) target.focus({preventScroll:true});
+    }
   }
 
   (function wireEnginesHub() {
@@ -93292,6 +93290,7 @@
           return;
         }
         if (handoff.moved.length) {
+          window.cccEngineConnection?.policyReturn(engine);
           setActiveSettingsRailSection('routing');
           window.cccRoutingPolicy?.open('defaults', {changes: {...handoff.extra, disabled_engines: next}});
           return;
@@ -93309,7 +93308,10 @@
         if (!row) return;
         if (act === 'verify') _engHubVerify(engine, actBtn);
         else if (act === 'install' || act === 'login') _engHubTerminal(engine, act, row);
+        else if (act === 'test') _engHubVerify(engine, actBtn, true);
+        else if (act === 'session') window.cccEngineConnection?.startSession?.(engine);
         else if (act === 'default' || act === 'worker') {
+          window.cccEngineConnection?.policyReturn(engine);
           setActiveSettingsRailSection('routing');
           window.cccRoutingPolicy?.open('defaults', {engine, target: act === 'worker' ? 'worker' : 'session'});
         }
@@ -94436,11 +94438,12 @@
     $settingsModal.querySelector('.settings-modal').classList.add('is-first-run');
     const intro = document.getElementById('engFirstRunIntro');
     const foot = document.getElementById('engFirstRunFoot');
-    if (intro) intro.hidden = false;
+    if (intro) intro.hidden = !!window.cccEngineConnection?.mounted();
     if (foot) foot.hidden = false;
     _settingsCurrentSection = 'engines';
     openSettingsModal();
     refreshEnginesFirstRunFoot();
+    window.cccEngineConnection?.open();
   }
   // First-run setup links to the same staged policy workflow; it never
   // preselects or saves a default implicitly during status polling.
@@ -94460,7 +94463,7 @@
     const ready = _engHubData ? _engHubRows().filter(r => r.installed).length : 0;
     if (btn) btn.textContent = ready ? 'Continue' : 'Later';
     if (note) note.textContent = !_engHubData ? '' : ready
-      ? ready + (ready === 1 ? ' engine is installed.' : ' engines are installed.')
+      ? ready + (ready === 1 ? ' engine is installed; provider access is untested.' : ' engines are installed; provider access is untested.')
       : 'No engine is installed yet. You can do this later from Settings.';
   }
   function finishEnginesFirstRun() {
@@ -94637,8 +94640,8 @@
     const restoreFocus = [$settingsBtn, _settingsModalPrevFocus,
       document.querySelector('[data-mobile-nav="more"]'),
       document.querySelector('[data-mobile-nav-menu]'), document.getElementById('sidebarMoreBtn')]
-      .find(element => element?.isConnected && !element.disabled
-        && element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden');
+      .find(element => element !== document.body && element !== document.documentElement
+        && element?.isConnected && !element.disabled && element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden');
     restoreFocus?.focus();
     _settingsModalPrevFocus = null;
   }
@@ -95608,7 +95611,8 @@
         try {
           const nextStatus = await refreshOnboardingCliStatus(false);
           if (nextStatus && nextStatus[engine] && nextStatus[engine].logged_in) {
-            renderCliChecker();
+            if (window.cccEngineConnection?.mounted()) refreshEnginesHub({fresh:true});
+            else renderCliChecker();
           }
         } catch (_) {}
       }
@@ -95621,6 +95625,7 @@
   }
 
   async function startInlineOnboardingLogin(engine, cli, item) {
+    if (!item || onbLoginSessions[engine]?.running) return;
     stopOnboardingLoginPoll(engine);
     const panel = ensureOnboardingLoginPanel(item, engine, cli);
     onbLoginSessions[engine] = {
@@ -95677,6 +95682,7 @@
   }
 
   function showOnboarding(statusData) {
+    if (window.cccEngineConnection?.open()) return;
     const modal = document.getElementById('onboardingModal');
     if (!modal) return;
 
@@ -95690,6 +95696,7 @@
   }
 
   function showOnbStep(stepIndex) {
+    if (window.cccEngineConnection?.open()) return;
     currentOnbStep = stepIndex;
     const steps = document.querySelectorAll('.onb-step');
     steps.forEach((step, idx) => {
@@ -95732,6 +95739,7 @@
   }
 
   function renderCliChecker() {
+    if (window.cccEngineConnection?.open()) return;
     const listContainer = document.getElementById('onbCliList');
     if (!listContainer || !onbCliStatus) return;
 
@@ -96130,6 +96138,27 @@
     load: loadVoiceConfig, loadOperator: fetchCarModeStatus,
     refreshVoices: refreshTtsVoiceOptions,
   });
+
+  window.cccEngineConnection?.mount({
+    navigate: () => {
+      clearTimeout(settingsSearchFocusTimer);
+      if ($settingsModal.hidden) openSettingsModal({focusSearch:false}); else clearSettingsSearch();
+      setActiveSettingsRailSection('engines');
+    },
+    refresh: () => refreshEnginesHub({fresh:true}), usageHtml:_engHubUsageHtml,
+    sessionEngines:SPAWN_DEFAULT_ENGINES, workerEngines:WORKER_DEFAULT_ENGINES,
+    terminalAvailable: () => !shouldUseInlineOnboardingLogin(),
+    checking: engine => _engHubChecking.has(engine), loginState: engine => onbLoginSessions[engine],
+    session: engine => {
+      closeSettingsModal();
+      enterNewSessionMode();
+      // Entering from a conversation resets the advisor's manual-choice state.
+      // Apply the explicit setup choice afterwards through the native picker path.
+      _spawnEngineChosenByUser = true; setSpawnEngine(engine);
+      requestAnimationFrame(() => document.getElementById('convInput')?.focus());
+    },
+  });
+  if (window.cccEngineConnection?.mounted()) { _settingsSearchIndex=null; if(_engHubData)renderEnginesHub(); }
 
   window.cccSettingsContext?.mount({
     closeSettings: closeSettingsModal,

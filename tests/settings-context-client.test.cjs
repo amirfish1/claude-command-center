@@ -25,7 +25,7 @@ const chips = between("    const $chipsToggle = document.getElementById('chipsCo
 const refresh = between('  function refreshAppearanceChecks()', '  // Live-update when');
 const getters = between('  function getThemePref()', '  function applyVoiceMobileBtn(');
 const applyView = between('  function applyViewGh(', '  // Segmented-control');
-const avatars = between('  let repoAvatarRefreshSeq = 0;', '  function openSettingsModal()');
+const avatars = between('  let repoAvatarRefreshSeq = 0;', '  let settingsSearchFocusTimer;');
 const resets = between('  function settingsResetAppearance()', '  // ── Preview feature flags');
 const mirror = between('  function _syncSidebarMoreFilters()', "  const $sidebarMoreMenu = document.getElementById('sidebarMoreMenu');");
 const more = between("  const $sidebarMoreMenu = document.getElementById('sidebarMoreMenu');", '  if ($cpCloseBtn)');

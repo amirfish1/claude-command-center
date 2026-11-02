@@ -158,6 +158,7 @@
 <link rel="stylesheet" href="/static/credential-broker.css">
 <link rel="stylesheet" href="/static/queue-policy.css">
 <link rel="stylesheet" href="/static/voice-setup.css">
+<link rel="stylesheet" href="/static/engine-connection.css">
 </head>
 <body class="voice-call-btn-off">
   <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
@@ -3003,8 +3004,8 @@
             <div class="settings-section-links"><button type="button" class="settings-action-btn" data-settings-go="defaults">Session defaults &amp; 7-day usage →</button><button type="button" class="settings-action-btn" data-settings-go="queues">Queue engines →</button></div>
             <!-- First-run only (app.js openEnginesFirstRun): the same Engines page, shown once before anything else. -->
             <div class="eng-first-run-intro" id="engFirstRunIntro" hidden>
-              <h2 class="eng-first-run-title">Review the engines that are installed</h2>
-              <p class="eng-first-run-body">Command Center runs your sessions on the agent CLIs installed on this Mac. Install the ones you want and sign in. You can come back to this any time in Settings, Engines.</p>
+              <h2 class="eng-first-run-title">Connect an engine for your first session</h2>
+              <p class="eng-first-run-body">Choose an engine below, install and sign in on this machine, then check setup and continue to the session composer. Saved launch defaults change only through Launch policy.</p>
             </div>
 
             <div class="eng-hero" data-keywords="engines status installed signed in usage ready setup overview">
@@ -4098,6 +4099,7 @@
 <script src="/static/queue-policy.js"></script>
 <script src="/static/settings-routing-policy.js"></script>
 <script src="/static/voice-setup.js"></script>
+<script src="/static/engine-connection.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/settings-preferences.js"></script>
 <script src="/static/free-settings.js" defer></script>

@@ -349,6 +349,14 @@
       + '<circle class="mz-node mz-n0" cx="100" cy="112" r="7.5" fill="#ffe2b8"/></svg>';
   }
 
+  function engineConnectionAction() {
+    if (!window.cccEngineConnection?.mounted()) return null;
+    const connect = el('button', 'mz-linklike', 'Connect an engine instead');
+    connect.type = 'button'; connect.dataset.engineConnection = 'open';
+    connect.addEventListener('click', () => { markDone(); close(); window.cccEngineConnection.open(); });
+    return connect;
+  }
+
   // ── Scene: Welcome ──
   function renderWelcome() {
     const card = el('section', 'mz-card mz-welcome');
@@ -373,6 +381,7 @@
     actions.appendChild(go);
     actions.appendChild(ghost);
     card.appendChild(actions);
+    const connect = engineConnectionAction(); if (connect) card.appendChild(connect);
     const hint = el('p', 'mz-kbd-hint', 'Press Enter to begin');
     card.appendChild(hint);
 
@@ -463,6 +472,7 @@
     later.type = 'button';
     later.addEventListener('click', () => { markDone(); close(); });
     skipWrap.appendChild(later);
+    const connect = engineConnectionAction(); if (connect) skipWrap.appendChild(connect);
     card.appendChild(skipWrap);
   }
 
