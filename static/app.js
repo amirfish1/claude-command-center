@@ -17930,7 +17930,7 @@
         const result = await response.json();
         if (!response.ok || !result.ok || !result.ref) throw new Error(result.error || 'Could not file the report');
         showOpToast('Decisions Fix: reported as ' + result.ref + (result.screenshot_warning ? ' (screenshot unavailable)' : ''), 'success');
-        btn.title = 'Reported as ' + result.ref + ' — click to report another mismatch';
+        btn.title = 'Reported as ' + result.ref + '; click to report another mismatch';
       } finally {
         _rowDecisionReportSending.delete(sid);
         btn.disabled = false; btn.removeAttribute('aria-busy');
@@ -93962,7 +93962,7 @@
       host.innerHTML = '<p>Choose and save a worker engine before applying it to queues.</p><button type="button" class="settings-action-btn" data-settings-go="defaults">Choose worker default →</button>';
       return;
     }
-    host.innerHTML = '<strong>' + rows.length + ' queues will follow ' + escapeHtml(target.engine) + '</strong><p>' + escapeHtml(target.model) + ' · ' + escapeHtml(target.effort) + '</p><p>Clear engine, model and effort pins for: ' + escapeHtml(rows.map(row => row.queue).join(', ') || 'none — already inherited') + '.</p><p>Auto-drain status, worker counts, fallback rules and running workers stay as they are.</p>' + (rows.length ? '<button type="button" class="settings-action-btn eng-primary" id="settingsQueueConfirm">Apply to ' + rows.length + ' queues</button> ' : '') + '<button type="button" class="settings-action-btn" id="settingsQueueCancel">Cancel</button>';
+    host.innerHTML = '<strong>' + rows.length + ' queues will follow ' + escapeHtml(target.engine) + '</strong><p>' + escapeHtml(target.model) + ' · ' + escapeHtml(target.effort) + '</p><p>Clear engine, model and effort pins for: ' + escapeHtml(rows.map(row => row.queue).join(', ') || 'none; already inherited') + '.</p><p>Auto-drain status, worker counts, fallback rules and running workers stay as they are.</p>' + (rows.length ? '<button type="button" class="settings-action-btn eng-primary" id="settingsQueueConfirm">Apply to ' + rows.length + ' queues</button> ' : '') + '<button type="button" class="settings-action-btn" id="settingsQueueCancel">Cancel</button>';
     document.getElementById('settingsQueueCancel').onclick = () => { host.hidden = true; };
     document.getElementById('settingsQueueConfirm')?.addEventListener('click', async (event) => {
       if (settingsQueueBusy) return;

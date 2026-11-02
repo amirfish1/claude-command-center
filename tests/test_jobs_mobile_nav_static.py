@@ -18,8 +18,7 @@ class JobsMobileNavTest(unittest.TestCase):
     def test_nav_handler_and_active_state_know_jobs(self):
         self.assertIn(
             "dest === 'coding' || dest === 'workers' || dest === 'queues' || dest === 'jobs'", JS)
-        self.assertIn("tab !== 'queues' && tab !== 'jobs'", JS)
-        self.assertIn("tab === 'jobs' ? 'jobs'", JS)
+        self.assertIn("queues: 'queues', jobs: 'jobs'", JS)
 
     def test_mobile_css_tap_targets_and_dialog(self):
         for sel in (".jobs-seg-btn", ".jobs-sort-toggle .grouping-opt", ".job-live",

@@ -1017,7 +1017,7 @@ for line in sys.stdin:
                 )
                 if client.request("health").get("ok"):
                     self.client = ControlPlaneClient(
-                        path=self.socket, token_file=self.token, timeout=15
+                        path=self.socket, token_file=self.token, timeout=60
                     )
                     return
             if self.worker.poll() is not None:

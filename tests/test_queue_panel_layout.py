@@ -533,7 +533,7 @@ class TestQueuePanelLayout(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         self.assertIn("function _uxqFilterItems(items, statusFilter, typeFilter)", app_js)
         helper_start = app_js.index("function _uxqFilterItems(items, statusFilter, typeFilter)")
-        helper_end = app_js.index("function _renderQueuePanel(options)", helper_start)
+        helper_end = app_js.index("\n  }\n", helper_start) + len("\n  }\n")
         helper = app_js[helper_start:helper_end]
         node_program = """
 const vm = require('vm');

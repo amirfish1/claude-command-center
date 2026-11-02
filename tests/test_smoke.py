@@ -1713,7 +1713,7 @@ class TestServerImports(unittest.TestCase):
 
         search_input = index_html.split('id="convSearch"', 1)[1].split('>', 1)[0]
         self.assertNotIn('list=', search_input)
-        self.assertIn("$convSearch.setAttribute('list', 'convSearchHistoryList')", app_js)
+        self.assertIn("$convSearch.removeAttribute('list')", app_js)
         self.assertIn('<datalist id="convSearchHistoryList"></datalist>', index_html)
         self.assertIn("const CONV_SEARCH_HISTORY_KEY = 'ccc-conv-search-history';", app_js)
         self.assertIn("function readConversationSearchHistory()", app_js)
@@ -1755,7 +1755,7 @@ class TestServerImports(unittest.TestCase):
         panel_html = index_html[panel_start:panel_end]
         self.assertIn('<div class="new-session-primary-row">', panel_html)
         self.assertLess(panel_html.index('id="sidebarNewBtn"'), panel_html.index('id="convSearch"'))
-        self.assertIn('placeholder="Search..."', panel_html)
+        self.assertIn('placeholder="Search sessions…"', panel_html)
         list_start = index_html.index('<div class="conv-list-panel" id="convListPanel">')
         list_end = index_html.index('<div class="today-tray"', list_start)
         self.assertNotIn('id="convSearch"', index_html[list_start:list_end])
@@ -1974,7 +1974,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('<div class="conv-archived-list">', archived_markup)
         self.assertIn(
             "(_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers' "
-            "|| _sidebarTab === 'ideas' || _sidebarTab === 'smallbugs') "
+            "|| _sidebarTab === 'ideas' || _sidebarTab === 'smallbugs' || _sidebarTab === 'alltickets') "
             "? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))",
             app_js,
         )
@@ -2038,7 +2038,7 @@ class TestServerImports(unittest.TestCase):
         # sub-tab switcher needed anymore.
         self.assertIn(
             "const _topLevelLaneOverride = _sidebarTab === 'coding' ? 'coding' : _sidebarTab === 'workers' ? 'workers'\n"
-            "      : (_ideaTicketsOn && (_sidebarTab === 'ideas' || _sidebarTab === 'smallbugs')) ? _sidebarTab : null;",
+            "      : (_ideaTicketsOn && (_sidebarTab === 'ideas' || _sidebarTab === 'smallbugs' || _sidebarTab === 'alltickets')) ? _sidebarTab : null;",
             app_js,
         )
         self.assertIn("const _allTabView = _topLevelLaneOverride || 'other';", app_js)
@@ -11104,6 +11104,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             self.assertEqual(body["engine"], "codex")
             spawn_codex.assert_called_once_with(
                 "do the thing",
+                timeline_t0_epoch_ms=None,
                 name=None,
                 cwd=None,
                 repo_path=None,
@@ -16167,8 +16168,9 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("Pinned to top", js)
         self.assertIn("_minPinnedRank", js)
         self.assertNotIn("conv-pinned-section", js)
-        self.assertIn("if (c.pinned) return true", js)
-        self.assertIn("c.pinned ||", js)
+        # Query matching for pinned rows is exercised by pinned-session-search.test.cjs.
+        subprocess.run(["node", "--test", "tests/pinned-session-search.test.cjs"],
+                       cwd=PROJECT_ROOT, check=True, capture_output=True, text=True)
         self.assertIn("applyOptimisticOverrides(rowsForRender)", js)
         self.assertIn("function _restoreConversationListScrollTop", js)
         self.assertIn("const pinScrollTop = $convList ? $convList.scrollTop : null", js)
@@ -16534,7 +16536,10 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("if (engineSupportsEffort(engine) && (effort || o.effortExplicit)) {", js)
         self.assertIn("body.reasoning_effort = effort;", js)
         self.assertIn("effortExplicit: spawnEffortChoiceDirty", js)
-        self.assertIn("def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort=\"\", parent_session_id=None):", engines_py)
+        import inspect
+        from ccc_server.engines import spawn_session_codex
+        effort_parameter = inspect.signature(spawn_session_codex).parameters["reasoning_effort"]
+        self.assertEqual(effort_parameter.default, "")
         # Spawning goes through the Codex app-server (no `codex exec -c ...`
         # fallback), so the effort rides on the thread/turn params instead.
         codex_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "codex.py").read_text()
