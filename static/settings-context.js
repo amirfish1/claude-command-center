@@ -161,9 +161,10 @@
     };
     const repoRow = row('repoAvatarSelect'); link(repoRow, 'Repository appearance → Folder picker or repository header', 'repository-branding');
     branding = singleton(make('details'), 'contextRepoPreferences'); branding.append(make('summary', 'Repository appearance'));
-    branding.append(repoRow); document.querySelector('.spawn-cwd-row')?.after(branding);
+    // Keep the editor out of the composer until an appearance action opens it.
+    branding.append(repoRow); parking.append(branding);
     branding.addEventListener('toggle', () => {
-      if (!branding.open) { brandingOpened = false; return; }
+      if (!branding.open) { brandingOpened = false; parking.append(branding); return; }
       if (!brandingOpened) { brandingOpened = true; brandingTarget = get('spawnCwdPicker')?.value; hooks.refreshBranding(brandingTarget); }
     });
 
@@ -254,10 +255,10 @@
     const listHost = get('convList');
     if (listHost) new MutationObserver(() => {
       syncList();
-      if (!branding.isConnected) (document.querySelector('.spawn-cwd-row') || parking).append(branding);
+      if (!branding.isConnected) { branding.open = false; parking.append(branding); }
     }).observe(listHost, {childList: true, subtree: true});
     const split = get('convSplit');
-    if (split) new MutationObserver(() => { if (!reader.isConnected) syncReader(); if (!branding.isConnected) (document.querySelector('.spawn-cwd-row') || parking).append(branding); }).observe(split, {childList: true, subtree: true});
+    if (split) new MutationObserver(() => { if (!reader.isConnected) syncReader(); if (!branding.isConnected) { branding.open = false; parking.append(branding); } }).observe(split, {childList: true, subtree: true});
     window.addEventListener('resize', () => { syncList(); syncReader(); clampQueue(); clampList(); });
     document.addEventListener('toggle', event => { if (event.target.contains(list)) clampList(); }, true);
     const hashRoute = () => { try { redirect(decodeURIComponent(location.hash.slice(1))); } catch (_) {} };

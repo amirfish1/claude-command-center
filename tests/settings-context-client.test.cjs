@@ -264,6 +264,20 @@ test('contextual links survive outside-click handlers and escape collapsed folde
  assert.equal(await page.$eval('#contextRepoPreferences',e=>!!e.closest('.spawn-cwd-row')),false);
 });
 
+test('repository appearance stays out of the composer until requested and after closing',async t=>{
+ const page=await open(t);
+ assert.equal(await page.$eval('#contextRepoPreferences',e=>!!e.closest('#contextPreferenceParking')),true);
+ assert.equal(await page.$eval('#contextRepoPreferences',e=>!!e.getClientRects().length),false);
+ await page.evaluate(()=>window.cccSettingsContext.openBranding('repo-alpha'));
+ await page.waitForSelector('#repoAvatarSelect',{visible:true});
+ await page.click('#contextRepoPreferences > summary');
+ await page.waitForFunction(()=>!!document.querySelector('#contextPreferenceParking #contextRepoPreferences'));
+ assert.equal(await page.$eval('#contextRepoPreferences',e=>!!e.getClientRects().length),false);
+ await page.evaluate(()=>window.cccSettingsContext.openBranding('repo-beta'));
+ await page.waitForSelector('#repoAvatarSelect',{visible:true});
+ assert.equal(await page.$eval('#repoAvatarSelect',e=>e.value),'repo-beta');
+});
+
 test('known repository remains editable while discovery is pending',async t=>{
  const page=await open(t);
  await page.evaluate(()=>{
