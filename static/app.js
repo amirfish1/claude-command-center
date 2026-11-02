@@ -24168,13 +24168,17 @@
     // Mobile view hides the list's own ⋮ row (phone CSS), so mirror here too.
     const src = (_phoneMenusMQ.matches || isMobileListView())
       && document.querySelector('#convList .conv-archived-overflow-menu');
-    box.innerHTML = src ? src.innerHTML : '';
+    const mirror = src ? src.cloneNode(true) : null;
+    mirror?.querySelectorAll('[data-context-preferences]').forEach(node => node.remove());
+    box.innerHTML = mirror ? mirror.innerHTML : '';
     box.hidden = !src;
+    window.cccSettingsContext?.syncList();
   }
   (function _wireSidebarMoreFilters() {
     const box = document.getElementById('sidebarMoreFilters');
     if (!box) return;
     box.addEventListener('click', (ev) => {
+      if (ev.target.closest('[data-context-preferences]')) return;
       const src = document.querySelector('#convList .conv-archived-overflow-menu');
       if (!src) return;
       const path = [];
@@ -30835,6 +30839,7 @@
       + '<div class="flow-inspector-toolbar">'
         + '<button type="button" class="flow-inspector-tab active" data-flow-inspector-tab="view" aria-pressed="true">View</button>'
         + actionButtons
+        + (data.kind === 'repo' ? '<button type="button" class="flow-inspector-btn" data-context-repo="' + escapeAttr(data.repo_path || '') + '">Repository appearance</button>' : '')
         + '<span class="flow-inspector-status" data-flow-inspector-status></span>'
       + '</div>'
       + '<div class="flow-inspector-body">'
@@ -42328,8 +42333,10 @@
           + ' title="Start a new session in this repository"'
           + ' aria-label="Start a new session in this repository">+</button>'
         : '';
+      const branding = repoPath && !archiveObjectId
+        ? '<button type="button" class="conv-folder-new-session-btn" data-context-repo="' + escapeHtml(repoPath) + '" aria-label="Repository appearance" title="Repository appearance">&#9881;</button>' : '';
       const repoActions = (newSession || ship)
-        ? '<span class="conv-folder-repo-actions">' + newSession + ship + '</span>'
+        ? '<span class="conv-folder-repo-actions">' + newSession + branding + ship + '</span>'
         : '';
       const objectRenameIcon = '<svg class="conv-folder-object-rename-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>';
       const objectRename = (section === 'inprogress' && archiveObjectId)
@@ -50455,6 +50462,7 @@
   function buildPaneElement(paneId) {
     const tmpl = document.querySelector('.conv-pane[data-pane-id="p1"]');
     const clone = tmpl.cloneNode(true);
+    clone.querySelectorAll('[data-context-singleton]').forEach(node => node.remove());
     clone.setAttribute('data-pane-id', paneId);
     clone.removeAttribute('data-presentation-mode');
     clone.removeAttribute('data-presentation-conversation-id');
@@ -91490,7 +91498,7 @@
         } else {
           restoreInputDraft(input, '__new__');
         }
-        input.focus();
+        if (!document.activeElement?.closest('#contextRepoPreferences')) input.focus();
       }
     }, 30);
   }
@@ -94091,7 +94099,7 @@
   function setActiveSettingsRailSection(sectionId, opts) {
     opts = opts || {};
     if (!$settingsRail || !$settingsPane || !sectionId) return;
-    if (window.cccSettingsActions?.redirect(sectionId)) return;
+    if (window.cccSettingsActions?.redirect(sectionId) || window.cccSettingsContext?.redirect(sectionId)) return;
     const requested = $settingsPane.querySelector('[data-section-id="'+sectionId+'"]');
     const destination = requested?.dataset.destination || sectionId;
     const firstRun = $settingsModalInner.classList.contains('is-first-run');
@@ -94261,22 +94269,17 @@
     try {
       localStorage.removeItem('ccc-theme');
       localStorage.removeItem('ccc-font');
-      localStorage.removeItem('ccc-conv-font-scale');
     } catch (_) {}
     applyTheme(getThemePref());
     applyFont(getFontPref());
-    convFontScale = 1;
-    if (typeof applyConvFontScale === 'function') applyConvFontScale();
     refreshAppearanceChecks();
   }
 
   function settingsResetLayout() {
     try {
-      localStorage.removeItem('ccc-view-gh');
       localStorage.removeItem('ccc-hero-live-variant');
       localStorage.removeItem(VOICE_MOBILE_BTN_STORAGE_KEY);
     } catch (_) {}
-    applyViewGh(getViewGhPref());
     applyVoiceMobileBtn(getVoiceMobileBtnPref());
     refreshAppearanceChecks();
   }
@@ -94342,26 +94345,53 @@
   window.addEventListener('ccc:flags', renderExperimentalFlags);
   renderExperimentalFlags();
 
-  async function refreshRepoAvatarSettings() {
+  let repoAvatarRefreshSeq = 0;
+  async function refreshRepoAvatarSettings(preferredRepo) {
+    const refreshSeq = ++repoAvatarRefreshSeq;
     const select = document.getElementById('repoAvatarSelect');
     if (!select) return;
     const previous = select.value;
-    try {
-      const state = await loadRepoList({ foreground: true });
-      const repos = new Map();
-      [...state.repos, ...state.suggested].forEach(repo => { if (repo.path) repos.set(repo.path, repo); });
+    const repos = new Map();
+    const add = repo => { if (repo?.path) repos.set(repo.path, repo); };
+    if (preferredRepo) add({path: preferredRepo});
+    if (typeof repoListState !== 'undefined') {
+      (repoListState.repos || []).forEach(add);
+      (repoListState.suggested || []).forEach(add);
+    }
+    // Existing session rows already identify repositories; do not leave the
+    // editor empty while a fresh filesystem discovery is running.
+    if (typeof conversationsData !== 'undefined') {
+      for (const row of conversationsData || []) { const path = rowRepoPath(row); if (path) add({path}); }
+    }
+    function renderRepositories() {
       select.replaceChildren();
+      const placeholder = document.createElement('option');
+      placeholder.value = ''; placeholder.textContent = 'Choose a repository';
+      select.appendChild(placeholder);
       for (const repo of repos.values()) {
         const option = document.createElement('option');
         option.value = repo.path;
-        option.textContent = repo.label || repo.path;
+        option.textContent = repo.label || repo.path.split('/').filter(Boolean).pop() || repo.path;
         option.title = repo.path;
         select.appendChild(option);
       }
-      if (repos.has(previous)) select.value = previous;
-      await previewRepoAvatar();
+      if (repos.has(preferredRepo)) select.value = preferredRepo;
+      else if (repos.has(previous)) select.value = previous;
+    }
+    renderRepositories();
+    void previewRepoAvatar();
+    if (!repos.size) document.getElementById('repoAvatarStatus').textContent = 'Loading repositories…';
+    try {
+      const state = await loadRepoList({ foreground: true });
+      if (refreshSeq !== repoAvatarRefreshSeq) return;
+      [...state.repos, ...state.suggested].forEach(add);
+      const selected = select.value;
+      renderRepositories();
+      if (repos.has(selected)) select.value = selected;
+      void previewRepoAvatar();
     } catch (_) {
-      document.getElementById('repoAvatarStatus').textContent = 'Could not load repositories. Reopen settings to retry.';
+      if (refreshSeq !== repoAvatarRefreshSeq) return;
+      document.getElementById('repoAvatarStatus').textContent = 'Could not load repositories. Close and reopen Repository appearance to retry.';
     }
   }
   async function previewRepoAvatar() {
@@ -94427,7 +94457,6 @@
     clearSettingsSearch();
     renderExperimentalFlags();
     refreshAppearanceChecks();
-    refreshRepoAvatarSettings();
     refreshMonthlyClaudePlanInput();
     refreshMonthlyCodexPlanInput();
     refreshSpawnEngineValue();
@@ -94450,7 +94479,7 @@
     setTimeout(function () {
       openSettingsModal();
       function activate() {
-        if (window.cccSettingsActions?.redirect(want)) return true;
+        if (window.cccSettingsActions?.redirect(want) || window.cccSettingsContext?.redirect(want)) return true;
         const tab = document.getElementById('settingsRailTab-' + want);
         const section = $settingsPane.querySelector('[data-section-id="' + CSS.escape(want) + '"]');
         if (!tab || !section?.dataset.destination) return false;
@@ -94767,12 +94796,13 @@
     $settingsSearchInput.addEventListener('input', (e) => applySettingsSearch(e.target.value));
   }
 
+  let settingsPreferenceClick;
   if ($settingsModal) {
     // Delegated control handling: theme/font segments, the three
     // Layout & View toggles, Fleet Pulse launcher, and the three
     // per-section reset buttons. Every mutation fires the ✓ Saved pulse;
     // the Fleet Pulse launcher (an action, not a setting) does not.
-    $settingsModal.addEventListener('click', (e) => {
+    settingsPreferenceClick = function handleSettingsPreferenceClick(e) {
       const destination = e.target.closest('[data-settings-go]');
       if (destination) { clearSettingsSearch(); setActiveSettingsRailSection(destination.dataset.settingsGo); return; }
       const themeBtn = e.target.closest('[data-theme]');
@@ -94919,7 +94949,8 @@
         showSettingsSavedPulse(resetBtn.closest('.settings-reset-row'));
         return;
       }
-    });
+    };
+    $settingsModal.addEventListener('click', settingsPreferenceClick);
 
     const monthlyPlanInput = document.getElementById('settingsMonthlyClaudePlanInput');
     if (monthlyPlanInput) {
@@ -96203,6 +96234,37 @@
     closeSettings: closeSettingsModal,
     openSystem: opener => sysOpenModal(opener, 'status'),
     refreshUsage: refreshSettingsUsage,
+  });
+
+  window.cccSettingsContext?.mount({
+    closeSettings: closeSettingsModal,
+    preferenceClick: settingsPreferenceClick,
+    refresh: refreshAppearanceChecks,
+    refreshBranding: refreshRepoAvatarSettings,
+    resetReader: () => {
+      localStorage.removeItem('ccc-conv-font-scale');
+      convFontScale = 1; applyConvFontScale();
+    },
+    resetList: () => {
+      for (const key of ['ccc-view-gh', 'ccc-separate-tabs', 'ccc-chips-mode']) localStorage.removeItem(key);
+      if (['issues', 'queues'].includes(localStorage.getItem('ccc-sidebar-tab'))) localStorage.setItem('ccc-sidebar-tab', 'inprogress');
+      window.cccSetChipsMode?.('color');
+      localStorage.removeItem('ccc-chips-mode');
+      applyViewGh(getViewGhPref()); refreshAppearanceChecks();
+    },
+    openQueue: () => {
+      cccSwitchCoreApp('sessions', {push: false});
+      _activateSidebarTabFromMobileNav('queues'); mobileShowMain(false); mobileShowConv(false);
+    },
+    openList: () => {
+      cccSwitchCoreApp('sessions', {push: false});
+      mobileShowMain(false); mobileShowConv(false);
+      if (!document.querySelector('#convList .conv-archived-overflow-menu')) _activateSidebarTabFromMobileNav('coding');
+    },
+    openReader: () => {
+      cccSwitchCoreApp('sessions', {push: false}); mobileShowForCurrentMode();
+    },
+    openRepoPicker: () => document.getElementById('sidebarNewBtn')?.click(),
   });
 
   // Trigger check on load
