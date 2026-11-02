@@ -1,6 +1,23 @@
 {
   "updates": [
     {
+      "slug": "decisions-and-a-clearer-workspace",
+      "title": "Find the decisions holding up your agents",
+      "summary": "Review owner questions in one inbox, track sessions through completion, and manage connections and voice setup in one place.",
+      "date": "2026-11-02",
+      "version": "5.43.0",
+      "problem_family": "needs-you",
+      "family_label": "Know what needs you",
+      "url": "https://ccc.amirfish.ai/updates/decisions-and-a-clearer-workspace.html",
+      "og_image": "https://ccc.amirfish.ai/updates/assets/og-default.png",
+      "tags": [
+        "decisions",
+        "sessions",
+        "settings",
+        "mobile"
+      ]
+    },
+    {
       "slug": "one-board-every-session",
       "title": "Every coding-agent session on your machine, on one board",
       "summary": "Nine terminal tabs and no idea which session is which. CCC reads each engine's on-disk state and puts the whole fleet on one local board.",

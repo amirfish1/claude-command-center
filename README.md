@@ -47,7 +47,7 @@ Want to look first? The [live demo](https://ccc.amirfish.ai/demo/) runs in your 
 ![Local only](https://img.shields.io/badge/runs-100%25%20local-purple)
 [![Discord](https://img.shields.io/badge/Discord-join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/aK325db94M)
 
-![CCC v5.41: a parent session with two helper lanes in the sidebar, each row summarizing what its agent did, next to the live transcript](docs/images/ccc-v5-41-hero.png)
+![CCC v5.43: the current session list and conversation reader, captured with synthetic demo sessions](docs/images/ccc-v5-43-hero.png)
 
 <sub>CCC v5.41 on demo data. The refunds session split its tests out to Codex and its review to a second Claude; both lanes report back under it.</sub>
 
@@ -272,6 +272,8 @@ backends it can use. [Comparisons and scope](docs/features.md#how-it-compares).
 <sub>A real share card from one of the maintainer's machines. Yours comes from the throughput page: totals only, no prompts, code, or project names.</sub>
 
 ## Recent
+
+v5.43: A shared Decisions inbox with visible source coverage and opt-in answer controls; clearer Active, Needs you, and Finished session groups; consolidated Connections, voice setup, health checks, and customization review. Mobile navigation now reaches the same apps as desktop.
 
 v5.41: Routine / Deep model picks that weigh cost and your remaining usage, helper lanes as real rows under their parent, model prices in the picker, voice switching mid-read, and `ccc restart`.
 

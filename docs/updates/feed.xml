@@ -5,10 +5,23 @@
   <id>https://ccc.amirfish.ai/updates/</id>
   <link href="https://ccc.amirfish.ai/updates/feed.xml" rel="self"/>
   <link href="https://ccc.amirfish.ai/updates/" rel="alternate"/>
-  <updated>2026-07-10T00:00:00Z</updated>
+  <updated>2026-11-02T00:00:00Z</updated>
   <author>
     <name>CCC</name>
   </author>
+  <entry>
+    <id>https://ccc.amirfish.ai/updates/decisions-and-a-clearer-workspace.html</id>
+    <title>Find the decisions holding up your agents</title>
+    <link href="https://ccc.amirfish.ai/updates/decisions-and-a-clearer-workspace.html" rel="alternate"/>
+    <published>2026-11-02T00:00:00Z</published>
+    <updated>2026-11-02T00:00:00Z</updated>
+    <summary>Review owner questions in one inbox, track sessions through completion, and manage connections and voice setup in one place.</summary>
+    <category term="needs-you" label="Know what needs you"/>
+    <author>
+      <name>CCC</name>
+    </author>
+    <content type="html"/>
+  </entry>
   <entry>
     <id>https://ccc.amirfish.ai/updates/one-board-every-session.html</id>
     <title>Every coding-agent session on your machine, on one board</title>
@@ -27,8 +40,8 @@
 &lt;h2&gt;What CCC does&lt;/h2&gt;
 &lt;p&gt;CCC attaches instead of owning. It reads each engine's on-disk state as the source of truth, so every session shows up on one local board no matter how you launched it, hand-started terminals included. Claude Code is first-class; Codex, Cursor, Antigravity, and Kilo Code spawn and appear too, each with a documented gap, so it is one board for several engines rather than identical support across all of them.&lt;/p&gt;
 &lt;h2&gt;Proof&lt;/h2&gt;
-&lt;p&gt;The capture is the CCC board running on seeded demo data. Columns carry GitHub issues, a needs-attention lane, an icebox, and eight in-progress sessions, with a live transcript open on the right and a header that reads "for Claude, Codex, Cursor, and Anti-Gravity." Every row is fake seeded data, nothing real, but it is the actual dashboard chrome: the whole operation on one screen.&lt;/p&gt;
-&lt;div class="u-media"&gt;&lt;figure class="u-figure"&gt;&lt;img src="https://ccc.amirfish.ai/product-story/assets/shots/S-OVR.png" alt="The CCC board on seeded demo data: columns for GitHub issues, a needs-attention lane, an icebox, and eight in-progress sessions, with a live session transcript open in a right-hand pane and a header reading 'for Claude, Codex, Cursor, and Anti-Gravity.'" loading="lazy"&gt;&lt;figcaption&gt;The whole operation on one local board. All data is seeded and fake.&lt;/figcaption&gt;&lt;/figure&gt;&lt;/div&gt;
+&lt;p&gt;The capture is the CCC board running on seeded demo data. Columns carry GitHub issues, a needs-attention lane, an icebox, and eight in-progress sessions, with a live transcript open on the right and a header that reads &quot;for Claude, Codex, Cursor, and Anti-Gravity.&quot; Every row is fake seeded data, nothing real, but it is the actual dashboard chrome: the whole operation on one screen.&lt;/p&gt;
+&lt;div class=&quot;u-media&quot;&gt;&lt;figure class=&quot;u-figure&quot;&gt;&lt;img src=&quot;https://ccc.amirfish.ai/product-story/assets/shots/S-OVR.png&quot; alt=&quot;The CCC board on seeded demo data: columns for GitHub issues, a needs-attention lane, an icebox, and eight in-progress sessions, with a live session transcript open in a right-hand pane and a header reading 'for Claude, Codex, Cursor, and Anti-Gravity.'&quot; loading=&quot;lazy&quot;&gt;&lt;figcaption&gt;The whole operation on one local board. All data is seeded and fake.&lt;/figcaption&gt;&lt;/figure&gt;&lt;/div&gt;
 &lt;h2&gt;How to try&lt;/h2&gt;
 &lt;p&gt;Open the live demo, no install required, and scan the board: issues waiting, sessions in progress, the one flagged for your attention. Running CCC already? Every coding-agent session on the machine appears automatically, including ones you started from a plain terminal. Nothing to wire up.&lt;/p&gt;
 &lt;h2&gt;Limitations&lt;/h2&gt;
@@ -55,7 +68,7 @@
 &lt;p&gt;The project tree groups your sessions under named objects you define, and those objects nest. Pin a strategy object at the top, fan its execution sessions out underneath, and file the throwaway work somewhere else entirely. The board now matches the shape of the work instead of flattening it into one column.&lt;/p&gt;
 &lt;h2&gt;Proof&lt;/h2&gt;
 &lt;p&gt;The capture above is the CCC board. The left sidebar carries the session list with the by project, by time, and by objects controls sitting right above it, so one click regroups the whole fleet by the axis you care about at that moment. The sessions are real rows in the seeded demo, each with its live status.&lt;/p&gt;
-&lt;div class="u-media"&gt;&lt;figure class="u-figure"&gt;&lt;img src="https://ccc.amirfish.ai/images/demo.png" alt="The CCC dashboard: the left sidebar lists sessions grouped in progress, with by project, by time, and by objects controls at the top." loading="lazy"&gt;&lt;figcaption&gt;The board, with the by project / by time / by objects grouping controls above the session list.&lt;/figcaption&gt;&lt;/figure&gt;&lt;/div&gt;
+&lt;div class=&quot;u-media&quot;&gt;&lt;figure class=&quot;u-figure&quot;&gt;&lt;img src=&quot;https://ccc.amirfish.ai/images/demo.png&quot; alt=&quot;The CCC dashboard: the left sidebar lists sessions grouped in progress, with by project, by time, and by objects controls at the top.&quot; loading=&quot;lazy&quot;&gt;&lt;figcaption&gt;The board, with the by project / by time / by objects grouping controls above the session list.&lt;/figcaption&gt;&lt;/figure&gt;&lt;/div&gt;
 &lt;h2&gt;How to try&lt;/h2&gt;
 &lt;p&gt;Update to 5.4.0 or later, then in the sidebar switch the grouping control to &lt;strong&gt;by objects&lt;/strong&gt;. Use &lt;strong&gt;+ object&lt;/strong&gt; to create a group, drag sessions into it (hold Cmd or Shift to move several at once), and nest objects inside objects for sub-projects. &lt;strong&gt;Expand all&lt;/strong&gt; and &lt;strong&gt;Collapse all&lt;/strong&gt; fold the whole tree when you just want the headlines.&lt;/p&gt;
 &lt;h2&gt;Limitations&lt;/h2&gt;
