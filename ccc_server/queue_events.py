@@ -2045,6 +2045,8 @@ def build_codex_wake_status(session_id):
         "active": active,
         "stages": stages,
         "model": model,
+        "rollout_model": snap.get("model"),
+        "rollout_effort": snap.get("effort"),
         "effort": effort,
         "context_used": ctx_used,
         "context_window": ctx_win,

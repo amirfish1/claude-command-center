@@ -9208,6 +9208,7 @@
         .then(data => {
           if (!data || data.sid !== sid || _codexWakePollSid !== sid) return;
           if (!currentSession || currentSession.id !== sid) return;
+          syncCodexWakeUsage(sid, data);
           renderCodexWakeBreakdown($view, data);
           rendered = true;
           if (data.outcome) {
@@ -62780,6 +62781,26 @@
     };
   }
   // SESSION_USAGE_REFRESH_POLICY_END
+
+  function syncCodexWakeUsage(sid, data) {
+    // An attempted switch is intent, not proof. The wake readout's rollout
+    // model comes from turn_context and is newer than the throttled usage
+    // poll, even while composer focus defers that poll.
+    if (!sid || !data || data.sid !== sid || !data.rollout_model) return;
+    Object.keys(_usageSessionIdByPane).forEach(pid => {
+      const usage = _usageDataByPane[pid];
+      if (_usageSessionIdByPane[pid] !== sid || !usage || usage.engine !== 'codex') return;
+      const effort = String(data.rollout_effort || '').trim();
+      if (usage.model === data.rollout_model && (!effort || usage.reasoning_effort === effort)) return;
+      usage.model = data.rollout_model;
+      if (effort) usage.reasoning_effort = effort;
+      // A usage request started before this observation must not put the
+      // old model back when its response arrives.
+      _usageRequestGenerationByPane[pid] = (_usageRequestGenerationByPane[pid] || 0) + 1;
+      delete _usageRequestByPane[pid];
+      renderSessionUsageIntoStrip(pid);
+    });
+  }
 
   function _sessionUsagePaneIsVisible(pid, sid) {
     if (!sid || document.hidden) return false;

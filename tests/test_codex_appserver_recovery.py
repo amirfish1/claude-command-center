@@ -205,5 +205,21 @@ class WakeStallOutcomeTest(unittest.TestCase):
         out = self.q.build_codex_wake_status(sid)
         self.assertIsNone(out["stalled_s"])
 
+    def test_rollout_model_is_distinct_from_an_attempted_switch(self):
+        sid = "test-wake-model-sid"
+        now = __import__("time").time()
+        self._seed(sid, [{"event": "codex_wake_attempt", "epoch": now,
+                          "model": "next-model", "effort": "high"}])
+        with mock.patch.object(self.q, "_codex_wake_rollout_snapshot", return_value={}):
+            out = self.q.build_codex_wake_status(sid)
+        self.assertEqual(out["model"], "next-model")
+        self.assertIsNone(out["rollout_model"])
+        self.assertIsNone(out["rollout_effort"])
+        with mock.patch.object(self.q, "_codex_wake_rollout_snapshot",
+                               return_value={"model": "actual-model", "effort": "medium"}):
+            out = self.q.build_codex_wake_status(sid)
+        self.assertEqual(out["rollout_model"], "actual-model")
+        self.assertEqual(out["rollout_effort"], "medium")
+
 if __name__ == "__main__":
     unittest.main()
