@@ -32589,8 +32589,8 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
    in/cached/out chip row (label + math in its tooltip). */
 .event-token-chips .cache-adjusted-num { color: #79c0ff; font-weight: 700; }
 
-/* Phone: "+ Ticket" folds into a ▾ on the New session button; the "? N"
-   question pill folds into the ⋮ menus, which show its count as a badge. */
+/* Phone: keep ticket creation directly accessible; the question pill
+   folds into the menus, which show its count as a badge. */
 .new-session-caret-wrap { display: none; }
 .new-session-caret-menu {
   position: fixed;
@@ -32605,21 +32605,9 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 .new-session-caret-menu[hidden] { display: none; }
 .new-session-caret-menu .sh-more-item { display: block; width: 100%; min-height: 48px; font-size: 16px; text-align: left; }
 @media (max-width: 1200px) {
-  .sidebar #sidebarNewTicketBtn { display: none !important; }
-  .sidebar .new-session-caret-wrap { display: inline-flex; margin-left: -9px; }
-  .sidebar #sidebarNewBtn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-  .sidebar .new-session-caret {
-    min-width: 40px;
-    min-height: 44px;
-    padding: 0;
-    border: 1px solid color-mix(in srgb, var(--orange, #d29922) 55%, transparent);
-    border-left-color: color-mix(in srgb, var(--orange, #d29922) 25%, transparent);
-    border-radius: 0 8px 8px 0;
-    background: color-mix(in srgb, var(--orange, #d29922) 12%, transparent);
-    color: var(--orange, #d29922);
-    font-size: 16px;
-    cursor: pointer;
-  }
+  .sidebar #sidebarNewTicketBtn { display: inline-flex; min-height: 44px; }
+  .sidebar .new-session-primary-row { flex: 1 1 auto; }
+  .sidebar #sidebarNewBtn { min-height: 44px; }
   .qtag-pill { display: none !important; }
   [data-qtag-badge] { position: relative; }
   [data-qtag-badge]:not([data-qtag-count=""])[data-qtag-count]::after {

@@ -7,9 +7,10 @@
   const dashboard = !!document.getElementById('mobileBottomNav');
   const style = document.createElement('style');
   style.textContent = `
-    #cccMobileAppFrame { position:fixed; inset:0 0 auto; width:100%; height:calc(100dvh - var(--ccc-mobile-app-nav-height, 70px)); border:0; background:var(--bg,#0f1115); z-index:900; }
+    #cccMobileAppFrame { position:fixed; top:calc(var(--app-vv-top, 0px) + env(safe-area-inset-top, 0px)); left:env(safe-area-inset-left, 0px); width:calc(100% - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)); height:max(0px, calc(var(--app-vh, 100dvh) - env(safe-area-inset-top, 0px) - var(--ccc-mobile-app-nav-height, 70px))); border:0; background:var(--bg,#0f1115); z-index:900; }
     #cccMobileAppFrame[hidden] { display:none; }
     body.ccc-mobile-app-open #ideaTicketsIntroBanner, body.ccc-mobile-app-open #pwaInstallBanner { display:none !important; }
+    body.has-mobile-bottom-nav #mobileBottomNav { bottom:auto; top:calc(var(--app-vv-top, 0px) + var(--app-vh, 100dvh)); transform:translateY(-100%); padding:4px max(4px, env(safe-area-inset-right, 0px)) max(2px, env(safe-area-inset-bottom, 0px)) max(4px, env(safe-area-inset-left, 0px)); }
     body.ccc-mobile-app-open #mobileBottomNav { display:flex !important; z-index:950; }
     body:has(#mobileBottomNav .mobile-nav-menu:not([hidden])) #pwaInstallBanner { display:none !important; }
     #mobileBottomNav .mobile-nav-menu { max-height:calc(100dvh - 100px); overflow-y:auto; overscroll-behavior:contain; min-width:220px; max-width:calc(100vw - 16px); }
