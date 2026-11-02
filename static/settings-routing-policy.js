@@ -170,9 +170,9 @@
         view.append(el('p','This changes saved policy only. Queue pins, runtime quota/headroom decisions and active runs remain independent. Metadata on retained policies and routes is preserved.','settings-row-desc'));view.hidden=false;
         status(result.changes.length?'Validated · review the changes, then apply.':'No effective changes; nothing to apply.');view.scrollIntoView({block:'nearest'});
       } else {
-        const saved={...base,...result.effective};if(result.applied)api.saved?.(saved);base={...saved,policy_documents:copy(result.effective)};
+        const saved={...base,...result.effective};if(result.applied){api.saved?.(saved);window.dispatchEvent(new CustomEvent('ccc:configuration-saved',{detail:{scope:'machine'}}));}base={...saved,policy_documents:copy(result.effective)};
         // Obtain the new revision without migrating any configuration.
-        try {base=await json('/api/spawn-defaults?policy=1');reset();status(result.applied?'Launch policy saved. New launches use the saved policy; running work is unchanged.':'No effective changes saved.');}
+        try {base=await json('/api/spawn-defaults?policy=1');reset();status((result.applied?'Launch policy saved. New launches use the saved policy; running work is unchanged.':'No effective changes saved.')+(result.configuration_history?.warning?' '+result.configuration_history.warning:''));}
         catch(err) {preview=null;error('Policy was saved, but its new revision could not be read. Reload before editing again.');base=null;}
       }
     } catch(err) { preview=null;$('routingPolicyDiff').hidden=true;error(err.message);status('Draft retained · no successful apply was reported. Review or reload before retrying.'); }

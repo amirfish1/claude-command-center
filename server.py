@@ -9901,6 +9901,10 @@ def _write_spawn_defaults_file(payload):
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
             f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        from ccc_server.configuration_history import check_publication
+        check_publication(SPAWN_DEFAULTS_FILE)
         tmp.replace(SPAWN_DEFAULTS_FILE)
     finally:
         tmp.unlink(missing_ok=True)
@@ -10028,9 +10032,21 @@ def _save_spawn_defaults(config):
 
 
 def _save_spawn_defaults_unlocked(config):
+    from ccc_server.configuration_history import History, read
+    try:
+        before = read(SPAWN_DEFAULTS_FILE)
+    except (OSError, ValueError):
+        return {"ok": False, "error": "Saved configuration unavailable; settings were not saved"}
     prepared = _prepare_spawn_defaults_unlocked(config)
     if prepared.get("ok"):
-        _write_spawn_defaults_file({key: value for key, value in prepared.items() if key != "ok"})
+        candidate = {key: value for key, value in prepared.items() if key != "ok"}
+        try:
+            history = History(sys.modules[__name__])
+            result = history.publish("machine", "", before, candidate,
+                                     lambda: _write_spawn_defaults_file(candidate))
+            prepared["configuration_history"] = result
+        except ValueError:
+            return {"ok": False, "error": "Configuration/history unavailable; settings were not saved"}
     return prepared
 
 
@@ -10277,14 +10293,18 @@ def _routing_policy_request(request):
                 if request.get("preview_token") != preview_token:
                     return {"ok": False, "error": "Preview expired or validation changed; preview again", "status": 409}
                 if diff:
-                    _write_spawn_defaults_file(prepared)
-            return {"ok": True, "policy_action": action, "preview_token": preview_token,
+                    from ccc_server.configuration_history import History
+                    history_result = History(sys.modules[__name__]).publish(
+                        "machine", "", stored if raw is not None else None, prepared,
+                        lambda: _write_spawn_defaults_file(prepared))
+            return {"ok": True, "configuration_history": history_result if action == "apply" and diff else {"state": "not_recorded"}, "policy_action": action, "preview_token": preview_token,
                     "policy_revision": view["policy_revision"], "changes": diff,
                     "effective": prepared, "applied": action == "apply" and bool(diff)}
         except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
+            from ccc_server.configuration_history import Stale
+            return {"ok": False, "error": str(exc), "status": 409 if isinstance(exc, Stale) else 400}
         except OSError:
-            return {"ok": False, "error": "Could not save launch policy; no partial changes applied", "status": 503}
+            return {"ok": False, "error": "Could not confirm launch policy save; reload configuration and history", "status": 503}
 
 
 def _spawn_auto_compact_k_tokens(auto_compact_k=None):
@@ -10426,6 +10446,11 @@ def _settings_launch_overview():
 
 
 def _queue_policy_action(payload):
+    with _spawn_defaults_lock:
+        return _queue_policy_action_unlocked(payload)
+
+
+def _queue_policy_action_unlocked(payload):
     """Opt-in scoped protocol on the native queue endpoint; legacy saves stay valid."""
     from ccc_server import queue_policy as policy
     from ccc_server.launch_preview import worker_plan
@@ -10474,10 +10499,14 @@ def _queue_policy_action(payload):
                 "plan": worker_plan(defaults, prepared[key], queue=key)}
     if payload.get("preview_token") != token:
         raise policy.StalePreview("Preview these exact queue changes before applying.")
+    history_result = {"state": "not_recorded"}
     if diff:
-        policy.publish(path, SPAWN_DEFAULTS_FILE, prepared, rev)
+        from ccc_server.configuration_history import History
+        history_result = History(sys.modules[__name__]).publish(
+            "queue", key, config, prepared,
+            lambda: policy.publish(path, SPAWN_DEFAULTS_FILE, prepared, rev))
     # No reconcile call: this edits saved policy only and never starts workers.
-    return {"ok": True, "queue": key, "applied": bool(diff), "changes": diff}
+    return {"ok": True, "queue": key, "applied": bool(diff), "changes": diff, "configuration_history": history_result}
 
 
 def _spawn_request_engine_and_model(payload, defaults=None):
@@ -32958,6 +32987,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "config": config, "headroom": _headroom.headroom_payload()})
             except (OSError, ValueError) as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/settings/history":
+            from ccc_server.configuration_history import History
+            try:
+                with _spawn_defaults_lock:
+                    self.send_json(History(sys.modules[__name__]).snapshot())
+            except (OSError, ValueError):
+                self.send_json({"ok": False, "error": "Configuration history unavailable; no restore is safe"}, 503)
         elif path == "/api/settings/changes":
             from ccc_server.settings_changes import snapshot
             try:
@@ -35508,6 +35544,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
+        if path == "/api/settings/history":
+            from ccc_server.configuration_history import History, Stale
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict): raise ValueError("Expected an object")
+                with _spawn_defaults_lock:
+                    history = History(sys.modules[__name__])
+                    if payload.get("action") == "preview_undo":
+                        self.send_json({"ok": True, **history.preview(payload.get("entry_id"))[0]})
+                    elif payload.get("action") == "apply_undo":
+                        self.send_json(history.undo(payload))
+                    else: raise ValueError("Choose preview_undo or apply_undo")
+            except Stale as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 409)
+            except ValueError:
+                self.send_json({"ok": False, "error": "Undo unavailable or incompatible with current policy; refresh history"}, 400)
+            except OSError:
+                self.send_json({"ok": False, "error": "Undo could not be saved; refresh history to check the outcome"}, 503)
+            return
         if path == "/api/spawn-defaults":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""
@@ -35521,7 +35577,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 status = saved.pop("status", 200 if saved.get("ok") else 400)
                 self.send_json(saved, status)
                 return
-            saved = _save_spawn_defaults(payload)
+            try:
+                saved = _save_spawn_defaults(payload)
+            except OSError:
+                self.send_json({"ok": False, "error": "Configuration save could not be confirmed; refresh configuration and history"}, 503)
+                return
             if not saved.get("ok"):
                 self.send_json(saved, 400)
                 return
@@ -36903,9 +36963,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
                 if isinstance(payload, dict) and "policy_action" in payload:
                     from ccc_server.queue_policy import StalePreview
+                    from ccc_server.configuration_history import Stale as HistoryStale
                     try:
                         self.send_json(_queue_policy_action(payload))
-                    except StalePreview as exc:
+                    except (StalePreview, HistoryStale) as exc:
                         self.send_json({"ok": False, "error": str(exc)}, 409)
                     except (OSError, StopIteration) as exc:
                         self.send_json({"ok": False, "error": "Queue policy unavailable: " + str(exc)}, 503)
@@ -36923,6 +36984,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cfg = _wt_read_config() or {}
                 matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
                 case_mismatch = bool(matched and matched != queue_name)
+                history_before_queue = json.loads(json.dumps(cfg))
                 before_conf = dict(cfg.get(matched) or {}) if matched else {}
                 if matched is None:
                     # A queue with no existing entry is being created here, not
@@ -37054,7 +37116,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # reconciler's next ~30s tick (CCC-790) -- started off-thread
                 # so the save itself doesn't hang on it (CCC-1014).
                 _reconcile_once_async()
-                self.send_json({"ok": True, **normalized})
+                history_result = {"state": "unavailable", "warning": "Configuration saved; legacy save history could not be recorded"}
+                try:
+                    from ccc_server.configuration_history import History, read
+                    history_result = History(sys.modules[__name__]).observed_queue(
+                        history_before_queue, read(_wt_config_path()), queue_name)
+                except (OSError, ValueError):
+                    pass
+                self.send_json({"ok": True, **normalized, "configuration_history": history_result})
             except ValueError as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             except Exception as e:

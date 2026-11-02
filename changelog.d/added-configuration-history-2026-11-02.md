@@ -1,0 +1,1 @@
+- Add bounded, nonsecret machine and queue configuration history with previewed, revision-checked undo and explicit interrupted-save recovery states in Workspace preferences.

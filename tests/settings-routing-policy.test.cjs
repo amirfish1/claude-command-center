@@ -136,7 +136,7 @@ test('stale revision and failed atomic save retain draft without partial writes 
  assert.equal(fs.readFileSync(file,'utf8'),before);assert.equal(await page.$eval('#routingPolicyApply',node=>node.disabled),true);assert.equal(await page.evaluate(()=>window.__savedCount),0);
  assert.equal(await page.$eval('#routingPolicyError',node=>{const r=node.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),true);
  await page.click('#routingPolicyReload');await page.waitForFunction(()=>document.querySelector('#routingPolicyStatus').textContent.startsWith('Saved policy loaded'));
- await page.select('#spawnDefaultsEffort','high');await preview(page);fs.writeFileSync(failFlag,'fail');await page.click('#routingPolicyApply');await page.waitForFunction(()=>document.querySelector('#routingPolicyError').textContent.includes('Could not save'));
+ await page.select('#spawnDefaultsEffort','high');await preview(page);fs.writeFileSync(failFlag,'fail');await page.click('#routingPolicyApply');await page.waitForFunction(()=>document.querySelector('#routingPolicyError').textContent.includes('Could not confirm launch policy save'));
  assert.equal(fs.readFileSync(file,'utf8'),before);assert.equal(await page.$eval('#spawnDefaultsEffort',node=>node.value),'high');assert.equal(await page.evaluate(()=>window.__savedCount),0);
  fs.rmSync(failFlag);await apply(page);assert.equal(read().reasoning_effort,'high');
 });

@@ -87030,6 +87030,8 @@
       if (typeof updateInputBar === 'function') updateInputBar();
       renderSpawnDefaultsInline();
       if (rowEl && typeof showSettingsSavedPulse === 'function') showSettingsSavedPulse(rowEl);
+      if (data.configuration_history?.warning) spawnDefaultsInlineError('Settings saved. ' + data.configuration_history.warning);
+      window.dispatchEvent(new CustomEvent('ccc:configuration-saved', {detail:{scope:'machine'}}));
       return true;
     } catch (err) {
       spawnDefaultsInlineError((err && err.message) || 'Save failed.');
@@ -94680,10 +94682,14 @@
     $settingsModal.hidden = true;
     if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', 'false');
     const restoreFocus = [$settingsBtn, _settingsModalPrevFocus,
-      document.querySelector('[data-mobile-nav="more"]'),
-      document.querySelector('[data-mobile-nav-menu]'), document.getElementById('sidebarMoreBtn')]
-      .find(element => element !== document.body && element !== document.documentElement
-        && element?.isConnected && !element.disabled && element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden');
+      ...document.querySelectorAll('[data-mobile-nav="more"], [data-mobile-nav-menu]'), document.getElementById('sidebarMoreBtn')]
+      .find(element => {
+        if (element === document.body || element === document.documentElement || !element?.isConnected
+            || element.disabled || !element.getClientRects().length || getComputedStyle(element).visibility === 'hidden') return false;
+        const rect = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return hit === element || element.contains(hit);
+      });
     restoreFocus?.focus();
     _settingsModalPrevFocus = null;
   }
@@ -96272,6 +96278,27 @@
       if ($settingsModal.hidden) openSettingsModal({focusSearch:false}); else clearSettingsSearch();
       setActiveSettingsRailSection(section);
       document.querySelector('#settingsSection-' + section + ' button, #settingsSection-' + section + ' input')?.focus();
+    },
+  });
+
+  window.cccConfigurationHistory?.mount({
+    applied: async result => {
+      try {
+        if (result.scope === 'machine') {
+          // Reuse the canonical merge without a migrating legacy GET.
+          const response = await fetch('/api/spawn-defaults?policy=1', {cache:'no-store'});
+          const data = await response.json();
+          if (!response.ok || !data.ok) return false;
+          mergeSpawnDefaults(data);
+          syncSpawnEngineDependentUi();
+          renderSpawnDefaultsInline();
+          if (typeof updateInputBar === 'function') updateInputBar();
+        } else {
+          _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; _renderQueuePanel();
+        }
+        window.cccLaunchPreview?.refresh();
+        return true;
+      } catch (_) { return false; }
     },
   });
 

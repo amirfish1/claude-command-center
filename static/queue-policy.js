@@ -107,7 +107,7 @@
         const result=await api({queue,policy_action:'apply',expected_revision:state.policy_revision,changes:pending.submitted,preview_token:pending.preview_token});
         reviewed=null;staged={};previewHost.hidden=true;
         if(result.applied){saved();window.dispatchEvent(new CustomEvent('ccc:queue-policy-changed',{detail:{queue}}));window.cccLaunchPreview?.refresh();}
-        freeze(false);await load();status.textContent=(result.applied?'Saved queue exceptions. Future launches use this policy.':'No changes saved.')+(state?'':' Saved launch preview could not be refreshed; retry Refresh saved policy.');
+        freeze(false);await load();status.textContent=(result.applied?'Saved queue exceptions. Future launches use this policy.':'No changes saved.')+(state?'':' Saved launch preview could not be refreshed; retry Refresh saved policy.')+(result.configuration_history?.warning?' '+result.configuration_history.warning:'');
       }catch(error){
         invalidate();status.textContent=(error.status?'Not applied: ':'Save could not be confirmed: ')+error.message+' Refresh saved policy and preview again; staged choices remain until refresh.';
       }

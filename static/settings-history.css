@@ -1,0 +1,11 @@
+#settingsConfigurationHistory {font-size:13px;line-height:1.5;margin:24px 0;padding-bottom:20px;border-bottom:1px solid var(--border)}
+#settingsConfigurationHistory h3 {font-size:18px;margin:0 0 12px}
+#settingsConfigurationHistory h4 {font-size:15px;margin:20px 0 12px}
+#settingsConfigurationHistory ol,#settingsConfigurationHistory ul {padding-left:0;list-style:none}
+#settingsConfigurationHistory li {padding:16px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
+#settingsConfigurationHistory dl {display:grid;grid-template-columns:160px minmax(0,1fr);gap:8px 16px}
+#settingsConfigurationHistory dd {margin:0} #settingsConfigurationHistory dt {font-weight:500}
+#settingsConfigurationHistory button {white-space:normal;margin-right:8px}
+#settingsConfigurationHistory summary {cursor:pointer;padding:12px 0}
+#settingsConfigurationHistory :is(button,summary):focus-visible {outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:600px){#settingsConfigurationHistory dl {grid-template-columns:1fr;gap:4px}#settingsConfigurationHistory dd {margin-bottom:8px}#settingsConfigurationHistory button,#settingsConfigurationHistory summary {min-height:44px}}

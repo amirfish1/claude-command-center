@@ -180,10 +180,24 @@ test('closing Settings skips a hidden desktop trigger and restores the visible p
  const result=await page.evaluate(close=>{
   const settings=document.getElementById('settingsModal');settings.hidden=false;
   const desktop=document.createElement('button');desktop.style.display='none';document.body.append(desktop);
-  const opener=document.createElement('button');opener.textContent='Voice setup';document.body.append(opener);
+  const opener=document.createElement('button');opener.textContent='Voice setup';opener.style.cssText='position:fixed;top:20px;left:20px;z-index:99999';document.body.append(opener);
   const run=new Function('$settingsModal','$settingsBtn','_settingsModalPrevFocus','finishEnginesFirstRun',close+';closeSettingsModal();');
   run(settings,desktop,opener,()=>{});
   return {hidden:settings.hidden,restored:document.activeElement===opener};
  },close);
  assert.deepEqual(result,{hidden:true,restored:true});
+});
+
+test('closing Settings skips a covered gear and hidden mobile fallback',async t=>{
+ const{page}=await open(t,390);
+ const close=between('  function closeSettingsModal() {','  // Exposed for call sites');
+ const result=await page.evaluate(close=>{
+  const settings=document.getElementById('settingsModal');settings.hidden=false;
+  const gear=document.createElement('button');gear.style.cssText='position:fixed;top:20px;left:20px;width:44px;height:44px;z-index:99998';document.body.append(gear);
+  const hidden=document.createElement('button');hidden.dataset.mobileNavMenu='';hidden.hidden=true;document.body.append(hidden);
+  const more=document.createElement('button');more.dataset.mobileNavMenu='';more.textContent='More';more.style.cssText='position:fixed;top:20px;left:20px;width:44px;height:44px;z-index:99999';document.body.append(more);
+  new Function('$settingsModal','$settingsBtn','_settingsModalPrevFocus','finishEnginesFirstRun',close+';closeSettingsModal();')(settings,gear,null,()=>{});
+  return {hidden:settings.hidden,restored:document.activeElement===more,hit:document.elementFromPoint(42,42)===more};
+ },close);
+ assert.deepEqual(result,{hidden:true,restored:true,hit:true});
 });
