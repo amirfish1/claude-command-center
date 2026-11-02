@@ -93231,6 +93231,7 @@
   }
 
   async function refreshEnginesHub(opts) {
+    if (window.cccEngineConnection?.cachedOnly?.() && !opts?.fresh) return null;
     if (!document.getElementById('engList')) return;
     const get = url => fetch(url, { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null);
     const fresh = opts && opts.fresh;
@@ -93467,7 +93468,7 @@
     });
     // Coming back from the terminal where the install/login ran is the moment
     // status most likely changed.
-    window.addEventListener('focus', () => { if (_engHubVisible()) refreshEnginesHub(); });
+    window.addEventListener('focus', () => { if (_engHubVisible() && !window.cccEngineConnection?.cachedOnly?.()) refreshEnginesHub(); });
   })();
 
   // ── Engines section: BYOK (bring-your-own-key) profiles (W2-2) ──
@@ -94539,7 +94540,7 @@
     refreshMonthlyClaudePlanInput();
     refreshMonthlyCodexPlanInput();
     refreshSpawnEngineValue();
-    refreshEngineUpdateStatus();
+    if (!cachedOnly) refreshEngineUpdateStatus();
     refreshByokSettings();
     refreshVaultSettings();
     const $phoneRow = document.getElementById('phoneAccessRow');

@@ -135,3 +135,35 @@ test('queue-local Override shares catalog and policy exclusions without saving o
  const page=await open(t);await page.click('#queue');await page.waitForFunction(()=>document.querySelector('.queue-policy-status')?.textContent.includes('Saved queue policy loaded'));await page.click('[aria-label="Override Engine"]');await page.click('#fqEngineSeg [data-engine="claude"]');await page.click('[aria-label="Override Model"]');
  const rows=await page.$eval('#fqConfigModel',n=>Object.fromEntries([...n.options].map(o=>[o.value,{disabled:o.disabled,text:o.textContent}])));assert.equal(rows.blocked.disabled,true);assert.match(rows.blocked.text,/Blocked by model policy/);assert.equal(rows.retired.disabled,true);assert.match(rows.retired.text,/Removed from catalog/);assert.equal(rows.sonnet.disabled,false);assert.equal(await page.$eval('#fqConfigModel',n=>n.value),'');assert.match(await page.$eval('.queue-policy-status',n=>n.textContent),/nothing is saved|Unsaved queue exceptions/);await page.screenshot({path:path.join(scratch,'queue-desktop.png'),fullPage:true});
 });
+
+test('cached unknown-engine identity and warnings survive unrelated native renders',async t=>{
+ const page=await open(t,390);
+ await page.evaluate(()=>{
+  window.cccEngineConnection.open('future-engine',{cachedOnly:true,observedAt:'2001-01-01T00:00:00Z'});
+  window.cccEngineConnection.render([{engine:'claude',meta:{label:'Claude'},installed:true,auth:true,isDefault:true}],{});
+ });
+ assert.equal(await page.$eval('#engineConnectionSelect',n=>n.value),'future-engine');
+ assert.match(await page.$eval('#engineConnectionStatus',n=>n.textContent),/Cached snapshot only.*Requested engine status is not available/);
+ assert.equal(await page.$('#engineConnectionPanel'),null);
+ await page.select('#engineConnectionSelect','claude');
+ assert.match(await page.$eval('#engineConnectionStatus',n=>n.textContent),/Cached snapshot only.*last snapshot is not current/);
+ assert.equal(await page.$eval('#engineConnection-session',n=>n.disabled),true);
+});
+
+test('native focus handler skips cached mode but refreshes ordinary setup',()=>{
+ let listener,cached=true,calls=0;
+ const source=app.match(/window\.addEventListener\('focus', \(\) => \{ if \(_engHubVisible\(\).*?\}\);/)[0];
+ vm.runInNewContext(source,{window:{addEventListener:(_,fn)=>listener=fn,cccEngineConnection:{cachedOnly:()=>cached}},_engHubVisible:()=>true,refreshEnginesHub:()=>calls++});
+ listener();assert.equal(calls,0);cached=false;listener();assert.equal(calls,1);
+});
+
+test('native Settings open skips update-status only for cached navigation',()=>{
+ let reads=0;const noop=()=>{};
+ const env={document:{activeElement:null,getElementById:()=>null},$settingsModal:{classList:{add:noop}},$settingsBtn:null,
+ clearSettingsSearch:noop,renderExperimentalFlags:noop,refreshAppearanceChecks:noop,refreshMonthlyClaudePlanInput:noop,
+ refreshMonthlyCodexPlanInput:noop,refreshSpawnEngineValue:noop,refreshEngineUpdateStatus:()=>reads++,refreshByokSettings:noop,
+ refreshVaultSettings:noop,buildSettingsSearchIndex:noop,setActiveSettingsRailSection:noop,_settingsCurrentSection:'routing',
+ clearTimeout:noop,setTimeout:noop,settingsSearchFocusTimer:null};
+ vm.createContext(env);vm.runInContext(between('  function openSettingsModal(', '  // Deep link: /?ccc_settings='),env);
+ env.openSettingsModal({cachedOnly:true});assert.equal(reads,0);env.openSettingsModal();assert.equal(reads,1);
+});
