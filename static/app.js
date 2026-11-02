@@ -3567,7 +3567,7 @@
     } catch (_) {}
     return out;
   }
-  const _ultraFresh = { entries: new Map(), source: null, ids: '', generation: 0, queued: false, connectTimer: null };
+  const _ultraFresh = { entries: new Map(), recent: new Map(), source: null, ids: '', generation: 0, queued: false, connectTimer: null };
   // Each connect re-parses the transcript tail of every watched row on the
   // server, and boot/list refreshes reshuffle the top rows many times a
   // second: 65-72 reconnects/min cost ~30s of server CPU per minute right
@@ -3597,7 +3597,8 @@
     return sending;
   }
   function _ultraFreshCurrent(c) {
-    const entry = _ultraFresh.entries.get(String(c.session_id || c.id));
+    const sid = String(c.session_id || c.id);
+    const entry = _ultraFresh.entries.get(sid) || _ultraFresh.recent?.get(sid);
     if (!entry) return c;
     _ultraFreshSendBarrier(entry, c.session_id || c.id);
     const ownerInputAt = Math.max(entry.userAt || 0, entry.sendAt || 0);
@@ -3873,9 +3874,20 @@
       _ultraFresh.generation++;
       if (_ultraFresh.source) _ultraFresh.source.close();
       _ultraFresh.source = null;
-      for (const sid of _ultraFresh.entries.keys()) if (!ids.includes(sid)) _ultraFresh.entries.delete(sid);
-      for (const sid of ids) if (!_ultraFresh.entries.has(sid)) _ultraFresh.entries.set(sid,
-        { at: 0, userAt: 0, text: '', sessionState: null, sendAt: 0, preSend: null });
+      // Resizing can briefly move a row outside the visible set. Retain four
+      // recent snapshots so a list refresh cannot restore older text while
+      // the stream reconnects; only the four visible sessions are watched.
+      for (const sid of _ultraFresh.entries.keys()) if (!ids.includes(sid)) {
+        _ultraFresh.recent.delete(sid);
+        _ultraFresh.recent.set(sid, _ultraFresh.entries.get(sid));
+        _ultraFresh.entries.delete(sid);
+      }
+      for (const sid of ids) if (!_ultraFresh.entries.has(sid)) {
+        _ultraFresh.entries.set(sid, _ultraFresh.recent.get(sid)
+          || { at: 0, userAt: 0, text: '', sessionState: null, sendAt: 0, preSend: null });
+        _ultraFresh.recent.delete(sid);
+      }
+      while (_ultraFresh.recent.size > 4) _ultraFresh.recent.delete(_ultraFresh.recent.keys().next().value);
       clearTimeout(_ultraFresh.connectTimer);
       _ultraFresh.connectTimer = null;
       if (key && typeof EventSource === 'function') {
@@ -3951,12 +3963,24 @@
     return want.on ? { state: 'running' } : null;
   }
   function sessionAttentionStep(c) {
-    const h = rowHandoff(c);
+    const retained = rowHandoff(c);
+    // Supervision is bound to a conversation, even when its ticket also
+    // contains continuations. Never present another conversation's block
+    // while this row is waiting for its own fresh footer.
+    const h = retained && retained.session && retained.session !== String(c.session_id || c.id)
+      ? null : retained;
+    const ss = (c && c.session_state) || {};
+    const comp = ss.completion;
+    // A later user check in that plan does not block the agent's first step.
+    const currentAgentPlan = comp && comp.valid === true && !comp.ready_to_close
+      && _ATTN_NONE_RE.test(String(ss.next_step_user || '').trim())
+      && Number((comp.decision_dependency || {}).score) === 0
+      && _attentionActionOwner((comp.remaining_actions || [])[0]) === 'agent';
+    if (currentAgentPlan && !h) return null;
     if (h && h.state === 'blocked') {
       return { label: 'Needs you', kind: 'next', handoff: 'blocked',
         text: String(h.question || 'The handed-off session is waiting on you.') };
     }
-    const ss = (c && c.session_state) || {};
     if (h && h.state === 'waiting') {
       // Parked on another ticket, a worker or a client: not the owner's turn.
       return { label: 'Waiting', kind: 'handoff', handoff: 'running',
@@ -3975,7 +3999,6 @@
     }
     const next = String(ss.next_step_user || '').trim();
     if (next && !_ATTN_NONE_RE.test(next)) return null;
-    const comp = ss.completion;
     if (!comp || comp.valid !== true || comp.ready_to_close) return null;
     const mine = (comp.remaining_actions || []).find(a => _attentionActionOwner(a) === 'user');
     if (mine) {

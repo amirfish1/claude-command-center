@@ -338,6 +338,23 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
     await page.waitForFunction(() => uf.state.ids === 's7,s6,s5');
     await page.evaluate(() => uf.accept({session_id:'s7',text:'Fresh filtered message',ts:'2099-02-01T00:00:00Z'}));
     await page.waitForFunction(() => document.querySelector('[data-id="s7"] .wa-preview').textContent.includes('Fresh filtered message'));
+    // A responsive layout can temporarily hide the list. A later render
+    // must retain the current message before a replacement stream connects.
+    const retained = await page.evaluate(() => {
+      const list = document.querySelector('#convList');
+      list.hidden = true;
+      uf.sync();
+      const result = { text: uf.current(uf.rows()[7]).last_assistant_text,
+        watched: uf.state.entries.size, cached: uf.state.recent.size };
+      list.hidden = false;
+      uf.sync();
+      result.restored = uf.state.entries.get('s7')?.text;
+      return result;
+    });
+    assert.equal(retained.text, 'Fresh filtered message');
+    assert.equal(retained.restored, 'Fresh filtered message');
+    assert.equal(retained.watched, 0);
+    assert.ok(retained.cached <= 4);
     if(process.env.ULTRA_FRESH_SCREENSHOT) await page.screenshot({path:process.env.ULTRA_FRESH_SCREENSHOT});
     await page.setViewport({width:390,height:844});
     await page.evaluate(() => {document.querySelector('#convList').style.width='390px';});
