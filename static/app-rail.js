@@ -16,10 +16,9 @@
  *   3. external embed  — an http(s) URL, or a local companion dashboard
  *                        reached through /proxy/<name>/*.
  *
- * Navigation is plain <a href> page navigation for user apps. Sessions ↔
- * Queues is intercepted on the dashboard (cccSwitchCoreApp) so the session
- * list stays mounted; mobile-app-nav.js hosts the catalog behind the mobile
- * More menu with persistent bottom navigation. Other desktop apps navigate.
+ * Dashboard app switches are intercepted so the session list stays mounted.
+ * mobile-app-nav.js hosts other apps in an overlay and supplies the mobile
+ * More menu. Standalone pages and modified clicks follow the link normally.
  * The Mac app treats any
  * URL on the dashboard port as in-app (scripts/macapp/main.swift).
  *
@@ -233,6 +232,8 @@
   /* Which app owns the current page. Longest matching URL wins so that
    * /view/reddit beats the "/" of Sessions. */
   function activeIdFor(apps) {
+    var embedded = new URLSearchParams(window.location.search).get("ccc_app");
+    if (embedded && apps.some(function (app) { return app.id === embedded; })) return embedded;
     var here = window.location.pathname;
     var best = null;
     var bestLen = -1;
@@ -702,10 +703,8 @@
   var nav = document.createElement("nav");
   nav.className = "ccc-side-nav";
   nav.setAttribute("aria-label", "Applications");
-  // Sessions ↔ Queues: let the dashboard keep the conversation list
-  // mounted (iframe overlay) instead of a full navigation. Other apps
-  // and modified-clicks (cmd-click, middle-click) still follow the href.
-  // On standalone q2.html, cccSwitchCoreApp is undefined and this is a no-op.
+  // Keep the dashboard mounted across app switches. Standalone pages and
+  // modified clicks still follow the href; Canvas keeps its companion window.
   nav.addEventListener("click", function (e) {
     if (e.defaultPrevented) return;
     if (e.button !== 0) return;
@@ -716,6 +715,13 @@
     var from = activeIdFor(lastApps) || "";
     if (a.target === "_blank") return;
     var t0 = Date.now();
+    if (typeof window.cccOpenApp === "function" && window.cccOpenApp(id)) {
+      e.preventDefault();
+      afterPaint(function () {
+        perfEvent("view_switch", Date.now() - t0, { from: from, to: id, mode: "in_page" });
+      });
+      return;
+    }
     if (id !== "sessions" && id !== "queues") {
       // not a core app: falls through to a full navigation below
     } else if (typeof window.cccSwitchCoreApp === "function" && window.cccSwitchCoreApp(id)) {

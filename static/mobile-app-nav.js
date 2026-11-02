@@ -1,4 +1,4 @@
-/* Keep mobile app navigation in the dashboard shell, using the rail catalog. */
+/* Keep app navigation in the dashboard shell, using the rail catalog. */
 (function () {
   'use strict';
   if (window.self !== window.top) return;
@@ -9,9 +9,10 @@
   style.textContent = `
     #cccMobileAppFrame { position:fixed; top:calc(var(--app-vv-top, 0px) + env(safe-area-inset-top, 0px)); left:env(safe-area-inset-left, 0px); width:calc(100% - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)); height:max(0px, calc(var(--app-vh, 100dvh) - env(safe-area-inset-top, 0px) - var(--ccc-mobile-app-nav-height, 70px))); border:0; background:var(--bg,#0f1115); z-index:900; }
     #cccMobileAppFrame[hidden] { display:none; }
+    body:not(.has-mobile-bottom-nav) #cccMobileAppFrame { top:0; left:var(--ccc-rail-w, 76px); width:calc(100% - var(--ccc-rail-w, 76px)); height:100%; }
     body.ccc-mobile-app-open #ideaTicketsIntroBanner, body.ccc-mobile-app-open #pwaInstallBanner { display:none !important; }
     body.has-mobile-bottom-nav #mobileBottomNav { bottom:auto; top:calc(var(--app-vv-top, 0px) + var(--app-vh, 100dvh)); transform:translateY(-100%); padding:4px max(4px, env(safe-area-inset-right, 0px)) max(2px, env(safe-area-inset-bottom, 0px)) max(4px, env(safe-area-inset-left, 0px)); }
-    body.ccc-mobile-app-open #mobileBottomNav { display:flex !important; z-index:950; }
+    body.ccc-mobile-app-open.has-mobile-bottom-nav #mobileBottomNav { display:flex !important; z-index:950; }
     body:has(#mobileBottomNav .mobile-nav-menu:not([hidden])) #pwaInstallBanner { display:none !important; }
     #mobileBottomNav .mobile-nav-menu { max-height:calc(100dvh - 100px); overflow-y:auto; overscroll-behavior:contain; min-width:220px; max-width:calc(100vw - 16px); }
     #mobileBottomNav .ccc-mobile-app-list { display:flex; flex-direction:column; border-top:1px solid var(--border); margin-top:6px; padding-top:6px; }
@@ -41,24 +42,27 @@
       el.classList.toggle('is-active', on);
       if (on) el.setAttribute('aria-current','page'); else el.removeAttribute('aria-current');
     });
+    if (active && typeof window.cccMarkRailActive === 'function') window.cccMarkRailActive(active);
   }
-  function close(push) {
+  function close(push, coreId = 'sessions') {
     if (!active) return;
     active = '';
     if (frame) frame.hidden = true;
     document.body.classList.remove('ccc-mobile-app-open');
-    if (typeof window.cccSwitchCoreApp === 'function') window.cccSwitchCoreApp('sessions', {push:false,force:true});
+    if (typeof window.cccSwitchCoreApp === 'function') window.cccSwitchCoreApp(coreId, {push:false,force:true});
     mark();
     if (push) history.pushState({}, '', '/');
   }
   function open(id, push) {
     const app = apps.find(a => a.id === id), url = app && appURL(app);
-    if (!app || !url) return;
+    if (!app || !url) return false;
     setMenu(false);
-    if (id === 'sessions') { close(push); if (typeof window.cccSwitchCoreApp === 'function') window.cccSwitchCoreApp('sessions'); return; }
-    if (!mobile() && dashboard) { location.replace(url.href); return; }
+    if (id === 'sessions' || id === 'queues') {
+      close(false, id);
+      return typeof window.cccSwitchCoreApp === 'function' && window.cccSwitchCoreApp(id, {push, force:true});
+    }
     if (!dashboard) { location.href = '/?ccc_app=' + encodeURIComponent(id); return; }
-    if (typeof window.cccSwitchCoreApp !== 'function') return;
+    if (typeof window.cccSwitchCoreApp !== 'function') return false;
     window.cccSwitchCoreApp('sessions', {push:false});
     document.body.classList.remove('mobile-ask-open');
     if (!frame) {
@@ -76,10 +80,12 @@
     document.title = app.label + ' · CCC';
     mark();
     if (push) history.pushState({cccMobileApp:id}, '', '/?ccc_app=' + encodeURIComponent(id));
+    return true;
   }
+  if (dashboard) window.cccOpenApp = id => open(id, true);
   function restore() {
     const id = new URLSearchParams(location.search).get('ccc_app');
-    if (id) open(id, false); else close(false);
+    if (id) open(id, false); else close(false, location.pathname === '/q2.html' ? 'queues' : 'sessions');
   }
   function render() {
     if (!dashboard) {
@@ -130,7 +136,6 @@
       if (e.target.closest('[data-mobile-nav]')) { close(true); setMenu(false); }
     }, true);
     document.addEventListener('keydown', e => { if (e.key === 'Escape' && !nav.querySelector('.mobile-nav-menu').hidden) { setMenu(false); (document.body.classList.contains('ccc-simple-mode') ? simpleMore : nav.querySelector('[data-mobile-nav-menu]')).focus(); } });
-    window.addEventListener('resize', () => { if (!mobile() && active) { const app = apps.find(a => a.id === active); if (app) location.assign(app.nav || app.url); } });
   }
   render();
 })();
