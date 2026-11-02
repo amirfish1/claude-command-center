@@ -45,6 +45,19 @@ def _known_row(sid):
         return dict(row) if row else None
 
 
+def _indexed_doc(sid):
+    """Read already-indexed text without triggering a global index refresh."""
+    from ccc_server import session_fts
+    try:
+        conn = session_fts._get_connection()
+        row = conn.execute(
+            f'SELECT title,prompts,report FROM sdoc WHERE {session_fts.sdoc_rowids_sql(1)}',
+            (sid,)).fetchone()
+        return dict(zip(('title', 'prompts', 'report'), row)) if row else {}
+    except sqlite3.Error:
+        return {}
+
+
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
@@ -159,12 +172,12 @@ def load_candidate(sid):
     if not row:
         # A cold/recent-only dashboard cache is not evidence that an old
         # session disappeared. Resolve its exact ID in the existing index.
-        from ccc_server.session_brief import _session_meta_row, _sdoc_row
+        from ccc_server.session_brief import _session_meta_row
         meta = _session_meta_row(conn, sid)
         if not meta:
             return None
         row = dict(session_id=sid, modified=meta.get('end_ts') or 0,
-                   display_name=_sdoc_row(sid).get('title') or '')
+                   display_name=_indexed_doc(sid).get('title') or '')
     archived, trashed = core._load_conversation_lifecycle_sets()
     if sid in archived or sid in trashed:
         return None
@@ -259,8 +272,8 @@ def run_checker(evidence):
 def evidence_for(item):
     # Read the existing text index directly: brief() also checks every linked
     # commit with git and would make a tiny recap's wall-time unbounded.
-    from ccc_server.session_brief import _sdoc_row, _last_user_asks, _last_reply
-    doc = _sdoc_row(item['session_id'])
+    from ccc_server.session_brief import _last_user_asks, _last_reply
+    doc = _indexed_doc(item['session_id'])
     return dict(recap=item['recap'], tickets=item.get('tickets', []),
                 last_user_asks=_last_user_asks(doc.get('prompts', '')),
                 last_reply=_last_reply(doc.get('report', '')))

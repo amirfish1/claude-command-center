@@ -191,7 +191,7 @@ def test_loader_checks_current_transcript_and_rejects_answered_or_superseded_row
     from ccc_server import session_brief
     monkeypatch.setattr(recaps, '_known_row', lambda sid: None)
     monkeypatch.setattr(session_brief, '_session_meta_row', lambda conn, sid: {'end_ts': NOW - 3 * recaps.DAY})
-    monkeypatch.setattr(session_brief, '_sdoc_row', lambda sid: {'title': 'Indexed old session'})
+    monkeypatch.setattr(recaps, '_indexed_doc', lambda sid: {'title': 'Indexed old session'})
     assert recaps.load_candidate('old-session')['recap']['request'] == 'Choose PDF or CSV.'
     events.append({'type': 'user', 'text': 'CSV'})
     assert recaps.load_candidate('old-session') is None
@@ -211,3 +211,17 @@ def test_archive_index_is_reused_across_visible_rows(monkeypatch):
     monkeypatch.setattr(recaps, '_rows_token', None)
     assert recaps._known_row('old-session')['session_id'] == 'old-session'
     assert recaps._known_row('second')['session_id'] == 'second'
+
+
+def test_recap_text_read_never_refreshes_the_global_index(tmp_path, monkeypatch):
+    from ccc_server import session_fts
+    import sqlite3
+    conn = sqlite3.connect(':memory:')
+    conn.execute('CREATE TABLE sdoc (session_id TEXT, title TEXT, prompts TEXT, report TEXT)')
+    conn.execute('INSERT INTO sdoc VALUES (?,?,?,?)', ('old', 'Old work', 'User ask', 'Last reply'))
+    monkeypatch.setattr(session_fts, '_get_connection', lambda: conn)
+    monkeypatch.setattr(session_fts, 'sdoc_rowids_sql', lambda count: 'session_id=?')
+    refresh = Mock(side_effect=AssertionError('Recap triggered global refresh'))
+    monkeypatch.setattr(session_fts, '_sync_index', refresh)
+    assert recaps._indexed_doc('old')['prompts'] == 'User ask'
+    refresh.assert_not_called()
