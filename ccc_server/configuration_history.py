@@ -46,6 +46,8 @@ def read(path):
 
 
 def check_publication(path):
+    check = getattr(PUBLICATION, 'source_check', None)
+    if check: check()
     expected = getattr(PUBLICATION, 'expected', None)
     if expected and Path(path) == expected[0] and revision(read(path)) != expected[1]:
         raise Stale('Configuration changed before publication; preview again')
@@ -192,7 +194,7 @@ class History:
                 'pending_status':pending,'limit':LIMIT,
                 'coverage':'Recorded from successful CCC launch-default and scoped queue-policy saves after this feature was installed. Legacy full queue saves are non-reversible observations; external writers and older history are not reconstructed. Browser history remains separate. Unsupported values/metadata are omitted and cannot be restored. Undo changes future launches, never running work. No cross-file atomicity.'}
 
-    def _commit(self,state,scope,target,before,after,writer,operation,force_marker=False):
+    def _commit(self,state,scope,target,before,after,writer,operation,force_marker=False,source_check=None):
         a=(before or {}) if scope=='machine' else (before or {}).get(target,{})
         b=after if scope=='machine' else after.get(target,{})
         diff,reversible=differences(self.core,scope,a,b)
@@ -206,9 +208,13 @@ class History:
         pending={**state,'pending':entry}
         atomic(self.path,pending)  # Failure here prevents the configuration write.
         try:
+            if source_check: source_check()
+            PUBLICATION.source_check = source_check
             PUBLICATION.expected = (self.target_path(scope), revision(before))
             try: writer()
-            finally: PUBLICATION.expected = None
+            finally:
+                PUBLICATION.expected = None
+                PUBLICATION.source_check = None
         except Exception as exc:
             from .queue_policy import StalePreview
             if isinstance(exc, (Stale, StalePreview)):
@@ -239,11 +245,11 @@ class History:
         except OSError:
             return {'state':'pending','warning':'Configuration saved; history finalization pending. Refresh history before undo.'}
 
-    def publish(self,scope,target,before,after,writer,operation='save'):
+    def publish(self,scope,target,before,after,writer,operation='save',source_check=None):
         with _lock(self.directory/'configuration-history-lock'):
             state,_=self.recover(self.state())
             if revision(self.document(scope)) != revision(before): raise Stale('Configuration changed before save; preview again')
-            return self._commit(state,scope,target,before,after,writer,operation)
+            return self._commit(state,scope,target,before,after,writer,operation,source_check=source_check)
 
     def observed_queue(self,before,after,target):
         # The legacy native form has multi-step setters and service effects;

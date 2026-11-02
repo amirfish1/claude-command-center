@@ -10253,11 +10253,12 @@ def _routing_policy_snapshot():
     return raw, stored, {**defaults, "policy_revision": revision(raw), "policy_documents": stored}
 
 
-def _routing_policy_request(request):
+def _routing_policy_request(request, *, source_check=None):
     """Validate/preview or atomically apply one staged policy on the old API."""
     from ccc_server.routing_policy import validate_changes, preserve_documents, staged_candidate, token, differences
     with _spawn_defaults_lock:
         try:
+            if source_check: source_check()
             raw, stored, view = _routing_policy_snapshot()
             if request.get("expected_revision") != view["policy_revision"]:
                 return {"ok": False, "error": "Launch policy changed; reload and review your draft", "status": 409}
@@ -10296,7 +10297,7 @@ def _routing_policy_request(request):
                     from ccc_server.configuration_history import History
                     history_result = History(sys.modules[__name__]).publish(
                         "machine", "", stored if raw is not None else None, prepared,
-                        lambda: _write_spawn_defaults_file(prepared))
+                        lambda: _write_spawn_defaults_file(prepared), source_check=source_check)
             return {"ok": True, "configuration_history": history_result if action == "apply" and diff else {"state": "not_recorded"}, "policy_action": action, "preview_token": preview_token,
                     "policy_revision": view["policy_revision"], "changes": diff,
                     "effective": prepared, "applied": action == "apply" and bool(diff)}
@@ -32987,6 +32988,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "config": config, "headroom": _headroom.headroom_payload()})
             except (OSError, ValueError) as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/settings/profiles":
+            from ccc_server.settings_profiles import registry
+            try:
+                with _spawn_defaults_lock:
+                    self.send_json(registry(sys.modules[__name__]))
+            except (OSError, ValueError):
+                self.send_json({"ok": False, "error": "Host profile sources unavailable; refresh to retry"}, 503)
         elif path == "/api/settings/history":
             from ccc_server.configuration_history import History
             try:
@@ -35543,6 +35551,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 400)
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/settings/profiles":
+            from ccc_server.settings_profiles import request as profile_request, decode, MAX_REQUEST
+            from ccc_server.configuration_history import Stale
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length < 1 or length > MAX_REQUEST: raise ValueError("Profile request exceeds the size limit")
+                payload = decode(self.rfile.read(length), MAX_REQUEST)
+                with _spawn_defaults_lock:
+                    self.send_json(profile_request(sys.modules[__name__], payload))
+            except Stale as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 409)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except OSError:
+                self.send_json({"ok": False, "error": "Host profile save could not be confirmed; refresh configuration and history"}, 503)
             return
         if path == "/api/settings/history":
             from ccc_server.configuration_history import History, Stale

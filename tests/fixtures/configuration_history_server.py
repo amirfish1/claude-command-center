@@ -34,13 +34,14 @@ class Handler(server.CommandCenterHandler):
         if self.path=='/api/spawn-defaults?policy=1':
             if (base/'fail-consumer').exists():self.send_json({'error':'Fixture controls unavailable'},503);return
             self.send_json({'ok':True,**server._routing_policy_snapshot()[2]});return
+        if self.path in ('/api/settings/profiles','/api/settings/preferences/registry'):return super().do_GET()
         if self.path=='/api/settings/history':
             if (base/'fail-read').exists():self.send_json({'error':'Fixture history unavailable'},503);return
             return super().do_GET()
         if self.path.startswith('/static/') and self.path.count('/')==2 and self.path.endswith(('.js','.css')):return super().do_GET()
         self.send_json({'error':'Unexpected fixture read'},403)
     def do_POST(self):
-        if self.path in ('/api/settings/history','/api/spawn-defaults','/api/queue/config'):return super().do_POST()
+        if self.path in ('/api/settings/profiles','/api/settings/history','/api/spawn-defaults','/api/queue/config'):return super().do_POST()
         self.send_json({'error':'Unexpected fixture action'},403)
 httpd=server.http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
 print(json.dumps({'url':f'http://127.0.0.1:{httpd.server_address[1]}'}),flush=True)

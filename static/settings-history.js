@@ -40,5 +40,5 @@
     (get('settingsChanges')||panel.querySelector('[data-pref-changed]'))?.after(host);if(!host.isConnected)panel.append(host);const b=button('Refresh history',()=>refresh());b.id='settingsHistoryRefresh';get('settingsHistoryToolbar').append(b);refresh(false);
   }
   window.addEventListener('ccc:configuration-saved',()=>{if(host&&!busy)refresh(false);});window.addEventListener('ccc:queue-policy-changed',()=>{if(host&&!busy)refresh(false);});
-  window.cccConfigurationHistory=Object.freeze({mount,refresh});new MutationObserver(()=>mount()).observe(document.documentElement,{childList:true,subtree:true});mount();
+  window.cccConfigurationHistory=Object.freeze({mount,refresh,refreshConsumers:result=>api?.applied?.(result)});new MutationObserver(()=>mount()).observe(document.documentElement,{childList:true,subtree:true});mount();
 })();

@@ -177,7 +177,7 @@
     host.focus();
   }
   function importProfile() {
-    const profile = parse(panel.querySelector('textarea').value);
+    const profile = parse(panel.querySelector('#settingsPreferencesProfile').value);
     if (!exact(profile, ['format', 'version', 'values']) || profile.format !== FORMAT || profile.version !== 1) message('Use a version 1 CCC preference profile without extra metadata.');
     makePreview('import', values(profile.values));
   }
@@ -191,7 +191,7 @@
   function exportProfile() {
     const state = snapshot();
     const text = JSON.stringify({format: FORMAT, version: 1, values: state.effective}, null, 2);
-    panel.querySelector('textarea').value = text;
+    panel.querySelector('#settingsPreferencesProfile').value = text;
     const blobURL = URL.createObjectURL(new Blob([text + '\n'], {type: 'application/json'}));
     const link = node('a'); link.href = blobURL; link.download = 'ccc-browser-preferences.json'; link.click();
     setTimeout(() => URL.revokeObjectURL(blobURL), 1000);
@@ -328,13 +328,13 @@
       const actions = {refresh, export: exportProfile, import: importProfile, reset: () => makePreview('reset', {}), undo, apply, cancel: clearPreview};
       protect(actions[button.dataset.prefAction]);
     });
-    panel.querySelector('input[type=file]').addEventListener('change', event => protect(async () => {
+    panel.querySelector('#settingsPreferencesFile').addEventListener('change', event => protect(async () => {
       clearPreview(); const file = event.target.files[0]; if (!file) return;
       if (file.size > MAX_BYTES) message('Profile is too large (maximum 64 KB).');
-      panel.querySelector('textarea').value = await file.text();
+      panel.querySelector('#settingsPreferencesProfile').value = await file.text();
       status('Profile loaded. Select Preview import to validate and review it.');
     }));
-    panel.querySelector('textarea').addEventListener('input', clearPreview);
+    panel.querySelector('#settingsPreferencesProfile').addEventListener('input', clearPreview);
     tab.addEventListener('click', () => protect(() => { if (specs) render(); }));
     window.addEventListener('storage', event => {
       if (!specs || (event.key !== null && event.key !== HISTORY_KEY && !Object.keys(specs).some(key => SUPPORTED[key][0] === event.key))) return;
