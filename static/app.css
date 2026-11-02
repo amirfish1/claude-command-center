@@ -32332,6 +32332,11 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
     height: 40px;
     font-size: 18px;
   }
+  /* Keep the larger touch targets above the prose in every view mode. */
+  .conv-pane .conversations-view .event.assistant:has(> .assistant-text),
+  body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text) {
+    padding-top: 44px !important;
+  }
 }
 
 /* ── Phone session list: thumb-sized controls ──────────────────────────────
