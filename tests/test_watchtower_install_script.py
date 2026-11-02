@@ -27,7 +27,7 @@ RUN_SCRIPT = PROJECT_ROOT / "run.sh"
 INSTALL_SCRIPT = PROJECT_ROOT / "scripts" / "install.sh"
 README = PROJECT_ROOT / "README.md"
 CI_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
-CI_WATCHTOWER_REF = "89d2d80099cfbba44231d7cf1f25e02cc8ce721d"
+CI_WATCHTOWER_REF = "32f3323452967b85dc746c647bcbf80f160860ce"
 
 
 FAKE_PYTHON = r"""#!/usr/bin/env bash
