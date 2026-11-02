@@ -158,6 +158,22 @@ def save_queue_form(core, payload, normalized, session_link):
                 raise ValueError(error)
             if model and wt and hasattr(wt, 'is_blocked_model') and wt.is_blocked_model(model):
                 raise ValueError('Model is blocked by worker policy')
+        if 'roles' in payload:
+            from .queue_roles import prepare_updates
+            # A role model without an explicit role/builder engine depends on
+            # saved worker defaults. Never call the installation resolver here.
+            updates = payload['roles']
+            role_inherits_worker = isinstance(updates, dict) and not conf.get('engine') and any(
+                isinstance(value, dict) and value.get('model') and not value.get('engine')
+                for value in updates.values())
+            role_defaults = snapshot(core.SPAWN_DEFAULTS_FILE) if role_inherits_worker else None
+            worker_engine = object_value(role_defaults).get('worker_engine') if role_inherits_worker else None
+            conf = prepare_updates(core, conf, updates, worker_engine)
+            if role_inherits_worker:
+                if depends_on_defaults and role_defaults != defaults_raw:
+                    raise Stale('Worker defaults changed during role validation')
+                defaults_raw = role_defaults
+                depends_on_defaults = True
         # Keep ordinary cleared fields absent, as native consumers expect.
         for key in ('claim_types',):
             if not conf.get(key):

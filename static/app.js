@@ -36826,9 +36826,11 @@
     if (!debugModeEnabled() && kind === 'info') return;
     const toast = document.createElement('div');
     const color = kind === 'error' ? 'var(--red)'
-      : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');
-    const mark = kind === 'error' ? '!' : (kind === 'info' ? '\u22ef' : '\u2713');
+      : kind === 'warning' ? 'var(--yellow, var(--accent))' : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');
+    const mark = (kind === 'error' || kind === 'warning') ? '!' : (kind === 'info' ? '\u22ef' : '\u2713');
+    if (kind === 'warning') { toast.setAttribute('role', 'status'); toast.dataset.operationWarning = ''; }
     toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:flex-start;gap:8px;background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);max-width:520px;';
+    if (kind === 'warning') { toast.style.width = 'min(520px, calc(100vw - 24px))'; toast.style.boxSizing = 'border-box'; }
     const body = document.createElement('span');
     body.style.cssText = 'flex:1 1 auto;min-width:0;word-break:break-word;';
     body.innerHTML = '<span style="color:' + color + '">' + mark + '</span> ' + msg;
@@ -36845,19 +36847,20 @@
       });
       toast.appendChild(actionBtn);
     }
-    // Error AND info toasts carry text the user often needs verbatim (a
+    // Error, warning and info toasts carry text the user often needs verbatim (a
     // "restart with ./run.sh" hint, a "pick a repo" instruction, a stack-ish
     // reason). Give them a Copy + close affordance and pause auto-dismiss on
     // hover so the message can't vanish mid-copy. Success stays ephemeral.
     let timer = null;
     const arm = (ms) => { if (timer) clearTimeout(timer); timer = setTimeout(() => toast.remove(), ms); };
-    const actionable = kind === 'error' || kind === 'info';
+    const actionable = kind === 'error' || kind === 'info' || kind === 'warning';
     if (actionable) {
       const plain = (body.textContent || msg || '').replace(/^[!⋯]\s*/, '').trim();
       const copyBtn = document.createElement('button');
       copyBtn.type = 'button';
       copyBtn.textContent = 'Copy';
       copyBtn.style.cssText = 'flex:0 0 auto;cursor:pointer;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:2px 7px;font-size:11px;line-height:1.4;';
+      if (kind === 'warning') copyBtn.style.minHeight = '44px';
       copyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const done = () => { copyBtn.textContent = 'Copied'; arm(4000); };
@@ -36872,6 +36875,7 @@
       closeBtn.setAttribute('aria-label', 'Dismiss');
       closeBtn.innerHTML = '&times;';
       closeBtn.style.cssText = 'flex:0 0 auto;cursor:pointer;background:transparent;border:0;color:var(--text-muted);font-size:16px;line-height:1;padding:0 2px;';
+      if (kind === 'warning') { closeBtn.style.minHeight = '44px'; closeBtn.style.minWidth = '44px'; }
       closeBtn.addEventListener('click', (e) => { e.stopPropagation(); toast.remove(); });
       toast.appendChild(copyBtn);
       toast.appendChild(closeBtn);
@@ -36881,9 +36885,9 @@
       toast.addEventListener('mouseleave', () => arm(5000));
     }
     document.body.appendChild(toast);
-    // Errors linger 15s, info 10s (time to read + copy); success stays 3s.
+    // Errors and warnings linger 15s, info 10s (time to read + copy); success stays 3s.
     // Hover pauses the timer, and the \u00d7 dismisses instantly.
-    arm(kind === 'error' ? 15000 : (kind === 'info' ? 10000 : 3000));
+    arm(kind === 'error' || kind === 'warning' ? 15000 : (kind === 'info' ? 10000 : 3000));
   }
 
   // Soft-block dialog: "CCC detected a terminal running on this session.
@@ -57885,24 +57889,14 @@
         roleEdits[role] = { engine: prev.engine, model: sel.value };
       }));
     }
-    async function saveRoles(queueName) {
+    function changedRoles() {
       const changed = {};
       Object.keys(roleEdits).forEach(role => {
         const row = (rolesState && rolesState.roles.find(r => r.role === role)) || {};
         const e = roleEdits[role];
         if (e.engine !== (row.override_engine || '') || e.model !== (row.override_model || '')) changed[role] = e;
       });
-      if (!Object.keys(changed).length) return true;
-      const r = await fetch('/api/queue/roles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ queue: queueName, roles: changed }) });
-      const d = await r.json().catch(() => ({}));
-      if (d && Array.isArray(d.roles)) {
-        rolesState = d;
-        // Keep the failed picks on screen next to their error; drop the rest.
-        Object.keys(roleEdits).forEach(k => { if (!(d.errors && d.errors[k])) delete roleEdits[k]; });
-        renderRoles(d.errors);
-      }
-      if (!r.ok || !d.ok) throw new Error(d.error || r.status);
-      return true;
+      return changed;
     }
     // Segmented engine/backend pickers drive the hidden selects (kept so the
     // payload code below is untouched); the drain switch drives its checkbox.
@@ -57991,25 +57985,20 @@
       const save = modal.querySelector('[data-fq-config-save]');
       const claim_types = Array.from(modal.querySelectorAll('input[name="fq-config-claim-type"]:checked')).map(box => box.value);
       const model = fields.model.value === '__custom__' ? fields.customModel.value : fields.model.value;
-      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value, queue_label: fields.queueLabel.value, fallback_to_default_worker: fields.fallback.value === '' ? null : fields.fallback.value === 'on' };
+      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value, queue_label: fields.queueLabel.value, fallback_to_default_worker: fields.fallback.value === '' ? null : fields.fallback.value === 'on', roles: changedRoles() };
       save.disabled = true;
       save.classList.add('is-saving');
       try {
         const res = await fetch('/api/queue/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || res.status);
-        try {
-          await saveRoles(data.queue);
-        } catch (e) {
-          // The queue itself saved; keep the dialog open on the role errors.
-          showOpToast('Saved ' + data.queue + ', but a role model was refused: ' + e.message, 'error');
-          save.disabled = false; save.classList.remove('is-saving');
-          _uxqHealthCache.ts = 0; _renderQueuePanel();
-          return;
-        }
-        showOpToast('Saved ' + data.queue + ' queue configuration', 'success');
-        _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; close(); _renderQueuePanel();
-      } catch (e) { showOpToast('Could not save queue: ' + e.message, 'error'); save.disabled = false; save.classList.remove('is-saving'); }
+        const warnings = Array.isArray(data.warnings) ? data.warnings.slice() : [];
+        if (data.configuration_history?.warning) warnings.push(data.configuration_history.warning);
+        showOpToast(escapeHtml('Saved ' + data.queue + ' queue configuration' + (warnings.length ? '. ' + warnings.join(' ') : '')), warnings.length ? 'warning' : 'success');
+        _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; close();
+        try { _renderQueuePanel(); }
+        catch (_) { showOpToast('Queue configuration saved; the visible queue list could not refresh. Reopen it before relying on its display.', 'warning'); }
+      } catch (e) { showOpToast(escapeHtml('Could not save queue: ' + e.message), 'error'); save.disabled = false; save.classList.remove('is-saving'); if (document.activeElement === document.body) save.focus(); }
     });
     if (policyMode) {
       window.cccQueuePolicy.mount({modal, fields, queue: initialQueue,
@@ -94952,6 +94941,8 @@
           if (!response.ok || !result.ok || !result.flags) throw new Error(result.error || 'Flag change rejected');
           window.__CCC_FLAGS__ = result.flags;
           window.dispatchEvent(new CustomEvent('ccc:flags'));
+          const status = document.querySelector('[data-ff-status="' + CSS.escape(name) + '"]');
+          if (status) status.textContent = Array.isArray(result.warnings) && result.warnings.length ? 'Saved. ' + result.warnings.join(' ') : 'Saved.';
         }).catch(error => {
           window.__CCC_FLAGS__ = Object.assign({}, window.__CCC_FLAGS__ || {}, {[name]:previous});
           window.dispatchEvent(new CustomEvent('ccc:flags'));

@@ -25,7 +25,7 @@ runtime consumer.
 
 | Editor / action | Inspected writer | Finding and next implementation boundary |
 |---|---|---|
-| Full native queue configuration (backend/repository/roles/drain/workers/claim types/product gate/routing/GitHub fields) | `/api/queue/config` normalizes the whole submitted form, then `settings_transactions.save_queue_form` validates GitHub shape/catch-all uniqueness, model policy before and after native alias resolution, and session links before one publication. | Unknown metadata, roles, headroom and omitted present-only fields survive; explicit removals remain removals. New queues stay drain-off; drain-on restores a parked worker count to one, matching native WT semantics. No writing WT setters or second session-link patch. Config publication is atomic; immediate reconciliation, native WT audit and nonreversible history observation are separate later effects. |
+| Full native queue configuration (backend/repository/roles/drain/workers/claim types/product gate/routing/GitHub fields) | `/api/queue/config` normalizes the whole submitted form, then `settings_transactions.save_queue_form` validates GitHub shape/catch-all uniqueness, model policy before and after native alias resolution, session links, and edited role engine/model selections before one publication. | Unedited roles, unknown role metadata, headroom and omitted present-only fields survive; explicit removals remain removals. New queues stay drain-off; drain-on restores a parked worker count to one, matching native WT semantics. Edited roles use the resulting builder engine or a revision-checked saved worker engine, pure WT alias/catalog validation, and the same publication as the other form fields. No writing WT setters, second roles request or second session-link patch. Config publication is atomic; immediate reconciliation, native WT audit and nonreversible history observation are separate later effects. |
 | Dashboard network binding/trust/origins | `_save_network_config` uses serialized durable publication. GET adds a document `revision` from the same byte snapshot as `stored`; POST optionally accepts `expected_revision` and returns 409 on a stale draft. Native UI supplies that revision and disables Save until a successful read. | Existing clients without a token retain serialized last-writer behavior. Known-key filtering, localhost/proxy/origin gates, hot origin reload, environment precedence and bind-change restart behavior are unchanged. Only the network document is committed; restart is a later native action. No preference journal/undo guarantee. |
 | Host preview flags | `_save_feature_flag` serializes the complete read/modify/publish operation, merging one known switch into the native object. | Concurrent cooperating CCC processes retain unrelated switches and unknown metadata. Invalid/nonobject sources are rejected instead of overwritten. Effective env/file/default precedence and old boolean coercion remain. Independent switches are not one multi-switch or service transaction; no operational history promise. |
 | Voice call defaults | `ccc_server/realtime_voice.py:voice_config_save` sanitizes whole patched config under a lock and replaces a temp file. | One host config publication; no optimistic stale-draft check, operational history or transaction with browser visibility. Already running calls retain their configuration. No cross-scope claim. |
@@ -36,6 +36,30 @@ runtime consumer.
 | Browser profile/reset/undo and notification policy | Browser storage adapters validate first; workbench and notification policy attempt rollback on failed local writes. | `localStorage` does not provide a multi-key transaction or cross-tab/process atomic commit. Browser+host is explicitly separate. Session/list/voice presentation preferences and their related convenience writes do not acquire a global host transaction. |
 | Repository avatar | `repo_avatars.save` replaces or removes the selected host avatar record and invalidates cache. | One repository record, separate from source-repository contents, browser display refresh and profile/history transactions. |
 | Usage-limit recovery, spare-quota Start, engine install/auth/test/update and System service operations | Existing native runtime handlers. | Actions affect real sessions/processes/external apps. They are not configuration-field batches; no rollback implied by Settings ownership metadata. |
+
+The full queue form includes its edited roles in the optional `roles` object on
+`POST /api/queue/config` (`{role: {engine: string, model: string}}`). All edited
+roles are validated before any publication, including a late invalid role after
+other valid edits. Blank strings remove the corresponding role field. A role
+model with no explicit role/builder engine requires a supported saved worker
+engine; unknown ambient installation fallback is not probed or guessed during
+Save. Existing clients omitting `roles` retain every stored role field. Unknown
+native metadata and unedited role overrides remain unchanged. Role changes are
+outside supported operational-history undo; full-form history stays an
+independent, nonreversible observation of allowlisted policy fields.
+
+The legacy `POST /api/queue/roles` compatibility endpoint retains its existing
+per-role setter semantics and can partially save multiple roles. The canonical
+full form no longer calls it. This is not a guarantee about old clients or
+external WT writers. Queue configuration and role fields share the native queue
+JSON document, not a new role store or a cross-file transaction.
+
+The native full queue UI now displays saved-but-warning responses as warnings,
+including durability and secondary-effect/history warnings, without claiming
+rollback or retrying. Host feature switches keep the returned saved state and
+show durability warnings beside the switch; a refused save still restores the
+previous switch value. Publication success and later effect failures remain
+separate outcomes.
 
 ## Publication and concurrency contract
 
