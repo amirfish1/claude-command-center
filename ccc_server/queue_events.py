@@ -2710,6 +2710,29 @@ def resume_session_codex(
         "codex_wake_attempt", sid=session_id,
         cwd=cwd, model=model, effort=reasoning_effort, steer=bool(steer),
     )
+    if steer and override_model:
+        # turn/steer appends input to the existing turn; it cannot change
+        # that turn's model. Read the rollout rather than thread defaults,
+        # which thread/resume may already have updated for the NEXT turn.
+        live_model = row.get("model") or ""
+        if native_rollout:
+            live_model = (
+                _core._extract_codex_tail_meta(native_rollout).get("model")
+                or live_model
+            )
+        if live_model and str(live_model).strip().lower() != str(model).strip().lower():
+            return {
+                "ok": False,
+                "via": "codex-steer",
+                "code": "codex_model_switch_pending",
+                "current_model": live_model,
+                "requested_model": model,
+                "error": (
+                    f"Send now cannot switch from {live_model} to {model} "
+                    "during a running turn. Leave this message queued for "
+                    "the next turn, or stop the current turn and send again."
+                ),
+            }
     from ccc_server.codex_client import resume_desktop_conversation
     desktop_result = resume_desktop_conversation(
         session_id, text, cwd=cwd, model=model, effort=reasoning_effort,
