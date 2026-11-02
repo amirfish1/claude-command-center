@@ -54,7 +54,7 @@ WARNINGS=""
 file_repofixer() {  # $1=kind $2=repo $3=details
   [ "$DRY" = 1 ] && { say "[dry-run] would file REPO-FIXER ticket: $1 in $(basename "$2")"; return 0; }
   command -v wt >/dev/null 2>&1 || return 0
-  wt add -q REPO-FIXER --title "release gate: $1 in $(basename "$2")" --note "$3" \
+  wt add -q REPO-FIXER --no-dispatch --title "release gate: $1 in $(basename "$2")" --note "$3" \
     --dedupe-key "release-gate-$1-$(basename "$2")-$(date +%Y-%m-%d)" >/dev/null 2>&1 || true
 }
 # Blocks on real risk (uncommitted work, unpushed main). Warnings only file a ticket.

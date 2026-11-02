@@ -20,10 +20,23 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.request
 
 import server
+
+
+def wait_for_listener(host, port, timeout=15):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with socket.create_connection((host, port), timeout=1):
+                return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
 
 
 class TestProxySecretUnit(unittest.TestCase):
@@ -31,6 +44,10 @@ class TestProxySecretUnit(unittest.TestCase):
         self._orig_env = os.environ.copy()
         self.tmp_dir = tempfile.mkdtemp()
         self.port = self._find_free_port()
+        # Authentication must not scan the host's live agent fleet.
+        census = patch.object(server, "build_session_census", return_value={"ok": True})
+        census.start()
+        self.addCleanup(census.stop)
 
         # Save server globals
         self._orig_allowed_origins = list(server.ALLOWED_ORIGINS)
@@ -59,7 +76,6 @@ class TestProxySecretUnit(unittest.TestCase):
         t.start()
         self.addCleanup(httpd.shutdown)
         self.addCleanup(httpd.server_close)
-        time.sleep(0.05)
         return httpd
 
     def test_proxy_secret_unset_allows_unauthenticated_access(self):
@@ -228,13 +244,13 @@ http.server.HTTPServer(("0.0.0.0", 8090), Handler).serve_forever()
         self.addCleanup(lambda: subprocess.run(["docker", "rm", "-f", backend_name], capture_output=True))
 
         # Get backend IP on the internal bridge
-        time.sleep(1)
         inspect_res = subprocess.run(
             ["docker", "inspect", backend_name, "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"],
             capture_output=True, text=True, check=True,
         )
         backend_ip = inspect_res.stdout.strip()
         self.assertTrue(backend_ip, "Failed to get backend IP")
+        wait_for_listener(backend_ip, 8090)
 
         # 1. Native Linux host direct connection WITHOUT secret -> MUST BE 401
         req_unauth = urllib.request.Request(f"http://{backend_ip}:8090/api/sessions")
@@ -381,14 +397,14 @@ http.server.HTTPServer(("0.0.0.0", 8090), Handler).serve_forever()
         self.addCleanup(lambda: subprocess.run(["docker", "rm", "-f", caddy_name], capture_output=True))
         subprocess.run(["docker", "network", "connect", back_net, caddy_name], check=True)
 
-        time.sleep(2)
-
         # Inspect backend IP
         inspect_res = subprocess.run(
             ["docker", "inspect", backend_name, "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"],
             capture_output=True, text=True, check=True,
         )
         backend_ip = inspect_res.stdout.strip()
+        wait_for_listener(backend_ip, 8090)
+        wait_for_listener("127.0.0.1", caddy_port)
 
         # 1. Direct host bypass to backend bridge IP -> 401
         req_direct = urllib.request.Request(f"http://{backend_ip}:8090/api/sessions")
