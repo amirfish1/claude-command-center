@@ -2455,7 +2455,7 @@ def test_live_activity_cache_covers_dashboard_poll_interval(monkeypatch):
     def fake_time():
         return now[0]
 
-    def build_uncached():
+    def build_uncached(detail=None):
         calls.append(now[0])
         return {"sid-1": {"state": "working"}}
 

@@ -13171,14 +13171,16 @@ def build_live_sessions_activity():
         # path, and the only place an actual (non-cached) build happens.
         _t0 = time.perf_counter()
         _c0 = time.thread_time()
-        data = _build_live_sessions_activity_uncached()
+        _detail = {}
+        data = _build_live_sessions_activity_uncached(_detail)
         _build_ms = (time.perf_counter() - _t0) * 1000.0
         # Thread CPU next to wall time: cpu << ms means the build was waiting
         # (GIL convoy, saturated host, subprocess), not computing (CCC-168).
         _cpu_ms = (time.thread_time() - _c0) * 1000.0
         _record_live_build_ms(_build_ms)
         try:
-            record_event("live_build", _build_ms, detail={"cpu_ms": int(round(_cpu_ms)), "rows": len(data or {})})
+            _detail.update(cpu_ms=int(round(_cpu_ms)), rows=len(data or {}))
+            record_event("live_build", _build_ms, detail=_detail)
         except Exception:
             pass
         snap["data"] = data
@@ -13186,18 +13188,46 @@ def build_live_sessions_activity():
         return data
 
 
-def _build_live_sessions_activity_uncached():
+def _build_live_sessions_activity_uncached(detail=None):
     out = {}
+    # Aggregate a fixed number of phases, without recording session ids or
+    # adding any discovery/I/O. CPU next to wall time distinguishes work
+    # from lock, subprocess and scheduling waits, including cold builds.
+    phases = {}
+
+    def measured(name, fn, *args):
+        if detail is None:
+            return fn(*args)
+        t0, c0 = time.perf_counter(), time.thread_time()
+        try:
+            return fn(*args)
+        finally:
+            wall = (time.perf_counter() - t0) * 1000.0
+            cpu = (time.thread_time() - c0) * 1000.0
+            phase = phases.setdefault(name, {"wall_ms": 0.0, "cpu_ms": 0.0,
+                                              "max_ms": 0.0, "count": 0})
+            phase["wall_ms"] += wall
+            phase["cpu_ms"] += cpu
+            phase["max_ms"] = max(phase["max_ms"], wall)
+            phase["count"] += 1
+
     # Pool-model Codex threads (desktop app-server) never appear in the
     # resume-arg/sidecar discovery scan — union the cached sqlite candidacy
     # set (same pattern as _auto_unarchive_live_sessions, CCC-435) so a turn
     # running in Codex desktop lights up its WIP chip too.
-    candidates = _discover_live_session_ids() | _codex_pool_candidate_sids()
+    candidates = measured("discovery", _discover_live_session_ids) | measured(
+        "pool_candidates", _codex_pool_candidate_sids)
     for sid in candidates:
-        if not _archive_session_is_live(sid):
+        if not measured("liveness", _archive_session_is_live, sid):
             continue
-        raw = _live_activity_entry_for_session(sid)
+        raw = measured("activity", _live_activity_entry_for_session, sid)
         out[sid] = {k: raw.get(k) for k in _LIVE_ACTIVITY_FIELD_KEYS}
+    if detail is not None:
+        detail["candidates"] = len(candidates)
+        detail["phases"] = {
+            name: {key: round(value, 2) for key, value in phase.items()}
+            for name, phase in phases.items()
+        }
     return out
 
 
