@@ -145,10 +145,15 @@ def test_outer_request_duplicate_fields_and_oversize_rejected(api):
         patch.setattr(urllib.request,'Request',duplicate)
         assert client(api)(payload)[0]==400
     def oversized(url,data=None,**kw):
-        return original(url,data=b' '*(profiles.MAX_REQUEST+1),**kw)
+        # The handler rejects Content-Length before reading the body. Sending
+        # a large body races its early response and can break the client pipe.
+        req=original(url,data=b'',**kw)
+        req.add_header('Content-Length',str(profiles.MAX_REQUEST+1))
+        return req
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(urllib.request,'Request',oversized)
-        assert client(api)(payload)[0]==400
+        code,result=client(api)(payload)
+        assert code==400 and 'size limit' in result['error']
     assert not store.path.exists()
 
 
