@@ -59,7 +59,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       button.click();
     },label);
     const wait = value => page.waitForFunction(value=>document.body.textContent.includes(value),{},value);
-    const idle = () => page.waitForFunction(()=>!document.querySelector('#guidance').textContent.includes('Waiting for'));
+    const idle = () => page.waitForFunction(()=>document.querySelector('#composer').getAttribute('aria-busy') !== 'true');
     const selected = () => page.$eval('#current article', el=>el.dataset.requestId);
     const reply = (req,state='pending',changes={}) => req.respond({status:200,contentType:'application/json',body:JSON.stringify({ok:true,request_id:id,answer_id:answerId,state,answer:{request_id:id,expected_revision:4,text:exact,actor:'owner'},work_completed:false,...changes})});
     try {
@@ -322,6 +322,21 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       await refresh(); await wait('Answer received by the originating session.');
       model.requests[0].answer.session_consumed=false; await refresh(); await wait('Answer received by the originating session.');
       assert.equal(posts.length,2);
+    });
+    await fixture('hung save and send release controls without another submission',async ({page,posts,click,idle,wait,load,reply,setHandler})=>{
+      await page.evaluate(()=>{const native=window.setTimeout;window.setTimeout=(fn,ms,...args)=>native(fn,ms===30000?250:ms,...args);});
+      setHandler(()=>{}); await page.type('textarea',exact); await click('Send answer');
+      await wait('The response took too long.'); await idle(); await wait('Retry saving same answer');
+      assert.equal(posts.length,1);
+      setHandler(req=>reply(req)); await click('Retry saving same answer'); await idle(); await wait('Send saved answer');
+      assert.deepEqual(posts[0],posts[1]);
+      setHandler(()=>{}); await click('Send saved answer'); await wait('The response took too long.'); await idle();
+      await wait('Check delivery'); assert.equal(posts.length,3);
+      assert.equal(await page.evaluate(()=>[...document.querySelectorAll('button')].find(b=>b.textContent==='Check delivery').disabled),false);
+      await load(); assert.equal(posts.length,3); await wait('Check delivery');
+      setHandler(req=>reply(req,'accepted')); await click('Check delivery'); await idle();
+      assert.equal(posts[3].url,'/api/decision-inbox/answers/reconcile');
+      assert.equal(posts.filter(post=>post.url.endsWith('/send')).length,1);
     });
     console.log(`PASS ${checks} guided queue browser scenarios; screenshots: ${screenshots}`);
   } finally { await browser.close(); }

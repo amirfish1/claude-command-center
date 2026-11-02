@@ -263,6 +263,43 @@ const base = {request_id:id, revision:4, adapter:'watchtower-block', origin_id:'
       model.requests[0].answer.session_consumed=false; await refresh(); await waitText('Answer received by session');
       assert.equal(posts.length,2);
     });
+    await fixture(async ({page,posts,click,waitText,setHandle,reply})=>{
+      await page.evaluate(()=>{const native=window.setTimeout;window.setTimeout=(fn,ms,...args)=>native(fn,ms===30000?250:ms,...args);});
+      setHandle(()=>{}); await page.type('textarea','  Region A\nExact.  '); await click('Save answer');
+      await waitText('The response took too long.'); await waitText('Retry saving same answer');
+      setHandle(req=>reply(req)); await click('Retry saving same answer'); await waitText('Send saved answer');
+      assert.deepEqual(posts[0],posts[1]);
+      setHandle(()=>{}); await click('Send saved answer'); await waitText('The response took too long.');
+      await waitText('Check delivery'); assert.equal(posts.length,3);
+      assert.equal(await page.evaluate(()=>[...document.querySelectorAll('#requestRows button')].find(b=>b.textContent==='Check delivery').disabled),false);
+      setHandle(req=>reply(req,'accepted')); await click('Check delivery'); await waitText('Answer accepted by source');
+      assert.equal(posts[3].url,'/api/decision-inbox/answers/reconcile');
+      assert.equal(posts.filter(post=>post.url.endsWith('/send')).length,1);
+    });
+    for (const adapter of ['watchtower-block','session-question']) await fixture(async ({page,model,refresh,load,waitText,posts})=>{
+      await page.select('#requestFilter','all');
+      model.requests=[{...base,adapter,reply_supported:true,source_current:true,needs_answer:false,can_answer:false,status:'answered',answer:{answer_id:answerId,state:'accepted',text:'source-only accepted answer',expected_revision:4,session_consumed:false}}];
+      await refresh(); await waitText(adapter==='session-question'?'Answer saved for session; awaiting receipt':'Answer accepted by source');
+      model.requests[0].answer.session_consumed=true; await refresh();
+      await waitText(adapter==='session-question'?'Answer received by session':'Answer accepted by source');
+      model.requests[0].answer={...model.requests[0].answer,state:'pending',session_consumed:false};
+      await refresh();
+      await waitText(adapter==='session-question'?'Answer received by session':'Answer accepted by source');
+      assert.equal(await page.evaluate(()=>[...document.querySelectorAll('#requestRows button')].some(b=>b.textContent==='Send saved answer')),false);
+      await load(); await page.select('#requestFilter','all');
+      await waitText(adapter==='session-question'?'Answer received by session':'Answer accepted by source');
+      model.requests[0].answer.answer_id='00000000-0000-4000-8000-000000000099'; await refresh();
+      await waitText(adapter==='session-question'?'Answer received by session':'Answer accepted by source');
+      assert.equal(posts.length,0);
+    });
+    await fixture(async ({page,model,refresh,load,waitText,posts})=>{
+      model.requests[0].answer={answer_id:answerId,state:'rejected',text:'source-only rejected answer',expected_revision:4};
+      await refresh(); await waitText('Answer definitively rejected');
+      model.requests[0].answer.state='pending'; await refresh(); await waitText('Answer definitively rejected');
+      await load(); await waitText('Answer definitively rejected');
+      assert.equal(await page.evaluate(()=>[...document.querySelectorAll('#requestRows button')].some(b=>b.textContent==='Send saved answer')),false);
+      assert.equal(posts.length,0);
+    });
     console.log(`PASS ${checks} intercepted owner-answer UI scenarios`);
   } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

@@ -1,0 +1,2 @@
+- Bound reply waits so a lost response releases the controls after 30 seconds. Preserve the exact answer and offer receipt checks rather than resending; show a clear waiting state during an active request.
+- Retain accepted, received and rejected states learned from another browser or a source refresh; stale reads cannot restore Send for an already accepted answer.

@@ -116,6 +116,9 @@
     return link;
   }
   function status(entry) {
+    if (active === entry.payload.request_id) return entry.saved
+      ? 'Your answer is saved. Waiting for confirmation from the source…'
+      : 'Saving your answer…';
     if (!entry.saved) return 'Save not confirmed. Retry saving the same frozen answer; nothing will be sent by that retry.';
     return {pending:'Answer saved. Delivery pending; sending requires an explicit click.', sending:'Delivery unknown. Check delivery; do not resend.', unknown:'Delivery unknown. Check delivery; do not resend.', accepted: (entry.saved.receipt?.acceptance === 'source_inbox' || state.snapshots[entry.payload.request_id]?.adapter === 'session-question') ? (entry.saved.session_consumed ? 'Answer received by the originating session. The work is not necessarily complete.' : 'Answer saved for the originating session; waiting for session receipt. The work is not complete.') : 'Answer accepted by source. Delivery confirmed; the work is not necessarily complete.', rejected:'Answer rejected by source. Your exact text is retained; this question has not advanced.'}[entry.saved.state];
   }
@@ -141,6 +144,7 @@
   function render() {
     const focused = document.activeElement === $('answer'), selection = [$('answer').selectionStart, $('answer').selectionEnd];
     const row = current(), id = row?.request_id, entry = state.entries[id], draft = state.drafts[id];
+    $('composer').setAttribute('aria-busy', String(active !== null));
     $('refresh').disabled = loading;
     const verified = model?.source_current === true && !readError && Number.isSafeInteger(model.needs_answer_count) && model.needs_answer_count >= 0;
     $('intro').textContent = verified ? (model.needs_answer_count ? `Hi, you have ${model.needs_answer_count} open questions. Here is the ${state.seen.length > 1 ? 'next' : 'first'} one.` : 'Hi, you have 0 open questions needing an answer.') : loaded ? 'Current question count unavailable. Previously observed questions remain below.' : 'Loading open questions…';
@@ -179,7 +183,7 @@
     $('answer').disabled = !row || !!entry || !!reason || active !== null;
     $('send').disabled = !row || !!entry || !!reason || !!changed || !draft?.text.trim() || active !== null;
     $('skip').disabled = active !== null || !row || openRows().length === 0;
-    $('guidance').textContent = active === id ? 'Waiting for the explicit action’s receipt…' : reason || (entry ? status(entry) : changed ? 'The question changed while you were drafting. Review the current question before rebinding your retained draft.' : 'Send answer records this exact text, then sends that frozen answer. No automatic retries.');
+    $('guidance').textContent = active === id ? status(entry) : reason || (entry ? status(entry) : changed ? 'The question changed while you were drafting. Review the current question before rebinding your retained draft.' : 'Send answer records this exact text, then sends that frozen answer. No automatic retries.');
     if (draft && changed && !entry) {
       const previous = el('details',''); previous.append(el('summary','Question this draft was written for'),el('div',draft.body,'raw')); $('current').append(previous);
       recovery('Use draft for current question', () => {
@@ -202,14 +206,21 @@
     return {answer_id:data.answer_id, state:data.state, text:data.answer.text, expected_revision:data.answer.expected_revision};
   }
   async function post(action, id, entry) {
-    const response = await fetch('/api/decision-inbox/answers' + (action === 'record' ? '' : '/' + action), {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(action === 'record' ? entry.payload : {answer_id:entry.saved.answer_id})
-    });
-    const data = await response.json();
-    if (!response.ok || data.ok !== true) throw Error(data.error || 'Response unavailable');
-    entry.saved = {...validateReceipt(data, entry, id, action), receipt:data.receipt};
-    entry.deliveryUnknown = ['unknown','sending'].includes(entry.saved.state);
-    if (!persist()) throw Error('Receipt received but recovery storage is unavailable; do not retry sending');
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 30000);
+    try {
+      const response = await fetch('/api/decision-inbox/answers' + (action === 'record' ? '' : '/' + action), {
+        method:'POST', headers:{'Content-Type':'application/json'}, signal:controller.signal,
+        body:JSON.stringify(action === 'record' ? entry.payload : {answer_id:entry.saved.answer_id})
+      });
+      const data = await response.json();
+      if (!response.ok || data.ok !== true) throw Error(data.error || 'Response unavailable');
+      entry.saved = {...validateReceipt(data, entry, id, action), receipt:data.receipt};
+      entry.deliveryUnknown = ['unknown','sending'].includes(entry.saved.state);
+      if (!persist()) throw Error('Receipt received but recovery storage is unavailable; do not retry sending');
+    } catch (error) {
+      if (controller.signal.aborted) throw Error('The response took too long. Your exact answer is retained.');
+      throw error;
+    } finally { clearTimeout(timer); }
   }
   async function act(action, id, combined = false) {
     if (active || model?.answers_enabled !== true) return;
@@ -244,9 +255,10 @@
   }
   async function refresh() {
     if (loading) return;
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 30000);
     loading = true; render();
     try {
-      const response = await fetch('/api/decision-inbox/requests', {cache:'no-store'});
+      const response = await fetch('/api/decision-inbox/requests', {cache:'no-store', signal:controller.signal});
       const data = await response.json();
       if (!response.ok || data.ok !== true || !Array.isArray(data.requests)) throw Error(data.error || 'Cannot read source questions.');
       rows = data.requests; model = data; readError = '';
@@ -257,6 +269,7 @@
       }
     } catch (error) { readError = error.message + ' Coverage unavailable; this is not a current count.'; }
     finally {
+      clearTimeout(timer);
       loading = false; loaded = true; render();
       const count = !readError && model?.source_current === true && Number.isSafeInteger(model.needs_answer_count) && model.needs_answer_count >= 0 ? model.needs_answer_count : null;
       if (parent !== window) parent.postMessage({type:'ccc:decision-count', count}, location.origin);

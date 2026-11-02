@@ -41,8 +41,18 @@
     return row.answer;
   }
   function absorb(row) {
-    const entry = submissions.get(row.request_id), saved = row.answer;
-    if (!entry || !saved || active.has(row.request_id)) return;
+    let entry = submissions.get(row.request_id);
+    const saved = row.answer;
+    if (!saved || active.has(row.request_id) || typeof saved.text !== 'string'
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(saved.answer_id)
+        || !['pending','sending','unknown','accepted','rejected'].includes(saved.state)
+        || !Number.isSafeInteger(saved.expected_revision) || saved.expected_revision < 1) return;
+    if (rejectedHistory.get(row.request_id)?.replaces_answer_id === saved.answer_id) return;
+    if (!entry) {
+      entry = {payload:{request_id:row.request_id, expected_revision:saved.expected_revision, text:saved.text},
+        saved:{...saved}, deliveryUnknown:['sending','unknown'].includes(saved.state)};
+      submissions.set(row.request_id, entry); persist(row.request_id, entry); return;
+    }
     if (entry.saved?.answer_id === saved.answer_id && entry.saved.state === 'accepted' && saved.state === 'accepted' && saved.session_consumed === true) {
       entry.saved.session_consumed = true; persist(row.request_id, entry);
     }
@@ -50,7 +60,6 @@
     // Keep that receipt terminal and never substitute another answer identity.
     if (entry.saved && (entry.saved.answer_id !== saved.answer_id
         || ['accepted', 'rejected'].includes(entry.saved.state))) return;
-    if (rejectedHistory.get(row.request_id)?.replaces_answer_id === saved.answer_id) return;
     if (saved.text === entry.payload.text && saved.expected_revision === entry.payload.expected_revision) {
       // A lost Send response remains uncertain until an explicit receipt check.
       if (!entry.deliveryUnknown || saved.state === 'accepted' || saved.state === 'rejected') {
@@ -166,9 +175,10 @@
       submissions.set(id, entry);
     }
     active.add(id); notices.delete(id); render();
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 30000);
     try {
       const response = await fetch('/api/decision-inbox/answers' + (action === 'record' ? '' : '/' + action), {
-        method:'POST', headers:{'Content-Type':'application/json'},
+        method:'POST', headers:{'Content-Type':'application/json'}, signal:controller.signal,
         body:JSON.stringify(action === 'record' ? entry.payload : {answer_id:saved.answer_id})
       });
       const data = await response.json();
@@ -181,8 +191,8 @@
       entry.deliveryUnknown = false; persist(id, entry);
     } catch (error) {
       notices.set(id, (action === 'record' ? 'Save not confirmed. ' : 'Delivery not confirmed. Use Check delivery; do not resend. ')
-        + error.message + '. Check source for current state.');
-    } finally { active.delete(id); render(); }
+        + (controller.signal.aborted ? 'The response took too long. Your exact text is retained.' : error.message) + '. Check source for current state.');
+    } finally { clearTimeout(timer); active.delete(id); render(); }
   }
   const limit = 10;
   const time = new Intl.DateTimeFormat('en-US', {timeZone:'America/Los_Angeles', year:'numeric',
@@ -275,9 +285,10 @@
   }
   async function refresh() {
     if (busy) return;
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 30000);
     busy = true; $('requestRefresh').disabled = true; render();
     try {
-      const response = await fetch('/api/decision-inbox/requests', {cache:'no-store'});
+      const response = await fetch('/api/decision-inbox/requests', {cache:'no-store', signal:controller.signal});
       const data = await response.json();
       if (!response.ok || !data.ok || !Array.isArray(data.requests)) throw new Error('Cannot read saved requests');
       rows = data.requests; answersEnabled = data.answers_enabled === true; sourceCurrent = data.source_current === true;
@@ -302,7 +313,7 @@
       $('requestsStatus').textContent = 'Cannot refresh owner questions. Any displayed rows may be out of date. Check the source again.';
       $('requestsStatus').classList.add('bad');
       if (window.parent !== window) window.parent.postMessage({type:'ccc:decision-count', count:null}, location.origin);
-    } finally { busy = false; $('requestRefresh').disabled = false; render(); }
+    } finally { clearTimeout(timer); busy = false; $('requestRefresh').disabled = false; render(); }
   }
   $('requestSearch').addEventListener('input', () => { page = 0; render(); });
   $('requestFilter').addEventListener('change', () => { page = 0; render(); });

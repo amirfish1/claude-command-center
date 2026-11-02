@@ -56,7 +56,9 @@ displayed separately from completion of the work.
 Before recording, the browser retains the frozen payload and idempotency key
 in session storage. An uncertain save can only retry that same submission;
 refresh and reload never resend automatically. A lost send response exposes
-receipt lookup rather than another Send action. If session storage cannot
+receipt lookup rather than another Send action. Browser requests stop waiting
+after 30 seconds so recovery controls become available even if the response
+never arrives; a timeout does not establish source rejection. If session storage cannot
 retain recovery state, the browser blocks the action. Unsaved drafts survive
 routine refreshes in the current document; they are not persisted on reload.
 Drafts stay attached to the revision shown when typing began. If that question
