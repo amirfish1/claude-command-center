@@ -33452,6 +33452,25 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     transform: scale(0.65);
     transform-origin: bottom right;
   }
+  /* In a narrow sidebar, session text leads; secondary controls share a
+     footer instead of reserving most of the title's first line. */
+  @container sidebar (max-width: 460px) {
+    #convList#convList .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > :is(.conv-title, .conv-title-stack) {
+      grid-column: 1 / -1;
+    }
+    #convList#convList .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > .conv-meta-col {
+      grid-column: 1;
+    }
+    #convList#convList .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > .conv-pct-badge {
+      grid-row: 3;
+      align-self: center;
+    }
+    #convList#convList .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > .conv-row-end {
+      grid-row: 3;
+      align-self: center;
+      min-height: 26px;
+    }
+  }
   #convList#convList .conv-gap-separator { display: none; }
 }
 

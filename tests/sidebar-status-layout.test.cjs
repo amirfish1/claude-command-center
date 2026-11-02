@@ -22,6 +22,7 @@ function row() {
     sessionStuckWarningHtml: () => '', workerOriginBadgeHtml: () => '',
     ideaTicketChipHtml: () => '', _ideaRowLine: () => '', ticketSessionSection: () => 'active',
     readyToCloseArchiveHtml: () => '', _nyaRowBlockHtml: () => '',
+    rowDecisionReportButton: () => '',
     window: {},
   };
   const context = new Proxy(values, {
