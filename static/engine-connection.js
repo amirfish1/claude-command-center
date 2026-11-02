@@ -21,16 +21,20 @@
 
   function render(next, state={}) {
     if (!mounted) return;
+    if(cachedOnly)state={...state,unavailable:!!state.unavailable || cachedUnavailable};
     rows=next;context=state;
-    if (rows.length && !rows.some(row=>row.engine===selected)) selected=rows.find(row=>row.isDefault)?.engine || rows[0]?.engine || '';
+    if (!cachedOnly && rows.length && !rows.some(row=>row.engine===selected)) selected=rows.find(row=>row.isDefault)?.engine || rows[0]?.engine || '';
     const select=get('engineConnectionSelect');
     const oldOptions=JSON.stringify([...select.options].map(option=>[option.value,option.textContent]));
     const options=rows.map(row=>[row.engine,row.meta.label+' · '+assessment(row).label]);
+    const missing=!!selected && !rows.some(row=>row.engine===selected);
+    if(cachedOnly && missing)options.unshift([selected,selected+' · status unavailable']);
     if (oldOptions!==JSON.stringify(options)) select.innerHTML=options.map(([id,label])=>'<option value="'+escape(id)+'">'+escape(label)+'</option>').join('');
-    select.value=selected;select.disabled=!rows.length;
+    select.value=selected;select.disabled=!options.length;
     get('engineConnectionStatus').textContent=state.unavailable
       ? 'Could not refresh engine status. Retry below; the last snapshot is not current.'
       : 'This machine · Binary and local sign-in evidence from the existing engine doctor. Credentials and provider connectivity have not been validated.';
+    if(cachedOnly)get('engineConnectionStatus').textContent='Cached snapshot only · '+(missing?'Requested engine status is not available. Choose an engine below or recheck. ':get('engineConnectionStatus').textContent+' ')+'Refresh is an explicit check; this handoff runs no probes.';
     get('engineConnectionStatus').classList.toggle('is-error',!!state.unavailable);
     const list=get('engList'), row=rows.find(item=>item.engine===selected);
     if (!row) { panelSignature='';list.textContent='No engine status available. Recheck to retry.';return; }
@@ -83,12 +87,17 @@
     if(loginFocus?.isConnected)loginFocus.focus({preventScroll:true});
     else if(oldFocus)get(oldFocus)?.focus({preventScroll:true});
   }
-  function open(engine) {
+  let cachedOnly=false,cachedUnavailable=false,openRequest=0;
+  function open(engine, options={}) {
     if (!mounted) return false;
     if(engine)selected=engine;
-    api.navigate();render(rows,context);
-    if(engine&&!rows.some(row=>row.engine===engine))get('engineConnectionStatus').textContent='Requested engine status is not available. Choose an engine below or recheck.';
-    requestAnimationFrame(()=>{get('engineConnectionSelect').scrollIntoView({block:'nearest'});get('engineConnectionSelect').focus({preventScroll:true});});
+    const request=++openRequest;
+    cachedOnly=!!options.cachedOnly;
+    cachedUnavailable=false;
+    if(cachedOnly) { const observed=Date.parse(options.observedAt || '');cachedUnavailable=!!options.unavailable || !Number.isFinite(observed) || Date.now()-observed>300000 || observed>Date.now()+60000; }
+    api.navigate(options);render(rows,context);
+    if(!cachedOnly&&engine&&!rows.some(row=>row.engine===engine))get('engineConnectionStatus').textContent='Requested engine status is not available. Choose an engine below or recheck.';
+    requestAnimationFrame(()=>{if(request!==openRequest)return;get('engineConnectionSelect').scrollIntoView({block:'nearest'});get('engineConnectionSelect').focus({preventScroll:true});});
     return true;
   }
   function policyReturn(engine=selected) {
@@ -120,11 +129,11 @@
     get('engList').before(header);
     for(const id of ['engHeroTitle','engListLabel']){const node=get(id);if(node)node.closest(id==='engHeroTitle'?'.eng-hero':'.eng-list-head').hidden=true;}
     get('engineConnectionSelect').addEventListener('change',event=>{selected=event.target.value;render(rows,context);});
-    get('engineConnectionRefresh').addEventListener('click',()=>api.refresh());
+    get('engineConnectionRefresh').addEventListener('click',()=>{cachedOnly=false;cachedUnavailable=false;api.refresh();});
     const old=get('onboardingModal');if(old){old.classList.remove('open');old.hidden=true;old.removeAttribute('role');old.removeAttribute('aria-modal');}
     mounted=true;
     host.addEventListener('click',event=>{if(event.target.closest('[data-policy-open]'))policyReturn();},true);
     window.addEventListener('hashchange',route);route();
   }
-  window.cccEngineConnection=Object.freeze({mount,mounted:()=>mounted,render,open,loginHost,startSession,policyReturn,assessment});
+  window.cccEngineConnection=Object.freeze({mount,mounted:()=>mounted,cachedOnly:()=>cachedOnly,endCachedOnly:()=>{cachedOnly=false;openRequest++;},render,open,loginHost,startSession,policyReturn,assessment});
 })();

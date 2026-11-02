@@ -134,3 +134,47 @@ def set_roles(queue: str, updates) -> dict:
     if errors:
         state["error"] = "; ".join(f"{ROLE_LABELS.get(r, r)}: {m}" for r, m in errors.items())
     return state
+
+
+def prepare_updates(core, conf, updates, worker_engine):
+    """Validate edited native role fields in memory; never call WT setters.
+
+    Unlike the compatibility role endpoint, a full-form Save is all-or-nothing.
+    Only edited role fields change; other roles and future metadata survive.
+    """
+    import copy
+    if not isinstance(updates, dict):
+        raise ValueError("roles must be an object")
+    result = copy.deepcopy(conf)
+    if not updates:
+        return result
+    native = core._wt_config if core._WT_CONFIG_AVAILABLE else None
+    if native is None or not all(hasattr(native, key) for key in ('ROLE_KEYS', 'canonical_model', 'is_approved_model')):
+        raise ValueError("Role editing unavailable; update WatchTower before saving role changes")
+    engines = getattr(getattr(native, '_models', None), 'ENGINES', core._ORCHESTRATION_SPAWN_ENGINES)
+    for role, value in updates.items():
+        if role not in native.ROLE_KEYS:
+            raise ValueError("Unknown editable role")
+        if not isinstance(value, dict) or set(value) != {'engine', 'model'}:
+            raise ValueError("Role changes require engine and model")
+        if any(not isinstance(v, str) or len(v) > 256 or any(ord(c) < 32 for c in v) for v in value.values()):
+            raise ValueError("Role engine/model must be single-line strings of at most 256 characters")
+        engine = value['engine'].strip().lower()
+        model = value['model'].strip()
+        if engine and engine not in engines:
+            raise ValueError("Unknown role engine")
+        if engine:
+            result[role + '_engine'] = engine
+        else:
+            result.pop(role + '_engine', None)
+        if model:
+            effective_engine = engine or result.get('engine') or worker_engine
+            if not effective_engine or effective_engine not in engines:
+                raise ValueError("Choose an explicit role engine; saved builder/worker engine is unresolved")
+            model = native.canonical_model(effective_engine, model)
+            if not native.is_approved_model(effective_engine, model) or core._model_policy_error(model):
+                raise ValueError(ROLE_LABELS.get(role, role) + ": Role model is not approved for its effective engine")
+            result[role + '_model'] = model
+        else:
+            result.pop(role + '_model', None)
+    return result

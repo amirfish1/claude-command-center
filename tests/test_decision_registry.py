@@ -45,6 +45,47 @@ def test_existing_registry_opens_while_a_writer_has_reserved_lock(registry):
         assert reopened.installation_id == registry.installation_id
 
 
+def test_projection_commit_does_not_wait_for_an_open_read_snapshot(registry):
+    import sqlite3
+    row = registry.upsert_requests([source()])[0]
+    reader = sqlite3.connect(str(registry.db_path))
+    try:
+        reader.execute('BEGIN')
+        assert reader.execute('SELECT revision FROM requests').fetchone()[0] == 1
+        writer = DecisionRegistry(registry.db_path, timeout=0.05)
+        changed = writer.upsert_requests([source(title='Updated question')])[0]
+        assert changed['request_id'] == row['request_id'] and changed['revision'] == 2
+        assert reader.execute('SELECT revision FROM requests').fetchone()[0] == 1
+    finally:
+        reader.close()
+    assert registry.list_requests()[0]['revision'] == 2
+
+
+def test_legacy_journal_migration_waits_for_existing_writer(registry):
+    import sqlite3
+    import threading
+    import time
+    with sqlite3.connect(str(registry.db_path), isolation_level=None) as blocker:
+        blocker.execute('PRAGMA journal_mode=DELETE')
+        blocker.execute('BEGIN IMMEDIATE')
+        started = threading.Event()
+        def reopen():
+            started.set()
+            return DecisionRegistry(registry.db_path, timeout=0.5)
+        with ThreadPoolExecutor(1) as pool:
+            future = pool.submit(reopen)
+            assert started.wait(1)
+            time.sleep(0.05)
+            blocker.commit()
+            assert future.result(timeout=2).installation_id == registry.installation_id
+    blocker.close()
+    check = sqlite3.connect(str(registry.db_path))
+    try:
+        assert check.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
+    finally:
+        check.close()
+
+
 def test_opt_in_legacy_sync_skips_unchanged_import_and_tracks_edits(registry):
     cards = {'dc_one': {'title': 'Choose', 'status': 'open'}}
     first = registry.import_cards(cards, only_if_changed=True)[0]

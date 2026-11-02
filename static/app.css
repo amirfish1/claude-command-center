@@ -34064,3 +34064,27 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 
 .routing-policy-first-run { display: none; }
 .settings-modal.is-first-run .routing-policy-first-run { display: inline-block; }
+
+/* Keep native transaction controls reachable on touch screens. */
+@media (max-width: 600px) {
+  .fq-config-dialog button,
+  #networkModal button {
+    min-width: 44px;
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+  .fq-config-dialog input:not([type="checkbox"]):not([type="radio"]),
+  .fq-config-dialog select {
+    min-height: 44px;
+  }
+  .fq-config-dialog .fq-config-checks label { min-height: 44px; }
+  .fq-config-dialog .settings-toggle,
+  button.settings-toggle[data-ff-toggle] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    flex-shrink: 0;
+  }
+}

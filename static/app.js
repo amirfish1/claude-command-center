@@ -36826,9 +36826,11 @@
     if (!debugModeEnabled() && kind === 'info') return;
     const toast = document.createElement('div');
     const color = kind === 'error' ? 'var(--red)'
-      : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');
-    const mark = kind === 'error' ? '!' : (kind === 'info' ? '\u22ef' : '\u2713');
+      : kind === 'warning' ? 'var(--yellow, var(--accent))' : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');
+    const mark = (kind === 'error' || kind === 'warning') ? '!' : (kind === 'info' ? '\u22ef' : '\u2713');
+    if (kind === 'warning') { toast.setAttribute('role', 'status'); toast.dataset.operationWarning = ''; }
     toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;align-items:flex-start;gap:8px;background:var(--surface);border:1px solid var(--border);padding:8px 14px;border-radius:6px;font-size:12px;color:var(--text);z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.4);max-width:520px;';
+    if (kind === 'warning') { toast.style.width = 'min(520px, calc(100vw - 24px))'; toast.style.boxSizing = 'border-box'; }
     const body = document.createElement('span');
     body.style.cssText = 'flex:1 1 auto;min-width:0;word-break:break-word;';
     body.innerHTML = '<span style="color:' + color + '">' + mark + '</span> ' + msg;
@@ -36845,19 +36847,20 @@
       });
       toast.appendChild(actionBtn);
     }
-    // Error AND info toasts carry text the user often needs verbatim (a
+    // Error, warning and info toasts carry text the user often needs verbatim (a
     // "restart with ./run.sh" hint, a "pick a repo" instruction, a stack-ish
     // reason). Give them a Copy + close affordance and pause auto-dismiss on
     // hover so the message can't vanish mid-copy. Success stays ephemeral.
     let timer = null;
     const arm = (ms) => { if (timer) clearTimeout(timer); timer = setTimeout(() => toast.remove(), ms); };
-    const actionable = kind === 'error' || kind === 'info';
+    const actionable = kind === 'error' || kind === 'info' || kind === 'warning';
     if (actionable) {
       const plain = (body.textContent || msg || '').replace(/^[!⋯]\s*/, '').trim();
       const copyBtn = document.createElement('button');
       copyBtn.type = 'button';
       copyBtn.textContent = 'Copy';
       copyBtn.style.cssText = 'flex:0 0 auto;cursor:pointer;background:transparent;border:1px solid var(--border);color:var(--text-muted);border-radius:4px;padding:2px 7px;font-size:11px;line-height:1.4;';
+      if (kind === 'warning') copyBtn.style.minHeight = '44px';
       copyBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         const done = () => { copyBtn.textContent = 'Copied'; arm(4000); };
@@ -36872,6 +36875,7 @@
       closeBtn.setAttribute('aria-label', 'Dismiss');
       closeBtn.innerHTML = '&times;';
       closeBtn.style.cssText = 'flex:0 0 auto;cursor:pointer;background:transparent;border:0;color:var(--text-muted);font-size:16px;line-height:1;padding:0 2px;';
+      if (kind === 'warning') { closeBtn.style.minHeight = '44px'; closeBtn.style.minWidth = '44px'; }
       closeBtn.addEventListener('click', (e) => { e.stopPropagation(); toast.remove(); });
       toast.appendChild(copyBtn);
       toast.appendChild(closeBtn);
@@ -36881,9 +36885,9 @@
       toast.addEventListener('mouseleave', () => arm(5000));
     }
     document.body.appendChild(toast);
-    // Errors linger 15s, info 10s (time to read + copy); success stays 3s.
+    // Errors and warnings linger 15s, info 10s (time to read + copy); success stays 3s.
     // Hover pauses the timer, and the \u00d7 dismisses instantly.
-    arm(kind === 'error' ? 15000 : (kind === 'info' ? 10000 : 3000));
+    arm(kind === 'error' || kind === 'warning' ? 15000 : (kind === 'info' ? 10000 : 3000));
   }
 
   // Soft-block dialog: "CCC detected a terminal running on this session.
@@ -57792,12 +57796,15 @@
       fields.model.value = known ? selected : '__custom__';
       fields.customModel.hidden = known;
       fields.customModel.value = known ? '' : selected;
+      window.cccChoiceEligibility?.decorate(fields.model,{kind:'model',engine:()=>fields.engine.value || '',context:()=>({name:'queue',policyConfirmation:!policyMode})});
     };
     const apply = (entry) => {
       const c = (entry && entry.config) || defaults;
       fields.queue.value = (entry && entry.queue) || initialQueue || '';
       fields.workers.value = c.desired_workers == null ? 1 : c.desired_workers;
-      fields.backend.value = c.backend || 'file'; fields.engine.value = c.engine || '';
+      fields.backend.value = c.backend || 'file';
+      if(c.engine && !Array.from(fields.engine.options).some(o=>o.value===c.engine)) { const o=document.createElement('option');o.value=c.engine;o.textContent=c.engine+' · stored engine';fields.engine.append(o); }
+      fields.engine.value = c.engine || '';
       fields.path.value = c.repo_path || ''; setModel(c.model);
       var eng = fields.engine.value;
       var levels = eng ? effortLevelsForEngine(eng) : allEffortLevels();
@@ -57805,7 +57812,7 @@
       const supportsCustom = !eng || ENGINE_SUPPORTS_CUSTOM_MODEL[eng] !== false;
       const customOpt = fields.model.querySelector('option[value="__custom__"]');
       if (customOpt) customOpt.hidden = !supportsCustom;
-      if (!supportsCustom && fields.model.value === '__custom__') { fields.customModel.hidden = true; fields.customModel.value = ''; fields.model.value = ''; }
+      if (!supportsCustom && fields.model.value === '__custom__') { fields.customModel.hidden = false; }
       fields.drain.checked = !!c.auto_drain; fields.gate.checked = !!c.product_gate;
       fields.fallback.value = typeof c.fallback_to_default_worker === 'boolean' ? (c.fallback_to_default_worker ? 'on' : 'off') : '';
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
@@ -57816,6 +57823,7 @@
       syncSegmented();
       syncDrainToggle();
       syncGateToggle();
+      window.cccChoiceEligibility?.decorate(fields.engine,{kind:'engine',engine:()=>fields.engine.value,context:()=>({name:'queue'}),chips:$('#fqEngineSeg')});
       loadRoles(entry ? entry.queue : '');
     };
     // CCC-1235: per-role engine/model (WatchTower WT-14). Loaded per queue
@@ -57885,24 +57893,14 @@
         roleEdits[role] = { engine: prev.engine, model: sel.value };
       }));
     }
-    async function saveRoles(queueName) {
+    function changedRoles() {
       const changed = {};
       Object.keys(roleEdits).forEach(role => {
         const row = (rolesState && rolesState.roles.find(r => r.role === role)) || {};
         const e = roleEdits[role];
         if (e.engine !== (row.override_engine || '') || e.model !== (row.override_model || '')) changed[role] = e;
       });
-      if (!Object.keys(changed).length) return true;
-      const r = await fetch('/api/queue/roles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ queue: queueName, roles: changed }) });
-      const d = await r.json().catch(() => ({}));
-      if (d && Array.isArray(d.roles)) {
-        rolesState = d;
-        // Keep the failed picks on screen next to their error; drop the rest.
-        Object.keys(roleEdits).forEach(k => { if (!(d.errors && d.errors[k])) delete roleEdits[k]; });
-        renderRoles(d.errors);
-      }
-      if (!r.ok || !d.ok) throw new Error(d.error || r.status);
-      return true;
+      return changed;
     }
     // Segmented engine/backend pickers drive the hidden selects (kept so the
     // payload code below is untouched); the drain switch drives its checkbox.
@@ -57921,6 +57919,7 @@
     function syncSegmented() {
       const bseg = $('#fqBackendSeg'), eseg = $('#fqEngineSeg');
       if (bseg) bseg.querySelectorAll('button').forEach(b => b.classList.toggle('is-active', (b.getAttribute('data-backend') || '') === fields.backend.value));
+      if (eseg && fields.engine.value && !Array.from(eseg.querySelectorAll('[data-engine]')).some(b=>b.dataset.engine===fields.engine.value)) { const b=document.createElement('button');b.type='button';b.className='orch-tier-chip';b.dataset.engine=fields.engine.value;b.textContent=fields.engine.value+' · stored engine';b.setAttribute('role','radio');b.onclick=()=>{fields.engine.value=b.dataset.engine;fields.engine.dispatchEvent(new Event('change',{bubbles:true}));syncSegmented();};eseg.append(b); }
       if (eseg) eseg.querySelectorAll('.orch-tier-chip').forEach(b => {
         const sel = (b.getAttribute('data-engine') || '') === fields.engine.value;
         b.classList.toggle('is-selected', sel);
@@ -57948,6 +57947,7 @@
       syncGateToggle();
     });
     const onKey = event => {
+      if(modal.style.display==='none')return;
       if (event.key === 'Escape' && !event.isComposing) {
         event.preventDefault();
         event.stopPropagation();
@@ -57991,25 +57991,20 @@
       const save = modal.querySelector('[data-fq-config-save]');
       const claim_types = Array.from(modal.querySelectorAll('input[name="fq-config-claim-type"]:checked')).map(box => box.value);
       const model = fields.model.value === '__custom__' ? fields.customModel.value : fields.model.value;
-      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value, queue_label: fields.queueLabel.value, fallback_to_default_worker: fields.fallback.value === '' ? null : fields.fallback.value === 'on' };
+      const payload = { queue: fields.queue.value, workers: fields.workers.value, backend: fields.backend.value, engine: fields.engine.value, repo_path: fields.path.value, model, effort: fields.effort.value, auto_drain: fields.drain.checked, product_gate: fields.gate.checked, claim_types, github_repo: fields.repo.value, github_assignee: fields.assignee.value, queue_label: fields.queueLabel.value, fallback_to_default_worker: fields.fallback.value === '' ? null : fields.fallback.value === 'on', roles: changedRoles() };
       save.disabled = true;
       save.classList.add('is-saving');
       try {
         const res = await fetch('/api/queue/config', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.error || res.status);
-        try {
-          await saveRoles(data.queue);
-        } catch (e) {
-          // The queue itself saved; keep the dialog open on the role errors.
-          showOpToast('Saved ' + data.queue + ', but a role model was refused: ' + e.message, 'error');
-          save.disabled = false; save.classList.remove('is-saving');
-          _uxqHealthCache.ts = 0; _renderQueuePanel();
-          return;
-        }
-        showOpToast('Saved ' + data.queue + ' queue configuration', 'success');
-        _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; close(); _renderQueuePanel();
-      } catch (e) { showOpToast('Could not save queue: ' + e.message, 'error'); save.disabled = false; save.classList.remove('is-saving'); }
+        const warnings = Array.isArray(data.warnings) ? data.warnings.slice() : [];
+        if (data.configuration_history?.warning) warnings.push(data.configuration_history.warning);
+        showOpToast(escapeHtml('Saved ' + data.queue + ' queue configuration' + (warnings.length ? '. ' + warnings.join(' ') : '')), warnings.length ? 'warning' : 'success');
+        _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; close();
+        try { _renderQueuePanel(); }
+        catch (_) { showOpToast('Queue configuration saved; the visible queue list could not refresh. Reopen it before relying on its display.', 'warning'); }
+      } catch (e) { showOpToast(escapeHtml('Could not save queue: ' + e.message), 'error'); save.disabled = false; save.classList.remove('is-saving'); if (document.activeElement === document.body) save.focus(); }
     });
     if (policyMode) {
       window.cccQueuePolicy.mount({modal, fields, queue: initialQueue,
@@ -80246,8 +80241,8 @@
     return own ? String(own.cost_summary || own.entitlement_summary || '') : '';
   }
 
-  function modelOptionsForSpawnEngine(engine, currentModel, includeOther) {
-    engine = normalizeSpawnDefaultEngine(engine);
+  function modelOptionsForSpawnEngine(engine, currentModel, includeOther, eligibility) {
+    engine = eligibility ? String(engine || '') : normalizeSpawnDefaultEngine(engine);
     const base = MODEL_OPTIONS_BY_ENGINE[engine] || [];
     const out = [];
     const seen = new Set();
@@ -80263,7 +80258,7 @@
     };
     if (engine === 'antigravity') add('', 'Use AGY configured model');
     const cur = String(currentModel == null ? '' : currentModel).trim();
-    if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur)) && _modelAllowedForEngine(engine, cur)) {
+    if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur)) && (eligibility || _modelAllowedForEngine(engine, cur))) {
       add(cur, cur + ' (default)');
     }
     ((engine === 'claude' || engine === 'codex') ? latestModelsOnly(base, cur) : base).forEach(opt => add(opt.id, opt.label || opt.id, {
@@ -80271,7 +80266,7 @@
       reason: opt.availability_reason || opt.reason || '',
     }));
     if (includeOther && _engineSupportsCustomModel(engine)) add(SPAWN_DEFAULT_OTHER, 'Other...');
-    return out;
+    return eligibility && window.cccChoiceEligibility ? window.cccChoiceEligibility.modelRows(engine,out,eligibility) : out;
   }
 
   function mergeSpawnDefaults(data, opts) {
@@ -80433,6 +80428,7 @@
     return null;
   }
 
+  let _emnObservedAt = null;
   let _emnInstalled = null;        // engine -> bool, null until first probe (declared early: sync runs at init)
   let _emnForced = '';             // engine named by a failed spawn
   let _emnBusy = '';               // engine whose install terminal we opened
@@ -88279,6 +88275,8 @@
   const $networkCancelBtn = document.getElementById('networkCancelBtn');
   const $networkSaveBtn = document.getElementById('networkSaveBtn');
 
+  let networkRevision = null;
+
   function networkEsc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -88327,6 +88325,8 @@
   async function networkOpen() {
     if (!$networkModal) return;
     networkResetState();
+    networkRevision = null;
+    if ($networkSaveBtn) $networkSaveBtn.disabled = true;
     if ($networkExtraOrigins) $networkExtraOrigins.value = '';
     if ($networkBindAll) $networkBindAll.checked = false;
     if ($networkTrustTailnet) $networkTrustTailnet.checked = false;
@@ -88335,6 +88335,7 @@
     let data;
     try {
       const r = await fetch('/api/network-config', { cache: 'no-store' });
+      if (!r.ok) throw new Error('load failed (' + r.status + ')');
       data = await r.json();
     } catch (e) {
       if ($networkError) {
@@ -88343,6 +88344,8 @@
       }
       return;
     }
+    networkRevision = data.revision || null;
+    if ($networkSaveBtn) $networkSaveBtn.disabled = false;
     const stored = data.stored || {};
     const runtime = data.runtime || {};
     if ($networkBindAll) $networkBindAll.checked = (stored.bind_host === '0.0.0.0') || (runtime.bind_host && runtime.bind_host !== '127.0.0.1' && runtime.bind_host !== 'localhost');
@@ -88379,6 +88382,8 @@
       }
       return;
     }
+    const restoreSaveFocus = document.activeElement === $networkSaveBtn;
+    const restoreFocus = () => { if (restoreSaveFocus && document.activeElement === document.body && $networkModal.classList.contains('open')) $networkSaveBtn.focus(); };
     $networkSaveBtn.disabled = true;
     $networkSaveBtn.textContent = 'Saving…';
     if ($networkCancelBtn) $networkCancelBtn.disabled = true;
@@ -88392,6 +88397,7 @@
           bind_host: bindAll ? '0.0.0.0' : '127.0.0.1',
           allowed_origins: extra,
           trust_tailnet: trust,
+          ...(networkRevision ? {expected_revision: networkRevision} : {}),
         }),
       });
       data = await r.json().catch(() => ({}));
@@ -88407,9 +88413,28 @@
       $networkSaveBtn.disabled = false;
       $networkSaveBtn.textContent = 'Save & restart';
       if ($networkCancelBtn) $networkCancelBtn.disabled = false;
+      restoreFocus();
       return;
     }
-    $networkSaveBtn.textContent = 'Restarting…';
+    const warnings = Array.isArray(data.saved?.warnings) ? data.saved.warnings.filter(value => typeof value === 'string') : [];
+    if (data.saved?.revision) networkRevision = data.saved.revision;
+    if (!data.restart) {
+      try { sessionStorage.removeItem('ccc-updating'); } catch (_) {}
+      $networkSaveBtn.disabled = false;
+      $networkSaveBtn.textContent = 'Save & restart';
+      if ($networkCancelBtn) $networkCancelBtn.disabled = false;
+      restoreFocus();
+      if ($networkError) {
+        $networkError.textContent = warnings.length ? warnings.join(' ') : 'Saved. No dashboard restart was needed.';
+        $networkError.classList.add('visible');
+      }
+      return;
+    }
+    $networkSaveBtn.textContent = 'Saved · restarting…';
+    if (warnings.length && $networkError) {
+      $networkError.textContent = warnings.join(' ') + ' Dashboard restart requested.';
+      $networkError.classList.add('visible');
+    }
     setTimeout(() => { try { location.reload(); } catch (_) {} }, 1200);
   }
 
@@ -91715,8 +91740,10 @@
         currentConversation === '__new__' ? {cccPriority: 'user'} : undefined);
       const d = await r.json();
       const map = {};
-      (d.engines || []).forEach(e => { if (e.kind === 'spawn') map[e.engine] = !!e.installed; });
+      (d.engines || []).forEach(e => { if (e.kind === 'spawn' && typeof e.installed === 'boolean') map[e.engine] = e.installed; });
       _emnInstalled = map;
+      _emnObservedAt = new Date().toISOString();
+      window.cccChoiceEligibility?.refresh();
     } catch (_) { /* keep the last answer; never block the composer on this */ }
     renderEngineMissingNotice();
     renderNsAdvisor();
@@ -93168,6 +93195,7 @@
     const list = document.getElementById('engList');
     if (!list || !_engHubData) return;
     const rows = _engHubRows();
+    window.cccChoiceEligibility?.refresh();
     if (window.cccEngineConnection?.mounted()) { window.cccEngineConnection.render(rows, {notes:_engHubNotes, unavailable:_engHubUnavailable}); return; }
     const counts = { all: rows.length, ready: 0, setup: 0, off: 0 };
     rows.forEach(r => { counts[r.state] += 1; });
@@ -93203,6 +93231,7 @@
   }
 
   async function refreshEnginesHub(opts) {
+    if (window.cccEngineConnection?.cachedOnly?.() && !opts?.fresh) return null;
     if (!document.getElementById('engList')) return;
     const get = url => fetch(url, { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null);
     const fresh = opts && opts.fresh;
@@ -93214,6 +93243,7 @@
     if (request !== _engHubRequest) return null;
     if (!doctor || !doctor.engines) {
       _engHubUnavailable = true;
+      window.cccChoiceEligibility?.refresh();
       window.cccEngineConnection?.render(_engHubRows(), {notes:_engHubNotes, unavailable:true});
       if (!_engHubData) {
         const list = document.getElementById('engList');
@@ -93230,17 +93260,17 @@
 
   function _engHubSchedule() {
     if (_engHubTimer) { clearTimeout(_engHubTimer); _engHubTimer = null; }
-    if (!_engHubVisible()) return;
+    if (!_engHubVisible() || window.cccEngineConnection?.cachedOnly?.()) return;
     _engHubTimer = setTimeout(async () => {
       _engHubTimer = null;
-      if (_engHubVisible() && !document.hidden) await refreshEnginesHub();
+      if (_engHubVisible() && !document.hidden && !window.cccEngineConnection?.cachedOnly?.()) await refreshEnginesHub();
       _engHubSchedule();
     }, ENGINE_HUB_POLL_MS);
   }
 
   function startEnginesHub() {
     applyDisabledEnginesToPickers();
-    if (!_engHubVisible()) { _engHubSchedule(); return; }
+    if (!_engHubVisible() || window.cccEngineConnection?.cachedOnly?.()) { _engHubSchedule(); return; }
     refreshEnginesHub();
     if (!_engHubKimiVersion && !window.cccEngineConnection?.mounted()) {
       // Slow probe (spawns `kimi --version`), so once per page, not per poll.
@@ -93438,7 +93468,7 @@
     });
     // Coming back from the terminal where the install/login ran is the moment
     // status most likely changed.
-    window.addEventListener('focus', () => { if (_engHubVisible()) refreshEnginesHub(); });
+    window.addEventListener('focus', () => { if (_engHubVisible() && !window.cccEngineConnection?.cachedOnly?.()) refreshEnginesHub(); });
   })();
 
   // ── Engines section: BYOK (bring-your-own-key) profiles (W2-2) ──
@@ -94167,7 +94197,7 @@
       sec.setAttribute('aria-hidden', active ? 'false' : 'true');
     });
     if (sectionId !== destination || firstRun) { const details=requested?.querySelector(':scope > details'); if(details)details.open=true; }
-    if (typeof startEnginesHub === 'function') startEnginesHub();
+    if (!opts.cachedOnly && typeof startEnginesHub === 'function') startEnginesHub();
     if (opts.scroll === false) return;
     $settingsPane.scrollTop = 0;
     if (sectionId !== destination) requested?.scrollIntoView({block:'start'});
@@ -94185,6 +94215,8 @@
     crumb.textContent = text;
   }
 
+  const settingsSearchVisibility = new Map();
+
   function buildSettingsSearchIndex() {
     if (!$settingsPane) { _settingsSearchIndex = []; return; }
     _settingsSearchIndex = Array.from($settingsPane.querySelectorAll('.settings-row, .eng-list'))
@@ -94197,7 +94229,7 @@
         el: row,
         section,
         sectionTitle: eyebrow ? eyebrow.textContent : '',
-        originallyHidden: row.hidden,
+        originallyHidden: settingsSearchVisibility.has(row) ? settingsSearchVisibility.get(row) : row.hidden,
         hay: [
           label ? label.textContent : '',
           desc ? desc.textContent : '',
@@ -94213,8 +94245,12 @@
     if (!_settingsSearchIndex) buildSettingsSearchIndex();
     const q = String(query || '').trim().toLowerCase();
     if (!q) {
+      window.cccSettingsTaskSearch?.search('');
       $settingsModalInner.classList.remove('is-searching');
       _settingsSearchIndex.forEach(entry => { entry.el.hidden = entry.originallyHidden; });
+      for (const [row, hidden] of settingsSearchVisibility) row.hidden = hidden;
+      settingsSearchVisibility.clear();
+      _settingsSearchIndex = null;
       $settingsPane.querySelectorAll('details[data-search-open]').forEach(el => {
         el.open=el.dataset.searchOpen==='true'; el.hidden=false; delete el.dataset.searchOpen;
       });
@@ -94236,6 +94272,7 @@
     const sectionMatchCount = {};
     let anyMatch = false;
     _settingsSearchIndex.forEach(entry => {
+      if (!settingsSearchVisibility.has(entry.el)) settingsSearchVisibility.set(entry.el, entry.originallyHidden);
       const match = !entry.originallyHidden && q.split(/\s+/).every(word => entry.hay.includes(word));
       entry.el.hidden = !match;
       if (match) {
@@ -94304,7 +94341,7 @@
       details.hidden = !Array.from(details.querySelectorAll('.settings-row, .eng-list, .settings-modal-tools-slot'))
         .some(row => !row.hidden && row.style.display !== 'none');
     });
-    if ($settingsEmptyState) $settingsEmptyState.hidden = anyMatch;
+    if ($settingsEmptyState) $settingsEmptyState.hidden = anyMatch || !!window.cccSettingsTaskSearch?.match(q).length;
     if ($settingsEmptyQuery) $settingsEmptyQuery.textContent = query;
   }
 
@@ -94497,7 +94534,8 @@
   });
 
   let settingsSearchFocusTimer;
-  function openSettingsModal({ focusSearch = true } = {}) {
+  var choiceEligibilityReturn;
+  function openSettingsModal({ focusSearch = true, cachedOnly = false } = {}) {
     if (!$settingsModal) return;
     _settingsModalPrevFocus = document.activeElement;
     $settingsModal.hidden = false;
@@ -94509,13 +94547,13 @@
     refreshMonthlyClaudePlanInput();
     refreshMonthlyCodexPlanInput();
     refreshSpawnEngineValue();
-    refreshEngineUpdateStatus();
+    if (!cachedOnly) refreshEngineUpdateStatus();
     refreshByokSettings();
     refreshVaultSettings();
     const $phoneRow = document.getElementById('phoneAccessRow');
     if ($phoneRow) $phoneRow.hidden = false;
     buildSettingsSearchIndex();
-    setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false });
+    setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false, cachedOnly });
     clearTimeout(settingsSearchFocusTimer);
     if (focusSearch) settingsSearchFocusTimer = setTimeout(() => {
       if (!$settingsModal.hidden && $settingsSearchInput) $settingsSearchInput.focus();
@@ -94762,6 +94800,7 @@
   }
 
   function closeSettingsModal() {
+    if(choiceEligibilityReturn){choiceEligibilityReturn();return;}
     if (!$settingsModal) return;
     window.cccVoiceSetup?.leave();
     window.cccServiceConnections?.leave();
@@ -94944,6 +94983,8 @@
           if (!response.ok || !result.ok || !result.flags) throw new Error(result.error || 'Flag change rejected');
           window.__CCC_FLAGS__ = result.flags;
           window.dispatchEvent(new CustomEvent('ccc:flags'));
+          const status = document.querySelector('[data-ff-status="' + CSS.escape(name) + '"]');
+          if (status) status.textContent = Array.isArray(result.warnings) && result.warnings.length ? 'Saved. ' + result.warnings.join(' ') : 'Saved.';
         }).catch(error => {
           window.__CCC_FLAGS__ = Object.assign({}, window.__CCC_FLAGS__ || {}, {[name]:previous});
           window.dispatchEvent(new CustomEvent('ccc:flags'));
@@ -96260,8 +96301,27 @@
     refreshUsage: refreshSettingsUsage,
   });
 
+  window.cccChoiceEligibility?.configure({
+    facts: () => ({
+      catalog:MODEL_OPTIONS_BY_ENGINE, blocked:[...spawnDefaultsState.blockedModels], disabled:spawnDefaultsState.disabled_engines || [],
+      snapshot:{engines:{...Object.fromEntries(Object.entries(_emnInstalled || {}).map(([engine,installed])=>[engine,{cli_present:installed,auth_present:null,observed_at:_emnObservedAt}])),...(_engHubData?.doctor?.engines || {})},generated_at:_engHubData?.doctor?.generated_at,unavailable:_engHubUnavailable},
+    }),
+    open: (engine, opener) => {
+      const overlay=opener.closest('.upd-overlay'), previous=_settingsCurrentSection, wasHidden=$settingsModal.hidden;
+      if(overlay)overlay.style.display='none';
+      if(_engHubTimer){clearTimeout(_engHubTimer);_engHubTimer=null;}
+      if(!window.cccEngineConnection?.open(engine,{cachedOnly:true,observedAt:_engHubData?.doctor?.generated_at,unavailable:_engHubUnavailable})) {if(overlay)overlay.style.display='';return;}
+      let back=document.getElementById('choiceEligibilityReturn');
+      if(!back){back=document.createElement('button');back.id='choiceEligibilityReturn';back.type='button';back.className='settings-action-btn';document.getElementById('engineConnectionStatus').after(back);}
+      back.textContent='Return to policy draft';
+      const restore=()=>{choiceEligibilityReturn=null;window.cccEngineConnection?.endCachedOnly();back.remove();if(overlay?.isConnected){overlay.style.display='';if(wasHidden)closeSettingsModal();}else setActiveSettingsRailSection(previous || 'routing',{cachedOnly:true});opener.scrollIntoView({block:'center'});opener.focus({preventScroll:true});document.removeEventListener('keydown',onEscape,true);};
+      const onEscape=event=>{if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();restore();}};
+      choiceEligibilityReturn=restore;back.onclick=restore;document.addEventListener('keydown',onEscape,true);
+    },
+  });
+
   window.cccRoutingPolicy?.mount({
-    models: (engine, current) => modelOptionsForSpawnEngine(engine, current, true),
+    models: (engine, current, context) => modelOptionsForSpawnEngine(engine, current, true, context),
     label: spawnEngineLabel,
     navigate: () => setActiveSettingsRailSection('routing'),
     saved: data => { mergeSpawnDefaults(data); syncSpawnEngineDependentUi(); renderEnginesHub(); if (typeof updateInputBar === 'function') updateInputBar(); },
@@ -96279,10 +96339,10 @@
   });
 
   window.cccEngineConnection?.mount({
-    navigate: () => {
+    navigate: (options={}) => {
       clearTimeout(settingsSearchFocusTimer);
-      if ($settingsModal.hidden) openSettingsModal({focusSearch:false}); else clearSettingsSearch();
-      setActiveSettingsRailSection('engines');
+      if ($settingsModal.hidden) openSettingsModal({focusSearch:false,cachedOnly:options.cachedOnly}); else clearSettingsSearch();
+      setActiveSettingsRailSection('engines',options);
     },
     refresh: () => refreshEnginesHub({fresh:true}), usageHtml:_engHubUsageHtml,
     sessionEngines:SPAWN_DEFAULT_ENGINES, workerEngines:WORKER_DEFAULT_ENGINES,
@@ -96387,6 +96447,39 @@
         window.cccLaunchPreview?.refresh();
         return true;
       } catch (_) { return false; }
+    },
+  });
+
+  window.cccSettingsTaskSearch?.mount({
+    queue: (name, trigger) => openQueueManager(name, false, trigger),
+    open: async task => {
+      clearTimeout(settingsSearchFocusTimer);
+      if (task.section === 'reader' && (!currentConversation || currentConversation === '__new__')) return null;
+      clearSettingsSearch();
+      if (task.section === 'health') {
+        closeSettingsModal(); sysOpenModal(null, 'health');
+      } else if (task.section === 'routing') {
+        setActiveSettingsRailSection('routing');
+        await window.cccRoutingPolicy?.open(task.id === 'fallback' ? 'worker_fallback' : task.id === 'profiles' ? 'fast' : 'defaults');
+      } else if (task.id === 'voice' || task.id === 'calls') {
+        window.cccVoiceSetup?.open(task.id === 'voice' ? 'reading' : 'conversation');
+      } else setActiveSettingsRailSection(task.section);
+      let target = document.getElementById(task.target);
+      if (task.id === 'reset') target = document.querySelector('#settingsSection-preferences [data-pref-action="reset"]')?.parentElement;
+      if (target?.matches('button,input,select')) target = target.closest('.settings-row') || target.parentElement;
+      if (target?.tagName === 'DETAILS') target.open = true;
+      for (let node=target?.parentElement;node;node=node.parentElement) if(node.tagName==='DETAILS')node.open=true;
+      return target;
+    },
+    returnToSearch: query => {
+      clearTimeout(settingsSearchFocusTimer);
+      document.querySelectorAll('.conv-pane-more[open]').forEach(node => {node.open=false;});
+      const phoneMenu=document.getElementById('convSimpleActionsMenu');if(phoneMenu)phoneMenu.hidden=true;
+      const more=document.getElementById('sidebarMoreMenu');if(more)more.hidden=true;
+      document.getElementById('queueMoreMenu')?.classList.remove('open');
+      sysCloseModal();
+      if($settingsModal.hidden)openSettingsModal({focusSearch:false});
+      $settingsSearchInput.value=query;applySettingsSearch(query);window.cccSettingsTaskSearch.search(query);
     },
   });
 

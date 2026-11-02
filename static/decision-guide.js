@@ -170,6 +170,8 @@
     const reason = entry ? frozenGate(!entry.saved ? 'record' : entry.saved.state === 'pending' ? 'send' : 'reconcile', row) : gate(row);
     const changed = draft && (draft.revision !== row?.revision || draft.body !== row?.body);
     $('answer').value = entry ? entry.payload.text : draft?.text || '';
+    $('answerFields').hidden = !row || !!entry || !!reason;
+    $('send').hidden = !row || !!entry || !!reason;
     $('answer').disabled = !row || !!entry || !!reason || active !== null;
     $('send').disabled = !row || !!entry || !!reason || !!changed || !draft?.text.trim() || active !== null;
     $('skip').disabled = active !== null || !row || openRows().length === 0;

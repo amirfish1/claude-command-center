@@ -252,8 +252,9 @@ class History:
             return self._commit(state,scope,target,before,after,writer,operation,source_check=source_check)
 
     def observed_queue(self,before,after,target):
-        # The legacy native form has multi-step setters and service effects;
-        # do not claim its complete operation can be undone or crash-replayed.
+        # The native form publishes once, but its broader fields and later
+        # service effects remain outside reversible policy history. This is an
+        # after-publication observation, not a crash-replay journal intent.
         with _lock(self.directory/'configuration-history-lock'):
             state,_=self.recover(self.state())
             diff,_=differences(self.core,'queue',before.get(target,{}),after.get(target,{}))

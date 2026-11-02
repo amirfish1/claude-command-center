@@ -1,10 +1,10 @@
-# Settings transaction boundary audit
+# Settings transaction boundaries
 
-This audit accompanies the ownership inventory. It does **not** establish that
-all Settings writes are atomic. An atomic file replacement, a revision-checked
-configuration transaction, a recoverable audit journal and a transaction across
-external processes/stores are different guarantees. No new writer is introduced
-by the scope annotations.
+This source inventory accompanies Settings ownership guidance. It does **not**
+establish that all Settings operations are atomic. An atomic file replacement,
+a revision-checked configuration transaction, a recoverable audit journal and a transaction across
+external processes/stores are different guarantees. The scope annotations do
+not write configuration. The native full queue form, network document and feature switches use the publication path described below.
 
 ## Existing staged operational paths
 
@@ -21,13 +21,13 @@ worker tuple consumed by worker dispatchers, queue pins, worker fallback provide
 chains, and Claude-only managed profiles. One staged editor does not imply one
 runtime consumer.
 
-## Remaining gaps and deliberate separate operations
+## Native publication and deliberate separate operations
 
 | Editor / action | Inspected writer | Finding and next implementation boundary |
 |---|---|---|
-| Full native queue configuration (backend/repository/roles/drain/workers/claim types/product gate/routing/GitHub fields) | Legacy full-form branch of `/api/queue/config` in `server.py` calls `ensure_entry` and multiple WatchTower setters, then other effects. Fallback direct JSON branch has different guarantees. | **Coupled partial-save gap.** A later setter can fail after earlier writes. Scope help explicitly calls this a legacy full-form boundary. A future change needs a canonical validated WatchTower-compatible batch contract and isolated failure tests; do not call it atomic based on CCC's request lock or scoped-policy implementation. |
-| Dashboard network binding/trust/origins | `server.py:_save_network_config` uses direct `write_text`; native Save may restart. | **Coupled file-durability gap.** Multiple fields form one document but publication is not atomic replace/revision checked. Remediation needs explicit network/security review and temporary-state failure checks; no network writer changed in this inventory task. |
-| Host preview flags | `ccc_server/log_parse.py:_save_feature_flag` reads overrides then directly writes the file. | **Publication/concurrency gap.** Each switch is an independent save, but read-modify-write can lose another change and interruption can truncate. Future work should use canonical atomic replacement/serialization without promising a multi-switch or service transaction. |
+| Full native queue configuration (backend/repository/roles/drain/workers/claim types/product gate/routing/GitHub fields) | `/api/queue/config` normalizes the whole submitted form, then `settings_transactions.save_queue_form` validates GitHub shape/catch-all uniqueness, model policy before and after native alias resolution, session links, and edited role engine/model selections before one publication. | Unedited roles, unknown role metadata, headroom and omitted present-only fields survive; explicit removals remain removals. New queues stay drain-off; drain-on restores a parked worker count to one, matching native WT semantics. Edited roles use the resulting builder engine or a revision-checked saved worker engine, pure WT alias/catalog validation, and the same publication as the other form fields. No writing WT setters, second roles request or second session-link patch. Config publication is atomic; immediate reconciliation, native WT audit and nonreversible history observation are separate later effects. |
+| Dashboard network binding/trust/origins | `_save_network_config` uses serialized durable publication. GET adds a document `revision` from the same byte snapshot as `stored`; POST optionally accepts `expected_revision` and returns 409 on a stale draft. Native UI supplies that revision and disables Save until a successful read. | Existing clients without a token retain serialized last-writer behavior. Known-key filtering, localhost/proxy/origin gates, hot origin reload, environment precedence and bind-change restart behavior are unchanged. Only the network document is committed; restart is a later native action. No preference journal/undo guarantee. |
+| Host preview flags | `_save_feature_flag` serializes the complete read/modify/publish operation, merging one known switch into the native object. | Concurrent cooperating CCC processes retain unrelated switches and unknown metadata. Invalid/nonobject sources are rejected instead of overwritten. Effective env/file/default precedence and old boolean coercion remain. Independent switches are not one multi-switch or service transaction; no operational history promise. |
 | Voice call defaults | `ccc_server/realtime_voice.py:voice_config_save` sanitizes whole patched config under a lock and replaces a temp file. | One host config publication; no optimistic stale-draft check, operational history or transaction with browser visibility. Already running calls retain their configuration. No cross-scope claim. |
 | Hands-free operator keys and process Start/Stop | `_save_car_mode_config` replaces the operator config; Start/Stop is a separate native process action. | Saved keys and process state are intentionally distinct operations. Save/Start is not one atomic transaction; environment/external speech engine selection remains external. Do not silently restart an operator after saving. |
 | Provider credentials and named credentials | Existing secure backend plus separate metadata/index writes (`byok.py`, `vault.py`, `secret_store.py`); explicit provider-to-named copy creates another entry. | Multiple secure/index stores and external keychain effects are not one preference transaction; no operational journal/undo promise. A future repair must preserve write-only APIs and credential lifecycle, not copy secrets into a preference journal. |
@@ -37,10 +37,76 @@ runtime consumer.
 | Repository avatar | `repo_avatars.save` replaces or removes the selected host avatar record and invalidates cache. | One repository record, separate from source-repository contents, browser display refresh and profile/history transactions. |
 | Usage-limit recovery, spare-quota Start, engine install/auth/test/update and System service operations | Existing native runtime handlers. | Actions affect real sessions/processes/external apps. They are not configuration-field batches; no rollback implied by Settings ownership metadata. |
 
-## Delivery status
+The full queue form includes its edited roles in the optional `roles` object on
+`POST /api/queue/config` (`{role: {engine: string, model: string}}`). All edited
+roles are validated before any publication, including a late invalid role after
+other valid edits. Blank strings remove the corresponding role field. A role
+model with no explicit role/builder engine requires a supported saved worker
+engine; unknown ambient installation fallback is not probed or guessed during
+Save. Existing clients omitting `roles` retain every stored role field. Unknown
+native metadata and unedited role overrides remain unchanged. Role changes are
+outside supported operational-history undo; full-form history stays an
+independent, nonreversible observation of allowlisted policy fields.
 
-Ownership guidance is a frontend composition milestone. The full native queue
-form, network config publication and feature-flag writer are confirmed gaps, not
-completed atomic-edit work. External service and secure-store sequences require
-separate explicit boundaries. This audit makes those limits reviewable and
-avoids changing risky writers merely to count an atomicity milestone complete.
+The legacy `POST /api/queue/roles` compatibility endpoint retains its existing
+per-role setter semantics and can partially save multiple roles. The canonical
+full form no longer calls it. This is not a guarantee about old clients or
+external WT writers. Queue configuration and role fields share the native queue
+JSON document, not a new role store or a cross-file transaction.
+
+The native full queue UI now displays saved-but-warning responses as warnings,
+including durability and secondary-effect/history warnings, without claiming
+rollback or retrying. Host feature switches keep the returned saved state and
+show durability warnings beside the switch; a refused save still restores the
+previous switch value. Publication success and later effect failures remain
+separate outcomes.
+
+## Publication and concurrency contract
+
+`ccc_server/settings_transactions.py` reuses the existing advisory directory
+lock and directory-sync helper. Each publication encodes the complete document,
+writes a unique temporary file in the same directory, preserves an existing
+file's mode (0600 for new files), flushes/fsyncs it, rechecks the original source,
+then replaces once and fsyncs the parent directory where supported by the OS. Failure before/at replace
+leaves the previous document intact and removes the temporary file. A directory
+sync failure **after** replace returns a saved-but-durability-unconfirmed warning,
+not a false claim that publication failed. Network responses include the saved
+revision/warnings; queue responses include warnings and independent history
+status; feature responses include warnings.
+
+CCC queue HTTP handlers already share the queue-settings request lock. Full-form
+saves additionally cooperate across CCC processes through the advisory directory
+lock. Model alias resolution uses the explicit engine or a read-only saved
+worker-engine snapshot, rechecked before publication. If neither is configured,
+the alias stays literal for the installation-dependent native worker resolver;
+no guessed engine is stored. Existing WT pure canonicalizers/policy readers are
+used when available; without that optional config module, normalized model IDs
+retain the existing pass-through contract. Native WT readers consume the same
+JSON schema. WT's optional audit helper is called only when its resolved config
+path matches the published document; a mismatch is reported and never written.
+
+External WT/manual writers do not take CCC's advisory lock; the final revision
+check detects earlier edits, **not** an edit in the final check/replace interval.
+Other legacy CCC queue operations share the in-process request lock but do not
+all take this cross-process advisory lock. Old tokenless network clients also
+cannot detect a draft that became stale before their request began. These are
+explicit concurrency limits, not a cross-service transaction guarantee.
+
+Full-form operational history remains an after-publication, allowlisted,
+nonreversible observation. Its broader native fields and service effects are not
+supported policy undo, and there is no pending-intent/crash replay guarantee for
+this form. Failed history or immediate reconciliation does not turn a successful
+config publication into a failed-save response. Native service reconciliation,
+WT audit metadata, restart and other stores cannot be rolled back atomically
+with the document. The remaining separate operations above retain their own
+boundaries; this milestone does not make every Settings workflow atomic.
+
+Selected operational resets now share the routing/scoped queue publication and
+pending-intent journal boundaries. Queue/default/reset HTTP requests take the
+same CCC request lock. Reset previews bind the selection, target, native
+candidate and host/queue/model-policy sources; apply recomputes this before
+publication. Scoped queue publication also checks the journal source guard
+immediately before replace. Host replacement versus queue absence, dependent
+worker tuples and undo availability are shown explicitly. This does not add a
+global reset or cross-scope transaction; see
+[selected operational reset coverage](settings-operational-resets.md).

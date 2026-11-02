@@ -384,15 +384,17 @@ def _save_feature_flag(name, on):
     """Persist a single per-machine override. Returns {ok, ...}."""
     if name not in _PREVIEW_FLAGS:
         return {"ok": False, "error": "unknown flag"}
-    overrides = _load_feature_flag_overrides()
-    overrides[name] = bool(on)
+    from . import settings_transactions as transaction
     try:
-        _core.COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-        with open(FEATURE_FLAGS_FILE, "w") as f:
-            json.dump(overrides, f, indent=2, sort_keys=True)
-    except OSError as exc:
+        with transaction.locked(FEATURE_FLAGS_FILE.parent):
+            raw = transaction.snapshot(FEATURE_FLAGS_FILE)
+            overrides = transaction.object_value(raw)
+            overrides[name] = bool(on)
+            warnings = transaction.publish(FEATURE_FLAGS_FILE, overrides, raw)
+            flags = _resolved_feature_flags()
+    except (OSError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
-    return {"ok": True, "flags": _resolved_feature_flags()}
+    return {"ok": True, "flags": flags, "warnings": warnings}
 # Persistent registry of spawned headless `claude -p` PIDs, so a server restart
 # can re-discover orphans instead of leaving them unreachable. See
 # _reattach_spawned_orphans() for the boot-time sweep. Schema is a list of

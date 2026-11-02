@@ -83,11 +83,16 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       model.answers_enabled=false;
       model.requests[1]={...second,adapter:'session-question',can_answer:false,answer_unavailable_reason:'Reply in the originating session.'};
       await refresh(); await page.click('#queue summary');
+      assert.equal(await page.$eval('#answerFields',el=>el.getBoundingClientRect().height),0);
+      assert.equal(await page.$eval('#send',el=>el.getBoundingClientRect().height),0);
+      assert.equal(await page.$eval('#skip',el=>el.disabled),false);
+      await page.screenshot({path:path.join(screenshots,'guide-read-only-390.png'),fullPage:true});
       assert.equal(await page.$$eval('#items button',nodes=>nodes.length),2);
       await page.click('#items button:nth-child(2)');
       assert.match(await page.$eval('#guidance',el=>el.textContent),/not enabled/);
       model.answers_enabled=true; await refresh();
       assert.match(await page.$eval('#guidance',el=>el.textContent),/originating session/); assert.equal(posts.length,0);
+      assert.equal(await page.$eval('#answerFields',el=>el.getBoundingClientRect().height),0);
     });
     await fixture('accepted receipt advances and retains exact transcript',async ({page,posts,click,wait,idle,selected,reply,setHandler,model,refresh,load})=>{
       setHandler(async req=>{
