@@ -32948,6 +32948,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "config": config, "headroom": _headroom.headroom_payload()})
             except (OSError, ValueError) as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/settings/changes":
+            from ccc_server.settings_changes import snapshot
+            try:
+                self.send_json(snapshot(sys.modules[__name__]))
+            except RuntimeError:
+                self.send_json({"error": "Settings changed while reading; refresh again"}, 409)
         elif path == "/api/settings/health":
             from ccc_server.settings_health import snapshot
             self.send_json(snapshot(sys.modules[__name__]))

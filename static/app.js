@@ -96275,6 +96275,36 @@
     },
   });
 
+  window.cccSettingsChanges?.mount({
+    review: () => {
+      clearTimeout(settingsSearchFocusTimer);
+      document.querySelectorAll('.conv-pane-more[open]').forEach(node => { node.open = false; });
+      const phoneMenu = document.getElementById('convSimpleActionsMenu'); if (phoneMenu) phoneMenu.hidden = true;
+      document.getElementById('queueMoreMenu')?.classList.remove('open');
+      const more = document.getElementById('sidebarMoreMenu'); if (more) more.hidden = true;
+      if ($settingsModal.hidden) openSettingsModal({focusSearch:false}); else clearSettingsSearch();
+      setActiveSettingsRailSection('preferences');
+    },
+    queue: (name, trigger) => openQueueManager(name, false, trigger),
+    edit: async edit => {
+      clearTimeout(settingsSearchFocusTimer);
+      if (edit.kind === 'policy') {
+        clearSettingsSearch(); setActiveSettingsRailSection('routing');
+        await window.cccRoutingPolicy?.open(edit.context);
+        return document.getElementById('routingPolicyEditor');
+      }
+      if (edit.context === 'reader' && (!currentConversation || currentConversation === '__new__')) return null;
+      if (['reader','list-presentation','queue-view'].includes(edit.context)) {
+        window.cccSettingsContext?.redirect(edit.context);
+        return document.getElementById(edit.context === 'reader' ? 'settingsModalFontSlot' : edit.context === 'queue-view' ? 'contextQueuePreferences' : 'contextListPreferences');
+      }
+      clearSettingsSearch(); setActiveSettingsRailSection(edit.context);
+      const section = $settingsPane.querySelector('[data-section-id="' + edit.context + '"]');
+      section?.querySelector('button,input,select')?.focus();
+      return section;
+    },
+  });
+
   // Trigger check on load
   if (!CONV_POPOUT_MODE) {
     setTimeout(checkOnboarding, 1000);
