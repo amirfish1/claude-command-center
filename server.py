@@ -30321,6 +30321,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # vertical stage list (folders → transcripts → infer …) instead
             # of the opaque "Loading archive…" spinner.
             self.send_json(_archive_load_snapshot())
+        elif path == "/api/decision-inbox/answers":
+            from ccc_server.decision_answer_http import answer_payload
+            qs = urllib.parse.parse_qs(parsed.query)
+            result, status = answer_payload('status', answer_id=qs.get('answer_id', [''])[0])
+            self.send_json(result, status)
         elif path == "/api/decision-inbox/requests":
             from ccc_server.decision_requests import requests_payload
             result = requests_payload()
@@ -40251,6 +40256,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 res = system_health_quit_app(app_id)
                 self.send_json(res, 200 if res.get("ok") else 400)
+        elif path in ("/api/decision-inbox/answers", "/api/decision-inbox/answers/send",
+                      "/api/decision-inbox/answers/reconcile"):
+            from ccc_server.decision_answer_api import MAX_BODY_BYTES
+            from ccc_server.decision_answer_http import answer_payload
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                length = 0
+            if not 0 < length <= MAX_BODY_BYTES:
+                self.close_connection = True
+                self.send_json({'ok': False, 'error': 'body_too_large'}, 413)
+                return
+            action = 'record' if path.endswith('/answers') else path.rsplit('/', 1)[1]
+            result, status = answer_payload(action, self.rfile.read(length))
+            self.send_json(result, status)
         elif path == "/api/decision-inbox/session-events":
             from ccc_server.decision_sessions import event_payload
             try:

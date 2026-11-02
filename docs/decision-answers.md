@@ -1,10 +1,31 @@
 # Decision answer controller
 
 `ccc_server.decision_answer_api.DecisionAnswerAPI` is an inert, stdlib-only
-controller for future HTTP handlers. It installs no routes, starts no threads,
-selects no source executable, and dispatches no background work. It does not
-activate answering in the dashboard. Source writer compatibility and complete
-source episode identities must be established before integration or rollout.
+controller used by the explicit answer HTTP handlers. The controller starts no
+threads, selects no source executable, and dispatches no background work.
+Installing these handlers does not activate answering in the dashboard. Source
+writer compatibility, complete source episode identities and coordinated
+producer ownership must be established before enabling delivery.
+
+## HTTP surface (disabled by default)
+
+The dashboard composes the controller through `decision_answer_http`:
+
+| Method | Endpoint | Operation |
+| --- | --- | --- |
+| POST | `/api/decision-inbox/answers` | Record the exact answer body below; never send |
+| GET | `/api/decision-inbox/answers?answer_id=UUID` | Look up local status; never contact the source |
+| POST | `/api/decision-inbox/answers/send` | Explicitly send a pending frozen answer |
+| POST | `/api/decision-inbox/answers/reconcile` | Look up an interrupted delivery receipt; never send |
+
+POST actions use `{"answer_id":"UUID"}`. All POSTs enforce the dashboard's
+same-origin policy and a 128 KiB body limit. Source selection and actor defaults
+are server-owned; clients cannot provide an executable, command, source snapshot
+or routing target. Only an explicit server environment setting
+`CCC_DECISION_ANSWERS_ENABLED=1` permits controller operations. The default 503
+`answers_disabled` response does not initialize a registry, discover a source
+executable or contact WatchTower. The UI remains read-only in this phase; no
+automatic dispatcher or retry loop is installed.
 
 Construct it with an explicit `DecisionRegistry`, an optional read-only
 `export_source()` callable returning the full owner export described by
