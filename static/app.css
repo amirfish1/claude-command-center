@@ -33893,6 +33893,15 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 #settingsSection-defaults .settings-row-control { flex: 0 1 42%; }
 #settingsSection-defaults .settings-row-control select { width: 100% !important; max-width: 100%; }
 #settingsSection-defaults .settings-number-input { width: 80px; }
+#settingsSection-defaults #spawnDefaultsWorkerInheritanceRow { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: start; flex: 1 0 100%; box-sizing: border-box; width: 100%; }
+#spawnDefaultsWorkerInheritanceRow .settings-row-control { grid-column: 2; grid-row: 1; width: auto; max-width: none; margin: 0; padding-top: 4px; }
+#spawnDefaultsWorkerInheritanceRow .settings-row-main { flex: 1; min-width: 0; }
+#spawnDefaultsWorkerInheritanceRow .settings-row-label { color: var(--text); font-weight: 600; }
+#spawnDefaultsWorkerInheritanceRow .settings-row-desc { display: block; overflow-wrap: anywhere; margin-top: 6px; }
+#spawnDefaultsWorkerInherit { width: 20px; height: 20px; accent-color: var(--accent); }
+#spawnDefaultsWorkerOverrides { width: 100%; min-width: 0; }
+#spawnDefaultsWorkerOverrides[hidden] { display: none; }
+
 @media(max-width:700px) { #settingsSection-defaults .settings-row-control { flex-basis:100%; } }
 .settings-modal.is-searching .settings-search-miss { display:none; }
 .settings-modal.is-searching .eng-card:has(.settings-row):not(:has(.settings-row:not([hidden]))) { display:none; }

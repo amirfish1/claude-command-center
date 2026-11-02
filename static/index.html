@@ -3133,6 +3133,15 @@
                   <div class="eng-card-sub">WatchTower queue workers, unless the queue overrides.</div>
                 </div>
 
+                  <div class="settings-row" data-keywords="worker inherit same new sessions defaults" id="spawnDefaultsWorkerInheritanceRow">
+                    <div class="settings-row-main">
+                      <label class="settings-row-label" for="spawnDefaultsWorkerInherit">Use the same settings as new sessions</label>
+                      <div class="settings-row-desc">Opt in to follow the session engine, model, effort and autocompact threshold. Turning this off restores your independent worker settings. Queue pins still win; active workers keep their settings. Fallback and model profiles stay independent.</div>
+                      <div id="spawnDefaultsWorkerInheritanceStatus" class="settings-row-desc" role="status" aria-live="polite"></div>
+                    </div>
+                    <div class="settings-row-control"><input type="checkbox" id="spawnDefaultsWorkerInherit" aria-describedby="spawnDefaultsWorkerInheritanceStatus"></div>
+                  </div>
+                  <div id="spawnDefaultsWorkerOverrides">
                   <div class="settings-row" data-keywords="worker engine watchtower spawn defaults">
                     <div class="settings-row-main">
                       <div class="settings-row-label">Engine</div>
@@ -3189,6 +3198,7 @@
                       <input type="number" id="spawnDefaultsWorkerAutoCompact" class="settings-number-input" min="50" max="1000" step="10" inputmode="numeric" value="250" aria-label="Worker autocompact threshold in thousands of tokens">
                       <span class="settings-suffix" aria-hidden="true">K</span>
                     </div>
+                  </div>
                   </div>
               </div>
             </div>

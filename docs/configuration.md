@@ -48,6 +48,23 @@ queue workers. Per-call `reasoning_effort` on `/api/sessions/spawn` overrides
 that default. The [live catalog](engine-support.md#models-and-reasoning-effort)
 lists valid values.
 
+Workers remain independent unless you explicitly enable **Use the same settings
+as new sessions**. `POST /api/spawn-defaults` accepts the boolean
+`worker_inherit_session`. Existing files without the flag remain independent;
+requests that omit it keep the current relationship. Opting in saves the previous
+four worker fields in read-only `worker_overrides` metadata and atomically writes effective `worker_engine`, `worker_model`,
+`worker_reasoning_effort` and `worker_auto_compact_k` fields for direct file
+readers. Every subsequent CCC defaults save keeps those fields synchronized;
+the model uses the same model-policy fallback as a new session. Queue pins,
+worker fallback chains and managed model profiles remain independent, and
+active workers are unchanged. Turning inheritance off restores the saved
+worker fields; explicit worker fields in that same request override the
+restored values. While linked, distinct worker edits require
+`worker_inherit_session: false`; unchanged effective-field or metadata echoes
+are accepted. A missing saved snapshot is reported instead of silently losing
+settings. Use this API for session-default changes: external file writers do
+not automatically materialize the relationship.
+
 ## Persistent local settings
 
 `CCC_BIND_HOST`, `CCC_ALLOWED_ORIGIN`, and `CCC_TRUST_TAILNET` can also live in

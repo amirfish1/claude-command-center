@@ -80046,6 +80046,7 @@
     models: Object.assign({}, _defaultModelsByEngine),
     reasoning_effort: '',
     auto_compact_k: 250,
+    worker_inherit_session: false,
     worker_engine: '',
     worker_model: '',
     worker_reasoning_effort: '',
@@ -80318,6 +80319,7 @@
     spawnDefaultsState.reasoning_effort = allEffortLevels().some(level => level.id === data.reasoning_effort)
       ? data.reasoning_effort
       : '';
+    spawnDefaultsState.worker_inherit_session = data.worker_inherit_session === true;
     // The WatchTower queue-worker default; '' means WT picks (codex first).
     spawnDefaultsState.worker_engine = WORKER_DEFAULT_ENGINES.includes(data.worker_engine)
       ? data.worker_engine
@@ -86927,6 +86929,10 @@
   // persistSpawnDefaults(). Routing controls save their own keys; ordinary
   // defaults never create or overwrite a routing policy.
   const $spawnDefaultsEngine = document.getElementById('spawnDefaultsEngine');
+  const $spawnDefaultsWorkerInherit = document.getElementById('spawnDefaultsWorkerInherit');
+  const $spawnDefaultsWorkerOverrides = document.getElementById('spawnDefaultsWorkerOverrides');
+  let workerInheritanceSaving = false;
+  let workerInheritanceError = "";
   const $spawnDefaultsWorkerEngine = document.getElementById('spawnDefaultsWorkerEngine');
   const $spawnDefaultsWorkerModelField = document.getElementById('spawnDefaultsWorkerModelField');
   const $spawnDefaultsWorkerModel = document.getElementById('spawnDefaultsWorkerModel');
@@ -87026,6 +87032,25 @@
     renderEffortOptions($spawnDefaultsEffort, levels, spawnDefaultsState.reasoning_effort, 'Engine default');
     if ($spawnDefaultsAutoCompact) $spawnDefaultsAutoCompact.value = spawnDefaultsState.auto_compact_k;
     if ($spawnDefaultsWorkerAutoCompact) $spawnDefaultsWorkerAutoCompact.value = spawnDefaultsState.worker_auto_compact_k;
+    renderWorkerInheritance();
+  }
+  function renderWorkerInheritance() {
+    const inherited = spawnDefaultsState.worker_inherit_session === true;
+    if ($spawnDefaultsWorkerInherit) {
+      $spawnDefaultsWorkerInherit.checked = inherited;
+      $spawnDefaultsWorkerInherit.disabled = workerInheritanceSaving;
+    }
+    if ($spawnDefaultsWorkerOverrides) {
+      $spawnDefaultsWorkerOverrides.hidden = inherited;
+      $spawnDefaultsWorkerOverrides.querySelectorAll('input,select,button').forEach(el => { el.disabled = inherited || workerInheritanceSaving; });
+    }
+    const status = document.getElementById('spawnDefaultsWorkerInheritanceStatus');
+    if (status) status.textContent = workerInheritanceSaving ? 'Saving worker defaults…' : workerInheritanceError || (inherited
+      ? 'Following new sessions: ' + spawnEngineLabel(spawnDefaultsState.worker_engine) + ' · ' + (spawnDefaultsState.worker_model || 'Engine default model') + ' · ' + (spawnDefaultsState.worker_reasoning_effort || 'Engine default effort') + ' · ' + spawnDefaultsState.worker_auto_compact_k + 'K. Independent worker settings are saved for return.'
+      : 'Independent worker defaults. Existing settings stay unchanged until you opt in.');
+  }
+  function compatibleDefaultEffort(engine, value) {
+    return effortLevelsForEngine(engine).some(level => level.id === value) ? value : '';
   }
   function updateSpawnDefaultsModelFromControls() {
     if (!$spawnDefaultsModel) return;
@@ -87139,24 +87164,25 @@
   // Single POST helper every inline control's change handler routes through.
   // The API accepts partial updates. Routing controls only save their own
   // policy so ordinary defaults and legacy fallback behavior stay intact.
-  async function persistSpawnDefaults(rowEl) {
+  async function persistSpawnDefaults(rowEl, explicitChange) {
     spawnDefaultsInlineError('');
     const focusedRouting = rowEl && ['workerFallbackSettings', 'modelProfilesSettings'].includes(rowEl.id);
+    const workerEdit = !!rowEl?.querySelector('[id^="spawnDefaultsWorker"]');
     const engine = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
     const model = String((spawnDefaultsState.models || {})[engine] || '').trim();
-    if (!focusedRouting && (engine === 'claude' || engine === 'codex' || engine === 'cursor') && !model) {
+    if (!explicitChange && !workerEdit && !focusedRouting && (engine === 'claude' || engine === 'codex' || engine === 'cursor') && !model) {
       spawnDefaultsInlineError('Claude, Codex, and Cursor need an explicit default model.');
       return;
     }
     const workerEngine = spawnDefaultsState.worker_engine || '';
     const workerModel = String(spawnDefaultsState.worker_model || '').trim();
     const workerUnavailableReason = workerEngine && _modelUnavailableReason(workerEngine, workerModel);
-    if (!focusedRouting && workerUnavailableReason) {
+    if (!explicitChange && workerEdit && !focusedRouting && workerUnavailableReason) {
       spawnDefaultsInlineError(workerUnavailableReason);
       return;
     }
     const unavailableReason = _modelUnavailableReason(engine, model);
-    if (!focusedRouting && unavailableReason) {
+    if (!explicitChange && !workerEdit && !focusedRouting && unavailableReason) {
       spawnDefaultsInlineError(unavailableReason);
       return;
     }
@@ -87170,6 +87196,17 @@
       worker_reasoning_effort: spawnDefaultsState.worker_reasoning_effort || '',
       worker_auto_compact_k: Number.isFinite(spawnDefaultsState.worker_auto_compact_k) ? spawnDefaultsState.worker_auto_compact_k : 250,
     };
+    if (explicitChange) {
+      Object.keys(payload).forEach(key => delete payload[key]);
+      Object.assign(payload, explicitChange);
+    } else if (!focusedRouting) {
+      // Session saves never echo worker fields over a concurrent inheritance
+      // transition; the server materializes the effective worker tuple.
+      const sessionKeys = ['engine', 'models', 'reasoning_effort', 'auto_compact_k'];
+      const workerKeys = ['worker_engine', 'worker_model', 'worker_reasoning_effort', 'worker_auto_compact_k'];
+      (workerEdit ? sessionKeys : workerKeys).forEach(key => delete payload[key]);
+      if (workerEdit) payload.worker_inherit_session = false;
+    }
     try {
       const res = await fetch('/api/spawn-defaults', {
         method: 'POST',
@@ -87184,8 +87221,10 @@
       if (typeof updateInputBar === 'function') updateInputBar();
       renderSpawnDefaultsInline();
       if (rowEl && typeof showSettingsSavedPulse === 'function') showSettingsSavedPulse(rowEl);
+      return true;
     } catch (err) {
       spawnDefaultsInlineError((err && err.message) || 'Save failed.');
+      return false;
     }
   }
 
@@ -88212,9 +88251,24 @@
   // Each control below mutates spawnDefaultsState in place and immediately
   // persists it — there is no draft object or Save button now that the
   // fields live inline in Settings instead of behind a modal launcher.
+  if ($spawnDefaultsWorkerInherit) $spawnDefaultsWorkerInherit.addEventListener('change', async () => {
+    if (workerInheritanceSaving) return;
+    const next = $spawnDefaultsWorkerInherit.checked;
+    workerInheritanceError = "";
+    workerInheritanceSaving = true; renderWorkerInheritance();
+    try {
+      const saved = await persistSpawnDefaults(document.getElementById('spawnDefaultsWorkerInheritanceRow'), {worker_inherit_session: next});
+      if (!saved) workerInheritanceError = document.getElementById('spawnDefaultsError')?.textContent || 'Could not save worker defaults. Please try again.';
+    } finally {
+      workerInheritanceSaving = false; renderWorkerInheritance();
+      const status = document.getElementById('spawnDefaultsWorkerInheritanceStatus');
+      if (workerInheritanceError && status?.getClientRects().length) status.scrollIntoView({block: 'nearest'});
+    }
+  });
   if ($spawnDefaultsEngine) $spawnDefaultsEngine.addEventListener('change', () => {
     updateSpawnDefaultsModelFromControls();
     spawnDefaultsState.engine = normalizeSpawnDefaultEngine($spawnDefaultsEngine.value);
+    spawnDefaultsState.reasoning_effort = compatibleDefaultEffort(spawnDefaultsState.engine, spawnDefaultsState.reasoning_effort);
     renderSpawnDefaultsInline();
     persistSpawnDefaults($spawnDefaultsEngine.closest('.settings-row'));
   });
@@ -88229,7 +88283,8 @@
   if ($spawnDefaultsWorkerEngine) $spawnDefaultsWorkerEngine.addEventListener('change', () => {
     spawnDefaultsState.worker_engine = $spawnDefaultsWorkerEngine.value || '';
     spawnDefaultsState.worker_model = '';
-    renderSpawnDefaultsWorkerModelInline();
+    spawnDefaultsState.worker_reasoning_effort = compatibleDefaultEffort(spawnDefaultsState.worker_engine || 'claude', spawnDefaultsState.worker_reasoning_effort);
+    renderSpawnDefaultsInline();
     persistSpawnDefaults($spawnDefaultsWorkerEngine.closest('.settings-row'));
   });
   if ($spawnDefaultsWorkerModel) $spawnDefaultsWorkerModel.addEventListener('change', () => {
@@ -93177,7 +93232,7 @@
       + _engHubDefaultChip(row, 'default', 'Sessions', row.isDefault, SPAWN_DEFAULT_ENGINES.includes(e),
         'New sessions start on ' + row.meta.label, 'Make ' + row.meta.label + ' the default for new sessions')
       + _engHubDefaultChip(row, 'worker', 'Workers', row.isWorkerDefault, ENGINE_HUB_WORKER_ENGINES.includes(e),
-        'WatchTower workers run on ' + row.meta.label, 'Make ' + row.meta.label + ' the default for WatchTower workers')
+        'WatchTower workers run on ' + row.meta.label, (spawnDefaultsState.worker_inherit_session ? 'Stop following new sessions and use ' : 'Make ') + row.meta.label + ' the default for WatchTower workers')
       + '</span>'
       + '<button type="button" class="settings-toggle' + (row.disabled ? '' : ' is-on') + '" role="switch" aria-checked="' + !row.disabled + '"'
       + ' data-eng-enable="' + e + '"'
@@ -93294,7 +93349,7 @@
       extra.engine = to.engine;
       moved.push('New sessions now default to ' + to.meta.label);
     }
-    if (spawnDefaultsState.worker_engine === engine) {
+    if (!spawnDefaultsState.worker_inherit_session && spawnDefaultsState.worker_engine === engine) {
       const to = ready.find(r => ENGINE_HUB_WORKER_ENGINES.includes(r.engine) && !r.limited && r.engine !== extra.engine)
         || ready.find(r => ENGINE_HUB_WORKER_ENGINES.includes(r.engine));
       extra.worker_engine = to ? to.engine : '';
@@ -93415,6 +93470,7 @@
         else if (act === 'install' || act === 'login') _engHubTerminal(engine, act, row);
         else if (act === 'default') {
           spawnDefaultsState.engine = engine;
+          spawnDefaultsState.reasoning_effort = compatibleDefaultEffort(engine, spawnDefaultsState.reasoning_effort);
           renderSpawnDefaultsInline();
           persistSpawnDefaults(document.getElementById('spawnDefaultsEngine').closest('.settings-row'));
           renderEnginesHub();
@@ -93422,7 +93478,10 @@
           spawnDefaultsState.worker_engine = engine;
           spawnDefaultsState.worker_model = '';
           renderSpawnDefaultsInline();
-          persistSpawnDefaults(document.getElementById('spawnDefaultsWorkerEngine').closest('.settings-row'));
+          persistSpawnDefaults(document.getElementById('spawnDefaultsWorkerEngine').closest('.settings-row'), {
+            worker_inherit_session: false, worker_engine: engine, worker_model: '',
+            worker_reasoning_effort: compatibleDefaultEffort(engine, spawnDefaultsState.worker_reasoning_effort),
+          });
           renderEnginesHub();
         }
         return;

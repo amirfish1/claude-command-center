@@ -9870,6 +9870,29 @@ def _clean_disabled_engines(value, keep_enabled=()):
     return out
 
 
+# Serialize read/modify/write within this server; file replacement stays atomic
+# for external readers such as WatchTower (which reads the worker fields).
+_spawn_defaults_lock = threading.RLock()
+_WORKER_DEFAULT_FIELDS = (
+    "worker_engine", "worker_model", "worker_reasoning_effort", "worker_auto_compact_k",
+)
+
+
+def _materialize_worker_defaults(payload):
+    if payload.get("worker_inherit_session") is True:
+        engine = payload["engine"]
+        # Engine-only legacy callers may leave an effort from the old engine.
+        # Keep the linked session and worker tuple valid in the same write.
+        payload["reasoning_effort"] = _validate_reasoning_effort(payload.get("reasoning_effort"), engine)
+        payload.update(
+            worker_engine=engine,
+            worker_model=_spawn_default_model_for_engine(engine, payload),
+            worker_reasoning_effort=payload["reasoning_effort"],
+            worker_auto_compact_k=payload.get("auto_compact_k", 250),
+        )
+    return payload
+
+
 def _write_spawn_defaults_file(payload):
     COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix="spawn-defaults-", suffix=".tmp", dir=SPAWN_DEFAULTS_FILE.parent)
@@ -9883,7 +9906,12 @@ def _write_spawn_defaults_file(payload):
         tmp.unlink(missing_ok=True)
 
 
-def _load_spawn_defaults():
+def _load_spawn_defaults(*, persist=True):
+    with _spawn_defaults_lock:
+        return _load_spawn_defaults_unlocked(persist=persist)
+
+
+def _load_spawn_defaults_unlocked(*, persist=True):
     """Return the server-backed defaults used by new-session spawns.
 
     These defaults are intentionally server-side rather than localStorage so
@@ -9898,7 +9926,8 @@ def _load_spawn_defaults():
     try:
         raw = json.loads(SPAWN_DEFAULTS_FILE.read_text())
     except FileNotFoundError:
-        _write_spawn_defaults_file(defaults)
+        if persist:
+            _write_spawn_defaults_file(defaults)
         return defaults
     except (OSError, json.JSONDecodeError):
         return defaults
@@ -9963,29 +9992,69 @@ def _load_spawn_defaults():
             raw.get("disabled_engines"), (engine, worker_engine),
         ),
     }
-    if needs_migration:
+    # Metadata is additive. Missing flag keeps the exact legacy relationship.
+    for key in ("worker_inherit_session", "worker_overrides"):
+        if key in raw:
+            result[key] = raw[key]
+    if needs_migration and persist:
         # A new engine was added to _ORCHESTRATION_SPAWN_ENGINES after this
         # file was written. Backfill it once and persist so every future
         # read is complete without re-touching the literals in this function.
-        migrated = dict(result)
+        migrated = {**raw, **result}
+        if isinstance(raw_models, dict):
+            migrated["models"] = {**raw_models, **models}
+        for key in _WORKER_DEFAULT_FIELDS:
+            if key in raw:
+                migrated[key] = raw[key]
+        for key in ("worker_fallback", "model_profiles"):
+            if key in raw:
+                migrated[key] = raw[key]
         if "worker_fallback" not in raw:
             migrated.pop("worker_fallback", None)
         if "model_profiles" not in raw:
             migrated.pop("model_profiles", None)
-        _write_spawn_defaults_file(migrated)
+        _write_spawn_defaults_file(_materialize_worker_defaults(migrated))
+        if migrated.get("worker_inherit_session") is True:
+            # The first GET must describe the tuple this migration just wrote,
+            # rather than the stale worker fields parsed before materializing.
+            for key in (*_WORKER_DEFAULT_FIELDS, "reasoning_effort"):
+                result[key] = migrated[key]
     return result
 
 
 def _save_spawn_defaults(config):
+    with _spawn_defaults_lock:
+        return _save_spawn_defaults_unlocked(config)
+
+
+def _save_spawn_defaults_unlocked(config):
     if not isinstance(config, dict):
         return {"ok": False, "error": "expected JSON object"}
-    current = _load_spawn_defaults()
+    # Invalid submissions must not seed or migrate the file before validation.
+    current = _load_spawn_defaults(persist=False)
     try:
         stored_keys = json.loads(SPAWN_DEFAULTS_FILE.read_text())
     except (OSError, json.JSONDecodeError):
         stored_keys = {}
     if not isinstance(stored_keys, dict):
         stored_keys = {}
+    if "worker_overrides" in config and config["worker_overrides"] != stored_keys.get("worker_overrides"):
+        return {"ok": False, "error": "worker_overrides is read-only saved metadata"}
+    if "worker_inherit_session" in config and type(config["worker_inherit_session"]) is not bool:
+        return {"ok": False, "error": "worker_inherit_session must be a boolean"}
+    inherited = stored_keys.get("worker_inherit_session") is True
+    inherit_next = config.get("worker_inherit_session", inherited) is True
+    if inherit_next:
+        # Older callers may echo the effective fields. A distinct worker edit
+        # must explicitly leave inheritance, never silently break the link.
+        if any(key in config and config[key] != current.get(key) for key in _WORKER_DEFAULT_FIELDS):
+            return {"ok": False, "error": "Disable worker inheritance before changing independent worker defaults"}
+    restoring = inherited and not inherit_next
+    if restoring:
+        saved = stored_keys.get("worker_overrides")
+        if not isinstance(saved, dict) or any(key not in saved for key in _WORKER_DEFAULT_FIELDS):
+            return {"ok": False, "error": "Saved independent worker defaults are missing; inheritance was not changed"}
+        current.update({key: saved[key] for key in _WORKER_DEFAULT_FIELDS})
     if "engine" in config:
         engine = _normalize_orchestration_spawn_engine(config.get("engine"))
         if engine not in _ORCHESTRATION_SPAWN_ENGINES:
@@ -10087,7 +10156,7 @@ def _save_spawn_defaults(config):
         config.get("disabled_engines")
         if "disabled_engines" in config
         else current.get("disabled_engines"),
-        (current["engine"], current.get("worker_engine", "")),
+        (current["engine"], str(current.get("worker_engine") or "")),
     )
 
     payload = {
@@ -10106,9 +10175,33 @@ def _save_spawn_defaults(config):
             for engine in _ORCHESTRATION_SPAWN_ENGINES
         },
     }
+    # Keep unrecognized policy fields and untouched routing documents verbatim.
+    # This server may be older than another writer of the shared defaults file.
+    payload = {**stored_keys, **payload}
+    if isinstance(stored_keys.get("models"), dict):
+        payload["models"] = {**stored_keys["models"], **payload["models"]}
     for routing_key in ("worker_fallback", "model_profiles"):
-        if routing_key not in config and routing_key not in stored_keys:
-            payload.pop(routing_key, None)
+        if routing_key not in config:
+            if routing_key in stored_keys:
+                payload[routing_key] = stored_keys[routing_key]
+            else:
+                payload.pop(routing_key, None)
+    for key in _WORKER_DEFAULT_FIELDS:
+        if key not in config:
+            if restoring:
+                payload[key] = stored_keys["worker_overrides"][key]
+            elif key in stored_keys:
+                payload[key] = stored_keys[key]
+    if "worker_inherit_session" in config:
+        payload["worker_inherit_session"] = inherit_next
+    if inherit_next and not inherited:
+        saved = dict(stored_keys.get("worker_overrides") or {}) if isinstance(stored_keys.get("worker_overrides"), dict) else {}
+        saved.update({key: stored_keys.get(key, current.get(key)) for key in _WORKER_DEFAULT_FIELDS})
+        payload["worker_overrides"] = saved
+    _materialize_worker_defaults(payload)
+    payload["disabled_engines"] = _clean_disabled_engines(
+        payload.get("disabled_engines"), (payload["engine"], str(payload.get("worker_engine") or "")),
+    )
     _write_spawn_defaults_file(payload)
     return {"ok": True, **payload}
 
