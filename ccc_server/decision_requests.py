@@ -24,12 +24,18 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
         binding = json.loads(metadata.get('source_scope:watchtower-block', 'null'))
         store_id = binding['scope']['store_id'] if binding else None
         answers = {}
+        consumed = {}
+        has_session_events = connection.execute("SELECT 1 FROM sqlite_master WHERE name='session_question_events'").fetchone()
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE name='session_answer_receipts'").fetchone():
+            consumed = {r['answer_id']: bool(r['consumed']) for r in connection.execute('SELECT answer_id,consumed FROM session_answer_receipts')}
         if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='answers'").fetchone():
             for saved_answer in connection.execute('SELECT * FROM answers ORDER BY rowid'):
                 frozen = json.loads(saved_answer['payload'])['answer']
                 answers[saved_answer['request_id']] = dict(answer_id=saved_answer['answer_id'],
                     state=saved_answer['state'], text=frozen['text'],
                     expected_revision=frozen['expected_revision'])
+                if saved_answer['answer_id'] in consumed:
+                    answers[saved_answer['request_id']]['session_consumed'] = consumed[saved_answer['answer_id']]
         result = []
         for saved in connection.execute('SELECT * FROM requests ORDER BY adapter,origin_id,generation'):
             record = DecisionRegistry._record(saved)
@@ -52,17 +58,22 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
             needs_answer = (question and record['status'] == 'open'
                             and (record['answer_state'] == 'none' or record['delivery_state'] == 'rejected'))
             delivery_owner = metadata.get('delivery_owner:' + record['request_id'])
-            can_answer = bool(answers_enabled and source_current and needs_answer
-                              and record['adapter'] == 'watchtower-block'
+            session_source = record['adapter'] == 'session-question'
+            promoted = bool(session_source and has_session_events and connection.execute(
+                "SELECT 1 FROM session_question_events WHERE request_id=? AND operation='promote'",
+                (record['request_id'],)).fetchone())
+            current_source = session_source or source_current
+            can_answer = bool(answers_enabled and current_source and needs_answer
+                              and (record['adapter'] == 'watchtower-block' or promoted)
                               and delivery_owner in (None, 'ccc-outbox'))
-            if record['adapter'] == 'session-question':
-                unavailable_reason = 'Reply in the originating session.'
-            elif not answers_enabled:
+            if not answers_enabled:
                 unavailable_reason = 'Source answers are not enabled in this phase.'
             elif delivery_owner == 'routine':
                 unavailable_reason = 'This answer is handled by its reporting routine.'
-            elif not source_current:
+            elif not current_source:
                 unavailable_reason = 'Check source coverage before saving an answer.'
+            elif session_source and not promoted:
+                unavailable_reason = 'This session question has no explicit promotion event.'
             elif not question:
                 unavailable_reason = 'This approval has no answer adapter.'
             else:
@@ -75,6 +86,7 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
                 episode_provenance=content.get('episode_provenance'),
                 answer_state=record['answer_state'], delivery_state=record['delivery_state'],
                 delivery_owner=delivery_owner, answer=answers.get(record['request_id']),
+                source_current=bool(current_source), reply_supported=bool(not session_source or promoted),
                 needs_answer=needs_answer, observed_at=observed_at, can_answer=can_answer,
                 answer_unavailable_reason=unavailable_reason))
         return result

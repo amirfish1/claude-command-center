@@ -63,7 +63,22 @@ class AnswerOutbox:
                 raise AnswerConflict('Request not found')
             content = json.loads(request['content'])
             snapshot = content.get('source_snapshot')
-            if (request['adapter'] != 'watchtower-block'
+            session_source = request['adapter'] == 'session-question'
+            if session_source:
+                try:
+                    valid_session = all(str(uuid.UUID(content[key])) == content[key]
+                                        for key in ('session_id', 'question_id', 'generation'))
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    valid_session = False
+                promoted = db.execute("SELECT 1 FROM sqlite_master WHERE name='session_question_events'").fetchone()
+                if (not valid_session or content.get('visibility') != 'global'
+                        or content.get('kind') != 'question' or content.get('wait_kind') != 'owner'
+                        or request['origin_id'] != content['session_id'] + ':' + content['question_id']
+                        or request['generation'] != content['generation'] or not promoted
+                        or not db.execute("SELECT 1 FROM session_question_events WHERE request_id=? AND operation='promote'",
+                                          (request_id,)).fetchone()):
+                    raise AnswerConflict('Session question has no explicit promotion contract')
+            elif (request['adapter'] != 'watchtower-block'
                     or content.get('visibility') != 'global'
                     or content.get('kind') != 'question'
                     or content.get('wait_kind') != 'owner'
@@ -76,7 +91,7 @@ class AnswerOutbox:
                     or (snapshot['wait'] is not None and not isinstance(snapshot['wait'], dict))):
                 raise AnswerConflict('Request has no supported source delivery contract')
             binding = db.execute("SELECT value FROM metadata WHERE key='source_scope:watchtower-block'").fetchone()
-            if (not binding or json.loads(binding[0])['scope']['store_id'] != snapshot.get('store_id')):
+            if not session_source and (not binding or json.loads(binding[0])['scope']['store_id'] != snapshot.get('store_id')):
                 raise AnswerConflict('Request is not bound to the authoritative source store')
             if (request['revision'] != expected_revision or request['status'] != 'open'
                     or (request['answer_state'] != 'none' and request['delivery_state'] != 'rejected')):
@@ -109,8 +124,9 @@ class AnswerOutbox:
                                       'reason': 'request_changed_before_delivery'})
                 db.execute("UPDATE answers SET state='rejected', receipt=? WHERE answer_id=?",
                            (receipt, answer_id))
-                db.execute("UPDATE requests SET delivery_state='rejected' WHERE request_id=?",
-                           (pending['request_id'],))
+                db.execute("UPDATE requests SET delivery_state='rejected' WHERE request_id=? AND revision=? "
+                           "AND status='open' AND delivery_state IN ('pending','sending','unknown')",
+                           (pending['request_id'], expected))
                 return None
             token = str(uuid.uuid4())
             changed = db.execute("UPDATE answers SET state='sending', attempt=? "
@@ -128,9 +144,12 @@ class AnswerOutbox:
                                  "AND attempt=? AND state IN ('sending','unknown')",
                                  (state, json.dumps(receipt, sort_keys=True), answer_id, attempt))
             if changed.rowcount:
+                expected = json.loads(db.execute('SELECT payload FROM answers WHERE answer_id=?',
+                                                 (answer_id,)).fetchone()[0])['answer']['expected_revision']
                 db.execute('UPDATE requests SET delivery_state=? WHERE request_id='
-                           '(SELECT request_id FROM answers WHERE answer_id=?)',
-                           (state, answer_id))
+                           '(SELECT request_id FROM answers WHERE answer_id=?) AND revision=? '
+                           "AND status='open' AND delivery_state IN ('pending','sending','unknown')",
+                           (state, answer_id, expected))
         return self.get(answer_id)
 
     def dispatch(self, answer_id, adapter):

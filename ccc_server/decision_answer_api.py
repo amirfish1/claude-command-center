@@ -131,14 +131,19 @@ class DecisionAnswerAPI:
                 if old['payload']['answer'] != dict(data_without_key(data), actor=SERVER_ACTOR):
                     raise AnswerAPIError(409, 'answer_conflict')
                 return _response(old, replay=True)
-            if self.export_source is None:
+            with self.registry._transaction() as db:
+                request = db.execute('SELECT adapter FROM requests WHERE request_id=?',
+                                     (data['request_id'],)).fetchone()
+            session_source = request is not None and request['adapter'] == 'session-question'
+            if not session_source and self.export_source is None:
                 raise AnswerAPIError(503, 'source_unavailable')
             try:
                 # A failed refresh is never substituted with an empty export
                 # or the last successful registry projection.
-                refreshed = apply_owner_export(self.export_source(), registry=self.registry, cards={})
-                if refreshed.get('ok') is not True:
-                    raise ValueError('Incomplete source coverage')
+                if not session_source:
+                    refreshed = apply_owner_export(self.export_source(), registry=self.registry, cards={})
+                    if refreshed.get('ok') is not True:
+                        raise ValueError('Incomplete source coverage')
             except sqlite3.Error:
                 raise
             except Exception as error:

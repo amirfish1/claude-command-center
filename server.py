@@ -30739,6 +30739,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server.decision_requests import requests_payload
             result = requests_payload()
             self.send_json(result, 200 if result.get('ok') else 503)
+        elif path == "/api/decision-inbox/legacy-reconciliation":
+            from ccc_server.decision_legacy_http import reconciliation_payload
+            self.send_json(reconciliation_payload())
         elif path == "/api/decision-inbox/session-questions":
             from ccc_server.decision_sessions import session_payload
             qs = urllib.parse.parse_qs(parsed.query)

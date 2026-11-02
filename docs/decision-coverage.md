@@ -66,8 +66,10 @@ share one view. Its Owner questions table reads
 `GET /api/decision-inbox/requests`, which refreshes authoritative local coverage
 and reads the saved registry in a read-only transaction. Ordinary session
 questions remain local; only explicit promotion events enter this table.
-Legacy reports retain their existing references and actions in a separate
-Reports and monitoring section. A matching ticket tag never merges identities.
+Legacy reports retain their existing references in a separate Reports and
+monitoring section. With canonical answers enabled, ticket-linked and routine
+reports cannot execute old choices: a read-only reconciliation links to current
+questions requiring a fresh answer. A matching tag never merges identities.
 The main tab stays within the ordinary sidebar; the conversation pane remains
 visible. Queue questions include ticket chips opening the existing ticket
 detail view, with `/?ticket=EXAMPLE-1` as a durable navigation link.
@@ -79,8 +81,10 @@ source episodes appear as `coverage_issues` without manufactured request IDs;
 they prevent a verified current count. The view does not initialize source
 identities or answer questions while checking coverage. Source answers remain
 disabled by default; the [opt-in controls](decision-answers.md#dashboard-controls)
-use the separate answer API. Promoted session questions link back to their
-conversation.
+use the separate answer API. Explicitly promoted session questions can receive
+a durable inbox reply through that same API and link back to their conversation.
+The source inbox receipt and the session's explicit consumption are distinct;
+neither establishes work completion.
 
 An explicitly initialized legacy owner wait carries `episode_provenance`.
 Its timestamp is the actual initialization time, labeled **Episode initialized

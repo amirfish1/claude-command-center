@@ -31,6 +31,8 @@ command, without opening the dashboard:
     ccc shipped "dark mode"                     # did we already build this?
     ccc history src/app.py                      # commits + sessions that touched a file
     ccc decisions "which queue engine"          # sessions that recorded a decision
+    ccc question inbox --session-id <UUID>       # explicit questions + accepted answers
+    ccc question event --json-file event.json    # exact lifecycle event, no inferred enrollment
     ccc brief <session>                         # where a session left off + how to resume it
     ccc where <session|query>                   # plain-language status + human checklist + continue
 
@@ -80,12 +82,13 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 
 PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
 SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
-               "rebind-report-to", "recall", "shipped", "history", "decisions", "brief", "where",
+               "rebind-report-to", "recall", "shipped", "history", "decisions", "question", "brief", "where",
                "brain", "consent", "jobs", "vault", "secret")
 
 RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
@@ -1087,6 +1090,93 @@ def cmd_history(args):
             print(f"{date:<12} {op:<7} {e.get('session_id') or '?':<38} {why}")
     for line in _node_status_lines(payload):
         print(line)
+    return 0
+
+
+def _question_uuid(value):
+    try:
+        if str(uuid.UUID(value)) == value:
+            return value
+    except (ValueError, TypeError, AttributeError):
+        pass
+    raise argparse.ArgumentTypeError("expected a canonical UUID")
+
+
+def _question_alias(value):
+    if not re.fullmatch(r"\[Q\d+:[a-z0-9-]+\]", value):
+        raise argparse.ArgumentTypeError("expected a full question tag, e.g. [Q1:choice]")
+    return value
+
+
+def _question_revision(value):
+    try:
+        revision = int(value)
+        if revision > 0:
+            return revision
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError("revision must be a positive integer")
+
+
+def _question_read(filename):
+    if filename == "-":
+        binary = getattr(sys.stdin, "buffer", None)
+        return binary.read().decode("utf-8") if binary is not None else sys.stdin.read()
+    # Universal-newline conversion would change the caller's question body.
+    with open(filename, encoding="utf-8", newline="") as stream:
+        return stream.read()
+
+
+def cmd_question(args):
+    """Explicit lifecycle only: polling never sends, promotes or consumes."""
+    def fail(message, **details):
+        print(json.dumps(dict(ok=False, error=message, **details)))
+        return 1
+
+    base = _resolve_server(args.server)
+    if not base:
+        return fail("No CCC server found; use --server or CCC_SERVER")
+    try:
+        operation = args.question_command
+        if operation == "inbox":
+            query = urllib.parse.urlencode({"session_id": args.session_id})
+            result = _get_json(base, "/api/decision-inbox/session-questions?" + query)
+            event = None
+            status = 200
+        else:
+            if operation == "event":
+                event = json.loads(_question_read(args.json_file))
+                if not isinstance(event, dict):
+                    return fail("Event JSON must be an object")
+            else:
+                event = dict(event_id=str(uuid.uuid4()), operation=operation,
+                             session_id=args.session_id)
+                if operation == "create":
+                    event.update(question_id=str(uuid.uuid4()), generation=str(uuid.uuid4()),
+                                 title=args.title, body=_question_read(args.body_file),
+                                 aliases=args.alias or [])
+                elif operation == "promote":
+                    event.update(request_id=args.request_id, expected_revision=args.revision,
+                                 reason=args.reason)
+                elif operation == "consume":
+                    event.update(request_id=args.request_id, answer_id=args.answer_id,
+                                 question_id=args.question_id, generation=args.generation,
+                                 source_message_id=args.source_message_id)
+            status, result = _post_json(base, "/api/decision-inbox/session-events", event)
+        if not 200 <= status < 300:
+            return fail("Session question request failed", http_status=status)
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            return fail("Invalid or unsuccessful session question response")
+    except urllib.error.HTTPError as error:
+        return fail("Session question request failed", http_status=error.code)
+    except (OSError, ValueError, UnicodeError):
+        # Neither local filenames/JSON parse errors nor server error bodies are
+        # safe to echo: either can contain private question or answer text.
+        return fail("Unable to read question input or contact CCC with valid JSON")
+    output = dict(result)
+    if event is not None:
+        output["event_id"] = event.get("event_id")
+    print(json.dumps(output, ensure_ascii=False))
     return 0
 
 
@@ -2760,6 +2850,32 @@ def main(argv=None):
     p.add_argument("--scope", choices=("all", "local"), default="all",
                    help="all (default): also ask paired CCC machines; local: this machine only")
     p.set_defaults(func=cmd_history)
+
+    p = sub.add_parser("question", help="explicit session question lifecycle (JSON output)")
+    qsub = p.add_subparsers(dest="question_command", required=True)
+    qp = qsub.add_parser("event", help="post exact caller JSON; '-' reads stdin")
+    qp.add_argument("--json-file", required=True, metavar="PATH")
+    qp.set_defaults(func=cmd_question)
+    qp = qsub.add_parser("inbox", help="read questions and accepted answers without consuming")
+    qp.add_argument("--session-id", required=True, type=_question_uuid)
+    qp.set_defaults(func=cmd_question)
+    qp = qsub.add_parser("create", help="register a local question; does not promote")
+    qp.add_argument("--session-id", required=True, type=_question_uuid)
+    qp.add_argument("--title", required=True)
+    qp.add_argument("--body-file", required=True, metavar="PATH", help="UTF-8 body, or '-' for stdin")
+    qp.add_argument("--alias", action="append", type=_question_alias, metavar="TAG")
+    qp.set_defaults(func=cmd_question)
+    qp = qsub.add_parser("promote", help="explicitly promote a local question at its current revision")
+    qp.add_argument("--session-id", required=True, type=_question_uuid)
+    qp.add_argument("--request-id", required=True, type=_question_uuid)
+    qp.add_argument("--revision", required=True, type=_question_revision)
+    qp.add_argument("--reason", required=True)
+    qp.set_defaults(func=cmd_question)
+    qp = qsub.add_parser("consume", help="acknowledge an accepted answer after reading it")
+    for field in ("session-id", "answer-id", "request-id", "question-id", "generation"):
+        qp.add_argument("--" + field, required=True, type=_question_uuid)
+    qp.add_argument("--source-message-id", required=True)
+    qp.set_defaults(func=cmd_question)
 
     p = sub.add_parser(
         "decisions",

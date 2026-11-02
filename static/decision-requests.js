@@ -43,6 +43,9 @@
   function absorb(row) {
     const entry = submissions.get(row.request_id), saved = row.answer;
     if (!entry || !saved || active.has(row.request_id)) return;
+    if (entry.saved?.answer_id === saved.answer_id && entry.saved.state === 'accepted' && saved.state === 'accepted' && saved.session_consumed === true) {
+      entry.saved.session_consumed = true; persist(row.request_id, entry);
+    }
     // A GET started before an explicit action may finish after its receipt.
     // Keep that receipt terminal and never substitute another answer identity.
     if (entry.saved && (entry.saved.answer_id !== saved.answer_id
@@ -63,9 +66,11 @@
     const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
     return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
   }
+  function supported(row) { return row?.adapter === 'watchtower-block' || (row?.adapter === 'session-question' && row.reply_supported === true); }
+  function currentSource(row) { return row?.source_current === true || sourceCurrent; }
   function startNewAnswer(row) {
     const id = row.request_id, saved = answerFor(row);
-    if (!answersEnabled || !sourceCurrent || row.can_answer !== true || active.has(id) || saved?.state !== 'rejected') return;
+    if (!answersEnabled || !currentSource(row) || row.can_answer !== true || active.has(id) || saved?.state !== 'rejected') return;
     const previous = rejectedHistory.get(id)?.answers || [];
     const history = {answers:[...previous, saved], replaces_answer_id:saved.answer_id};
     try {
@@ -90,7 +95,7 @@
     }
     const notice = notices.get(id);
     if (notice) { const line = text('div', notice, 'request-meta request-error'); line.setAttribute('role', 'status'); cell.append(line); }
-    if (!answersEnabled || row.adapter !== 'watchtower-block' || row.kind !== 'question' || row.delivery_owner === 'routine') return;
+    if (!answersEnabled || !supported(row) || row.kind !== 'question' || row.delivery_owner === 'routine') return;
     function button(label, action) {
       const b = text('button', label); b.type = 'button'; b.disabled = active.has(id);
       b.onclick = action; cell.append(b);
@@ -100,12 +105,12 @@
       return;
     }
     if (saved) {
-      if (saved.state === 'rejected' && row.can_answer === true && sourceCurrent) button('Start new answer', () => startNewAnswer(row));
+      if (saved.state === 'rejected' && row.can_answer === true && currentSource(row)) button('Start new answer', () => startNewAnswer(row));
       if (saved.state === 'pending') button('Send saved answer', () => mutate(row, 'send'));
       if (saved.state === 'sending' || saved.state === 'unknown') button('Check delivery', () => mutate(row, 'reconcile'));
       return;
     }
-    if (row.can_answer !== true || !sourceCurrent) return;
+    if (row.can_answer !== true || !currentSource(row)) return;
     const form = document.createElement('form'); form.className = 'request-answer';
     const label = text('label', 'Your answer');
     const input = document.createElement('textarea'); input.rows = 3; input.maxLength = 24000;
@@ -126,7 +131,7 @@
       const review = text('button', 'Use draft for current question'); review.type = 'button'; review.disabled = active.has(id);
       review.onclick = () => {
         const current = rows.find(candidate => candidate.request_id === id);
-        if (!answersEnabled || !sourceCurrent || current?.can_answer !== true || active.has(id) || answerFor(current)) return;
+        if (!answersEnabled || !currentSource(current) || current?.can_answer !== true || active.has(id) || answerFor(current)) return;
         draftRevisions.set(id, current.revision); render();
       };
       form.append(review);
@@ -141,7 +146,7 @@
     if (!answersEnabled || active.has(id)) return;
     let entry = submissions.get(id);
     if (action === 'record' && !entry) {
-      if (!sourceCurrent || row.can_answer !== true || !storageReady) return;
+      if (!currentSource(row) || row.can_answer !== true || !storageReady) return;
       const draft = drafts.get(id) || '';
       const draftRevision = draftRevisions.get(id);
       if (!draft.trim() || draftRevision !== row.revision) return;
@@ -239,7 +244,7 @@
       identity.href = '#request-' + row.request_id; identity.title = row.request_id;
       tr.id = 'request-' + row.request_id; question.append(identity);
       const saved = answerFor(row);
-      state.append(text('span', saved ? ({pending:'Answer saved; delivery pending', sending:'Checking answer delivery', unknown:'Answer delivery unknown', accepted:'Answer accepted by source', rejected:'Answer rejected by source'})[saved.state] : stateLabel(row), 'request-state'));
+      state.append(text('span', saved ? ({pending:'Answer saved; delivery pending', sending:'Checking answer delivery', unknown:'Answer delivery unknown', accepted:row.adapter === 'session-question' ? (saved.session_consumed ? 'Answer received by session' : 'Answer saved for session; awaiting receipt') : 'Answer accepted by source', rejected:'Answer rejected by source'})[saved.state] : stateLabel(row), 'request-state'));
       state.append(text('span', row.adapter === 'session-question' ? 'Promoted from a session' : 'Local queue owner wait', 'request-meta'));
       const date = new Date(row.observed_at);
       if (Number.isFinite(date.getTime())) {
@@ -292,6 +297,7 @@
       if (window.parent !== window) window.parent.postMessage({type:'ccc:decision-count', count:data.needs_answer_count}, location.origin);
     } catch (_) {
       sourceCurrent = false;
+      rows = rows.map(row => ({...row, source_current:false, can_answer:false}));
       $('requestCount').textContent = '(unavailable)';
       $('requestsStatus').textContent = 'Cannot refresh owner questions. Any displayed rows may be out of date. Check the source again.';
       $('requestsStatus').classList.add('bad');

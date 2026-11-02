@@ -1,0 +1,3 @@
+- Add source-bound replies for explicitly promoted session questions with durable inboxes, explicit session acknowledgment and at-most-once advisory wakes. Preserve local questions and winning local resolutions.
+- Reconcile historical ticket-linked reports read-only with current source questions; require a fresh canonical answer instead of executing old choices when source answering is enabled.
+- Add `ccc question` commands for explicit creation, promotion, inbox reads and acknowledgment.

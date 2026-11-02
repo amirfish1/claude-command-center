@@ -182,7 +182,7 @@ def test_session_read_only_projection_is_explicit_scoped_and_reports_corrupt_sto
     recorded, _ = event_payload(event, state_root=tmp_path)
     event_payload(dict(event, event_id=uid(), session_id=uid()), state_root=tmp_path)
     value, status = session_payload(session, state_root=tmp_path)
-    assert status == 200 and value['remote_answers_supported'] is False
+    assert status == 200 and value['remote_answers_supported'] is True
     assert value['requests'] == [recorded['request']]
     assert session_payload('invalid', state_root=tmp_path)[1] == 400
     (tmp_path / 'decision-inbox' / 'requests.sqlite3').write_bytes(b'not sqlite')

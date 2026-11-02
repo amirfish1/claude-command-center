@@ -76,7 +76,7 @@ def test_answer_affordance_requires_exact_opt_in_and_current_source(tmp_path, mo
         assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='answers'").fetchone()
 
 
-def test_routine_owned_and_promoted_session_questions_stay_read_only(tmp_path):
+def test_routine_owner_is_fenced_and_explicit_session_promotion_supports_replies(tmp_path):
     registry = setup(tmp_path)
     source = read_requests(registry.db_path)[0]
     with registry._transaction() as db:
@@ -88,9 +88,11 @@ def test_routine_owned_and_promoted_session_questions_stay_read_only(tmp_path):
     sessions.apply(dict(event_id=str(uuid.uuid4()), session_id=session_id, operation='promote',
         request_id=local['request_id'], expected_revision=local['revision'], reason='Awaiting owner'))
     rows = read_requests(registry.db_path, answers_enabled=True, source_current=True)
-    assert len(rows) == 2 and all(not r['can_answer'] for r in rows)
+    assert len(rows) == 2
+    assert next(r for r in rows if r['adapter'] == 'session-question')['can_answer']
+    assert not next(r for r in rows if r['adapter'] == 'watchtower-block')['can_answer']
     assert 'reporting routine' in next(r for r in rows if r['adapter'] == 'watchtower-block')['answer_unavailable_reason']
-    assert 'originating session' in next(r for r in rows if r['adapter'] == 'session-question')['answer_unavailable_reason']
+    assert next(r for r in rows if r['adapter'] == 'session-question')['answer_unavailable_reason'] == ''
 
 
 def test_saved_answer_is_visible_after_reload_without_delivery_or_writes(tmp_path):

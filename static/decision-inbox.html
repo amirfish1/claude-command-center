@@ -218,6 +218,7 @@
 (function () {
   "use strict";
   var state = { cards: [], governor: [], queueRepos: {}, busy: {}, page: 0, expanded: new Set() };
+  var legacyById = {};
   var $ = function (id) { return document.getElementById(id); };
 
   function esc(s) {
@@ -303,6 +304,8 @@
 
   function renderCard(c) {
     var closed = c.status !== "open";
+    var historical = c.canonical_required === true;
+    var annotation = legacyById[c.id];
     var opts = (c.options || []).map(function (o, i) {
       var decidedHere = c.decided && c.decided.option === i;
       return '<div class="opt' + (o.recommended ? " rec" : "") + '">' +
@@ -310,7 +313,7 @@
         '<span class="lbl">' + esc(o.label) + "</span>" +
         '<span class="det">' + esc(o.detail || "") + "</span>" +
         (o.cost ? '<span class="cost">Cost: ' + esc(o.cost) + "</span>" : "") +
-        (closed ? (decidedHere ? '<span class="result">Chosen ' + ago(c.decided.at) + "</span>" : "") :
+        (closed || historical ? (decidedHere ? '<span class="result">Chosen ' + ago(c.decided.at) + "</span>" : "") :
           '<button class="' + (o.recommended ? "primary" : "") + (o.action && o.action.kind === "kill" ? " danger" : "") +
           '" data-decide="' + esc(c.id) + '" data-idx="' + i + '">' + esc(actionVerb(o.action)) + "</button>") +
         "</div>";
@@ -333,7 +336,13 @@
       '<span class="tag ' + esc(c.kind) + '">' + esc(c.kind) + "</span>" +
       (closed ? '<span class="tag">' + esc(c.status) + "</span>" : "") + "</div>" +
       '<div class="timestamps"><span>Created ' + esc(exact(c.created_at)) + '</span><span>Updated ' + esc(exact(c.updated_at)) + '</span>' + (c.last_seen_at ? '<span>Last reported ' + esc(exact(c.last_seen_at)) + '</span>' : '') + '</div>' + originExplanation(c) + '<div class="ctx">' + esc(c.context || "") + "</div>" +
-      '<div class="opts">' + opts + "</div>" +
+      (historical ? '<p class="ctx">Retained report — old choices are read-only. ' +
+        (annotation && annotation.classification === 'no-longer-waiting' ? 'No current owner question on this ticket.' :
+         annotation && annotation.current_questions.length ? 'Review and answer the current question below; no earlier answer is prefilled.' :
+         'Current question coverage is unavailable. Check source before answering.') + '</p>' +
+        (annotation ? annotation.current_questions.map(function(q) {
+          return '<p><a href="#request-' + esc(q.request_id) + '">Open current question ' + esc(q.origin_id) + '</a></p>';
+        }).join('') : '') : '') + '<div class="opts">' + opts + "</div>" +
       '<div class="foot"><span>' + esc(c.source_id) + " · " + ago(c.created_at) + " · " + analyst + "</span>" +
       (srcLine ? '<details><summary>source</summary><pre>' + esc(srcLine) + "</pre></details>" : "") +
       '<span class="grow"></span>' +
@@ -460,6 +469,7 @@
   $('sweepRetry').onclick = loadSweeps;
   async function load() {
     loadSweeps();
+    loadReconciliation();
     try {
       var r = await fetch("/api/decision-inbox", { cache: "no-store" });
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -469,6 +479,16 @@
       $("freshness").textContent = "Cannot refresh the inbox. Displayed items may be out of date. Retrying automatically.";
       $("freshness").classList.add("bad");
     }
+  }
+  async function loadReconciliation() {
+    try {
+      var r = await fetch('/api/decision-inbox/legacy-reconciliation', {cache:'no-store'});
+      if (!r.ok) throw new Error('Reconciliation unavailable');
+      var result = await r.json();
+      legacyById = {};
+      (result.cards || []).forEach(function(row) { legacyById[row.card_id] = row; });
+      browse();
+    } catch (_) { legacyById = {}; browse(); }
   }
   $("timezone").textContent = "Pacific time (PST/PDT)";
   ["search", "statusFilter", "sourceFilter", "sort"].forEach(function(id) { $(id).addEventListener(id === "search" ? "input" : "change", function() { state.page = 0; browse(); }); });

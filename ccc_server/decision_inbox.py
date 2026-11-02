@@ -1228,6 +1228,10 @@ def decision_inbox_api_payload(*, cards=None, cfg=None, review_cards=None):
     if review_cards is None:
         review_cards = _wt_review.live_review_cards()
     ordered = list(review_cards) + ordered
+    from ccc_server.decision_legacy_http import canonical_mode, legacy_requires_canonical
+    if canonical_mode(_state_root()):
+        ordered = [dict(card, canonical_required=not card.get('live') and legacy_requires_canonical(card))
+                   for card in ordered]
     with _di_lock:
         findings = list(_last_findings["governor"])
         findings_at = _last_findings["at"]
@@ -1334,6 +1338,10 @@ def decision_inbox_decide(card_id, option_index, *, cards=None, now=None, persis
     card = cards.get(str(card_id))
     if not card:
         return {"ok": False, "error": "unknown card"}
+    from ccc_server.decision_legacy_http import canonical_mode, legacy_requires_canonical
+    if canonical_mode(_state_root()) and legacy_requires_canonical(card):
+        return {"ok": False, "code": "canonical_question_required",
+                "error": "This retained report is history. Open the current owner question and answer it afresh; old choices cannot be replayed."}
     source_request = (card.get('source') or {}).get('source_request')
     if isinstance(source_request, dict) and source_request.get('delivery_owner') == 'ccc-outbox':
         return {"ok": False, "error": "This source request requires the canonical answer workflow; legacy card actions are disabled."}

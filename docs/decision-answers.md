@@ -43,9 +43,10 @@ source and delivery prerequisites above first.
 The request response includes `answers_enabled`, per-row `can_answer`, and a
 read-only `answer` summary (`answer_id`, `state`, exact `text`, and
 `expected_revision`). Reading a summary never initializes an outbox or sends
-an answer. New answer forms require complete current source coverage, a
-supported owner question and no routine delivery owner. Local or promoted
-session questions and approvals retain their existing navigation.
+an answer. New answer forms require a current source, a supported owner question and no
+routine delivery owner. Queue questions require complete authoritative queue
+coverage; explicitly promoted session questions are checked against the local
+registry transaction. Ordinary local questions and approvals remain read-only.
 
 **Save answer** records the exact text without delivery. **Send saved answer**
 is a separate explicit action; **Check delivery** only reconciles an uncertain
@@ -124,14 +125,14 @@ registry revision changes, or source unavailability. Different text, request
 ID, revision, or actor under that key conflicts. Replay never dispatches,
 including pending, sending, unknown, or accepted answers.
 
-A new key requires a successful complete current full export. The existing
-source validator and registry reconcile that export; failed or incomplete
-refreshes never become empty/current source observations. The existing outbox
-then atomically checks the current expected revision, authoritative store UUID,
-source contract and delivery owner before recording. Only global owner
-questions with an exact conditional WatchTower block snapshot are supported.
-Routine-owned requests reject; local or promoted session questions, review,
-rationale and legacy cards have no fallback delivery path.
+A new WatchTower answer requires a successful complete current full export.
+The source validator and registry reconcile that export; failed or incomplete
+refreshes never become empty/current source observations. The outbox atomically
+checks revision, authoritative store UUID, source contract and delivery owner.
+For session questions, it instead checks the explicit promotion audit and exact
+request/session/question/generation binding in the same registry transaction.
+Routine-owned requests reject; ordinary local questions, reviews, rationale and
+legacy cards have no fallback delivery path.
 
 `ControllerOutbox.get_by_key` is a small read-only extension of `AnswerOutbox`
 using its existing registry transaction and row decoder. It is needed because
@@ -164,5 +165,36 @@ neither send nor reconcile can regress or replay acceptance.
 Source submission failures and ambiguous receipts use the existing outbox
 `unknown` state rather than claiming rejection or acceptance. Failed receipt
 lookup preserves the existing state. Rejection reasons remain in the durable
-receipt. No scans, worker starts, child sessions or legacy answer commands are
-part of this contract.
+receipt. No scans, child sessions or legacy answer commands are part of this
+contract. An explicitly promoted session answer may issue one advisory wake to
+the exact originating session, as described below.
+
+## Promoted session answers
+
+[Session question commands](session-questions.md) keep creation local until an
+explicit promotion. A reply freezes the complete source question and uses the
+same Save, Send and Check operations as queue replies. A concurrent local edit,
+withdrawal or local answer can win before source acceptance; stale remote sends
+are rejected without overwriting that local resolution.
+
+Source acceptance atomically records the reply in the originating session's
+durable inbox. The UI says **saved for session; awaiting receipt** until that
+session explicitly acknowledges the exact accepted answer. Receipt is separate
+from completion of the requested work. The inbox remains readable after restart
+and after consumption. Polling never consumes an answer.
+
+An optional IDs-only wake targets the original session with same-session,
+no-queue routing. It cannot start a substitute session. The notification journal
+persists **uncertain** before calling transport; uncertain and notified attempts
+never reroute or retry automatically. Unsupported engines or transport failures
+leave the durable inbox available for polling on resume. Send replay and receipt
+lookup never wake again. A transport success is not a session receipt.
+
+The recipient reads the actual answer through `ccc question inbox`, verifies the
+full binding, and explicitly uses `ccc question consume` with a real transcript
+message ID. The UI then says **received by session**. Downstream actions still
+require their own durable deduplication keyed by answer UUID.
+
+An installation with persisted answer policy keeps the historical replay fence
+even when new replies are disabled. Disabling delivery does not reactivate old
+report options.

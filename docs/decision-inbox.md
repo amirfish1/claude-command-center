@@ -78,11 +78,23 @@ the [question counter and tagging guidance](user-question-tags.md) by default.
 A session question and an inbox card are separate records unless the card
 explicitly carries that question's tag; numbering alone does not publish a card.
 
+Historical ticket-linked and routine reports retain their exact references and
+recorded choices. When canonical answering is enabled, those old choices cannot
+execute: [legacy reconciliation](decision-legacy-reconciliation.md) links to
+current questions, requiring a fresh answer instead of replaying history.
+
+Explicitly promoted session questions use a [durable session inbox](session-questions.md).
+Saved for session, received by session and work complete are separate states.
+Ordinary interactive questions remain local.
+
 The [shadow coverage report](decision-coverage.md) compares current cached owner
 questions and review gates with retained cards using stable source identities.
 It does not change counts, merge questions or deliver answers.
 
-On mobile, open **More → Decisions** in CCC. The More menu includes the same
+On mobile, **More → Decisions 2** is the first direct item in both normal and
+Simple mode. The original **Decisions** table remains in the Apps list.
+Opening More refreshes the app catalog; an older loaded page needs one reload
+to acquire the shortcut code. The More menu includes the same
 app catalog as the desktop rail. Apps keep the bottom bar visible so you can
 switch apps or return to sessions. Direct app links also open in this shell.
 

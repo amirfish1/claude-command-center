@@ -49,13 +49,15 @@
   const time = new Intl.DateTimeFormat('en-US', {timeZone:'America/Los_Angeles', year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', timeZoneName:'short'});
   function current() { return rows.find(row => row.request_id === state.selected) || state.snapshots[state.selected]; }
   function openRows() { return rows.filter(row => row.status === 'open' && row.kind === 'question'); }
+  function supported(row) { return row?.adapter === 'watchtower-block' || (row?.adapter === 'session-question' && row.reply_supported === true); }
+  function currentSource(row) { return row?.source_current === true || model?.source_current === true; }
   function gate(row) {
     if (!storageReady) return 'Session storage is unavailable or unreadable. Answers are blocked to protect recovery.';
-    if (!model || readError || model.source_current !== true) return 'Source coverage is unavailable. Check source before submitting an answer.';
+    if (!model || readError || !currentSource(row)) return 'Source coverage is unavailable. Check source before submitting an answer.';
     if (model.answers_enabled !== true) return 'Source answers are not enabled. This question is read-only.';
     if (!row || !rows.some(r => r.request_id === row.request_id) || row.status !== 'open') return 'This question is no longer open at source. This is not a delivery receipt.';
     if (row.can_answer !== true) return row.answer_unavailable_reason || 'The source does not allow an answer to this question.';
-    if (row.adapter !== 'watchtower-block' || row.kind !== 'question' || row.delivery_owner === 'routine') return row.answer_unavailable_reason || 'Reply at the originating source; this question is read-only here.';
+    if (!supported(row) || row.kind !== 'question' || row.delivery_owner === 'routine') return row.answer_unavailable_reason || 'Reply at the originating source; this question is read-only here.';
     if (!uuid(row.request_id) || !revision(row.revision)) return 'Source question identity is unavailable.';
     return '';
   }
@@ -65,8 +67,8 @@
     // The immutable key is replayed before backend freshness checks. A save retry
     // never sends, and receipt lookup also remains safe without source coverage.
     if (action === 'record' || action === 'reconcile') return '';
-    if (readError || model?.source_current !== true) return 'Source coverage is unavailable. Check source before sending the saved answer.';
-    if (!row || row.adapter !== 'watchtower-block' || row.kind !== 'question' || row.delivery_owner === 'routine') return row?.answer_unavailable_reason || 'This source does not support sending the saved answer here.';
+    if (readError || !currentSource(row)) return 'Source coverage is unavailable. Check source before sending the saved answer.';
+    if (!row || !supported(row) || row.kind !== 'question' || row.delivery_owner === 'routine') return row?.answer_unavailable_reason || 'This source does not support sending the saved answer here.';
     return '';
   }
   function revealCurrent() {
@@ -89,6 +91,7 @@
     const saved = row.answer;
     if (!validAnswer(saved) || active === row.request_id) return;
     let entry = state.entries[row.request_id];
+    if (entry?.saved?.answer_id === saved.answer_id && entry.saved.state === 'accepted' && saved.state === 'accepted' && saved.session_consumed === true) entry.saved.session_consumed = true;
     if (entry) {
       if (entry.saved && (entry.saved.answer_id !== saved.answer_id || ['accepted','rejected'].includes(entry.saved.state))) return;
       if (saved.text !== entry.payload.text || saved.expected_revision !== entry.payload.expected_revision) return;
@@ -101,6 +104,7 @@
     entry.saved = {...saved}; entry.deliveryUnknown = ['sending','unknown'].includes(saved.state);
   }
   function ticket(row) {
+    if (row.adapter === 'session-question' && uuid(row.session_id)) { const link = el('a', 'Open originating session', 'ticket'); link.href = '/?session=' + encodeURIComponent(row.session_id); link.target = '_top'; return link; }
     if (row.adapter !== 'watchtower-block') return el('span', row.origin_id || '', 'meta');
     const link = el('a', row.origin_id, 'ticket');
     link.href = '/?ticket=' + encodeURIComponent(row.origin_id); link.target = '_top'; link.title = 'Open ticket ' + row.origin_id;
@@ -113,7 +117,7 @@
   }
   function status(entry) {
     if (!entry.saved) return 'Save not confirmed. Retry saving the same frozen answer; nothing will be sent by that retry.';
-    return {pending:'Answer saved. Delivery pending; sending requires an explicit click.', sending:'Delivery unknown. Check delivery; do not resend.', unknown:'Delivery unknown. Check delivery; do not resend.', accepted:'Answer accepted by source. Delivery confirmed; the work is not necessarily complete.', rejected:'Answer rejected by source. Your exact text is retained; this question has not advanced.'}[entry.saved.state];
+    return {pending:'Answer saved. Delivery pending; sending requires an explicit click.', sending:'Delivery unknown. Check delivery; do not resend.', unknown:'Delivery unknown. Check delivery; do not resend.', accepted: (entry.saved.receipt?.acceptance === 'source_inbox' || state.snapshots[entry.payload.request_id]?.adapter === 'session-question') ? (entry.saved.session_consumed ? 'Answer received by the originating session. The work is not necessarily complete.' : 'Answer saved for the originating session; waiting for session receipt. The work is not complete.') : 'Answer accepted by source. Delivery confirmed; the work is not necessarily complete.', rejected:'Answer rejected by source. Your exact text is retained; this question has not advanced.'}[entry.saved.state];
   }
   function question(row, entry, history = false) {
     const card = el('article', '', history ? 'history' : 'question'); card.dataset.requestId = row.request_id;
@@ -203,7 +207,7 @@
     });
     const data = await response.json();
     if (!response.ok || data.ok !== true) throw Error(data.error || 'Response unavailable');
-    entry.saved = validateReceipt(data, entry, id, action);
+    entry.saved = {...validateReceipt(data, entry, id, action), receipt:data.receipt};
     entry.deliveryUnknown = ['unknown','sending'].includes(entry.saved.state);
     if (!persist()) throw Error('Receipt received but recovery storage is unavailable; do not retry sending');
   }

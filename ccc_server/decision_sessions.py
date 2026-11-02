@@ -1,9 +1,9 @@
 """Explicit session-question events; transcript tags never enroll requests.
 
 Session authors report creation and local resolution here. Promotion is an
-explicit revision-checked event. This module never sends input to a session or
-claims that a remotely supplied answer was delivered. Session reply transport
-must acquire its own conditional delivery contract before it can be enabled.
+explicit revision-checked event. Remote answers use decision_session_answers
+for conditional durable source inbox acceptance and explicit session
+consumption; neither implies completed work.
 """
 import json
 import re
@@ -56,12 +56,18 @@ class SessionQuestions:
             'promote': {'request_id', 'expected_revision', 'reason'},
             'answer_local': {'request_id', 'expected_revision', 'text', 'source_message_id'},
             'withdraw': {'request_id', 'expected_revision', 'reason'},
+            'consume': {'request_id', 'answer_id', 'question_id', 'generation', 'source_message_id'},
         }
         operation = event.get('operation')
         if operation not in fields or set(event) - common - fields[operation]:
             raise ValueError('Unsupported session question event or fields')
         _uuid(event.get('event_id'), 'event_id')
         _uuid(event.get('session_id'), 'session_id')
+        if operation == 'consume':
+            for field in ('request_id', 'answer_id', 'question_id', 'generation'):
+                _uuid(event.get(field), field)
+            _text(event.get('source_message_id'), 'source_message_id', 200)
+            return operation
         if operation == 'create':
             _uuid(event.get('question_id'), 'question_id')
             _uuid(event.get('generation'), 'generation')
@@ -94,6 +100,9 @@ class SessionQuestions:
         an engine. Concurrent local/global lifecycle changes use revisions.
         """
         operation = self._validate(event)
+        if operation == 'consume':
+            from ccc_server.decision_session_answers import SessionAnswers
+            return SessionAnswers(self.registry).consume(event)
         encoded = _json(event)
         with self.registry._transaction() as db:
             old = db.execute('SELECT payload,result FROM session_question_events WHERE event_id=?',
@@ -127,8 +136,12 @@ class SessionQuestions:
                 content = json.loads(row['content'])
                 if content.get('session_id') != event['session_id']:
                     raise SessionQuestionConflict('Question belongs to another session')
+                # An outbox save is provisional. Local input/edit/withdraw
+                # can win until the source inbox CAS accepts a remote answer.
                 if (row['revision'] != event['expected_revision'] or row['status'] != 'open'
-                        or row['answer_state'] != 'none'):
+                        or (row['answer_state'] != 'none' and not (
+                            row['answer_state'] == 'recorded' and row['delivery_state'] in
+                            ('pending', 'sending', 'unknown', 'rejected')))):
                     raise SessionQuestionConflict('Question changed or already resolved')
                 status = 'open'
                 if operation == 'edit':
@@ -182,6 +195,8 @@ def event_payload(payload, *, state_root=None):
         root = Path(state_root) if state_root else decision_inbox._state_root()
         registry = DecisionRegistry(root / 'decision-inbox' / 'requests.sqlite3', timeout=1)
         result = SessionQuestions(registry).apply(payload)
+        if payload.get('operation') == 'consume':
+            return dict(ok=True, consumption=result, input_sent=False, work_completed=False), 200
         return dict(ok=True, request=result, input_sent=False), 200
     except SessionQuestionConflict as error:
         return dict(ok=False, error=str(error)), 409
@@ -202,11 +217,19 @@ def session_payload(session_id, *, state_root=None):
         root = Path(state_root) if state_root else decision_inbox._state_root()
         database = root / 'decision-inbox' / 'requests.sqlite3'
         if not database.exists():
-            return dict(ok=True, requests=[], remote_answers_supported=False), 200
-        registry = DecisionRegistry(database, timeout=1)
-        requests = [r for r in registry.list_requests() if r['adapter'] == 'session-question'
-                    and r['content'].get('session_id') == session_id]
-        return dict(ok=True, requests=requests, remote_answers_supported=False), 200
+            return dict(ok=True, requests=[], remote_answers=[], remote_answers_supported=True), 200
+        from types import SimpleNamespace
+        from ccc_server.decision_session_answers import SessionAnswerAdapter
+        # GET must not construct a writer registry or initialize answer schema.
+        reader = SessionAnswerAdapter(SimpleNamespace(db_path=database, timeout=1))
+        with reader._read() as db:
+            requests = [DecisionRegistry._record(row) for row in db.execute(
+                "SELECT * FROM requests WHERE adapter='session-question' "
+                "ORDER BY origin_id,generation")
+                if json.loads(row['content']).get('session_id') == session_id]
+        remote_answers = reader.poll(session_id)
+        return dict(ok=True, requests=requests, remote_answers=remote_answers,
+                    remote_answers_supported=True), 200
     except ValueError as error:
         return dict(ok=False, error=str(error)), 400
     except (OSError, sqlite3.Error):

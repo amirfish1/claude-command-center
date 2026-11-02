@@ -247,6 +247,22 @@ const base = {request_id:id, revision:4, adapter:'watchtower-block', origin_id:'
       await click('Save answer'); await waitText('Save not confirmed');
       assert.equal(posts[0].body.expected_revision,4); assert.equal(posts[0].body.text,'unchanged question draft');
     });
+    await fixture(async ({page,model,refresh,click,waitText,posts,setHandle,setReadHandle}) => {
+      model.source_current=false; model.needs_answer_count=null;
+      model.requests=[{...base,adapter:'session-question',reply_supported:true,source_current:true,session_id:'00000000-0000-4000-8000-000000000003'}];
+      await refresh(); assert.notEqual(await page.$('textarea'),null);
+      // A transport failure invalidates even a previously current local row.
+      setReadHandle(req=>req.abort('failed')); await refresh();
+      assert.equal(await page.$('textarea'),null); assert.equal(posts.length,0);
+      setReadHandle(null); await refresh();
+      setHandle(req=>req.respond({status:200,contentType:'application/json',body:JSON.stringify({ok:true,request_id:id,answer_id:answerId,state:req.url().endsWith('/send')?'accepted':'pending',answer:{request_id:id,expected_revision:4,text:'session reply',actor:'owner'},receipt:{acceptance:'source_inbox'},work_completed:false})}));
+      await page.type('textarea','session reply'); await click('Save answer'); await waitText('Send saved answer');
+      await click('Send saved answer'); await waitText('Answer saved for session; awaiting receipt');
+      model.requests[0].answer={answer_id:answerId,state:'accepted',text:'session reply',expected_revision:4,session_consumed:true};
+      await refresh(); await waitText('Answer received by session');
+      model.requests[0].answer.session_consumed=false; await refresh(); await waitText('Answer received by session');
+      assert.equal(posts.length,2);
+    });
     console.log(`PASS ${checks} intercepted owner-answer UI scenarios`);
   } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

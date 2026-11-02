@@ -12,7 +12,7 @@ from ccc_server.decision_answer_api import AnswerAPIError, DecisionAnswerAPI, OP
 
 
 def answer_payload(action, body=b'', *, answer_id=None, state_root=None, environ=None,
-                   export_source=None, adapter=None):
+                   export_source=None, adapter=None, session_wake=None):
     from ccc_server import decision_inbox
     from ccc_server.decision_answer_settings import answer_environment
     root = Path(state_root) if state_root else decision_inbox._state_root()
@@ -21,14 +21,11 @@ def answer_payload(action, body=b'', *, answer_id=None, state_root=None, environ
         return {'ok': False, 'error': 'answers_disabled'}, 503
     try:
         from ccc_server.decision_registry import DecisionRegistry
-        registry = DecisionRegistry(root / 'decision-inbox' / 'requests.sqlite3', timeout=1)
+        registry = DecisionRegistry(root / 'decision-inbox' / 'requests.sqlite3', timeout=5)
         if action == 'record' and export_source is None:
             export_source = _export_source
         if action in ('send', 'reconcile') and adapter is None:
-            from ccc_server.watchtower_msg import _wt_cli_path
-            from ccc_server.decision_watchtower import WatchTowerAnswers
-            executable = _wt_cli_path()
-            adapter = WatchTowerAnswers(executable) if executable else None
+            adapter = AnswerRouter(registry, session_wake=session_wake)
         api = DecisionAnswerAPI(registry, export_source=export_source, adapter=adapter, environ=settings)
         if action == 'status':
             return api.status(answer_id), 200
@@ -51,3 +48,29 @@ def _export_source():
     if process.returncode:
         raise ValueError('Source export unavailable')
     return json.loads(process.stdout)
+
+
+class AnswerRouter:
+    conditional_idempotent = True
+
+    def __init__(self, registry, *, session_wake=None):
+        self.registry = registry
+        self.session_wake = session_wake
+
+    def _adapter(self, row):
+        if row['payload']['source']['adapter'] == 'session-question':
+            from ccc_server.decision_session_answers import SessionAnswers
+            from ccc_server.decision_session_wake import wake_session_answer
+            return SessionAnswers(self.registry, notify=self.session_wake or wake_session_answer)
+        from ccc_server.watchtower_msg import _wt_cli_path
+        from ccc_server.decision_watchtower import WatchTowerAnswers
+        executable = _wt_cli_path()
+        if not executable:
+            raise ValueError('Conditional source unavailable')
+        return WatchTowerAnswers(executable)
+
+    def submit(self, row):
+        return self._adapter(row).submit(row)
+
+    def lookup(self, row):
+        return self._adapter(row).lookup(row)

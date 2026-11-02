@@ -309,6 +309,20 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       assert.deepEqual(await page.evaluate(()=>window.decisionCounts),[2,null]);
       assert.equal(await page.evaluate(()=>window.ticketMessages.length),1); assert.equal(posts.length,0);
     });
+    await fixture('promoted session inbox acceptance is separate from explicit consumption',async ({page,model,refresh,posts,click,wait,idle,setHandler})=>{
+      model.source_current=false; model.needs_answer_count=null;
+      model.requests=[{...base,adapter:'session-question',reply_supported:true,source_current:true,session_id:secondId}];
+      await refresh();
+      assert.equal(await page.$eval('#answerFields',el=>el.hidden),false);
+      assert.equal(await page.$eval('#current a',el=>el.getAttribute('href')),'/?session='+secondId);
+      setHandler(req=>req.respond({status:200,contentType:'application/json',body:JSON.stringify({ok:true,request_id:id,answer_id:answerId,state:req.url().endsWith('/send')?'accepted':'pending',answer:{request_id:id,expected_revision:4,text:exact,actor:'owner'},receipt:{acceptance:'source_inbox',session_consumed:false},work_completed:false})}));
+      await page.type('textarea',exact); await click('Send answer'); await idle();
+      await wait('Answer saved for the originating session; waiting for session receipt.');
+      model.requests[0].answer={...summary('accepted'),session_consumed:true};
+      await refresh(); await wait('Answer received by the originating session.');
+      model.requests[0].answer.session_consumed=false; await refresh(); await wait('Answer received by the originating session.');
+      assert.equal(posts.length,2);
+    });
     console.log(`PASS ${checks} guided queue browser scenarios; screenshots: ${screenshots}`);
   } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});
