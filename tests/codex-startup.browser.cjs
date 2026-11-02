@@ -113,7 +113,8 @@ function event(text,live=false){return {type:'assistant',line:live?undefined:3,t
     assert.ok(s.view.indexOf(prompt)<s.view.indexOf(answer),'prompt precedes answer');
     assert.ok(heldLists>0,'full-list completion is withheld');
     assert.equal(errors.length,0,'no page or route errors');
-    assert.ok(!s.view.includes('Waiting for first visible output'),'headline acknowledges output');
+    assert.ok(!s.view.includes('Waiting for first visible output')&&!s.view.includes('Waiting for CCC'),'headline acknowledges output');
+    assert.ok(s.view.includes('to first visible output'),'headline labels the actual paint');
     assert.equal(await page.$eval('.conv-pane.is-active [data-role="pane-session-id"]', el=>el.dataset.copyRowSessionId),sid,'pane header resolves to the accepted UUID');
    }
    const tr=s.trial,ms=t=>t==null?null:Math.round(t-tr.t0);

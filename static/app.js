@@ -60825,9 +60825,14 @@
       // Refresh from local marks immediately, even if the timeline GET lags.
       const summary = view.querySelector('.spawn-stats-summary strong');
       if (summary) {
-        const wasWaiting = summary.textContent.includes('Waiting');
         summary.textContent = fmtStatMs(spawnStatsLocalMarks.get(sid)?.client_first_visible_output);
-        if (wasWaiting) summary.after(document.createTextNode(' to first visible output'));
+        const label = summary.nextSibling;
+        if (label?.nodeType === Node.TEXT_NODE) label.textContent = ' to first visible output';
+        else summary.after(document.createTextNode(' to first visible output'));
+        const note = view.querySelector('.spawn-stats-note');
+        if (note?.textContent.includes('Waiting for CCC')) {
+          note.textContent = 'The accepted session is showing its first answer. Detailed timings are loading.';
+        }
       }
     }));
   }
@@ -60930,7 +60935,7 @@
     let data = null;
     try {
       const r = await fetch('/api/session/spawn-timeline?session_id=' + encodeURIComponent(sid),
-        { cache: 'no-store', signal: convScopeSignal() });
+        { cache: 'no-store', signal: convScopeSignal(), cccPriority: spawnStatsT0.has(sid) ? 'user' : undefined });
       data = await r.json();
     } catch (_) { return; }
     if (!data || !data.ok || !data.timeline || !$view.isConnected) return;

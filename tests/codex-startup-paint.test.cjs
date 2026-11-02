@@ -36,7 +36,7 @@ test('startup marks require visible assistant text in the selected connected pan
       __mark('task', document.getElementById('view'), 'p1');
       requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }));
-    await page.evaluate(() => { view.innerHTML = '<div class="user-msg">Prompt only</div><div class="assistant-text"></div>'; });
+    await page.evaluate(() => { view.innerHTML = '<details class="spawn-stats"><summary class="spawn-stats-summary"><strong>12ms</strong> elapsed</summary><div class="spawn-stats-note">Waiting for CCC to create the thread.</div></details><div class="user-msg">Prompt only</div><div class="assistant-text"></div>'; });
     await paint();
     await page.evaluate(() => { view.querySelector('.assistant-text').textContent = 'Answer'; __select('other-session'); });
     await paint();
@@ -51,6 +51,8 @@ test('startup marks require visible assistant text in the selected connected pan
     await paint();
     const marks = await page.evaluate(() => __posted);
     assert.equal(marks.length, 1);
+    assert.match(await page.$eval('.spawn-stats-summary', el=>el.textContent), /to first visible output/);
+    assert.doesNotMatch(await page.$eval('.spawn-stats-note', el=>el.textContent), /Waiting for CCC/);
     assert.ok(marks[0].marks.first_visible_output >= 1000);
     await paint();
     assert.equal(await page.evaluate(() => __posted.length), 1, 'first paint is recorded once');
