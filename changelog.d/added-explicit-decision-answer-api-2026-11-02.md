@@ -1,1 +1,0 @@
-- Added default-disabled, source-bound answer APIs with separate record, status, send and receipt-reconciliation operations; retries preserve the original answer identity, and source acceptance never implies completed work.

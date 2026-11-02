@@ -1,1 +1,0 @@
-- Show completed session summaries with a green checkmark, emphasize decision labels in bold amber, and start child lanes collapsed unless explicitly expanded.

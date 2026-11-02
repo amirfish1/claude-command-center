@@ -1,1 +1,0 @@
-- Preserve validated producer links to exact owner-question episodes, freeze their source binding, and reserve one delivery owner per canonical question; reject stale links and legacy actions on outbox-owned cards while retaining existing references.

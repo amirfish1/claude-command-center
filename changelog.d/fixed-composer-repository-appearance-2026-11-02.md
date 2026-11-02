@@ -1,1 +1,0 @@
-- Keep Repository appearance out of the composer and bottom session bar until its settings action is opened, and remove the editor from the layout when closed.

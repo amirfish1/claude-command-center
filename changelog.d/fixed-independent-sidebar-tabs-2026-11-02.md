@@ -1,1 +1,0 @@
-- Keep sidebar tab selection independent per browser window/tab and retain each window’s selection on reload.

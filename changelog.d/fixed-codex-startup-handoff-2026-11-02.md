@@ -1,1 +1,0 @@
-Codex sessions show the submitted prompt immediately and bind their accepted session without waiting for the full sidebar refresh. Live answers survive transcript handoff and reconnects, and startup timings record visible output separately from time spent in hidden tabs or other sessions.

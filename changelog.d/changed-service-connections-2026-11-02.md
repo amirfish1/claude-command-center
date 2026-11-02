@@ -1,1 +1,0 @@
-- Bring provider accounts and named service credentials into one Connections directory, with existing secure editors, explicit credential replacement, and storage-versus-access status.

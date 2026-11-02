@@ -1,1 +1,0 @@
-Queue-local worker policy shows saved launch routing and sources, with staged Override and Follow default actions for engine, model, effort, failure fallback and headroom dispatch. Previews protect against stale saves and preserve unrelated queue metadata; the cross-queue report includes manual queues and keeps bulk pin removal.

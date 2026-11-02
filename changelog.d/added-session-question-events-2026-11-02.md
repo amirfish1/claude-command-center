@@ -1,1 +1,0 @@
-- Add explicit session-question lifecycle events with local visibility by default, revision-checked promotion, durable audit history, and local answer reporting; ordinary question tags do not enroll requests.

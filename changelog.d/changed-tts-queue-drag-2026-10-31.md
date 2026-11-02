@@ -1,1 +1,0 @@
-- The TTS queue inspector ("TTS: N sent · N waiting") can be dragged anywhere on screen by its header, with a mouse or a finger, and remembers where you left it.

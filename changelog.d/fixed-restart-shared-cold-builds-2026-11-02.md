@@ -1,1 +1,0 @@
-- After a restart, the model picker catalog and polled panels (savings, headroom, issues) are built once and shared by concurrent requests instead of once per request, and a catalog rebuild reads the model policy file once instead of thousands of times.

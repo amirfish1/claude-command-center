@@ -1,1 +1,0 @@
-- The session view's top bar now shows the same name as the sidebar row for continued sessions, instead of CCC's "You are continuing a task from an earlier session…" handoff text.

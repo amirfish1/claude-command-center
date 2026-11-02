@@ -1,1 +1,0 @@
-Add authoritative local owner-request coverage with durable source binding, ordered reconciliation, and withdrawals scoped to proven source membership; cached observations cannot overwrite the canonical source state.

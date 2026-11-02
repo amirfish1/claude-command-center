@@ -1,1 +1,0 @@
-- Keep injected question guidance out of question tracking and document the default counter installation.

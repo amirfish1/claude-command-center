@@ -1,1 +1,0 @@
-- Add selected-field portable host preference profiles to Workspace Preferences, with explicit native-policy import previews, source checks, operational history, and separate browser applies.

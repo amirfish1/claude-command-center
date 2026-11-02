@@ -1,1 +1,0 @@
-- Spawned sessions now hide only the machine JSON lines (`NEXT_ACTION`/`COMPLETION`) of the `<session-state>` footer inside an HTML comment: markdown-rendering terminals show the readable DID/INSIGHT/NEXT_STEP_USER summary and skip the JSON, while all block formats still parse.

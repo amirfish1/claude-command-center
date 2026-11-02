@@ -1,1 +1,0 @@
-Mobile More now includes the shared app catalog. Apps open inside the dashboard with persistent bottom navigation, app switching, browser Back, and direct-link/reload support. Desktop app navigation is unchanged.

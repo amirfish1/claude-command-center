@@ -1,1 +1,0 @@
-- The sidebar toolbar's engine-filter button and the "Table" toggle have moved into its ⋮ menu. The menu is now always available and shows the engine buttons in a row, plus a "Table view" item with a check mark when it is on.

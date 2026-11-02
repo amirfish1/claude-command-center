@@ -1,1 +1,0 @@
-- Typing in the session search box no longer shows the native browser autocomplete popup (a stray "old UI" chip under the field).

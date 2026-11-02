@@ -1,1 +1,0 @@
-- Sidebar rows with decision chips keep the read-aloud speaker on the same line as the chips, so they no longer spend an extra line on it.

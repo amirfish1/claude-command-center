@@ -1,1 +1,0 @@
-Bundle a portable `q-next` counter and shared user question tagging guidance with standard setup and CCC session prompts; offer reversible Claude/Codex global instructions through config consent while preserving custom helpers and existing counters.

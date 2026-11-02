@@ -7,6 +7,204 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.43.0] - 2026-11-02
+
+### Added
+- Added an account avatar pinned to the bottom of the applications rail: it shows this machine's CCC Cloud connection state (green only when paired, enabled and online) and opens a popover with the masked account identity, the machine's device id, Sign in (opens the real Network access pairing flow from any page), and Sign out of this machine. The Report a problem flag moved off the bottom edge and now rides mid-rail.
+- Sidebar: new **All** tab, first in the row, lists Features and Small bugs tickets together, newest first.
+- Added a browser preference workbench in Settings → Workspace to review supported overrides, export/import nonsecret profiles, preview resets, and undo the latest workbench change. Changes reload the dashboard after saving; stale previews and invalid profiles are rejected. Added notification policies that coordinate alerts and completion sounds while preserving custom combinations and browser permission control.
+- Long-press or right-click the floating Call button to hide it, with the option to show it again in Settings. Dragging and ordinary taps still work.
+- Show live startup diagnostics for new Codex sessions, including pre-response elapsed time, thread creation, turn acceptance, first event, reasoning, and first text. Keep the timeline visible in the spawn log and measure browser and server milestones from the same submit action.
+- Make every session lifecycle category expandable with keyboard-accessible headings and remembered choices per tab. Archived starts collapsed, while search temporarily reveals matching content.
+- Stage conditional WatchTower answer delivery with exact source snapshots and validated receipts, preserving existing reply routes until unified workflow admission is enabled.
+- Add bounded, nonsecret machine and queue configuration history with previewed, revision-checked undo and explicit interrupted-save recovery states in Workspace preferences.
+- Preferences now reviews supported browser, machine launch-policy and queue customization together, distinguishing explicit saved defaults, inherited and shadowed values, unavailable evidence and context-dependent baselines. Scoped Edit actions reuse existing editors; profile and history boundaries are unchanged.
+- Stage durable decision answers with revision checks, duplicate suppression and source-receipt recovery; this foundation does not enable a new answer endpoint or change existing delivery routes.
+- Add a shadow decision-request registry and read-only source coverage endpoint with stable source identities, preserved legacy references, explicit stale-source diagnostics and no changes to live answer delivery.
+- Show explicit initialization provenance for legacy owner questions, distinguishing a newly initialized episode from its unknown historical block date.
+- Decision Inbox explains when cards are created and shows each item’s source, recorded trigger, and repeat reports. Includes mobile access guidance.
+- Decision Inbox now shows all retained sweeps with exact timestamps, added decisions and sources, skip counts and errors, replacing the generic explanation. New sweeps retain source snapshots and manual/scheduled triggers.
+- Add Decisions 2, a deterministic guided question queue with exact ticket questions and receipt-based reply handling; no model calls, with source answering still disabled by default.
+- Bundle a portable `q-next` counter and shared user question tagging guidance with standard setup and CCC session prompts; offer reversible Claude/Codex global instructions through config consent while preserving custom helpers and existing counters.
+- Added default-disabled, source-bound answer APIs with separate record, status, send and receipt-reconciliation operations; retries preserve the original answer identity, and source acceptance never implies completed work.
+- Add an explicit Archived section below Finished, with Archive actions on ticket rows. New owner messages immediately return finished work to Active and reopen its ticket. Preserve saved task titles through frontend row shaping.
+- Add opt-in owner-answer controls with separate Save, Send and receipt-check actions, frozen submission recovery, and retained rejection history; answering remains disabled by default.
+- Add selected-field portable host preference profiles to Workspace Preferences, with explicit native-policy import previews, source checks, operational history, and separate browser applies.
+- The image viewer now offers Zoom in, Zoom out, Actual size, and Fit controls. Enlarged images can be scrolled on phones and desktops.
+- Settings now explains saved launch routing for a new local session, an unpinned
+worker or a selected queue, including value sources, effective queue pins,
+fallback candidate order and unresolved runtime headroom decisions. The preview
+is read-only and marks unverified consumer resolution explicitly.
+- Mobile More now includes the shared app catalog. Apps open inside the dashboard with persistent bottom navigation, app switching, browser Back, and direct-link/reload support. Desktop app navigation is unchanged.
+- Phone bottom nav gains a first-class All button (idea-tickets flag) as the leftmost destination, promoted out of the More menu — the bar is now All / Features / Bugs / Workers / More.
+- Queue-local worker policy shows saved launch routing and sources, with staged Override and Follow default actions for engine, model, effort, failure fallback and headroom dispatch. Previews protect against stale saves and preserve unrelated queue metadata; the cross-queue report includes manual queues and keeps bulk pin removal.
+- Session rows now have a one-click mismatch report button that files a Decisions Fix ticket with the observed status and choices, an independent transcript snapshot, session identity, and screenshot evidence when available.
+- The session-row thumbs-down button now opens a small optional description field before sending a report. Your note is saved with the ticket and its captured evidence.
+- Add authoritative local owner-request coverage with durable source binding, ordered reconciliation, and withdrawals scoped to proven source membership; cached observations cannot overwrite the canonical source state.
+- Allow disabling off-dashboard stopped-session alerts with `CCC_ALERT_SESSION_DEATHS=0` while retaining dashboard notifications and other alert types.
+- Add explicit session-question lifecycle events with local visibility by default, revision-checked promotion, durable audit history, and local answer reporting; ordinary question tags do not enroll requests.
+- Add a saved By state / One list control for ticket session lists. One list combines active, finished, and archived sessions using the selected time, project, or cost ordering.
+- Add shared “Where this applies” guidance for Settings and contextual preference editors, distinguishing browser, host, repository, queue, session and external ownership without changing native save behavior.
+- Settings now groups engine setup, session defaults, queue engines, model routing, provider keys, and voice controls into focused panels. Inspect seven-day starting-model counts and effective auto-drain queue routing, preview applying worker defaults to auto-drain or all active queues, and use clearer labels, keyboard navigation, search results, and mobile layouts.
+- Added a Decisions tab with a shared owner-question table, explicit local-session promotion, delivery states, and visible coverage gaps; source checks do not run scans or models, and unavailable sources never appear as an empty inbox.
+- Add engine-neutral takeover observation and exact-session delivery adapters, with bounded native transcript reads, persisted user-input receipt evidence, and guarded delivery to current ACP connections or native session resumes.
+- Preserve validated producer links to exact owner-question episodes, freeze their source binding, and reserve one delivery owner per canonical question; reject stale links and legacy actions on outbox-owned cards while retaining existing references.
+- Let worker defaults explicitly follow new-session defaults, with effective
+worker fields saved atomically for queue launchers. Independent worker settings
+are preserved for return; queue pins, fallback policies and active runs keep
+their existing behavior.
+
+### Changed
+- System status now opens actionable health checks from saved launch policy and cached engine/service evidence, with canonical repair links and explicit unchecked, stale and unavailable states. Service checks and resource diagnostics remain explicit actions; opening Settings reads launch defaults without seeding or migrating them.
+- Group repeated Hermes CLI batch tasks under a collapsible task row, even when generated titles differ or other sessions appear between runs. Individual sessions remain accessible as indented rows, with separate groups for each profile, model, and folder.
+- Blocked ticket messages now lead with the decision and offer a cached plain-English explanation of the proposal, tradeoff, and alternatives. Technical wording stays expandable, and the current question links directly to the reply box. Explanations use the optional Claude CLI with tools disabled; the original remains readable if it is unavailable.
+- Make green completion checkmarks visibly heavier in both session row layouts.
+- Tighten child session rows to single-spaced lines in expanded lane groups.
+- Combine attention and working sessions in one Active section, with items needing input first.
+- Move repository avatars beside repository controls, conversation text size into
+reader actions, and session/queue presentation controls into their view menus.
+Settings keeps navigation links instead of duplicate editors; existing control
+IDs, storage formats and contextual reset actions remain available.
+- Sidebar rows that wait on a decision now read "Decide" and show one tap-to-send chip per option, instead of "Next: Answer Q…". Agents are asked to supply the option chips; older answers get chips derived from their "A or B" wording.
+- Decision Inbox now has numbered expandable rows, question references, local timestamps, search, status/source filters, sorting, paginated history, and explicit feed freshness/error states. Retained history is no longer truncated to 200 API items.
+- Engine setup now uses one connection flow for choosing an engine, installation, native sign-in, explicit setup checks, staged launch-default review and entry to the session composer. Local setup evidence is distinguished from live connectivity, legacy setup entries redirect to the same flow, and saved defaults remain unchanged until explicitly applied in Launch policy.
+- After a restart, the hourly engine and model-catalog maintenance pass waits out the boot burst (90 s, CCC_BOOT_WARM_DELAY_S) instead of competing with the dashboard's first loads.
+- Redesigned Jobs around attention, upcoming schedules, recent results, and a searchable inventory. Added explicit statuses, project and status filters, accessible expandable run details, and clear labels for estimated or outdated schedule data.
+- Mobile search now opens from an icon beside New session and focuses the existing field. Hold the floating TTS debug header to confirm hiding the panel and cache markers.
+- Phone Advanced keeps tabs in a single strip — the bottom nav — with All/Other under its More menu. The new-session screen now shows the selected repo as 'Auto · repo · Change' (tap to expand the full picker), and spawning lands on a sidebar tab that actually lists the new session.
+- Simplify sweep history to one row per decision with only Pacific date/time, decision reference and title, trigger, and decision-specific LLM usage.
+- Add a metadata-only optional capability catalog for voice, remote access, free-model routing, hands-free operation and preview feature gates. Fresh setup is deliberate, existing configuration stays accessible, and native runtime controls retain their actual effects. Viewing Phone access no longer enables its preview flag.
+- The relay client remains public; the wire protocol specification is now maintained separately. Public setup and security guides remain available, and existing repository history is preserved.
+- Bring provider accounts and named service credentials into one Connections directory, with existing secure editors, explicit credential replacement, and storage-versus-access status.
+- Spawned sessions now hide only the machine JSON lines (`NEXT_ACTION`/`COMPLETION`) of the `<session-state>` footer inside an HTML comment: markdown-rendering terminals show the readable DID/INSIGHT/NEXT_STEP_USER summary and skip the JSON, while all block formats still parse.
+- Moved the session list’s By state / One list controls into the three-dot view options menu, including the phone menu.
+- Show completed session summaries with a green checkmark, emphasize decision labels in bold amber, and start child lanes collapsed unless explicitly expanded.
+- Highlight Working with a soft green glow and give Finished a quieter, stronger label. Keep status emphasis synchronized with live updates and respect reduced motion.
+- Refine the Features and Small bugs session lists with Needs you, Active, and Finished sections, stable ordering across status updates, compact project marks, and a quieter toolbar. Idle turns and sessions ready to close remain Active until explicit closure; archived deletions stay separate. Move plan usage and performance diagnostics into an expandable footer drawer with a visible low-capacity warning.
+- Keep Settings focused on preferences: workspace launchers and Help move to More,
+service operations live in System status, and starting-model counts live in
+Stats & usage. Existing action IDs and retired Tools/Help links keep working,
+including on phones and with the keyboard.
+- Settings now has six task-based destinations instead of a long list of pages. Launch defaults come first; setup, queue overrides, routing, reports, and tools expand inline. Existing section links still work, duplicate tour navigation is removed, and search finds collapsed settings while preserving hidden controls and disclosure state.
+- The sidebar toolbar's engine-filter button and the "Table" toggle have moved into its ⋮ menu. The menu is now always available and shows the engine buttons in a row, plus a "Table view" item with a check mark when it is on.
+- Saved session/worker routes, worker fallback and managed capability profiles now
+share one staged Launch policy editor with validated preview and atomic apply.
+Default shortcuts and first-run setup lead to that workflow. Existing policy
+schemas, consumer-specific restrictions and metadata on retained routes remain
+intact; queue pins and runtime routing decisions stay independent.
+- Show decision sweeps as a flat table in Pacific time with added decisions, sources, and explicit LLM usage. Hide empty script-only runs and record model request counts, including failed requests and retries.
+- Images returned by tools now show as half-size thumbnails, several per row, with a (+) button to enlarge them.
+- The TTS queue inspector ("TTS: N sent · N waiting") can be dragged anywhere on screen by its header, with a mouse or a finger, and remembers where you left it.
+- Voice setup now brings dictation availability, read-aloud output, live call defaults, offline speech and call shortcuts into one Settings workflow. Existing setup links redirect there, saved unavailable voices and profiles remain selected, and status distinguishes configuration from an actual microphone or connection test.
+- Session takeover delegates supervision to compatible WatchTower installations,
+independently of browser refreshes. Existing handoffs migrate with their reminder
+budgets, owner questions and cancellation state; answers have a single delivery
+owner. The sidebar distinguishes pending delivery from confirmed supervision.
+Guarded delivery stays in the same session and never falls back to a queue or
+changes its permission settings.
+
+### Removed
+- Removed the separate Wrap and Details controls from session toolbars; Coding and Workers keep the combined Compact / Cozy / Detailed display control.
+- Removed the obsolete Features / Small bugs migration banner now that the All tab provides a combined session list.
+
+### Fixed
+- Move answered decisions below waiting items immediately within the combined Active section, including while hovering.
+- All sessions now sorts active rows by recent activity, interleaving questions with working sessions and using consistent timestamps instead of putting older questions or pins first.
+- Keep Sessions in memory when switching to another dashboard app, so returning preserves the view and drafts without a page reload.
+- Archive refreshes stay responsive while the ship index is updating; continuation titles remain durable for explicit spawns and renames.
+- Sessions started on GPT-6 Astra are named after the request instead of the "<astra-guardrail> You are running as gpt-6-astra…" preamble CCC adds to their first prompt.
+- Keep ticket numbers and engine badges in square project avatars, and remove the extra ticket metadata row.
+- The dashboard responds sooner after a restart: the notification scheduler's spend totals are now summed inside SQLite instead of parsing every usage row in Python, which blocked other requests for about 2.5s on each boot.
+- Explicit short category choices in older session footers now get reply chips; agent instructions also request chips for categorical clarification questions. Offline tasks remain text steps.
+- Preserve compact child engine icons in flat search results and keep inherited ticket references from expanding child rows.
+- Use compact engine icons for child lanes without their own ticket, avoiding large placeholder project circles.
+- Codex diagnostics requests now return promptly while slow checks run in the background, with explicit collecting and refreshing states and bounded concurrent collection.
+- Codex live text no longer waits for redundant engine metadata reads when the current connection already knows the session's workspace.
+- Codex Send now explains when a model switch is pending instead of sending into the previous model's running turn; queued messages stay queued for the selected model's next turn.
+- New Codex sessions and continuations open their confirmed thread immediately, without waiting for the full session archive to refresh.
+- Codex sessions show the submitted prompt immediately and bind their accepted session without waiting for the full sidebar refresh. Live answers survive transcript handoff and reconnects, and startup timings record visible output separately from time spent in hidden tabs or other sessions.
+- Codex continuation sessions now attach to their ticket as successors (`continued`) instead of `child`, so the freshest leg can lead a ticket cluster; existing mislabeled entries are relabeled once on upgrade.
+- Prevent concurrent sidebar requests from failing when another connection holds the session index during initial SQLite journal setup.
+- Switching the sidebar to a repo for the first time after a dashboard restart no longer takes 5-18s: the worktree/branch detection for each session is now saved to disk and reused instead of being recomputed from every transcript.
+- Keep child repository portraits inside their compact row without overlapping the next lane.
+- Compact transcript disclosure arrows expand their own command group consistently; a separate Fold button collapses the whole tool run.
+- Keep session workspace, context usage, and model controls on one row in narrow panes; shorten Token Sitter to TS and trim secondary details when space is tight.
+- Keep Repository appearance out of the composer and bottom session bar until its settings action is opened, and remove the editor from the layout when closed.
+- Count instruction blocks in agent config consent summaries and describe config edits accurately, including when only question guidance is waiting for approval.
+- Keep contextual Settings links within narrow screens and give reader text-size controls larger phone touch targets.
+- Leave desktop reader header actions unobstructed by notification toasts.
+- Session continuations show their current agent plan instead of an earlier conversation's saved AUTO question when no user action is currently needed.
+- Live row updates survive temporary visibility changes during resizing, keeping the latest status while the stream reconnects.
+- Keep shadow coverage responsive during registry contention, avoid reimporting unchanged cards and open existing identities without taking a write lock.
+- Update session rows and reply buttons from the latest owner decision even when automation retains a waiting or takeover flag.
+- Keep Decisions within the normal sidebar and add prominent ticket links that open the originating ticket's context without reloading the question list.
+- Persist continuation topic titles and expose stable root session identity independently of loaded ancestor rows, preserving the root topic across multiple continuations and generated task-title updates while honoring explicit root renames.
+- Keep saved task titles available after refreshes that return continuation boilerplate, and serialize session renames so concurrent writers preserve each other's names.
+- Already-running Claude sessions receive reply-chip guidance through the prompt hook on their next normal turn, without waking idle conversations.
+- Expose Archive on historical Finished rows and protect explicit archive state against delayed polls, including after a confirming local render.
+- Keep the read-only work badge stable when a finished agent remains alive, preventing sidebar rows from jumping during status refreshes. Clarify that the badge does not restrict replies.
+- Move streamed decisions into Needs you immediately, including while the cursor hovers over a session row. Keep status text and lifecycle grouping synchronized in both directions.
+- Show a reply's decision and authored options in the session list as soon as its footer reaches the open conversation or live spawn feed, without waiting for another poll or tab switch. Preserve richer metadata when duplicate feeds race.
+- Keep sidebar tab selection independent per browser window/tab and retain each window’s selection on reload.
+- Show the conversation's repo path, context usage, and model immediately from
+loaded session data, and keep the bar visible while workspace details refresh.
+- Preserve the listening socket across in-place macOS restarts when Darwin rejects the SO_ACCEPTCONN query, keeping queued connections available to the successor.
+- Opening a large screenshot no longer freezes the dashboard on a slow remote link: images over 150 kB open as a small JPEG preview, with a **Full size** button for the original. Download still saves the original file.
+- Keep the mobile Ticket button directly accessible and fit embedded apps and bottom navigation to the visible screen, respecting iPhone safe areas.
+- Keep the repository path, context usage, and model visible in narrow session composers by wrapping the status strip.
+- Session names use the full text width in narrow desktop sidebars, with context percentage, report control, and activity time below the description.
+- Show the next reply's choices after answering an older question, while preserving newer approval and question events.
+- Fix batch session grouping for live sidebar previews that normalize away blank lines, so repeated runs appear under one collapsible task row.
+- The session view's top bar now shows the same name as the sidebar row for continued sessions, instead of CCC's "You are continuing a task from an earlier session…" handoff text.
+- Show pending agent work or external dependencies in open session summaries instead of repeating completed milestones.
+- Match session avatars to the clean project marks: centered initials in a quiet square, with ticket references in row metadata instead of stacked numbers and engine badges.
+- Keep injected question guidance out of question tracking and document the default counter installation.
+- Keep the agent configuration dialog above announcement banners so its title remains visible on phones.
+- The Queue panel and the sidebar's ticket badges now download only tickets that changed (`/api/queue/list?since=<version>`) instead of the whole multi-MB board on every queue change, and worker heartbeats no longer trigger a ticket reload. On a slow connection the full board held the page's single connection for 5-15s and every other request (session list, health, voice) waited behind it.
+- Queues now shows deferred and dependency-waiting tickets without misleading launching or stale-claim labels; historical session links remain available.
+- Keep decision buttons below their prompt and wrap long labels so phone users can read every choice beside the audio control.
+- Repo-scoped polls (deploy status, Next.js status, throughput) no longer stall for 2-3s: every such request re-recorded its repo as "recent", which rewrote the recent-repos file and dropped the known-repos cache even when nothing changed, so the next requests waited on a cold disk walk.
+- Restarting the dashboard no longer causes a burst of HTTP 502 errors behind a reverse proxy such as `tailscale serve`. The restart now lets in-flight requests finish and passes the listening socket to the new process, so requests made during the restart wait for it instead of failing. A message that was already delivered no longer shows "Resume failed: HTTP 502" and then sends twice on retry.
+- After a restart, the savings and background-runs panels build faster: model pricing lookups are memoized instead of re-running regexes for every transcript row.
+- After a restart, the model picker catalog and polled panels (savings, headroom, issues) are built once and shared by concurrent requests instead of once per request, and a catalog rebuild reads the model policy file once instead of thousands of times.
+- Reloading the dashboard right after a restart shows the sidebar immediately from the last saved session list while the fresh list is built in the background, instead of waiting up to 40 seconds.
+- A dashboard tab left open across a restart also gets the saved list right away (or a 304 when it already holds it) instead of waiting for the first rebuild.
+- After a restart, cheap sidebar reads (queue status, history, live activity) no longer queue for up to a minute behind slow cold rebuilds: background reads whose recorded CPU cost is small skip the shared slots.
+- The sidebar list looks up continuation topics in a few batched queries instead of several per session, and concurrent Codex stuck-summary requests after a restart share one scan.
+- Review requests with an explicit artifact link now show an action chip even when the assistant omitted reply actions. The chip opens the artifact without sending a reply or approval.
+- Sidebar rows with decision chips keep the read-aloud speaker on the same line as the chips, so they no longer spend an extra line on it.
+- Runaway detection recognizes completed, verified read-only reports as progress for Claude and Codex sessions, so active verification work is no longer mistaken for a stagnant loop. Identical repeated reports and incomplete work do not reset stagnation.
+- Typing in the session search box no longer shows the native browser autocomplete popup (a stray "old UI" chip under the field).
+- Keep the selected new session visible by following it to Small bugs when automatic
+classification finishes. Background sessions and manual tab navigation keep their
+current sidebar tab.
+- Keep All, Features, and Small bugs populated from the cached session preview while the session feed loads, and prevent large worker fleets from crowding ticketed sessions out of the preview.
+- Restore newest-first ordering within session lifecycle sections. New activity now moves an existing ticket above older sessions; equal timestamps use a deterministic tie-breaker to prevent polling jitter. Pinned rows and explicit project/cost grouping retain their existing priority.
+- Preserve a continuation's original topic or manually assigned name, followed by its current task, across session lists and conversation headers.
+- Keep first-run notices clear of phone controls: reserve the wrapped intro-banner height and place the install prompt above bottom navigation. Pinned sessions now obey search queries instead of appearing as unrelated matches.
+- Keep the sidebar More actions menu within the screen on phones and narrow sidebars, with scrolling for shorter screens.
+- The sidebar search field now shares the New session row when there is enough room, and wraps onto its own row in narrower sidebars.
+- Keep session activity times at the top right of narrow desktop sidebar rows.
+- "Move to split view" now leaves focus on the newly loaded left pane, instead of the moved pane taking it back a moment later.
+- Keep a submitted session Active and Working through delivery acknowledgment, and follow fresh replies from historically finished sessions without waiting for a list refresh.
+- Show prominent decision references in sweep history and link directly to the matching inbox item. Cards without a Q-reference now use persistent D-numbers instead of internal hashes.
+- Session takeover uses a shared lifecycle across engines, with engine adapters
+for session observation, same-session delivery and receipt verification.
+Auto remains available across engines, and requests rejected by the former
+engine restriction recover through the normal adoption path.
+Native session settings remain authoritative over ACP facade defaults when
+capturing settings for a later same-session resume.
+- Bound Devin takeover transcript materialization by bytes as well as message count, retaining complete recent messages and pausing when the latest message exceeds the read budget.
+- Keep takeover observation responsive by sharing one owner snapshot per request and bounding worker snapshot reads; unavailable owner state pauses delivery without starting a competing native writer.
+Dashboard-owned ACP engines keep their local owner instead of querying an unrelated worker.
+- Current decisions and resumed work take precedence over an older ticket closure; selecting a conversation no longer freezes its attention category.
+- Bundle tool-returned images into one thumbnail gallery when only tool calls separate them, keeping zoom, Open, and Download available for every image.
+- Images returned inside a tool output (for example a Codex image generated inside `exec`) now show inline in the conversation, with Open and Download links, instead of being visible only to the agent.
+- Keep expanded compact tool output and the reading position stable as new tools arrive. Expanding a shortened Codex tool result now loads its complete saved or live output.
+- The usage-limit watcher no longer stats every Claude transcript on disk every 45 seconds; it rescans only project folders that changed (with a full sweep every 5 minutes), which cuts background I/O that slowed the sidebar after a restart.
+- Keep the Working status and glow after a new owner message supersedes an older idle or waiting snapshot.
+- Working sessions move from Needs you into Active immediately, including the open conversation and live status updates.
+
 ## [5.42.0] - 2026-10-31
 
 ### Added
@@ -4440,7 +4638,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.42.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.43.0...HEAD
+[5.43.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.43.0
 [5.42.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.42.0
 [5.41.1]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.41.1
 [5.41.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.41.0

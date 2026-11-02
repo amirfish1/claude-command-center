@@ -1,1 +1,0 @@
-- Allow disabling off-dashboard stopped-session alerts with `CCC_ALERT_SESSION_DEATHS=0` while retaining dashboard notifications and other alert types.

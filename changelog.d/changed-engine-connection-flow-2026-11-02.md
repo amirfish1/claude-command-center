@@ -1,1 +1,0 @@
-Engine setup now uses one connection flow for choosing an engine, installation, native sign-in, explicit setup checks, staged launch-default review and entry to the session composer. Local setup evidence is distinguished from live connectivity, legacy setup entries redirect to the same flow, and saved defaults remain unchanged until explicitly applied in Launch policy.

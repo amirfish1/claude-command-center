@@ -1,1 +1,0 @@
-- Opening a large screenshot no longer freezes the dashboard on a slow remote link: images over 150 kB open as a small JPEG preview, with a **Full size** button for the original. Download still saves the original file.

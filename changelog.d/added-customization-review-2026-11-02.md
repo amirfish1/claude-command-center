@@ -1,1 +1,0 @@
-Preferences now reviews supported browser, machine launch-policy and queue customization together, distinguishing explicit saved defaults, inherited and shadowed values, unavailable evidence and context-dependent baselines. Scoped Edit actions reuse existing editors; profile and history boundaries are unchanged.

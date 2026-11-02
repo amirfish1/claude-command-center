@@ -1,1 +1,0 @@
-Phone Advanced keeps tabs in a single strip — the bottom nav — with All/Other under its More menu. The new-session screen now shows the selected repo as 'Auto · repo · Change' (tap to expand the full picker), and spawning lands on a sidebar tab that actually lists the new session.

@@ -1,1 +1,0 @@
-- Sidebar: new **All** tab, first in the row, lists Features and Small bugs tickets together, newest first.

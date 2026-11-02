@@ -1,1 +1,0 @@
-Codex continuation sessions now attach to their ticket as successors (`continued`) instead of `child`, so the freshest leg can lead a ticket cluster; existing mislabeled entries are relabeled once on upgrade.

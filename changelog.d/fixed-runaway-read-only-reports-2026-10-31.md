@@ -1,1 +1,0 @@
-Runaway detection recognizes completed, verified read-only reports as progress for Claude and Codex sessions, so active verification work is no longer mistaken for a stagnant loop. Identical repeated reports and incomplete work do not reset stagnation.

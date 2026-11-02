@@ -1,1 +1,0 @@
-Show decision sweeps as a flat table in Pacific time with added decisions, sources, and explicit LLM usage. Hide empty script-only runs and record model request counts, including failed requests and retries.

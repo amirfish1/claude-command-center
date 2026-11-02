@@ -1,2 +1,0 @@
-- Session continuations show their current agent plan instead of an earlier conversation's saved AUTO question when no user action is currently needed.
-- Live row updates survive temporary visibility changes during resizing, keeping the latest status while the stream reconnects.

@@ -1,1 +1,0 @@
-- Review requests with an explicit artifact link now show an action chip even when the assistant omitted reply actions. The chip opens the artifact without sending a reply or approval.

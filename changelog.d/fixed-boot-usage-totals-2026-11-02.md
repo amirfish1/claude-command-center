@@ -1,1 +1,0 @@
-- The dashboard responds sooner after a restart: the notification scheduler's spend totals are now summed inside SQLite instead of parsing every usage row in Python, which blocked other requests for about 2.5s on each boot.

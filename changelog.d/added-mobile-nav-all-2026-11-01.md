@@ -1,1 +1,0 @@
-Phone bottom nav gains a first-class All button (idea-tickets flag) as the leftmost destination, promoted out of the More menu — the bar is now All / Features / Bugs / Workers / More.

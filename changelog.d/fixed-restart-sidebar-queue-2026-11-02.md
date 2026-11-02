@@ -1,1 +1,0 @@
-- After a restart, cheap sidebar reads (queue status, history, live activity) no longer queue for up to a minute behind slow cold rebuilds: background reads whose recorded CPU cost is small skip the shared slots.

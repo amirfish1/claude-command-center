@@ -1,1 +1,0 @@
-- Keep the agent configuration dialog above announcement banners so its title remains visible on phones.
