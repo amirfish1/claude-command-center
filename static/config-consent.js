@@ -98,7 +98,7 @@
       $pill.hidden = false;
       $pill.classList.add('visible');
       if ($text) $text.textContent = n === 1 ? '1 config change to review' : n + ' config changes to review';
-      $pill.title = 'CCC is waiting for your OK before it adds hooks or skills to your agent config. Click to review the exact changes.';
+      $pill.title = 'CCC is waiting for your OK before it adds hooks, skills or instructions to your agent config. Click to review the exact changes.';
       $pill.dataset.focus = '';
     } else if (hooks && hooks.status === 'declined') {
       $pill.hidden = false;
@@ -185,7 +185,7 @@
       if (l && present[e] !== false && names.indexOf(l) < 0) names.push(l);
     }));
     const where = 'your ' + (names.join(' and ') || 'agent') + ' setup';
-    const safe = 'It only adds its own files (backed up first, undo anytime) and changes nothing else.';
+    const safe = 'CCC backs up the files first, preserves your other config, and lets you undo these changes anytime.';
     if (!review.length) {
       const n = carried.length;
       return 'Earlier versions of CCC added ' + plural(n, 'item') + ' to your agent setup. '
@@ -194,17 +194,22 @@
     const skills = review.filter((i) => i.id.indexOf('skill:') === 0).length;
     const wtSkills = review.some((i) => i.id === 'watchtower-skills');
     const hooks = review.reduce((a, i) => a + (i.hook_count || 0), 0);
+    const instructions = review.filter((i) => i.kind === 'instructions').length;
     const parts = [];
     if (skills) parts.push(plural(skills, 'skill'));
     if (hooks) parts.push(plural(hooks, 'hook'));
     if (wtSkills) parts.push('the WatchTower skills');
-    const list = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : parts[0];
+    if (instructions) parts.push(plural(instructions, 'instruction block'));
+    const list = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1]
+      : parts[0] || plural(review.length, 'config change');
     const allChanged = review.every((i) => i.status === 'changed');
     const lead = allChanged
       ? 'CCC has updated ' + list + ' in ' + where + '.'
       : 'CCC will add ' + list + ' to ' + where + '.';
     const why = hooks && (skills || wtSkills) ? 'They let the dashboard show live status and let your agents use CCC.'
-      : hooks ? 'They let the dashboard show live status.' : 'They let your agents use CCC.';
+      : hooks ? 'They let the dashboard show live status.'
+        : instructions ? 'These instructions give your agents CCC guidance.'
+          : skills || wtSkills ? 'They let your agents use CCC.' : 'Review the exact changes in Details.';
     return esc(lead + ' ' + safe + ' ' + why);
   }
 
@@ -265,8 +270,8 @@
     const carried = noticeOn ? items.filter((i) => noticeIds.has(i.id) && !i.needs_review) : [];
     const rest = mode === 'manage'
       ? items.filter((i) => !i.needs_review && !(noticeOn && noticeIds.has(i.id))) : [];
-    const intro = 'CCC can add a few hooks and skills to your agent config so the dashboard can show live '
-      + 'status and your agents can use CCC. It only changes the files listed below, only after you say so, '
+    const intro = 'Review the changes CCC proposes for your agent config. '
+      + 'It only changes the files listed below, only after you say so, '
       + 'keeps everything else in them as-is, and saves a backup of each file first ('
       + '<code>' + esc((state && state.backups_dir) || '') + '</code>). You can undo any of it here later.';
     m.querySelector('.cfgc-dialog').classList.toggle('cfgc-compact', compact);
