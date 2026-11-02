@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Decisions 2 · Guided queue</title>
+  <link rel="stylesheet" href="/static/decision-guide.css">
+  <script src="/static/decision-guide.js" defer></script>
+</head>
+<body>
+  <main class="guide">
+    <header><div><h1>Decisions 2</h1><p class="subtitle">Guided queue · no AI</p></div><button id="refresh" type="button">Check source</button></header>
+    <p id="coverage" class="meta" role="status">Checking source coverage…</p>
+    <p id="intro">Loading open questions…</p>
+    <details id="queue"><summary>Browse open questions <span id="queueCount"></span></summary><nav id="items" aria-label="Open questions"></nav></details>
+    <section id="issues" aria-label="Questions without stable source identities"></section>
+    <section role="log" aria-label="Question and answer history" aria-live="polite" aria-relevant="additions text" tabindex="0">
+      <div id="transcript"></div>
+      <section id="current" aria-label="Current question"></section>
+    </section>
+    <form id="composer" aria-label="Answer current question">
+      <label for="answer">Your answer</label>
+      <textarea id="answer" rows="4" maxlength="24000" aria-describedby="guidance" disabled></textarea>
+      <p id="guidance" class="meta">Checking source before answering.</p>
+      <div id="recovery" class="actions"></div>
+      <div class="actions"><button id="send" class="primary" type="submit" disabled>Send answer</button><button id="skip" type="button" disabled>Skip / next</button></div>
+    </form>
+    <p class="meta footnote">Skipping only defers a question here. Source acceptance confirms delivery, not completion of the work.</p>
+  </main>
+</body>
+</html>

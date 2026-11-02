@@ -32391,13 +32391,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
-        elif path == "/decision-inbox.html":
-            # Decision Inbox page. Same narrow-route pattern as /q2.html: no
-            # app.js/app.css, so it cannot affect the main dashboard.
+        elif path in ("/decision-inbox.html", "/decision-guide.html"):
+            # Serve only the two named Decisions surfaces, without the main
+            # app bundle. Keep this allowlist independent of filesystem paths.
+            page_name = "decision-guide.html" if path == "/decision-guide.html" else "decision-inbox.html"
             try:
-                body = (STATIC_DIR / "decision-inbox.html").read_bytes()
+                body = (STATIC_DIR / page_name).read_bytes()
             except OSError as e:
-                self.send_json({"error": "decision-inbox.html missing", "detail": str(e)}, 500)
+                self.send_json({"error": page_name + " missing", "detail": str(e)}, 500)
                 return
             body, enc = self._maybe_gzip(body, "text/html; charset=utf-8")
             self.send_response(200)
