@@ -62,5 +62,84 @@ test('a backfill of the already-active pane keeps it active', () => {
 test('split-and-advance still focuses the left pane after loading it', () => {
   const start = app.indexOf('async function moveMainConversationToSplitAndAdvance(');
   const body = app.slice(start, app.indexOf('\n  function closePane(', start));
-  assert.match(body, /await selectConversation\(next\.dataset\.id, 'p1'\);\s*setActivePaneById\('p1'\);/);
+  assert.match(body, /await selectConversation\(nextId, 'p1'\);\s*setActivePaneById\('p1'\);/);
+});
+
+function advanceHarness(rows, { current = 'moved', repaint, sessionIds = {} } = {}) {
+  const ctx = {
+    currentConversation: current,
+    sessionIdByConv: sessionIds,
+    splitState: { orientation: null, panes: [{ id: 'p1', conversationId: current }], activeIndex: 0 },
+    document: { querySelectorAll: () => rows },
+    toasts: [],
+    showOpToast: text => ctx.toasts.push(text),
+    openConversationInPane: async id => {
+      ctx.splitState.orientation = 'vertical';
+      ctx.splitState.panes.push({ id: 'p2', conversationId: id });
+      ctx.splitState.activeIndex = 1;
+      if (repaint) repaint();
+    },
+    selectConversation: async (id, paneId) => {
+      ctx.splitState.panes.find(p => p.id === paneId).conversationId = id;
+    },
+    setActivePaneById: paneId => { ctx.splitState.activeIndex = ctx.splitState.panes.findIndex(p => p.id === paneId); },
+  };
+  vm.createContext(ctx);
+  vm.runInContext('async ' + extractFunction('moveMainConversationToSplitAndAdvance')
+    + '; this.advance = moveMainConversationToSplitAndAdvance;', ctx);
+  return ctx;
+}
+
+const row = (id, sessionId = id, visible = true) => ({
+  dataset: { id, sessionId }, offsetParent: visible ? {} : null,
+});
+
+function assertSplit(ctx, left, right = 'moved') {
+  assert.equal(ctx.splitState.panes[0].conversationId, left);
+  assert.equal(ctx.splitState.panes[1].conversationId, right);
+  assert.equal(ctx.splitState.activeIndex, 0);
+}
+
+test('split skips repeated rows and aliases for the moved session', async () => {
+  const ctx = advanceHarness([row('moved'), row('moved'), row('alias', 'moved'), row('next')]);
+  await ctx.advance();
+  assertSplit(ctx, 'next');
+});
+
+test('split captures the next id before the sidebar repaints', async () => {
+  const next = row('next');
+  const ctx = advanceHarness([row('moved'), next], {
+    repaint: () => { next.dataset.id = 'moved'; },
+  });
+  await ctx.advance();
+  assertSplit(ctx, 'next');
+});
+
+test('split skips hidden rows and falls back to a preceding distinct session', async () => {
+  const ctx = advanceHarness([row('previous'), row('moved'), row('hidden', 'hidden', false), row('moved')]);
+  await ctx.advance();
+  assertSplit(ctx, 'previous');
+});
+
+test('split uses a visible different session when the current row is filtered out', async () => {
+  const ctx = advanceHarness([row('next'), row('later')]);
+  await ctx.advance();
+  assertSplit(ctx, 'next');
+});
+
+test('split does not create duplicate panes when no other session is visible', async () => {
+  const ctx = advanceHarness([row('moved'), row('alias', 'moved')]);
+  await ctx.advance();
+  assert.equal(ctx.splitState.panes.length, 1);
+  assert.equal(ctx.splitState.orientation, null);
+  assert.equal(ctx.splitState.activeIndex, 0);
+  assert.deepEqual([...ctx.toasts], ['No next conversation to load']);
+});
+
+test('split compares session identities even when conversation ids differ', async () => {
+  const ctx = advanceHarness([row('current', 'session'), row('alias', 'session'), row('next')], {
+    current: 'current', sessionIds: { current: 'session' },
+  });
+  await ctx.advance();
+  assertSplit(ctx, 'next', 'current');
 });

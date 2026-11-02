@@ -51054,17 +51054,24 @@
       try { showOpToast('Already split into two panes', 'error'); } catch (_) {}
       return;
     }
-    const items = [...document.querySelectorAll('.conv-item[data-id]')]
+    const items = [...document.querySelectorAll('#convList .conv-item[data-id]')]
       .filter(el => el.offsetParent && el.dataset.id);
-    const idx = items.findIndex(el => el.dataset.id === convId);
-    const next = idx >= 0 ? (items[idx + 1] || items[idx - 1]) : null;
-    await openConversationInPane(convId, null, 'vertical', { skipSameConvGuard: true });
-    if (next && next.dataset.id && next.dataset.id !== convId) {
-      await selectConversation(next.dataset.id, 'p1');
-      setActivePaneById('p1');
-    } else {
+    const sessionId = sessionIdByConv[convId] || convId;
+    const rowSessionId = el => el.dataset.sessionId || sessionIdByConv[el.dataset.id] || el.dataset.id;
+    const idx = items.findIndex(el => el.dataset.id === convId || rowSessionId(el) === sessionId);
+    const isOtherSession = el => el.dataset.id !== convId && rowSessionId(el) !== sessionId;
+    const next = items.slice(idx + 1).find(isOtherSession)
+      || items.slice(0, Math.max(0, idx)).reverse().find(isOtherSession);
+    // Opening p2 repaints the sidebar. Snapshot the id before awaiting it;
+    // a retained row element may be reused for a different conversation.
+    const nextId = next ? next.dataset.id : null;
+    if (!nextId) {
       try { showOpToast('No next conversation to load', 'ok'); } catch (_) {}
+      return;
     }
+    await openConversationInPane(convId, null, 'vertical', { skipSameConvGuard: true });
+    await selectConversation(nextId, 'p1');
+    setActivePaneById('p1');
   }
 
   function closePane(paneId) {
