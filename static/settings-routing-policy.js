@@ -19,12 +19,13 @@
     for(const row of levels(engine))option(select,typeof row==='string'?row:row.id,typeof row==='string'?row:row.label||row.id);
     if(value&&!levelIds(engine).includes(value))option(select,value,value+' · stored, unsupported');select.value=value||'';
   }
-  function modelChoices(engine,current) { return (api.models?.(engine,current)||[]).filter(row=>row.id&&row.id!=='__other__'); }
-  function modelSelect(select,engine,current,allowManual=false) {
+  function modelChoices(engine,current,eligibility) { return (api.models?.(engine,current,eligibility)||[]).filter(row=>row.id&&row.id!=='__other__'); }
+  function modelSelect(select,engine,current,allowManual=false,eligibility={}) {
     select.replaceChildren();option(select,'',allowManual?'Engine/shared model default':'Choose a catalog model');
-    for(const row of modelChoices(engine,current)) { const node=option(select,row.id,row.label||row.id);node.disabled=!!row.disabled; }
+    for(const row of modelChoices(engine,current,eligibility)) { const node=option(select,row.id,row.label||row.id);node.disabled=!!row.disabled;node.dataset.catalogDisabled=String(!!(row.nativeDisabled ?? row.disabled));node.dataset.catalogReason=row.reason||''; }
     if(current&&!Array.from(select.options).some(row=>row.value===current))option(select,current,current+' · stored identifier');
     if(allowManual)option(select,'__other__','Manual identifier…');select.value=current||'';
+    window.cccChoiceEligibility?.decorate(select,{kind:'model',engine:()=>engine,context:()=>eligibility});
   }
   function setValue(id,value) { const node=$(id);if(!node)return; if(node.tagName==='SELECT'&&!Array.from(node.options).some(row=>row.value===value))option(node,value,value+' · stored, unsupported');node.value=value??''; }
   function chainFrom(doc) { return (Array.isArray(doc?.models)?doc.models:[]).map((row,index)=>({engine:row?.engine||'',model:row?.model||'',effort:row?.effort||'',origin:index})); }
@@ -50,7 +51,9 @@
       const engine=which==='session'?draft.engine:worker.worker_engine;
       const value=which==='session'?(draft.models?.[engine]||''):(worker.worker_model||'');
       const id=which==='session'?'spawnDefaultsModel':'spawnDefaultsWorkerModel';
-      modelSelect($(id),engine,value,true);if(manual.has(which))$(id).value='__other__';
+      modelSelect($(id),engine,value,true,{name:which,disabled:draft.disabled_engines || []});
+      const engineSelect=$(which==='session'?'spawnDefaultsEngine':'spawnDefaultsWorkerEngine');
+      window.cccChoiceEligibility?.decorate(engineSelect,{kind:'engine',engine:()=>engineSelect.value,context:()=>({...(which==='session'?{engines:base.supported_engines}:{}),disabled:draft.disabled_engines || []})});if(manual.has(which))$(id).value='__other__';
       const input=$(which==='session'?'spawnDefaultsOtherModel':'spawnDefaultsWorkerOtherModel');input.style.display=manual.has(which)?'':'none';input.value=value;
     }
     $('spawnDefaultsEffortField').style.display='';$('spawnDefaultsWorkerEffortField').style.display='';$('spawnDefaultsWorkerModelField').style.display='';
@@ -90,9 +93,11 @@
     rows.forEach((entry,index)=>{
       const row=el('fieldset',null,'routing-policy-route');row.append(el('legend',(index===0&&!worker?'Primary route':'Route '+(index+1))));
       const engine=el('select');for(const id of engines)option(engine,id,api.label(id));if(!engines.includes(entry.engine))option(engine,entry.engine,entry.engine+' · stored, unsupported');engine.value=entry.engine;
-      const model=el('select');modelSelect(model,entry.engine,entry.model);
+      const model=el('select');modelSelect(model,entry.engine,entry.model,false,{engines,disabled:draft.disabled_engines || []});
       const effort=el('select');effortSelect(effort,entry.engine,entry.effort);
       for(const [labelText,node] of [['Engine',engine],['Model',model],['Effort',effort]]) { const label=el('label',labelText);label.append(node);row.append(label); }
+      window.cccChoiceEligibility?.decorate(engine,{kind:'engine',engine:()=>engine.value,context:()=>({engines,disabled:draft.disabled_engines || []})});
+      window.cccChoiceEligibility?.decorate(model,{kind:'model',engine:()=>engine.value,context:()=>({engines,disabled:draft.disabled_engines || []})});
       engine.addEventListener('change',()=>{entry.engine=engine.value;entry.model='';entry.effort='';changed();renderChain();container.querySelectorAll('fieldset')[index]?.querySelectorAll('select')[1]?.focus();});
       model.addEventListener('change',()=>{entry.model=model.value;changed();});effort.addEventListener('change',()=>{entry.effort=effort.value;changed();});
       const actions=el('div',null,'routing-policy-toolbar');
@@ -138,7 +143,7 @@
     $('routingPolicyApply').disabled=busy||!preview?.changes?.length;
     if(base&&draft.worker_inherit_session)$('spawnDefaultsWorkerOverrides').querySelectorAll('input,select,button').forEach(node=>node.disabled=true);
     if(base&&context!=='defaults') { // Retain per-row boundary controls after the global busy toggle.
-      const rows=$('routingPolicyChain').querySelectorAll('fieldset');rows.forEach((row,index)=>{row.querySelectorAll('button')[0].disabled=busy||index===0;row.querySelectorAll('button')[1].disabled=busy||index===rows.length-1;});
+      const rows=$('routingPolicyChain').querySelectorAll('fieldset');rows.forEach((row,index)=>{row.querySelector('.routing-policy-toolbar').querySelectorAll('button')[0].disabled=busy||index===0;row.querySelector('.routing-policy-toolbar').querySelectorAll('button')[1].disabled=busy||index===rows.length-1;});
       $('routingPolicyChain').lastElementChild.disabled=busy||chains[context].length>=4;
     }
   }

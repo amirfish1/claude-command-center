@@ -57796,12 +57796,15 @@
       fields.model.value = known ? selected : '__custom__';
       fields.customModel.hidden = known;
       fields.customModel.value = known ? '' : selected;
+      window.cccChoiceEligibility?.decorate(fields.model,{kind:'model',engine:()=>fields.engine.value || '',context:()=>({name:'queue',policyConfirmation:!policyMode})});
     };
     const apply = (entry) => {
       const c = (entry && entry.config) || defaults;
       fields.queue.value = (entry && entry.queue) || initialQueue || '';
       fields.workers.value = c.desired_workers == null ? 1 : c.desired_workers;
-      fields.backend.value = c.backend || 'file'; fields.engine.value = c.engine || '';
+      fields.backend.value = c.backend || 'file';
+      if(c.engine && !Array.from(fields.engine.options).some(o=>o.value===c.engine)) { const o=document.createElement('option');o.value=c.engine;o.textContent=c.engine+' · stored engine';fields.engine.append(o); }
+      fields.engine.value = c.engine || '';
       fields.path.value = c.repo_path || ''; setModel(c.model);
       var eng = fields.engine.value;
       var levels = eng ? effortLevelsForEngine(eng) : allEffortLevels();
@@ -57809,7 +57812,7 @@
       const supportsCustom = !eng || ENGINE_SUPPORTS_CUSTOM_MODEL[eng] !== false;
       const customOpt = fields.model.querySelector('option[value="__custom__"]');
       if (customOpt) customOpt.hidden = !supportsCustom;
-      if (!supportsCustom && fields.model.value === '__custom__') { fields.customModel.hidden = true; fields.customModel.value = ''; fields.model.value = ''; }
+      if (!supportsCustom && fields.model.value === '__custom__') { fields.customModel.hidden = false; }
       fields.drain.checked = !!c.auto_drain; fields.gate.checked = !!c.product_gate;
       fields.fallback.value = typeof c.fallback_to_default_worker === 'boolean' ? (c.fallback_to_default_worker ? 'on' : 'off') : '';
       fields.repo.value = c.github_repo || ''; fields.assignee.value = c.github_assignee || '';
@@ -57820,6 +57823,7 @@
       syncSegmented();
       syncDrainToggle();
       syncGateToggle();
+      window.cccChoiceEligibility?.decorate(fields.engine,{kind:'engine',engine:()=>fields.engine.value,context:()=>({name:'queue'}),chips:$('#fqEngineSeg')});
       loadRoles(entry ? entry.queue : '');
     };
     // CCC-1235: per-role engine/model (WatchTower WT-14). Loaded per queue
@@ -57915,6 +57919,7 @@
     function syncSegmented() {
       const bseg = $('#fqBackendSeg'), eseg = $('#fqEngineSeg');
       if (bseg) bseg.querySelectorAll('button').forEach(b => b.classList.toggle('is-active', (b.getAttribute('data-backend') || '') === fields.backend.value));
+      if (eseg && fields.engine.value && !Array.from(eseg.querySelectorAll('[data-engine]')).some(b=>b.dataset.engine===fields.engine.value)) { const b=document.createElement('button');b.type='button';b.className='orch-tier-chip';b.dataset.engine=fields.engine.value;b.textContent=fields.engine.value+' · stored engine';b.setAttribute('role','radio');b.onclick=()=>{fields.engine.value=b.dataset.engine;fields.engine.dispatchEvent(new Event('change',{bubbles:true}));syncSegmented();};eseg.append(b); }
       if (eseg) eseg.querySelectorAll('.orch-tier-chip').forEach(b => {
         const sel = (b.getAttribute('data-engine') || '') === fields.engine.value;
         b.classList.toggle('is-selected', sel);
@@ -57942,6 +57947,7 @@
       syncGateToggle();
     });
     const onKey = event => {
+      if(modal.style.display==='none')return;
       if (event.key === 'Escape' && !event.isComposing) {
         event.preventDefault();
         event.stopPropagation();
@@ -80235,8 +80241,8 @@
     return own ? String(own.cost_summary || own.entitlement_summary || '') : '';
   }
 
-  function modelOptionsForSpawnEngine(engine, currentModel, includeOther) {
-    engine = normalizeSpawnDefaultEngine(engine);
+  function modelOptionsForSpawnEngine(engine, currentModel, includeOther, eligibility) {
+    engine = eligibility ? String(engine || '') : normalizeSpawnDefaultEngine(engine);
     const base = MODEL_OPTIONS_BY_ENGINE[engine] || [];
     const out = [];
     const seen = new Set();
@@ -80252,7 +80258,7 @@
     };
     if (engine === 'antigravity') add('', 'Use AGY configured model');
     const cur = String(currentModel == null ? '' : currentModel).trim();
-    if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur)) && _modelAllowedForEngine(engine, cur)) {
+    if (cur && !base.some(o => _normalizeModelId(o.id) === _normalizeModelId(cur)) && (eligibility || _modelAllowedForEngine(engine, cur))) {
       add(cur, cur + ' (default)');
     }
     ((engine === 'claude' || engine === 'codex') ? latestModelsOnly(base, cur) : base).forEach(opt => add(opt.id, opt.label || opt.id, {
@@ -80260,7 +80266,7 @@
       reason: opt.availability_reason || opt.reason || '',
     }));
     if (includeOther && _engineSupportsCustomModel(engine)) add(SPAWN_DEFAULT_OTHER, 'Other...');
-    return out;
+    return eligibility && window.cccChoiceEligibility ? window.cccChoiceEligibility.modelRows(engine,out,eligibility) : out;
   }
 
   function mergeSpawnDefaults(data, opts) {
@@ -80422,6 +80428,7 @@
     return null;
   }
 
+  let _emnObservedAt = null;
   let _emnInstalled = null;        // engine -> bool, null until first probe (declared early: sync runs at init)
   let _emnForced = '';             // engine named by a failed spawn
   let _emnBusy = '';               // engine whose install terminal we opened
@@ -91733,8 +91740,10 @@
         currentConversation === '__new__' ? {cccPriority: 'user'} : undefined);
       const d = await r.json();
       const map = {};
-      (d.engines || []).forEach(e => { if (e.kind === 'spawn') map[e.engine] = !!e.installed; });
+      (d.engines || []).forEach(e => { if (e.kind === 'spawn' && typeof e.installed === 'boolean') map[e.engine] = e.installed; });
       _emnInstalled = map;
+      _emnObservedAt = new Date().toISOString();
+      window.cccChoiceEligibility?.refresh();
     } catch (_) { /* keep the last answer; never block the composer on this */ }
     renderEngineMissingNotice();
     renderNsAdvisor();
@@ -93186,6 +93195,7 @@
     const list = document.getElementById('engList');
     if (!list || !_engHubData) return;
     const rows = _engHubRows();
+    window.cccChoiceEligibility?.refresh();
     if (window.cccEngineConnection?.mounted()) { window.cccEngineConnection.render(rows, {notes:_engHubNotes, unavailable:_engHubUnavailable}); return; }
     const counts = { all: rows.length, ready: 0, setup: 0, off: 0 };
     rows.forEach(r => { counts[r.state] += 1; });
@@ -93232,6 +93242,7 @@
     if (request !== _engHubRequest) return null;
     if (!doctor || !doctor.engines) {
       _engHubUnavailable = true;
+      window.cccChoiceEligibility?.refresh();
       window.cccEngineConnection?.render(_engHubRows(), {notes:_engHubNotes, unavailable:true});
       if (!_engHubData) {
         const list = document.getElementById('engList');
@@ -93248,17 +93259,17 @@
 
   function _engHubSchedule() {
     if (_engHubTimer) { clearTimeout(_engHubTimer); _engHubTimer = null; }
-    if (!_engHubVisible()) return;
+    if (!_engHubVisible() || window.cccEngineConnection?.cachedOnly?.()) return;
     _engHubTimer = setTimeout(async () => {
       _engHubTimer = null;
-      if (_engHubVisible() && !document.hidden) await refreshEnginesHub();
+      if (_engHubVisible() && !document.hidden && !window.cccEngineConnection?.cachedOnly?.()) await refreshEnginesHub();
       _engHubSchedule();
     }, ENGINE_HUB_POLL_MS);
   }
 
   function startEnginesHub() {
     applyDisabledEnginesToPickers();
-    if (!_engHubVisible()) { _engHubSchedule(); return; }
+    if (!_engHubVisible() || window.cccEngineConnection?.cachedOnly?.()) { _engHubSchedule(); return; }
     refreshEnginesHub();
     if (!_engHubKimiVersion && !window.cccEngineConnection?.mounted()) {
       // Slow probe (spawns `kimi --version`), so once per page, not per poll.
@@ -94185,7 +94196,7 @@
       sec.setAttribute('aria-hidden', active ? 'false' : 'true');
     });
     if (sectionId !== destination || firstRun) { const details=requested?.querySelector(':scope > details'); if(details)details.open=true; }
-    if (typeof startEnginesHub === 'function') startEnginesHub();
+    if (!opts.cachedOnly && typeof startEnginesHub === 'function') startEnginesHub();
     if (opts.scroll === false) return;
     $settingsPane.scrollTop = 0;
     if (sectionId !== destination) requested?.scrollIntoView({block:'start'});
@@ -94515,7 +94526,8 @@
   });
 
   let settingsSearchFocusTimer;
-  function openSettingsModal({ focusSearch = true } = {}) {
+  var choiceEligibilityReturn;
+  function openSettingsModal({ focusSearch = true, cachedOnly = false } = {}) {
     if (!$settingsModal) return;
     _settingsModalPrevFocus = document.activeElement;
     $settingsModal.hidden = false;
@@ -94533,7 +94545,7 @@
     const $phoneRow = document.getElementById('phoneAccessRow');
     if ($phoneRow) $phoneRow.hidden = false;
     buildSettingsSearchIndex();
-    setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false });
+    setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false, cachedOnly });
     clearTimeout(settingsSearchFocusTimer);
     if (focusSearch) settingsSearchFocusTimer = setTimeout(() => {
       if (!$settingsModal.hidden && $settingsSearchInput) $settingsSearchInput.focus();
@@ -94780,6 +94792,7 @@
   }
 
   function closeSettingsModal() {
+    if(choiceEligibilityReturn){choiceEligibilityReturn();return;}
     if (!$settingsModal) return;
     window.cccVoiceSetup?.leave();
     window.cccServiceConnections?.leave();
@@ -96280,8 +96293,27 @@
     refreshUsage: refreshSettingsUsage,
   });
 
+  window.cccChoiceEligibility?.configure({
+    facts: () => ({
+      catalog:MODEL_OPTIONS_BY_ENGINE, blocked:[...spawnDefaultsState.blockedModels], disabled:spawnDefaultsState.disabled_engines || [],
+      snapshot:{engines:{...Object.fromEntries(Object.entries(_emnInstalled || {}).map(([engine,installed])=>[engine,{cli_present:installed,auth_present:null,observed_at:_emnObservedAt}])),...(_engHubData?.doctor?.engines || {})},generated_at:_engHubData?.doctor?.generated_at,unavailable:_engHubUnavailable},
+    }),
+    open: (engine, opener) => {
+      const overlay=opener.closest('.upd-overlay'), previous=_settingsCurrentSection, wasHidden=$settingsModal.hidden;
+      if(overlay)overlay.style.display='none';
+      if(_engHubTimer){clearTimeout(_engHubTimer);_engHubTimer=null;}
+      if(!window.cccEngineConnection?.open(engine,{cachedOnly:true,observedAt:_engHubData?.doctor?.generated_at,unavailable:_engHubUnavailable})) {if(overlay)overlay.style.display='';return;}
+      let back=document.getElementById('choiceEligibilityReturn');
+      if(!back){back=document.createElement('button');back.id='choiceEligibilityReturn';back.type='button';back.className='settings-action-btn';document.getElementById('engineConnectionStatus').after(back);}
+      back.textContent='Return to policy draft';
+      const restore=()=>{choiceEligibilityReturn=null;window.cccEngineConnection?.endCachedOnly();back.remove();if(overlay?.isConnected){overlay.style.display='';if(wasHidden)closeSettingsModal();}else setActiveSettingsRailSection(previous || 'routing',{cachedOnly:true});opener.scrollIntoView({block:'center'});opener.focus({preventScroll:true});document.removeEventListener('keydown',onEscape,true);};
+      const onEscape=event=>{if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();restore();}};
+      choiceEligibilityReturn=restore;back.onclick=restore;document.addEventListener('keydown',onEscape,true);
+    },
+  });
+
   window.cccRoutingPolicy?.mount({
-    models: (engine, current) => modelOptionsForSpawnEngine(engine, current, true),
+    models: (engine, current, context) => modelOptionsForSpawnEngine(engine, current, true, context),
     label: spawnEngineLabel,
     navigate: () => setActiveSettingsRailSection('routing'),
     saved: data => { mergeSpawnDefaults(data); syncSpawnEngineDependentUi(); renderEnginesHub(); if (typeof updateInputBar === 'function') updateInputBar(); },
@@ -96299,10 +96331,10 @@
   });
 
   window.cccEngineConnection?.mount({
-    navigate: () => {
+    navigate: (options={}) => {
       clearTimeout(settingsSearchFocusTimer);
-      if ($settingsModal.hidden) openSettingsModal({focusSearch:false}); else clearSettingsSearch();
-      setActiveSettingsRailSection('engines');
+      if ($settingsModal.hidden) openSettingsModal({focusSearch:false,cachedOnly:options.cachedOnly}); else clearSettingsSearch();
+      setActiveSettingsRailSection('engines',options);
     },
     refresh: () => refreshEnginesHub({fresh:true}), usageHtml:_engHubUsageHtml,
     sessionEngines:SPAWN_DEFAULT_ENGINES, workerEngines:WORKER_DEFAULT_ENGINES,
