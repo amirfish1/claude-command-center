@@ -104,7 +104,13 @@ requires the conditional source check.
 
 The binding is frozen. Reposting a different episode, revision or delivery
 owner under an existing producer source ID is refused. Use a new explicit
-report revision; an old tag-only card is not silently rebound to today's
+report revision for content changes; a new report cannot transfer delivery
+ownership. CCC reserves one owner per canonical request in its registry. The
+answer outbox reserves `ccc-outbox` in the same transaction as the answer and
+refuses routine-owned requests. Concurrent reports cannot claim different
+owners for one question. Reservations survive a card-write failure so retries
+must retain that owner; a later coordinated handoff is required to change it.
+An old tag-only card is not silently rebound to today's
 question. Source-bound titles and choices are also frozen on a repost; direct
 spawn/inject options cannot bypass conditional delivery. Date-family heuristics
 never resolve source-bound questions. Existing Q/D references and card IDs remain intact. No semantic

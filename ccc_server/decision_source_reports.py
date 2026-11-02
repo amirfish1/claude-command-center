@@ -1,7 +1,8 @@
 """Bind producer annotations to exact source requests, never to ticket tags.
 
-Validation reads only CCC's already bound registry. It does not refresh a
-source, create a request, submit an answer, or transfer delivery ownership.
+Validation reads only CCC's already bound registry. Reserving a delivery owner
+writes CCC metadata only. Neither operation refreshes a source, creates a
+request, submits an answer, or transfers existing delivery ownership.
 The retained link is frozen: edits to the source require a new report revision.
 """
 import json
@@ -54,10 +55,40 @@ def bind_source_request(value, *, database=None):
                 or ('request_revision' in value and (type(value['request_revision']) is not int
                                                     or value['request_revision'] != row['revision']))):
             raise SourceReportConflict('Source request changed; refresh coverage and report a new revision')
+        owner = connection.execute('SELECT value FROM metadata WHERE key=?',
+                                   ('delivery_owner:' + row['request_id'],)).fetchone()
+        if owner and owner['value'] != value['delivery_owner']:
+            raise SourceReportConflict('This question already belongs to another delivery owner')
         # Detach the producer object and return canonical identity from the
         # registry, not an ID supplied by the producer or inferred from Q.
         result = json.loads(json.dumps(value, allow_nan=False))
         result.update(request_id=row['request_id'], request_revision=row['revision'])
         return result
+    finally:
+        connection.close()
+
+
+def reserve_delivery_owner(value, *, database=None):
+    """Fence all reports and the outbox to one owner per canonical request.
+
+    A reservation survives card-write failures, so a retry must use the same
+    owner. Changing owners requires an explicit later coordinated handoff;
+    deleting or rewriting a card never transfers pending answer obligations.
+    """
+    if database is None:
+        from ccc_server import decision_inbox
+        database = decision_inbox._state_root() / 'decision-inbox' / 'requests.sqlite3'
+    connection = sqlite3.connect(Path(database).resolve().as_uri() + '?mode=rw', uri=True, timeout=1)
+    try:
+        connection.execute('BEGIN IMMEDIATE')
+        row = connection.execute('SELECT revision,status,answer_state FROM requests WHERE request_id=?',
+                                 (value['request_id'],)).fetchone()
+        if row != (value['request_revision'], 'open', 'none'):
+            raise SourceReportConflict('Source request changed before delivery ownership was reserved')
+        key = 'delivery_owner:' + value['request_id']
+        connection.execute('INSERT OR IGNORE INTO metadata VALUES (?,?)', (key, value['delivery_owner']))
+        if connection.execute('SELECT value FROM metadata WHERE key=?', (key,)).fetchone()[0] != value['delivery_owner']:
+            raise SourceReportConflict('This question already belongs to another delivery owner')
+        connection.commit()
     finally:
         connection.close()

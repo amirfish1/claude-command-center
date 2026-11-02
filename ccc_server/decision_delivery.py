@@ -81,6 +81,10 @@ class AnswerOutbox:
             if (request['revision'] != expected_revision or request['status'] != 'open'
                     or (request['answer_state'] != 'none' and request['delivery_state'] != 'rejected')):
                 raise AnswerConflict('Request changed or already has an answer')
+            key = 'delivery_owner:' + request_id
+            db.execute('INSERT OR IGNORE INTO metadata VALUES (?,?)', (key, 'ccc-outbox'))
+            if db.execute('SELECT value FROM metadata WHERE key=?', (key,)).fetchone()[0] != 'ccc-outbox':
+                raise AnswerConflict('This request has another answer delivery owner')
             answer_id = str(uuid.uuid4())
             payload = json.dumps({'answer': supplied, 'source': content,
                                   'created_at': datetime.now(timezone.utc).isoformat()}, sort_keys=True)

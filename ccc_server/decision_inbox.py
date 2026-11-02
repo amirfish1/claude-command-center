@@ -1579,6 +1579,15 @@ def decision_inbox_ingest(payload, *, cards=None, now=None, persist=True, cfg=No
                                                      or existing.get('options') != fields['options']):
             return {'ok': False, 'error': 'Source-bound choices are frozen; use a new report revision.',
                     'code': 'source_request_conflict'}
+    if fields['extra'].get('source_request'):
+        from ccc_server.decision_source_reports import reserve_delivery_owner
+        try:
+            reserve_delivery_owner(fields['extra']['source_request'])
+        except ValueError as error:
+            return {'ok': False, 'error': str(error), 'code': 'source_request_conflict'}
+        except (OSError, sqlite3.Error):
+            return {'ok': False, 'error': 'Source delivery ownership is unavailable', 'code': 'source_request_unavailable'}
+    if existing is not None:
         status = existing.get("status")
         blocked = status == "open"
         if status == "snoozed":

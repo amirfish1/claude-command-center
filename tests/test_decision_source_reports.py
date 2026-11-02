@@ -117,7 +117,7 @@ def test_frozen_binding_and_delivery_owner_cannot_change_on_repost(setup):
     assert cards == before
     assert di.decision_inbox_ingest(dict(payload, source_id='new-producer-revision',
                                        source_request=dict(typed, delivery_owner='ccc-outbox')),
-                                  cards=cards, persist=False)['ok']
+                                  cards=cards, persist=False)['ok'] is False
     assert first['card_id'] in cards
 
 
@@ -154,6 +154,37 @@ def test_date_family_heuristic_does_not_resolve_a_source_question(setup):
     untyped = {key: value for key, value in payload.items() if key != 'source_request'}
     assert di.decision_inbox_ingest(dict(untyped, source_id='daily:2020-01-03'), cards=cards, persist=False)['ok']
     assert cards[first['card_id']]['status'] == 'open'
+
+
+def test_routine_owned_request_cannot_enter_ccc_outbox(setup):
+    from ccc_server.decision_delivery import AnswerConflict, AnswerOutbox
+    registry, _, row, _, payload = setup
+    assert di.decision_inbox_ingest(payload, cards={}, persist=False)['ok']
+    with pytest.raises(AnswerConflict, match='another answer delivery owner'):
+        AnswerOutbox(registry).record(row['request_id'], expected_revision=row['revision'],
+                                     text='A', idempotency_key='answer-key')
+    assert registry.list_requests()[0]['answer_state'] == 'none'
+
+
+def test_outbox_reservation_prevents_later_routine_claim(setup):
+    from ccc_server.decision_delivery import AnswerOutbox
+    registry, _, row, _, payload = setup
+    answer = AnswerOutbox(registry).record(row['request_id'], expected_revision=row['revision'],
+                                          text='A', idempotency_key='answer-key')
+    assert answer['state'] == 'pending'
+    assert di.decision_inbox_ingest(payload, cards={}, persist=False)['ok'] is False
+
+
+def test_concurrent_producer_owners_cannot_both_reserve_the_same_question(setup):
+    from concurrent.futures import ThreadPoolExecutor
+    _, _, _, typed, payload = setup
+    alternatives = [dict(payload, source_id=owner, source_request=dict(typed, delivery_owner=owner))
+                    for owner in ('routine', 'ccc-outbox')]
+    cards = {}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda value: di.decision_inbox_ingest(value, cards=cards, persist=False), alternatives))
+    assert sum(r['ok'] for r in results) == 1
+    assert len(cards) == 1
 
 
 def test_missing_registry_is_unavailable_and_does_not_initialize_it(tmp_path, monkeypatch):
