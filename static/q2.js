@@ -2964,6 +2964,7 @@
             + '</span>'
           : '')
       + '<span class="q2-spacer"></span>'
+      + '<button type="button" class="q2-btn" data-q2-act="latest">Latest activity</button>'
       + '<button type="button" class="q2-btn" data-q2-act="copy">Copy prompt</button>'
       + '</div>';
 
@@ -3337,6 +3338,19 @@
   async function detailAction(act, btn) {
     var ref = state.ref;
     if (!ref) return;
+
+    if (act === 'latest') {
+      var host = $('q2Detail');
+      if (!host) return;
+      var events = Array.from(host.querySelectorAll('.q2-tl > .q2-tl-row:not(.is-now)'))
+        .filter(function (el) { return el.getClientRects().length; });
+      var target = events[events.length - 1] || host.querySelector('.q2-tl');
+      if (!target) return;
+      target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: 'start', behavior: 'instant' });
+      return;
+    }
 
     if (act === 'copy') {
       var text = (state.detail && (state.detail._github_body || state.detail.text)) || titleOf(state.detail) || '';

@@ -55908,6 +55908,7 @@
           + (runBusy ? ' disabled aria-busy="true"' : '') + '>'
           + (runQueued ? 'Cancel queued run' : '▶ Run now') + '</button>'
         : '')
+      +     '<button type="button" class="ann-btn" data-ux-latest>Latest activity</button>'
       +     '<button type="button" class="ann-btn" data-ux-copy>Copy prompt</button>'
       +   '</div>'
       + '</div>'
@@ -55928,6 +55929,16 @@
     modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 
     modal.querySelectorAll('[data-ux-close]').forEach(btn => btn.addEventListener('click', close));
+
+    modal.querySelector('[data-ux-latest]').addEventListener('click', () => {
+      const events = Array.from(modal.querySelectorAll('.uxq-timeline > .uxq-tl-evt:not(.uxq-tl-open)'))
+        .filter(el => el.getClientRects().length);
+      const target = events[events.length - 1] || modal.querySelector('.uxq-timeline');
+      if (!target) return;
+      target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: 'start', behavior: 'instant' });
+    });
 
     // Top badges (status/lane/priority/type) jump to the section that
     // explains or acts on that badge, instead of sitting there inert
