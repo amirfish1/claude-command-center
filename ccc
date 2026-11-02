@@ -558,6 +558,14 @@ def _resolve_target(base, target):
     return target, None
 
 
+def _sent_by_agent_session(attr, sender_sid, target_sid):
+    """True when an agent session (not a human shell) is the sender."""
+    author = (attr or {}).get("author") or {}
+    if author.get("kind") != "session" or not sender_sid:
+        return False
+    return str(sender_sid) != str(target_sid)
+
+
 def cmd_send(args):
     base = _resolve_server(args.server)
     if not base:
@@ -625,6 +633,12 @@ def cmd_send(args):
             payload["stop"] = True
     elif args.queue:
         payload["mode"] = "queue"
+    elif _sent_by_agent_session(attr, sender_sid, sid):
+        # Session-to-session messages steer by default: a peer's report or
+        # coordination ("holding release until...") is useless if it waits
+        # behind the receiver's whole turn. Pass --queue to wait instead.
+        # Humans typing `ccc send` in a shell keep the plain send.
+        payload["mode"] = "steer"
     try:
         status, result = _post_json(base, "/api/inject-input", payload)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
@@ -2740,9 +2754,11 @@ def main(argv=None):
     p.add_argument("text", nargs="*", help="the message (or pipe it on stdin)")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--steer", action="store_true",
-                   help="interrupt the session's current turn with this message")
+                   help="interrupt the session's current turn with this message "
+                        "(the default when an agent session is the sender)")
     g.add_argument("--queue", action="store_true",
-                   help="queue behind the current turn instead of delivering now")
+                   help="queue behind the current turn instead of delivering now "
+                        "(the default when a human runs ccc send)")
     p.add_argument("--from", dest="sender", metavar="SESSION_ID",
                    help="sender session id or name for peer attribution (defaults to the current engine session)")
     p.add_argument("--new-if-large-and-stale", action="store_true",

@@ -1,0 +1,1 @@
+- `ccc send` from an agent session now steers into the receiving session's current turn by default, so coordination between sessions no longer waits behind a whole turn. Pass `--queue` to wait instead. A person running `ccc send` from a shell keeps the old behaviour.
