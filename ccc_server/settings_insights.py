@@ -56,7 +56,8 @@ def queue_overview(config, defaults, resolve=None):
                      'engine': engine, 'model': model or 'Engine default', 'effort': effort or 'Engine default',
                      'workers': conf.get('desired_workers', 1),
                      'pins': {k: conf[k] for k in ('engine', 'model', 'effort') if conf.get(k)},
-                     'fallback': conf.get('fallback_to_default_worker')})
+                     'fallback': conf.get('fallback_to_default_worker'),
+                     'headroom': conf.get('headroom_dispatch')})
     return {'ok': True, 'queues': rows, 'revision': revision(config), 'defaults_revision': revision(defaults),
             'worker_default': {'engine': defaults.get('worker_engine') or 'WatchTower default',
                                'model': defaults.get('worker_model') or (defaults.get('models') or {}).get(defaults.get('worker_engine')) or 'Engine default',

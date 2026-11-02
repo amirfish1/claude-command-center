@@ -22,7 +22,11 @@
     const plan = plans.find(plan => plan.id === card.select.value);
     card.output.replaceChildren();
     if (!plan) { card.output.append(el('p','This context is no longer available. Choose another context; no launch result is inferred.')); return; }
-    card.output.append(el('p', plan.basis === 'consumer' ? 'Resolved by launch consumers · ' + observedAt : 'Configured only · consumer unavailable · ' + observedAt, 'settings-launch-basis'));
+    renderPlan(card.output, plan, observedAt);
+  }
+  function renderPlan(output, plan, stamp = 'Saved routing') {
+    output.replaceChildren();
+    output.append(el('p', plan.basis === 'consumer' ? 'Resolved by launch consumers · ' + stamp : 'Configured only · consumer unavailable · ' + stamp, 'settings-launch-basis'));
     const details = el('details', null, 'settings-launch-details');
     details.append(el('summary', 'Sources & runtime details'));
     const fields = el('dl', null, 'settings-launch-fields');
@@ -34,12 +38,12 @@
       dd.append(el('span', sources[field.source] || field.source, 'settings-source-badge'));
       details.append(el('p', label + ': ' + field.explanation)); row.append(dd); fields.append(row);
     }
-    card.output.append(fields);
+    output.append(fields);
     if (Object.keys(plan.pins || {}).length) {
       details.append(el('p', 'Stored queue pins: ' + Object.entries(plan.pins).map(([key,value]) => key + ' = ' + value).join(' · ')));
     }
     const fallback = plan.fallback;
-    card.output.append(el('h4', 'Failure fallback · ' + (fallback.enabled ? 'On' : 'Off') + (fallback.source ? ' · ' + (fallback.source === 'queue_pin' ? 'Queue override' : fallback.legacy ? 'Legacy default' : 'Worker policy') : '')));
+    output.append(el('h4', 'Failure fallback · ' + (fallback.enabled ? 'On' : 'Off') + (fallback.source ? ' · ' + (fallback.source === 'queue_pin' ? 'Queue override' : fallback.legacy ? 'Legacy default' : 'Worker policy') : '')));
     details.append(el('p', fallback.explanation));
     if (fallback.routes.length) {
       details.append(el('p', (fallback.verified ? 'Consumer-resolved' : 'Configured, unverified') + ' candidate order (not a selected replacement):'));
@@ -47,12 +51,12 @@
       for (const route of fallback.routes) order.append(el('li', [route.engine, route.model || 'Engine default model', route.effort || 'No effort override'].join(' · ') + (route.same_engine ? ' — current engine; skipped after its failure' : '')));
       details.append(order);
     } else if (plan.id !== 'session') {
-      card.output.append(el('p', fallback.enabled ? 'No verified replacement candidates. A failure may park the queue.' : 'No replacement selected.'));
+      output.append(el('p', fallback.enabled ? 'No verified replacement candidates. A failure may park the queue.' : 'No replacement selected.'));
     }
-    if (plan.id !== 'session') card.output.append(el('p', 'Headroom dispatch: ' + (fallback.headroom ? 'On · decision deferred until dispatch' : 'Off') + ' · ' + (fallback.headroom_source === 'queue_pin' ? 'Queue override' : 'Worker policy')));
-    for (const warning of plan.warnings || []) card.output.append(el('p', warning, 'settings-launch-warning'));
+    if (plan.id !== 'session') output.append(el('p', 'Headroom dispatch: ' + (fallback.headroom ? 'On · decision deferred until dispatch' : 'Off') + ' · ' + (fallback.headroom_source === 'queue_pin' ? 'Queue override' : 'Worker policy')));
+    for (const warning of plan.warnings || []) output.append(el('p', warning, 'settings-launch-warning'));
     for (const note of plan.notes) details.append(el('p', note, 'settings-row-desc'));
-    card.output.append(details);
+    output.append(details);
   }
   function accept(data) {
     if (!data?.launch_preview?.plans) return false;
@@ -109,5 +113,5 @@
     window.addEventListener('ccc:spawn-defaults-changed',schedule);
     schedule();
   }
-  window.cccLaunchPreview = Object.freeze({mount,refresh,accept,selectQueue});
+  window.cccLaunchPreview = Object.freeze({mount,refresh,accept,selectQueue,renderPlan});
 })();

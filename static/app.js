@@ -56411,156 +56411,10 @@
       + escapeHtml(label) + '</button>';
   }
 
-  // CCC-1234: the plan chip opens a quick popover of 1-tap chips (the same
-  // usage-ranked engine/model favorites the new-session strip shows, plus
-  // the effort ladder) instead of the full queue manager. A tap saves at
-  // once; "More settings" still opens the manager. /api/queue/config is a
-  // full replace, so each save re-sends the queue's current fields.
-  let _fqPlanPopEl = null;
-  let _fqPlanPopCloser = null;
-  function _closeFqPlanPopover() {
-    if (_fqPlanPopEl) { _fqPlanPopEl.remove(); _fqPlanPopEl = null; }
-    if (_fqPlanPopCloser) {
-      document.removeEventListener('click', _fqPlanPopCloser, true);
-      document.removeEventListener('keydown', _fqPlanPopCloser, true);
-      _fqPlanPopCloser = null;
-    }
-  }
+  // The launch chip and configuration gear share the canonical queue controls.
+  // Queue exceptions are staged locally rather than saved on a quick-pick tap.
   async function _openFqPlanPopover(btn, queue) {
-    _closeFqPlanPopover();
-    const pop = document.createElement('div');
-    pop.className = 'fq-plan-pop';
-    pop.setAttribute('role', 'dialog');
-    pop.setAttribute('aria-label', 'Worker engine, model and effort for ' + queue);
-    pop.innerHTML = '<div class="fq-plan-pop-status">Loading…</div>';
-    document.body.appendChild(pop);
-    _fqPlanPopEl = pop;
-    const place = () => {
-      const r = btn.getBoundingClientRect();
-      const pr = pop.getBoundingClientRect();
-      pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pr.width - 8)) + 'px';
-      const below = window.innerHeight - r.bottom;
-      pop.style.top = (below >= pr.height + 12 || below >= r.top)
-        ? Math.min(r.bottom + 4, window.innerHeight - pr.height - 8) + 'px'
-        : Math.max(8, r.top - pr.height - 4) + 'px';
-    };
-    place();
-    _fqPlanPopCloser = (ev) => {
-      if (isImeKey(ev)) return;
-      if (ev.type === 'keydown' && ev.key === 'Escape') { _closeFqPlanPopover(); return; }
-      if (ev.type === 'click' && !pop.contains(ev.target) && !btn.contains(ev.target)) _closeFqPlanPopover();
-    };
-    document.addEventListener('click', _fqPlanPopCloser, true);
-    document.addEventListener('keydown', _fqPlanPopCloser, true);
-
-    let options;
-    try {
-      const res = await fetch('/api/queue/config-options', { method: 'POST' });
-      options = await res.json();
-      if (!res.ok || !options.ok) throw new Error((options && options.error) || res.status);
-    } catch (e) {
-      if (_fqPlanPopEl === pop) pop.querySelector('.fq-plan-pop-status').textContent = 'Could not load queue config: ' + e;
-      return;
-    }
-    if (_fqPlanPopEl !== pop) return;
-    const q = (options.queues || []).find(x => String(x.queue).toUpperCase() === String(queue).toUpperCase()) || {};
-    const conf = q.config || q;
-    const cur = { engine: conf.engine || '', model: conf.model || '', effort: conf.effort || '' };
-    const plan = { engine: btn.getAttribute('data-engine') || '', model: btn.getAttribute('data-model') || '' };
-    const allowedEngines = new Set(Object.keys(options.models_by_engine || {}));
-    // "claude-opus-5-5" and "opus-5-5" are one model: one chip, and the
-    // queue's own pin wins so it reads as selected.
-    const sameModel = (p, e, m) => p.engine === e && _normalizeModelId(p.model) === _normalizeModelId(m);
-    const favs = [];
-    const candidates = (cur.engine ? [{ engine: cur.engine, model: cur.model }] : [])
-      .concat(typeof getTopSpawnPicks === 'function' ? getTopSpawnPicks() : []);
-    candidates.forEach(p => {
-      if (!p || !p.engine || (allowedEngines.size && !allowedEngines.has(p.engine))) return;
-      if (!favs.some(f => sameModel(f, p.engine, p.model))) favs.push(p);
-    });
-    const effEngine = cur.engine || plan.engine;
-    const efforts = ((options.efforts_by_engine || {})[effEngine]) || [];
-    const glyph = e => '<span class="orch-glyph orch-glyph-' + escapeAttr(e) + '">'
-      + escapeHtml(MODEL_PICKER_ENGINE_GLYPHS[e] || String(e).charAt(0).toUpperCase() || '?') + '</span>';
-    const chip = (attrs, sel, inner, title) => '<button type="button" class="orch-tier-chip' + (sel ? ' is-selected' : '') + '"'
-      + ' role="radio" aria-checked="' + (sel ? 'true' : 'false') + '" ' + attrs
-      + (title ? ' title="' + escapeAttr(title) + '"' : '') + '>' + inner + '</button>';
-    const modelChips = chip('data-fq-plan-default="1"', !cur.engine, 'Default',
-      'Clear the queue pin: workers use the CCC worker default')
-      + favs.map(p => chip('data-engine="' + escapeAttr(p.engine) + '" data-model="' + escapeAttr(p.model || '') + '"',
-        !!cur.engine && sameModel(p, cur.engine, cur.model),
-        glyph(p.engine) + escapeHtml(getModelPillLabel(p.engine, p.model || '')),
-        p.engine + (p.model ? ' · ' + p.model : ' · engine default'))).join('');
-    const effortChips = efforts.length
-      ? chip('data-effort=""', !cur.effort, 'Default', 'Engine default effort')
-        + efforts.map(e => chip('data-effort="' + escapeAttr(e) + '"', e === cur.effort,
-          escapeHtml(REASONING_LEVEL_LABELS[e] || e))).join('')
-      : '';
-    pop.innerHTML = '<div class="fq-plan-pop-head">Next ' + escapeHtml(queue) + ' worker</div>'
-      + '<div class="fq-plan-pop-label">Engine · model</div>'
-      + '<div class="fq-plan-pop-chips" role="radiogroup" aria-label="Engine and model">' + modelChips + '</div>'
-      + (effortChips ? '<div class="fq-plan-pop-label">Effort</div>'
-        + '<div class="fq-plan-pop-chips" role="radiogroup" aria-label="Effort">' + effortChips + '</div>' : '')
-      + '<div class="fq-plan-pop-foot"><button type="button" class="fq-plan-pop-more" data-fq-plan-more="1">More settings…</button>'
-      + '<span class="fq-plan-pop-status" aria-live="polite"></span></div>';
-    place();
-    const status = pop.querySelector('.fq-plan-pop-status');
-
-    async function save(next) {
-      status.textContent = 'Saving…';
-      status.className = 'fq-plan-pop-status';
-      const body = {
-        queue: q.queue || queue,
-        repo_path: conf.repo_path || '',
-        backend: conf.backend || 'file',
-        github_repo: conf.github_repo || '',
-        github_assignee: conf.github_assignee || '',
-        engine: next.engine,
-        model: next.model,
-        effort: next.effort,
-        desired_workers: Number.isFinite(Number(conf.desired_workers)) ? Number(conf.desired_workers) : 1,
-        claim_types: Array.isArray(conf.claim_types) ? conf.claim_types : [],
-        auto_drain: conf.auto_drain === true,
-        product_gate: conf.product_gate === true,
-      };
-      try {
-        let r = await fetch('/api/queue/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        let d = await r.json().catch(() => ({}));
-        if (!r.ok && /polic/i.test(String(d.error || '')) && window.confirm(String(d.error) + '\n\nUse it anyway?')) {
-          body.confirm_blocked_model = true;
-          r = await fetch('/api/queue/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-          d = await r.json().catch(() => ({}));
-        }
-        if (!r.ok || !d.ok) throw new Error((d && d.error) || r.status);
-      } catch (e) {
-        if (_fqPlanPopEl !== pop) return;
-        status.textContent = String(e && e.message ? e.message : e);
-        status.className = 'fq-plan-pop-status is-err';
-        return;
-      }
-      _closeFqPlanPopover();
-      _uxqHealthCache.ts = 0;
-      _uxqItemsCache.ts = 0;
-      await _renderQueuePanel();
-    }
-    pop.addEventListener('click', (ev) => {
-      const t = ev.target.closest && ev.target.closest('button');
-      if (!t || !pop.contains(t)) return;
-      if (t.hasAttribute('data-fq-plan-more')) {
-        _closeFqPlanPopover();
-        openQueueManager(queue);
-      } else if (t.hasAttribute('data-fq-plan-default')) {
-        save({ engine: '', model: '', effort: '' });
-      } else if (t.hasAttribute('data-effort')) {
-        // An effort needs a pinned engine to mean anything; pin the one the
-        // next worker already runs as.
-        save({ engine: cur.engine || plan.engine, model: cur.engine ? cur.model : '', effort: t.getAttribute('data-effort') });
-      } else if (t.hasAttribute('data-engine')) {
-        const engine = t.getAttribute('data-engine');
-        const ladder = ((options.efforts_by_engine || {})[engine]) || [];
-        save({ engine, model: t.getAttribute('data-model') || '', effort: ladder.includes(cur.effort) ? cur.effort : '' });
-      }
-    });
+    await openQueueManager(queue, false, btn);
   }
   function _uxqRepaintStatusStrip() {
     const liveWorkers = ((_uxqHealthCache && _uxqHealthCache.wt_workers) || [])
@@ -57394,14 +57248,13 @@
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-plan-queue]');
         if (!btn) return;
         ev.preventDefault(); ev.stopPropagation();
-        if (_fqPlanPopEl) { _closeFqPlanPopover(); return; }
         _openFqPlanPopover(btn, btn.getAttribute('data-fq-plan-queue'));
       });
       $health.addEventListener('click', async (ev) => {
         const btn = ev.target && ev.target.closest && ev.target.closest('[data-fq-config-queue], #filesQueueConfigure');
         if (!btn) return;
         ev.preventDefault(); ev.stopPropagation();
-        await openQueueManager(btn.getAttribute('data-fq-config-queue') || _uxqLastResolvedProject || _uxqWorkerProject());
+        await openQueueManager(btn.getAttribute('data-fq-config-queue') || _uxqLastResolvedProject || _uxqWorkerProject(), false, btn);
       });
       $health.addEventListener('click', scopeFromRow);
       $health.addEventListener('keydown', (ev) => {
@@ -57799,8 +57652,20 @@
   // The compact health-row controls remain useful shortcuts; this manager is
   // the discoverable place for every field `wt config` supports.
   window.openQueueManager = openQueueManager;
-  async function openQueueManager(initialQueue) {
-    document.querySelectorAll('.fq-config-composer').forEach(n => n.remove());
+  async function openQueueManager(initialQueue, fullConfig = false, trigger = document.activeElement) {
+    // Queue status can repaint during loading or while the dialog is open.
+    const opener = trigger;
+    const openerId = opener?.id;
+    const openerAttribute = ['data-fq-plan-queue', 'data-fq-config-queue', 'data-queue-policy']
+      .find(attribute => opener?.hasAttribute(attribute));
+    const openerValue = openerAttribute ? opener.getAttribute(openerAttribute) : null;
+    const restoreOpener = () => {
+      const candidates = [opener, openerId && document.getElementById(openerId)];
+      if (openerAttribute) candidates.push(...Array.from(document.querySelectorAll('[' + openerAttribute + ']'))
+        .filter(element => element.getAttribute(openerAttribute) === openerValue));
+      candidates.find(element => element?.isConnected && !element.disabled && element.getClientRects().length)?.focus();
+    };
+    document.querySelectorAll('.fq-config-composer').forEach(n => n.cccClose ? n.cccClose() : n.remove());
     let options;
     try {
       const res = await fetch('/api/queue/config-options', { method: 'POST' });
@@ -57813,6 +57678,7 @@
     const defaults = options.defaults || {};
     const queues = Array.isArray(options.queues) ? options.queues : [];
     const findQueue = (name) => queues.find(q => String(q.queue).toUpperCase() === String(name || '').toUpperCase());
+    const policyMode = !!findQueue(initialQueue) && !fullConfig && !!window.cccQueuePolicy;
     const pathChoices = (options.repo_paths || []).map(p => '<option value="' + escapeAttr(p) + '"></option>').join('');
     const githubRepoChoices = (options.github_repos || []).map(repo => '<option value="' + escapeAttr(repo) + '"></option>').join('');
     const modelsByEngine = options.models_by_engine || {};
@@ -57827,7 +57693,7 @@
       + '<div class="upd-dialog fq-config-dialog" role="dialog" aria-modal="true" aria-labelledby="fqConfigTitle">'
       +   '<div class="fq-ticket-header"><h2 class="upd-title" id="fqConfigTitle">Queue configuration</h2><button type="button" class="fq-ticket-close" data-fq-config-cancel aria-label="Close">&times;</button></div>'
       +   '<div class="fq-ticket-body fq-config-body">'
-      +     '<div class="fq-config-help">Create a queue with safe local defaults, or select an existing queue to revise it. Changes are written to WatchTower’s queue config immediately.</div>'
+      +     '<div class="fq-config-help">Create a queue with safe local defaults, or select an existing queue to revise it. Changes are saved only when you apply them.</div>'
       +     '<div class="fq-config-section"><div class="fq-config-eyebrow">Queue</div><div class="fq-config-grid">'
       +       '<div class="fq-config-field"><label for="fqConfigQueue">Queue name</label><input id="fqConfigQueue" list="fqConfigQueues" maxlength="64" placeholder="e.g. PRODUCT" autocomplete="off"><datalist id="fqConfigQueues">' + queueChoices + '</datalist><span class="fq-config-help">Letters, numbers, _ and - only.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigWorkers">Workers</label><input id="fqConfigWorkers" type="number" min="1" max="16"><span class="fq-config-help">Concurrent workers when auto-drain is on.</span></div>'
@@ -57835,7 +57701,7 @@
       +     '</div></div>'
       +     '<div class="fq-config-section"><div class="fq-config-eyebrow">Worker</div><div class="fq-config-grid">'
       +       '<div class="fq-config-field wide"><label>Engine</label><div class="fq-engine-chips" id="fqEngineSeg" role="radiogroup" aria-label="Worker engine">'
-      +         '<button type="button" class="orch-tier-chip" data-engine="" role="radio"><span class="orch-glyph" style="font-size:8px">⚙</span>CCC default</button>'
+      +         '<button type="button" class="orch-tier-chip" data-engine="" role="radio"><span class="orch-glyph" style="font-size:8px">⚙</span>Worker default</button>'
       +         '<button type="button" class="orch-tier-chip" data-engine="claude" role="radio"><span class="orch-glyph orch-glyph-claude">C</span>Claude</button>'
       +         '<button type="button" class="orch-tier-chip" data-engine="codex" role="radio"><span class="orch-glyph orch-glyph-codex">X</span>Codex</button>'
       +         '<button type="button" class="orch-tier-chip" data-engine="gemini" role="radio"><span class="orch-glyph orch-glyph-gemini">G</span>Gemini</button>'
@@ -57850,9 +57716,9 @@
       +         '<button type="button" class="orch-tier-chip" data-engine="aider" role="radio"><span class="orch-glyph orch-glyph-aider">A</span>Aider</button>'
       +         '<button type="button" class="orch-tier-chip" data-engine="droid" role="radio"><span class="orch-glyph orch-glyph-droid">D</span>Droid</button>'
       +         '<button type="button" class="orch-tier-chip" data-engine="pi" role="radio"><span class="orch-glyph orch-glyph-pi">P</span>Pi</button>'
-      +       '</div><select id="fqConfigEngine" hidden><option value="">CCC spawn default</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option><option value="cursor">Cursor</option><option value="antigravity">Antigravity</option><option value="kilo">Kilo</option><option value="opencode">OpenCode</option><option value="kimi">Kimi</option><option value="hermes">Hermes</option><option value="devin">Devin</option><option value="grok">Grok</option><option value="aider">Aider</option><option value="droid">Droid</option><option value="pi">Pi</option></select><span class="fq-config-help">Choose an override, or let CCC pick its shared worker engine default.</span></div>'
+      +       '</div><select id="fqConfigEngine" hidden><option value="">Follow worker default</option><option value="claude">Claude</option><option value="codex">Codex</option><option value="gemini">Gemini</option><option value="cursor">Cursor</option><option value="antigravity">Antigravity</option><option value="kilo">Kilo</option><option value="opencode">OpenCode</option><option value="kimi">Kimi</option><option value="hermes">Hermes</option><option value="devin">Devin</option><option value="grok">Grok</option><option value="aider">Aider</option><option value="droid">Droid</option><option value="pi">Pi</option></select><span class="fq-config-help">Choose an override, or let CCC pick its shared worker engine default.</span></div>'
       +       '<div class="fq-config-field"><label for="fqConfigModel">Model (optional)</label><select id="fqConfigModel"></select><input id="fqConfigCustomModel" placeholder="Model id" hidden><span class="fq-config-help">Cost tiers shown per model; Highspeed is the fast (2× price) tier.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigEffort">Effort (optional)</label><select id="fqConfigEffort"><option value="">Use engine default</option><option value="low">Light</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra High</option><option value="max">Max</option></select><span class="fq-config-help">Reasoning budget passed to WatchTower workers for this queue.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigEffort">Effort (optional)</label><select id="fqConfigEffort"><option value="">Follow worker default</option><option value="low">Light</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra High</option><option value="max">Max</option></select><span class="fq-config-help">Reasoning budget passed to WatchTower workers for this queue.</span></div>'
       +       '<div class="fq-config-field wide"><label for="fqConfigPath">Working repository</label><input id="fqConfigPath" list="fqConfigPaths" placeholder="/path/to/repository"><datalist id="fqConfigPaths">' + pathChoices + '</datalist><span class="fq-config-help">Suggestions come from queues already configured on this machine.</span></div>'
       +     '</div></div>'
       +     '<div class="fq-config-section fq-config-roles" hidden><div class="fq-config-eyebrow">Roles</div>'
@@ -57862,7 +57728,7 @@
       +       '<div class="fq-config-field"><label>Drain policy</label><div class="fq-config-checkrow"><button type="button" class="settings-toggle" id="fqDrainToggle" role="switch" aria-checked="false" aria-label="Auto-drain new work"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button><span class="fq-config-checkrow-label">Auto-drain new work</span></div><input type="checkbox" id="fqConfigDrain" hidden><span class="fq-config-help">Off keeps tickets as a deliberate backlog until run manually.</span></div>'
       +       '<div class="fq-config-field"><label>Claim types</label><div class="fq-config-checks"><label><input name="fq-config-claim-type" value="bug" type="checkbox"> Bugs</label><label><input name="fq-config-claim-type" value="feature" type="checkbox"> Features</label></div><span class="fq-config-help">Choose neither to accept both ticket types.</span></div>'
       +       '<div class="fq-config-field"><label>Product gate</label><div class="fq-config-checkrow"><button type="button" class="settings-toggle" id="fqGateToggle" role="switch" aria-checked="false" aria-label="Require Ack before workers implement"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button><span class="fq-config-checkrow-label">Require my Ack before implementing</span></div><input type="checkbox" id="fqConfigGate" hidden><span class="fq-config-help">Workers post a short pitch after diagnosis and wait for Ack/Nack.</span></div>'
-      +       '<div class="fq-config-field"><label for="fqConfigFallback">Worker fallback</label><select id="fqConfigFallback" class="bug-input"><option value="">Use machine default</option><option value="on">On</option><option value="off">Off</option></select><span class="fq-config-help">On/Off overrides Settings → Engines → Worker and managed model fallback. Stored model pins stay unchanged. Explicit queue effort wins.</span></div>'
+      +       '<div class="fq-config-field"><label for="fqConfigFallback">Worker fallback</label><select id="fqConfigFallback" class="bug-input"><option value="">Use machine default</option><option value="on">On</option><option value="off">Off</option></select><span class="fq-config-help">Unset follows the machine worker fallback policy. Off is an explicit queue exception. Fallback never rewrites stored pins.</span></div>'
       +     '</div></div>'
       +     '<div class="fq-config-section fq-config-github" hidden><div class="fq-config-eyebrow">GitHub</div><div class="fq-config-grid">'
       +       '<div class="fq-config-field wide"><label for="fqConfigGithubRepo">GitHub repository</label><input id="fqConfigGithubRepo" list="fqConfigGithubRepos" placeholder="owner/repository"><datalist id="fqConfigGithubRepos">' + githubRepoChoices + '</datalist><span class="fq-config-help">Choose a configured repository or enter owner/repository.</span></div>'
@@ -57896,8 +57762,8 @@
       const known = !selected || choices.includes(selected);
       const isBlocked = (id) => typeof spawnDefaultsState === 'object' && spawnDefaultsState.blockedModels instanceof Set
         && spawnDefaultsState.blockedModels.has(String(id || '').trim().toLowerCase());
-      fields.model.innerHTML = '<option value="">CCC spawn default</option>'
-        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(modelLabel(fields.engine.value, choice) + tierText(fields.engine.value, choice) + (isBlocked(choice) ? ' - ⚠ policy blocked, asks to confirm' : '')) + '</option>').join('')
+      fields.model.innerHTML = '<option value="">Follow worker default</option>'
+        + choices.map(choice => '<option value="' + escapeAttr(choice) + '">' + escapeHtml(modelLabel(fields.engine.value, choice) + tierText(fields.engine.value, choice) + (isBlocked(choice) ? (policyMode ? ' - ⚠ blocked by model policy' : ' - ⚠ policy blocked, asks to confirm') : '')) + '</option>').join('')
         + '<option value="__custom__">Custom model…</option>';
       fields.model.value = known ? selected : '__custom__';
       fields.customModel.hidden = known;
@@ -57911,7 +57777,7 @@
       fields.path.value = c.repo_path || ''; setModel(c.model);
       var eng = fields.engine.value;
       var levels = eng ? effortLevelsForEngine(eng) : allEffortLevels();
-      renderEffortOptions(fields.effort, levels, c.effort || '', 'Use engine default');
+      renderEffortOptions(fields.effort, levels, c.effort || '', 'Follow worker default');
       const supportsCustom = !eng || ENGINE_SUPPORTS_CUSTOM_MODEL[eng] !== false;
       const customOpt = fields.model.querySelector('option[value="__custom__"]');
       if (customOpt) customOpt.hidden = !supportsCustom;
@@ -57939,6 +57805,7 @@
       Object.keys(roleEdits).forEach(k => delete roleEdits[k]);
       if (!section) return;
       section.hidden = true;
+      if (policyMode) return;
       if (!queueName) return;
       try {
         const r = await fetch('/api/queue/roles?queue=' + encodeURIComponent(queueName));
@@ -58020,6 +57887,7 @@
       if (!seg) return;
       seg.querySelectorAll('button').forEach(btn => {
         btn.addEventListener('click', () => {
+          if (select.value === (btn.getAttribute('data-' + attr) || '')) return;
           select.value = btn.getAttribute('data-' + attr) || '';
           select.dispatchEvent(new Event('change', { bubbles: true }));
           syncSegmented();
@@ -58055,7 +57923,24 @@
       fields.gate.checked = !fields.gate.checked;
       syncGateToggle();
     });
-    const close = () => modal.remove();
+    const onKey = event => {
+      if (event.key === 'Escape' && !event.isComposing) {
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+        return;
+      }
+      if (event.key === 'Tab') {
+        const nodes = Array.from(modal.querySelectorAll('button,input,select,summary,[tabindex]')).filter(n => !n.disabled && n.tabIndex >= 0 && n.getClientRects().length);
+        const first = nodes[0], last = nodes[nodes.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    const close = () => { document.removeEventListener('keydown', onKey, true); modal.remove(); restoreOpener(); };
+    modal.cccClose = close;
+    // Handle the top dialog before document-level shortcuts for Settings below it.
+    document.addEventListener('keydown', onKey, true);
     apply(findQueue(initialQueue));
     fields.queue.addEventListener('change', () => { const found = findQueue(fields.queue.value); if (found) apply(found); else loadRoles(''); });
     fields.backend.addEventListener('change', () => modal.querySelectorAll('.fq-config-github').forEach(el => { el.hidden = fields.backend.value !== 'github'; }));
@@ -58064,7 +57949,7 @@
       // Rebuild effort dropdown for the selected engine's ladder
       const eng = fields.engine.value;
       const levels = eng ? effortLevelsForEngine(eng) : allEffortLevels();
-      renderEffortOptions(fields.effort, levels, '', 'Use engine default');
+      renderEffortOptions(fields.effort, levels, '', 'Follow worker default');
       // Show/hide custom model based on engine support
       const supportsCustom = !eng || ENGINE_SUPPORTS_CUSTOM_MODEL[eng] !== false;
       const customOpt = fields.model.querySelector('option[value="__custom__"]');
@@ -58078,6 +57963,7 @@
     });
     modal.querySelectorAll('[data-fq-config-cancel]').forEach(el => el.addEventListener('click', close));
     modal.querySelector('[data-fq-config-save]').addEventListener('click', async () => {
+      if (policyMode) return;
       const save = modal.querySelector('[data-fq-config-save]');
       const claim_types = Array.from(modal.querySelectorAll('input[name="fq-config-claim-type"]:checked')).map(box => box.value);
       const model = fields.model.value === '__custom__' ? fields.customModel.value : fields.model.value;
@@ -58101,7 +57987,13 @@
         _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; close(); _renderQueuePanel();
       } catch (e) { showOpToast('Could not save queue: ' + e.message, 'error'); save.disabled = false; save.classList.remove('is-saving'); }
     });
-    requestAnimationFrame(() => fields.queue.focus());
+    if (policyMode) {
+      window.cccQueuePolicy.mount({modal, fields, queue: initialQueue,
+        hydrate: config => apply({queue: initialQueue, config}),
+        configure: () => { close(); openQueueManager(initialQueue, true); },
+        saved: () => { _uxqHealthCache.ts = 0; _uxqItemsCache.ts = 0; _renderQueuePanel(); }
+      });
+    } else requestAnimationFrame(() => fields.queue.focus());
   }
 
   // Routes a ticket into the panel's current scope. The trigger is rendered
@@ -93841,14 +93733,18 @@
       const data = await settingsJSON('/api/settings/queue-engines');
       settingsQueueSnapshot = data;
       window.cccLaunchPreview?.accept(data);
-      const rows = data.queues.filter(row => row.auto_drain);
-      host.innerHTML = rows.length ? '<p class="settings-row-desc">' + rows.length + ' auto-drain queues · ' + rows.reduce((sum,row)=>sum+Number(row.workers || 0),0) + ' configured worker slots</p><div class="settings-table-wrap"><table class="settings-routing-table"><thead><tr><th>Queue</th><th>Saved routing</th><th>Effort</th><th>Source</th><th>Workers</th></tr></thead><tbody>' + rows.map(row =>
-        '<tr><th scope="row">' + escapeHtml(row.queue) + '<br><button type="button" class="settings-action-btn" data-launch-queue="' + escapeHtml(row.queue) + '">Inspect launch</button></th><td><strong>' + escapeHtml(row.engine) + '</strong><small>' + escapeHtml(row.model) + '</small></td><td>' + escapeHtml(row.effort) + '</td><td><span class="settings-source-badge">' + (Object.keys(row.pins).length ? 'Pinned: ' + escapeHtml(Object.keys(row.pins).join(', ')) : 'Inherited') + '</span><small>Fallback: ' + (row.fallback === true ? 'On' : row.fallback === false ? 'Off' : 'Default') + '</small></td><td>' + Number(row.workers || 0) + '</td></tr>'
-      ).join('') + '</tbody></table></div>' : '<p class="settings-empty">No auto-drain queues. Enable auto-drain from a queue to see its routing here.</p>';
+      const rows = data.queues;
+      host.innerHTML = rows.length ? '<p class="settings-row-desc">' + rows.length + ' active queues · ' + rows.reduce((sum,row)=>sum+Number(row.workers || 0),0) + ' configured worker slots</p><div class="settings-table-wrap"><table class="settings-routing-table"><thead><tr><th>Queue</th><th>Saved routing</th><th>Effort</th><th>Source</th><th>Workers</th></tr></thead><tbody>' + rows.map(row =>
+        '<tr><th scope="row">' + escapeHtml(row.queue) + (row.auto_drain ? '' : ' · manual') + '<br><button type="button" class="settings-action-btn" data-queue-policy="' + escapeHtml(row.queue) + '">Edit exceptions</button><br><button type="button" class="settings-action-btn" data-launch-queue="' + escapeHtml(row.queue) + '">Inspect launch</button></th><td><strong>' + escapeHtml(row.engine) + '</strong><small>' + escapeHtml(row.model) + '</small></td><td>' + escapeHtml(row.effort) + '</td><td><span class="settings-source-badge">' + (Object.keys(row.pins).length ? 'Pinned: ' + escapeHtml(Object.keys(row.pins).join(', ')) : 'Inherited') + '</span><small>Fallback: ' + (row.fallback === true ? 'On · override' : row.fallback === false ? 'Off · override' : 'Follow default') + '</small><small>Headroom: ' + (row.headroom === true ? 'On · override' : row.headroom === false ? 'Off · override' : 'Follow default') + '</small></td><td>' + Number(row.workers || 0) + '</td></tr>'
+      ).join('') + '</tbody></table></div>' : '<p class="settings-empty">No active queues.</p>';
     } catch (error) { host.textContent = 'Queue routing unavailable: ' + error.message; }
   }
   document.getElementById('settingsUsageRefresh')?.addEventListener('click', refreshSettingsUsage);
   document.getElementById('settingsQueueRefresh')?.addEventListener('click', refreshSettingsQueues);
+  document.getElementById('settingsQueueTable')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-queue-policy]');
+    if (button) openQueueManager(button.dataset.queuePolicy, false, button);
+  });
   document.getElementById('settingsQueueScope')?.addEventListener('change', () => { document.getElementById('settingsQueuePreviewBody').hidden = true; });
   document.getElementById('settingsQueuePreview')?.addEventListener('click', async () => {
     if (settingsQueueBusy) return;

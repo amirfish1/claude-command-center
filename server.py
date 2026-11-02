@@ -10425,6 +10425,61 @@ def _settings_launch_overview():
     return result
 
 
+def _queue_policy_action(payload):
+    """Opt-in scoped protocol on the native queue endpoint; legacy saves stay valid."""
+    from ccc_server import queue_policy as policy
+    from ccc_server.launch_preview import worker_plan
+    action = payload.get("policy_action")
+    if action not in ("read", "preview", "apply"):
+        raise ValueError("Unknown queue policy action")
+    path = _wt_config_path()
+    config = policy.read(path)
+    raw = policy.defaults_text(SPAWN_DEFAULTS_FILE)
+    rev = policy.state_revision(config, raw)
+    key = policy.entry(config, payload.get("queue"))
+    if action == "read":
+        overview = _settings_launch_overview()
+        if policy.state_revision(policy.read(path), policy.defaults_text(SPAWN_DEFAULTS_FILE)) != rev:
+            raise policy.StalePreview("Queue settings changed while reading. Refresh again.")
+        plan = next((p for p in overview["launch_preview"]["plans"] if p["id"] == "queue:" + key), None)
+        return {"ok": True, "queue": key, "policy_revision": rev,
+                "config": config[key],
+                "overrides": {k: config[key][k] for k in policy.FIELDS if k in config[key]},
+                "plan": plan, "observed_at": overview["launch_preview"]["observed_at"]}
+    if payload.get("expected_revision") != rev:
+        raise policy.StalePreview("Queue or worker defaults changed. Refresh and preview again.")
+    key, prepared, diff = policy.prepare(config, key, payload.get("changes"))
+    changes = payload["changes"]
+    # Validate only explicit edits. Existing unknown policy values are carried
+    # through exactly, rather than normalized as a side effect of another edit.
+    if changes.get("engine") and changes["engine"] not in _QUEUE_CONFIG_ENGINES:
+        raise ValueError("Choose a supported worker engine")
+    effort = changes.get("effort")
+    if effort and effort not in _QUEUE_CONFIG_EFFORTS:
+        raise ValueError("Choose a supported effort")
+    model = changes.get("model")
+    if model:
+        error = _model_policy_error(model)
+        if error:
+            raise ValueError(error)
+    defaults = json.loads(raw) if raw is not None else {}
+    if not isinstance(defaults, dict):
+        raise ValueError("Worker defaults must be an object")
+    engine = prepared[key].get("engine") or defaults.get("worker_engine")
+    if effort and engine and effort not in _engine_reasoning_efforts(engine):
+        raise ValueError(_reasoning_effort_error("Queue effort", engine))
+    token = policy.revision([rev, key, prepared])
+    if action == "preview":
+        return {"ok": True, "queue": key, "changes": diff, "preview_token": token,
+                "plan": worker_plan(defaults, prepared[key], queue=key)}
+    if payload.get("preview_token") != token:
+        raise policy.StalePreview("Preview these exact queue changes before applying.")
+    if diff:
+        policy.publish(path, SPAWN_DEFAULTS_FILE, prepared, rev)
+    # No reconcile call: this edits saved policy only and never starts workers.
+    return {"ok": True, "queue": key, "applied": bool(diff), "changes": diff}
+
+
 def _spawn_request_engine_and_model(payload, defaults=None):
     payload = payload if isinstance(payload, dict) else {}
     if defaults is None:
@@ -36821,6 +36876,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             body = self.rfile.read(length) if length > 0 else b""
             try:
                 payload = json.loads(body) if body else {}
+                if isinstance(payload, dict) and "policy_action" in payload:
+                    from ccc_server.queue_policy import StalePreview
+                    try:
+                        self.send_json(_queue_policy_action(payload))
+                    except StalePreview as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 409)
+                    except (OSError, StopIteration) as exc:
+                        self.send_json({"ok": False, "error": "Queue policy unavailable: " + str(exc)}, 503)
+                    return
                 normalized = _queue_config_from_payload(payload)
                 session_link = ""
                 if str(payload.get("session_id") or "").strip():
@@ -36919,10 +36983,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     cfg_path.parent.mkdir(parents=True, exist_ok=True)
                     if matched and matched != queue_name:
                         del cfg[matched]
-                    for kept in ("queue_label", "grace_s", "fallback_to_default_worker",
-                                 "session_id", "offer_workers"):
-                        if kept not in payload and before_conf.get(kept) is not None:
-                            normalized["config"][kept] = before_conf[kept]
+                    # The native form replaces its own fields, not policy
+                    # extensions or role metadata it does not edit. In
+                    # particular a full-form save must retain headroom
+                    # exceptions created by the scoped policy workflow.
+                    form_fields = {"engine", "model", "effort", "backend", "repo_path",
+                                   "github_repo", "github_assignee", "auto_drain",
+                                   "product_gate", "desired_workers", "claim_types"}
+                    present_only = {"queue_label", "grace_s", "fallback_to_default_worker",
+                                    "session_id", "offer_workers"}
+                    for kept, value in before_conf.items():
+                        if kept not in form_fields and (kept not in present_only or kept not in payload):
+                            normalized["config"][kept] = value
                     if normalized["config"].get("fallback_to_default_worker") is None:
                         normalized["config"].pop("fallback_to_default_worker", None)
                     cfg[queue_name] = normalized["config"]

@@ -6252,7 +6252,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('name="fq-config-claim-type"', app_js)
         self.assertIn('id="fqConfigEffort"', app_js)
         self.assertIn("effort: fields.effort.value", app_js)
-        self.assertIn("CCC spawn default", app_js)
+        self.assertIn("Follow worker default", app_js)
         self.assertIn("queue configuration", app_js)
         self.assertIn(".fq-config-dialog", app_css)
 

@@ -156,6 +156,7 @@
   })();
 </script>
 <link rel="stylesheet" href="/static/credential-broker.css">
+<link rel="stylesheet" href="/static/queue-policy.css">
 </head>
 <body class="voice-call-btn-off">
   <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
@@ -3062,12 +3063,12 @@
 
 <section class="settings-section" id="settingsSection-defaults" data-section-id="defaults" role="tabpanel" aria-labelledby="settingsRailTab-defaults"><div class="settings-section-eyebrow">Session defaults</div><p class="settings-section-note">Review saved launch routing. Edit launch policy to stage related changes together; queue pins take precedence over worker defaults.</p><div class="settings-row settings-data-card" data-keywords="model usage sessions seven days statistics"><div class="settings-row-main"><div class="settings-row-label">Sessions started · last 7 days</div><p class="settings-row-desc">Indexed local Claude and Codex sessions plus retained CCC launches, grouped by starting model. Resumes count once; missing initial models are shown separately.</p><div id="settingsModelUsage" aria-live="polite">Loading session counts…</div><button type="button" class="settings-action-btn" id="settingsUsageRefresh">Refresh counts</button></div></div>            <div class="settings-data-card" data-launch-preview="defaults"></div><div class="settings-row" data-keywords="defaults engine worker model effort launch policy"><div class="settings-row-main"><div class="settings-row-label">Launch policy</div><p class="settings-row-desc">Edit default routes, worker inheritance, fallback and capability profiles together. Changes are staged until you review and apply them.</p></div><div class="settings-row-control"><button type="button" class="settings-action-btn" data-policy-open="defaults">Edit launch policy</button></div></div>
 </section>
-<section class="settings-section" id="settingsSection-queues" data-section-id="queues" role="tabpanel" aria-labelledby="settingsRailTab-queues"><div class="settings-section-eyebrow">Queue engines</div><p class="settings-section-note">Review auto-drain queues and their next worker launch. Existing workers keep their current model.</p>
+<section class="settings-section" id="settingsSection-queues" data-section-id="queues" role="tabpanel" aria-labelledby="settingsRailTab-queues"><div class="settings-section-eyebrow">Queue engines</div><p class="settings-section-note">Review exceptions across active queues, including manual queues. Edit exceptions inside each queue; use this report for bulk work. Running workers keep their current routing.</p>
 <div class="settings-data-card" data-launch-preview="queues"></div><div class="settings-row settings-data-card" data-keywords="queues engines workers auto drain bulk apply override inherit"><div class="settings-row-main">
 <div class="settings-row-label">Apply the saved worker default</div><p class="settings-row-desc">Choose the worker engine, model and effort in Launch policy first. Applying clears queue pins so these queues follow future worker-default changes too.</p>
 <div class="settings-bulk-toolbar"><select id="settingsQueueScope" aria-label="Queues to update"><option value="auto">Auto-drain queues only</option><option value="all">All active queues</option></select><button type="button" class="settings-action-btn" id="settingsQueuePreview">Preview changes</button><button type="button" class="settings-action-btn" id="settingsQueueRefresh">Refresh</button></div>
 <div id="settingsQueuePreviewBody" hidden></div><div id="settingsQueueStatus" role="status" aria-live="polite"></div>
-</div></div><div class="settings-row settings-data-card" data-keywords="auto drain queue engine model effort pinned inherited"><div class="settings-row-main"><div class="settings-row-label">Auto-drain queues</div><div id="settingsQueueTable" aria-live="polite">Loading queue routing…</div></div></div></section>
+</div></div><div class="settings-row settings-data-card" data-keywords="auto drain queue engine model effort pinned inherited"><div class="settings-row-main"><div class="settings-row-label">Queue exception report</div><div id="settingsQueueTable" aria-live="polite">Loading queue routing…</div></div></div></section>
 <section class="settings-section" id="settingsSection-routing" data-section-id="routing" role="tabpanel" aria-labelledby="settingsRailTab-routing">
 <h2>Launch policy</h2><p class="settings-section-note">This machine · Stage default routes, worker fallback and managed capability profiles in one draft. Preview validates the whole change; Apply saves it together. Queue pins still win. Running sessions and workers are unaffected.</p>
 <div id="routingPolicyEditor" aria-busy="true">
@@ -4093,6 +4094,7 @@
 <script src="/static/settings-actions.js"></script>
 <script src="/static/settings-context.js"></script>
 <script src="/static/settings-launch-preview.js"></script>
+<script src="/static/queue-policy.js"></script>
 <script src="/static/settings-routing-policy.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/settings-preferences.js"></script>
