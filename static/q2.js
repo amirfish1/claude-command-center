@@ -210,8 +210,11 @@
   // rather than flagging it, and so do we.
   function isStaleClaim(it) {
     var raw = String((it && it.status) || 'open');
+    if (raw !== 'open' && raw !== 'in_progress') return false;
+    // Defer/reopen preserve the session link for history and resumption.
+    // That link alone is not a current claim whose worker can go stale.
     return raw === 'in_progress' ? !hasLiveClaim(it)
-      : hasClaimMetadata(it) && !hasLiveClaim(it);
+      : !!(it && (it.claimed_by || it.claimed_at)) && !hasLiveClaim(it);
   }
 
   // claimed_by with no claimed_session_id: a claim label with no durable id, so
@@ -253,6 +256,12 @@
     var QA = window.QueueAttention;
     if (!QA || !it) return null;
     return QA.project(it, { explain: true, liveClaim: hasLiveClaim(it) && !isStaleClaim(it), queue: (state.queues || []).find(function (q) { return projectKey(q.queue) === projectKey(it.project); }) });
+  }
+  function isRunQueued(it, attention) {
+    if (statusOf(it) !== 'open' || isLiveWip(it) || !it.run_requested) return false;
+    var a = attention === undefined ? attentionOf(it) : attention;
+    // A saved request does not mean the scheduler can launch it yet.
+    return !a || a.key === 'ready';
   }
   // A blocked ticket only counts as "needs input" when the owner must act.
   function blockedOnOwner(it) {
@@ -2319,7 +2328,8 @@
     // A blocked worker has already left, and an answer in flight already
     // says whether a worker has it: who/what the ticket waits on is the
     // signal, not whether the claim that asked is still alive.
-    var claimShown = st !== 'blocked' && !(att && att.tone === 'answer');
+    var claimShown = (st === 'open' || st === 'in_progress')
+      && !(att && (att.blocked || att.key === 'deferred' || att.tone === 'answer'));
     var stale = claimShown && isStaleClaim(it);
     var unverified = claimShown && isUnverifiedClaim(it);
     var unresolved = String(it.status) === 'closed' && unresolvedNotes(it).length > 0;
@@ -2339,7 +2349,7 @@
     // a question only a human can answer, and blocked on it. The stale run
     // request is still true but no longer the thing to tell someone; showing
     // "run requested" here reads as if nothing had happened yet.
-    var queued = canRun && !!it.run_requested && st !== 'blocked';
+    var queued = isRunQueued(it, att);
     // A block someone else must clear reads "waiting", never "needs input".
     var rowSt = (st === 'blocked' && att && !att.owner && att.key !== 'gate') ? 'waiting' : st;
     var dotTitle = unresolved ? 'closed, unresolved follow-up'
@@ -2900,7 +2910,8 @@
     var editCount = (Array.isArray(item.timeline) ? item.timeline : [])
       .filter(function (ev) { return ev && ev.event === 'edit'; }).length;
     var closed = st === 'closed';
-    var runQueued = !closed && !isLiveWip(item) && !!item.run_requested;
+    var runQueued = isRunQueued(item);
+    var runRequested = !closed && !isLiveWip(item) && !!item.run_requested;
     // GitHub-backed queues sync tickets read-only: run/answer/comment/close/
     // reopen all 404 with "not found in the local queue store" (see
     // _uxq_not_found_error server-side), which read as an unexplained
@@ -3007,11 +3018,11 @@
       + ' data-q2-arm="close_completed">Close as completed</button>'
       + '<button type="button" class="q2-btn' + (state.arm === 'close_not_relevant' ? ' is-armed' : '') + '"'
       + ' data-q2-arm="close_not_relevant">Close as not relevant</button>'
-      + '<button type="button" class="q2-btn' + (runQueued ? ' is-armed' : '') + '"'
-      + ' data-q2-act="run" title="' + (runQueued
-          ? 'Queued to run. Click to cancel.'
+      + '<button type="button" class="q2-btn' + (runRequested ? ' is-armed' : '') + '"'
+      + ' data-q2-act="run" title="' + (runRequested
+          ? 'Run requested. Click to cancel.'
           : 'Ask WatchTower to run this ticket next.') + '">'
-      + (runQueued ? '&#9632; Queued' : '&#9654; Run now') + '</button>'
+      + (runRequested ? (runQueued ? '&#9632; Queued' : '&#9632; Run requested') : '&#9654; Run now') + '</button>'
       + '</div>'
       + armedForm('close_completed')
       + armedForm('close_not_relevant')
