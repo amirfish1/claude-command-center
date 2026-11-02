@@ -86920,15 +86920,10 @@
   bugOpenDiagnosticFromLocation();
   bugOpenProblemFromLocation();
 
-  // Spawn defaults — inlined directly into Settings > Sessions & Spawning
-  // (CCC-902). These controls are the ONLY writer of /api/spawn-defaults;
-  // New session / Kanban toolbar dropdowns read this default on load but
-  // only mutate in-memory state (setSpawnEngine/setSpawnDefaultModel) — a
-  // one-off engine pick for a single session must never overwrite the saved
-  // default. There is no separate draft/Save/Cancel step anymore: each
-  // control persists its defaults immediately on change via
-  // persistSpawnDefaults(). Routing controls save their own keys; ordinary
-  // defaults never create or overwrite a routing policy.
+  // Legacy default-control adapters. The unified policy editor owns these
+  // nodes when mounted; its capture handlers stage changes before these
+  // compatibility listeners can mutate saved state.
+  // One-off composer choices remain separate from saved launch policy.
   const $spawnDefaultsEngine = document.getElementById('spawnDefaultsEngine');
   const $spawnDefaultsWorkerInherit = document.getElementById('spawnDefaultsWorkerInherit');
   const $spawnDefaultsWorkerOverrides = document.getElementById('spawnDefaultsWorkerOverrides');
@@ -87008,6 +87003,7 @@
     }
   }
   function renderSpawnDefaultsInline() {
+    if (window.cccRoutingPolicy?.ownsControls()) return;
     if ($spawnDefaultsEngine) $spawnDefaultsEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
     if ($spawnDefaultsWorkerEngine) $spawnDefaultsWorkerEngine.value = spawnDefaultsState.worker_engine || '';
     // No worker engine chosen means WatchTower picks one at claim time, so the
@@ -87025,8 +87021,6 @@
     }
     renderSpawnDefaultsModelInline();
     renderSpawnDefaultsWorkerModelInline();
-    renderWorkerFallback();
-    renderModelProfile();
     const engine = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
     const levels = effortLevelsForEngine(engine);
     if ($spawnDefaultsEffortField) $spawnDefaultsEffortField.style.display = levels.length ? '' : 'none';
@@ -87074,120 +87068,31 @@
     }
     spawnDefaultsState.worker_model = model;
   }
-  function renderWorkerFallback() {
-    const host = document.getElementById('workerFallbackModels');
-    const enabled = document.getElementById('workerFallbackEnabled');
-    if (!host || !enabled) return;
-    const policy = spawnDefaultsState.worker_fallback;
-    enabled.checked = policy.enabled;
-    renderFallbackList(policy, host, document.getElementById('workerFallbackAdd'), 'workerFallbackSettings', renderWorkerFallback);
-  }
-  // Model profiles dedupe on engine+model (opus then sonnet is a valid
-  // route); worker fallback keeps one entry per engine, matching the server
-  // validators.
-  function fallbackModelChoices(engine) {
-    return modelOptionsForSpawnEngine(engine, '', false).filter(item => item.id && !item.disabled && item.id !== SPAWN_DEFAULT_OTHER);
-  }
-  function fallbackUnusedModels(policy, engine, sectionId, skipIndex) {
-    const taken = (item, i) => i !== skipIndex && item.engine === engine;
-    if (sectionId !== 'modelProfilesSettings') return policy.models.some(taken) ? [] : fallbackModelChoices(engine);
-    return fallbackModelChoices(engine).filter(choice => !policy.models.some((item, i) => taken(item, i) && item.model === choice.id));
-  }
-  function renderFallbackList(policy, host, addButton, sectionId, render) {
-    const engines = sectionId === 'modelProfilesSettings' ? spawnDefaultsState.model_profile_engines : spawnDefaultsState.worker_fallback_engines;
-    const perModel = sectionId === 'modelProfilesSettings';
-    host.replaceChildren();
-    policy.models.forEach((entry, index) => {
-      const row = document.createElement('div');
-      row.className = 'model-routing-entry';
-      const number = document.createElement('span'); number.textContent = (index + 1) + '.'; row.appendChild(number);
-      const engine = document.createElement('select'); engine.className = 'bug-input'; engine.style.width = '130px'; engine.setAttribute('aria-label', 'Fallback engine ' + (index + 1));
-      engines.forEach(id => {
-        const option = document.createElement('option'); option.value = id; option.textContent = spawnEngineLabel(id);
-        option.disabled = id !== entry.engine && !fallbackUnusedModels(policy, id, sectionId, index).length; engine.appendChild(option);
-      });
-      if (!engines.includes(entry.engine)) { const option = document.createElement('option'); option.value = entry.engine; option.textContent = spawnEngineLabel(entry.engine) + ' (unsupported for managed runs)'; option.disabled = true; engine.appendChild(option); }
-      engine.value = entry.engine; row.appendChild(engine);
-      const model = document.createElement('select'); model.className = 'bug-input'; model.style.width = '260px'; model.setAttribute('aria-label', 'Fallback model ' + (index + 1));
-      const choices = modelOptionsForSpawnEngine(entry.engine, '', false).filter(item => item.id && item.id !== SPAWN_DEFAULT_OTHER);
-      choices.forEach(item => { const option = document.createElement('option'); option.value = item.id; option.textContent = item.label || item.id; option.disabled = !!item.disabled || (perModel && item.id !== entry.model && policy.models.some((other, i) => i !== index && other.engine === entry.engine && other.model === item.id)); model.appendChild(option); });
-      if (!choices.some(item => item.id === entry.model)) { const option = document.createElement('option'); option.value = entry.model; option.textContent = entry.model + ' (unavailable)'; option.disabled = true; model.appendChild(option); }
-      model.value = entry.model; row.appendChild(model);
-      const effort = document.createElement('select'); effort.className = 'bug-input'; effort.style.width = '140px'; effort.setAttribute('aria-label', 'Fallback effort ' + (index + 1)); renderEffortOptions(effort, effortLevelsForEngine(entry.engine), entry.effort, 'Engine default'); row.appendChild(effort);
-      const save = () => persistSpawnDefaults(document.getElementById(sectionId));
-      engine.addEventListener('change', () => { entry.engine = engine.value; entry.model = fallbackUnusedModels(policy, entry.engine, sectionId, index)[0]?.id || ''; entry.effort = effortLevelsForEngine(entry.engine).some(item => item.id === 'medium') ? 'medium' : ''; render(); save(); });
-      model.addEventListener('change', () => { entry.model = model.value; save(); });
-      effort.addEventListener('change', () => { entry.effort = effort.value; save(); });
-      const button = (label, action, disabled) => { const el = document.createElement('button'); el.type = 'button'; el.className = 'settings-action-btn'; el.textContent = label; el.disabled = !!disabled; el.addEventListener('click', action); row.appendChild(el); };
-      const move = (delta) => { const other = index + delta; [policy.models[index], policy.models[other]] = [policy.models[other], policy.models[index]]; render(); save(); };
-      button('↑', () => move(-1), index === 0); row.lastChild.setAttribute('aria-label', 'Move fallback ' + (index + 1) + ' up');
-      button('↓', () => move(1), index === policy.models.length - 1); row.lastChild.setAttribute('aria-label', 'Move fallback ' + (index + 1) + ' down');
-      button('Remove', () => { policy.models.splice(index, 1); if (!policy.models.length) policy.enabled = false; render(); save(); });
-      host.appendChild(row);
-    });
-    addButton.disabled = !engines.some(id => fallbackUnusedModels(policy, id, sectionId, -1).length);
-  }
-  document.getElementById('workerFallbackEnabled')?.addEventListener('change', event => {
-    spawnDefaultsState.worker_fallback.enabled = event.target.checked;
-    persistSpawnDefaults(document.getElementById('workerFallbackSettings'));
-  });
-  function addFallbackModel(policy, render, sectionId) {
-    const engines = sectionId === 'modelProfilesSettings' ? spawnDefaultsState.model_profile_engines : spawnDefaultsState.worker_fallback_engines;
-    // Prefer an engine the route doesn't use yet; profiles then fall back to
-    // another model on an engine already in the route.
-    const ordered = [...(engines.includes('codex') ? ['codex'] : []), ...engines];
-    const engine = ordered.find(id => !policy.models.some(item => item.engine === id) && fallbackModelChoices(id).length)
-      || ordered.find(id => fallbackUnusedModels(policy, id, sectionId, -1).length);
-    if (!engine) { spawnDefaultsInlineError('No other available model to add to this route.'); return; }
-    const choices = fallbackUnusedModels(policy, engine, sectionId, -1);
-    const model = choices.find(item => item.id === 'gpt-6.1-sol') || choices[0];
-    policy.models.push({ engine, model: model.id, effort: effortLevelsForEngine(engine).some(item => item.id === 'medium') ? 'medium' : '' });
-    render(); persistSpawnDefaults(document.getElementById(sectionId));
-  }
-  document.getElementById('workerFallbackAdd')?.addEventListener('click', () => addFallbackModel(spawnDefaultsState.worker_fallback, renderWorkerFallback, 'workerFallbackSettings'));
-  function currentModelProfile() {
-    const name = document.getElementById('modelProfileSelect').value;
-    return spawnDefaultsState.model_profiles[name] || { models: [] };
-  }
-  function renderModelProfile() {
-    const host = document.getElementById('modelProfileModels');
-    if (!host) return;
-    renderFallbackList(currentModelProfile(), host, document.getElementById('modelProfileAdd'), 'modelProfilesSettings', renderModelProfile);
-    if (!host.children.length) { const empty = document.createElement('p'); empty.className = 'settings-row-desc'; empty.textContent = 'No model route configured for this profile.'; host.appendChild(empty); }
-  }
-  document.getElementById('modelProfileSelect')?.addEventListener('change', renderModelProfile);
-  document.getElementById('modelProfileAdd')?.addEventListener('click', () => {
-    const name = document.getElementById('modelProfileSelect').value;
-    if (!spawnDefaultsState.model_profiles[name]) spawnDefaultsState.model_profiles[name] = { models: [] };
-    addFallbackModel(currentModelProfile(), renderModelProfile, 'modelProfilesSettings');
-  });
-
-  // Single POST helper every inline control's change handler routes through.
-  // The API accepts partial updates. Routing controls only save their own
-  // policy so ordinary defaults and legacy fallback behavior stay intact.
+  // Routing chains are staged by cccRoutingPolicy, using one shared editor.
+  // Compatibility save adapter for embedded default-control hosts. The
+  // dashboard's unified policy editor captures edits and uses preview/apply.
   async function persistSpawnDefaults(rowEl, explicitChange) {
     spawnDefaultsInlineError('');
-    const focusedRouting = rowEl && ['workerFallbackSettings', 'modelProfilesSettings'].includes(rowEl.id);
     const workerEdit = !!rowEl?.querySelector('[id^="spawnDefaultsWorker"]');
     const engine = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
     const model = String((spawnDefaultsState.models || {})[engine] || '').trim();
-    if (!explicitChange && !workerEdit && !focusedRouting && (engine === 'claude' || engine === 'codex' || engine === 'cursor') && !model) {
+    if (!explicitChange && !workerEdit && (engine === 'claude' || engine === 'codex' || engine === 'cursor') && !model) {
       spawnDefaultsInlineError('Claude, Codex, and Cursor need an explicit default model.');
       return;
     }
     const workerEngine = spawnDefaultsState.worker_engine || '';
     const workerModel = String(spawnDefaultsState.worker_model || '').trim();
     const workerUnavailableReason = workerEngine && _modelUnavailableReason(workerEngine, workerModel);
-    if (!explicitChange && workerEdit && !focusedRouting && workerUnavailableReason) {
+    if (!explicitChange && workerEdit && workerUnavailableReason) {
       spawnDefaultsInlineError(workerUnavailableReason);
       return;
     }
     const unavailableReason = _modelUnavailableReason(engine, model);
-    if (!explicitChange && !workerEdit && !focusedRouting && unavailableReason) {
+    if (!explicitChange && !workerEdit && unavailableReason) {
       spawnDefaultsInlineError(unavailableReason);
       return;
     }
-    const payload = focusedRouting ? (rowEl.id === 'workerFallbackSettings' ? { worker_fallback: spawnDefaultsState.worker_fallback } : { model_profiles: spawnDefaultsState.model_profiles }) : {
+    const payload = {
       engine,
       models: Object.assign({}, spawnDefaultsState.models || {}),
       reasoning_effort: spawnDefaultsState.reasoning_effort,
@@ -87200,7 +87105,7 @@
     if (explicitChange) {
       Object.keys(payload).forEach(key => delete payload[key]);
       Object.assign(payload, explicitChange);
-    } else if (!focusedRouting) {
+    } else {
       // Session saves never echo worker fields over a concurrent inheritance
       // transition; the server materializes the effective worker tuple.
       const sessionKeys = ['engine', 'models', 'reasoning_effort', 'auto_compact_k'];
@@ -93036,10 +92941,12 @@
     const off = _engHubDisabledSet();
     const $defEngine = document.getElementById('spawnDefaultsEngine');
     const $defWorker = document.getElementById('spawnDefaultsWorkerEngine');
-    _engHubFillDefaultSelect($defEngine, SPAWN_DEFAULT_ENGINES, '');
-    _engHubFillDefaultSelect($defWorker, WORKER_DEFAULT_ENGINES, 'WatchTower default');
-    if ($defEngine) $defEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
-    if ($defWorker) $defWorker.value = spawnDefaultsState.worker_engine || '';
+    if (!window.cccRoutingPolicy?.ownsControls()) {
+      _engHubFillDefaultSelect($defEngine, SPAWN_DEFAULT_ENGINES, '');
+      _engHubFillDefaultSelect($defWorker, WORKER_DEFAULT_ENGINES, 'WatchTower default');
+      if ($defEngine) $defEngine.value = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
+      if ($defWorker) $defWorker.value = spawnDefaultsState.worker_engine || '';
+    }
     [$convInputEngineSelect, $kptToolbarEngineSelect].forEach(sel => {
       if (!sel) return;
       Array.from(sel.options).forEach(opt => {
@@ -93238,7 +93145,7 @@
       + '<button type="button" class="settings-toggle' + (row.disabled ? '' : ' is-on') + '" role="switch" aria-checked="' + !row.disabled + '"'
       + ' data-eng-enable="' + e + '"'
       + ' aria-label="Use ' + escapeHtml(row.meta.label) + ' in CCC"'
-      + ' title="' + (locked ? 'On. This is a default engine: switching it off hands the default to the next ready engine.'
+      + ' title="' + (locked ? 'On. Switching off a default opens a staged policy handoff for review.'
         : row.disabled ? 'Off: hidden from every engine picker' : 'On: offered in every engine picker') + '">'
       + '<span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button>'
       + '</div>' + (open ? _engHubDrawer(row) : '') + '</div>';
@@ -93456,6 +93363,11 @@
           showOpToast('Nothing else is ready to take over as the default. Set up another engine first.', 'err');
           return;
         }
+        if (handoff.moved.length) {
+          setActiveSettingsRailSection('routing');
+          window.cccRoutingPolicy?.open('defaults', {changes: {...handoff.extra, disabled_engines: next}});
+          return;
+        }
         const label = (ENGINE_HUB_META[engine] || {}).label || engine;
         _engHubSaveDisabled(next, handoff.extra,
           handoff.moved.length ? label + ' is off. ' + handoff.moved.join('. ') + '.' : '');
@@ -93469,21 +93381,9 @@
         if (!row) return;
         if (act === 'verify') _engHubVerify(engine, actBtn);
         else if (act === 'install' || act === 'login') _engHubTerminal(engine, act, row);
-        else if (act === 'default') {
-          spawnDefaultsState.engine = engine;
-          spawnDefaultsState.reasoning_effort = compatibleDefaultEffort(engine, spawnDefaultsState.reasoning_effort);
-          renderSpawnDefaultsInline();
-          persistSpawnDefaults(document.getElementById('spawnDefaultsEngine').closest('.settings-row'));
-          renderEnginesHub();
-        } else if (act === 'worker') {
-          spawnDefaultsState.worker_engine = engine;
-          spawnDefaultsState.worker_model = '';
-          renderSpawnDefaultsInline();
-          persistSpawnDefaults(document.getElementById('spawnDefaultsWorkerEngine').closest('.settings-row'), {
-            worker_inherit_session: false, worker_engine: engine, worker_model: '',
-            worker_reasoning_effort: compatibleDefaultEffort(engine, spawnDefaultsState.worker_reasoning_effort),
-          });
-          renderEnginesHub();
+        else if (act === 'default' || act === 'worker') {
+          setActiveSettingsRailSection('routing');
+          window.cccRoutingPolicy?.open('defaults', {engine, target: act === 'worker' ? 'worker' : 'session'});
         }
         return;
       }
@@ -94004,7 +93904,7 @@
         if (/debug/i.test(label)) document.getElementById('settingsSection-maintenance').append(row);
       });
     }
-    const notes = {appearance:'Make the workspace comfortable to read.',layout:'Choose how sessions, issues and queues appear.',notifications:'Choose which updates deserve your attention.',engines:'Install and connect your agent engines. Choose launch defaults in Session defaults.',voice:'Configure speaking, listening and hands-free access.',vault:'Manage secrets stored on this machine.',network:'Connect devices and manage access to this dashboard.',tools:'Open workspace tools and find past work.',sessions:'Set plan costs used for subscription estimates.',maintenance:'Inspect services, troubleshoot and restart individual processes.',help:'Get help or revisit the guided setup.',routing:'Choose fallback order and capability-based model routes.', 'api-keys':'Connect provider credentials and inspect their recorded usage.'};
+    const notes = {appearance:'Make the workspace comfortable to read.',layout:'Choose how sessions, issues and queues appear.',notifications:'Choose which updates deserve your attention.',engines:'Install and connect your agent engines. Review default routes in Launch policy.',voice:'Configure speaking, listening and hands-free access.',vault:'Manage secrets stored on this machine.',network:'Connect devices and manage access to this dashboard.',tools:'Open workspace tools and find past work.',sessions:'Set plan costs used for subscription estimates.',maintenance:'Inspect services, troubleshoot and restart individual processes.',help:'Get help or revisit the guided setup.',routing:'Stage default routes, fallback and capability profiles, then preview and apply together.', 'api-keys':'Connect provider credentials and inspect their recorded usage.'};
     for (const [id,note] of Object.entries(notes)) {
       const section = pane.querySelector('[data-section-id="' + id + '"]');
       if (!section || section.querySelector(':scope > .settings-section-note')) continue;
@@ -94022,7 +93922,7 @@
     ];
     window.cccSettingsDestinations = destinations;
     const titles = {defaults:'Launch defaults', engines:'Install & connect engines',
-      queues:'Queue overrides', routing:'Advanced model routing', appearance:'Appearance',
+      queues:'Queue overrides', routing:'Launch policy', appearance:'Appearance',
       layout:'Layout & visibility', preferences:'Review & transfer preferences', notifications:'Notifications', voice:'Voice & sound',
       vault:'Saved secrets', 'api-keys':'Model provider keys', network:'Devices & remote access',
       sessions:'Subscription costs', limits:'Usage limits', leftover:'Use spare quota',
@@ -94604,61 +94504,18 @@
     openSettingsModal();
     refreshEnginesFirstRunFoot();
   }
-  // One compact "Default for new sessions" row under the engine list. It only
-  // proxies the real Settings > Spawn defaults controls (same state, same
-  // persistSpawnDefaults API); nothing new is stored.
+  // First-run setup links to the same staged policy workflow; it never
+  // preselects or saves a default implicitly during status polling.
   function renderEnginesFirstRunDefaults() {
     const wrap = document.getElementById('engFirstRunDefaults');
     if (!wrap) return;
-    const $e = document.getElementById('efdEngine');
-    const $m = document.getElementById('efdModel');
-    const $f = document.getElementById('efdEffort');
-    if (!window.__cccEnginesFirstRun || !_engHubData) { wrap.hidden = true; return; }
-    const off = _engHubDisabledSet();
-    const installed = _engHubRows()
-      .filter(r => r.installed && !off.has(r.engine) && SPAWN_DEFAULT_ENGINES.includes(r.engine));
-    if (!installed.length) { wrap.hidden = true; return; }
-    const realEngine = document.getElementById('spawnDefaultsEngine');
-    const current = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
-    if (!installed.some(r => r.engine === current) && realEngine) {
-      // Blank Mac with one engine: preselect it (persists via the real control).
-      realEngine.value = installed[0].engine;
-      realEngine.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    if ([$e, $m, $f].some(el => el && document.activeElement === el)) { wrap.hidden = false; return; }
-    const engineNow = normalizeSpawnDefaultEngine(spawnDefaultsState.engine);
-    $e.innerHTML = installed.map(r => '<option value="' + escapeHtml(r.engine) + '">' + escapeHtml(r.meta.label) + '</option>').join('');
-    $e.value = engineNow;
-    const mirror = (src, dst, field) => {
-      const shown = src && field !== false && src.options.length && src.style.display !== 'none' && !(field && field.style.display === 'none');
-      dst.hidden = !shown;
-      if (!shown) return;
-      dst.innerHTML = Array.from(src.options)
-        .filter(o => o.value !== SPAWN_DEFAULT_OTHER)
-        .map(o => '<option value="' + escapeHtml(o.value) + '">' + escapeHtml(o.textContent) + '</option>').join('');
-      dst.value = src.value;
-    };
-    mirror(document.getElementById('spawnDefaultsModel'), $m);
-    mirror(document.getElementById('spawnDefaultsEffort'), $f, document.getElementById('spawnDefaultsEffortField'));
-    wrap.hidden = false;
-  }
-  function _efdBind(id, realId) {
-    const el = document.getElementById(id);
-    if (!el || el.dataset.bound) return;
-    el.dataset.bound = '1';
-    el.addEventListener('change', () => {
-      const real = document.getElementById(realId);
-      if (!real) return;
-      real.value = el.value;
-      real.dispatchEvent(new Event('change', { bubbles: true }));
-      setTimeout(renderEnginesFirstRunDefaults, 60);
-    });
+    wrap.hidden = !window.__cccEnginesFirstRun || !_engHubData;
+    const summary = document.getElementById('engFirstRunDefaultSummary');
+    if (summary) summary.textContent = spawnEngineLabel(spawnDefaultsState.engine) + ' · '
+      + ((spawnDefaultsState.models || {})[spawnDefaultsState.engine] || 'Engine default model');
   }
   function refreshEnginesFirstRunFoot() {
     if (!window.__cccEnginesFirstRun) return;
-    _efdBind('efdEngine', 'spawnDefaultsEngine');
-    _efdBind('efdModel', 'spawnDefaultsModel');
-    _efdBind('efdEffort', 'spawnDefaultsEffort');
     renderEnginesFirstRunDefaults();
     const btn = document.getElementById('engFirstRunContinue');
     const note = document.getElementById('engFirstRunNote');
@@ -96315,6 +96172,12 @@
     refreshUsage: refreshSettingsUsage,
   });
 
+  window.cccRoutingPolicy?.mount({
+    models: (engine, current) => modelOptionsForSpawnEngine(engine, current, true),
+    label: spawnEngineLabel,
+    navigate: () => setActiveSettingsRailSection('routing'),
+    saved: data => { mergeSpawnDefaults(data); syncSpawnEngineDependentUi(); renderEnginesHub(); if (typeof updateInputBar === 'function') updateInputBar(); },
+  });
   window.cccLaunchPreview?.mount();
 
   window.cccSettingsContext?.mount({

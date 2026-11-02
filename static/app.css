@@ -33882,18 +33882,18 @@ body.has-mobile-bottom-nav .pwa-install-banner {
 /* Keep passive notifications behind the active Settings dialog. */
 body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 /* Defaults need labeled rows: compact engine-list strips clip long models. */
-#settingsSection-defaults .eng-card { display: block; padding: 18px; }
-#settingsSection-defaults .eng-card-head { margin-bottom: 12px; }
-#settingsSection-defaults .eng-card-title { font-size: 16px; }
-#settingsSection-defaults .eng-card-sub { display: block; color: var(--text-muted); font-size: 12px; margin-top: 5px; }
-#settingsSection-defaults .settings-row { display: flex; width: auto; padding: 12px 0; gap: 20px; }
-#settingsSection-defaults .settings-row-main { flex: 1 1 auto; }
-#settingsSection-defaults .settings-row-desc { display: block; }
-#settingsSection-defaults .settings-row-label { font-size: 13px; font-weight: 550; color: var(--text); }
-#settingsSection-defaults .settings-row-control { flex: 0 1 42%; }
-#settingsSection-defaults .settings-row-control select { width: 100% !important; max-width: 100%; }
-#settingsSection-defaults .settings-number-input { width: 80px; }
-#settingsSection-defaults #spawnDefaultsWorkerInheritanceRow { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: start; flex: 1 0 100%; box-sizing: border-box; width: 100%; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .eng-card { display: block; padding: 18px; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .eng-card-head { margin-bottom: 12px; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .eng-card-title { font-size: 16px; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .eng-card-sub { display: block; color: var(--text-muted); font-size: 12px; margin-top: 5px; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .settings-row { display: flex; width: auto; padding: 12px 0; gap: 20px; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .settings-row-main { flex: 1 1 auto; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .settings-row-desc { display: block; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .settings-row-label { font-size: 13px; font-weight: 550; color: var(--text); }
+:is(#settingsSection-defaults, #routingPolicyEditor) .settings-row-control { flex: 0 1 42%; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .settings-row-control select { width: 100% !important; max-width: 100%; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .settings-number-input { width: 80px; }
+:is(#settingsSection-defaults, #routingPolicyEditor) #spawnDefaultsWorkerInheritanceRow { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: start; flex: 1 0 100%; box-sizing: border-box; width: 100%; }
 #spawnDefaultsWorkerInheritanceRow .settings-row-control { grid-column: 2; grid-row: 1; width: auto; max-width: none; margin: 0; padding-top: 4px; }
 #spawnDefaultsWorkerInheritanceRow .settings-row-main { flex: 1; min-width: 0; }
 #spawnDefaultsWorkerInheritanceRow .settings-row-label { color: var(--text); font-weight: 600; }
@@ -33902,7 +33902,7 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 #spawnDefaultsWorkerOverrides { width: 100%; min-width: 0; }
 #spawnDefaultsWorkerOverrides[hidden] { display: none; }
 
-@media(max-width:700px) { #settingsSection-defaults .settings-row-control { flex-basis:100%; } }
+@media(max-width:700px) { :is(#settingsSection-defaults, #routingPolicyEditor) .settings-row-control { flex-basis:100%; } }
 .settings-modal.is-searching .settings-search-miss { display:none; }
 .settings-modal.is-searching .eng-card:has(.settings-row):not(:has(.settings-row:not([hidden]))) { display:none; }
 @media(max-width:700px) {
@@ -33911,8 +33911,8 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 }
 .settings-section-links { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 20px; }
 .settings-modal.is-first-run .settings-section-links { display:none; }
-#settingsSection-defaults .settings-data-card { display:block; padding:18px; }
-@media(max-width:700px) { #settingsSection-defaults .settings-data-card { padding:14px; } }
+:is(#settingsSection-defaults, #routingPolicyEditor) .settings-data-card { display:block; padding:18px; }
+@media(max-width:700px) { :is(#settingsSection-defaults, #routingPolicyEditor) .settings-data-card { padding:14px; } }
 
 /* Make the status word scannable without lighting up the whole preview. */
 #convList#convList .conv-item .wa-explanation-label[data-status="working"],
@@ -34016,8 +34016,8 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 .settings-modal.is-searching .settings-section-links { display: none; }
 .settings-modal.is-first-run .settings-disclosure > summary { display: none; }
 .settings-modal.is-first-run .settings-disclosure { border: 0; padding: 0; }
-#settingsSection-defaults .eng-defaults-card { border: 0; border-radius: 0; background: transparent; padding-left: 0; padding-right: 0; }
-#settingsSection-defaults .eng-defaults-card + .eng-defaults-card { border-top: 1px solid var(--border); }
+:is(#settingsSection-defaults, #routingPolicyEditor) .eng-defaults-card { border: 0; border-radius: 0; background: transparent; padding-left: 0; padding-right: 0; }
+:is(#settingsSection-defaults, #routingPolicyEditor) .eng-defaults-card + .eng-defaults-card { border-top: 1px solid var(--border); }
 
 /* State grouping is independent of the session ordering toolbar. */
 .conv-session-state-tools { display: flex; padding: 4px 0 6px; }
@@ -34044,3 +34044,23 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 .settings-launch-details { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
 .settings-launch-details > summary { cursor: pointer; font-weight: 600; }
 .settings-launch-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* One staged launch-policy workflow on the existing routing surface. */
+#routingPolicyEditor { min-width: 0; }
+.routing-policy-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0; }
+.routing-policy-toolbar select { flex: 1 1 170px; min-width: 0; }
+.routing-policy-route { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin: 16px 0; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; min-width: 0; }
+.routing-policy-route label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.routing-policy-route .routing-policy-toolbar { grid-column: 1 / -1; margin: 4px 0; }
+#routingPolicyDiff { overflow-wrap: anywhere; border-top: 1px solid var(--border); padding-top: 16px; }
+.routing-policy-diff { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.routing-policy-diff p { margin: 5px 0; }
+#routingPolicyError { color: var(--danger, #ef7777); overflow-wrap: anywhere; }
+#routingPolicyEditor .eng-defaults { grid-template-columns: 1fr; }
+#routingPolicyEditor .eng-defaults-card { min-width: 0; }
+@media (max-width: 600px) { .routing-policy-route { grid-template-columns: 1fr; } }
+
+.settings-modal.is-first-run #routingPolicyEditor .eng-defaults { display: block !important; }
+
+.routing-policy-first-run { display: none; }
+.settings-modal.is-first-run .routing-policy-first-run { display: inline-block; }

@@ -10028,6 +10028,14 @@ def _save_spawn_defaults(config):
 
 
 def _save_spawn_defaults_unlocked(config):
+    prepared = _prepare_spawn_defaults_unlocked(config)
+    if prepared.get("ok"):
+        _write_spawn_defaults_file({key: value for key, value in prepared.items() if key != "ok"})
+    return prepared
+
+
+def _prepare_spawn_defaults_unlocked(config):
+    """Validate and construct a complete candidate without seeding/migrating."""
     if not isinstance(config, dict):
         return {"ok": False, "error": "expected JSON object"}
     # Invalid submissions must not seed or migrate the file before validation.
@@ -10202,8 +10210,81 @@ def _save_spawn_defaults_unlocked(config):
     payload["disabled_engines"] = _clean_disabled_engines(
         payload.get("disabled_engines"), (payload["engine"], str(payload.get("worker_engine") or "")),
     )
-    _write_spawn_defaults_file(payload)
     return {"ok": True, **payload}
+
+
+def _routing_policy_snapshot():
+    """Opt-in read-only view; legacy GET semantics remain unchanged."""
+    from ccc_server.routing_policy import revision
+    try:
+        raw = SPAWN_DEFAULTS_FILE.read_text()
+        stored = json.loads(raw)
+        if not isinstance(stored, dict):
+            raise ValueError("Saved launch defaults are not an object")
+    except FileNotFoundError:
+        raw, stored = None, {}
+    except (OSError, ValueError) as exc:
+        raise ValueError("Cannot read saved launch policy; no configuration changed") from exc
+    defaults = _load_spawn_defaults(persist=False)
+    try:
+        after = SPAWN_DEFAULTS_FILE.read_text()
+    except FileNotFoundError:
+        after = None
+    except OSError as exc:
+        raise ValueError("Cannot read saved launch policy; no configuration changed") from exc
+    if raw != after:
+        raise ValueError("Launch policy changed while reading; reload")
+    return raw, stored, {**defaults, "policy_revision": revision(raw), "policy_documents": stored}
+
+
+def _routing_policy_request(request):
+    """Validate/preview or atomically apply one staged policy on the old API."""
+    from ccc_server.routing_policy import validate_changes, preserve_documents, staged_candidate, token, differences
+    with _spawn_defaults_lock:
+        try:
+            raw, stored, view = _routing_policy_snapshot()
+            if request.get("expected_revision") != view["policy_revision"]:
+                return {"ok": False, "error": "Launch policy changed; reload and review your draft", "status": 409}
+            action = request.get("policy_action")
+            if action not in ("preview", "apply"):
+                raise ValueError("policy_action must be preview or apply")
+            changes = request.get("changes")
+            validate_changes(changes)
+            prepared = _prepare_spawn_defaults_unlocked(changes)
+            if not prepared.get("ok"):
+                return prepared
+            prepared.pop("ok")
+            for engine_key, effort_key in (("engine", "reasoning_effort"), ("worker_engine", "worker_reasoning_effort")):
+                if engine_key in changes and _validate_reasoning_effort(
+                    prepared.get(effort_key), prepared.get(engine_key) or "claude", strict=True,
+                ) is None:
+                    raise ValueError("Choose compatible " + effort_key + " for the staged engine")
+            prepared = preserve_documents(stored, changes, prepared, request.get("origins"))
+            # The existing engine/model rules are shared with launch consumers.
+            for engine, model in (changes.get("models") or {}).items():
+                if model and (not _model_catalog_allows_model(engine, model) or _model_policy_blocks(model)):
+                    raise ValueError("Choose a model allowed for " + engine)
+            if changes.get("worker_model"):
+                engine = prepared.get("worker_engine")
+                if engine and (not _model_catalog_allows_model(engine, changes["worker_model"]) or _model_policy_blocks(changes["worker_model"])):
+                    raise ValueError("Choose a worker model allowed for " + engine)
+            prepared = staged_candidate(stored, changes, prepared)
+            preview_token = token(view["policy_revision"], prepared)
+            if raw != (SPAWN_DEFAULTS_FILE.read_text() if SPAWN_DEFAULTS_FILE.exists() else None):
+                return {"ok": False, "error": "Launch policy changed while validating; reload", "status": 409}
+            diff = differences(stored, prepared)
+            if action == "apply":
+                if request.get("preview_token") != preview_token:
+                    return {"ok": False, "error": "Preview expired or validation changed; preview again", "status": 409}
+                if diff:
+                    _write_spawn_defaults_file(prepared)
+            return {"ok": True, "policy_action": action, "preview_token": preview_token,
+                    "policy_revision": view["policy_revision"], "changes": diff,
+                    "effective": prepared, "applied": action == "apply" and bool(diff)}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        except OSError:
+            return {"ok": False, "error": "Could not save launch policy; no partial changes applied", "status": 503}
 
 
 def _spawn_auto_compact_k_tokens(auto_compact_k=None):
@@ -32830,7 +32911,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 409)
         elif path == "/api/spawn-defaults":
-            defaults = _load_spawn_defaults()
+            policy_view = urllib.parse.parse_qs(parsed.query).get("policy") == ["1"]
+            try:
+                defaults = _routing_policy_snapshot()[2] if policy_view else _load_spawn_defaults()
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 409)
+                return
             self.send_json({
                 "ok": True,
                 **defaults,
@@ -35349,6 +35435,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
             except json.JSONDecodeError:
                 self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            if isinstance(payload, dict) and "policy_action" in payload:
+                saved = _routing_policy_request(payload)
+                status = saved.pop("status", 200 if saved.get("ok") else 400)
+                self.send_json(saved, status)
                 return
             saved = _save_spawn_defaults(payload)
             if not saved.get("ok"):

@@ -127,8 +127,8 @@ def test_ordinary_save_does_not_create_legacy_routing_keys(isolated):
 def test_ordinary_ui_save_omits_routing_fields():
     from pathlib import Path
     text = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text()
-    body = text.split("const payload = focusedRouting ?", 1)[1].split("    try {", 1)[0]
-    ordinary = body.rsplit(" : {", 1)[1]
+    helper = text.split("async function persistSpawnDefaults(", 1)[1]
+    ordinary = helper.split("const payload = {", 1)[1].split("    };", 1)[0]
     assert "worker_fallback:" not in ordinary
     assert "model_profiles:" not in ordinary
 

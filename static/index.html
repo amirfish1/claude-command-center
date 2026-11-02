@@ -3021,9 +3021,8 @@
             </div>
             <div class="eng-first-run-defaults" id="engFirstRunDefaults" hidden>
               <span class="efd-label">Default for new sessions</span>
-              <select id="efdEngine" class="bug-input" aria-label="Default engine for new sessions"></select>
-              <select id="efdModel" class="bug-input" aria-label="Default model" hidden></select>
-              <select id="efdEffort" class="bug-input" aria-label="Default effort" hidden></select>
+              <span id="engFirstRunDefaultSummary" class="settings-row-desc"></span>
+              <button type="button" class="settings-action-btn" data-policy-open="defaults">Review launch policy</button>
             </div>
             <!-- First-run step 2 (optional, never required): Tailscale for phone / other machines. -->
             <div class="eng-tailscale-step" id="engTailscaleStep" hidden>
@@ -3061,7 +3060,21 @@
 
           </section>
 
-<section class="settings-section" id="settingsSection-defaults" data-section-id="defaults" role="tabpanel" aria-labelledby="settingsRailTab-defaults"><div class="settings-section-eyebrow">Session defaults</div><p class="settings-section-note">Choose what starts next. Changes save automatically; queue pins take precedence over worker defaults.</p><div class="settings-row settings-data-card" data-keywords="model usage sessions seven days statistics"><div class="settings-row-main"><div class="settings-row-label">Sessions started · last 7 days</div><p class="settings-row-desc">Indexed local Claude and Codex sessions plus retained CCC launches, grouped by starting model. Resumes count once; missing initial models are shown separately.</p><div id="settingsModelUsage" aria-live="polite">Loading session counts…</div><button type="button" class="settings-action-btn" id="settingsUsageRefresh">Refresh counts</button></div></div>            <div class="settings-data-card" data-launch-preview="defaults"></div><div class="eng-defaults">
+<section class="settings-section" id="settingsSection-defaults" data-section-id="defaults" role="tabpanel" aria-labelledby="settingsRailTab-defaults"><div class="settings-section-eyebrow">Session defaults</div><p class="settings-section-note">Review saved launch routing. Edit launch policy to stage related changes together; queue pins take precedence over worker defaults.</p><div class="settings-row settings-data-card" data-keywords="model usage sessions seven days statistics"><div class="settings-row-main"><div class="settings-row-label">Sessions started · last 7 days</div><p class="settings-row-desc">Indexed local Claude and Codex sessions plus retained CCC launches, grouped by starting model. Resumes count once; missing initial models are shown separately.</p><div id="settingsModelUsage" aria-live="polite">Loading session counts…</div><button type="button" class="settings-action-btn" id="settingsUsageRefresh">Refresh counts</button></div></div>            <div class="settings-data-card" data-launch-preview="defaults"></div><div class="settings-row" data-keywords="defaults engine worker model effort launch policy"><div class="settings-row-main"><div class="settings-row-label">Launch policy</div><p class="settings-row-desc">Edit default routes, worker inheritance, fallback and capability profiles together. Changes are staged until you review and apply them.</p></div><div class="settings-row-control"><button type="button" class="settings-action-btn" data-policy-open="defaults">Edit launch policy</button></div></div>
+</section>
+<section class="settings-section" id="settingsSection-queues" data-section-id="queues" role="tabpanel" aria-labelledby="settingsRailTab-queues"><div class="settings-section-eyebrow">Queue engines</div><p class="settings-section-note">Review auto-drain queues and their next worker launch. Existing workers keep their current model.</p>
+<div class="settings-data-card" data-launch-preview="queues"></div><div class="settings-row settings-data-card" data-keywords="queues engines workers auto drain bulk apply override inherit"><div class="settings-row-main">
+<div class="settings-row-label">Apply the saved worker default</div><p class="settings-row-desc">Choose the worker engine, model and effort in Launch policy first. Applying clears queue pins so these queues follow future worker-default changes too.</p>
+<div class="settings-bulk-toolbar"><select id="settingsQueueScope" aria-label="Queues to update"><option value="auto">Auto-drain queues only</option><option value="all">All active queues</option></select><button type="button" class="settings-action-btn" id="settingsQueuePreview">Preview changes</button><button type="button" class="settings-action-btn" id="settingsQueueRefresh">Refresh</button></div>
+<div id="settingsQueuePreviewBody" hidden></div><div id="settingsQueueStatus" role="status" aria-live="polite"></div>
+</div></div><div class="settings-row settings-data-card" data-keywords="auto drain queue engine model effort pinned inherited"><div class="settings-row-main"><div class="settings-row-label">Auto-drain queues</div><div id="settingsQueueTable" aria-live="polite">Loading queue routing…</div></div></div></section>
+<section class="settings-section" id="settingsSection-routing" data-section-id="routing" role="tabpanel" aria-labelledby="settingsRailTab-routing">
+<h2>Launch policy</h2><p class="settings-section-note">This machine · Stage default routes, worker fallback and managed capability profiles in one draft. Preview validates the whole change; Apply saves it together. Queue pins still win. Running sessions and workers are unaffected.</p>
+<div id="routingPolicyEditor" aria-busy="true">
+<button type="button" class="settings-action-btn routing-policy-first-run" data-settings-goto="engines">Back to engine setup</button>
+<div class="routing-policy-toolbar"><label for="routingPolicyContext">Edit</label><select id="routingPolicyContext"><option value="defaults">Default routes</option><option value="worker_fallback">Worker fallback</option><option value="fast">Fast capability profile</option><option value="standard">Standard capability profile</option><option value="deep">Deep capability profile</option></select><button type="button" id="routingPolicyReload" class="settings-action-btn">Reload saved policy</button></div>
+<p id="routingPolicyScope" class="settings-row-desc"></p>
+<div data-policy-defaults><div class="eng-defaults">
               <div class="eng-card eng-defaults-card">
                 <div class="eng-card-head">
                   <div class="eng-card-title" title="What you get when you spawn without choosing.">New sessions</div>
@@ -3201,34 +3214,13 @@
                   </div>
                   </div>
               </div>
-            </div>
-</section>
-<section class="settings-section" id="settingsSection-queues" data-section-id="queues" role="tabpanel" aria-labelledby="settingsRailTab-queues"><div class="settings-section-eyebrow">Queue engines</div><p class="settings-section-note">Review auto-drain queues and their next worker launch. Existing workers keep their current model.</p>
-<div class="settings-data-card" data-launch-preview="queues"></div><div class="settings-row settings-data-card" data-keywords="queues engines workers auto drain bulk apply override inherit"><div class="settings-row-main">
-<div class="settings-row-label">Apply the saved worker default</div><p class="settings-row-desc">Choose the worker engine, model and effort in Session defaults first. Applying clears queue pins so these queues follow future worker-default changes too.</p>
-<div class="settings-bulk-toolbar"><select id="settingsQueueScope" aria-label="Queues to update"><option value="auto">Auto-drain queues only</option><option value="all">All active queues</option></select><button type="button" class="settings-action-btn" id="settingsQueuePreview">Preview changes</button><button type="button" class="settings-action-btn" id="settingsQueueRefresh">Refresh</button></div>
-<div id="settingsQueuePreviewBody" hidden></div><div id="settingsQueueStatus" role="status" aria-live="polite"></div>
-</div></div><div class="settings-row settings-data-card" data-keywords="auto drain queue engine model effort pinned inherited"><div class="settings-row-main"><div class="settings-row-label">Auto-drain queues</div><div id="settingsQueueTable" aria-live="polite">Loading queue routing…</div></div></div></section>
-<section class="settings-section" id="settingsSection-routing" data-section-id="routing" role="tabpanel" aria-labelledby="settingsRailTab-routing"><div class="settings-section-eyebrow">Model routing</div>            <div class="eng-card model-routing-card" id="workerFallbackSettings" data-keywords="fallback quota exhausted models worker watchtower managed">
-              <div class="eng-card-head"><div class="eng-card-title">Worker and managed model fallback</div><div class="eng-card-sub">Try the next configured provider when a model runs out of quota.</div></div>
-              <div class="settings-row">
-                <div class="settings-row-main"><div class="settings-row-label">Enable fallback by default</div><div class="settings-row-desc">Applies to new worker launches and apps using WatchTower managed model runs. Queue On/Off overrides this default. Active runs finish with their current model.</div></div>
-                <div class="settings-row-control"><input type="checkbox" id="workerFallbackEnabled" aria-label="Enable worker and managed model fallback"></div>
-              </div>
-              <div id="workerFallbackModels" style="padding:0 16px;"></div>
-              <div style="padding:12px 16px;"><button type="button" class="settings-action-btn" id="workerFallbackAdd">Add fallback model</button></div>
-              <p class="settings-row-desc" style="padding:0 16px 16px;">Models are tried from top to bottom, once per provider. Queue model pins stay stored; explicit queue effort takes precedence over fallback effort. Exhausting every provider parks work until quota recovers. Uses existing signed-in engines.</p>
-            </div>
-            <div class="eng-card model-routing-card" id="modelProfilesSettings" data-keywords="capability profile fast standard deep model routing fallback">
-              <div class="eng-card-head"><div class="eng-card-title">Managed model profiles</div><div class="eng-card-sub">Apps request a capability; WatchTower selects its configured provider and model.</div></div>
-              <div class="settings-row"><div class="settings-row-main"><label class="settings-row-label" for="modelProfileSelect">Capability profile</label></div><div class="settings-row-control"><select id="modelProfileSelect" class="bug-input"><option value="fast">Fast</option><option value="standard" selected>Standard</option><option value="deep">Deep</option></select></div></div>
-              <div id="modelProfileModels" style="padding:0 16px;"></div>
-              <div style="padding:12px 16px;"><button type="button" class="settings-action-btn" id="modelProfileAdd">Add profile model</button></div>
-              <p class="settings-row-desc" style="padding:0 16px 16px;">The first model is the primary route. Later providers are used only when fallback is enabled above and quota is exhausted. An empty profile has no route. Profile names describe your intended capability; choose models accordingly. The managed runtime currently supports Claude with schema and no-tools guarantees. Unsupported providers fail visibly; Codex is supported for queue worker fallback above.</p>
-            </div>
+            </div></div>
+<div id="routingPolicyChain" hidden></div>
+<div class="routing-policy-toolbar"><button type="button" id="routingPolicyPreview" class="settings-action-btn">Preview all changes</button><button type="button" id="routingPolicyApply" class="settings-action-btn" disabled>Apply previewed changes</button><button type="button" id="routingPolicyDiscard" class="settings-action-btn">Discard draft</button></div>
+<p id="routingPolicyStatus" role="status" aria-live="polite">Open this section to read saved policy.</p><p id="routingPolicyError" role="alert" hidden></p><div id="routingPolicyDiff" hidden></div>
+<span id="workerFallbackSettings" tabindex="-1"></span><span id="modelProfilesSettings" tabindex="-1"></span>
+</div></section>
 
-
-</section>
           <!-- Vault: any kind of secret (API keys, tokens, logins), stored in
                the Keychain (service ccc-vault) or an encrypted file. Values
                are write-only here; agents read them via `ccc vault exec`.
@@ -4101,6 +4093,7 @@
 <script src="/static/settings-actions.js"></script>
 <script src="/static/settings-context.js"></script>
 <script src="/static/settings-launch-preview.js"></script>
+<script src="/static/settings-routing-policy.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/settings-preferences.js"></script>
 <script src="/static/free-settings.js" defer></script>

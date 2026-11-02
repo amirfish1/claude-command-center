@@ -18,7 +18,7 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-inheritance-'));
 function between(start, end) {
  const a=app.indexOf(start);assert(a>=0,start);const b=app.indexOf(end,a+start.length);assert(b>=0,end);return app.slice(a,b);
 }
-const controls = between("  const $spawnDefaultsEngine =", '  function renderWorkerFallback()');
+const controls = between("  const $spawnDefaultsEngine =", '  // Routing chains are staged');
 const persist = between('  async function persistSpawnDefaults(', '  const $runOnboardingBtn =');
 const merge = between('  function mergeSpawnDefaults(', '  // setSpawnDefaultModel/setSpawnEngine');
 const efforts = between('  const CODEX_REASONING_LEVELS =', '  function _normalizeModelId(');
@@ -31,12 +31,13 @@ body{display:block;overflow:auto}.settings-pane{box-sizing:border-box;max-width:
 </style></head><body><div class="fixture-title">Settings · Session defaults</div><main id="fixture" class="settings-pane"></main><div id="spawnDefaultsError" role="alert" hidden></div>
 <script>
 const parsed=new DOMParser().parseFromString(${encoded},'text/html');
-document.getElementById('fixture').append(parsed.getElementById('settingsSection-defaults'));document.getElementById('settingsModelUsage').closest('.settings-row').remove();
+document.getElementById('fixture').append(parsed.getElementById('settingsSection-defaults'),parsed.getElementById('settingsSection-routing'));document.getElementById('settingsModelUsage').closest('.settings-row').remove();
 const SPAWN_DEFAULT_ENGINES=['claude','codex','cursor','antigravity','kilo','hermes','kimi','opencode','devin','grok'],WORKER_DEFAULT_ENGINES=SPAWN_DEFAULT_ENGINES.concat(['aider','droid','pi']),ENGINE_HUB_WORKER_ENGINES=WORKER_DEFAULT_ENGINES;
 const SPAWN_DEFAULT_OTHER='__other__',normalizeSpawnDefaultEngine=v=>SPAWN_DEFAULT_ENGINES.includes(v)?v:'claude';
 let spawnDefaultsState={engine:'claude',models:{},worker_inherit_session:false,disabled_engines:[]},_spawnDefaultsLoaded=false,_defaultModelsByEngine={};
 const _spawnEngineChosenByUser=false,_spawnModelChosenByUserForEngine=new Set(),$convInputEngineSelect=null,$kptToolbarEngineSelect=null;
 const spawnEngineLabel=v=>({claude:'Claude',codex:'Codex',kimi:'Kimi'})[v]||v;
+const setActiveSettingsRailSection=()=>{};window.cccRoutingPolicy={ownsControls:()=>false,open:(which,preset)=>{window.__policyIntent={which,preset};}};
 const syncSpawnEngineDependentUi=()=>{},applyDisabledEnginesToPickers=()=>{},renderEnginesHub=()=>{},renderWorkerFallback=()=>{},renderModelProfile=()=>{};
 const showOpToast=(text)=>{document.body.dataset.toast=text;},showSettingsSavedPulse=row=>{row.dataset.saved='true';};
 const _modelUnavailableReason=()=>'';
@@ -147,6 +148,7 @@ test('independent edits stay independent and engine hub handoff follows inherita
  assert.equal(read().engine,'claude');assert.equal(read().worker_engine,'claude');assert.equal(read().worker_inherit_session,false);
  await toggle(page,true);await page.evaluate(()=>window.__hubDisable('claude'));
  assert.equal(read().engine,'codex');assert.equal(read().worker_engine,'codex');assert.equal(read().worker_inherit_session,true);
- await page.evaluate(()=>window.__hubWorker('claude'));await page.waitForFunction(()=>!document.getElementById('spawnDefaultsWorkerInherit').checked);
- assert.equal(read().worker_inherit_session,false);assert.equal(read().worker_engine,'claude');assert.equal(read().worker_auto_compact_k,600);assert.deepEqual(read().future_policy,{keep:true});
+ const before=fs.readFileSync(stateFile,'utf8');await page.evaluate(()=>window.__hubWorker('claude'));
+ assert.deepEqual(await page.evaluate(()=>window.__policyIntent),{which:'defaults',preset:{engine:'claude',target:'worker'}});
+ assert.equal(fs.readFileSync(stateFile,'utf8'),before);assert.deepEqual(read().future_policy,{keep:true});
 });
