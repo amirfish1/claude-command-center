@@ -42,8 +42,8 @@ recording, refreshing, or contacting a source. No settings file is changed.
 Methods return JSON-compatible dictionaries or raise `AnswerAPIError`, whose
 `status` is the proposed HTTP status and `as_dict()` returns
 `{"ok": false, "error": "<code>"}`. Successful calls are suitable for HTTP 200.
-There are no actual HTTP endpoints in this phase. Future handlers must enforce
-transport body limits before reading, authorization and same-origin checks.
+The HTTP handlers listed above enforce the transport body limit before reading
+and apply the dashboard's same-origin checks; they remain disabled by default.
 
 - `record(body)` accepts UTF-8 JSON bytes or a JSON string containing exactly
   `request_id`, `expected_revision`, `text`, and `idempotency_key`. Request IDs

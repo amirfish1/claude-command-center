@@ -49,6 +49,7 @@ def read_requests(database):
                 title=content.get('title') or record['origin_id'], body=body,
                 aliases=record['aliases'], kind=content.get('kind') or '', status=record['status'],
                 session_id=content.get('session_id') if record['adapter'] == 'session-question' else None,
+                episode_provenance=content.get('episode_provenance'),
                 answer_state=record['answer_state'], delivery_state=record['delivery_state'],
                 delivery_owner=metadata.get('delivery_owner:' + record['request_id']),
                 needs_answer=needs_answer, observed_at=observed_at, can_answer=False,

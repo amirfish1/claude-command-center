@@ -2,20 +2,26 @@
 
 [Back to the README](../README.md) · [Queues](QUEUES.md)
 
-Once an hour, CCC checks for stalled work and uses an analyst model to prepare
-three-option cards. You choose an option; CCC spawns or steers the follow-up.
-Open **Decisions** from the app rail or `/decision-inbox.html`.
+Open **Decisions** in the main navigation, app rail or `/decision-inbox.html`.
+The [Owner questions table](decision-coverage.md#shared-request-view) shows
+current local queue owner waits and explicitly promoted session questions.
+Interactive questions stay in their sessions. Source answers remain disabled
+in this phase, and incomplete source coverage is shown explicitly.
+
+**Reports and monitoring** retains scanner and tool reports. Scheduled scans
+can create scripted health alerts or use an analyst model for suggested
+follow-up cards; the sweep table records which path each decision used.
 
 ## Browsing decisions
 
-The inbox shows ten compact rows per page. Expand a row to read its context,
+Reports show ten compact rows per page. Expand a report to read its context,
 created/updated timestamps, and options. Browse numbers reflect the current
 filtered order; question references (such as Q123) and card IDs stay attached
 to their original items. Search accepts those references, ticket names, and
 text from the title or context. Filter by status or source and sort by creation
 or update time. History includes all retained closed items.
 
-Dates use the browser's local timezone, named above the list. Feed refresh and
+Dates use Pacific time (PST/PDT). Feed refresh and
 scanner time are shown separately: a successful scan does not prove that every
 older decision still applies. Connection failures and overdue scans are visible.
 

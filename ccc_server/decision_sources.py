@@ -58,6 +58,17 @@ def validate_export(receipt):
                                           sort_keys=True).encode()).hexdigest()
         if row.get('source_revision') != digest:
             raise ValueError('Source question revision mismatch')
+        provenance = row.get('episode_provenance')
+        if provenance is not None and (
+                not isinstance(provenance, dict) or type(provenance.get('version')) is not int
+                or provenance.get('version') != 1
+                or provenance.get('kind') != 'legacy-owner-wait-initialization'
+                or provenance.get('initialized_at') != row['generation']
+                or provenance.get('historical_blocked_at') is not None
+                or provenance.get('historical_block_time') != 'unknown'
+                or not isinstance(provenance.get('idempotency_key'), str)
+                or not provenance['idempotency_key']):
+            raise ValueError('Invalid episode initialization provenance')
         items.append(dict(ref=row['origin_id'], title=row.get('title') or row['origin_id'],
                           status=row.get('status') or 'open', duplicate_of=row.get('duplicate_of'),
                           needs_input=True, blocked_at=row['generation'], block_question=row['body'],
@@ -81,6 +92,8 @@ def apply_owner_export(receipt, *, registry, cards):
         fields = ('adapter', 'origin_id', 'generation', 'kind', 'wait_kind', 'title', 'body',
                   'visibility', 'source_revision', 'source_snapshot')
         records.append({key: request[key] for key in fields})
+        if row.get('episode_provenance') is not None:
+            records[-1]['episode_provenance'] = row['episode_provenance']
     if result['source_errors'] or result['counts']['missing_generation']:
         return dict(result, ok=False, mode='authoritative_read_only',
                     source=dict(receipt, items=None), error='Source questions have incomplete identities; registry unchanged.')

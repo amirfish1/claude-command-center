@@ -52,6 +52,25 @@ def test_identity_edits_generations_and_scope_binding(registry):
     assert old['status'] == 'withdrawn' and old['answer_state'] == 'none'
 
 
+def test_initialized_episode_provenance_is_preserved_without_invented_history(registry):
+    from ccc_server.decision_requests import read_requests
+    source = row(generation='2026-01-15T18:00:00.123456Z')
+    source['episode_provenance'] = dict(version=1, kind='legacy-owner-wait-initialization',
+        initialized_at=source['generation'], historical_blocked_at=None,
+        historical_block_time='unknown', idempotency_key='migration-key')
+    first = apply(registry, [source])['requests'][0]
+    displayed = read_requests(registry.db_path)[0]
+    assert displayed['episode_provenance'] == source['episode_provenance']
+    assert displayed['observed_at'] == source['generation']
+    assert displayed['body'] == source['expected_block_question']
+    assert apply(registry, [source])['requests'][0]['request_id'] == first['request_id']
+    before = registry.list_requests()
+    source['episode_provenance']['historical_blocked_at'] = 'invented historical date'
+    with pytest.raises(ValueError, match='provenance'):
+        apply(registry, [source], 2)
+    assert registry.list_requests() == before
+
+
 def test_absence_withdraws_only_previously_bound_source_rows(registry):
     apply(registry, [row()])
     registry.import_cards({'dc_example': {'status': 'open', 'title': 'Legacy'}})

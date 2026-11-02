@@ -77,13 +77,20 @@ they prevent a verified current count. The view does not initialize source
 identities or answer questions. Source answers remain disabled in this phase;
 promoted session questions link back to their conversation.
 
+An explicitly initialized legacy owner wait carries `episode_provenance`.
+Its timestamp is the actual initialization time, labeled **Episode initialized
+at this time; historical block time is unknown.** It is not a reconstruction
+of the original block date. The view preserves this provenance, exact question
+and canonical identity; reading coverage never performs initialization.
+
 ## Delivery staging
 
 The internal answer outbox is separate from the coverage endpoint. It records
 an answer and pending delivery atomically against an expected request revision.
 It requires a conditional, idempotent source adapter; legacy card actions, local
-questions and review gates cannot enter this path. There is no public answer
-endpoint or automatic dispatcher for these records yet.
+questions and review gates cannot enter this path. The [explicit answer
+API](decision-answers.md) is disabled by default; there is no automatic
+dispatcher for these records.
 
 A lost response leaves delivery unknown. Recovery first looks up the source's
 receipt by answer ID. Only authoritative absence permits another attempt using

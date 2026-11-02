@@ -50,6 +50,7 @@
       if (Number.isFinite(date.getTime())) {
         const stamp = text('time', time.format(date), 'request-meta'); stamp.dateTime = row.observed_at;
         state.append(stamp);
+        if (row.episode_provenance) state.append(text('span', 'Episode initialized at this time; historical block time is unknown.', 'request-meta'));
       }
       if (row.needs_answer) state.append(text('span', row.answer_unavailable_reason, 'request-meta'));
       if (row.session_id) {
