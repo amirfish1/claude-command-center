@@ -6,12 +6,41 @@ import sqlite3
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
 import pytest
 
 import ccc_server.ship_graph as ship_graph
 import server  # binds the hermes channel's lazy `_core` proxy
+
+
+def test_connection_waits_for_initial_journal_mode_writer(tmp_path):
+    db_path = tmp_path / "cold.sqlite"
+    writer = sqlite3.connect(db_path)
+    writer.execute("CREATE TABLE sample (value INTEGER)")
+    writer.commit()
+    writer.execute("BEGIN IMMEDIATE")
+    started = threading.Event()
+
+    def reader():
+        started.set()
+        conn = ship_graph._connect(db_path)
+        try:
+            return conn.execute("PRAGMA journal_mode").fetchone()[0]
+        finally:
+            conn.close()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(reader)
+        try:
+            assert started.wait(5)
+            with pytest.raises(TimeoutError):
+                pending.result(timeout=0.1)
+        finally:
+            writer.rollback()
+            writer.close()
+        assert pending.result(timeout=5) == "wal"
 
 
 @pytest.fixture

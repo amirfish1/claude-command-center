@@ -232,9 +232,26 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     write transaction, which is exactly the tens-of-seconds-long first recall
     seen after a real restart)."""
     conn = sqlite3.connect(str(db_path), timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+    try:
+        deadline = time.monotonic() + 30.0
+        while True:
+            try:
+                # WAL persists across connections. Avoid another mode change
+                # while a peer is writing; initial mode changes can return
+                # SQLITE_BUSY immediately despite the connection timeout.
+                if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "wal":
+                    conn.execute("PRAGMA journal_mode=WAL")
+                break
+            except sqlite3.OperationalError as exc:
+                if (not any(word in str(exc).lower() for word in ("locked", "busy"))
+                        or time.monotonic() >= deadline):
+                    raise
+                time.sleep(0.01)
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 
 def _get_wt_db_path() -> Path:
