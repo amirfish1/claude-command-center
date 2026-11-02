@@ -53,9 +53,15 @@ class FakeWt:
         self.find_status = "open"
         self.add_rc = 0
         self.add_ref = "CCC-501"
+        self.tickets = []
+        self.list_rc = 0
 
     def __call__(self, args, timeout):
         self.calls.append(list(args))
+        if args[0] == "ls":
+            return (self.list_rc, json.dumps(self.tickets))
+        if args[0] == "comment":
+            return (0, "")
         if args[0] == "find":
             if self.find_rc != 0:
                 return (self.find_rc, "")
@@ -363,6 +369,127 @@ class TestPerfTicketCheckOnce(PerfEventsTestBase):
         pe._WT_RUNNER = fake
         result = pe.perf_ticket_check_once(now=now)
         self.assertEqual(result, "wt-unavailable")
+
+    def test_waiting_and_review_tickets_suppress_next_day_alerts(self):
+        for status in ("awaiting_answer", "in_review"):
+            with self.subTest(status=status):
+                now = time.time()
+                pe._save_ticket_state({"last_ref": "CCC-500", "last_kind": "archive_load",
+                                       "last_status": status,
+                                       "last_filed_date": "2000-01-01"})
+                self._seed_breach(now)
+                fake = FakeWt()
+                fake.find_status = status
+                pe._WT_RUNNER = fake
+                self.assertEqual(pe.perf_ticket_check_once(now), "open-ticket-exists")
+                self.assertFalse(any(c[0] == "add" for c in fake.calls))
+
+    def test_adopts_primary_sidebar_investigation_and_throttles_evidence(self):
+        now = time.time()
+        self._seed_breach(now)
+        fake = FakeWt()
+        fake.tickets = [
+            {"ref": "CCC-502", "status": "awaiting_answer",
+             "title": "[perf] slow list read: p95 4000ms", "created_at": "2000-01-01"},
+            {"ref": "CCC-500", "status": "in_progress",
+             "title": "[deep pilot] Session-list refresh: scale with recent sessions",
+             "created_at": "2000-01-02"},
+        ]
+        pe._WT_RUNNER = fake
+        self.assertEqual(pe.perf_ticket_check_once(now), "open-ticket-exists")
+        self.assertEqual(pe._load_ticket_state()["topics"]["sidebar"]["last_ref"], "CCC-500")
+        self.assertEqual(pe.perf_ticket_check_once(now + 1), "open-ticket-exists")
+        comments = [c for c in fake.calls if c[0] == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(comments[0][1], "CCC-500")
+        self.assertIn("kind=archive_load", comments[0][2])
+        later = now + pe._PERF_TICKET_UPDATE_S + 1
+        self._seed_breach(later)
+        self.assertEqual(pe.perf_ticket_check_once(later), "open-ticket-exists")
+        self.assertEqual(len([c for c in fake.calls if c[0] == "comment"]), 2)
+        self.assertFalse(any(c[0] == "add" for c in fake.calls))
+
+    def test_state_loss_still_finds_other_sidebar_metric_in_queue(self):
+        now = time.time()
+        self._seed_breach(now)
+        fake = FakeWt()
+        fake.tickets = [{"ref": "CCC-500", "status": "in_review",
+                         "title": "[perf] slow list read: p95 4000ms"}]
+        pe._WT_RUNNER = fake
+        self.assertEqual(pe.perf_ticket_check_once(now), "open-ticket-exists")
+        self.assertFalse(any(c[0] == "add" for c in fake.calls))
+
+    def test_unrelated_topic_does_not_suppress_sidebar_alert(self):
+        now = time.time()
+        self._seed_breach(now)
+        fake = FakeWt()
+        fake.tickets = [{"ref": "CCC-500", "status": "open",
+                         "title": "[deep pilot] Opening a session: under 1s"}]
+        pe._WT_RUNNER = fake
+        self.assertEqual(pe.perf_ticket_check_once(now), "filed:CCC-501")
+        add = next(c for c in fake.calls if c[0] == "add")
+        self.assertEqual(add[add.index("--depth") + 1], "deep")
+        self.assertIn("ccc-perf:sidebar:", add[add.index("--dedupe-key") + 1])
+        self.assertIn("Performance topic: sidebar", add[add.index("--note") + 1])
+
+    def test_queue_lookup_failure_cannot_create_another_ticket(self):
+        now = time.time()
+        self._seed_breach(now)
+        fake = FakeWt()
+        fake.list_rc = 1
+        pe._WT_RUNNER = fake
+        self.assertEqual(pe.perf_ticket_check_once(now), "wt-unavailable")
+        self.assertFalse(any(c[0] == "add" for c in fake.calls))
+
+    def test_topics_can_file_independently_on_the_same_day(self):
+        now = time.time()
+        fake = FakeWt()
+        pe._WT_RUNNER = fake
+        self._seed_breach(now)
+        self.assertEqual(pe.perf_ticket_check_once(now), "filed:CCC-501")
+        self.events_path().unlink()
+        self._seed_breach(now, "conv_open")
+        fake.add_ref = "CCC-502"
+        self.assertEqual(pe.perf_ticket_check_once(now), "filed:CCC-502")
+        topics = pe._load_ticket_state()["topics"]
+        self.assertEqual(topics["sidebar"]["last_ref"], "CCC-501")
+        self.assertEqual(topics["conv_open"]["last_ref"], "CCC-502")
+
+    def test_new_topic_marker_survives_a_ticket_rename(self):
+        now = time.time()
+        self._seed_breach(now)
+        fake = FakeWt()
+        fake.tickets = [{"ref": "CCC-500", "status": "awaiting_answer",
+                         "title": "Investigate the startup delay",
+                         "note": "Performance topic: sidebar\nEvidence follows."}]
+        pe._WT_RUNNER = fake
+        self.assertEqual(pe.perf_ticket_check_once(now), "open-ticket-exists")
+        self.assertFalse(any(c[0] == "add" for c in fake.calls))
+
+    def test_adopted_sidebar_owner_does_not_block_conversation_alert(self):
+        now = time.time()
+        self._seed_breach(now)
+        fake = FakeWt()
+        fake.tickets = [{"ref": "CCC-500", "status": "open",
+                         "title": "[deep pilot] Session-list refresh: recent sessions"}]
+        pe._WT_RUNNER = fake
+        self.assertEqual(pe.perf_ticket_check_once(now), "open-ticket-exists")
+        self.events_path().unlink()
+        self._seed_breach(now, "conv_open")
+        self.assertEqual(pe.perf_ticket_check_once(now), "filed:CCC-501")
+
+    def test_bad_queue_json_cannot_create_another_ticket(self):
+        now = time.time()
+        self._seed_breach(now)
+        calls = []
+
+        def runner(args, timeout):
+            calls.append(list(args))
+            return (0, '{"error": "not a ticket list"}')
+
+        pe._WT_RUNNER = runner
+        self.assertEqual(pe.perf_ticket_check_once(now), "wt-unavailable")
+        self.assertFalse(any(c[0] == "add" for c in calls))
         state = pe._load_ticket_state()
         self.assertNotIn("last_ref", state)
 
@@ -538,6 +665,8 @@ class TestTicketFilingRobustness(PerfEventsTestBase):
         calls = []
         def runner(args, timeout):
             calls.append(list(args))
+            if args[0] == "ls":
+                return (0, "[]")
             if args[0] == "add":
                 return (pe._WT_TIMEOUT_RC, "FILED: CCC-77  [perf] slow archive load\n")
             return (1, "")
@@ -550,6 +679,8 @@ class TestTicketFilingRobustness(PerfEventsTestBase):
     def test_timeout_without_output_still_arms_same_day_dedupe(self):
         self._seed_pattern()
         def runner(args, timeout):
+            if args[0] == "ls":
+                return (0, "[]")
             return (pe._WT_TIMEOUT_RC, "") if args[0] == "add" else (1, "")
         with mock.patch.object(pe, "_WT_RUNNER", runner):
             self.assertEqual(pe.perf_ticket_check_once(), "filed:?")
@@ -558,6 +689,8 @@ class TestTicketFilingRobustness(PerfEventsTestBase):
     def test_clean_failure_does_not_arm_dedupe(self):
         self._seed_pattern()
         def runner(args, timeout):
+            if args[0] == "ls":
+                return (0, "[]")
             return (1, "") if args[0] == "add" else (1, "")
         with mock.patch.object(pe, "_WT_RUNNER", runner):
             self.assertEqual(pe.perf_ticket_check_once(), "error")
@@ -568,6 +701,8 @@ class TestTicketFilingRobustness(PerfEventsTestBase):
         self._seed_pattern()
         seen = {}
         def runner(args, timeout):
+            if args[0] == "ls":
+                return (0, "[]")
             if args[0] == "add":
                 seen["timeout"] = timeout
                 return (0, "FILED: CCC-78  x")
