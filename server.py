@@ -28619,12 +28619,99 @@ def _is_background_api_read(path, client_marked):
     return bool(client_marked or path in _BACKGROUND_API_READ_PATHS)
 
 
-def _run_api_request(is_background, callback):
+# Background reads that are cheap skip the shared slots (CCC-142). After a
+# restart, cold rebuilds (background-runs, live-activity) held both slots for
+# 30-72 s while sidebar reads that take milliseconds (repo/list, queue/status)
+# queued behind them. "Cheap" is the route's thread CPU per request, which GIL
+# contention does not inflate (wall time would), so a route that only waits
+# on I/O also bypasses: it does not compete for the GIL. Each route still
+# runs one at a time, so duplicate polls of a cold route cannot pile up.
+# Costs persist across restarts: the boot burst is exactly when they matter.
+_BG_ROUTE_CHEAP_CPU_S = 0.05
+_BG_ROUTE_CPU = {}  # route -> EWMA thread-CPU seconds per request
+_BG_ROUTE_LOCKS = {}
+_BG_ROUTE_GUARD = threading.Lock()
+_BG_ROUTE_CPU_FILE = (
+    Path(os.environ["CCC_BG_ROUTE_CPU_FILE"]) if os.environ.get("CCC_BG_ROUTE_CPU_FILE")
+    else Path(tempfile.gettempdir()) / f"ccc-test-bg-route-cpu-{os.getpid()}.json"
+    if test_isolation_active()
+    else Path.home() / ".claude" / "command-center" / "bg_route_cpu.json"
+)
+_BG_ROUTE_CPU_STATE = {"dirty": False, "saved_at": 0.0}
+_BG_ROUTE_CPU_SAVE_MIN_S = 60.0
+
+
+def _bg_route_is_cheap(route):
+    cpu = _BG_ROUTE_CPU.get(route)
+    return cpu is not None and cpu < _BG_ROUTE_CHEAP_CPU_S
+
+
+def _bg_route_note_cpu(route, cpu_s):
+    with _BG_ROUTE_GUARD:
+        prev = _BG_ROUTE_CPU.get(route)
+        _BG_ROUTE_CPU[route] = cpu_s if prev is None else 0.5 * prev + 0.5 * cpu_s
+        _BG_ROUTE_CPU_STATE["dirty"] = True
+
+
+def _load_bg_route_cpu():
+    try:
+        data = json.loads(_BG_ROUTE_CPU_FILE.read_text())
+        routes = data.get("routes") if isinstance(data, dict) and data.get("schema") == 1 else None
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(routes, dict):
+        return 0
+    n = 0
+    with _BG_ROUTE_GUARD:
+        for route, cpu in routes.items():
+            if isinstance(route, str) and isinstance(cpu, (int, float)) and 0 <= cpu < 3600:
+                _BG_ROUTE_CPU.setdefault(route, float(cpu))
+                n += 1
+    return n
+
+
+def _save_bg_route_cpu(force=False):
+    now = time.time()
+    with _BG_ROUTE_GUARD:
+        st = _BG_ROUTE_CPU_STATE
+        if not st["dirty"] or (not force and now - st["saved_at"] < _BG_ROUTE_CPU_SAVE_MIN_S):
+            return False
+        st["dirty"], st["saved_at"] = False, now
+        body = json.dumps({"schema": 1, "routes": {k: round(v, 4) for k, v in _BG_ROUTE_CPU.items()}})
+    try:
+        _BG_ROUTE_CPU_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _BG_ROUTE_CPU_FILE.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(body)
+        os.replace(tmp, _BG_ROUTE_CPU_FILE)
+    except OSError:
+        return False
+    return True
+
+
+def _run_api_request(is_background, callback, route=None):
     """Keep slow dashboard probes from crowding out foreground requests."""
     if not is_background:
         return callback()
-    with _background_api_read_slots:
-        return callback()
+    if route is None:
+        with _background_api_read_slots:
+            return callback()
+    with _BG_ROUTE_GUARD:
+        route_lock = _BG_ROUTE_LOCKS.setdefault(route, threading.Lock())
+    with route_lock:
+        cheap = _bg_route_is_cheap(route)
+        if not cheap:
+            _background_api_read_slots.acquire()
+        c0 = time.thread_time()
+        try:
+            return callback()
+        finally:
+            if not cheap:
+                _background_api_read_slots.release()
+            try:
+                _bg_route_note_cpu(route, time.thread_time() - c0)
+                _save_bg_route_cpu()
+            except Exception:
+                pass
 
 
 def _spawn_stream_idle_sleep_s(consecutive_empty):
@@ -28697,7 +28784,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         is_background = _is_background_api_read(
             path, self.headers.get("X-CCC-Background") == "1"
         )
-        return _run_api_request(is_background, self._do_GET)
+        return _run_api_request(
+            is_background, self._do_GET,
+            route=path if path in _BACKGROUND_API_READ_PATHS else None,
+        )
 
     def _do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -45356,6 +45446,7 @@ def main():
     ).start()
     _load_conv_meta_cache()
     _load_effective_repo_cache()
+    _load_bg_route_cpu()
     # Seed _SEEN_INTERRUPTS from the resume ledger BEFORE any background
     # thread starts parsing transcripts. The seed makes dedup at-most-once
     # across restarts. Must run before the reaper/archive refresher threads
