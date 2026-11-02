@@ -14,6 +14,8 @@ function launch({enabled = true, source = 'claude', meta = {}, parents = [], que
   const prefs = new Map([['ccc-sidebar-tab', 'archived']]);
   const ctx = {
     conversationsData: parents, pendingSpawns: new Map(), columnOverrides: {},
+    trackSpawnView:()=>{}, requestAnimationFrame:fn=>fn(), setTimeout:fn=>fn(),
+    _currentSidebarTabKey:()=>prefs.get('ccc-sidebar-tab'),
     activePaneId: () => 'primary', ideaTicketsOn: () => enabled,
     isSpawnLogPlaceholderSource: () => true,
     localStorage: {setItem: (k, v) => prefs.set(k, v)},
@@ -71,7 +73,7 @@ test('disabled experiment retains the deferred Claude sidebar path', () => {
   const {card, events, prefs} = launch({enabled: false, meta: {fast_path: true}});
   assert.equal(card.idea_ticket, undefined);
   assert.deepEqual(events.map(e => e.kind), ['select']);
-  assert.equal(prefs.get('ccc-sidebar-tab'), 'archived');
+  assert.equal(prefs.get('ccc-sidebar-tab'), 'coding');
 });
 
 test('a previous search cannot hide the new local Ideas session', () => {

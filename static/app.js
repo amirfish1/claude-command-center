@@ -418,6 +418,7 @@
     _soundToggleBtn.textContent = on ? 'sound' : 'mute';
     _soundToggleBtn.style.opacity = on ? '0.85' : '0.5';
   }
+  document.addEventListener('ccc:notification-policy-changed', () => { _renderSoundToggle(); refreshAppearanceChecks(); });
   function _cccBeep(freq, durationMs, type, delayMs) {
     if (!_cccSoundsEnabled()) return;
     const ctx = _ensureAudioCtx();
@@ -25096,6 +25097,7 @@
   // Pending spawn placeholders (optimistic UI) — keyed by pid.
   const pendingSpawns = new Map();
   const claudeSpawnAwaitingFirstPaint = new Set();
+  const codexSpawnPreviews = new Map();
 
   // A 'spawning-*' selection may hold the global poll-pause gate only while
   // the placeholder still has a live paint transition to protect. A failed
@@ -25364,10 +25366,52 @@
     pendingSpawns.delete(tempPid);
     pendingSpawns.set(realPid, placeholder);
     if (placeholder.source === 'codex' && sessionId) {
-      _watchCodexSpawnRegistration(realPid, placeholder.id || ('spawning-' + tempPid), sessionId);
+      bindAcceptedCodexSpawn(placeholder, sessionId);
+      return placeholder;
     }
     if (!placeholder.fast_path) renderSidebar(filterConversations($convSearch.value));
     return placeholder;
+  }
+
+  // The spawn response already identifies an accepted native thread. Its
+  // local row and live output need neither a full archive nor a rollout file.
+  // Keep the same card in pendingSpawns until an archive row replaces it.
+  function bindAcceptedCodexSpawn(card, sid) {
+    if (!card || !sid || card._landedResolved) return;
+    const oldId = card.id;
+    const selected = currentConversation === oldId;
+    card.id = sid;
+    card.session_id = sid;
+    card.expected_session_id = sid;
+    card.pending_spawn = false;
+    card._landedResolved = true;
+    codexSpawnPreviews.set(sid, card);
+    sessionIdByConv[sid] = sid;
+    sessionSourceByConv[sid] = 'codex';
+    sessionCwdByConv[sid] = card.session_cwd || card.spawn_cwd || card.cwd || '';
+    sessionCwdExistsByConv[sid] = card.session_cwd_exists !== false;
+    sessionSpawnPidByConv[sid] = card.spawn_pid;
+    if (selected) rebindCurrentSelectionToRealCard(card);
+    resolvePlaceholderPanes([oldId], card);
+    delete columnOverrides[oldId];
+    // Paint the pane first; a large sidebar must not hold its first token.
+    requestAnimationFrame(() => setTimeout(() => {
+      renderArchiveList($convSearch ? $convSearch.value : '', { force: true });
+      markSpawnRowPaint(sid);
+    }, 0));
+    setTimeout(() => codexSpawnPreviews.delete(sid), 3 * 60 * 1000);
+  }
+
+  function markSpawnRowPaint(sid) {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (document.hidden) return;
+      const row = Array.from(document.querySelectorAll('#convList [data-id]'))
+        .find(el => el.dataset.id === sid && el.getBoundingClientRect().height > 0);
+      if (row) {
+        spawnStatsMark(sid, 'row_rendered');
+        spawnStatsMark(sid, 'row_resolved');
+      }
+    }));
   }
 
   function normalizePendingPrompt(value) {
@@ -25446,8 +25490,7 @@
       carryFlowPendingSpawnNode(placeholder, realCard);
       const resolvedSid = realCard.session_id || realCard.id;
       if (resolvedSid) {
-        spawnStatsMark(resolvedSid, 'row_rendered');
-        spawnStatsMark(resolvedSid, 'row_resolved');
+        markSpawnRowPaint(resolvedSid);
       }
       if (currentConversation === placeholderId || currentConversation === defaultPlaceholderId) {
         selectionSwap = { realCard, placeholderId };
@@ -25522,7 +25565,7 @@
     try {
       const $v = (typeof getConvViewForPane === 'function' ? getConvViewForPane(activePaneId()) : null)
         || (typeof getConvView === 'function' ? getConvView() : null);
-      if ($v) $v.querySelectorAll('.event.user_text.pending, .stream-bubble').forEach(n => n.remove());
+      if ($v && real.source !== 'codex') $v.querySelectorAll('.event.user_text.pending, .stream-bubble').forEach(n => n.remove());
       if (typeof _streamingBubble !== 'undefined') _streamingBubble = null;
     } catch (_) {}
     setCurrentSession(
@@ -25538,6 +25581,12 @@
     _currentToolGroup = null;
     _currentToolCount = 0;
     setCopyableSessionId($cpSessionId, sid || '');
+    if (real.source === 'codex') {
+      updatePaneHeader(activePaneId(), real);
+      const paneEl = convPaneElById(activePaneId());
+      paneEl?.classList.add('is-codex-session', 'is-webui-session');
+      window.CCCCodexLiveSource?.start(paneEl, { startup: codexSpawnPreviews.has(sid) });
+    }
     fetchConversationEvents();
     // CCC-31: a fresh inline spawn rebinds its optimistic placeholder onto
     // the real session here, not through selectConversation() — so without
@@ -25776,6 +25825,7 @@
   }
 
   function refreshSelectedPendingSpawn(card) {
+    if (card && card.source === 'codex' && card._landedResolved) return;
     if (pendingSpawnIsSelected(card) && typeof selectConversation === 'function') {
       const paneId = card.spawn_pane_id || activePaneId();
       selectConversation(paneByPaneId(paneId).conversationId, paneId);
@@ -25871,6 +25921,7 @@
       }
     }
     pendingSpawns.set(pid, card);
+    if (source === 'codex') trackSpawnView(card);
     conversationsData = [card, ...conversationsData];
     // Pin to Working column for the moment
     columnOverrides[id] = 'working';
@@ -25886,7 +25937,10 @@
       if (card.no_auto_select) return;
       if (typeof selectConversation === 'function') selectConversation(id);
     };
-    if (card.fast_path && !card.no_auto_select) {
+    if (source === 'codex' && !card.no_auto_select) {
+      selectPending();
+      requestAnimationFrame(() => setTimeout(() => renderSidebar(filterConversations($convSearch.value)), 0));
+    } else if (card.fast_path && !card.no_auto_select) {
       // Rebuilding a sidebar with thousands of sessions can occupy the main
       // thread for a full second. Claude's main pane is the useful immediate
       // feedback, so select it now and let the complete sidebar rebuild run
@@ -26012,7 +26066,7 @@
     const card = pendingSpawns.get(pid)
       || Array.from(pendingSpawns.values()).find(c => c && c.id === fallbackId);
     const watchKey = expectedSessionId || String(pid);
-    if (card && card._codexRegistrationWatch === watchKey) return;
+    if (card && (card._landedResolved || card._codexRegistrationWatch === watchKey)) return;
     if (card) card._codexRegistrationWatch = watchKey;
     const deadline = Date.now() + 3 * 60 * 1000;
     const tick = async () => {
@@ -26020,7 +26074,7 @@
       let durable = null;
       try {
         const res = await fetch('/api/sessions/spawned?engine=codex&_=' + Date.now(), {
-          cache: 'no-store',
+          cache: 'no-store', cccPriority: 'user',
         });
         const rows = res.ok ? await res.json() : [];
         durable = Array.isArray(rows) && rows.find(row => {
@@ -26039,15 +26093,7 @@
         const ph = pendingSpawns.get(pid)
           || Array.from(pendingSpawns.values()).find(c => c && c.id === fallbackId);
         if (sid && ph && !ph._landedResolved) {
-          ph._landedResolved = true;
-          ph.pending_spawn = false;
-          ph.session_id = sid;
-          const real = Object.assign({}, ph, { id: sid });
-          if (currentConversation === ph.id || currentConversation === fallbackId) {
-            rebindCurrentSelectionToRealCard(real);
-          }
-          resolvePlaceholderPanes([ph.id, fallbackId], real);
-          renderArchiveList($convSearch ? $convSearch.value : '', { force: true });
+          bindAcceptedCodexSpawn(ph, sid);
         }
         try { await refreshConversationList(); } catch (_) {}
         try {
@@ -59846,19 +59892,23 @@
   // real card, normal conversation rendering takes over.
   async function loadCodexLog(card) {
     const logEngine = (card && isSpawnLogPlaceholderSource(card.source)) ? card.source : 'codex';
-    if (!card || typeof card.spawn_pid !== 'number') {
+    if (!card || !card.spawn_pid || String(card.spawn_pid).startsWith('tmp-')) {
       // Pre-swap (toolbar Run): spawn_pid is still 'tmp-...'. Show a
       // placeholder until the spawn POST returns and re-selects this card.
+      if (card) { renderPendingSpawnConversation(card, activePaneId()); return; }
       const $view = getConvView();
       $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Spawning ' + logEngine + ' run…</div>';
       updateConversationEndAffordance($view);
       return;
     }
+    const logPaneId = activePaneId(), logConversationId = currentConversation;
     const $view = getConvView();
     const engine = logEngine;
     try {
       const res = await fetch('/api/sessions/spawned/' + encodeURIComponent(card.spawn_pid) + '/log?_=' + Date.now());
       const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
+      if (paneByPaneId(logPaneId)?.conversationId !== logConversationId
+          || card._landedResolved || !$view.isConnected) return;
       if (!data.ok) {
         $view.innerHTML = '<div class="empty-state" style="height:auto;padding:40px;">Failed to load ' + engine + ' log: ' + escapeHtml(data.error || ('HTTP ' + res.status)) + '</div>';
         updateConversationEndAffordance($view);
@@ -59875,6 +59925,7 @@
             ? renderCursorLogHtml(data)
             : renderCodexLogHtml(data)));
       if (engine === 'codex' && card.expected_session_id) {
+        markSpawnAssistantPaint(card.expected_session_id, $view, logPaneId);
         await renderSpawnStatsPanel(card.expected_session_id, $view, { open: !!data.running });
       }
       if (atBottom) scrollConversationToEnd($view);
@@ -60730,7 +60781,56 @@
   // Kill switch: localStorage['ccc-spawn-stats'] = '0' (or CCC_SPAWN_STATS=0
   // server-side, which also stops collection).
   const spawnStatsT0 = new Map();      // sid -> epoch ms when we asked
+  const spawnStatsLocalMarks = new Map();
   const spawnStatsSent = new Map();    // sid -> Set of already-posted marks
+
+  function trackSpawnView(card) {
+    if (!card || card._spawnViewTiming) return;
+    const timing = card._spawnViewTiming = {
+      at: Date.now(), hidden: document.hidden, selected: true,
+      hiddenMs: 0, unselectedMs: 0,
+    };
+    const tick = () => {
+      const now = Date.now(), elapsed = Math.max(0, now - timing.at);
+      if (timing.hidden) timing.hiddenMs += elapsed;
+      else if (!timing.selected) timing.unselectedMs += elapsed;
+      timing.at = now;
+      timing.hidden = document.hidden;
+      timing.selected = pendingSpawnIsSelected(card);
+      if (!timing.done && now - (card.spawn_requested_at || now) < 180000) {
+        timing.timer = setTimeout(tick, 100);
+      }
+    };
+    timing.sample = tick;
+    timing.selected = !card.no_auto_select;
+    timing.timer = setTimeout(tick, 100);
+  }
+
+  function markSpawnAssistantPaint(sid, view, paneId) {
+    if (!sid || !spawnStatsT0.has(sid)) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const pane = paneByPaneId(paneId);
+      if (document.hidden || !view?.isConnected || activePaneId() !== paneId
+          || (pane?.conversationId !== sid && !Array.from(pendingSpawns.values())
+            .some(c => c.id === pane?.conversationId && c.expected_session_id === sid))
+          || getConvViewForPane(paneId) !== view) return;
+      const bounds = view.getBoundingClientRect();
+      const visible = Array.from(view.querySelectorAll('.assistant-text, .codex-msg.assistant')).some(el => {
+        const rect = el.getBoundingClientRect();
+        return el.textContent.trim() && rect.width > 0 && rect.height > 0
+          && rect.bottom > bounds.top && rect.top < bounds.bottom;
+      });
+      if (!visible) return;
+      spawnStatsMark(sid, 'first_visible_output');
+      // Refresh from local marks immediately, even if the timeline GET lags.
+      const summary = view.querySelector('.spawn-stats-summary strong');
+      if (summary) {
+        const wasWaiting = summary.textContent.includes('Waiting');
+        summary.textContent = fmtStatMs(spawnStatsLocalMarks.get(sid)?.client_first_visible_output);
+        if (wasWaiting) summary.after(document.createTextNode(' to first visible output'));
+      }
+    }));
+  }
 
   function spawnStatsEnabled() {
     try { return localStorage.getItem('ccc-spawn-stats') !== '0'; } catch (_) { return true; }
@@ -60750,10 +60850,24 @@
     if (sent.has(name)) return;   // first occurrence is the interesting one
     sent.add(name);
     const ms = Date.now() - t0;
+    const marks = { [name]: ms };
+    const card = codexSpawnPreviews.get(sid) || Array.from(pendingSpawns.values())
+      .find(c => c && c.expected_session_id === sid);
+    const timing = card?._spawnViewTiming;
+    if (timing && (name === 'first_paint' || name === 'first_visible_output')) {
+      clearTimeout(timing.timer);
+      timing.done = timing.done || name === 'first_visible_output';
+      timing.sample();
+      marks[name + '_hidden_ms'] = Math.round(timing.hiddenMs);
+      marks[name + '_unselected_ms'] = Math.round(timing.unselectedMs);
+      marks[name + '_foreground_ms'] = Math.max(0, ms - marks[name + '_hidden_ms'] - marks[name + '_unselected_ms']);
+    }
+    spawnStatsLocalMarks.set(sid, Object.assign(spawnStatsLocalMarks.get(sid) || {},
+      Object.fromEntries(Object.entries(marks).map(([key, value]) => ['client_' + key, value]))));
     fetch('/api/session/spawn-timeline/mark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sid, marks: { [name]: ms } }),
+      body: JSON.stringify({ session_id: sid, marks }),
     }).catch(() => {});
   }
 
@@ -60820,7 +60934,9 @@
       data = await r.json();
     } catch (_) { return; }
     if (!data || !data.ok || !data.timeline || !$view.isConnected) return;
-    const marks = (data.timeline.marks) || {};
+    const marks = Object.assign({}, data.timeline.marks || {});
+    const local = spawnStatsLocalMarks.get(sid);
+    if (local) Object.assign(marks, local);
     if (!Object.keys(marks).length) return;
     const statRows = data.timeline.engine === 'claude'
       ? CLAUDE_SPAWN_STAT_ROWS : SPAWN_STAT_ROWS;
@@ -60841,6 +60957,9 @@
       + '<button type="button" class="spawn-stats-copy" title="Copy timeline">&#128203;</button></summary>'
       + '<div class="spawn-stats-body">' + rows
       + '<div class="spawn-stats-note">Times are from the browser submit action. '
+      + (marks.client_first_visible_output_hidden_ms || marks.client_first_visible_output_unselected_ms
+        ? 'Includes ' + fmtStatMs(marks.client_first_visible_output_hidden_ms || 0) + ' with the tab hidden and '
+          + fmtStatMs(marks.client_first_visible_output_unselected_ms || 0) + ' viewing another session. ' : '')
       + 'Hide with <code>localStorage[\'ccc-spawn-stats\']=\'0\'</code>.</div></div></details>';
     if (existing) {
       existing.outerHTML = html;
@@ -61115,7 +61234,7 @@
       const savedIdx = splitState.activeIndex;
       splitState.activeIndex = paneIndexByPaneId(fetchPaneId);
       try {
-        if (convLastLine === 0) {
+        if (convLastLine === 0 && !codexSpawnPreviews.has(id)) {
           $view.innerHTML = '';
         }
         // Remember the fetched segment's own continuation parent (from the
@@ -61263,7 +61382,8 @@
         // showed an empty pane (just "Thinking...") even though CCC has held
         // the prompt since the moment it was submitted. Echo it optimistically
         // until the real transcript arrives -- the next poll replaces this.
-        if ((!Array.isArray(data.events) || !data.events.length) && convLastLine === 0) {
+        if ((!Array.isArray(data.events) || !data.events.length) && convLastLine === 0
+            && !$view.querySelector('.event.user_text.pending, [data-live-key]')) {
           const echo = optimisticPromptForSession(id);
           if (echo) {
             $view.innerHTML = '<div class="event user_text pending">'
@@ -61278,9 +61398,7 @@
         // wait actually ends from the user's point of view.
         if (Array.isArray(data.events) && data.events.length) {
           spawnStatsMark(id, 'first_paint');
-          if (spawnStatsT0.has(id) && $view.querySelector('.event.assistant .assistant-text')) {
-            requestAnimationFrame(() => requestAnimationFrame(() => spawnStatsMark(id, 'first_visible_output')));
-          }
+          markSpawnAssistantPaint(id, $view, fetchPaneId);
           const renderedPane = paneByPaneId(fetchPaneId);
           const renderedSid = (renderedPane && renderedPane.currentSession
             && renderedPane.currentSession.id) || id;
@@ -68968,6 +69086,7 @@
   // fallback.
   function _findMatchingProvisionalNode(view, ev, div) {
     const provisionalNodes = view.querySelectorAll('.event[data-live-key]');
+    const sameType = node => !ev.type || node.classList.contains(ev.type);
     if (!provisionalNodes.length) return null;
     // 1) Tools: rollout call_id equals the live item id. Per the plan's
     // Slice-1 findings this is effectively dead in practice (app-server item
@@ -68985,14 +69104,14 @@
       const turnId = String(ev.turn_id);
       const ordinal = String(_turnOrdinalBefore(view, turnId));
       for (const node of provisionalNodes) {
-        if (node.dataset.turnId === turnId && node.dataset.turnOrdinal === ordinal) return node;
+        if (sameType(node) && node.dataset.turnId === turnId && node.dataset.turnOrdinal === ordinal) return node;
       }
     }
     // 3) Fallback: normalized text equality.
     const text = _normalizeEventText(div.textContent);
     if (text) {
       for (const node of provisionalNodes) {
-        if (_normalizeEventText(node.textContent) === text) return node;
+        if (sameType(node) && _normalizeEventText(node.textContent) === text) return node;
       }
     }
     return null;
@@ -70864,7 +70983,13 @@
             if (_staleProvisional) _staleProvisional.remove();
             if (ev.type === 'result' && ev.turn_id != null) _removeStaleProvisionalsForTurn($view, ev.turn_id);
           }
-          $view.appendChild(div);
+          // The live answer may precede the rollout's first prompt flush.
+          // Insert that prompt before its own provisional turn, not after it.
+          const livePromptTurn = ev.type === 'user_text' && ev.turn_id != null
+            ? Array.from($view.querySelectorAll('.event[data-live-key]'))
+              .find(node => node.dataset.turnId === String(ev.turn_id))?.closest('.kimi-turn') : null;
+          if (livePromptTurn) $view.insertBefore(div, livePromptTurn);
+          else $view.appendChild(div);
         }
         if (ev.type === 'assistant' && !handedOffStreamingBubble) _convLiveRevealNewText(div, paneId, opts);
       }
@@ -71103,6 +71228,7 @@
       // Best-effort re-apply of stored annotations — never blocks rendering.
     }
     if (_codexPane) {
+      markSpawnAssistantPaint(renderedConversationId, $view, paneId);
       queueMicrotask(() => {
         if (paneByPaneId(paneId)?.conversationId !== renderedConversationId) return;
         const paneEl = convPaneElById(paneId);
@@ -91523,6 +91649,9 @@
   // browser. Now the tick is a tiny "has it landed?" probe and the expensive
   // refresh runs once, when there is actually something new to show.
   function chasePendingSpawn(pid, opts) {
+    const card = pendingSpawns.get(pid) || Array.from(pendingSpawns.values())
+      .find(c => c && (c.id === 'spawning-' + pid || (opts?.sessionId && c.expected_session_id === opts.sessionId)));
+    if (card?.source === 'codex' && card._landedResolved) return;
     const deadline = Date.now() + ((opts && opts.timeoutMs) || 45000);
     const every = (opts && opts.intervalMs) || 1200;
     const sid = (opts && opts.sessionId) || null;
@@ -91651,6 +91780,27 @@
   }
   window.addEventListener('focus', () => { if (_emnInstalled) refreshEngineMissingNotice({ fresh: true }); });
 
+  async function awaitQueuedSpawnResult(data) {
+    if (!data?.ok || !data.work_id || data.session_id || !data.queued) return data;
+    const workId = data.work_id;
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch('/api/control-plane/graph?root_id=' + encodeURIComponent(workId), {
+          cache: 'no-store', cccPriority: 'user', signal: AbortSignal.timeout(10000),
+        });
+        const graph = await response.json();
+        const work = graph?.graph?.items?.find(item => item.id === workId);
+        if (work?.result?.session_id) return Object.assign({}, data, work.result, { queued: false });
+        if (work && ['failed', 'cancelled', 'uncertain', 'interrupted'].includes(work.state)) {
+          return { ok: false, error: work.last_error || ('Spawn work is ' + work.state) };
+        }
+      } catch (_) { /* A restart can interrupt a read; keep the same work id. */ }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    return { ok: false, error: 'Session startup is still queued. Check the worker before retrying.' };
+  }
+
   async function spawnFromInlineInput(body) {
     const launchSelection = buildSpawnBody({
       ...currentSpawnChoice(),
@@ -91666,6 +91816,19 @@
     const $autoCompactInput = document.getElementById('convSendAutoCompactK');
     const autoCompactK = $autoCompactInput ? parseInt($autoCompactInput.value, 10) : NaN;
     const engine = launchSelection.engine;
+    if (engine === 'codex' && newSessionLaunchStillCurrent(launchContext)) {
+      const view = getConvViewForPane(spawnPaneId);
+      if (view) {
+        view.innerHTML = '<div class="event user_text pending"><span class="label">User</span>'
+          + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(body) + '">'
+          + linkifyPastedImages(escapeHtml(body)) + '</div></div>';
+        // Yield a paint before folder validation or sidebar work can run.
+        await new Promise(resolve => {
+          const fallback = setTimeout(resolve, 100);
+          requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(fallback); resolve(); }));
+        });
+      }
+    }
     await settleRepoGuessBeforeSend();
     const spawnCwd = (typeof getSpawnCwd === 'function') ? getSpawnCwd() : '';
     const autoPickedCwd = (repoGuessAuto && !repoGuessUserPicked && repoGuessAuto.path === spawnCwd) ? spawnCwd : '';
@@ -91763,7 +91926,8 @@
         priority: 'high',
         body: JSON.stringify(spawnBody),
       });
-      const data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
+      let data = await res.json().catch(() => ({ ok: false, error: 'invalid JSON response' }));
+      if (engine === 'codex') data = await awaitQueuedSpawnResult(data);
       if (data.ok) {
         // An auto-picked folder becomes the last-used one only now that a
         // session actually launched in it.

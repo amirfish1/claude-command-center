@@ -17,6 +17,9 @@ function harness(rows, selected = true) {
     Date, Map, Array, Object, String,
     currentConversation:selected ? card.id : 'other-session',
     pendingSpawns:new Map([['spawn-1',card]]), conversationsData:[card],
+    codexSpawnPreviews:new Map(), sessionIdByConv:{}, sessionSourceByConv:{},
+    sessionCwdByConv:{}, sessionCwdExistsByConv:{}, sessionSpawnPidByConv:{}, columnOverrides:{},
+    requestAnimationFrame:fn=>fn(), markSpawnRowPaint:()=>{},
     fetch:async () => { calls.push('probe'); return {ok:true, json:async () => rows}; },
     refreshConversationList:() => { calls.push('refresh'); return new Promise(() => {}); },
     refreshArchiveData:async () => { calls.push('archive'); },
@@ -32,7 +35,7 @@ function harness(rows, selected = true) {
     isSpawnLogPlaceholderSource:() => true,
     renderSidebar() {}, filterConversations:() => [],
   });
-  vm.runInContext(['_pendingSpawnStillWaiting','_watchCodexSpawnRegistration','adoptPendingSpawnPid']
+  vm.runInContext(['_pendingSpawnStillWaiting','_watchCodexSpawnRegistration','adoptPendingSpawnPid','bindAcceptedCodexSpawn']
     .map(fn).join('\n'), ctx);
   return {ctx,card,calls,timers};
 }
@@ -45,11 +48,12 @@ test('binds a confirmed thread before a full refresh that never resolves', async
   assert.equal(h.card.pending_spawn,false);
   assert.equal(h.card._landedResolved,true);
   assert.deepEqual(h.calls.slice(0,2),['probe',['bind','new-session']]);
-  assert.ok(h.calls.indexOf('refresh') > h.calls.indexOf('render'));
-  assert.equal(h.timers.length,0,'no initial five-second delay');
+  assert.equal(h.card.id,'new-session','the usable row has the real UUID');
+  assert.equal(h.ctx.sessionSourceByConv['new-session'],'codex');
+  assert.equal(h.timers.some(t=>t.ms===5000),false,'no initial five-second delay');
 });
 
-test('normal Codex adoption starts the same watcher and F2 cannot start it twice', async () => {
+test('an accepted Codex UUID binds without waiting for registry or full-list reads', async () => {
   const h = harness([{session_id:'new-session',spawn_id:'spawn-1'}]);
   h.ctx.pendingSpawns.delete('spawn-1');
   h.ctx.pendingSpawns.set('temp',h.card);
@@ -57,14 +61,19 @@ test('normal Codex adoption starts the same watcher and F2 cannot start it twice
   h.ctx._watchCodexSpawnRegistration('spawn-1',h.card.id,'new-session');
   await flush();
   assert.equal(h.ctx.currentConversation,'new-session');
-  assert.equal(h.calls.filter(c => c === 'probe').length,1);
+  assert.equal(h.calls.filter(c => c === 'probe').length,0);
+  assert.equal(h.calls.includes('refresh'),false);
+  assert.equal(h.ctx.conversationsData[0].id,'new-session');
+  assert.equal(h.card.expected_session_id,'new-session');
 });
 
 test('a confirmed background pane can resolve without stealing the selected conversation', async () => {
   const h = harness([{session_id:'new-session'}],false);
+  const oldId=h.card.id;
   h.ctx._watchCodexSpawnRegistration('spawn-1',h.card.id,'new-session');
   await flush();
   assert.equal(h.ctx.currentConversation,'other-session');
+  assert.ok(h.calls.some(c=>Array.isArray(c)&&c[0]==='panes'&&c[1].includes(oldId)));
   assert.equal(h.calls.some(c => Array.isArray(c) && c[0] === 'bind'),false);
   assert.ok(h.calls.some(c => Array.isArray(c) && c[0] === 'panes' && c[2] === 'new-session'));
 });

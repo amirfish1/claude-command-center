@@ -29052,6 +29052,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             values = {key: value[-1] for key, value in query.items()}
             data = {key: values[key] for key in ("method", "cursor", "generation") if key in values}
             data["context"] = {key: values[key] for key in ("repo_path", "thread_id", "environment_id") if key in values}
+            data["startup"] = values.get("startup") == "1"
             result = codex_client_call(action, data)
             self.send_json(result, 200 if result.get("ok") else 409)
             return

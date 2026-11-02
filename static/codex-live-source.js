@@ -113,10 +113,11 @@
       && a.repoPath === b.repoPath && a.environmentId === b.environmentId;
   }
 
-  async function fetchLiveTranscript(context) {
+  async function fetchLiveTranscript(context, foreground = false, startup = false) {
     const params = new URLSearchParams({ thread_id: context.threadId, repo_path: context.repoPath });
     if (context.environmentId) params.set('environment_id', context.environmentId);
-    const response = await fetch('/api/codex/client/live-transcript?' + params.toString(), { cache: 'no-store' });
+    if (startup) params.set('startup', '1');
+    const response = await fetch('/api/codex/client/live-transcript?' + params.toString(), { cache: 'no-store', cccPriority: foreground ? 'user' : undefined });
     let data = null;
     try { data = await response.json(); } catch (_) { /* handled below */ }
     if (!response.ok || !data || data.ok === false) {
@@ -134,7 +135,10 @@
     if (!viewEl) return entry.active;
     const turns = Array.isArray(data.turns) ? data.turns : [];
     const requests = Array.isArray(data.requests) ? data.requests : [];
-    if (entry.generation != null && data.generation !== entry.generation) {
+    const events = flattenTurns(turns);
+    const startup = Date.now() < (entry.startupUntil || 0);
+    if (entry.generation != null && data.generation !== entry.generation
+        && (!startup || events.length)) {
       // Resync: the store's generation changed under us (server restart or
       // app-server reconnect). The rollout-derived rows are unaffected --
       // only the provisional overlay is now suspect.
@@ -142,8 +146,7 @@
     }
     entry.generation = data.generation;
     entry.cursor = data.cursor;
-    const events = flattenTurns(turns);
-    if (!events.length) {
+    if (!events.length && !startup) {
       // An empty overlay means the app-server no longer sees ANY live item
       // for this thread. Any provisional rows still standing are ghosts
       // (e.g. the overlay briefly served a stale turn right at pane-open);
@@ -155,7 +158,11 @@
     if (events.length && typeof window.CCCCodexRenderLiveEvents === 'function') {
       window.CCCCodexRenderLiveEvents(entry.paneId, events);
     }
-    return isTurnActive(turns, requests);
+    // Acceptance can beat turn/started, or a reconnect can temporarily
+    // empty the store. Neither is evidence that a just-accepted turn ended.
+    const hasAnswer = events.some(ev => ev.type === 'assistant'
+      && ev.blocks?.some(block => block.kind === 'text' && String(block.text || '').trim()));
+    return isTurnActive(turns, requests) || (startup && !hasAnswer);
   }
 
   async function pollOnce(entry) {
@@ -174,7 +181,8 @@
     entry.inFlight = true;
     if (typeof window._pollerTickManual === 'function') { try { window._pollerTickManual(POLLER_NAME); } catch (_) {} }
     try {
-      const data = await fetchLiveTranscript(entry.context);
+      const startup = Date.now() < (entry.startupUntil || 0);
+      const data = await fetchLiveTranscript(entry.context, entry.generation == null || startup, startup);
       // A response belongs to the context that requested it, even if the
       // same pane DOM has since been reused for a different conversation.
       if (panes.get(entry.paneEl) !== entry
@@ -208,7 +216,7 @@
   // callers invoke this at every point a pane might be looking at a Codex
   // thread (pane paint, rollout re-render, workspace fetch); a pane already
   // being actively polled is a cheap no-op.
-  function start(paneEl) {
+  function start(paneEl, opts) {
     if (pollerOff() || !paneEl) return;
     const context = contextFor(paneEl);
     if (!context) return;
@@ -223,6 +231,7 @@
         paneEl, paneId: context.paneId, context,
         generation: null, cursor: null, failures: 0,
         active: true, inFlight: false, timer: null,
+        startupUntil: opts?.startup ? Date.now() + 180000 : 0,
       };
       panes.set(paneEl, entry);
       pollOnce(entry).then(() => schedule(entry));
@@ -230,6 +239,7 @@
     }
     entry.context = context;
     entry.paneId = context.paneId || entry.paneId;
+    if (opts?.startup) entry.startupUntil = Date.now() + 180000;
     if (!entry.timer && !entry.inFlight) {
       // A previously-idle pane (turn had completed, nothing pending) --
       // something changed (a new message was sent, a request appeared).

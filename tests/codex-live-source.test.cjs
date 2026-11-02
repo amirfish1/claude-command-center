@@ -274,3 +274,56 @@ test('a delayed response cannot paint into a reused pane', async () => {
     assert.deepEqual(await page.evaluate(() => window.__rendered), []);
   });
 });
+
+test('an accepted startup keeps polling an initially empty store with a foreground first read', async () => {
+  await withPage(async page => {
+    await page.setContent('<div class="conv-pane" data-pane-id="p1"><div class="conversations-view"></div></div>');
+    await page.evaluate(() => {
+      window.__CCC_TEST_LIVE_POLL_MS = 15;
+      window.__calls = [];
+      window.__rendered = [];
+      window.CCCCodexClientContext = () => ({paneId:'p1',threadId:'task',repoPath:'/test'});
+      window.CCCCodexRenderLiveEvents = (_, events) => __rendered.push(events);
+      window.fetch = async (url, init) => {
+        __calls.push({url, priority:init.cccPriority});
+        return {ok:true,json:async()=>({ok:true,generation:'g',cursor:__calls.length,
+          turns:__calls.length===1?[]:[{turn_id:'turn',status:'completed',events:[{
+            type:'assistant',live_key:'turn:reply',blocks:[{kind:'text',text:'Reply'}],
+          }]}],requests:[]})};
+      };
+    });
+    await page.addScriptTag({content:LIVE_SOURCE_JS});
+    await page.evaluate(() => CCCCodexLiveSource.start(document.querySelector('.conv-pane'), {startup:true}));
+    await page.waitForFunction(() => __rendered.length === 1);
+    const calls = await page.evaluate(() => __calls);
+    assert.ok(calls.every(call => call.priority === 'user'), 'startup polls bypass held background list reads');
+    assert.ok(calls.every(call => call.url.includes('startup=1')));
+  });
+});
+
+test('a startup reconnect preserves the last partial answer across an empty snapshot', async () => {
+  await withPage(async page => {
+    await page.setContent('<div class="conv-pane"><div class="conversations-view"><div class="assistant-text" data-live-key="turn:reply">Partial</div></div></div>');
+    await page.addScriptTag({content:LIVE_SOURCE_JS});
+    const result = await page.evaluate(() => {
+      const paneEl=document.querySelector('.conv-pane');
+      const active=CCCCodexLiveSource.__testing.applySnapshot({paneEl,paneId:'p1',generation:'old',startupUntil:Date.now()+10000},
+        {generation:'new',turns:[],requests:[]});
+      return {active,text:paneEl.querySelector('.assistant-text')?.textContent};
+    });
+    assert.deepEqual(result,{active:true,text:'Partial'});
+  });
+});
+
+test('a late user prompt cannot reconcile away the live assistant with the same turn ordinal', async () => {
+  await withPage(async page => {
+    await page.setContent('<div class="conversations-view"><div class="event assistant provisional" data-live-key="t:a" data-turn-id="t" data-turn-ordinal="0"></div></div>');
+    await page.evaluate(code => {
+      (0,eval)(code+'\nwindow.__find=_findMatchingProvisionalNode;');
+    },dedupeHelpersCode);
+    assert.equal(await page.evaluate(() => {
+      const div=document.createElement('div');div.className='event user_text';
+      return __find(document.querySelector('.conversations-view'),{type:'user_text',turn_id:'t'},div)===null;
+    }),true);
+  });
+});

@@ -902,10 +902,20 @@ def codex_client_dispatch(action, data):
         if action == "live-transcript":
             # The native app-server's own turns/items as a provisional overlay
             # on top of the rollout-derived transcript (see
-            # ccc_server/codex_live_events.py). Read-only, pure mapping - no
-            # new state here beyond what "state" already reads.
+            # ccc_server/codex_live_events.py). Ordinary reads map the local
+            # store; accepted startups may recover history after reconnect.
             from ccc_server.codex_live_events import live_turns_from_snapshot
             snapshot = CODEX_CONVERSATIONS.snapshot(tid)
+            thread = snapshot.get("thread") or {}
+            if data.get("startup") is True and not thread.get("turns"):
+                # The native daemon survives an owner reconnect; the local
+                # notification store does not. Recover this accepted thread's
+                # bounded recent history instead of declaring it idle. The
+                # store's hydrate() merges notifications newer than this read.
+                recovered = _client_history(data)
+                if not recovered.get("ok"):
+                    return recovered
+                snapshot = recovered
             return {
                 "ok": True,
                 "generation": snapshot.get("generation"),

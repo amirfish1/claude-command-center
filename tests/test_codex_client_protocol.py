@@ -24,6 +24,42 @@ class ClientProtocolTests(unittest.TestCase):
         client._CLIENT_LIFECYCLE_PENDING.clear()
         client._CLIENT_LIFECYCLE_LAST_ERROR = None
 
+    def test_startup_live_overlay_recovers_after_owner_reconnect(self):
+        data = {"startup": True, "context": {"thread_id": "task", "repo_path": "/test-repo"}}
+        recovered = {"ok": True, "generation": "new-owner", "cursor": 9,
+            "thread": {"id": "task", "turns": [{"id": "turn", "status": "inProgress", "items": [
+                {"id": "reply", "type": "agentMessage", "text": "Partial answer"}]}]}}
+        with mock.patch.object(client, "_client_scope"), \
+             mock.patch.object(client, "_client_history", return_value=recovered) as history:
+            result = client.codex_client_dispatch("live-transcript", data)
+        history.assert_called_once_with(data)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["generation"], "new-owner")
+        self.assertEqual(result["turns"][0]["events"][0]["blocks"][0]["text"], "Partial answer")
+
+    def test_live_overlay_does_not_load_history_for_ordinary_opens_or_known_turns(self):
+        context = {"thread_id": "task", "repo_path": "/test-repo"}
+        with mock.patch.object(client, "_client_scope"), mock.patch.object(client, "_client_history") as history:
+            client.codex_client_dispatch("live-transcript", {"context": context})
+            history.assert_not_called()
+            client.codex_client_observe({"method": "turn/started", "params": {
+                "threadId": "task", "turn": {"id": "turn", "status": "inProgress"}}}, self.transport)
+            client.codex_client_dispatch("live-transcript", {"context": context, "startup": True})
+            history.assert_not_called()
+
+    def test_startup_history_error_is_retryable_and_scope_is_checked_first(self):
+        data = {"startup": True, "context": {"thread_id": "task", "repo_path": "/test-repo"}}
+        with mock.patch.object(client, "_client_scope", side_effect=ValueError("wrong repository")), \
+             mock.patch.object(client, "_client_history") as history:
+            result = client.codex_client_dispatch("live-transcript", data)
+            self.assertFalse(result["ok"])
+            history.assert_not_called()
+        with mock.patch.object(client, "_client_scope"), \
+             mock.patch.object(client, "_client_history", return_value={"ok": False, "error": "reconnecting"}):
+            result = client.codex_client_dispatch("live-transcript", data)
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error"], "reconnecting")
+
     def test_registered_question_can_be_answered_on_original_connection(self):
         client.codex_client_observe({"id": 7, "method": "item/tool/requestUserInput", "params": {
             "threadId": "task", "turnId": "turn", "questions": [{"id": "q"}]}}, self.transport)
