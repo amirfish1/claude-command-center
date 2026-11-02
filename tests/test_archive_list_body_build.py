@@ -26,8 +26,9 @@ def test_projection_isolates_flat_and_nested_containers():
     assert row['session_state'] == {'todos': [{'text': 'x'}]}
 
 
-def test_concurrent_polls_of_one_snapshot_build_the_body_once(monkeypatch):
+def test_concurrent_polls_of_one_snapshot_build_the_body_once(monkeypatch, tmp_path):
     server = importlib.import_module('server')
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
     monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', {})
     monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_BUILD_LOCKS', {})
     monkeypatch.setattr(

@@ -21734,15 +21734,25 @@ def _take_inherited_listen_socket(bind_host, port):
     try:
         sock.set_inheritable(False)
         name = sock.getsockname()
-        listening = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN)
         host_ok = True
         try:
             want = ipaddress.ip_address(str(bind_host))
             host_ok = ipaddress.ip_address(str(name[0])) == want
         except ValueError:
             host_ok = True  # hostname bind: the port check is what matters
-        if listening and int(name[1]) == int(port) and host_ok:
-            return sock
+        if int(name[1]) == int(port) and host_ok:
+            try:
+                listening = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN)
+            except OSError as exc:
+                if sys.platform != "darwin" or exc.errno != errno.ENOPROTOOPT:
+                    raise
+                # Darwin exposes SO_ACCEPTCONN as a flag but rejects it as
+                # a getsockopt option. Reassert listen after checking the
+                # binding; this preserves the existing connection backlog.
+                sock.listen(128)
+                listening = True
+            if listening:
+                return sock
     except OSError:
         pass
     try:
