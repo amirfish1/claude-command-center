@@ -31850,8 +31850,17 @@ body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open
 body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open):not(.tool-call-group) {
   border: 0 !important; background: none !important; padding: 0 6px !important; cursor: pointer;
 }
-body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-open > .tool-call-group-header::after {
-  content: "\25BE  fold " attr(data-cc-run-label); margin-left: auto; opacity: 0.6; font-size: 0.9em;
+.cc-run-fold { display: none; }
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-open > .tool-call-group-header > .cc-run-fold {
+  display: inline-flex; margin-left: auto; flex-shrink: 0;
+  border: 0; background: transparent; padding: 1px 4px;
+  color: var(--text-muted); font: inherit; font-size: 0.9em; cursor: pointer;
+}
+body.conv-compact .conversations-view .cc-run-fold:hover {
+  color: var(--text); text-decoration: underline;
+}
+body.conv-compact .conversations-view .cc-run-fold:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
 /* Run chip: the folded run's label rides at the end of the preceding

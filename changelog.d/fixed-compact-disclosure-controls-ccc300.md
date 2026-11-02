@@ -1,0 +1,1 @@
+- Compact transcript disclosure arrows expand their own command group consistently; a separate Fold button collapses the whole tool run.

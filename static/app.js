@@ -85776,6 +85776,7 @@
   function _ccMarkRuns(view) {
     const stale = new Set(view.querySelectorAll('[data-cc-run]'));
     const staleChips = new Set(view.querySelectorAll('.cc-run-chip'));
+    const staleFolds = new Set(view.querySelectorAll('.cc-run-fold'));
     const staleOrch = new Set(view.querySelectorAll('.cc-orch-chip'));
     const staleFinals = new Set(view.querySelectorAll('.assistant-text.cc-final'));
     // The last text of each turn (right before the next user message, or
@@ -85813,6 +85814,21 @@
         const labelEl = head.classList.contains('tool-call-group')
           ? head.querySelector(':scope > .tool-call-group-header') : head;
         if (labelEl && labelEl.dataset.ccRunLabel !== label) labelEl.dataset.ccRunLabel = label;
+        // The first Claude group's arrow belongs to that group, just like
+        // later arrows. Give the enclosing run its own collapse control.
+        if (head.classList.contains('tool-call-group') && labelEl) {
+          let fold = labelEl.querySelector('.cc-run-fold');
+          if (!fold) {
+            fold = document.createElement('button');
+            fold.type = 'button';
+            fold.className = 'cc-run-fold';
+            fold.setAttribute('aria-label', 'Collapse tool run');
+            labelEl.appendChild(fold);
+          }
+          const foldLabel = 'Fold ' + label;
+          if (fold.textContent !== foldLabel) fold.textContent = foldLabel;
+          staleFolds.delete(fold);
+        }
         // Chip at the end of the preceding text, so the fold line doesn't
         // take a row between sentences (CSS exempts chip-bearing text from
         // the two-line clamp so the chip is never cut off). No preceding
@@ -85878,6 +85894,7 @@
       delete el.dataset.ccRun;
     });
     staleChips.forEach(c => c.remove());
+    staleFolds.forEach(c => c.remove());
     staleOrch.forEach(c => c.remove());
   }
   let _ccRunsRaf = 0;
@@ -85902,8 +85919,8 @@
       _ccScheduleRuns();
     }
   }
-  // A tap on a folded run's line unfolds the whole run; a tap on the run's
-  // head while unfolded folds it back.
+  // A folded line opens the run. Once open, group arrows control their
+  // own group; only the explicit Fold button or run chip closes the run.
   document.addEventListener('click', (ev) => {
     if (!document.body.classList.contains('conv-compact')) return;
     const t = ev.target;
@@ -85912,6 +85929,8 @@
     const head = chip ? null : t.closest('.cc-run-head');
     if (!chip && !head) return;
     if (head && head.classList.contains('tool-call-group') && !t.closest('.tool-call-group-header')) return;
+    if (head?.classList.contains('tool-call-group') && head.classList.contains('cc-run-open')
+        && !t.closest('.cc-run-fold')) return;
     // Once revealed, let the tool/think controls handle their own clicks.
     // A chip or the standalone head's fold label still closes the run.
     if (head?.matches('.kimi-tool, .kimi-tool-group, .kimi-thinking')
