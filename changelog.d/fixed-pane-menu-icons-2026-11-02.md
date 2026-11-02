@@ -1,0 +1,1 @@
+- Distinguish reading options from session actions in conversation headers with a sliders icon and a clear accessible label instead of two adjacent dots buttons.
