@@ -1,0 +1,84 @@
+"""One read model for explicitly global requests, without transcript enrollment.
+
+The source refresh may update CCC's projection, never the source. Reading the
+registry itself uses a single read-only transaction. Unavailable coverage keeps
+the last observed questions visible and never becomes a verified empty inbox.
+"""
+import json
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+
+from ccc_server.decision_registry import DecisionRegistry
+
+
+def read_requests(database):
+    database = Path(database)
+    if not database.exists():
+        return []
+    connection = sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=1)
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute('BEGIN')
+        metadata = {r['key']: r['value'] for r in connection.execute('SELECT * FROM metadata')}
+        binding = json.loads(metadata.get('source_scope:watchtower-block', 'null'))
+        store_id = binding['scope']['store_id'] if binding else None
+        result = []
+        for saved in connection.execute('SELECT * FROM requests ORDER BY adapter,origin_id,generation'):
+            record = DecisionRegistry._record(saved)
+            content = record['content']
+            body = content.get('body') or ''
+            if content.get('visibility') != 'global' or record['adapter'] == 'legacy-card':
+                continue
+            if record['adapter'] == 'watchtower-block':
+                snapshot = content.get('source_snapshot') or {}
+                if not store_id or snapshot.get('store_id') != store_id:
+                    continue  # A display-cache observation is not source coverage.
+                question = content.get('kind') == 'question' and content.get('wait_kind') == 'owner'
+                body = snapshot.get('block_question', body)
+                observed_at = snapshot.get('blocked_at') or record['generation']
+            elif record['adapter'] == 'session-question':
+                question = content.get('kind') == 'question'
+                observed_at = content.get('created_at') or ''
+            else:
+                continue  # Reviews/providers need their own complete source contract.
+            needs_answer = (question and record['status'] == 'open'
+                            and (record['answer_state'] == 'none' or record['delivery_state'] == 'rejected'))
+            result.append(dict(request_id=record['request_id'], revision=record['revision'],
+                adapter=record['adapter'], origin_id=record['origin_id'], generation=record['generation'],
+                title=content.get('title') or record['origin_id'], body=body,
+                aliases=record['aliases'], kind=content.get('kind') or '', status=record['status'],
+                session_id=content.get('session_id') if record['adapter'] == 'session-question' else None,
+                answer_state=record['answer_state'], delivery_state=record['delivery_state'],
+                delivery_owner=metadata.get('delivery_owner:' + record['request_id']),
+                needs_answer=needs_answer, observed_at=observed_at, can_answer=False,
+                answer_unavailable_reason='Reply in the originating session.' if record['adapter'] == 'session-question'
+                                          else 'Source answers are not enabled in this phase.'))
+        return result
+    finally:
+        connection.close()
+
+
+def requests_payload(*, state_root=None, source_loader=None):
+    from ccc_server import decision_inbox
+    from ccc_server.decision_sources import owner_source_payload
+    root = Path(state_root) if state_root else decision_inbox._state_root()
+    refreshed = (source_loader or owner_source_payload)(state_root=root)
+    source = refreshed.get('source') or {'status': 'unavailable', 'complete': False}
+    try:
+        rows = read_requests(root / 'decision-inbox' / 'requests.sqlite3')
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+        return dict(ok=False, requests=None, needs_answer_count=None, source=source,
+                    error='Cannot read saved requests. Retry the source check.', llm_used=False)
+    current = refreshed.get('ok') is True and source.get('authoritative') is True and source.get('complete') is True
+    issues = [dict(origin_id=r.get('origin_id'), title=r.get('title'), body=r.get('body'),
+                   reason='Source question has no stable episode; it has not been imported.')
+              for r in (refreshed.get('requests') or []) if not r.get('generation')]
+    return dict(ok=True, requests=rows, needs_answer_count=sum(r['needs_answer'] for r in rows) if current else None,
+                source_current=current, source=source, llm_used=False,
+                coverage_issues=issues,
+                checked_at=datetime.now(timezone.utc).isoformat(),
+                error=refreshed.get('error') if not current else None,
+                limitations=['Coverage: local file-backed owner waits and explicitly promoted session questions.',
+                             'Ordinary interactive questions stay in their sessions.',
+                             'Reviews, remote queues and untyped reports have separate lifecycles.'])

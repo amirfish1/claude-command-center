@@ -30321,6 +30321,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # vertical stage list (folders → transcripts → infer …) instead
             # of the opaque "Loading archive…" spinner.
             self.send_json(_archive_load_snapshot())
+        elif path == "/api/decision-inbox/requests":
+            from ccc_server.decision_requests import requests_payload
+            result = requests_payload()
+            self.send_json(result, 200 if result.get('ok') else 503)
         elif path == "/api/decision-inbox/session-questions":
             from ccc_server.decision_sessions import session_payload
             qs = urllib.parse.parse_qs(parsed.query)

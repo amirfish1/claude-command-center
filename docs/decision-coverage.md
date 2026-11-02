@@ -59,6 +59,24 @@ the last registry state. There is no fallback from failure to an empty inbox.
 Existing stores without a durable ID need WatchTower's metadata-only
 `wt answer-store-init --json`; the read-only endpoint never initializes the source.
 
+## Shared request view
+
+The Decisions tab in the main session navigation and `/decision-inbox.html`
+share one view. Its Owner questions table reads
+`GET /api/decision-inbox/requests`, which refreshes authoritative local coverage
+and reads the saved registry in a read-only transaction. Ordinary session
+questions remain local; only explicit promotion events enter this table.
+Legacy reports retain their existing references and actions in a separate
+Reports and monitoring section. A matching ticket tag never merges identities.
+
+The table distinguishes needs-answer, saved delivery and source withdrawal.
+It shows exact question text and Pacific timestamps. When a source cannot be
+checked, saved rows remain visible but `needs_answer_count` is null. Missing
+source episodes appear as `coverage_issues` without manufactured request IDs;
+they prevent a verified current count. The view does not initialize source
+identities or answer questions. Source answers remain disabled in this phase;
+promoted session questions link back to their conversation.
+
 ## Delivery staging
 
 The internal answer outbox is separate from the coverage endpoint. It records

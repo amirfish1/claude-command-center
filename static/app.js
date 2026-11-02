@@ -21302,7 +21302,7 @@
       // reachable — no remapping of stored tabs the bottom nav doesn't
       // cover (All / Other / Active).
       activeNavKey = _coreApp === 'queues' ? 'q2'
-        : ({ workers: 'workers', queues: 'queues', jobs: 'jobs', smallbugs: 'smallbugs',
+        : ({ workers: 'workers', queues: 'queues', jobs: 'jobs', decisions: 'decisions', smallbugs: 'smallbugs',
             alltickets: 'alltickets', archived: 'archived', ideas: 'coding', coding: 'coding' })[tab] || '';
     }
     if (!isSimpleMode() && document.body.classList.contains('mobile-ask-open')) activeNavKey = 'ask';
@@ -21323,7 +21323,7 @@
     }
     const _menuBtn = nav.querySelector('[data-mobile-nav-menu]');
     if (_menuBtn) _menuBtn.classList.toggle('is-active',
-      activeNavKey === 'jobs' || activeNavKey === 'queues' || activeNavKey === 'ask'
+      activeNavKey === 'jobs' || activeNavKey === 'queues' || activeNavKey === 'ask' || activeNavKey === 'decisions'
         || activeNavKey === 'archived');
     nav.querySelectorAll('[data-mobile-nav]').forEach(btn => {
       const active = btn.getAttribute('data-mobile-nav') === activeNavKey;
@@ -45045,6 +45045,7 @@
         ['jobs', 'Jobs', _jobsTabCount()],
         ...(_otherTabCount > 0 ? [_otherTabDef] : []),
       ];
+    _tabDefs.splice(_tabDefs.findIndex(tab => tab[0] === 'jobs') + 1, 0, ['decisions', 'Decisions', 0]);
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
         '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '"'
@@ -45070,6 +45071,7 @@
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'queues' ? '<div class="shared-queue-host shared-queue-host-sidebar" id="sidebarQueueHost"></div>'
       : _sidebarTab === 'jobs' ? '<div class="jobs-host" id="sidebarJobsHost"></div>'
+      : _sidebarTab === 'decisions' ? '<div class="decisions-host" id="sidebarDecisionHost"></div>'
       : (_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers' || _sidebarTab === 'ideas' || _sidebarTab === 'smallbugs' || _sidebarTab === 'alltickets') ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
       // _readyToMergeHtml is built at its declaration below the In-progress
       // assembly, so it has to be concatenated here rather than inside
@@ -45078,7 +45080,7 @@
       // `||` fallback keeps the empty-state text when BOTH are empty while
       // still showing ready-to-merge rows when only In-progress is empty.
       : ((_readyToMergeHtml + _forceOpen(_inProgressHtml, 'conv-inprogress-section')) || _tabEmpty('in-progress sessions'));
-    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_ipSearchActive || (_sidebarTab !== 'jobs' && _sidebarTab !== 'ideas' && _sidebarTab !== 'smallbugs' && _sidebarTab !== 'alltickets')))
+    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_ipSearchActive || (_sidebarTab !== 'decisions' && _sidebarTab !== 'jobs' && _sidebarTab !== 'ideas' && _sidebarTab !== 'smallbugs' && _sidebarTab !== 'alltickets')))
       ? '<div class="archive-empty-state"><button type="button" class="conv-window-btn" data-role="sidebar-show-more">Show '
         + Math.min(SIDEBAR_RENDER_MORE_ROWS, _sidebarRowsOmitted)
         + ' more sessions</button><div>' + _sidebarRowsOmitted + ' older rows are not rendered yet.</div></div>'
@@ -45215,6 +45217,7 @@
     _mountSharedQueuePanel();
     // Jobs tab: refill the fresh host from cached data (no flicker, no fetch).
     try { if (_sidebarTab === 'jobs' && window.CCCJobsTab) window.CCCJobsTab.mount(); } catch (_) {}
+    try { if (window.CCCDecisionTab) window.CCCDecisionTab.mount(); } catch (_) {}
     // The Workers lane emits the activity containers empty (see CCC-1061 above)
     // so their live contents stay out of the structural signature. Fill them
     // here, immediately after the reset, or the block flashes blank until the
@@ -94289,6 +94292,7 @@
     return ff('idea_tickets');
   }
   function normalizeSidebarTabKey(t) {
+    if (t === 'decisions') return t;
     if (ideaTicketsOn()) {
       return (t === 'alltickets' || t === 'ideas' || t === 'smallbugs' || t === 'issues' || t === 'queues' || t === 'archived' || t === 'workers' || t === 'jobs') ? t : 'alltickets';
     }

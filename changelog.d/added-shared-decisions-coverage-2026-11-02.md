@@ -1,0 +1,1 @@
+- Added a Decisions tab with a shared owner-question table, explicit local-session promotion, delivery states, and visible coverage gaps; source checks do not run scans or models, and unavailable sources never appear as an empty inbox.

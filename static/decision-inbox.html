@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Decision Inbox</title>
+<title>Decisions</title>
 <script src="/static/app-rail.js" defer></script>
+<script src="/static/decision-requests.js" defer></script>
 <style>
   :root {
     --bg: #0f1115; --panel: #151920; --line: #232830; --ink: #e6e9ee; --mute: #8a929e;
@@ -123,6 +124,23 @@
   .origin { margin:16px 0; padding-block:14px; border-block:1px solid var(--line); max-width:75ch; }
   .origin h3 { font-size:14px; margin:0 0 6px; }
   .origin p { margin:4px 0; color:var(--mute); overflow-wrap:anywhere; }
+  .requests-toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:12px 0; }
+  .requests-toolbar label { display:flex; flex-direction:column; gap:4px; color:var(--mute); }
+  .requests-toolbar input, .requests-toolbar select { color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px; font:inherit; max-width:100%; box-sizing:border-box; }
+  .requests-toolbar label:first-child { flex:1; min-width:min(100%,230px); }
+  .requests-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  .requests-table th, .requests-table td { padding:14px 8px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+  .requests-table th { color:var(--dim); font-size:12px; }
+  .requests-table th:first-child { width:64%; }
+  .requests-table th:last-child { width:36%; }
+  .request-body { white-space:pre-wrap; max-width:75ch; margin:6px 0; }
+  .request-meta { display:block; color:var(--dim); font-size:12px; margin-top:6px; }
+  .request-state { font-weight:600; }
+  #requestsStatus { color:var(--dim); margin:8px 0; }
+  #requestsStatus.bad { color:var(--warn); }
+  #requestPager { margin-bottom:28px; }
+  #requestPager span { text-align:center; }
+  #requestsSection :focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 
   @media(max-width:700px) {
     .wrap { padding:20px 16px 50px; }
@@ -147,14 +165,26 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Decision Inbox</h1>
-    <span class="tag status" id="openCount">0 open</span>
-    <div class="meta">
-      <span id="lastRun">no scan yet</span>
+    <h1>Decisions</h1>
+  </header>
+  <p class="sub">Owner questions, reports, and the actions they need.</p>
+  <section id="requestsSection" aria-labelledby="requestsHeading">
+    <h2 id="requestsHeading">Owner questions <span id="requestCount"></span></h2>
+    <p id="requestsStatus" role="status">Checking the local queue source…</p>
+    <div id="requestCoverageIssues" role="status"></div>
+    <div class="requests-toolbar">
+      <label>Find an owner question<input id="requestSearch" type="search" placeholder="Ticket, question tag, or text"></label>
+      <label>Show<select id="requestFilter"><option value="needs">Needs answer</option><option value="delivery">Answer delivery</option><option value="history">History</option><option value="all">All requests</option></select></label>
+      <button id="requestRefresh" type="button">Check source</button>
+    </div>
+    <table class="requests-table" aria-label="Owner questions"><thead><tr><th scope="col">Question</th><th scope="col">State and source</th></tr></thead><tbody id="requestRows"></tbody></table>
+    <nav id="requestPager" class="pager" aria-label="Owner question pages"><button id="requestPrev" type="button">Previous</button><span id="requestPage" role="status"></span><button id="requestNext" type="button">Next</button></nav>
+  </section>
+  <header><h2>Reports and monitoring</h2><span class="tag status" id="openCount">Loading reports…</span>
+    <div class="meta"><span id="lastRun">no scan yet</span>
       <button id="scanBtn" title="Run the stalled-work scan now (hourly otherwise)">Scan now</button>
     </div>
   </header>
-  <p class="sub">Find a decision, review the context, and choose the next step.</p>
   <div id="freshness" class="freshness" role="status">Connecting to the inbox…</div>
   <section class="inbox-help" id="sweepHistory" aria-labelledby="sweepSummary">
     <h2 id="sweepSummary">Sweep history</h2>
@@ -197,7 +227,7 @@
   }
   function exact(iso) {
     var d = new Date(iso);
-    return !iso || !Number.isFinite(d.getTime()) ? "Unknown" : d.toLocaleString(undefined, {year:"numeric", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
+    return !iso || !Number.isFinite(d.getTime()) ? "Unknown" : d.toLocaleString("en-US", {timeZone:"America/Los_Angeles", year:"numeric", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit", timeZoneName:"short"});
   }
   function reference(c) {
     var q = String(c.title || "").match(/\[Q(\d+):[^\]]+\]/);
@@ -361,7 +391,7 @@
     var kinds = Array.from(new Set(state.cards.map(function(c) { return c.kind; }))).sort();
     $("sourceFilter").innerHTML = '<option value="all">All sources</option>' + kinds.map(function(k) { return '<option value="' + esc(k) + '">' + esc(k) + '</option>'; }).join('');
     $("sourceFilter").value = kinds.includes(selected) ? selected : "all";
-    $("openCount").textContent = (data.open_count == null ? state.cards.filter(function(c) { return c.status === "open"; }).length : data.open_count) + " open";
+    $("openCount").textContent = (data.open_count == null ? state.cards.filter(function(c) { return c.status === "open"; }).length : data.open_count) + " open reports";
     var fingerprint = JSON.stringify([state.cards, state.queueRepos]);
     if (fingerprint !== state.fingerprint) { browse(); state.fingerprint = fingerprint; }
     var findings = (data.governor && data.governor.findings) || [];
@@ -432,7 +462,7 @@
       $("freshness").classList.add("bad");
     }
   }
-  $("timezone").textContent = "Times in " + Intl.DateTimeFormat().resolvedOptions().timeZone;
+  $("timezone").textContent = "Pacific time (PST/PDT)";
   ["search", "statusFilter", "sourceFilter", "sort"].forEach(function(id) { $(id).addEventListener(id === "search" ? "input" : "change", function() { state.page = 0; browse(); }); });
   $("prev").onclick = function() { state.page--; browse(); };
   $("next").onclick = function() { state.page++; browse(); };
