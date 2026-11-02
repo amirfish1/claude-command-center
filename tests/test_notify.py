@@ -342,3 +342,43 @@ def test_post_logs_outcome_to_activity_log(monkeypatch):
     notify.post({"title": "Logged", "kind": "info"}, publish=publish, now=1000)
     notify.post({"title": "Logged", "kind": "info"}, publish=publish, now=1010)
     assert [(c, v) for c, v, _ in lines] == [("NOTIFY", "emitted"), ("NOTIFY", "deduped")]
+
+
+def _totals_db(path, cost_rows, session_starts):
+    import sqlite3
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE event_costs (ts TEXT, cost_usd REAL)")
+    conn.execute("CREATE TABLE sessions (started_at TEXT)")
+    conn.executemany("INSERT INTO event_costs VALUES (?, ?)", cost_rows)
+    conn.executemany("INSERT INTO sessions VALUES (?)", [(s,) for s in session_starts])
+    conn.commit()
+    conn.close()
+
+
+def test_usage_db_totals_sum_in_sqlite_and_match_the_local_day(tmp_path, monkeypatch):
+    """SMALL-BUGS-67: the totals scan fetched ~200k rows and parsed each date
+    in Python, holding the GIL ~2.5 s on every boot. It now sums in SQLite;
+    the local-day split must stay exactly what the per-row parse produced."""
+    from datetime import datetime, timezone
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time.tzset()
+    try:
+        now = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc).timestamp()  # 04:00 PST
+        db = tmp_path / "usage.sqlite3"
+        _totals_db(db, [
+            ("2026-11-02T07:59:59.999Z", 1.0),   # 23:59 Nov 1 local -> yesterday
+            ("2026-11-02T08:00:00.000Z", 2.0),   # 00:00 Nov 2 local -> today
+            ("2026-11-03T07:59:59.000Z", 4.0),   # 23:59 Nov 2 local -> today
+            ("2026-11-03T08:00:00.000Z", 8.0),   # tomorrow
+            ("2026-11-02T10:00:00Z", 16.0),      # other shape -> per-row path, today
+            ("2026-11-02T10:00:00.000Z", None),  # unpriced
+            (None, 32.0),                        # no timestamp: not counted
+        ], [
+            "2026-11-02T07:00:00.000Z", "2026-11-02T09:00:00.000Z", "2026-11-02T09:30:00+00:00",
+        ])
+        monkeypatch.setattr(notify, "_usage_db_path", lambda: str(db))
+        got = notify._usage_db_totals_uncached(now)
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()
+    assert got == {"all_time_usd": 31.0, "today_usd": 22.0, "sessions_today": 2}

@@ -35,7 +35,7 @@ import threading
 import time
 import urllib.request
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ccc_server import core as _core
@@ -750,50 +750,78 @@ def _usage_db_totals(now=None, fresh=False):
     return value
 
 
+_UTC_TS_LIKE = "____-__-__T__:__:__.___Z"
+
+
+def _local_day_utc_bounds(now):
+    """[start, end) of the local calendar day containing `now`, as the
+    usage DB's fixed-width UTC strings, so SQLite can range-compare them.
+    mktime resolves each local midnight on its own, so DST days are right."""
+    d = datetime.fromtimestamp(now).date()
+    nxt = d + timedelta(days=1)
+    start = time.mktime((d.year, d.month, d.day, 0, 0, 0, 0, 0, -1))
+    end = time.mktime((nxt.year, nxt.month, nxt.day, 0, 0, 0, 0, 0, -1))
+    fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+    return (datetime.fromtimestamp(start, timezone.utc).strftime(fmt),
+            datetime.fromtimestamp(end, timezone.utc).strftime(fmt))
+
+
 def _usage_db_totals_uncached(now=None):
     """(all-time list cost, today's local-date list cost, sessions today)
-    straight from the usage DB."""
+    straight from the usage DB.
+
+    The sums run inside SQLite (which releases the GIL) over the fixed-width
+    UTC timestamps. Fetching all ~200k rows and parsing each date in Python
+    held the GIL for ~2.5 s on every dashboard boot (SMALL-BUGS-67). Rows in
+    any other timestamp shape keep the old per-row path."""
     conn = _connect_usage_db_ro()
     if conn is None:
         return None
-    try:
-        rows = conn.execute(
-            "SELECT ts, cost_usd FROM event_costs WHERE ts IS NOT NULL"
-        ).fetchall()
-    except sqlite3.Error:
-        rows = []
-    today = datetime.fromtimestamp(now or time.time()).date()
+    now = now or time.time()
+    today = datetime.fromtimestamp(now).date()
+    day_start, day_end = _local_day_utc_bounds(now)
+
+    def _local_day(ts):
+        try:
+            return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).astimezone().date()
+        except ValueError:
+            return None
+
     all_time = 0.0
     today_total = 0.0
-    for row in rows:
-        v = row["cost_usd"]
-        if v is None:
-            continue
-        all_time += v
-        try:
-            day = datetime.fromisoformat(
-                str(row["ts"]).replace("Z", "+00:00")
-            ).astimezone().date()
-        except ValueError:
-            continue
-        if day == today:
-            today_total += v
     try:
-        srows = conn.execute(
-            "SELECT started_at FROM sessions WHERE started_at IS NOT NULL"
-        ).fetchall()
+        row = conn.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0.0),"
+            " COALESCE(SUM(CASE WHEN ts >= ? AND ts < ? AND ts LIKE ? THEN cost_usd END), 0.0)"
+            " FROM event_costs WHERE ts IS NOT NULL",
+            (day_start, day_end, _UTC_TS_LIKE),
+        ).fetchone()
+        all_time, today_total = float(row[0]), float(row[1])
+        for r in conn.execute(
+            "SELECT ts, cost_usd FROM event_costs"
+            " WHERE ts IS NOT NULL AND cost_usd IS NOT NULL AND ts NOT LIKE ?",
+            (_UTC_TS_LIKE,),
+        ):
+            if _local_day(r[0]) == today:
+                today_total += r[1]
     except sqlite3.Error:
-        srows = []
+        pass
     sessions_today = 0
-    for row in srows:
-        try:
-            day = datetime.fromisoformat(
-                str(row["started_at"]).replace("Z", "+00:00")
-            ).astimezone().date()
-        except ValueError:
-            continue
-        if day == today:
-            sessions_today += 1
+    try:
+        sessions_today = int(conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE started_at >= ? AND started_at < ?"
+            " AND started_at LIKE ?",
+            (day_start, day_end, _UTC_TS_LIKE),
+        ).fetchone()[0])
+        for r in conn.execute(
+            "SELECT started_at FROM sessions"
+            " WHERE started_at IS NOT NULL AND started_at NOT LIKE ?",
+            (_UTC_TS_LIKE,),
+        ):
+            if _local_day(r[0]) == today:
+                sessions_today += 1
+    except sqlite3.Error:
+        pass
     try:
         conn.close()
     except Exception:
