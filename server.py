@@ -30321,6 +30321,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # vertical stage list (folders → transcripts → infer …) instead
             # of the opaque "Loading archive…" spinner.
             self.send_json(_archive_load_snapshot())
+        elif path == "/api/decision-inbox/session-questions":
+            from ccc_server.decision_sessions import session_payload
+            qs = urllib.parse.parse_qs(parsed.query)
+            result, status = session_payload(qs.get('session_id', [''])[0])
+            self.send_json(result, status)
         elif path == "/api/decision-inbox/source-coverage":
             from ccc_server.decision_sources import owner_source_payload
             result = owner_source_payload()
@@ -40242,6 +40247,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 res = system_health_quit_app(app_id)
                 self.send_json(res, 200 if res.get("ok") else 400)
+        elif path == "/api/decision-inbox/session-events":
+            from ccc_server.decision_sessions import event_payload
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                length = 0
+            if not 0 < length <= 128 * 1024:
+                self.close_connection = True
+                self.send_json({'ok': False, 'error': 'Event body must be between 1 byte and 128 KiB'}, 413)
+                return
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except ValueError:
+                self.send_json({'ok': False, 'error': 'Event body must be valid JSON'}, 400)
+                return
+            result, status = event_payload(payload)
+            self.send_json(result, status)
         elif path in ("/api/decision-inbox", "/api/decision-inbox/cards"):
             # External producers (a digest job, a monitor) file a card:
             # {source, source_id, title, detail|context, options?, severity?}.
