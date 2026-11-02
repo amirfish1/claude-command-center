@@ -310,6 +310,25 @@ def decision_inbox_runs_payload(*, offset=0, limit=10, path=None, cards=None):
     for run in records:
         run["llm_used"], run["llm_usage_basis"] = sweep_llm_usage(run, retained)
     activity = [run for run in records if run.get("created") or run["llm_used"] is True]
+    decision_rows = []
+    for run in activity:
+        for item in run.get("created") or []:
+            decision = dict(item)
+            card = retained.get(item.get("id"), {})
+            if card.get("run_id") == run["run_id"]:
+                for key in ("source", "kind", "created_at", "decision_number", "analyst"):
+                    if key not in decision and key in card:
+                        decision[key] = card[key]
+            used, basis = sweep_llm_usage({"run_id": run["run_id"], "created": [decision]}, retained)
+            meta = decision.get("analyst") or {}
+            decision_rows.append(dict(decision, run_id=run["run_id"],
+                                      created_at=decision.get("created_at") or run.get("started_at"),
+                                      llm_used=used, llm_usage_basis=basis, llm_calls=meta.get("llm_calls")))
+        if not run.get("created") and run["llm_used"] is True:
+            decision_rows.append({"id": None, "title": "No decisions added", "run_id": run["run_id"],
+                                  "created_at": run.get("started_at"), "source": {},
+                                  "llm_used": True, "llm_usage_basis": run["llm_usage_basis"],
+                                  "llm_calls": run.get("llm_calls")})
     page = records[offset:offset + limit]
     activity_page = activity[offset:offset + limit]
     for run in page + activity_page:
@@ -325,7 +344,8 @@ def decision_inbox_runs_payload(*, offset=0, limit=10, path=None, cards=None):
     return {"ok": True, "runs": page,
             "total": len(records), "offset": offset, "limit": limit,
             "invalid_records": invalid, "activity_runs": activity_page,
-            "activity_total": len(activity), "hidden_count": len(records) - len(activity)}
+            "activity_total": len(activity), "hidden_count": len(records) - len(activity),
+            "decision_rows": decision_rows[offset:offset + limit], "decision_total": len(decision_rows)}
 
 
 def _di_iso(ts):

@@ -21,26 +21,29 @@ older decision still applies. Connection failures and overdue scans are visible.
 
 ## Why an item appeared
 
-**Sweep history** is a table with exact start/end and decision creation times
-in Pacific time (`America/Los_Angeles`, automatically PST or PDT). Each row
-lists added decision references, titles and source IDs, with an explicit **LLM used** column.
-Click a reference to open that exact inbox item. Existing Q-references stay the
-same; cards without one get a persistent local D-number, shared with the inbox
-list and searchable there. These numbers remain fixed when sorting or filtering.
-Empty script-only sweeps are hidden; runs that attempted an LLM request remain
-visible even when they added no decision. Pagination applies after filtering.
+**Sweep history** shows one table row per added decision: its creation date/time
+in Pacific time (`America/Los_Angeles`, automatically PST or PDT), clickable
+reference and title, trigger, and LLM usage with its recorded or historical basis.
+Pagination counts decisions, so a sweep adding several decisions creates several
+rows. Empty script-only sweeps are hidden; an empty run that attempted an LLM
+request remains visible as a **No decisions added** exception.
 
-New runs record request counts, including retries and failed requests; a missing
-executable does not count as a request. Older usage is inferred from retained
-analyst records and labeled historical; unavailable usage is **Unknown**.
-Sources and creation times for older decisions come from their original retained
-card when available. Reading history never starts work or chooses an option.
+LLM usage is specific to each decision: a scripted health alert stays **No** even
+when the same sweep used an LLM for another decision. New analyst records count
+requests, retries and failures; unavailable historical usage is **Unknown**.
+Existing Q-references are preserved. Persisted cards without a Q-reference use
+stable local D-numbers, shared with the inbox list and searchable there.
 
-`GET /api/decision-inbox/runs?offset=0&limit=10` keeps the original unfiltered
-`runs` and `total` fields and adds filtered `activity_runs`, `activity_total`,
-and `hidden_count`. Run records include `llm_used` and `llm_usage_basis`;
-new records also include `llm_calls`. Limits are clamped to 1–100.
-Malformed log lines are counted in `invalid_records` and skipped.
+`GET /api/decision-inbox/runs?offset=0&limit=10` preserves the unfiltered `runs`
+and `total` plus sweep-level `activity_runs` and `activity_total`. It additionally
+returns paginated `decision_rows` and `decision_total` for the compact table.
+`hidden_count` counts omitted empty script-only sweeps. Malformed log lines are
+counted in `invalid_records` and skipped. Limits are clamped to 1–100.
+
+Q-tags identify questions written by agents in session transcripts. CCC recognizes
+and displays them; the standard installer does not install an agent tagging rule
+or a question counter. A session question and an inbox card are separate records
+unless the card explicitly carries that question's tag.
 
 On mobile, open **More → Decisions** in CCC. The More menu includes the same
 app catalog as the desktop rail. Apps keep the bottom bar visible so you can

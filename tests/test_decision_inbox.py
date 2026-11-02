@@ -492,9 +492,36 @@ class Persistence(unittest.TestCase):
             self.assertEqual(first["hidden_count"], 1)
             self.assertEqual([r["run_id"] for r in first["activity_runs"]], ["legacy-llm", "empty-llm"])
             self.assertTrue(all(r["llm_used"] for r in first["activity_runs"]))
+            self.assertEqual(first["decision_total"], 3)
+            self.assertIsNone(first["decision_rows"][1]["id"])
+            self.assertTrue(first["decision_rows"][1]["llm_used"])
             second = di.decision_inbox_runs_payload(path=runs, cards=cards, offset=2, limit=2)
             self.assertEqual([r["run_id"] for r in second["activity_runs"]], ["governor"])
             self.assertFalse(second["activity_runs"][0]["llm_used"])
+
+    def test_decision_rows_split_mixed_runs_and_paginate_per_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = pathlib.Path(tmp) / "runs.jsonl"
+            di._append_run({"run_id": "mixed", "started_at": "2026-11-02T01:00:00Z", "llm_calls": 1,
+                            "created": [{"id": "g", "source_id": "governor:s:context_high", "kind": "governor"},
+                                        {"id": "w", "source_id": "wt:EXAMPLE"}]}, path=runs)
+            cards = {"g": {"run_id": "mixed", "decision_number": 1, "source": {"detail": "context high"}},
+                     "w": {"run_id": "mixed", "decision_number": 2, "source": {"reason": "queue stalled"},
+                           "analyst": {"error": None, "llm_calls": 1}}}
+            first = di.decision_inbox_runs_payload(path=runs, cards=cards, limit=1)
+            self.assertEqual(first["activity_total"], 1)
+            self.assertEqual(first["decision_total"], 2)
+            row = first["decision_rows"][0]
+            self.assertEqual(row["id"], "g")
+            self.assertEqual(row["decision_number"], 1)
+            self.assertFalse(row["llm_used"])  # Mixed sweep used LLM, governor did not.
+            self.assertEqual(row["created_at"], "2026-11-02T01:00:00Z")
+            second = di.decision_inbox_runs_payload(path=runs, cards=cards, offset=1, limit=1)
+            row = second["decision_rows"][0]
+            self.assertEqual(row["id"], "w")
+            self.assertTrue(row["llm_used"])
+            self.assertEqual(row["llm_calls"], 1)
+            self.assertEqual(row["source"]["reason"], "queue stalled")
 
     def test_legacy_llm_usage_does_not_guess_from_a_different_run(self):
         run = {"run_id": "r1", "created": [{"id": "c", "source_id": "wt:EXAMPLE"}]}

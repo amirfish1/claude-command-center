@@ -110,10 +110,10 @@
   .sweep-table { width:100%; table-layout:fixed; border-collapse:collapse; color:var(--ink); font-size:13px; }
   .sweep-table th, .sweep-table td { padding:14px 12px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
   .sweep-table th { color:var(--mute); font-size:12px; font-weight:600; }
-  .sweep-table th:first-child { width:25%; }
-  .sweep-table th:last-child { width:16%; }
-  .sweep-table ul { margin:0; padding-left:18px; }
-  .sweep-table li + li { margin-top:14px; }
+  .sweep-table th:first-child { width:22%; }
+  .sweep-table th:nth-child(2) { width:40%; }
+  .sweep-table th:nth-child(3) { width:25%; }
+  .sweep-table th:last-child { width:13%; }
   .sweep-table .source { display:block; color:var(--mute); font-size:12px; margin-top:4px; }
   .sweep-decision-ref { color:var(--accent); font-weight:700; margin-right:8px; white-space:nowrap; text-underline-offset:3px; }
   .sweep-table time { font-variant-numeric:tabular-nums; }
@@ -136,9 +136,10 @@
     .browse-meta { align-items:start; font-size:12px; }
     .gov .row { flex-wrap:wrap; }
     .sweep-table th, .sweep-table td { padding:12px 5px; }
-    .sweep-table th:first-child { width:28%; }
-    .sweep-table th:last-child { width:17%; }
-    .sweep-table ul { padding-left:13px; }
+    .sweep-table { font-size:12px; }
+    .sweep-table th:nth-child(2) { width:32%; }
+    .sweep-table th:nth-child(3) { width:24%; }
+    .sweep-table th:last-child { width:22%; }
 
   }
 </style>
@@ -158,8 +159,8 @@
   <section class="inbox-help" id="sweepHistory" aria-labelledby="sweepSummary">
     <h2 id="sweepSummary">Sweep history</h2>
     <p id="sweepStatus" role="status">Loading recorded sweeps…</p>
-    <table class="sweep-table"><thead><tr><th scope="col">Sweep · Pacific time</th><th scope="col">Decisions added</th><th scope="col">LLM used</th></tr></thead><tbody id="sweepRuns"></tbody></table>
-    <nav class="pager" aria-label="Sweep history pages"><button id="sweepPrev">Newer sweeps</button><span id="sweepPage"></span><button id="sweepNext">Older sweeps</button><button id="sweepRetry">Refresh history</button></nav>
+    <table class="sweep-table"><thead><tr><th scope="col">Date · Pacific time</th><th scope="col">Decision</th><th scope="col">Trigger</th><th scope="col">LLM used</th></tr></thead><tbody id="sweepRuns"></tbody></table>
+    <nav class="pager" aria-label="Decision history pages"><button id="sweepPrev">Newer decisions</button><span id="sweepPage"></span><button id="sweepNext">Older decisions</button><button id="sweepRetry">Refresh history</button></nav>
   </section>
   <div class="toolbar" role="search" aria-label="Browse decisions">
     <label class="search">Search decisions<input id="search" type="search" placeholder="Question number, ticket, title or context"></label>
@@ -382,17 +383,6 @@
     var d = new Date(iso);
     return !iso || !Number.isFinite(d.getTime()) ? "Not recorded" : d.toLocaleString("en-US", {timeZone:"America/Los_Angeles",year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit",timeZoneName:"short"});
   }
-  function sweepItems(items) {
-    return '<ul>' + items.map(function(c) {
-      var src = c.source || {};
-      return '<li><a class="sweep-decision-ref" href="#decision=' + encodeURIComponent(c.id) + '" data-open-decision="' + esc(c.id) + '" aria-label="Open decision ' + esc(reference(c)) + '">' + esc(reference(c)) + '</a><strong>' + esc(cleanTitle(c)) + '</strong><span class="source">ID: ' + esc(c.id) + ' · Source: ' + esc(c.source_id || 'Not recorded') +
-        (c.kind ? ' · ' + esc(c.kind) : '') + '</span>' +
-        (c.details_from ? '<span class="source">Details from ' + esc(c.details_from) + '</span>' : '') +
-        (c.created_at ? '<span class="source">Created: ' + esc(sweepTime(c.created_at)) + '</span>' : '') +
-        (src.reason || src.detail ? '<span class="source">Trigger: ' + esc(src.reason || src.detail) + '</span>' : '') +
-        '</li>';
-    }).join('') + '</ul>';
-  }
   async function loadSweeps() {
     if (sweepBusy) return;
     sweepBusy = true;
@@ -400,28 +390,27 @@
       var r = await fetch('/api/decision-inbox/runs?offset=' + sweepOffset + '&limit=' + sweepLimit, {cache:'no-store'});
       if (!r.ok) throw new Error('HTTP ' + r.status);
       var data = await r.json(); if (!data.ok) throw new Error(data.error);
-      var total = data.activity_total, runs = data.activity_runs;
+      var total = data.decision_total, rows = data.decision_rows;
       if (sweepOffset >= total && sweepOffset > 0) { sweepOffset = 0; sweepFingerprint = ''; setTimeout(loadSweeps, 0); return; }
-      $('sweepSummary').textContent = 'Sweep history · ' + total + ' runs';
-      $('sweepStatus').textContent = 'Pacific time (PST/PDT) · ' + data.hidden_count + ' empty script-only sweeps hidden. Yes means an LLM request was attempted, including failed requests. Historical usage is inferred from retained records where available.' +
+      $('sweepSummary').textContent = 'Sweep history · ' + total + ' entries';
+      $('sweepStatus').textContent = 'Pacific time (PST/PDT) · ' + data.hidden_count + ' empty script-only sweeps hidden.' +
         (data.invalid_records ? ' ' + data.invalid_records + ' unreadable record(s) skipped.' : '');
-      $('sweepPage').textContent = total ? (sweepOffset + 1) + '–' + Math.min(sweepOffset + sweepLimit, total) + ' of ' + total : '0 sweeps';
+      $('sweepPage').textContent = total ? (sweepOffset + 1) + '–' + Math.min(sweepOffset + sweepLimit, total) + ' of ' + total : '0 entries';
       $('sweepPrev').disabled = sweepOffset === 0;
       $('sweepNext').disabled = sweepOffset + sweepLimit >= total;
-      var fingerprint = JSON.stringify(runs);
+      var fingerprint = JSON.stringify(rows);
       if (fingerprint !== sweepFingerprint) {
-        $('sweepRuns').innerHTML = runs.map(function(run) {
-          var added = run.created || [];
-          var llm = run.llm_used === true ? 'Yes' : run.llm_used === false ? 'No' : 'Unknown';
-          return '<tr class="sweep" data-run-id="' + esc(run.run_id) + '"><td><time datetime="' + esc(run.started_at) + '">' + esc(sweepTime(run.started_at)) + '</time>' +
-            '<span class="source">Finished: ' + esc(sweepTime(run.finished_at)) + '</span>' +
-            '<span class="source">' + esc(run.run_id) + ' · ' + esc(run.trigger || 'Run type not recorded') + '</span>' +
-            '<span class="source">Duration: ' + esc(run.duration_s == null ? 'Not recorded' : run.duration_s + ' s') + '</span></td><td>' +
-            (added.length ? '<strong>' + added.length + ' added</strong>' + sweepItems(added) : '<strong>No decisions added.</strong>') +
-            ((run.errors || []).length ? '<p class="result bad">Errors: ' + esc(run.errors.join(' · ')) + '</p>' : '') +
+        $('sweepRuns').innerHTML = rows.map(function(decision) {
+          var src = decision.source || {};
+          var llm = decision.llm_used === true ? 'Yes' : decision.llm_used === false ? 'No' : 'Unknown';
+          var title = decision.id
+            ? '<a class="sweep-decision-ref" href="#decision=' + encodeURIComponent(decision.id) + '" data-open-decision="' + esc(decision.id) + '" aria-label="Open decision ' + esc(reference(decision)) + '">' + esc(reference(decision)) + '</a><strong>' + esc(cleanTitle(decision)) + '</strong>'
+            : '<strong>No decisions added.</strong>';
+          return '<tr class="sweep" data-run-id="' + esc(decision.run_id) + '" data-decision-id="' + esc(decision.id || '') + '"><td><time datetime="' + esc(decision.created_at) + '">' + esc(sweepTime(decision.created_at)) + '</time></td><td>' + title +
+            '</td><td class="sweep-trigger">' + esc(src.reason || src.detail || 'Not recorded') +
             '</td><td class="sweep-llm"><strong>' + llm + '</strong><span class="source">' +
-            esc(run.llm_calls == null ? run.llm_usage_basis : run.llm_calls + ' request(s)') + '</span></td></tr>';
-        }).join('') || '<tr><td colspan="3">No sweeps added decisions or used an LLM.</td></tr>';
+            esc(decision.llm_calls == null ? decision.llm_usage_basis : decision.llm_calls + ' request(s)') + '</span></td></tr>';
+        }).join('') || '<tr><td colspan="4">No sweeps added decisions or used an LLM.</td></tr>';
         sweepFingerprint = fingerprint;
       }
     } catch(e) {
