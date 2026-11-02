@@ -1,1 +1,2 @@
 - Reloading the dashboard right after a restart shows the sidebar immediately from the last saved session list while the fresh list is built in the background, instead of waiting up to 40 seconds.
+- A dashboard tab left open across a restart also gets the saved list right away (or a 304 when it already holds it) instead of waiting for the first rebuild.

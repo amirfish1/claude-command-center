@@ -16122,7 +16122,7 @@ def _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val, now=Non
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(f".{os.getpid()}.tmp")
             with open(tmp, "wb") as fh:
-                fh.write(etag_val.encode() + b"\n" + blob)
+                fh.write(etag_val.encode() + b"\t" + _archive_list_body_token(raw).encode() + b"\n" + blob)
             os.replace(tmp, path)
         except Exception:
             pass
@@ -16131,24 +16131,42 @@ def _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val, now=Non
     return True
 
 
+def _archive_list_body_token(raw):
+    """The body's delta_token (dumped last, so found from the end), or ''."""
+    at = raw.rfind(b'"delta_token": "')
+    if at < 0:
+        return ""
+    start = at + len(b'"delta_token": "')
+    end = raw.find(b'"', start)
+    return raw[start:end].decode("ascii", "replace") if end > start else ""
+
+
 def _archive_list_disk_load(cache_key, window, now=None):
-    """(raw, gzip, etag) of the saved body, or None when absent or too old."""
+    """(raw, gzip, etag, delta_token) of the saved body, or None when absent
+    or too old."""
     now = time.time() if now is None else now
     path = _archive_list_disk_path(cache_key, window)
     try:
         if now - path.stat().st_mtime > _ARCHIVE_LIST_DISK_MAX_AGE_S:
             return None
         data = path.read_bytes()
-        etag_val, blob = data.split(b"\n", 1)
-        return gzip.decompress(blob), blob, etag_val.decode()
+        head, blob = data.split(b"\n", 1)
+        etag_val, _, token = head.decode().partition("\t")
+        return gzip.decompress(blob), blob, etag_val, token
     except Exception:
         return None
 
 
 def _archive_list_disk_candidate(cache_key, window, since, now=None):
-    """The saved body to serve for this request, or None (normal path)."""
+    """The saved body to serve for this request, or None (normal path).
+
+    Bootstrap reads (no token) and pages left open across the restart (a
+    token from an older process) qualify; a current-process token is
+    answered by the normal delta path."""
     now = time.time() if now is None else now
-    if since or now - _SERVER_START_TS > _ARCHIVE_LIST_DISK_BOOT_S:
+    if since and since.split(".", 1)[0] == _ARCHIVE_DELTA_NONCE:
+        return None
+    if now - _SERVER_START_TS > _ARCHIVE_LIST_DISK_BOOT_S:
         return None
     if (cache_key, window) in _ARCHIVE_LIST_BUILT:
         return None
@@ -30302,6 +30320,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # vertical stage list (folders → transcripts → infer …) instead
             # of the opaque "Loading archive…" spinner.
             self.send_json(_archive_load_snapshot())
+        elif path == "/api/decision-inbox/coverage":
+            # Shadow-only source comparison: no scans, model calls or delivery.
+            from ccc_server.decision_coverage import coverage_payload
+            self.send_json(coverage_payload())
         elif path == "/api/decision-inbox/runs":
             qs = urllib.parse.parse_qs(parsed.query)
             self.send_json(decision_inbox_runs_payload(
@@ -32753,11 +32775,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     (list_cache_key, window),
                     lambda: _archive_list_warm(cache_options, window, stale_ok),
                 )
-                _status = self._send_archive_list_body(*_disk, extra_headers=(("X-CCC-List-Body", "disk"),))
+                if since and since == _disk[3]:
+                    # The open page already holds exactly the saved rows.
+                    self.send_response(304)
+                    self.send_header("ETag", '"d-' + since + '"')
+                    self.send_header("X-CCC-List-Body", "disk")
+                    self.end_headers()
+                    _status = 304
+                else:
+                    _status = self._send_archive_list_body(
+                        *_disk[:3], extra_headers=(("X-CCC-List-Body", "disk"),))
                 record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
                     "window": window, "status": _status, "disk": True,
                     "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
-                    "body_hit": True, "since": "none", "stale_ok": stale_ok,
+                    "body_hit": True, "since": "disk" if since else "none", "stale_ok": stale_ok,
                 })
                 return
             rows, from_cache, body_ver = _archive_list_source_rows_cached(

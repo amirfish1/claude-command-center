@@ -3,6 +3,7 @@ body at once while one background warm builds the fresh one."""
 import importlib
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -36,7 +37,7 @@ def test_save_and_load_round_trip(srv):
     assert not srv._archive_list_disk_save(key, '7d', raw, None, '"e2"')  # throttled
     assert _wait(lambda: srv._archive_list_disk_path(key, '7d').exists())
     got = srv._archive_list_disk_load(key, '7d')
-    assert got[0] == raw and got[2] == '"e1"'
+    assert got[0] == raw and got[2] == '"e1"' and got[3] == ''
     assert srv._archive_list_disk_load(key, '7d', now=time.time() + srv._ARCHIVE_LIST_DISK_MAX_AGE_S + 5) is None
 
 
@@ -45,7 +46,8 @@ def test_candidate_only_for_boot_bootstrap_reads_before_a_build(srv):
     srv._archive_list_disk_save(key, '7d', b'{"x": 1}', None, '"e"')
     assert _wait(lambda: srv._archive_list_disk_path(key, '7d').exists())
     assert srv._archive_list_disk_candidate(key, '7d', '') is not None
-    assert srv._archive_list_disk_candidate(key, '7d', 'tok') is None          # delta poll
+    assert srv._archive_list_disk_candidate(key, '7d', srv._ARCHIVE_DELTA_NONCE + '.2.a.b') is None  # this process
+    assert srv._archive_list_disk_candidate(key, '7d', 'oldnonce.2.a.b') is not None  # page open across restart
     assert srv._archive_list_disk_candidate(key, '1d', '') is None             # nothing saved
     late = srv._SERVER_START_TS + srv._ARCHIVE_LIST_DISK_BOOT_S + 1
     assert srv._archive_list_disk_candidate(key, '7d', '', now=late) is None   # past boot
@@ -85,6 +87,34 @@ def test_bootstrap_read_serves_disk_body_and_warms_once(srv, monkeypatch):
             assert r.headers.get('X-CCC-List-Body') is None
             assert b'new' in r.read()
         assert len(warms) == 2  # the warm, then this normal read's source fetch
+    finally:
+        gate.set()
+        httpd.shutdown()
+        httpd.server_close()
+        t.join(timeout=5)
+
+
+def test_open_page_holding_the_saved_body_gets_304(srv, monkeypatch):
+    key = srv._archive_response_cache_key()
+    raw = b'{"conversations": [], "delta_token": "oldnonce.5.c.d"}'
+    srv._archive_list_disk_save(key, '7d', raw, None, '"e"')
+    assert _wait(lambda: srv._archive_list_disk_path(key, '7d').exists())
+    assert srv._archive_list_disk_load(key, '7d')[3] == 'oldnonce.5.c.d'
+    gate = threading.Event()
+    monkeypatch.setattr(srv, '_archive_list_source_rows_cached', lambda *a, **kw: gate.wait(5) and ([], True, 0))
+    httpd = srv.http.server.ThreadingHTTPServer(('127.0.0.1', 0), srv.CommandCenterHandler)
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    base = f'http://127.0.0.1:{httpd.server_address[1]}/api/conversations/list?window=7d&stale_ok=1&since='
+    try:
+        try:
+            urllib.request.urlopen(base + 'oldnonce.5.c.d', timeout=5)
+            raise AssertionError('expected 304')
+        except urllib.error.HTTPError as e:
+            assert e.code == 304
+        with urllib.request.urlopen(base + 'oldnonce.4.x.y', timeout=5) as r:
+            assert r.headers['X-CCC-List-Body'] == 'disk'
+            assert b'delta_token' in r.read()
     finally:
         gate.set()
         httpd.shutdown()
