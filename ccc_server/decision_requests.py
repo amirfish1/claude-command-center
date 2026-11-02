@@ -5,7 +5,6 @@ registry itself uses a single read-only transaction. Unavailable coverage keeps
 the last observed questions visible and never becomes a verified empty inbox.
 """
 import json
-import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,7 +89,8 @@ def requests_payload(*, state_root=None, source_loader=None):
     refreshed = (source_loader or owner_source_payload)(state_root=root)
     source = refreshed.get('source') or {'status': 'unavailable', 'complete': False}
     current = refreshed.get('ok') is True and source.get('authoritative') is True and source.get('complete') is True
-    enabled = os.environ.get('CCC_DECISION_ANSWERS_ENABLED') == '1'
+    from ccc_server.decision_answer_settings import answer_environment
+    enabled = answer_environment(root).get('CCC_DECISION_ANSWERS_ENABLED') == '1'
     try:
         rows = read_requests(root / 'decision-inbox' / 'requests.sqlite3',
                              answers_enabled=enabled, source_current=current)

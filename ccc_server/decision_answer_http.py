@@ -4,7 +4,6 @@ There is no background dispatch. Disabled requests do not initialize a registry
 or discover a source executable. GET status never contacts WatchTower.
 """
 import json
-import os
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -14,13 +13,14 @@ from ccc_server.decision_answer_api import AnswerAPIError, DecisionAnswerAPI, OP
 
 def answer_payload(action, body=b'', *, answer_id=None, state_root=None, environ=None,
                    export_source=None, adapter=None):
-    settings = os.environ if environ is None else environ
+    from ccc_server import decision_inbox
+    from ccc_server.decision_answer_settings import answer_environment
+    root = Path(state_root) if state_root else decision_inbox._state_root()
+    settings = answer_environment(root, environ)
     if settings.get(OPT_IN) != '1':
         return {'ok': False, 'error': 'answers_disabled'}, 503
     try:
-        from ccc_server import decision_inbox
         from ccc_server.decision_registry import DecisionRegistry
-        root = Path(state_root) if state_root else decision_inbox._state_root()
         registry = DecisionRegistry(root / 'decision-inbox' / 'requests.sqlite3', timeout=1)
         if action == 'record' and export_source is None:
             export_source = _export_source

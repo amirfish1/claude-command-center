@@ -21,12 +21,22 @@ The dashboard composes the controller through `decision_answer_http`:
 POST actions use `{"answer_id":"UUID"}`. All POSTs enforce the dashboard's
 same-origin policy and a 128 KiB body limit. Source selection and actor defaults
 are server-owned; clients cannot provide an executable, command, source snapshot
-or routing target. Only an explicit server environment setting
-`CCC_DECISION_ANSWERS_ENABLED=1` permits controller operations. The default 503
+or routing target. An explicit installation opt-in (the environment setting
+`CCC_DECISION_ANSWERS_ENABLED=1` or the persisted setting below) permits controller operations. The default 503
 `answers_disabled` response does not initialize a registry, discover a source
 executable or contact WatchTower. The default UI remains read-only. With the
 same explicit opt-in, eligible source questions expose the controls below;
 no automatic dispatcher or retry loop is installed.
+
+An installation can instead persist `{"enabled":true}` in
+`decision-inbox/answer-settings.json` under its CCC state directory. The read
+model and answer endpoints read this setting on each operation, so it also
+works with drain-aware restarts that preserve the process environment. Publish
+the complete file with an atomic rename. Missing, unreadable or malformed
+files disable answers; only a literal boolean `true` enables them. An explicit
+`CCC_DECISION_ANSWERS_ENABLED` environment value takes precedence, including
+`0` to disable. This opt-in does not migrate producer ownership: establish the
+source and delivery prerequisites above first.
 
 ## Dashboard controls
 
