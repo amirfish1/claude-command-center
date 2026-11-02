@@ -14865,12 +14865,34 @@
   function _ttsMakeDebugQueueDraggable(panel, handle) {
     let drag = null;
     let suppressClick = false;
+    let holdTimer = null;
+    const clearHold = () => { clearTimeout(holdTimer); holdTimer = null; };
+    const offerHide = () => {
+      clearHold();
+      if (drag) drag.held = true;
+      suppressClick = true;
+      if (window.confirm('Hide the TTS debug panel and cache markers? You can show them again in Settings.')) {
+        _ttsSetCacheDebug(false);
+      }
+    };
+    handle.title = 'Drag to move; hold to hide';
+    handle.addEventListener('contextmenu', ev => {
+      ev.preventDefault();
+      if (!drag?.held) offerHide();
+    });
+    handle.addEventListener('keydown', ev => {
+      if (ev.key === 'ContextMenu' || (ev.shiftKey && ev.key === 'F10')) {
+        ev.preventDefault();
+        offerHide();
+      }
+    });
     // Move/up listen on window while a drag is live: a fast pointer outruns
     // the header, and pointer capture is not reliable on every browser.
     const move = ev => {
-      if (!drag || ev.pointerId !== drag.id) return;
+      if (!drag || ev.pointerId !== drag.id || drag.held) return;
       if (!drag.moved) {
         if (Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) < 5) return;
+        clearHold();
         drag.moved = true;
         panel.classList.add('is-dragging');
       }
@@ -14879,10 +14901,11 @@
     };
     const end = ev => {
       if (!drag || ev.pointerId !== drag.id) return;
+      clearHold();
       removeEventListener('pointermove', move);
       removeEventListener('pointerup', end);
       removeEventListener('pointercancel', end);
-      if (drag.moved) {
+      if (drag.moved || drag.held) {
         suppressClick = true;
         setTimeout(() => { suppressClick = false; }, 0);
         panel.classList.remove('is-dragging');
@@ -14891,14 +14914,21 @@
       drag = null;
     };
     handle.addEventListener('pointerdown', ev => {
-      if (ev.button !== 0) return;
+      if (ev.button !== 0 || ev.isPrimary === false) return;
+      clearHold();
+      suppressClick = false;
       const r = panel.getBoundingClientRect();
-      drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: ev.clientX - r.left, dy: ev.clientY - r.top, moved: false };
+      drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: ev.clientX - r.left, dy: ev.clientY - r.top, moved: false, held: false };
+      holdTimer = setTimeout(offerHide, 600);
       addEventListener('pointermove', move, { passive: false });
       addEventListener('pointerup', end);
       addEventListener('pointercancel', end);
     });
-    // A drag ends with a click on <summary>; don't let it toggle the panel.
+    addEventListener('blur', () => {
+      if (drag) end({ pointerId: drag.id });
+      clearHold();
+    });
+    // A drag or hold must not also toggle the panel.
     handle.addEventListener('click', ev => {
       if (suppressClick) { suppressClick = false; ev.preventDefault(); }
     });
@@ -20402,6 +20432,28 @@
   const $flowBoard = document.getElementById('flowBoard');
   const $convKanbanToggle = document.getElementById('convKanbanToggle');
   const CONV_SEARCH_HISTORY_KEY = 'ccc-conv-search-history';
+
+  // Keep the wired search field, revealing it on demand on phones.
+  const $sidebarSearchBtn = document.getElementById('sidebarSearchBtn');
+  const $sidebarSearchRow = $sidebarSearchBtn?.closest('.new-session-primary-row');
+  function setSidebarSearchOpen(open) {
+    $sidebarSearchRow?.classList.toggle('is-search-open', open);
+    $sidebarSearchBtn?.setAttribute('aria-expanded', String(open));
+    if (open) $convSearch?.focus();
+    else $sidebarSearchBtn?.focus();
+  }
+  $sidebarSearchBtn?.addEventListener('click', () => {
+    setSidebarSearchOpen(!$sidebarSearchRow?.classList.contains('is-search-open'));
+  });
+  $convSearch?.addEventListener('input', () => {
+    $sidebarSearchBtn?.classList.toggle('is-filtering', !!$convSearch.value.trim());
+  });
+  $convSearch?.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape' && !ev.isComposing && $sidebarSearchRow?.classList.contains('is-search-open')) {
+      ev.preventDefault();
+      setSidebarSearchOpen(false);
+    }
+  });
 
   // The sidebar list is rebuilt wholesale on archive refreshes. Delegate this
   // control from the stable list container so a redraw cannot leave the model

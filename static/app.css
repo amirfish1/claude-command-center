@@ -33823,6 +33823,27 @@ body.has-mobile-bottom-nav .pwa-install-banner {
   }
 }
 
+/* Phone search shares the New session row, expanding the existing field. */
+.sidebar-search-btn { display: none; }
+@media (max-width: 1200px) {
+  .sidebar .new-session-primary-row { flex-wrap: wrap; }
+  .sidebar .sidebar-search-btn {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+  }
+  .sidebar .sidebar-search-btn.is-filtering { color: var(--accent); }
+  .sidebar .new-session-primary-row:not(.is-search-open) > .search-wrap { display: none; }
+  .sidebar .new-session-primary-row.is-search-open > .search-wrap {
+    display: flex;
+    order: 10;
+    flex: 1 0 100%;
+    min-width: 0;
+  }
+  .sidebar .new-session-primary-row.is-search-open .conv-search-input { width: 100%; }
+}
+
 /* Settings: readable hierarchy, grouped navigation and inspectable routing. */
 .settings-title { font-size: 17px; margin: 0 12px 0 4px; }
 .settings-rail { flex-basis: 210px; padding: 10px; }
