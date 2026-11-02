@@ -12,7 +12,9 @@ def setup(tmp_path):
     registry = DecisionRegistry(tmp_path / 'requests.sqlite3')
     source = dict(adapter='watchtower-block', origin_id='EXAMPLE-1', generation='episode-1',
                   source_revision='revision-1', kind='question', wait_kind='owner',
-                  body='Choose region', title='Deployment', visibility='global')
+                  body='Choose region', title='Deployment', visibility='global',
+                  source_snapshot={'blocked_at': 'episode-1', 'block_question': 'Choose region',
+                                   'wait_kind': 'owner', 'wait': None})
     request = registry.upsert_requests([source])[0]
     return registry, AnswerOutbox(registry), request, source
 
@@ -46,7 +48,7 @@ def test_stale_or_unsupported_answers_are_rejected_before_recording(setup):
     with pytest.raises(AnswerConflict):
         save(outbox, request)
     for changes in ({'visibility': 'local'}, {'adapter': 'legacy-card'},
-                    {'wait_kind': 'external'}, {'kind': 'review'}):
+                    {'wait_kind': 'external'}, {'kind': 'review'}, {'source_snapshot': None}):
         row = registry.upsert_requests([dict(source, origin_id=str(changes), **changes)])[0]
         with pytest.raises(AnswerConflict):
             save(outbox, row)

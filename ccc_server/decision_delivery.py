@@ -62,10 +62,18 @@ class AnswerOutbox:
             if request is None:
                 raise AnswerConflict('Request not found')
             content = json.loads(request['content'])
+            snapshot = content.get('source_snapshot')
             if (request['adapter'] != 'watchtower-block'
                     or content.get('visibility') != 'global'
                     or content.get('kind') != 'question'
-                    or content.get('wait_kind') != 'owner'):
+                    or content.get('wait_kind') != 'owner'
+                    or not isinstance(snapshot, dict)
+                    or snapshot.get('blocked_at') != request['generation']
+                    or not isinstance(snapshot.get('block_question'), str)
+                    or not snapshot['block_question'].strip()
+                    or snapshot.get('wait_kind') != 'owner'
+                    or 'wait' not in snapshot
+                    or (snapshot['wait'] is not None and not isinstance(snapshot['wait'], dict))):
                 raise AnswerConflict('Request has no supported source delivery contract')
             if (request['revision'] != expected_revision or request['status'] != 'open'
                     or (request['answer_state'] != 'none' and request['delivery_state'] != 'rejected')):

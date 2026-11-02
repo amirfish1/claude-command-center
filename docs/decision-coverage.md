@@ -48,3 +48,10 @@ receipt by answer ID. Only authoritative absence permits another attempt using
 the same answer ID. An accepted receipt proves source acceptance, not resumed
 work or completed work. Definitive source rejection preserves the original
 answer and allows a new answer against the current request revision.
+
+The staged WatchTower adapter uses `answer-conditional` and `answer-receipt`.
+It freezes the original, untrimmed question and entire current wait record,
+including its revision token, separately from display text. Receipts must match
+the ticket, immutable answer ID and exact submitted payload. Unsupported sources
+are refused; it never falls back to an ordinary unguarded `wt answer` call.
+Routing details remain separate from source acceptance and work completion.

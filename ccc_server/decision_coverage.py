@@ -5,6 +5,7 @@ Only an explicit source episode can establish a stable source request identity.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -96,6 +97,14 @@ def project(items, cards):
                        json.dumps(revision_data, sort_keys=True).encode()).hexdigest(),
                    'identity_status': 'source_episode' if generation else 'missing_generation',
                    'possible_legacy_links': possible, 'request_id': None}
+        if kind == 'owner':
+            wait = item.get('wait')
+            current = (isinstance(wait, dict) and wait.get('on') in ('owner', 'external', 'dependency', 'worker')
+                       and str(wait.get('block_at') or '') == str(item.get('blocked_at') or ''))
+            request['source_snapshot'] = {
+                'blocked_at': str(item.get('blocked_at') or ''),
+                'block_question': str(item.get('block_question') or ''),
+                'wait_kind': kind, 'wait': copy.deepcopy(wait) if current else None}
         requests.append(request)
     requests.sort(key=lambda r: (r['adapter'], r['origin_id']))
     return {'requests': requests, 'excluded': excluded, 'source_errors': errors,
@@ -137,8 +146,8 @@ def coverage_payload(*, state_root=None, snapshot_path=None, registry_path=None)
     registry = DecisionRegistry(registry_path or root / 'decision-inbox' / 'requests.sqlite3')
     registry.import_cards(cards)
     stable = [r for r in result['requests'] if r['generation']]
-    fields = ('adapter', 'origin_id', 'generation', 'kind', 'wait_kind', 'title', 'body', 'visibility', 'source_revision')
-    saved = registry.upsert_requests([{key: r[key] for key in fields} for r in stable])
+    fields = ('adapter', 'origin_id', 'generation', 'kind', 'wait_kind', 'title', 'body', 'visibility', 'source_revision', 'source_snapshot')
+    saved = registry.upsert_requests([{key: r[key] for key in fields if key in r} for r in stable])
     records = {(r['adapter'], r['origin_id'], r['generation']): r for r in saved}
     for request in stable:
         record = records[(request['adapter'], request['origin_id'], request['generation'])]
