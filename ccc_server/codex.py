@@ -3475,6 +3475,11 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
             params, response, timeout,
             _route=_route, _expected_generation=_expected_generation,
         )
+    try:
+        from ccc_server import codex_thread_wedge
+        codex_thread_wedge.note_result(method, params, response)
+    except Exception:
+        pass
     return response
 
 

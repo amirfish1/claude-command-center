@@ -1983,6 +1983,21 @@ def build_codex_wake_status(session_id):
                 outcome = "error"
                 outcome_detail = _codex_wake_stall_detail(stalled_for, app_transport)
 
+    # The worker publishes threads the app-server daemon stopped answering;
+    # surface that instead of an endless "resuming" spinner.
+    try:
+        from ccc_server import codex_thread_wedge
+        daemon_wedge = codex_thread_wedge.read_published(session_id)
+    except Exception:
+        daemon_wedge = None
+    if daemon_wedge and outcome is None:
+        outcome = "error"
+        outcome_detail = (
+            f"Codex app-server stopped answering this thread "
+            f"({daemon_wedge.get('timeouts')} timed-out requests); "
+            + (daemon_wedge.get("waiting") or "daemon restart pending")
+        )
+
     active = bool(attempt) and outcome is None
 
     # Stage timeline. Emit a stage only once it has STARTED; the current stage
@@ -2044,6 +2059,7 @@ def build_codex_wake_status(session_id):
         "outcome": outcome,
         "outcome_detail": outcome_detail,
         "stalled_s": stalled_for,
+        "daemon_wedge": daemon_wedge,
     }
 
 
@@ -2219,7 +2235,52 @@ def _codex_restore_or_journal_claim(claim):
     return "failed"
 
 
+def _codex_wedge_gate(session_id):
+    """Hold delivery to a thread the app-server daemon stopped answering.
+
+    Returns a refusal dict while the thread is wedged and a daemon restart is
+    not yet safe (no request is sent, so hung requests stop piling up inside
+    the daemon), or None to proceed -- including right after a restart.
+    """
+    from ccc_server import codex_thread_wedge
+
+    def turn_active():
+        lock = _core._CODEX_APP_SERVER_LOCK
+        with lock:
+            return bool(_core._codex_app_server_active_turn_fresh(time.time()))
+
+    resolved = _core._resolve_codex_bin() or {}
+    decision = codex_thread_wedge.maybe_recover(
+        session_id,
+        turn_active=turn_active,
+        codex_bin=resolved.get("bin") if resolved.get("available") else "",
+        log=lambda detail: _core._log_activity(
+            "inject", "CODEX_DAEMON_RESTART", detail,
+        ),
+    )
+    if not decision.get("wedged"):
+        return None
+    if decision.get("action") == "restarted":
+        # Drop the transport bound to the old daemon; the next request
+        # reconnects to the fresh one.
+        try:
+            _core._codex_app_server_shutdown()
+        except Exception:
+            pass
+        return None
+    return {
+        "ok": False,
+        "delivered": False,
+        "code": "codex_thread_wedged",
+        "error": "Codex app-server is not answering this thread: " + decision["reason"],
+        "wedge": decision,
+    }
+
+
 def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
+    refusal = _codex_wedge_gate(session_id)
+    if refusal is not None:
+        return refusal
     with _core._codex_queue_pump_lock(session_id):
         if not _core._retry_pending_input_recovery(session_id):
             return {
