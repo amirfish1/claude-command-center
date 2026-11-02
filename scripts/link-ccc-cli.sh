@@ -32,6 +32,11 @@ BIN_DIR="$HOME/.local/bin"
 TARGET="$SOURCE_DIR/ccc"
 LINK="$BIN_DIR/ccc"
 
+# Install the default counter without replacing any custom q-next command.
+if command -v python3 >/dev/null 2>&1; then
+  python3 "$SOURCE_DIR/ccc_server/question_defaults.py" || printf '%sq-next setup failed\n' "$LOG_PREFIX"
+fi
+
 if [ ! -f "$TARGET" ]; then
   exit 0
 fi

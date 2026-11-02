@@ -133,6 +133,7 @@ switch ($firstArg) {
 
 New-Item -ItemType Directory -Force -Path $ServiceLogDir | Out-Null
 $python = Resolve-Python
+& $python (Join-Path $Here "ccc_server\question_defaults.py")
 
 Write-Output "-> Command Center"
 Write-Output "  port     : $env:PORT"

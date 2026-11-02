@@ -11,6 +11,7 @@ how to undo it.
 | `claude-hooks` | `~/.claude/settings.json` | 8 hook entries (PreToolUse, PermissionRequest, PostToolUse, Notification, Stop, SessionStart, PreCompact, PostCompact), each running a script in `~/.claude/command-center/hooks/` | no live "running X for Ns" tool status, Needs-approval badges, AskUserQuestion answers from the dashboard, Compacting badge, or precise turn-end detection for Claude sessions |
 | `codex-hooks` | `~/.codex/hooks.json` | 1 PostCompact entry. Codex asks you to trust it once on the next `codex` launch. Offered only when Codex is installed. | Codex sessions are not re-oriented on their task after `/compact` |
 | `skill:ccc-orchestration`, `skill:group-chat-checkin`, `skill:superpowers-to-watchtower`, `skill:fleet-verify` | `~/.claude/skills/<name>/SKILL.md`, plus `~/.codex/skills/<name>/SKILL.md` when Codex is installed | the bundled skill file | agents don't know that skill exists |
+| `claude-question-guidance`, `codex-question-guidance` | `~/.claude/CLAUDE.md`, `$CODEX_HOME/AGENTS.md` (default `~/.codex/AGENTS.md`) | a managed [user question tagging block](user-question-tags.md); existing custom q-next guidance is preserved | sessions launched outside CCC lack the bundled tagging convention |
 | `watchtower-skills` | `wt skills sync` symlinks into each agent's skills folder | WatchTower's bundled skills (WatchTower owns the list) | agents don't know the `wt` commands |
 
 A skill folder that is a symlink belongs to another tool (for example
@@ -21,6 +22,7 @@ WatchTower's own `group-chat-checkin`). CCC never writes or removes through it.
 - `~/.claude/sessions/<pid>.json` + key file: CCC's peer registration so Claude
   sessions can message it, the same registry row every running Claude session
   writes. Turn it off with `CCC_MESSAGING_BACKEND=legacy`.
+- The bundled `q-next` helper in CCC's owned directory and a PATH wrapper (existing custom helpers are preserved); see [installation and counter behavior](user-question-tags.md).
 - Per-repo `.claude/logs/` written by the hooks once you approve them.
 - Files the Codex and Claude CLIs create in their own homes when CCC launches
   them (for example Codex's sqlite state).

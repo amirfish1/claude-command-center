@@ -772,6 +772,93 @@ class BundledSkill:
         return "; ".join(errors) or None
 
 
+class QuestionGuidance:
+    kind = "instructions"
+    depends = "Stable question tags in sessions launched outside CCC."
+
+    def __init__(self, engine):
+        self.engine = engine
+        self.engines = (engine,)
+        self.id = f"{engine}-question-guidance"
+        self.title = f"{engine.title()} user question tags"
+        self.summary = ("Adds a managed q-next convention to global instructions; "
+                        "preserves existing guidance and other text. Numbering does not publish to an inbox.")
+
+    def applicable(self, ctx):
+        return (ctx.ccc_root / "resources" / "owner-questions.md").is_file()
+
+    def targets(self, ctx):
+        return [ctx.codex_home / "AGENTS.md" if self.engine == "codex"
+                else ctx.home / ".claude" / "CLAUDE.md"]
+
+    def proposal(self, ctx):
+        from ccc_server.question_defaults import guidance
+        return [guidance(ctx.ccc_root), str(self.targets(ctx)[0])]
+
+    def _texts(self, ctx):
+        from ccc_server.question_defaults import guidance
+        dst = self.targets(ctx)[0]
+        try:
+            with dst.open(encoding="utf-8", newline="") as stream:
+                text = stream.read()
+        except FileNotFoundError:
+            text = ""
+        except (OSError, UnicodeDecodeError) as error:
+            raise ValueError(str(error)) from error
+        start = "<!-- CCC:user-question-tags -->"
+        end = "<!-- /CCC:user-question-tags -->\n\n"
+        if text.count(start) != text.count(end) or text.count(start) > 1:
+            raise ValueError("malformed CCC question guidance block; refusing to edit")
+        if start in text:
+            a, b = text.index(start), text.index(end) + len(end)
+            if b < a:
+                raise ValueError("malformed CCC question guidance block")
+            before, after = text[:a], text[b:]
+            block = start + "\n" + guidance(ctx.ccc_root) + "\n" + end
+            return text, before + block + after, before + after, True
+        # A pre-existing private convention remains authoritative and unowned.
+        if "q-next" in text and "[Q" in text:
+            return text, text, text, False
+        # Put separators inside the owned block so revoke restores exact bytes.
+        block = start + "\n" + guidance(ctx.ccc_root) + "\n" + end
+        return text, block + text, text, False
+
+    def plan(self, ctx):
+        plan = Plan()
+        try:
+            text, added, removed, owned = self._texts(ctx)
+        except ValueError as error:
+            plan.error = str(error)
+            return plan
+        plan.installed = owned
+        plan.up_to_date = text == added
+        dst = self.targets(ctx)[0]
+        if text != added:
+            plan.files.append({"path": display_path(dst, ctx.home), "action": "modify",
+                               "diff": _diff(dst, text, added, ctx.home)})
+        if text != removed:
+            plan.remove_files.append({"path": display_path(dst, ctx.home), "action": "modify",
+                                      "diff": _diff(dst, text, removed, ctx.home)})
+        return plan
+
+    def _write(self, ctx, remove=False):
+        try:
+            text, added, removed, _ = self._texts(ctx)
+        except ValueError as error:
+            return str(error)
+        result = removed if remove else added
+        err = write_config_text(ctx, self.targets(ctx)[0], result) if result != text else None
+        if remove and not err:
+            cleanup_created(ctx, self.targets(ctx)[0])
+        return err
+
+    def apply(self, ctx):
+        return self._write(ctx)
+
+    def revoke(self, ctx):
+        return self._write(ctx, remove=True)
+
+
 class WatchTowerSkills:
     id = "watchtower-skills"
     kind = "skill"
@@ -854,7 +941,7 @@ class WatchTowerSkills:
 
 
 def all_items():
-    items = [ClaudeHooks(), CodexHooks()]
+    items = [ClaudeHooks(), CodexHooks(), QuestionGuidance("claude"), QuestionGuidance("codex")]
     items += [BundledSkill(n, b) for n, b in BUNDLED_SKILLS]
     items.append(WatchTowerSkills())
     return items
@@ -1074,8 +1161,14 @@ def is_enabled(item_id, ctx=None):
 
 def startup(ctx=None, log=print):
     """Server start: apply only what the user approved at its current
-    content. Nothing else is written outside CCC's own dir."""
+    content. The bundled CLI helper is installed independently of agent config."""
     ctx = ctx or default_ctx()
+    from ccc_server.question_defaults import install_helper
+    try:
+        install_helper(ctx.ccc_root, ctx.home, ctx.state_dir)
+    except OSError as error:
+        if log:
+            log(f"  [q-next] helper installation failed: {error}")
     summary = {"applied": [], "pending": [], "changed": [], "declined": [], "errors": {}}
     with _LOCK:
         state = _load_or_init(ctx)

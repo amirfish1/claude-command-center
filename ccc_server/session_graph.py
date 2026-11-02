@@ -1329,6 +1329,12 @@ Example structure (replace all scores/evidence with facts):
 """.strip()
 
 
+# The same default text serves global managed blocks and every engine's
+# shared CCC session prompt, without editing any global agent configuration.
+from ccc_server.question_defaults import guidance as _question_guidance
+_CCC_SESSION_STATE_SYSTEM_PROMPT += "\n\n" + _question_guidance()
+
+
 def _claude_session_state_args():
     """CLI args that keep CCC's hidden reminders out of user text."""
     return [
