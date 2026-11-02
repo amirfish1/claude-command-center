@@ -44265,9 +44265,14 @@
     const _allTabClusterPinRank = (cluster) => (cluster.rows || []).reduce((best, item) => (
       item.card.pinned ? Math.min(best, _pinRankValue(item.card)) : best
     ), Infinity);
-    const _allTabClusterMtime = (cluster) => (cluster.rows || []).reduce((m, item) => Math.max(
-      m, item.card.modified || item.card.last_interacted || 0
-    ), 0);
+    const _allTabClusterMtime = (cluster) => {
+      // All orders the visible ticket representatives by their own activity;
+      // a nested lane must not lift an older parent above a newer session.
+      if (_allTabView === 'alltickets') return _archiveWindowRowTs(cluster.rows[0]?.card);
+      return (cluster.rows || []).reduce((m, item) => Math.max(
+        m, _archiveWindowRowTs(item.card)
+      ), 0);
+    };
     // Sort key matches what the badge shows: subscription-allocated $, not
     // raw API list price, so a $2 subscription row never outranks a $0.50
     // one just because its API-equivalent sticker price was bigger.
@@ -44582,7 +44587,7 @@
         let clusters = _allTabRowsToClusters(_allTabTreeRowsFor(rows));
         clusters.sort((a, b) => {
           const pinDelta = _allTabClusterPinRank(a) - _allTabClusterPinRank(b);
-          if (!Number.isNaN(pinDelta) && pinDelta !== 0) return pinDelta;
+          if (_allTabView !== 'alltickets' && !Number.isNaN(pinDelta) && pinDelta !== 0) return pinDelta;
           return _arcGrouping === 'cost'
             ? _allTabClusterCost(b) - _allTabClusterCost(a)
             : _allTabClusterMtime(b) - _allTabClusterMtime(a);
@@ -44622,7 +44627,9 @@
           + label + '<span class="session-lifecycle-count">' + rows.length + '</span><span class="session-lifecycle-arrow" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span></button></h3>'
           + '<div class="session-lifecycle-content" id="' + contentId + '"' + (collapsed ? ' hidden' : '') + '>'
           + (rows.length ? (key === 'active'
-              ? renderSectionRows(groups['needs-you']) + renderSectionRows(groups.active)
+              ? (_allTabView === 'alltickets'
+                  ? renderSectionRows(rows)
+                  : renderSectionRows(groups['needs-you']) + renderSectionRows(groups.active))
               : renderSectionRows(rows))
             : '<div class="session-lifecycle-empty">' + ({ 'needs-you': 'Nothing needs your attention.', active: 'No active sessions in this view.', finished: 'No finished sessions in this view.', archived: 'No archived sessions in this view.' }[key]) + '</div>')
           + '</div></section>';
@@ -44634,7 +44641,9 @@
           : renderSectionRows(rows);
       } else {
         if (!_ipSearchActive) {
-          _arcRows = sectionHtml('active', 'Active', 'Questions and decisions first, followed by working sessions');
+          _arcRows = sectionHtml('active', 'Active', _allTabView === 'alltickets'
+            ? 'Most recently active sessions first'
+            : 'Questions and decisions first, followed by working sessions');
         }
         _ideaArchivedHtml = sectionHtml('finished', 'Finished', 'Completed work; a new message returns it to Active')
           + sectionHtml('archived', 'Archived', 'Sessions explicitly put away; restore one to resume work');
