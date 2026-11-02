@@ -4,9 +4,6 @@
   let frame, host, count = null;
   const style = document.createElement('style');
   style.textContent = `
-    body.ccc-decisions-tab:not(.ccc-core-app-open):not(.ccc-simple-mode) .sidebar { width:auto !important; max-width:none !important; flex:1 1 auto; }
-    body.ccc-decisions-tab:not(.ccc-core-app-open):not(.ccc-simple-mode) .main,
-    body.ccc-decisions-tab:not(.ccc-core-app-open):not(.ccc-simple-mode) .sidebar-resizer,
     body.ccc-decisions-tab #pwaInstallBanner { display:none !important; }
     #convList:has(> .decisions-host) { display:flex; flex-direction:column; overflow:hidden !important; }
     #convList:has(> .decisions-host) > .conv-tab-bar { flex:0 0 auto; }
@@ -46,6 +43,13 @@
   window.CCCDecisionTab = {mount};
   window.addEventListener('resize', position);
   window.addEventListener('message', event => {
+    const mobileFrame = document.getElementById('cccMobileAppFrame');
+    if (event.origin === location.origin && event.data && event.data.type === 'ccc:open-ticket'
+        && ((frame && event.source === frame.contentWindow)
+            || (mobileFrame && event.source === mobileFrame.contentWindow))
+        && typeof window.cccOpenTicket === 'function') {
+      window.cccOpenTicket(event.data.ref); return;
+    }
     if (!frame || event.source !== frame.contentWindow || event.origin !== location.origin
         || !event.data || event.data.type !== 'ccc:decision-count') return;
     const value = event.data.count;

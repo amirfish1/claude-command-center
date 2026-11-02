@@ -55043,6 +55043,24 @@
       }
     }
   }
+  // Shared ticket navigation for embedded owner questions and durable links.
+  // The existing detail modal supplies the ticket's full context and controls.
+  window.cccOpenTicket = function (ref) {
+    if (typeof ref !== 'string' || ref.length > 200
+        || !/^[A-Za-z0-9][A-Za-z0-9._-]*-\d+$/.test(ref)) return false;
+    _uxqOpenItemDetail(ref);
+    return true;
+  };
+  function openDeepLinkedTicket() {
+    const ref = new URLSearchParams(location.search).get('ticket');
+    if (ref) window.cccOpenTicket(ref);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', openDeepLinkedTicket, { once: true });
+  } else {
+    queueMicrotask(openDeepLinkedTicket);
+  }
+
   function _uxqItemPrompt(item) {
     if (!item) return '';
     // _github_body is the full issue body; `text` can be a truncated copy.
