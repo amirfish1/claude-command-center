@@ -365,7 +365,7 @@
     try { if (localStorage.getItem('ccc-conv-direct') === '0') return; } catch (_) {}
     _convDirect.probing = true;
     _convDirect.checkedAt = Date.now();
-    fetch('/api/conv-reader/info', { cache: 'no-store' })
+    fetch('/api/conv-reader/info', { cache: 'no-store', cccPriority: 'user' })
       .then(r => (r.ok ? r.json() : null))
       .then(info => {
         const port = info && info.port;
