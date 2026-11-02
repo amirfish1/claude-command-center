@@ -21842,7 +21842,7 @@ def _schedule_restart(delay=0.5):
     t.start()
 
 
-def _load_network_config():
+def _load_network_config(raw=None):
     """Read persisted network config from NETWORK_CONFIG_FILE.
 
     Returns a dict with the three keys we care about, defaults filled in:
@@ -21852,8 +21852,8 @@ def _load_network_config():
     """
     default = {"bind_host": None, "allowed_origins": [], "trust_tailnet": False}
     try:
-        raw = json.loads(NETWORK_CONFIG_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
+        raw = json.loads(NETWORK_CONFIG_FILE.read_bytes() if raw is None else raw)
+    except (OSError, ValueError):
         return default
     if not isinstance(raw, dict):
         return default
@@ -21873,7 +21873,7 @@ def _load_network_config():
     }
 
 
-def _save_network_config(config):
+def _save_network_config(config, expected_revision=None):
     """Persist `config` to NETWORK_CONFIG_FILE. Only the three known keys are
     written — the function silently drops anything else so a bad POST body
     can't smuggle extra fields onto disk."""
@@ -21891,9 +21891,13 @@ def _save_network_config(config):
         "allowed_origins": origins,
         "trust_tailnet": bool(config.get("trust_tailnet")),
     }
-    COMMAND_CENTER_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    NETWORK_CONFIG_FILE.write_text(json.dumps(payload, indent=2))
-    return payload
+    from ccc_server import settings_transactions as transaction
+    with transaction.locked(NETWORK_CONFIG_FILE.parent):
+        before = transaction.snapshot(NETWORK_CONFIG_FILE)
+        if expected_revision is not None and expected_revision != transaction.revision(before):
+            raise transaction.Stale("Network settings changed. Reopen Network access and review before saving.")
+        warnings = transaction.publish(NETWORK_CONFIG_FILE, payload, before)
+        return {**payload, "revision": transaction.revision(transaction.encoded(payload).encode()), "warnings": warnings}
 
 
 # Car Mode key names -> the env var each maps to when we launch the voice agent.
@@ -33011,11 +33015,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # signed in to Tailscale just now — but reuse the cached
             # RUNTIME_NETWORK_INFO for everything else (it never changes
             # mid-run; switching it requires restart via POST).
-            stored = _load_network_config()
+            from ccc_server import settings_transactions as transaction
+            try:
+                network_raw = transaction.snapshot(NETWORK_CONFIG_FILE)
+            except OSError:
+                self.send_json({"ok": False, "error": "Network configuration unavailable"}, 503)
+                return
+            stored = _load_network_config(network_raw if network_raw is not None else b'{}')
+            network_revision = transaction.revision(network_raw)
             tailnet = _detect_tailnet_origins(PORT)
             info = RUNTIME_NETWORK_INFO or {}
             self.send_json({
                 "stored": stored,
+                "revision": network_revision,
                 "runtime": {
                     "bind_host": info.get("bind_host"),
                     "allowed_origins": info.get("allowed_origins", []),
@@ -35563,11 +35575,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.send_json({"error": "bind_host must be a string or null"}, 400)
                     return
                 requested_bind = requested_bind.strip() or None
-            saved = _save_network_config({
-                "bind_host": requested_bind,
-                "allowed_origins": payload.get("allowed_origins") or [],
-                "trust_tailnet": bool(payload.get("trust_tailnet")),
-            })
+            from ccc_server.settings_transactions import Stale
+            try:
+                saved = _save_network_config({
+                    "bind_host": requested_bind,
+                    "allowed_origins": payload.get("allowed_origins") or [],
+                    "trust_tailnet": bool(payload.get("trust_tailnet")),
+                }, expected_revision=payload.get("expected_revision"))
+            except Stale as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 409)
+                return
+            except (OSError, ValueError) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+                return
             # Origins and trust_tailnet are hot-reloaded by _check_same_origin
             # (phone_access.live_extra_origins / live_trust_tailnet). Only a
             # bind_host change needs the socket rebound, i.e. a restart.
@@ -37048,149 +37068,38 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 queue_name = normalized["queue"]
-                cfg = _wt_read_config() or {}
-                matched = next((k for k in cfg if k.strip().upper() == queue_name), None)
-                case_mismatch = bool(matched and matched != queue_name)
-                history_before_queue = json.loads(json.dumps(cfg))
-                before_conf = dict(cfg.get(matched) or {}) if matched else {}
-                if matched is None:
-                    # A queue with no existing entry is being created here, not
-                    # edited (CCC-768) — force auto_drain off no matter what the
-                    # client sent, so a brand-new queue always starts as a
-                    # deliberate backlog. Editing an existing queue (matched is
-                    # not None) still respects whatever the form submitted.
-                    normalized["config"]["auto_drain"] = False
-                # Reject a blocked model before any setter runs (both branches
-                # below), so a refused save leaves no half-written queue entry
-                # behind. confirm_blocked_model lets a deliberate pick through
-                # (2026-09-06) -- the model still shows in the picker either way.
-                confirm_blocked_model = bool(payload.get("confirm_blocked_model"))
-                queue_model = normalized["config"].get("model")
-                policy_error = None if confirm_blocked_model else _model_policy_error(queue_model)
-                if policy_error:
-                    raise ValueError(policy_error)
-                if confirm_blocked_model and _model_policy_blocks(queue_model):
-                    _log_activity("queue", "CONFIRM_BLOCKED", f"queue={queue_name} model={queue_model}")
-                # A repo can have one catch-all queue ("*"); refuse a second one
-                # here, before any setter has written anything.
-                if "queue_label" in payload and normalized["config"].get("queue_label") == "*":
-                    catch_repo = str(normalized["config"].get("github_repo") or "").strip().lower()
-                    for other, oconf in cfg.items():
-                        if str(other).strip().upper() == queue_name or not isinstance(oconf, dict):
-                            continue
-                        if (str(oconf.get("queue_label") or "").strip() == "*"
-                                and str(oconf.get("github_repo") or "").strip().lower() == catch_repo):
-                            raise ValueError(
-                                f"{other} is already the catch-all queue for {catch_repo}; "
-                                "a repo can have only one")
-                if _WT_CONFIG_AVAILABLE and _wt_config is not None and not case_mismatch:
-                    # WT owns queue-config.json — write through the same setters
-                    # `wt config -q ...` uses. Direct write remains below for
-                    # installs without the watchtower package, and for renaming
-                    # a legacy case-mismatched key (wt has no delete/rename).
-                    conf = normalized["config"]
-                    _wt_config.ensure_entry(queue_name)
-                    _wt_config.set_backend(queue_name, conf.get("backend", "file"))
-                    _wt_config.set_github_repo(queue_name, conf.get("github_repo", ""))
-                    _wt_config.set_github_assignee(queue_name, conf.get("github_assignee", ""))
-                    if "queue_label" in payload and hasattr(_wt_config, "set_queue_label"):
-                        # Older watchtower installs predate queue_label
-                        # (2026-09-18); they just keep the default label.
-                        _wt_config.set_queue_label(queue_name, conf.get("queue_label", ""))
-                    if "grace_s" in payload and hasattr(_wt_config, "set_grace_s"):
-                        _wt_config.set_grace_s(queue_name, conf.get("grace_s"))
-                    if ("fallback_to_default_worker" in payload
-                            and payload["fallback_to_default_worker"] is not None
-                            and hasattr(_wt_config, "set_fallback_to_default_worker")):
-                        # Older watchtower installs predate the fallback toggle
-                        # (WATCHTOWER-30); they just keep it off.
-                        _wt_config.set_fallback_to_default_worker(
-                            queue_name, conf.get("fallback_to_default_worker")
-                        )
-                    _wt_config.set_repo_path(queue_name, conf.get("repo_path", ""))
-                    # Blank means "CCC spawn default" (the payload normalizer
-                    # pops the key, CCC-1038) — re-injecting "claude" here made
-                    # a queue saved as CCC default come back as claude (CCC-1044).
-                    _wt_config.set_engine(queue_name, conf.get("engine") or "")
-                    # Older WT installs predate confirm_blocked (2026-09-06);
-                    # fall back to the un-confirmed call rather than hard-fail
-                    # on TypeError (the pre-existing policy_error check above
-                    # already rejected an un-confirmed blocked model, so a
-                    # confirmed one just gets policy-enforced by the old WT).
-                    try:
-                        _wt_config.set_model(
-                            queue_name, conf.get("model", ""), confirm_blocked=confirm_blocked_model
-                        )
-                    except TypeError:
-                        _wt_config.set_model(queue_name, conf.get("model", ""))
-                    _wt_config.set_effort(queue_name, conf.get("effort", ""))
-                    _wt_config.set_desired_workers(queue_name, conf.get("desired_workers", 1))
-                    _wt_config.set_auto_drain(queue_name, conf.get("auto_drain", False))
-                    _wt_config.set_claim_types(queue_name, conf.get("claim_types", []))
-                    if hasattr(_wt_config, "set_product_gate"):
-                        # Older watchtower installs predate the product gate
-                        # (2026-09-01); the direct-JSON fallback below still
-                        # carries the field for them.
-                        _wt_config.set_product_gate(queue_name, conf.get("product_gate", False))
-                else:
-                    cfg_path = _wt_config_path()
-                    cfg_path.parent.mkdir(parents=True, exist_ok=True)
-                    if matched and matched != queue_name:
-                        del cfg[matched]
-                    # The native form replaces its own fields, not policy
-                    # extensions or role metadata it does not edit. In
-                    # particular a full-form save must retain headroom
-                    # exceptions created by the scoped policy workflow.
-                    form_fields = {"engine", "model", "effort", "backend", "repo_path",
-                                   "github_repo", "github_assignee", "auto_drain",
-                                   "product_gate", "desired_workers", "claim_types"}
-                    present_only = {"queue_label", "grace_s", "fallback_to_default_worker",
-                                    "session_id", "offer_workers"}
-                    for kept, value in before_conf.items():
-                        if kept not in form_fields and (kept not in present_only or kept not in payload):
-                            normalized["config"][kept] = value
-                    if normalized["config"].get("fallback_to_default_worker") is None:
-                        normalized["config"].pop("fallback_to_default_worker", None)
-                    cfg[queue_name] = normalized["config"]
-                    tmp = cfg_path.with_suffix(".json.tmp")
-                    with open(tmp, "w") as f:
-                        json.dump(cfg, f, indent=2)
-                    tmp.replace(cfg_path)
-                # Session -> queue link (CCC-1225): present-only, like
-                # queue_label, so a plain re-save never clears it.
-                link = {}
-                if "fallback_to_default_worker" in payload and payload["fallback_to_default_worker"] is None:
-                    link["fallback_to_default_worker"] = None
-                if "session_id" in payload:
-                    link["session_id"] = session_link or None
-                if "offer_workers" in payload:
-                    link["offer_workers"] = True if payload.get("offer_workers") else None
-                if link:
-                    from ccc_server.session_queue import patch_queue_config
-                    patch_queue_config(_wt_config_path(), queue_name, link)
+                from ccc_server.settings_transactions import save_queue_form, Stale as TransactionStale
+                normalized, history_before_queue, published, before_conf, matched, warnings = save_queue_form(
+                    sys.modules[__name__], payload, normalized, session_link)
+                # Publication succeeded. Later effects must not masquerade as a
+                # failed configuration save or trigger a client retry of it.
+                try:
+                    if payload.get("confirm_blocked_model") and _model_policy_blocks(normalized["config"].get("model")):
+                        _log_activity("queue", "CONFIRM_BLOCKED", f"queue={queue_name} model={normalized['config'].get('model')}")
+                except Exception:
+                    warnings.append("Configuration saved; confirmation activity log unavailable")
                 # Activity-log the save as a before/after diff (CCC-1037).
-                after_conf = (_wt_read_config() or {}).get(queue_name)
-                if after_conf is None:
-                    after_conf = normalized["config"]
+                after_conf = normalized["config"]
                 diff = _queue_config_diff(before_conf, after_conf)
-                _wt_log_queue_config_change(
-                    queue_name,
-                    diff if diff else "no changes",
-                    action="created" if matched is None else "updated",
-                )
-                # A settings change (e.g. flipping auto_drain on, raising
-                # desired_workers) should act now, not sit until the
-                # reconciler's next ~30s tick (CCC-790) -- started off-thread
-                # so the save itself doesn't hang on it (CCC-1014).
-                _reconcile_once_async()
+                try:
+                    _wt_log_queue_config_change(queue_name, diff if diff else "no changes",
+                                                action="created" if matched is None else "updated")
+                except Exception:
+                    warnings.append("Configuration saved; activity log unavailable")
+                try:
+                    _reconcile_once_async()
+                except Exception:
+                    warnings.append("Configuration saved; immediate reconciliation unavailable")
                 history_result = {"state": "unavailable", "warning": "Configuration saved; legacy save history could not be recorded"}
                 try:
-                    from ccc_server.configuration_history import History, read
+                    from ccc_server.configuration_history import History
                     history_result = History(sys.modules[__name__]).observed_queue(
-                        history_before_queue, read(_wt_config_path()), queue_name)
-                except (OSError, ValueError):
+                        history_before_queue, published, queue_name)
+                except Exception:
                     pass
-                self.send_json({"ok": True, **normalized, "configuration_history": history_result})
+                self.send_json({"ok": True, **normalized, "configuration_history": history_result, "warnings": warnings})
+            except TransactionStale as e:
+                self.send_json({"ok": False, "error": str(e)}, 409)
             except ValueError as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
             except Exception as e:

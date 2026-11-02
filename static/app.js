@@ -88279,6 +88279,8 @@
   const $networkCancelBtn = document.getElementById('networkCancelBtn');
   const $networkSaveBtn = document.getElementById('networkSaveBtn');
 
+  let networkRevision = null;
+
   function networkEsc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -88327,6 +88329,8 @@
   async function networkOpen() {
     if (!$networkModal) return;
     networkResetState();
+    networkRevision = null;
+    if ($networkSaveBtn) $networkSaveBtn.disabled = true;
     if ($networkExtraOrigins) $networkExtraOrigins.value = '';
     if ($networkBindAll) $networkBindAll.checked = false;
     if ($networkTrustTailnet) $networkTrustTailnet.checked = false;
@@ -88335,6 +88339,7 @@
     let data;
     try {
       const r = await fetch('/api/network-config', { cache: 'no-store' });
+      if (!r.ok) throw new Error('load failed (' + r.status + ')');
       data = await r.json();
     } catch (e) {
       if ($networkError) {
@@ -88343,6 +88348,8 @@
       }
       return;
     }
+    networkRevision = data.revision || null;
+    if ($networkSaveBtn) $networkSaveBtn.disabled = false;
     const stored = data.stored || {};
     const runtime = data.runtime || {};
     if ($networkBindAll) $networkBindAll.checked = (stored.bind_host === '0.0.0.0') || (runtime.bind_host && runtime.bind_host !== '127.0.0.1' && runtime.bind_host !== 'localhost');
@@ -88392,6 +88399,7 @@
           bind_host: bindAll ? '0.0.0.0' : '127.0.0.1',
           allowed_origins: extra,
           trust_tailnet: trust,
+          ...(networkRevision ? {expected_revision: networkRevision} : {}),
         }),
       });
       data = await r.json().catch(() => ({}));
