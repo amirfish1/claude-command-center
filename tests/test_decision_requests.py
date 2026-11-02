@@ -57,6 +57,58 @@ def test_recorded_answer_is_delivery_not_another_owner_question(tmp_path):
     assert pending['delivery_owner'] == 'ccc-outbox'
 
 
+def test_answer_affordance_requires_exact_opt_in_and_current_source(tmp_path, monkeypatch):
+    registry = setup(tmp_path)
+    current = dict(ok=True, source=dict(authoritative=True, complete=True))
+    for value in ('', 'true', '0', '01'):
+        monkeypatch.setenv('CCC_DECISION_ANSWERS_ENABLED', value)
+        result = requests_payload(state_root=tmp_path, source_loader=lambda **kw: current)
+        assert not result['answers_enabled'] and not result['requests'][0]['can_answer']
+    monkeypatch.setenv('CCC_DECISION_ANSWERS_ENABLED', '1')
+    result = requests_payload(state_root=tmp_path, source_loader=lambda **kw: current)
+    assert result['answers_enabled'] and result['requests'][0]['can_answer']
+    assert result['requests'][0]['answer'] is None
+    unavailable = dict(ok=False, source=dict(authoritative=False, complete=False))
+    result = requests_payload(state_root=tmp_path, source_loader=lambda **kw: unavailable)
+    assert result['answers_enabled'] and not result['requests'][0]['can_answer']
+    assert 'Check source coverage' in result['requests'][0]['answer_unavailable_reason']
+    with registry._transaction() as db:
+        assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='answers'").fetchone()
+
+
+def test_routine_owned_and_promoted_session_questions_stay_read_only(tmp_path):
+    registry = setup(tmp_path)
+    source = read_requests(registry.db_path)[0]
+    with registry._transaction() as db:
+        db.execute('INSERT INTO metadata VALUES (?,?)', ('delivery_owner:' + source['request_id'], 'routine'))
+    sessions = SessionQuestions(registry)
+    session_id = str(uuid.uuid4())
+    local = sessions.apply(dict(event_id=str(uuid.uuid4()), session_id=session_id, operation='create',
+        question_id=str(uuid.uuid4()), generation=str(uuid.uuid4()), title='Choose a region', body='Region?'))
+    sessions.apply(dict(event_id=str(uuid.uuid4()), session_id=session_id, operation='promote',
+        request_id=local['request_id'], expected_revision=local['revision'], reason='Awaiting owner'))
+    rows = read_requests(registry.db_path, answers_enabled=True, source_current=True)
+    assert len(rows) == 2 and all(not r['can_answer'] for r in rows)
+    assert 'reporting routine' in next(r for r in rows if r['adapter'] == 'watchtower-block')['answer_unavailable_reason']
+    assert 'originating session' in next(r for r in rows if r['adapter'] == 'session-question')['answer_unavailable_reason']
+
+
+def test_saved_answer_is_visible_after_reload_without_delivery_or_writes(tmp_path):
+    registry = setup(tmp_path)
+    request = read_requests(registry.db_path)[0]
+    outbox = AnswerOutbox(registry)
+    answer = outbox.record(request['request_id'], expected_revision=request['revision'],
+                           text='  Region A\nExact answer.  ', idempotency_key='saved-for-reload')
+    before = registry.db_path.read_bytes()
+    for enabled, current in ((False, True), (True, False), (True, True)):
+        row = read_requests(registry.db_path, answers_enabled=enabled, source_current=current)[0]
+        assert not row['can_answer']
+        assert row['answer'] == dict(answer_id=answer['answer_id'], state='pending',
+            text='  Region A\nExact answer.  ', expected_revision=request['revision'])
+    assert registry.db_path.read_bytes() == before
+    assert outbox.get(answer['answer_id'])['state'] == 'pending'
+
+
 def test_failed_refresh_retains_questions_but_never_claims_zero(tmp_path):
     registry = setup(tmp_path)
     def unavailable(**kwargs):

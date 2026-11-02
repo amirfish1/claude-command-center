@@ -5,6 +5,7 @@ registry itself uses a single read-only transaction. Unavailable coverage keeps
 the last observed questions visible and never becomes a verified empty inbox.
 """
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +13,7 @@ from pathlib import Path
 from ccc_server.decision_registry import DecisionRegistry
 
 
-def read_requests(database):
+def read_requests(database, *, answers_enabled=False, source_current=False):
     database = Path(database)
     if not database.exists():
         return []
@@ -23,6 +24,13 @@ def read_requests(database):
         metadata = {r['key']: r['value'] for r in connection.execute('SELECT * FROM metadata')}
         binding = json.loads(metadata.get('source_scope:watchtower-block', 'null'))
         store_id = binding['scope']['store_id'] if binding else None
+        answers = {}
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='answers'").fetchone():
+            for saved_answer in connection.execute('SELECT * FROM answers ORDER BY rowid'):
+                frozen = json.loads(saved_answer['payload'])['answer']
+                answers[saved_answer['request_id']] = dict(answer_id=saved_answer['answer_id'],
+                    state=saved_answer['state'], text=frozen['text'],
+                    expected_revision=frozen['expected_revision'])
         result = []
         for saved in connection.execute('SELECT * FROM requests ORDER BY adapter,origin_id,generation'):
             record = DecisionRegistry._record(saved)
@@ -44,6 +52,22 @@ def read_requests(database):
                 continue  # Reviews/providers need their own complete source contract.
             needs_answer = (question and record['status'] == 'open'
                             and (record['answer_state'] == 'none' or record['delivery_state'] == 'rejected'))
+            delivery_owner = metadata.get('delivery_owner:' + record['request_id'])
+            can_answer = bool(answers_enabled and source_current and needs_answer
+                              and record['adapter'] == 'watchtower-block'
+                              and delivery_owner in (None, 'ccc-outbox'))
+            if record['adapter'] == 'session-question':
+                unavailable_reason = 'Reply in the originating session.'
+            elif not answers_enabled:
+                unavailable_reason = 'Source answers are not enabled in this phase.'
+            elif delivery_owner == 'routine':
+                unavailable_reason = 'This answer is handled by its reporting routine.'
+            elif not source_current:
+                unavailable_reason = 'Check source coverage before saving an answer.'
+            elif not question:
+                unavailable_reason = 'This approval has no answer adapter.'
+            else:
+                unavailable_reason = ''
             result.append(dict(request_id=record['request_id'], revision=record['revision'],
                 adapter=record['adapter'], origin_id=record['origin_id'], generation=record['generation'],
                 title=content.get('title') or record['origin_id'], body=body,
@@ -51,10 +75,9 @@ def read_requests(database):
                 session_id=content.get('session_id') if record['adapter'] == 'session-question' else None,
                 episode_provenance=content.get('episode_provenance'),
                 answer_state=record['answer_state'], delivery_state=record['delivery_state'],
-                delivery_owner=metadata.get('delivery_owner:' + record['request_id']),
-                needs_answer=needs_answer, observed_at=observed_at, can_answer=False,
-                answer_unavailable_reason='Reply in the originating session.' if record['adapter'] == 'session-question'
-                                          else 'Source answers are not enabled in this phase.'))
+                delivery_owner=delivery_owner, answer=answers.get(record['request_id']),
+                needs_answer=needs_answer, observed_at=observed_at, can_answer=can_answer,
+                answer_unavailable_reason=unavailable_reason))
         return result
     finally:
         connection.close()
@@ -66,17 +89,20 @@ def requests_payload(*, state_root=None, source_loader=None):
     root = Path(state_root) if state_root else decision_inbox._state_root()
     refreshed = (source_loader or owner_source_payload)(state_root=root)
     source = refreshed.get('source') or {'status': 'unavailable', 'complete': False}
+    current = refreshed.get('ok') is True and source.get('authoritative') is True and source.get('complete') is True
+    enabled = os.environ.get('CCC_DECISION_ANSWERS_ENABLED') == '1'
     try:
-        rows = read_requests(root / 'decision-inbox' / 'requests.sqlite3')
+        rows = read_requests(root / 'decision-inbox' / 'requests.sqlite3',
+                             answers_enabled=enabled, source_current=current)
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
         return dict(ok=False, requests=None, needs_answer_count=None, source=source,
-                    error='Cannot read saved requests. Retry the source check.', llm_used=False)
-    current = refreshed.get('ok') is True and source.get('authoritative') is True and source.get('complete') is True
+                    error='Cannot read saved requests. Retry the source check.', llm_used=False,
+                    answers_enabled=enabled)
     issues = [dict(origin_id=r.get('origin_id'), title=r.get('title'), body=r.get('body'),
                    reason='Source question has no stable episode; it has not been imported.')
               for r in (refreshed.get('requests') or []) if not r.get('generation')]
     return dict(ok=True, requests=rows, needs_answer_count=sum(r['needs_answer'] for r in rows) if current else None,
-                source_current=current, source=source, llm_used=False,
+                source_current=current, source=source, llm_used=False, answers_enabled=enabled,
                 coverage_issues=issues,
                 checked_at=datetime.now(timezone.utc).isoformat(),
                 error=refreshed.get('error') if not current else None,
