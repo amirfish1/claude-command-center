@@ -39,6 +39,47 @@ def apply(registry, rows, revision=1):
     return apply_owner_export(receipt(rows, revision), registry=registry, cards={})
 
 
+def test_parallel_refreshes_each_export_and_apply_in_order(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    import time
+    from ccc_server import decision_sources as sources
+    calls, active = [], []
+    original = sources.apply_owner_export
+    def runner(*args, **kwargs):
+        assert not active
+        seq = len(calls) + 1
+        calls.append(seq)
+        active.append(seq)
+        time.sleep(0.01)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(receipt([row()], seq)))
+    def applying(data, **kwargs):
+        assert active == [data['store_version']['revision']]
+        time.sleep(0.01)
+        result = original(data, **kwargs)
+        active.clear()
+        return result
+    monkeypatch.setattr(sources, 'apply_owner_export', applying)
+    with ThreadPoolExecutor(4) as pool:
+        results = list(pool.map(lambda _: owner_source_payload(
+            state_root=tmp_path, executable='example-wt', runner=runner), range(8)))
+    assert all(r['ok'] for r in results)
+    assert calls == list(range(1, 9))
+    assert len({r['requests'][0]['request_id'] for r in results}) == 1
+
+
+def test_busy_refresh_never_claims_current_or_empty_coverage(monkeypatch):
+    from ccc_server import decision_sources as sources
+    class Busy:
+        def acquire(self, *, timeout):
+            assert timeout == 5
+            return False
+    monkeypatch.setattr(sources, '_owner_refresh_lock', Busy())
+    result = owner_source_payload(runner=lambda *a, **kw: pytest.fail('busy refresh exported'))
+    assert result['ok'] is False and result['requests'] is None
+    assert result['source']['authoritative'] is False and result['source']['complete'] is False
+
+
 def test_identity_edits_generations_and_scope_binding(registry):
     first = apply(registry, [row()])['requests'][0]
     repeat = apply(registry, [row()])['requests'][0]

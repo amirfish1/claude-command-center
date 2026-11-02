@@ -1,0 +1,1 @@
+- Serialize concurrent Decisions source refreshes without reusing cached coverage, and allow bounded waits for projection writes.

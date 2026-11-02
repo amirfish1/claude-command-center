@@ -9,6 +9,7 @@ import json
 import re
 import sqlite3
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from ccc_server.decision_coverage import project
 
 REQUIRED_CAPABILITIES = {'conditional-owner-answer-v1', 'answer-receipt-v1',
                          'owner-blocks-export-v1', 'store-identity-v1'}
+_owner_refresh_lock = threading.Lock()
 
 
 def validate_export(receipt):
@@ -113,6 +115,19 @@ def apply_owner_export(receipt, *, registry, cards):
 
 
 def owner_source_payload(*, state_root=None, executable=None, runner=None):
+    # Multiple open views must not race fresh exports against local projection
+    # writes. Each admitted caller still obtains its own complete source receipt.
+    if not _owner_refresh_lock.acquire(timeout=5):
+        return dict(ok=False, mode='authoritative_read_only', llm_used=False, requests=None,
+                    source={'status': 'unavailable', 'complete': False, 'authoritative': False},
+                    error='Source refresh is busy. Check source again.')
+    try:
+        return _refresh_owner_source(state_root=state_root, executable=executable, runner=runner)
+    finally:
+        _owner_refresh_lock.release()
+
+
+def _refresh_owner_source(*, state_root=None, executable=None, runner=None):
     from ccc_server import decision_inbox
     from ccc_server.decision_registry import DecisionRegistry
     if executable is None:
@@ -130,7 +145,7 @@ def owner_source_payload(*, state_root=None, executable=None, runner=None):
             return dict(unavailable, error='WatchTower did not return an authoritative source receipt')
         validate_export(receipt)  # Refuse bad receipts before touching the registry.
         root = Path(state_root) if state_root else decision_inbox._state_root()
-        registry = DecisionRegistry(root / 'decision-inbox' / 'requests.sqlite3', timeout=1)
+        registry = DecisionRegistry(root / 'decision-inbox' / 'requests.sqlite3', timeout=5)
         cards = decision_inbox.load_cards(root / 'decision-inbox' / 'cards.json')
         return apply_owner_export(receipt, registry=registry, cards=cards)
     except (OSError, ValueError, TypeError, sqlite3.Error, subprocess.SubprocessError) as error:
