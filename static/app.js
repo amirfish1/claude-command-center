@@ -93342,31 +93342,42 @@
     const el = document.getElementById('byokProfilesList');
     if (!el) return;
     if (!profiles || !profiles.length) {
-      el.textContent = 'No profiles yet.';
+      el.textContent = 'No provider accounts saved. Add a connection to store a provider credential.';
       return;
     }
     el.innerHTML = profiles.map((p) => {
       const chips = (p.providers || []).map((provider) => {
         const label = (_byokProviders[provider] || {}).label || provider;
-        return '<span class="byok-profile-chip">' + escapeHtml(label) +
-          ' <button type="button" class="byok-chip-delete" data-byok-del-profile="' +
+        const unsupported = !Object.prototype.hasOwnProperty.call(_byokProviders, provider);
+        return '<div class="service-provider-account"><span>' + escapeHtml(label) +
+          ' · Credential stored · Access not verified</span>' +
+          '<button type="button" class="settings-action-btn" data-service-profile="' + escapeHtml(p.name) +
+          '" data-service-provider="' + escapeHtml(provider) + '"' +
+          (unsupported ? ' disabled title="Provider unavailable in this catalog; existing credential is preserved"' : '') + '>Replace credential</button>' +
+          '<button type="button" class="settings-action-btn" data-byok-del-profile="' +
           escapeHtml(p.name) + '" data-byok-del-provider="' + escapeHtml(provider) +
-          '" title="Remove ' + escapeHtml(label) + ' key from ' + escapeHtml(p.name) + '">&times;</button></span>';
+          '" aria-label="Remove ' + escapeHtml(label) + ' credential from ' + escapeHtml(p.name) + '">Remove</button></div>';
       }).join('');
-      return '<div class="byok-profile-row"><strong>' + escapeHtml(p.name) + '</strong> ' + chips + '</div>';
+      return '<div class="byok-profile-row"><strong>' + escapeHtml(p.name) + '</strong><div class="settings-row-desc">Provider profile · This machine · Used only when selected by a supported launch or service.</div>' + chips + '</div>';
     }).join('');
     el.querySelectorAll('[data-byok-del-profile]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const profile = btn.getAttribute('data-byok-del-profile');
         const provider = btn.getAttribute('data-byok-del-provider');
+        if (!window.confirm('Remove the ' + provider + ' credential from profile "' + profile + '"? Existing references will no longer have this credential.')) return;
         try {
-          await fetch('/api/byok/keys/delete', {
+          const response = await fetch('/api/byok/keys/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ profile, provider }),
           });
-        } catch (_) {}
-        refreshByokSettings();
+          const result = await response.json();
+          if (!response.ok || !result.ok) throw new Error(result.error || 'Request rejected');
+          refreshByokSettings();
+        } catch (error) {
+          window.cccServiceConnections?.editor('provider', {profile, provider});
+          document.getElementById('byokSaveStatus').textContent = 'Could not remove: ' + error.message;
+        }
       });
     });
   }
@@ -93378,11 +93389,11 @@
     try {
       const res = await fetch('/api/byok/profiles', { cache: 'no-store' });
       const data = await res.json();
+      if (!res.ok || !Array.isArray(data.profiles) || !data.providers) throw new Error('Provider account list unavailable. Refresh to retry.');
       _byokProviders = data.providers || {};
       if (backendDesc) {
         const backend = data.backend === 'keychain' ? 'macOS Keychain' : 'encrypted local file';
-        backendDesc.textContent = 'Keys for OpenRouter, TokenRouter, and other providers, stored in the ' +
-          backend + ' on this machine. Spawns pick a profile via "key_profile". Other keys (non-LLM) belong in Settings > Vault.';
+        backendDesc.textContent = 'Provider credentials are stored in the ' + backend + ' on this machine. Profile names remain available to existing model, launch and voice selections. Saving a key does not verify provider access.';
       }
       if (providerSelect && !providerSelect.dataset.filled) {
         providerSelect.innerHTML = Object.keys(_byokProviders).map((id) =>
@@ -93392,7 +93403,9 @@
       }
       _byokRenderProfiles(data.profiles || []);
     } catch (err) {
-      if (backendDesc) backendDesc.textContent = 'Could not load BYOK settings: ' + ((err && err.message) || 'network');
+      if (backendDesc) backendDesc.textContent = 'Provider accounts unavailable: ' + ((err && err.message) || 'network');
+      const list = document.getElementById('byokProfilesList');
+      if (list) list.textContent = 'Provider accounts unavailable. Refresh list to retry.';
     }
     try {
       const res2 = await fetch('/api/byok/usage?days=30', { cache: 'no-store' });
@@ -93423,6 +93436,7 @@
         if (status) status.textContent = 'Profile name, provider, and key are all required.';
         return;
       }
+      const restoreSaveFocus = document.activeElement === btn;
       btn.disabled = true;
       btn.textContent = 'Saving…';
       try {
@@ -93432,7 +93446,7 @@
           body: JSON.stringify({ profile, provider, key }),
         });
         const data = await res.json().catch(() => ({}));
-        if (data && data.ok) {
+        if (res.ok && data && data.ok) {
           if (status) status.textContent = 'Saved to ' + (data.backend === 'keychain' ? 'Keychain' : 'encrypted file') + '.';
           if (keyInput) keyInput.value = '';
           if (typeof showSettingsSavedPulse === 'function') showSettingsSavedPulse(btn.closest('.settings-row'));
@@ -93443,8 +93457,10 @@
       } catch (err) {
         if (status) status.textContent = 'Save failed: ' + ((err && err.message) || 'network');
       } finally {
+        if (keyInput) keyInput.value = '';
         btn.disabled = false;
         btn.textContent = 'Save key';
+        if (restoreSaveFocus && document.activeElement === document.body && btn.isConnected && btn.getClientRects().length) btn.focus();
       }
     });
   }
@@ -93475,6 +93491,7 @@
       .replace(/^[^a-z0-9]+/, '').replace(/-+$/, '').slice(0, 64);
   }
   function _vaultSetStatus(text) {
+    window.cccServiceConnections?.status(text || '');
     const el = document.getElementById('vaultFormStatus');
     if (el) el.textContent = text || '';
   }
@@ -93497,6 +93514,7 @@
     if (save) save.textContent = 'Save';
   }
   function _vaultOpenForm(mode, fields, opts) {
+    window.cccServiceConnections?.editor('credential');
     _vaultResetForm();
     _vaultForm = Object.assign({ mode }, opts || {});
     Object.keys(fields || {}).forEach((f) => {
@@ -93511,14 +93529,14 @@
       if (nameEl) nameEl.readOnly = true;
       if (valueEl) valueEl.placeholder = 'New value (leave blank to keep the saved one)';
     } else if (mode === 'import') {
-      if (title) title.textContent = 'Import BYOK key ' + opts.profile + ' / ' + opts.providerLabel;
+      if (title) title.textContent = 'Copy provider credential ' + opts.profile + ' / ' + opts.providerLabel;
       if (valueEl) valueEl.hidden = true;
     }
     const cancel = document.getElementById('vaultCancelBtn');
     if (cancel) cancel.hidden = false;
     const save = document.getElementById('vaultSaveBtn');
-    if (save) save.textContent = mode === 'import' ? 'Import to Vault' : 'Save';
-    _vaultSetStatus(mode === 'import' ? 'The value is copied from BYOK; the BYOK key stays where it is.' : '');
+    if (save) save.textContent = mode === 'import' ? 'Create independent copy' : 'Save';
+    _vaultSetStatus(mode === 'import' ? 'This explicitly creates an independent named copy. The original provider credential is unchanged.' : '');
     const row = document.getElementById('vaultFormRow');
     if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
     if (nameEl && !nameEl.readOnly) nameEl.focus();
@@ -93531,7 +93549,7 @@
     _vaultEntriesByName = {};
     (entries || []).forEach((e) => { _vaultEntriesByName[e.name] = e; });
     if (!entries || !entries.length) {
-      el.textContent = 'Nothing in the vault yet.';
+      el.textContent = 'No other credentials saved. Add a connection for a named service credential.';
       return;
     }
     el.innerHTML = entries.map((e) => {
@@ -93540,9 +93558,9 @@
       if (e.username) bits.push('user ' + escapeHtml(e.username));
       if (e.env_var) bits.push('<code>' + escapeHtml(e.env_var) + '</code>');
       if (e.website) bits.push(escapeHtml(e.website));
-      if (e.source && e.source.type === 'byok') bits.push('from BYOK ' + escapeHtml(e.source.profile + '/' + e.source.provider));
+      if (e.source && e.source.type === 'byok') bits.push('independent copy from provider profile ' + escapeHtml(e.source.profile + '/' + e.source.provider));
       const saved = 'saved' + (e.value_updated_at ? ' ' + _vaultAgo(e.value_updated_at) : '') +
-        (e.hint ? ' · ••••' + escapeHtml(e.hint) : '');
+        ' · Access not verified';
       return '<div class="vault-entry">' +
         '<div class="vault-entry-main">' +
           '<strong>' + escapeHtml(e.name) + '</strong>' +
@@ -93570,7 +93588,7 @@
     el.querySelectorAll('[data-vault-delete]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const name = btn.getAttribute('data-vault-delete');
-        if (!window.confirm('Delete "' + name + '" from the Vault? The saved value is removed from this machine.')) return;
+        if (!window.confirm('Delete "' + name + '" from this machine’s credential storage? The saved value will be removed.')) return;
         try {
           const res = await fetch('/api/vault/entries/delete', {
             method: 'POST',
@@ -93600,11 +93618,11 @@
       return '<div class="vault-entry">' +
         '<div class="vault-entry-main">' +
           '<strong>' + escapeHtml(r.profile) + ' / ' + escapeHtml(r.provider_label || r.provider) + '</strong>' +
-          '<span class="vault-kind-chip">BYOK</span>' + imported +
+          '<span class="vault-kind-chip">Provider credential</span>' + imported +
           ((r.env_vars || []).length ? '<div class="vault-entry-meta">' + r.env_vars.map((v) => '<code>' + escapeHtml(v) + '</code>').join(' ') + '</div>' : '') +
         '</div>' +
         '<div class="vault-entry-actions">' +
-          '<button type="button" class="settings-action-btn" data-vault-import="' + i + '">Import to Vault</button>' +
+          '<button type="button" class="settings-action-btn" data-vault-import="' + i + '">Create independent copy</button>' +
         '</div>' +
       '</div>';
     }).join('');
@@ -93630,15 +93648,18 @@
     try {
       const res = await fetch('/api/vault', { cache: 'no-store' });
       const data = await res.json();
+      if (!res.ok || !Array.isArray(data.entries)) throw new Error('Credential list unavailable. Refresh to retry.');
       if (data.kinds) _vaultKinds = data.kinds;
       const backend = data.backend === 'keychain'
-        ? 'the macOS Keychain (service "ccc-vault")' : 'an encrypted file';
-      backendDesc.textContent = 'API keys, tokens and logins for any service, stored in ' + backend +
-        ' on this machine only. Never synced, never sent anywhere.';
+        ? 'the macOS Keychain' : 'an encrypted file';
+      backendDesc.textContent = 'Named credentials for tools and local programs, stored in ' + backend +
+        ' on this machine. A service label is informational; saving does not connect or verify that service.';
       _vaultRenderEntries(data.entries || []);
       _vaultRenderByok(data.byok || []);
     } catch (err) {
-      backendDesc.textContent = 'Could not load the Vault: ' + ((err && err.message) || 'network');
+      backendDesc.textContent = 'Credentials unavailable: ' + ((err && err.message) || 'network');
+      const list = document.getElementById('vaultEntriesList');
+      if (list) list.textContent = 'Other credentials unavailable. Refresh list to retry.';
     }
   }
   if (document.getElementById('vaultSaveBtn')) {
@@ -93677,6 +93698,7 @@
         payload.provider = _vaultForm.provider;
       }
       const label = btn.textContent;
+      const restoreSaveFocus = document.activeElement === btn;
       btn.disabled = true;
       btn.textContent = 'Saving…';
       try {
@@ -93686,7 +93708,7 @@
           body: JSON.stringify(payload),
         });
         const data = await res.json().catch(() => ({}));
-        if (data && data.ok) {
+        if (res.ok && data && data.ok) {
           const where = data.backend === 'keychain' ? 'Keychain' : 'encrypted file';
           const done = mode === 'edit'
             ? (payload.value ? 'Value replaced in ' + where + '.' : 'Details updated.')
@@ -93704,6 +93726,7 @@
         if (valueEl) valueEl.value = '';
         btn.disabled = false;
         if (btn.textContent === 'Saving…') btn.textContent = label;
+        if (restoreSaveFocus && document.activeElement === document.body && btn.isConnected && btn.getClientRects().length) btn.focus();
       }
     });
   }
@@ -94012,7 +94035,7 @@
   function setActiveSettingsRailSection(sectionId, opts) {
     opts = opts || {};
     if (!$settingsRail || !$settingsPane || !sectionId) return;
-    if (window.cccSettingsActions?.redirect(sectionId) || window.cccSettingsContext?.redirect(sectionId)) return;
+    if (window.cccServiceConnections?.redirect(sectionId) || window.cccSettingsActions?.redirect(sectionId) || window.cccSettingsContext?.redirect(sectionId)) return;
     const requested = $settingsPane.querySelector('[data-section-id="'+sectionId+'"]');
     const destination = requested?.dataset.destination || sectionId;
     const firstRun = $settingsModalInner.classList.contains('is-first-run');
@@ -94633,6 +94656,7 @@
   function closeSettingsModal() {
     if (!$settingsModal) return;
     window.cccVoiceSetup?.leave();
+    window.cccServiceConnections?.leave();
     finishEnginesFirstRun();
     $settingsModal.classList.remove('open');
     $settingsModal.hidden = true;
@@ -96159,6 +96183,17 @@
     },
   });
   if (window.cccEngineConnection?.mounted()) { _settingsSearchIndex=null; if(_engHubData)renderEnginesHub(); }
+
+  window.cccServiceConnections?.mount({
+    navigate: () => {
+      clearTimeout(settingsSearchFocusTimer);
+      if ($settingsModal.hidden) openSettingsModal({focusSearch:false}); else clearSettingsSearch();
+      setActiveSettingsRailSection('vault');
+    },
+    newCredential: () => _vaultOpenForm('add', {}),
+    refresh: () => Promise.allSettled([refreshByokSettings(), refreshVaultSettings()]),
+  });
+  _settingsSearchIndex = null;
 
   window.cccSettingsContext?.mount({
     closeSettings: closeSettingsModal,
