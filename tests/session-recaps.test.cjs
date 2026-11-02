@@ -20,6 +20,10 @@ test('old owner waits get escaped context without changing their action', () => 
   assert.match(html, /Reported done:/);
   assert.match(html, /Check &lt;rows&gt;/);
   assert.doesNotMatch(html, /<layout>|<rows>/);
+  api.rememberOpen({ isConnected: true, dataset: { recapSession: 'old' }, open: true });
+  assert.match(api.render(row, { kind: 'next', text: 'Check <rows>' }), /data-recap-session="old" open/);
+  api.rememberOpen({ isConnected: false, dataset: { recapSession: 'old' }, open: false });
+  assert.match(api.render(row, { kind: 'next', text: 'Check <rows>' }), /data-recap-session="old" open/);
   assert.equal(api.render(row, { kind: 'working' }), '');
   assert.equal(api.render({ ...row, archived: true }, { kind: 'next' }), '');
   assert.equal(api.render({ ...row, modified: Date.now() / 1000 }, { kind: 'next' }), '');

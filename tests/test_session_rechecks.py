@@ -83,6 +83,18 @@ def test_lost_process_becomes_unverified_without_retry(tmp_path):
     assert response['status'] == 'unverified' and not admitted
 
 
+def test_message_identity_migration_reuses_paid_result_once(tmp_path):
+    store = recaps.Store(tmp_path / 'checks.db')
+    store.admit(item(revision='old-content-key'), NOW)
+    store.finish(item(revision='old-content-key'), {'finding': 'Already checked'})
+    upgraded = dict(item(revision='message-one'), legacy_revision='old-content-key')
+    response, admitted = store.admit(upgraded, NOW + 60)
+    assert not admitted and response['result']['finding'] == 'Already checked'
+    changed = dict(upgraded, revision='message-two')
+    assert store.admit(changed, NOW + 60)[0]['status'] == 'cooldown'
+    assert store.admit(changed, NOW + recaps.DAY)[1]
+
+
 @pytest.mark.parametrize('phase', ['before', 'during', 'failure'])
 def test_answer_or_failure_does_not_publish_stale_result_or_retry(tmp_path, monkeypatch, phase):
     store = recaps.Store(tmp_path / 'checks.db')
@@ -163,6 +175,7 @@ def test_loader_checks_current_transcript_and_rejects_answered_or_superseded_row
     monkeypatch.setattr(server, '_sessions_state_snapshot', lambda: {})
     monkeypatch.setattr(server, 'conversation_transcript_path', lambda sid: str(source))
     monkeypatch.setattr(server, '_wt_list_items_snapshot_only', lambda: [])
+    monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda: {})
     monkeypatch.setattr(ship_graph, '_get_connection', lambda: None)
     monkeypatch.setattr(lineage, 'latest_successor', lambda conn, sid: sid)
     monkeypatch.setattr(lineage, 'continuation_chain_members', lambda conn, sid: ['chain-root', sid])
@@ -175,6 +188,11 @@ def test_loader_checks_current_transcript_and_rejects_answered_or_superseded_row
     assert loaded['recap']['request'] == 'Choose PDF or CSV.'
     assert loaded['chain'] == 'chain-root'
     parser.assert_called_with('old-session', tail=80, use_cache=True)
+    from ccc_server import session_brief
+    monkeypatch.setattr(recaps, '_known_row', lambda sid: None)
+    monkeypatch.setattr(session_brief, '_session_meta_row', lambda conn, sid: {'end_ts': NOW - 3 * recaps.DAY})
+    monkeypatch.setattr(session_brief, '_sdoc_row', lambda sid: {'title': 'Indexed old session'})
+    assert recaps.load_candidate('old-session')['recap']['request'] == 'Choose PDF or CSV.'
     events.append({'type': 'user', 'text': 'CSV'})
     assert recaps.load_candidate('old-session') is None
     events.pop()

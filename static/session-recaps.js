@@ -41,7 +41,8 @@
     if (!eligible(row, info)) return '';
     const sid = String(row.session_id || row.id || '');
     const state = row.session_state || {};
-    const fingerprint = JSON.stringify([row.modified, row.mtime, state, info.text]);
+    const fingerprint = JSON.stringify([row.modified, row.mtime, state, info.text,
+      row.idea_ticket, row.question_text, row.question_waiting, row.needs_approval]);
     let value = cache.get(sid);
     if (!value || value.fingerprint !== fingerprint) {
       value = { fingerprint, status: 'saved', recap: {
@@ -52,8 +53,14 @@
     }
     if (value.status === 'ineligible') return '';
     if (value.retry_at && Date.now() / 1000 >= value.retry_at) value.requested = false;
-    return '<details class="conv-old-recap" data-recap-session="' + esc(sid) + '" onclick="event.stopPropagation()"'
+    return '<details class="conv-old-recap" data-recap-session="' + esc(sid) + '"' + (value.open ? ' open' : '')
+      + ' ontoggle="window.CCCSessionRecaps.rememberOpen(this)" onclick="event.stopPropagation()"'
       + ' onpointerdown="event.stopPropagation()">' + contents(value) + '</details>';
+  }
+  function rememberOpen(element) {
+    if (!element.isConnected) return;
+    const value = cache.get(element.dataset.recapSession);
+    if (value) value.open = element.open;
   }
   function paint(sid, value) {
     for (const el of document.querySelectorAll('.conv-old-recap')) {
@@ -128,11 +135,19 @@
       observer?.observe(el);
     }
   }
-  window.CCCSessionRecaps = { render, eligible, contents };
+  window.CCCSessionRecaps = { render, eligible, contents, rememberOpen };
   document.addEventListener('DOMContentLoaded', () => {
     const list = document.getElementById('convList');
     if (list) new MutationObserver(scan).observe(list, { childList: true, subtree: true });
     scan();
   });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) scan(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    // Returning to the page is a cheap observation event, not a new paid
+    // attempt. It lets the server notice changed linked-ticket evidence.
+    for (const value of cache.values()) {
+      if (!value.retry_at || Date.now() / 1000 >= value.retry_at) value.requested = false;
+    }
+    scan();
+  });
 })();

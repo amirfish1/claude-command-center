@@ -92,9 +92,10 @@ def candidate(row, *, chain=None, tickets=(), now=None):
                  did=str(state.get('did') or '')[:1000], request=question[:2000], last_activity=activity)
     # Dates, costs, titles, list position and our own result are not revisions.
     # Ticket content is supplied by the server, never by the browser.
-    revision = digest([question, state, row.get('_recap_source_revision'),
-                       sorted(tickets, key=lambda t: str(t.get('ref')))])
-    return dict(session_id=sid, chain=chain or sid, revision=revision, recap=recap)
+    content = [question, state, sorted(tickets, key=lambda t: str(t.get('ref')))]
+    revision = digest([*content, row.get('_recap_source_revision')])
+    return dict(session_id=sid, chain=chain or sid, revision=revision, recap=recap,
+                legacy_revision=digest(content))
 
 
 class Store:
@@ -118,6 +119,13 @@ class Store:
             # A lost process never retries the same revision after restart.
             db.execute("UPDATE checks SET status='unverified', finished=? WHERE status='checking' AND started<?",
                        (now, now - 180))
+            # Preserve already-paid preview checks when adding message-level
+            # revision identity. This old content-only key is migrated once;
+            # subsequent new replies cannot keep matching it.
+            legacy = item.get('legacy_revision')
+            if legacy and legacy != item['revision']:
+                db.execute("UPDATE OR IGNORE checks SET revision=? WHERE chain=? AND revision=? AND status!='checking'",
+                           (item['revision'], item['chain'], legacy))
             old = db.execute('SELECT status,result,started FROM checks WHERE chain=? AND revision=?',
                              (item['chain'], item['revision'])).fetchone()
             if old:
@@ -147,8 +155,16 @@ def load_candidate(sid):
     from ccc_server import core, lineage, ship_graph
     from ccc_server.continuation import manual_forward_target
     row = _known_row(sid)
+    conn = ship_graph._get_connection()
     if not row:
-        return None
+        # A cold/recent-only dashboard cache is not evidence that an old
+        # session disappeared. Resolve its exact ID in the existing index.
+        from ccc_server.session_brief import _session_meta_row, _sdoc_row
+        meta = _session_meta_row(conn, sid)
+        if not meta:
+            return None
+        row = dict(session_id=sid, modified=meta.get('end_ts') or 0,
+                   display_name=_sdoc_row(sid).get('title') or '')
     archived, trashed = core._load_conversation_lifecycle_sets()
     if sid in archived or sid in trashed:
         return None
@@ -156,7 +172,6 @@ def load_candidate(sid):
     if live.get('state') == 'working':
         return None
     row.update({k: v for k, v in live.items() if k in ('state', 'question_waiting', 'needs_approval')})
-    conn = ship_graph._get_connection()
     if manual_forward_target(sid) != sid or lineage.latest_successor(conn, sid) not in ('', None, sid):
         return None
     members = lineage.continuation_chain_members(conn, sid) or [sid]
@@ -181,6 +196,9 @@ def load_candidate(sid):
         return None
     row['session_state'] = current_state
     row['_recap_source_revision'] = digest([last.get('ts'), message_text(last)])
+    ticket = core._idea_tickets.idea_ticket_rows_map().get(sid)
+    if ticket:
+        row['idea_ticket'] = ticket
     refs = set(re.findall(r'\b[A-Z][A-Z0-9_-]*-\d+\b', json.dumps(row.get('session_state') or {})))
     ref = (row.get('idea_ticket') or {}).get('ref')
     if ref:
