@@ -13,16 +13,25 @@ tags: [decisions, sessions, settings, mobile]
 changelog_refs: ["CHANGELOG#5-43-0"]
 media:
   - type: image
-    src: /images/ccc-v5-43-hero.png
+    src: ../images/ccc-v5-43-hero.png
     alt: "CCC v5.43 session list beside an open conversation, using synthetic demo sessions."
     caption: "The current session workspace and conversation reader, captured with synthetic sessions."
 related: []
 ---
 
-## Find the question holding up the work
+## Pain
 
 When several agents are running, a request for your input can disappear into a
-conversation. CCC v5.43 brings queue owner questions and explicitly promoted
+conversation.
+
+## Why workarounds fail
+
+Cycling through every terminal becomes harder as more sessions run. A quiet
+session may be waiting for a decision, rather than finished.
+
+## Limitations
+
+CCC v5.43 brings queue owner questions and explicitly promoted
 session questions into a shared Decisions inbox, with visible source coverage
 and delivery states. Open Decisions to review the questions and their context.
 
@@ -30,7 +39,7 @@ Answer controls are opt-in. Saving an answer, sending it, and checking its
 receipt remain separate actions. Unavailable sources show a coverage gap;
 numbering a question alone does not publish it to the inbox.
 
-## Track sessions through completion
+## What CCC does
 
 The session workspace now separates Active, Needs you, and Finished work,
 with collapsible categories and explicit archive actions. An idle turn does
@@ -39,7 +48,7 @@ not automatically mean the whole task is finished.
 The capture above shows the current session list and conversation reader
 running against synthetic fixtures. It contains no private sessions.
 
-## Set up connections and voice in one place
+## Proof
 
 Connections brings provider accounts and named service credentials into one
 directory. Voice setup uses the same native controls, health checks point to
@@ -49,7 +58,7 @@ On your phone, app navigation now reaches the same apps as desktop. This
 release also improves search, read-aloud controls, decision buttons, Codex
 startup and handoff, image previews, and cold-start performance.
 
-## Upgrade
+## How to try
 
 Use your usual CCC install method. Homebrew users can run:
 

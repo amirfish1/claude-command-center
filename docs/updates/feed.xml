@@ -20,7 +20,25 @@
     <author>
       <name>CCC</name>
     </author>
-    <content type="html"/>
+    <content type="html">&lt;h2&gt;The pain&lt;/h2&gt;
+&lt;p&gt;When several agents are running, a request for your input can disappear into a conversation.&lt;/p&gt;
+&lt;h2&gt;Why workarounds fail&lt;/h2&gt;
+&lt;p&gt;Cycling through every terminal becomes harder as more sessions run. A quiet session may be waiting for a decision, rather than finished.&lt;/p&gt;
+&lt;h2&gt;What CCC does&lt;/h2&gt;
+&lt;p&gt;The session workspace now separates Active, Needs you, and Finished work, with collapsible categories and explicit archive actions. An idle turn does not automatically mean the whole task is finished.&lt;/p&gt;
+&lt;p&gt;The capture above shows the current session list and conversation reader running against synthetic fixtures. It contains no private sessions.&lt;/p&gt;
+&lt;h2&gt;Proof&lt;/h2&gt;
+&lt;p&gt;Connections brings provider accounts and named service credentials into one directory. Voice setup uses the same native controls, health checks point to concrete actions, and customization review shows settings across scopes.&lt;/p&gt;
+&lt;p&gt;On your phone, app navigation now reaches the same apps as desktop. This release also improves search, read-aloud controls, decision buttons, Codex startup and handoff, image previews, and cold-start performance.&lt;/p&gt;
+&lt;div class=&quot;u-media&quot;&gt;&lt;figure class=&quot;u-figure&quot;&gt;&lt;img src=&quot;../images/ccc-v5-43-hero.png&quot; alt=&quot;CCC v5.43 session list beside an open conversation, using synthetic demo sessions.&quot; loading=&quot;lazy&quot;&gt;&lt;figcaption&gt;The current session workspace and conversation reader, captured with synthetic sessions.&lt;/figcaption&gt;&lt;/figure&gt;&lt;/div&gt;
+&lt;h2&gt;How to try&lt;/h2&gt;
+&lt;p&gt;Use your usual CCC install method. Homebrew users can run:&lt;/p&gt;
+&lt;pre&gt;&lt;code&gt;brew update &amp;amp;&amp;amp; brew upgrade ccc&lt;/code&gt;&lt;/pre&gt;
+&lt;p&gt;The release includes a signed macOS app and Sparkle update. Queued work may show &lt;strong&gt;needs reconciliation&lt;/strong&gt; once after upgrading; use Reconcile in Settings → Maintenance if prompted.&lt;/p&gt;
+&lt;p&gt;&lt;a href=&quot;https://github.com/amirfish1/claude-command-center/releases/tag/v5.43.0&quot; target=&quot;_blank&quot; rel=&quot;noopener&quot;&gt;Read the full release notes&lt;/a&gt;.&lt;/p&gt;
+&lt;h2&gt;Limitations&lt;/h2&gt;
+&lt;p&gt;CCC v5.43 brings queue owner questions and explicitly promoted session questions into a shared Decisions inbox, with visible source coverage and delivery states. Open Decisions to review the questions and their context.&lt;/p&gt;
+&lt;p&gt;Answer controls are opt-in. Saving an answer, sending it, and checking its receipt remain separate actions. Unavailable sources show a coverage gap; numbering a question alone does not publish it to the inbox.&lt;/p&gt;</content>
   </entry>
   <entry>
     <id>https://ccc.amirfish.ai/updates/one-board-every-session.html</id>
