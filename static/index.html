@@ -157,6 +157,7 @@
 </script>
 <link rel="stylesheet" href="/static/credential-broker.css">
 <link rel="stylesheet" href="/static/queue-policy.css">
+<link rel="stylesheet" href="/static/voice-setup.css">
 </head>
 <body class="voice-call-btn-off">
   <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
@@ -2851,7 +2852,7 @@
             <div class="settings-row" data-keywords="voice speak offline kokoro install repair">
               <div class="settings-row-main">
                 <div class="settings-row-label">Better offline voice</div>
-                <div class="settings-row-desc" id="localSpeechStatus" role="status" aria-live="polite">Optional download (~330 MB). Your Mac voice keeps working during installation.</div>
+                <div class="settings-row-desc" id="localSpeechStatus" role="status" aria-live="polite">Optional download (~330 MB). Output availability has not been checked.</div>
               </div>
               <div class="settings-row-control">
                 <button type="button" id="localSpeechInstall" class="bug-input">Install better offline voice (~330 MB)</button>
@@ -3770,10 +3771,10 @@
         <div class="car-mode-cost">
           <strong>What it costs</strong>
           <div style="margin-top:4px;">
-            About <strong>$0.10/hr</strong> to run: the routing agent on Claude Haiku 4.5.
-            Speech is local and free by default (whisper.cpp hears you, Kokoro speaks).
-            Opting into Deepgram (<code>CCC_VOICE_ENGINE=deepgram</code>) adds about
-            $0.25/hr. Your CCC sessions bill separately as usual.
+            The dispatcher uses the Anthropic API. Local speech uses this machine;
+            selecting Deepgram (<code>CCC_VOICE_ENGINE=deepgram</code>) adds paid
+            speech processing. Provider rates and usage determine charges.
+            CCC sessions bill separately.
           </div>
         </div>
 
@@ -3782,7 +3783,7 @@
           <strong>If a key is missing</strong> - Car Mode degrades instead of breaking:
           <ul style="margin:6px 0 0 18px;padding:0;">
             <li>Local voice not installed → run <code>scripts/install_local_speech.sh</code>
-              once; meanwhile CCC's built-in browser mic and read-aloud still work.</li>
+              once. Browser dictation and read-aloud have separate requirements; their availability is not tested here.</li>
             <li>No Anthropic key → Car Mode can't start; it tells you what's needed
               instead of erroring.</li>
           </ul>
@@ -4096,6 +4097,7 @@
 <script src="/static/settings-launch-preview.js"></script>
 <script src="/static/queue-policy.js"></script>
 <script src="/static/settings-routing-policy.js"></script>
+<script src="/static/voice-setup.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/settings-preferences.js"></script>
 <script src="/static/free-settings.js" defer></script>

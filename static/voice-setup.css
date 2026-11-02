@@ -1,0 +1,22 @@
+.voice-setup { font-size: 13px; line-height: 1.55; min-width: 0; }
+.voice-setup h2 { margin: 0 0 8px; font-size: 20px; }
+.voice-setup h3 { margin: 0 0 8px; font-size: 15px; }
+.voice-setup p { max-width: 72ch; margin: 8px 0 12px; }
+.voice-setup .voice-setup-section { display: block; border-top: 1px solid var(--border); padding: 20px 0; scroll-margin-top: 12px; }
+.voice-setup .voice-setup-section .settings-row { padding: 12px 0; gap: 16px; }
+.voice-setup .voice-setup-nav { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 16px 0; }
+.voice-setup .voice-setup-nav a { color: var(--accent); text-underline-offset: 3px; }
+.voice-setup button { white-space: normal; }
+.voice-setup select, .voice-setup input { max-width: 100%; min-width: 0; box-sizing: border-box; }
+.voice-setup :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.voice-setup .voice-setup-section:focus { outline: none; }
+.voice-setup [hidden] { display: none !important; }
+.voice-setup details > summary { cursor: pointer; font-size: 15px; font-weight: 600; }
+.voice-setup #voiceModalSaveBtn { margin-top: 12px; }
+.voice-setup #voiceSetup-conversation > button { margin: 0 8px 12px 0; }
+@media(max-width:600px){
+  .voice-setup .settings-row { flex-direction: column; align-items: stretch; }
+  .voice-setup .settings-row-control select { width: 100% !important; }
+  .voice-setup .upd-actions { flex-wrap: wrap; }
+  .voice-setup #voiceSetup-conversation > div > div { flex-wrap: wrap; }
+}

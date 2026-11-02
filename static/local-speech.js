@@ -21,7 +21,7 @@
     }
     if (status) status.textContent = installing ? (data.progress || 'Installing offline voice...')
       : data.reason || (ready ? 'Ready. Speak can use the offline voice.'
-        : 'Optional download (~330 MB). Your Mac voice keeps working during installation.');
+        : 'Optional download (~330 MB). Read-aloud output depends on the selected voice and this machine.');
     clearTimeout(timer);
     if (installing) timer = setTimeout(check, 1500);
     if (ready && !wasReady) window.dispatchEvent(new Event('ccc-local-speech-ready'));
@@ -35,7 +35,7 @@
       return r.json();
     }).then(data => checkedGeneration === generation ? render(data) : null).catch(() => {
       if (checkedGeneration !== generation) return null;
-      if (status) status.textContent = 'Could not check offline voice status. Your Mac voice still works.';
+      if (status) status.textContent = 'Could not check offline voice status. Refresh to retry; output availability is unknown.';
       if (installing) timer = setTimeout(check, 3000);
       return null;
     }).finally(() => {
@@ -86,7 +86,7 @@
     setTimeout(() => toast.remove(), 20000);
   }
   if (button) button.addEventListener('click', install);
-  window.cccLocalSpeech = { offer: offer };
+  window.cccLocalSpeech = { offer: offer, check: check };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', check);
   else check();
 })();

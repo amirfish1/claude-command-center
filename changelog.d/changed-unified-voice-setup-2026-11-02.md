@@ -1,0 +1,1 @@
+Voice setup now brings dictation availability, read-aloud output, live call defaults, offline speech and call shortcuts into one Settings workflow. Existing setup links redirect there, saved unavailable voices and profiles remain selected, and status distinguishes configuration from an actual microphone or connection test.

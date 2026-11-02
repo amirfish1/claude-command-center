@@ -87065,8 +87065,8 @@
       cls = 'running';
       msg = '● Car Mode is running. Talk to it in the voice window, or press Stop.';
     } else if (d.mode === 'voice') {
-      cls = 'ok';
-      msg = '✓ Ready for hands-free voice. Speech: ' + (d.speech_engine_label || 'local') + '. Press Start Car Mode.';
+      cls = d.launcher_present ? 'ok' : 'warn';
+      msg = d.launcher_present ? 'Configured for hands-free operation. Speech: ' + (d.speech_engine_label || 'local') + '. Microphone and a live conversation have not been tested.' : 'Hands-free launcher is unavailable on this machine.';
     } else if (d.mode === 'degraded_no_local_speech') {
       cls = 'warn';
       msg = 'Anthropic key set, local voice not installed yet. Run scripts/install_local_speech.sh in the CCC folder (one time), then Start.';
@@ -87082,9 +87082,9 @@
     $carModeBanner.style.display = '';
     if ($carModeStartBtn) {
       $carModeStartBtn.style.display = d.running ? 'none' : '';
-      $carModeStartBtn.disabled = d.mode !== 'voice';
+      $carModeStartBtn.disabled = d.mode !== 'voice' || !d.launcher_present;
     }
-    if ($carModeStopBtn) $carModeStopBtn.style.display = d.running ? '' : 'none';
+    if ($carModeStopBtn) { $carModeStopBtn.style.display = d.running ? '' : 'none'; $carModeStopBtn.disabled = false; }
     if ($carModeAnthropicKey) $carModeAnthropicKey.placeholder = d.anthropic_key_set ? 'stored ✓ - leave blank to keep it' : 'sk-ant-… (required)';
     if ($carModeDeepgramKey) $carModeDeepgramKey.placeholder = d.deepgram_key_set ? 'stored ✓ - leave blank to keep it' : 'optional - only used with CCC_VOICE_ENGINE=deepgram';
   }
@@ -87092,11 +87092,18 @@
     try {
       const res = await fetch('/api/car-mode/status', { cache: 'no-store' });
       const d = await res.json().catch(() => ({}));
+      if (!res.ok || d.ok === false) throw new Error('Status unavailable');
       renderCarModeStatus(d);
       return d;
-    } catch (_) { return null; }
+    } catch (_) {
+      if ($carModeBanner) { $carModeBanner.textContent = 'Operator status unavailable. Reopen this section to retry; readiness is unknown.'; $carModeBanner.style.display = ''; }
+      if ($carModeStartBtn) $carModeStartBtn.disabled = true;
+      if ($carModeStopBtn) $carModeStopBtn.disabled = true;
+      return null;
+    }
   }
   function openCarModeModal() {
+    if (window.cccVoiceSetup?.open('operator')) return;
     if (!$carModeModal) return;
     carModeError('');
     if ($carModeAnthropicKey) $carModeAnthropicKey.value = '';
@@ -87107,6 +87114,7 @@
     carModePollTimer = setInterval(fetchCarModeStatus, 3000);
   }
   function closeCarModeModal() {
+    if (window.cccVoiceSetup?.mounted()) { document.getElementById('voiceSetup-operator').open = false; }
     if ($carModeModal) $carModeModal.classList.remove('open');
     if (carModePollTimer) { clearInterval(carModePollTimer); carModePollTimer = null; }
   }
@@ -87803,9 +87811,19 @@
   }
 
   async function openVoiceModal() {
+    if (window.cccVoiceSetup?.open('conversation')) return;
     if (!$voiceModal) return;
     voiceModalError('');
     $voiceModal.classList.add('open');
+    await loadVoiceConfig();
+  }
+
+  let voiceConfigBaseline = null, voiceConfigSequence = 0;
+  async function loadVoiceConfig() {
+    voiceModalError('');
+    const request = ++voiceConfigSequence;
+    voiceConfigBaseline = null;
+    if ($voiceModalSaveBtn) $voiceModalSaveBtn.disabled = true;
     try {
       const [cfgRes, voicesRes] = await Promise.all([
         fetch('/api/voice/config', {cache: 'no-store'}),
@@ -87813,6 +87831,8 @@
       ]);
       const cfg = (await cfgRes.json().catch(() => ({}))) || {};
       const voices = (await voicesRes.json().catch(() => ({}))) || {};
+      if (request !== voiceConfigSequence) return false;
+      if (!cfgRes.ok || cfg.ok === false || !voicesRes.ok) throw new Error(cfg.error || 'Call settings or voice catalog unavailable');
       const c = cfg.config || {};
       const vv = voices.voices || {};
       // Sessions pin realtime version v3, which only accepts the v1 voice
@@ -87820,10 +87840,11 @@
       const all = (vv.v1 && vv.v1.length) ? vv.v1.slice() : (vv.v2 || []).slice();
       if ($voiceSelect) {
         $voiceSelect.innerHTML = '';
-        if (!all.length) all.push(c.voice || 'cove');
+        if (c.voice && !all.includes(c.voice)) all.push(c.voice);
+        if (!all.length) throw new Error('Call voice catalog unavailable');
         for (const v of all) {
           const o = document.createElement('option');
-          o.value = v; o.textContent = v;
+          o.value = v; o.textContent = v + (!(vv.v1 || vv.v2 || []).includes(v) ? ' · saved voice, not listed in current catalog' : '');
           $voiceSelect.appendChild(o);
         }
         $voiceSelect.value = all.includes(c.voice) ? c.voice : (all[0] || 'cove');
@@ -87839,11 +87860,14 @@
           o.value = p; o.textContent = p;
           $voiceProfileSelect.appendChild(o);
         }
+        if (c.profile && !profiles.includes(c.profile)) {
+          const saved = document.createElement('option'); saved.value = c.profile; saved.textContent = c.profile + ' · saved profile, key unavailable'; $voiceProfileSelect.append(saved);
+        }
         $voiceProfileSelect.value = c.profile || '';
       }
       if ($voiceSetupBanner) {
         if (!profiles.length) {
-          $voiceSetupBanner.textContent = 'Subscription voice works without a key. The paid fallback is unavailable: no BYOK profile has an OpenAI key. Add one under Settings > BYOK to enable it.';
+          $voiceSetupBanner.textContent = 'The subscription lane needs no API key; entitlement and connection are checked only when you start a call. Paid fallback is unavailable: no BYOK profile has an OpenAI key. Manage provider keys in Connections.';
           $voiceSetupBanner.style.display = '';
         } else {
           $voiceSetupBanner.style.display = 'none';
@@ -87860,44 +87884,48 @@
       if ($voiceAllowFallback) $voiceAllowFallback.checked = c.allow_api_fallback !== false;
       const $voiceShowMobileBtn = document.getElementById('voiceShowMobileBtn');
       if ($voiceShowMobileBtn) $voiceShowMobileBtn.checked = getVoiceMobileBtnPref();
+      voiceConfigBaseline = {...c};
+      if ($voiceModalSaveBtn) $voiceModalSaveBtn.disabled = false;
+      window.cccVoiceSetup?.loaded(cfg);
+      return true;
     } catch (err) {
-      voiceModalError('Could not load voice settings.');
+      if (request !== voiceConfigSequence) return false;
+      voiceModalError('Could not load call settings: ' + err.message + '. Reload call settings to retry.');
+      window.cccVoiceSetup?.loadFailed();
+      return false;
     }
   }
 
   function closeVoiceModal() {
+    if (window.cccVoiceSetup?.mounted()) { closeSettingsModal(); return; }
     if ($voiceModal) $voiceModal.classList.remove('open');
   }
 
   async function saveVoiceConfig() {
     voiceModalError('');
-    const $voiceShowMobileBtn = document.getElementById('voiceShowMobileBtn');
-    if ($voiceShowMobileBtn) {
-      setVoiceMobileBtnPref(!!$voiceShowMobileBtn.checked);
+    if (!voiceConfigBaseline) { voiceModalError('Reload call settings before saving.'); return; }
+    const controls = {voice:$voiceSelect, profile:$voiceProfileSelect,
+      max_minutes:$voiceMaxMinutes, idle_seconds:$voiceIdleSeconds,
+      save_transcripts:$voiceSaveTranscripts, allow_api_fallback:$voiceAllowFallback};
+    const patch = {};
+    for (const [key, control] of Object.entries(controls)) {
+      if (!control) continue;
+      if (!control.checkValidity()) { voiceModalError('Check ' + (control.labels?.[0]?.textContent || key) + '.'); control.reportValidity(); return; }
+      const value = control.type === 'checkbox' ? control.checked : control.type === 'number' ? Number(control.value) : control.value;
+      if (value !== voiceConfigBaseline[key]) patch[key] = value;
     }
-    const patch = {
-      voice: $voiceSelect ? $voiceSelect.value : undefined,
-      profile: $voiceProfileSelect ? $voiceProfileSelect.value : undefined,
-      max_minutes: $voiceMaxMinutes ? parseInt($voiceMaxMinutes.value, 10) : undefined,
-      idle_seconds: $voiceIdleSeconds ? parseInt($voiceIdleSeconds.value, 10) : undefined,
-      save_transcripts: $voiceSaveTranscripts ? !!$voiceSaveTranscripts.checked : undefined,
-      allow_api_fallback: $voiceAllowFallback ? !!$voiceAllowFallback.checked : undefined,
-      show_mobile_btn: $voiceShowMobileBtn ? !!$voiceShowMobileBtn.checked : undefined,
-    };
-    for (const k of Object.keys(patch)) if (patch[k] === undefined || Number.isNaN(patch[k])) delete patch[k];
+    if (!Object.keys(patch).length) { window.cccVoiceSetup?.saved('No call settings changed.'); return; }
+    if ($voiceModalSaveBtn) $voiceModalSaveBtn.disabled = true;
     try {
-      const res = await fetch('/api/voice/config', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(patch),
-      });
+      const res = await fetch('/api/voice/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(patch)});
       const d = await res.json().catch(() => ({}));
-      if (!res.ok || !d.ok) throw new Error((d && d.error) || ('HTTP ' + res.status));
-      showOpToast('Voice settings saved', 'ok');
-      closeVoiceModal();
-    } catch (err) {
-      voiceModalError((err && err.message) || 'Save failed.');
-    }
+      if (!res.ok || !d.ok) throw new Error(d.error || ('HTTP ' + res.status));
+      voiceConfigBaseline = {...d.config};
+      // Keep edits made while saving visible, rather than replacing the draft.
+      window.cccVoiceSetup?.saved('Live conversation defaults saved. Current calls are unchanged.');
+      if (!window.cccVoiceSetup?.mounted()) { showOpToast('Voice settings saved', 'ok'); closeVoiceModal(); }
+    } catch (err) { voiceModalError('Save could not be confirmed: ' + err.message + '. Reload to check saved settings before retrying.'); }
+    finally { if ($voiceModalSaveBtn) $voiceModalSaveBtn.disabled = false; }
   }
 
   // -- wiring ------------------------------------------------------------
@@ -88006,10 +88034,12 @@
       $voiceCallBtnToggle.classList.toggle('is-on', on);
       $voiceCallBtnToggle.setAttribute('aria-checked', on ? 'true' : 'false');
     }
+    window.cccVoiceSetup?.refreshAccess();
   }
   if ($voiceCallBtnToggle) $voiceCallBtnToggle.addEventListener('click', () => {
     const on = $voiceCallBtnToggle.getAttribute('aria-checked') !== 'true';
     try { localStorage.setItem('ccc-voice-call-button', on ? '1' : '0'); } catch (_) {}
+    if (window.cccVoiceSetup?.mounted()) setVoiceMobileBtnPref(on);
     voiceApplyCallButtonPref();
   });
   voiceApplyCallButtonPref();
@@ -92236,7 +92266,12 @@
       el.textContent = o.label + (o.paid ? ' $' : '');
       sel.appendChild(el);
     });
-    sel.value = ttsVoiceDefault();
+    const saved = ttsVoiceDefault();
+    if (saved && !_ttsVoiceOptions.some(o => o.id === saved)) {
+      const option = document.createElement('option'); option.value = saved; option.textContent = saved + ' · saved voice, currently unavailable'; sel.append(option);
+    }
+    sel.value = saved;
+    window.cccVoiceSetup?.ttsLoaded(_ttsVoiceOptions);
     if (!sel._tvBound) {
       sel._tvBound = true;
       sel.addEventListener('change', () => {
@@ -92246,11 +92281,11 @@
     }
   }
   function refreshTtsVoiceOptions() {
-    fetch('/api/free-runtime/tts-voices').then(r => r.ok ? r.json() : null).then(d => {
+    return fetch('/api/free-runtime/tts-voices').then(r => { if (!r.ok) throw new Error('Output voice catalog unavailable'); return r.json(); }).then(d => {
       _ttsVoiceOptions = (d && Array.isArray(d.voices)) ? d.voices : [];
       renderTtsVoiceDefaultSelect();
       document.querySelectorAll('.conv-pane').forEach(renderTtsVoiceStepper);
-    }).catch(() => {});
+    }).catch(() => { renderTtsVoiceDefaultSelect(); window.cccVoiceSetup?.ttsFailed(); });
   }
   refreshTtsVoiceOptions();
   window.addEventListener('ccc-local-speech-ready', refreshTtsVoiceOptions);
@@ -92506,6 +92541,7 @@
       localStorage.setItem(VOICE_MOBILE_BTN_STORAGE_KEY, show ? '1' : '0');
     } catch (_) {}
     applyVoiceMobileBtn(show);
+    window.cccVoiceSetup?.refreshAccess();
   }
 
   function applyTheme(pref) {
@@ -93988,6 +94024,7 @@
     _settingsCurrentSection = sectionId;
 
     if (sectionId === 'queues') refreshSettingsQueues();
+    if (sectionId === 'voice') window.cccVoiceSetup?.enter();
     // A destination contains related sections; first-run isolates engine setup.
     // Search crosses destinations and reveals only matching controls.
     $settingsPane.querySelectorAll('.settings-section').forEach(sec => {
@@ -94016,7 +94053,8 @@
 
   function buildSettingsSearchIndex() {
     if (!$settingsPane) { _settingsSearchIndex = []; return; }
-    _settingsSearchIndex = Array.from($settingsPane.querySelectorAll('.settings-row, .eng-list')).map(row => {
+    _settingsSearchIndex = Array.from($settingsPane.querySelectorAll('.settings-row, .eng-list'))
+      .filter(row => !row.closest('[data-settings-search-group]') || row.hasAttribute('data-settings-search-group')).map(row => {
       const section = row.closest('.settings-section');
       const eyebrow = section ? section.querySelector('.settings-section-eyebrow') : null;
       const label = row.querySelector('.settings-row-label');
@@ -94128,6 +94166,7 @@
       if (resetRow) resetRow.hidden = true;
     });
     $settingsPane.querySelectorAll('details').forEach(details => {
+      if (details.hasAttribute('data-settings-search-group')) return;
       details.hidden = !Array.from(details.querySelectorAll('.settings-row, .eng-list, .settings-modal-tools-slot'))
         .some(row => !row.hidden && row.style.display !== 'none');
     });
@@ -94153,7 +94192,6 @@
   function settingsResetLayout() {
     try {
       localStorage.removeItem('ccc-hero-live-variant');
-      localStorage.removeItem(VOICE_MOBILE_BTN_STORAGE_KEY);
     } catch (_) {}
     applyVoiceMobileBtn(getVoiceMobileBtnPref());
     refreshAppearanceChecks();
@@ -94323,7 +94361,8 @@
     reader.readAsDataURL(file);
   });
 
-  function openSettingsModal() {
+  let settingsSearchFocusTimer;
+  function openSettingsModal({ focusSearch = true } = {}) {
     if (!$settingsModal) return;
     _settingsModalPrevFocus = document.activeElement;
     $settingsModal.hidden = false;
@@ -94342,7 +94381,10 @@
     if ($phoneRow) $phoneRow.hidden = false;
     buildSettingsSearchIndex();
     setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false });
-    setTimeout(() => { if ($settingsSearchInput) $settingsSearchInput.focus(); }, 0);
+    clearTimeout(settingsSearchFocusTimer);
+    if (focusSearch) settingsSearchFocusTimer = setTimeout(() => {
+      if (!$settingsModal.hidden && $settingsSearchInput) $settingsSearchInput.focus();
+    }, 0);
   }
 
   // Deep link: /?ccc_settings=<section> opens Settings on that pane. The q2
@@ -94587,14 +94629,17 @@
 
   function closeSettingsModal() {
     if (!$settingsModal) return;
+    window.cccVoiceSetup?.leave();
     finishEnginesFirstRun();
     $settingsModal.classList.remove('open');
     $settingsModal.hidden = true;
     if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', 'false');
-    const restoreFocus = ($settingsBtn && typeof $settingsBtn.focus === 'function')
-      ? $settingsBtn
-      : _settingsModalPrevFocus;
-    if (restoreFocus && typeof restoreFocus.focus === 'function') restoreFocus.focus();
+    const restoreFocus = [$settingsBtn, _settingsModalPrevFocus,
+      document.querySelector('[data-mobile-nav="more"]'),
+      document.querySelector('[data-mobile-nav-menu]'), document.getElementById('sidebarMoreBtn')]
+      .find(element => element?.isConnected && !element.disabled
+        && element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden');
+    restoreFocus?.focus();
     _settingsModalPrevFocus = null;
   }
   // Exposed for call sites defined earlier in this file / other scopes
@@ -96075,6 +96120,16 @@
     saved: data => { mergeSpawnDefaults(data); syncSpawnEngineDependentUi(); renderEnginesHub(); if (typeof updateInputBar === 'function') updateInputBar(); },
   });
   window.cccLaunchPreview?.mount();
+  window.cccVoiceSetup?.mount({
+    navigate: () => {
+      clearTimeout(settingsSearchFocusTimer);
+      if ($settingsModal.hidden) openSettingsModal({ focusSearch: false });
+      else clearSettingsSearch();
+      setActiveSettingsRailSection('voice');
+    },
+    load: loadVoiceConfig, loadOperator: fetchCarModeStatus,
+    refreshVoices: refreshTtsVoiceOptions,
+  });
 
   window.cccSettingsContext?.mount({
     closeSettings: closeSettingsModal,
