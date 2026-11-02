@@ -272,7 +272,13 @@ def _dashboard_queue_signature():
 def _dashboard_queue_watch_tick(previous):
     current = _dashboard_queue_signature()
     if previous is not None and current != previous:
-        _invalidate_dashboard("queue", reason="external-change")
+        # workers.json (index 3) is rewritten on every worker heartbeat; it
+        # carries no ticket content, so it must not make boards refetch the
+        # ticket list (CCC-142).
+        if current[:3] == previous[:3] and current[4:] == previous[4:]:
+            _invalidate_dashboard("workers", reason="worker-heartbeat")
+        else:
+            _invalidate_dashboard("queue", reason="external-change")
     return current
 
 
@@ -29084,6 +29090,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 _memo_items = items
                 if _slim:
                     items = _ux_fixes_slim_items(items)
+                # ?since=<version>: only tickets changed since the snapshot the
+                # client holds (CCC-142). Unknown versions get the full list.
+                _scope = (status_filter, lane_filter, _slim)
+                _ver, _keys, _digests = _queue_list_version(_scope, _memo_items, items)
+                _since = (qs.get("since", [""])[0] or "").strip()
+                if _since:
+                    _delta = _queue_list_delta(_scope, _since, items, _ver, _keys, _digests)
+                    if _delta is not None:
+                        _delta.update({"ok": True, "synced_at": synced_at})
+                        self.send_json(_delta)
+                        return
                 _ek = (status_filter, lane_filter, _slim, synced_at)
                 _ent = _QUEUE_LIST_ENCODED.get(_ek)
                 if _ent is None or _ent[0] is not _memo_items:
@@ -29095,7 +29112,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     _QUEUE_LIST_ENCODED[_ek] = _ent
                 self.send_json({
                     "ok": True, "items": items, "count": len(items),
-                    "synced_at": synced_at,
+                    "synced_at": synced_at, "version": _ver, "order": _keys,
                 }, encoded=_ent[1])
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)

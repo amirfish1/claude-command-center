@@ -52115,6 +52115,60 @@
   const _uxqNewItemExpires = new Map();
   let _ffcLastSidebarData = null;
   let _uxqLastResolvedProject = '';
+  // One delta-synced copy of /api/queue/list?slim=1, shared by the Queue panel
+  // and the sidebar's ticket badges (CCC-142). The full list is ~3 MB gzipped;
+  // over a slow link each full refetch held the page's single HTTP/2
+  // connection for 5-15s and every other request queued behind it. With
+  // ?since=<version> the server sends only changed tickets plus the ref order.
+  let _queueListMirror = { version: '', order: null, items: null };
+  let _queueListMirrorPromise = null;
+  function _queueListMerge(prior, data) {
+    const items = Array.isArray(data && data.items) ? data.items : null;
+    if (!data || !data.delta) {
+      if (!items) return null;
+      const order = Array.isArray(data.order) && data.order.length === items.length ? data.order : null;
+      return { version: order ? String(data.version || '') : '', order, items };
+    }
+    if (!prior.items || !prior.order) return null;
+    if (data.unchanged) return Object.assign({}, prior, { version: String(data.version || '') });
+    const order = Array.isArray(data.order) ? data.order : null;
+    if (!order) return null;
+    const changed = data.changed && typeof data.changed === 'object' ? data.changed : {};
+    const prev = new Map();
+    prior.order.forEach((key, i) => prev.set(key, prior.items[i]));
+    const merged = new Array(order.length);
+    for (let i = 0; i < order.length; i++) {
+      const key = order[i];
+      const item = Object.prototype.hasOwnProperty.call(changed, key) ? changed[key] : prev.get(key);
+      if (item === undefined) return null;
+      merged[i] = item;
+    }
+    return { version: String(data.version || ''), order, items: merged };
+  }
+  function _queueListFetch(fetchOpts) {
+    if (_queueListMirrorPromise) return _queueListMirrorPromise;
+    _queueListMirrorPromise = (async () => {
+      const read = async since => {
+        const url = '/api/queue/list?slim=1' + (since ? '&since=' + encodeURIComponent(since) : '');
+        const res = await backgroundApiFetch(url, Object.assign({ cache: 'no-store' }, fetchOpts || {}));
+        if (res.ok === false) throw new Error('queue list HTTP ' + res.status);
+        const data = await res.json();
+        if (!data || data.ok === false) throw new Error((data && data.error) || 'queue list failed');
+        return data;
+      };
+      const prior = _queueListMirror;
+      let data = await read(prior.items && prior.version ? prior.version : '');
+      let next = _queueListMerge(prior, data);
+      if (!next) {
+        data = await read('');
+        next = _queueListMerge(prior, data);
+      }
+      if (!next) throw new Error('queue list merge failed');
+      _queueListMirror = next;
+      return { items: next.items, synced_at: data.synced_at };
+    })().finally(() => { _queueListMirrorPromise = null; });
+    return _queueListMirrorPromise;
+  }
   async function _fetchUxqItems(allowStale) {
     // Scope changes only filter this already-complete snapshot. Let that
     // interaction repaint immediately even when the normal TTL has elapsed;
@@ -52125,9 +52179,8 @@
     const requestVersion = _uxqItemsVersion;
     _uxqItemsPromise = (async () => {
     try {
-      const res = await backgroundApiFetch('/api/queue/list?slim=1', { cache: 'no-store', cccPriority: _queueSnapshotIsForeground() ? 'user' : undefined });
-      const data = await res.json().catch(() => ({}));
-      const items = Array.isArray(data && data.items) ? data.items : [];
+      const data = await _queueListFetch({ cccPriority: _queueSnapshotIsForeground() ? 'user' : undefined });
+      const items = data.items;
       if (requestVersion !== _uxqItemsVersion) return _uxqItemsCache.items;
       const now = Date.now();
       const refs = new Set(items.map(_uxqItemRef).filter(Boolean));
@@ -77049,7 +77102,10 @@
     const pending = Array.from(_dashboardEventState.invalidations.values());
     _dashboardEventState.invalidations.clear();
     const resources = new Set(pending.map(item => item.resource));
-    if (resources.has('queue')) {
+    if (resources.has('queue') || resources.has('workers')) {
+      // 'workers' = only workers.json changed (worker heartbeats): refresh
+      // worker health, never the ticket list (CCC-142).
+      const ticketsChanged = resources.has('queue');
       // Worker registration/claims can precede the transcript archive. The
       // list endpoint overlays those live sessions, so refresh it with queues.
       resources.add('archive');
@@ -77064,17 +77120,17 @@
       // one, so ordering is preserved without discarding reads.
       _uxqHealthAppliedSeq = ++_uxqHealthReqSeq;
       _wtWorkersVersion += 1;
-      _uxqItemsCache.ts = 0;
+      if (ticketsChanged) _uxqItemsCache.ts = 0;
       _uxqHealthCache.ts = 0;
       _wtWorkersCache.ts = 0;
       const refreshQueue = () => {
-        _uxqItemsCache.ts = 0;
+        if (ticketsChanged) _uxqItemsCache.ts = 0;
         if (_queuePanelIsVisible() && typeof _renderQueuePanel === 'function') {
           _renderQueuePanel();
         }
       };
       if (_queuePanelIsVisible()) {
-        const refreshItems = Promise.resolve(inFlightQueueRead).catch(() => {}).then(() => {
+        const refreshItems = !ticketsChanged ? null : Promise.resolve(inFlightQueueRead).catch(() => {}).then(() => {
           _uxqItemsCache.ts = 0;
           return _fetchUxqItems(false);
         });
@@ -77686,10 +77742,8 @@
     if (!opts.force && fresh) return uxFixesQueueMeta;
     _uxFixesQueueMetaPromise = (async () => {
       try {
-        const res = await backgroundApiFetch('/api/queue/list?slim=1', { cache: 'no-store' });
-        if (!res.ok) return uxFixesQueueMeta;
-        const data = await res.json().catch(() => ({}));
-        const meta = _setUxFixesQueueMeta(Array.isArray(data.items) ? data.items : []);
+        const data = await _queueListFetch();
+        const meta = _setUxFixesQueueMeta(data.items);
         if (opts.render !== false) {
           if (typeof _renderArchiveIfLoaded === 'function') _renderArchiveIfLoaded();
           // The line above only repaints the Archive view; the progress chips
@@ -79602,8 +79656,13 @@
       // /api/queue/list refetch per event kept the strip oscillating in and
       // out of its "loading" paint nonstop.
       let invalidateTimer = null;
-      const invalidateAndRender = () => {
-        _uxqItemsCache.ts = 0;
+      const invalidateAndRender = (ev) => {
+        // what=['workers'] is a heartbeat rewrite of workers.json: no ticket
+        // changed, so keep the ticket list (CCC-142).
+        let what = null;
+        try { what = ev && ev.data ? JSON.parse(ev.data).what : null; } catch (_) {}
+        const workersOnly = Array.isArray(what) && what.length > 0 && what.every(w => w === 'workers');
+        if (!workersOnly) _uxqItemsCache.ts = 0;
         _uxqHealthCache.ts = 0;
         _wtWorkersCache.ts = 0;
         if (invalidateTimer) return;
@@ -79624,7 +79683,7 @@
         try { es = new EventSource('/api/queue/events'); } catch (_) { schedule(); return; }
         _uxqLegacyEventSource = es;
         es.onopen = () => { retryMs = 1000; _uxqStreamLive = true; invalidateAndRender(); };
-        es.onmessage = () => { invalidateAndRender(); };
+        es.onmessage = ev => { invalidateAndRender(ev); };
         es.onerror = () => {
           _uxqStreamLive = _dashboardEventStreamHealthy;
           try { es.close(); } catch (_) {}

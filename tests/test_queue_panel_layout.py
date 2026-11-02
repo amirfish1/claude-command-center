@@ -477,8 +477,8 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("_queuePanelIsVisible()", refresh_block)
 
         stream_block = app_js[
-            app_js.index("const invalidateAndRender = () =>"):
-            app_js.index("const schedule = () =>", app_js.index("const invalidateAndRender = () =>"))
+            app_js.index("const invalidateAndRender = (ev) =>"):
+            app_js.index("const schedule = () =>", app_js.index("const invalidateAndRender = (ev) =>"))
         ]
         self.assertIn("_queuePanelIsVisible()", stream_block)
 

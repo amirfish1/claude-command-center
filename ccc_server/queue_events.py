@@ -1186,6 +1186,72 @@ def _ux_fixes_slim_items(items):
 
 
 # ---------------------------------------------------------------------------
+# /api/queue/list?since=<version> deltas (CCC-142)
+# ---------------------------------------------------------------------------
+# The board list is multi-MB and boards refetch it on every queue change. Over
+# a slow link one 2.8 MB body holds the browser's single HTTP/2 connection for
+# 5-15s and every other request waits behind it. So each memo rebuild gets a
+# version; a client that sends the version it holds receives only the tickets
+# whose content changed plus the current ref order.
+_QUEUE_LIST_VERSIONS_MAX = 32
+_queue_list_versions_lock = threading.Lock()
+_queue_list_versions = collections.OrderedDict()  # token -> (scope, {key: digest})
+_queue_list_current = {}  # scope -> (memo identity, token, keys, digests)
+_queue_list_seq = [0]
+
+
+def _queue_list_item_key(item, index):
+    if isinstance(item, dict):
+        key = item.get("ref") or item.get("id")
+        if key:
+            return str(key)
+    return "#%d" % index
+
+
+def _queue_list_version(scope, memo_items, items):
+    """(token, keys, digests) for this memo snapshot, built once per rebuild."""
+    with _queue_list_versions_lock:
+        cur = _queue_list_current.get(scope)
+        if cur is not None and cur[0] is memo_items:
+            return cur[1], cur[2], cur[3]
+    import hashlib
+    keys, digests = [], {}
+    for i, it in enumerate(items or []):
+        k = _queue_list_item_key(it, i)
+        if k in digests:
+            k = "#%d" % i
+        keys.append(k)
+        digests[k] = hashlib.blake2b(
+            json.dumps(it, sort_keys=True, default=str).encode(), digest_size=12).digest()
+    with _queue_list_versions_lock:
+        _queue_list_seq[0] += 1
+        token = "%x.%d" % (os.getpid(), _queue_list_seq[0])
+        _queue_list_current[scope] = (memo_items, token, keys, digests)
+        _queue_list_versions[token] = (scope, digests)
+        while len(_queue_list_versions) > _QUEUE_LIST_VERSIONS_MAX:
+            _queue_list_versions.popitem(last=False)
+    return token, keys, digests
+
+
+def _queue_list_delta(scope, since, items, token, keys, digests):
+    """Delta body for a client holding `since`, or None when it must get the
+    full list (unknown/expired version, or a different filter scope)."""
+    with _queue_list_versions_lock:
+        old = _queue_list_versions.get(since)
+    if old is None or old[0] != scope:
+        return None
+    if since == token:
+        return {"delta": True, "unchanged": True, "version": token, "count": len(keys)}
+    prev = old[1]
+    changed = {}
+    for i, k in enumerate(keys):
+        if k.startswith("#") or prev.get(k) != digests[k]:
+            changed[k] = items[i]
+    return {"delta": True, "version": token, "count": len(keys),
+            "order": keys, "changed": changed}
+
+
+# ---------------------------------------------------------------------------
 # GitHub-backed queue freshness
 # ---------------------------------------------------------------------------
 # The queue-events SSE detects change by stat'ing the local ticket store, which
