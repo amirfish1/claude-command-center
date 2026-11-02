@@ -8,6 +8,20 @@ def ev(role, ts, text, uuid):
 
 
 class BuildIndexTest(unittest.TestCase):
+    def test_bundled_guidance_is_neither_a_question_nor_an_answer(self):
+        from ccc_server.question_defaults import guidance
+        instruction = "Agent context:\n" + guidance() + "\nExample: [Q42:install-scope]"
+        ask = ev("assistant", "2026-01-01T00:00:01Z",
+                 "[Q42:install-scope] Which scope?", "ask")
+        for role in ("user", "assistant"):
+            injected = ev(role, "2026-01-01T00:00:02Z", instruction, "instructions")
+            self.assertIsNone(qt._event(role, instruction, "instructions", injected["ts"], "s1"))
+            questions = qt.build_index({"a": {"ev": [ask, injected]}})["questions"]
+            self.assertEqual(len(questions), 1)
+            self.assertFalse(questions[0]["answered"])
+            self.assertEqual(questions[0]["mentions"], [])
+            self.assertEqual(qt.build_index({"a": {"ev": [injected]}})["questions"], [])
+
     def test_cached_compaction_summary_is_not_an_owner_answer(self):
         ask = ev("assistant", "2026-01-01T00:00:01Z", "[Q7:publish] OK to publish?", "ask")
         summary = ev("user", "2026-01-01T00:00:02Z",

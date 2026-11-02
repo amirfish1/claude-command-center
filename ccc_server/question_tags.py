@@ -115,7 +115,9 @@ def _iso(ts) -> str:
 
 def _is_injected_context(text: str) -> bool:
     """Compaction context quotes old turns without supplying a new answer."""
-    return (_INJECTED in text or text.lstrip().startswith(
+    return (_INJECTED in text or "<!-- CCC:user-question-tags -->" in text
+            or "<!-- CCC:question-guidance -->" in text
+            or text.lstrip().startswith("## User question tags\n") or text.lstrip().startswith(
         "This session is being continued from a previous conversation"))
 
 

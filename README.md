@@ -241,7 +241,9 @@ user service. [Linux and WSL2 guide](docs/install.md#running-on-linux-and-wsl2) 
 
 ### Your agent config
 
-CCC asks before registering hooks or installing skills in your agent config.
+CCC includes [question numbering and tagging guidance](docs/user-question-tags.md)
+for sessions it starts. It asks before adding that guidance, hooks or skills to
+your global agent config.
 You can skip them, review the diff, or remove them later in Settings.
 [What changes, and how to undo it](docs/agent-config-consent.md).
 

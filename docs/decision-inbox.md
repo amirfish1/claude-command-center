@@ -40,10 +40,10 @@ returns paginated `decision_rows` and `decision_total` for the compact table.
 `hidden_count` counts omitted empty script-only sweeps. Malformed log lines are
 counted in `invalid_records` and skipped. Limits are clamped to 1–100.
 
-Q-tags identify questions written by agents in session transcripts. CCC recognizes
-and displays them; the standard installer does not install an agent tagging rule
-or a question counter. A session question and an inbox card are separate records
-unless the card explicitly carries that question's tag.
+Q-tags identify questions written by agents in session transcripts. CCC bundles
+the [question counter and tagging guidance](user-question-tags.md) by default.
+A session question and an inbox card are separate records unless the card
+explicitly carries that question's tag; numbering alone does not publish a card.
 
 On mobile, open **More → Decisions** in CCC. The More menu includes the same
 app catalog as the desktop rail. Apps keep the bottom bar visible so you can
