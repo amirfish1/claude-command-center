@@ -863,6 +863,15 @@ def codex_client_dispatch(action, data):
         if action in ("state", "events") and tombstone and tombstone.get("deleted"):
             validate_operation_context("thread/read", {"threadId": tid}, context,
                 resolve_repo=_core.resolve_repo_path, read_thread=lambda _: tombstone)
+        elif (action == "live-transcript" and tombstone
+              and not tombstone.get("deleted") and tombstone.get("cwd")):
+            # The current connection's notifications already establish this
+            # read-only overlay's workspace. A fresh native thread/read can
+            # wait behind engine work and delay text we already hold locally.
+            # Still validate the selected repo on every poll; missing metadata
+            # and all mutation paths retain their authoritative native reads.
+            validate_operation_context("thread/read", {"threadId": tid}, context,
+                resolve_repo=_core.resolve_repo_path, read_thread=lambda _: tombstone)
         else:
             _client_scope("thread/read", {"threadId": tid}, context)
         if action == "handover":

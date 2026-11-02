@@ -213,6 +213,39 @@ class ClientProtocolTests(unittest.TestCase):
                                  {"thread_id": "task", "repo_path": "/test"})
         read.assert_called_once_with("task", fresh=True)
 
+    def test_live_overlay_uses_current_notification_workspace_without_native_io(self):
+        client.codex_client_observe({"method": "thread/started", "params": {
+            "thread": {"id": "task", "cwd": "/test"}}}, self.transport)
+        client.codex_client_observe({"method": "item/agentMessage/delta", "params": {
+            "threadId": "task", "turnId": "turn", "itemId": "reply", "delta": "Hello"}}, self.transport)
+        with mock.patch.object(server, "resolve_repo_path", return_value="/test"), \
+             mock.patch.object(client, "_client_rpc", side_effect=AssertionError("native read blocks")):
+            result = client.codex_client_dispatch("live-transcript", {
+                "context": {"thread_id": "task", "repo_path": "/test"}})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["turns"][0]["events"][0]["blocks"][0]["text"], "Hello")
+
+    def test_notification_workspace_still_rejects_other_repos_and_environments(self):
+        client.codex_client_observe({"method": "thread/started", "params": {
+            "thread": {"id": "task", "cwd": "/other"}}}, self.transport)
+        with mock.patch.object(server, "resolve_repo_path", return_value="/test"), \
+             mock.patch.object(client, "_client_rpc", side_effect=AssertionError("unexpected native read")):
+            for extra in ({}, {"environment_id": "remote"}):
+                result = client.codex_client_dispatch("live-transcript", {
+                    "context": {"thread_id": "task", "repo_path": "/test", **extra}})
+                self.assertFalse(result["ok"])
+
+    def test_live_overlay_revalidates_natively_after_connection_replacement(self):
+        client.codex_client_observe({"method": "thread/started", "params": {
+            "thread": {"id": "task", "cwd": "/test"}}}, self.transport)
+        client.codex_client_connect(Transport())
+        with mock.patch.object(server, "resolve_repo_path", return_value="/test"), \
+             mock.patch.object(client, "_client_read_thread", return_value={"cwd": "/test"}) as read:
+            result = client.codex_client_dispatch("live-transcript", {
+                "context": {"thread_id": "task", "repo_path": "/test"}})
+        self.assertTrue(result["ok"])
+        read.assert_called_once_with("task", fresh=True)
+
     def test_read_crossing_reconnect_is_not_labeled_with_new_generation(self):
         def request(*args, **kwargs):
             client.codex_client_connect(Transport())
