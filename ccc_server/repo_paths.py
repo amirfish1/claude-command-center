@@ -219,6 +219,13 @@ def _invalidate_known_repo_paths():
         _core._KNOWN_REPO_PATHS_CACHE["paths"] = None
 
 
+def _expire_known_repo_paths():
+    """Mark the memo stale but keep serving it: the next caller kicks one
+    background rebuild instead of every caller waiting on a cold walk."""
+    with _KNOWN_REPO_PATHS_LOCK:
+        _core._KNOWN_REPO_PATHS_CACHE["at"] = 0.0
+
+
 def _known_repo_paths_memo_hit():
     with _KNOWN_REPO_PATHS_LOCK:
         hit = _core._KNOWN_REPO_PATHS_CACHE["paths"]

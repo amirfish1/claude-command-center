@@ -5179,6 +5179,12 @@ def _record_recent_repo(path_str):
     if not p.is_dir():
         return
     existing = _load_recent_repos()
+    # Every repo-scoped request lands here (require_repo_context). When
+    # the repo is already the most recent one nothing changes; rewriting the
+    # file and dropping the known-repos memo made the next callers wait on a
+    # cold multi-second disk walk (CCC-298: 2-3s waits on repo_path polls).
+    if existing and existing[0] == str(p):
+        return
     new_list = [str(p)] + [x for x in existing if x != str(p)]
     new_list = new_list[:_RECENT_REPOS_CAP]
     try:
@@ -5186,7 +5192,12 @@ def _record_recent_repo(path_str):
         _RECENT_REPOS_FILE.write_text("\n".join(new_list) + "\n")
     except OSError:
         pass
-    _invalidate_known_repo_paths()
+    if str(p) in existing:
+        # A reorder of an already-known repo: the set is unchanged, so a
+        # background refresh is enough.
+        _expire_known_repo_paths()
+    else:
+        _invalidate_known_repo_paths()
 
 
 def _append_custom_repo(path_str):

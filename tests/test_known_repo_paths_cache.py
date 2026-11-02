@@ -96,3 +96,33 @@ def test_invalidate_forces_the_next_call_to_walk_again(monkeypatch):
     server._known_repo_paths()
     assert len(calls) == 2
     _reset_cache()
+
+
+def test_recording_the_current_repo_keeps_the_memo(monkeypatch, tmp_path):
+    """Every repo-scoped request records its repo as recent (CCC-298).
+
+    Re-recording the repo that is already most recent must not rewrite the
+    file or drop the memo; a reorder only marks it stale (served while one
+    background rebuild runs); only a never-seen repo drops it.
+    """
+    a, b, c = (tmp_path / n for n in "abc")
+    for d in (a, b, c):
+        d.mkdir()
+    recent = tmp_path / "recent"
+    recent.write_text(f"{a}\n{b}\n")
+    monkeypatch.setattr(server, "_RECENT_REPOS_FILE", recent)
+    monkeypatch.setattr(server, "_known_repo_paths_uncached", lambda: ["/repo/a"])
+    _reset_cache()
+    server._known_repo_paths()
+    before = recent.stat().st_mtime_ns
+
+    server._record_recent_repo(str(a))
+    assert recent.stat().st_mtime_ns == before
+    assert server._known_repo_paths_memo_hit() == (["/repo/a"], True)
+
+    server._record_recent_repo(str(b))
+    assert recent.read_text().split() == [str(b), str(a)]
+    assert server._known_repo_paths_memo_hit() == (["/repo/a"], False)
+
+    server._record_recent_repo(str(c))
+    assert server._known_repo_paths_memo_hit() == (None, False)

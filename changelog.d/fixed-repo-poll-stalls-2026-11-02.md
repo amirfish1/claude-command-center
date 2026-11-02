@@ -1,0 +1,1 @@
+- Repo-scoped polls (deploy status, Next.js status, throughput) no longer stall for 2-3s: every such request re-recorded its repo as "recent", which rewrote the recent-repos file and dropped the known-repos cache even when nothing changed, so the next requests waited on a cold disk walk.
