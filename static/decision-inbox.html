@@ -338,6 +338,7 @@
       '<div class="timestamps"><span>Created ' + esc(exact(c.created_at)) + '</span><span>Updated ' + esc(exact(c.updated_at)) + '</span>' + (c.last_seen_at ? '<span>Last reported ' + esc(exact(c.last_seen_at)) + '</span>' : '') + '</div>' + originExplanation(c) + '<div class="ctx">' + esc(c.context || "") + "</div>" +
       (historical ? '<p class="ctx">Retained report — old choices are read-only. ' +
         (annotation && annotation.classification === 'no-longer-waiting' ? 'No current owner question on this ticket.' :
+         annotation && annotation.classification === 'unlinked/no-ticket' ? 'No structured ticket link was recorded for this report. Find the current question in Owner questions above.' :
          annotation && annotation.current_questions.length ? 'Review and answer the current question below; no earlier answer is prefilled.' :
          'Current question coverage is unavailable. Check source before answering.') + '</p>' +
         (annotation ? annotation.current_questions.map(function(q) {
