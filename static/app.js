@@ -94215,6 +94215,8 @@
     crumb.textContent = text;
   }
 
+  const settingsSearchVisibility = new Map();
+
   function buildSettingsSearchIndex() {
     if (!$settingsPane) { _settingsSearchIndex = []; return; }
     _settingsSearchIndex = Array.from($settingsPane.querySelectorAll('.settings-row, .eng-list'))
@@ -94227,7 +94229,7 @@
         el: row,
         section,
         sectionTitle: eyebrow ? eyebrow.textContent : '',
-        originallyHidden: row.hidden,
+        originallyHidden: settingsSearchVisibility.has(row) ? settingsSearchVisibility.get(row) : row.hidden,
         hay: [
           label ? label.textContent : '',
           desc ? desc.textContent : '',
@@ -94243,8 +94245,12 @@
     if (!_settingsSearchIndex) buildSettingsSearchIndex();
     const q = String(query || '').trim().toLowerCase();
     if (!q) {
+      window.cccSettingsTaskSearch?.search('');
       $settingsModalInner.classList.remove('is-searching');
       _settingsSearchIndex.forEach(entry => { entry.el.hidden = entry.originallyHidden; });
+      for (const [row, hidden] of settingsSearchVisibility) row.hidden = hidden;
+      settingsSearchVisibility.clear();
+      _settingsSearchIndex = null;
       $settingsPane.querySelectorAll('details[data-search-open]').forEach(el => {
         el.open=el.dataset.searchOpen==='true'; el.hidden=false; delete el.dataset.searchOpen;
       });
@@ -94266,6 +94272,7 @@
     const sectionMatchCount = {};
     let anyMatch = false;
     _settingsSearchIndex.forEach(entry => {
+      if (!settingsSearchVisibility.has(entry.el)) settingsSearchVisibility.set(entry.el, entry.originallyHidden);
       const match = !entry.originallyHidden && q.split(/\s+/).every(word => entry.hay.includes(word));
       entry.el.hidden = !match;
       if (match) {
@@ -94334,7 +94341,7 @@
       details.hidden = !Array.from(details.querySelectorAll('.settings-row, .eng-list, .settings-modal-tools-slot'))
         .some(row => !row.hidden && row.style.display !== 'none');
     });
-    if ($settingsEmptyState) $settingsEmptyState.hidden = anyMatch;
+    if ($settingsEmptyState) $settingsEmptyState.hidden = anyMatch || !!window.cccSettingsTaskSearch?.match(q).length;
     if ($settingsEmptyQuery) $settingsEmptyQuery.textContent = query;
   }
 
@@ -96440,6 +96447,39 @@
         window.cccLaunchPreview?.refresh();
         return true;
       } catch (_) { return false; }
+    },
+  });
+
+  window.cccSettingsTaskSearch?.mount({
+    queue: (name, trigger) => openQueueManager(name, false, trigger),
+    open: async task => {
+      clearTimeout(settingsSearchFocusTimer);
+      if (task.section === 'reader' && (!currentConversation || currentConversation === '__new__')) return null;
+      clearSettingsSearch();
+      if (task.section === 'health') {
+        closeSettingsModal(); sysOpenModal(null, 'health');
+      } else if (task.section === 'routing') {
+        setActiveSettingsRailSection('routing');
+        await window.cccRoutingPolicy?.open(task.id === 'fallback' ? 'worker_fallback' : task.id === 'profiles' ? 'fast' : 'defaults');
+      } else if (task.id === 'voice' || task.id === 'calls') {
+        window.cccVoiceSetup?.open(task.id === 'voice' ? 'reading' : 'conversation');
+      } else setActiveSettingsRailSection(task.section);
+      let target = document.getElementById(task.target);
+      if (task.id === 'reset') target = document.querySelector('#settingsSection-preferences [data-pref-action="reset"]')?.parentElement;
+      if (target?.matches('button,input,select')) target = target.closest('.settings-row') || target.parentElement;
+      if (target?.tagName === 'DETAILS') target.open = true;
+      for (let node=target?.parentElement;node;node=node.parentElement) if(node.tagName==='DETAILS')node.open=true;
+      return target;
+    },
+    returnToSearch: query => {
+      clearTimeout(settingsSearchFocusTimer);
+      document.querySelectorAll('.conv-pane-more[open]').forEach(node => {node.open=false;});
+      const phoneMenu=document.getElementById('convSimpleActionsMenu');if(phoneMenu)phoneMenu.hidden=true;
+      const more=document.getElementById('sidebarMoreMenu');if(more)more.hidden=true;
+      document.getElementById('queueMoreMenu')?.classList.remove('open');
+      sysCloseModal();
+      if($settingsModal.hidden)openSettingsModal({focusSearch:false});
+      $settingsSearchInput.value=query;applySettingsSearch(query);window.cccSettingsTaskSearch.search(query);
     },
   });
 
