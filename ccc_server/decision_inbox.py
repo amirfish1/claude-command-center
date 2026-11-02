@@ -220,6 +220,51 @@ def last_run(path=None):
     return None
 
 
+def decision_inbox_runs_payload(*, offset=0, limit=10, path=None, cards=None):
+    """Read every retained run; paginate newest first without starting work."""
+    try:
+        offset = max(0, int(offset))
+        limit = max(1, min(100, int(limit)))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "offset and limit must be integers"}
+    records = []
+    invalid = 0
+    try:
+        with (Path(path) if path else runs_path()).open(encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    invalid += 1
+                    continue
+                if isinstance(row, dict) and row.get("run_id"):
+                    records.append(row)
+                else:
+                    invalid += 1
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return {"ok": False, "error": "Cannot read sweep history"}
+    records.reverse()
+    page = records[offset:offset + limit]
+    retained = load_cards() if cards is None else cards
+    for run in page:
+        for item in run.get("created") or []:
+            card = retained.get(item.get("id"), {})
+            # Match the original run, never attach a later report's source.
+            if card.get("run_id") != run["run_id"]:
+                continue
+            for key in ("source", "kind", "created_at"):
+                if key not in item and key in card:
+                    item[key] = card[key]
+                    item["details_from"] = "retained decision"
+    return {"ok": True, "runs": page,
+            "total": len(records), "offset": offset, "limit": limit,
+            "invalid_records": invalid}
+
+
 def _di_iso(ts):
     try:
         return datetime.fromtimestamp(float(ts), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -900,7 +945,7 @@ def expire_ephemeral_cards(cards, *, now, ttl_s):
 
 def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
              analyst=None, wt_runner=None, board_text=None, board_mtime=None,
-             persist=True):
+             persist=True, trigger="direct"):
     """One scan. Every input is injectable; defaults read the live server.
     Returns the run record (also appended to runs.jsonl when persisting)."""
     cfg = cfg or load_config()
@@ -915,7 +960,7 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
     max_new = int(cfg.get("max_cards_per_run") or 5)
     expired = expire_ephemeral_cards(cards, now=now, ttl_s=cfg.get("governor_card_ttl_s"))
     blocked = blocked_source_ids(cards, now=now, dedupe_days=cfg.get("dedupe_days"))
-    record = {"run_id": run_id, "started_at": _di_iso(now), "sources": {}, "created": [],
+    record = {"run_id": run_id, "trigger": trigger, "started_at": _di_iso(now), "sources": {}, "created": [],
               "expired": expired, "skipped_dedupe": 0, "skipped_cap": 0,
               "skipped_muted": 0, "errors": []}
 
@@ -985,7 +1030,8 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
 
     for c in new_cards:
         cards[c["id"]] = c
-        record["created"].append({"id": c["id"], "source_id": c["source_id"], "title": c["title"]})
+        record["created"].append({k: c.get(k) for k in
+                                  ("id", "source_id", "title", "kind", "source", "created_at")})
     record["duration_s"] = round(time.time() - started, 1)
     record["finished_at"] = _di_iso(time.time())
     if persist:
@@ -1014,14 +1060,14 @@ def _server_live_ids():
         return set()
 
 
-def decision_inbox_start_background_run(cfg=None):
+def decision_inbox_start_background_run(cfg=None, *, trigger="manual"):
     """Kick one run on a daemon thread; refuse while one is in flight."""
     if not _run_lock.acquire(blocking=False):
         return {"ok": False, "error": "a scan is already running", "since": _running["since"]}
 
     def _go():
         try:
-            run_once(cfg=cfg)
+            run_once(cfg=cfg, trigger=trigger)
         except Exception:
             pass
         finally:
@@ -1045,7 +1091,7 @@ def decision_inbox_loop(initial_delay_s=120):
         cfg = load_config()
         if cfg.get("enabled", True):
             try:
-                decision_inbox_start_background_run(cfg)
+                decision_inbox_start_background_run(cfg, trigger="scheduled")
             except Exception:
                 pass
         try:

@@ -258,6 +258,17 @@ class RunContract(unittest.TestCase):
         self.assertEqual(rec2["skipped_dedupe"], 5)
         self.assertEqual(len({c["source_id"] for c in cards.values()}), 8)
 
+    def test_run_retains_source_snapshot_and_trigger(self):
+        cards = {}
+        rec = self._run(cards, board_text="| Cat | Task | Status | ETA | Notes |\n|---|---|---|---|---|\n| x | Example | Blocked | - | waiting |\n", trigger="scheduled")
+        self.assertEqual(rec["trigger"], "scheduled")
+        snapshot = rec["created"][0]
+        card = cards[snapshot["id"]]
+        self.assertEqual(snapshot["created_at"], di._di_iso(NOW))
+        self.assertEqual(snapshot["source"], card["source"])
+        self.assertEqual(snapshot["source"]["reason"], "marked Blocked")
+        self.assertEqual(snapshot["kind"], "board")
+
     def test_decided_recently_blocks_but_old_decisions_do_not(self):
         board = "| Cat | Task | Status | ETA | Notes |\n|---|---|---|---|---|\n| x | **Item** | ⚠️ Blocked | - | - |\n"
         cards = {"c1": {"id": "c1", "source_id": "board:item", "status": "decided",
@@ -378,6 +389,36 @@ class Persistence(unittest.TestCase):
             di._append_run({"run_id": "r1"}, path=runs)
             di._append_run({"run_id": "r2"}, path=runs)
             self.assertEqual(di.last_run(path=runs)["run_id"], "r2")
+
+    def test_all_runs_paginate_in_reverse_append_order_and_skip_bad_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = pathlib.Path(tmp) / "runs.jsonl"
+            self.assertEqual(di.decision_inbox_runs_payload(path=runs, cards={})["total"], 0)
+            for i in range(203):
+                di._append_run({"run_id": "r" + str(i), "created": [], "sources": {"wt": 3}}, path=runs)
+            with runs.open("a") as f:
+                f.write('broken\n[]\n')
+            result = di.decision_inbox_runs_payload(path=runs, cards={}, offset=100, limit=1000)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["total"], 203)
+            self.assertEqual(result["invalid_records"], 2)
+            self.assertEqual(len(result["runs"]), 100)
+            self.assertEqual(result["runs"][0]["run_id"], "r102")
+            self.assertEqual(di.decision_inbox_runs_payload(path=runs, cards={}, offset=200)["runs"][-1]["run_id"], "r0")
+            self.assertEqual(di.decision_inbox_runs_payload(path=runs, cards={}, offset=300)["runs"], [])
+            self.assertFalse(di.decision_inbox_runs_payload(path=runs, cards={}, offset="bad")["ok"])
+
+    def test_old_run_enriched_only_from_its_original_retained_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runs = pathlib.Path(tmp) / "runs.jsonl"
+            di._append_run({"run_id": "r1", "created": [{"id": "c1"}, {"id": "c2"}]}, path=runs)
+            cards = {"c1": {"run_id": "r1", "source": {"reason": "blocked"}, "created_at": "2026-09-01T00:00:00Z"},
+                     "c2": {"run_id": "r2", "source": {"reason": "later"}}}
+            added = di.decision_inbox_runs_payload(path=runs, cards=cards)["runs"][0]["created"]
+            self.assertEqual(added[0]["source"]["reason"], "blocked")
+            self.assertEqual(added[0]["details_from"], "retained decision")
+            self.assertNotIn("source", added[1])
+            self.assertNotIn("source", json.loads(runs.read_text())["created"][0])
 
     def test_config_defaults_and_overlay(self):
         with tempfile.TemporaryDirectory() as tmp:

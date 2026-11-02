@@ -105,7 +105,16 @@
   .opts { grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr)); }
   .foot, .ctx, .det { overflow-wrap:anywhere; }
   .toast { z-index:1000; }
-  .inbox-help { margin-top:16px; font-size:14px; color:var(--mute); max-width:75ch; }
+  .inbox-help { margin-top:16px; font-size:14px; color:var(--mute); }
+  .sweep { font-size:14px; padding:14px 0; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+  .sweep > summary { font-weight:600; }
+  .sweep p { margin:6px 0; }
+  .sweep time { font-variant-numeric:tabular-nums; }
+  .sweep li { margin-bottom:12px; }
+  .sweep .source { display:block; color:var(--mute); font-size:12px; }
+  #sweepStatus { font-size:12px; }
+  #sweepHistory .pager { flex-wrap:wrap; font-size:12px; }
+
   .inbox-help summary { color:var(--ink); cursor:pointer; padding:8px 0; }
   .inbox-help li { margin:8px 0; }
   .origin { margin:16px 0; padding-block:14px; border-block:1px solid var(--line); max-width:75ch; }
@@ -138,16 +147,11 @@
   </header>
   <p class="sub">Find a decision, review the context, and choose the next step.</p>
   <div id="freshness" class="freshness" role="status">Connecting to the inbox…</div>
-  <details class="inbox-help">
-    <summary>When and why do decisions appear?</summary>
-    <ul>
-      <li><strong>Scheduled scans:</strong> <span id="scanExplanation">The scanner checks for stalled work.</span> It looks for blocked or overdue board items, stalled queues, idle sessions with unfinished work, and session health warnings.</li>
-      <li><strong>Agent and routine reports:</strong> A connected tool can submit a decision as soon as it finds something needing your attention. These reports do not wait for the next scan.</li>
-      <li><strong>Review requests:</strong> Tickets awaiting review appear directly from the queue and leave this view when their review state changes.</li>
-    </ul>
-    <p>Each expanded item shows its source and recorded trigger below. Repeated reports usually update an existing item instead of creating another. A new timestamp can mean a repeat report, not a new decision.</p>
-    <p>Creating a card does not choose an option. Read the option’s action before selecting it: it may start or steer work, record that you will handle it, or snooze the item.</p>
-    <p><strong>On your phone:</strong> open this same page through your configured remote connection, then bookmark it or add it to your home screen. Localhost addresses only work on the computer running CCC.</p>
+  <details class="inbox-help" id="sweepHistory" open>
+    <summary id="sweepSummary">Sweep history</summary>
+    <p id="sweepStatus" role="status">Loading recorded sweeps…</p>
+    <div id="sweepRuns"></div>
+    <nav class="pager" aria-label="Sweep history pages"><button id="sweepPrev">Newer sweeps</button><span id="sweepPage"></span><button id="sweepNext">Older sweeps</button><button id="sweepRetry">Refresh history</button></nav>
   </details>
   <div class="toolbar" role="search" aria-label="Browse decisions">
     <label class="search">Search decisions<input id="search" type="search" placeholder="Question number, ticket, title or context"></label>
@@ -328,8 +332,6 @@
     document.querySelectorAll('.decision-row').forEach(function(el) { el.addEventListener('toggle', function() { if (el.open) state.expanded.add(el.dataset.id); else state.expanded.delete(el.dataset.id); }); });
   }
   function render(data) {
-    var cfg = data.config || {};
-    $("scanExplanation").textContent = (cfg.enabled === false ? "Automatic scans are currently disabled." : "Automatic scans run every " + Math.round((cfg.interval_s || 3600) / 60) + " minutes.") + " Each scan creates at most " + (cfg.max_cards_per_run || 5) + " new cards. " + (cfg.strategy_board === false ? "No strategy board is currently configured." : "");
     state.cards = data.cards || []; state.queueRepos = data.queue_repos || {};
     var selected = $("sourceFilter").value;
     var kinds = Array.from(new Set(state.cards.map(function(c) { return c.kind; }))).sort();
@@ -351,7 +353,61 @@
       ". Older items may need rechecking against their source." + (data.total_count > state.cards.length ? " Showing the latest " + state.cards.length + " of " + data.total_count + " stored items." : "");
     $("scanBtn").disabled = !!data.running_since;
   }
+  var sweepOffset = 0, sweepLimit = 5, sweepBusy = false, sweepFingerprint = "";
+  function sweepTime(iso) {
+    var d = new Date(iso);
+    return !iso || !Number.isFinite(d.getTime()) ? "Not recorded" : d.toLocaleString(undefined, {year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit",timeZoneName:"short"}) + " (" + iso + ")";
+  }
+  function sweepItems(items) {
+    return '<ul>' + items.map(function(c) {
+      var src = c.source || {};
+      return '<li><strong>' + esc(c.title || c.id) + '</strong><span class="source">Decision ' + esc(c.id) + ' · Source: ' + esc(c.source_id || 'Not recorded') +
+        (c.kind ? ' · ' + esc(c.kind) : '') + '</span>' +
+        (c.details_from ? '<span class="source">Details from ' + esc(c.details_from) + '</span>' : '') +
+        (c.created_at ? '<span class="source">Created: ' + esc(sweepTime(c.created_at)) + '</span>' : '') +
+        (src.reason || src.detail ? '<span class="source">Trigger: ' + esc(src.reason || src.detail) + '</span>' : '') +
+        '<span class="source">' + esc(JSON.stringify(src) === '{}' ? '' : JSON.stringify(src)) + '</span></li>';
+    }).join('') + '</ul>';
+  }
+  async function loadSweeps() {
+    if (sweepBusy) return;
+    sweepBusy = true;
+    try {
+      var r = await fetch('/api/decision-inbox/runs?offset=' + sweepOffset + '&limit=' + sweepLimit, {cache:'no-store'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var data = await r.json(); if (!data.ok) throw new Error(data.error);
+      if (sweepOffset >= data.total && sweepOffset > 0) { sweepOffset = 0; sweepFingerprint = ''; setTimeout(loadSweeps, 0); return; }
+      $('sweepSummary').textContent = 'Sweep history · ' + data.total + ' recorded';
+      $('sweepStatus').textContent = 'All saved sweeps, newest first · Local timezone: ' + Intl.DateTimeFormat().resolvedOptions().timeZone + '; UTC timestamps in parentheses.' +
+        (data.invalid_records ? ' ' + data.invalid_records + ' unreadable record(s) skipped.' : '') +
+        ' Older runs use source details from the original decision where retained; unavailable details stay unrecorded. Direct tool reports and live queue reviews are outside this sweep log.';
+      $('sweepPage').textContent = data.total ? (sweepOffset + 1) + '–' + Math.min(sweepOffset + sweepLimit, data.total) + ' of ' + data.total : '0 sweeps';
+      $('sweepPrev').disabled = sweepOffset === 0;
+      $('sweepNext').disabled = sweepOffset + sweepLimit >= data.total;
+      var fingerprint = JSON.stringify(data.runs);
+      if (fingerprint !== sweepFingerprint) {
+        $('sweepRuns').innerHTML = data.runs.map(function(run) {
+          var added = run.created || [], expired = run.expired || [];
+          return '<details class="sweep"><summary><time>' + esc(sweepTime(run.started_at)) + '</time> · ' + added.length + ' added' + ((run.errors || []).length ? ' · Errors' : '') + '</summary>' +
+            '<p>Run ' + esc(run.run_id) + ' · ' + esc(run.trigger || 'Run type not recorded') + '</p>' +
+            '<p>Finished: ' + esc(sweepTime(run.finished_at)) + ' · Duration: ' + esc(run.duration_s == null ? 'Not recorded' : run.duration_s + ' s') + '</p>' +
+            '<p>Candidates: ' + Object.entries(run.sources || {}).map(function(pair) { return esc(pair[0]) + ': ' + esc(pair[1]); }).join(' · ') + '</p>' +
+            '<p>Skipped: ' + esc(run.skipped_dedupe || 0) + ' duplicate · ' + esc(run.skipped_cap || 0) + ' over limit · ' + esc(run.skipped_muted || 0) + ' muted</p>' +
+            (added.length ? sweepItems(added) : '<p>No decisions added.</p>') +
+            (expired.length ? '<p>' + expired.length + ' expired</p>' + sweepItems(expired) : '') +
+            ((run.errors || []).length ? '<p class="result bad">Errors: ' + esc(run.errors.join(' · ')) + '</p>' : '') + '</details>';
+        }).join('') || '<p>No sweeps recorded.</p>';
+        sweepFingerprint = fingerprint;
+      }
+    } catch(e) {
+      $('sweepStatus').textContent = 'Cannot refresh sweep history. Displayed records may be out of date. Use Refresh history to retry.';
+    } finally { sweepBusy = false; }
+  }
+  $('sweepPrev').onclick = function() { if (sweepBusy) return; sweepOffset = Math.max(0, sweepOffset - sweepLimit); loadSweeps(); };
+  $('sweepNext').onclick = function() { if (sweepBusy) return; sweepOffset += sweepLimit; loadSweeps(); };
+  $('sweepRetry').onclick = loadSweeps;
   async function load() {
+    loadSweeps();
     try {
       var r = await fetch("/api/decision-inbox", { cache: "no-store" });
       if (!r.ok) throw new Error("HTTP " + r.status);

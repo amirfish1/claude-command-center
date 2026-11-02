@@ -29979,6 +29979,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # vertical stage list (folders → transcripts → infer …) instead
             # of the opaque "Loading archive…" spinner.
             self.send_json(_archive_load_snapshot())
+        elif path == "/api/decision-inbox/runs":
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(decision_inbox_runs_payload(
+                offset=qs.get("offset", ["0"])[0], limit=qs.get("limit", ["10"])[0]))
         elif path == "/api/decision-inbox":
             # Cards + governor findings + last run. Cache read only; a poll
             # never triggers a scan or an analyst call.

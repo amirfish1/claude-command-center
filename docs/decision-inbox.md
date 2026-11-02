@@ -21,11 +21,19 @@ older decision still applies. Connection failures and overdue scans are visible.
 
 ## Why an item appeared
 
-Open **When and why do decisions appear?** for the configured scan interval,
-per-scan creation limit, and the difference between scan-generated cards,
-reports from connected tools, and live queue reviews. Expand an item to see
-**Why this appeared**, including its source reference and recorded trigger
-when available. Report submission does not itself choose an option.
+**Sweep history** shows every retained sweep, newest first, with pagination.
+Expand a run for its exact start/end timestamps (local time and UTC), duration,
+candidate counts by source, skip counts, errors, and every added decision's
+title, ID, and source ID. Runs that created nothing are included. New runs also
+retain source details and the manual/scheduled trigger. Older runs show source
+details and creation times from their original retained decision where available;
+missing details and run types are labeled as unrecorded. Connected-tool reports and live queue reviews are not
+sweep results. Expand a decision for its own **Why this appeared** details.
+Reading history never starts a sweep or chooses an option.
+
+`GET /api/decision-inbox/runs?offset=0&limit=10` returns `runs`, `total`,
+`offset`, `limit`, and `invalid_records`. Limits are clamped to 1–100;
+malformed log lines are counted and skipped rather than hiding other runs.
 
 On mobile, open **More → Decisions** in CCC. The More menu includes the same
 app catalog as the desktop rail. Apps keep the bottom bar visible so you can
