@@ -4563,16 +4563,14 @@
     font-weight: 500;
     vertical-align: middle;
   }
-  /* Workspace context strip — single row above the conv input bar,
-     Claude-Desktop-style: "⎇ branch ← base · ↑N · ↓M · ⚠ co-tenants".
-     Visible only when a session has a resolvable cwd. Wraps onto a
-     second line if needed — never scrolls horizontally. */
+  /* Workspace context strip — branch, path, usage, and model beside
+     the composer. Narrow panes wrap the workspace and usage groups
+     instead of hiding essential session details. */
   .conv-input-context {
     display: none;
     align-items: center; gap: 10px 12px;
-    /* Single line — wrap was producing a 2-row strip when the path was long.
-       Anything that doesn't fit gets clipped with ellipsis. The full path is
-       still recoverable via the title attribute on the kind chip. */
+    /* Wide panes share a line; existing-session groups may wrap below.
+       Long paths ellipsify and retain their full value in the tooltip. */
     flex-wrap: nowrap;
     overflow: hidden;
     white-space: nowrap;
@@ -4649,15 +4647,27 @@
   @container conv-ctx (max-width: 650px) {
     .conv-input-context .wp-cost-pill { display: none; }
   }
-  @container conv-ctx (max-width: 550px) {
-    .conv-input-context .wp-usage-pill { display: none; }
-  }
   /* And cap the path so it actively ellipsifies in narrow panes
      instead of waiting for the layout to overflow. ch units scale
      with the font so this holds across font-size changes. */
   @container conv-ctx (max-width: 800px) {
+    .conv-input-context .wp-row {
+      flex: 1 1 100%;
+      flex-wrap: wrap;
+    }
     .conv-input-context .wp-path { max-width: 28ch; }
+    .conv-input-context .wp-branch { max-width: 18ch; }
+    .conv-input-context .wp-usage {
+      flex: 1 1 100%;
+      flex-wrap: wrap;
+      min-width: 0;
+      margin-left: 0;
+    }
+    .conv-input-context .wp-usage > * { flex-shrink: 0; }
   }
+  /* A container cannot query itself; allow wrapping here, then size
+     its child groups in the container query, including split panes. */
+  .conv-input-context:not(.is-new-session) { flex-wrap: wrap; }
   @container conv-ctx (max-width: 600px) {
     .conv-input-context .wp-path { max-width: 18ch; }
   }
@@ -10094,26 +10104,11 @@
     .conv-input-bar .submit-plus-btn { display: none !important; }
   }
 
-  /* ── Mobile: status-bar declutter ────────────────────────────────────────────
-     On a 375px phone the bottom context strip shows: kind · branch · path ·
-     quality-grade · calc Xk/YM (Z%) · model. The path and quality grade eat
-     half the strip, leaving no room for the model pill. Drop them on mobile
-     and reduce the usage pill to just the pct (font-size:0 hides the text
-     node, child span gets a real size back). */
+  /* Keep core session details on narrow screens too. The container
+     rules above reflow workspace and usage into separate rows instead of
+     hiding the path, context count, or model. */
   @media (max-width: 1200px) {
-    .wp-quality-pill { display: none !important; }
-    .wp-usage-pill { font-size: 0 !important; white-space: nowrap; }
-    .wp-usage-pill .wp-usage-pct { font-size: 11px !important; }
-  }
-  /* The path only crowds out the model pill on touch phones; a narrow
-     desktop window keeps it (it ellipsifies via the container queries). */
-  @media (max-width: 1200px) and (pointer: coarse), (max-width: 480px) {
-    .wp-path { display: none !important; }
-  }
-  /* Phones: the ≤550px container query above hides the context pill entirely,
-     which is every phone. Show it, with its numbers, on touch devices. */
-  @media (pointer: coarse) {
-    .conv-input-context .wp-usage-pill { display: inline-flex !important; font-size: 11px !important; }
+    .conv-input-context .wp-quality-pill { display: none; }
   }
 
   /* ── Mobile: sidebar-footer poller strip doesn't clip ──────────────────────
