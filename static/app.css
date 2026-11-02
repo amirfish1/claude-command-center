@@ -21584,45 +21584,6 @@ body.status-pos-right #convToolbar {
   font-family: inherit;
 }
 .drain-paused-banner__details:hover { background: rgba(255,255,255,0.15); }
-/* Idea tickets intro banner: same fixed-top pattern, indigo instead of
-   amber/red -- this is an informational heads-up, not a warning. Stacks
-   below the health/drain banners when they're also up. */
-.idea-tickets-intro-banner {
-  position: fixed;
-  top: 0; left: 0; right: 0;
-  z-index: 10000;
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 16px;
-  background: #3730a3;
-  color: #fff;
-  font-size: 12.5px;
-  font-family: inherit;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
-  animation: injection-health-slide-down 0.25s ease-out;
-}
-@media (prefers-color-scheme: light) {
-  .idea-tickets-intro-banner { background: #4338ca; }
-}
-:root[data-theme="light"] .idea-tickets-intro-banner { background: #4338ca; }
-:root[data-theme="dark"] .idea-tickets-intro-banner { background: #3730a3; }
-#injectionHealthBanner:not([hidden]) ~ .idea-tickets-intro-banner,
-.drain-paused-banner:not([hidden]) ~ .idea-tickets-intro-banner { top: 39px; }
-.idea-tickets-intro-banner__icon { font-size: 15px; flex: 0 0 auto; }
-.idea-tickets-intro-banner__text { flex: 1 1 auto; line-height: 1.4; }
-.idea-tickets-intro-banner__revert,
-.idea-tickets-intro-banner__dismiss {
-  flex: 0 0 auto;
-  background: rgba(255,255,255,0.15);
-  border: 1px solid rgba(255,255,255,0.35);
-  color: #fff;
-  padding: 4px 12px;
-  border-radius: 6px;
-  font-size: 12px; font-weight: 600; cursor: pointer;
-  font-family: inherit;
-}
-.idea-tickets-intro-banner__dismiss { background: transparent; }
-.idea-tickets-intro-banner__revert:hover,
-.idea-tickets-intro-banner__dismiss:hover { background: rgba(255,255,255,0.25); }
 .injection-health-banner-details {
   position: fixed;
   /* 39px is the desktop one-line banner height. On a narrow viewport the copy
@@ -33839,23 +33800,11 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   .sidebar:has(.session-workspace) .sh-title-main { font-size: 15px; }
   .sidebar:has(.session-workspace) .new-session-caret { background: var(--accent); border-color: var(--accent); color: var(--bg, #101318); }
 }
-/* First-run notices must not obscure the controls they introduce. */
-body:has(#ideaTicketsIntroBanner:not([hidden])) .sidebar {
-  padding-top: var(--session-intro-stack-h, 0px);
-  box-sizing: border-box;
-}
 body.has-mobile-bottom-nav .pwa-install-banner {
   bottom: calc(76px + env(safe-area-inset-bottom, 0px));
   max-height: calc(100dvh - 180px);
   overflow-y: auto;
 }
-@media (max-width: 1200px) {
-  body:has(#ideaTicketsIntroBanner:not([hidden])):not(.kanban-split) .main {
-    top: calc(var(--app-vv-top, 0px) + env(safe-area-inset-top, 0px) + var(--session-intro-stack-h, 0px));
-    height: calc(var(--app-vh, 100vh) - env(safe-area-inset-top, 0px) - var(--session-intro-stack-h, 0px));
-  }
-}
-
 /* Phone search shares the New session row, expanding the existing field. */
 .sidebar-search-btn { display: none; }
 @media (max-width: 1200px) {
@@ -33947,7 +33896,6 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 @media(max-width:700px) { #settingsSection-defaults .settings-row-control { flex-basis:100%; } }
 .settings-modal.is-searching .settings-search-miss { display:none; }
 .settings-modal.is-searching .eng-card:has(.settings-row):not(:has(.settings-row:not([hidden]))) { display:none; }
-body:has(#settingsModal.open) #ideaTicketsIntroBanner { visibility:hidden; pointer-events:none; }
 @media(max-width:700px) {
   .settings-routing-table { min-width:620px; }
   .settings-routing-table th { white-space:nowrap; }
