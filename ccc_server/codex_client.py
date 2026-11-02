@@ -863,7 +863,7 @@ def codex_client_dispatch(action, data):
         if action in ("state", "events") and tombstone and tombstone.get("deleted"):
             validate_operation_context("thread/read", {"threadId": tid}, context,
                 resolve_repo=_core.resolve_repo_path, read_thread=lambda _: tombstone)
-        elif (action == "live-transcript" and tombstone
+        elif (action in ("live-transcript", "tool-output") and tombstone
               and not tombstone.get("deleted") and tombstone.get("cwd")):
             # The current connection's notifications already establish this
             # read-only overlay's workspace. A fresh native thread/read can
@@ -908,6 +908,15 @@ def codex_client_dispatch(action, data):
             cursor = max(0, int(data.get("cursor") or 0))
             return {**CODEX_CONVERSATIONS.events_since(cursor, data.get("generation"), tid),
                     "queue_owner": "native" if native_queue_owned(tid) else "ccc", "requests": CODEX_REQUESTS.snapshot(tid)["requests"]}
+        if action == "tool-output":
+            from ccc_server.codex_live_events import _tool_output_text
+            for turn in (CODEX_CONVERSATIONS.snapshot(tid).get("thread") or {}).get("turns", []):
+                if turn.get("id") != data.get("turn_id"):
+                    continue
+                for item in turn.get("items", []):
+                    if item.get("id") == data.get("item_id"):
+                        return {"ok": True, "output": _core._tool_input_payload(_tool_output_text(item))}
+            return {"ok": False, "error": "Tool output is no longer available in the live view. Reopen the session to read its saved transcript."}
         if action == "live-transcript":
             # The native app-server's own turns/items as a provisional overlay
             # on top of the rollout-derived transcript (see

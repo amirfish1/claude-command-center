@@ -27519,6 +27519,39 @@ def _conversation_tool_input(conversation_id, line_num, tool_use_id=""):
     return _tool_input_at_jsonl_line(filepath, line_num, tool_use_id)
 
 
+def _conversation_tool_output(conversation_id, line_num, tool_use_id):
+    """Read a complete saved Codex result only when the reader expands it."""
+    try:
+        target_line = int(line_num)
+    except (TypeError, ValueError):
+        return None
+    if target_line <= 0 or not tool_use_id:
+        return None
+    filepath, parser = _resolve_conversation_reader(conversation_id)
+    if parser is not _parse_codex_event:
+        return None
+    try:
+        with Path(filepath).open(encoding="utf-8", errors="replace") as transcript:
+            for current_line, raw in enumerate(transcript, 1):
+                if current_line != target_line:
+                    continue
+                event = json.loads(raw)
+                payload = event.get("payload") or {}
+                if (event.get("type") != "response_item"
+                        or payload.get("type") not in ("function_call_output", "custom_tool_call_output")
+                        or payload.get("call_id") != tool_use_id):
+                    return None
+                output = payload.get("output") or ""
+                if isinstance(output, list):
+                    output = "\n".join(part if isinstance(part, str) else part["text"]
+                                       for part in output if isinstance(part, str)
+                                       or (isinstance(part, dict) and isinstance(part.get("text"), str)))
+                return _tool_input_payload(output if isinstance(output, str) else str(output))
+    except (OSError, ValueError, TypeError):
+        return None
+    return None
+
+
 def _ask_question_blocking_inject(session_id, status=None):
     """True if typed input must be HELD because a question awaits an answer.
 
@@ -29414,12 +29447,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # caller of catalog/schema/history/state/events. live-transcript
             # is the one action the live overlay (static/codex-live-source.js)
             # still polls.
-            if action not in ("live-transcript",):
+            if action not in ("live-transcript", "tool-output"):
                 self.send_json({"ok": False, "error": "Unknown Codex view"}, 404)
                 return
             query = urllib.parse.parse_qs(parsed.query)
             values = {key: value[-1] for key, value in query.items()}
-            data = {key: values[key] for key in ("method", "cursor", "generation") if key in values}
+            data = {key: values[key] for key in ("method", "cursor", "generation", "turn_id", "item_id") if key in values}
             data["context"] = {key: values[key] for key in ("repo_path", "thread_id", "environment_id") if key in values}
             data["startup"] = values.get("startup") == "1"
             result = codex_client_call(action, data)
@@ -31780,6 +31813,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "Tool input not found"}, 404)
             else:
                 self.send_json({"ok": True, "input": payload})
+        elif re.match(r"^/api/conversations/[^/]+/tool-output$", path):
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            qs = urllib.parse.parse_qs(parsed.query)
+            payload = _conversation_tool_output(conv_id, qs.get("line", [""])[0],
+                                                qs.get("tool_use_id", [""])[0])
+            if payload is None:
+                self.send_json({"ok": False, "error": "Tool output not found"}, 404)
+            else:
+                self.send_json({"ok": True, "output": payload})
         elif re.match(r"^/api/conversations/[^/]+/files$", path):
             conv_id = path.split("/")[-2]
             payload = _extract_files_from_conversation(conv_id)

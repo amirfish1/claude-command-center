@@ -941,7 +941,8 @@ def _parse_codex_event_unattributed(ev, line_num, token_usage=None, codex_turn_m
             output = "\n".join(parts)
         if not isinstance(output, str):
             output = str(output)
-        if len(output) > 800:
+        output_truncated = len(output) > 800
+        if output_truncated:
             output = output[:800] + "\n..."
         result = {
             "line": line_num,
@@ -951,6 +952,8 @@ def _parse_codex_event_unattributed(ev, line_num, token_usage=None, codex_turn_m
             "tool_use_id": payload.get("call_id", ""),
             "is_error": False,
         }
+        if output_truncated:
+            result["output_truncated"] = True
         if images:
             result["images"] = images
         return _apply_codex_turn_meta(result, codex_turn_meta)

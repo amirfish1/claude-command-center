@@ -68443,6 +68443,38 @@
       + '</div>';
   }
 
+  // Keep poll payloads small; load the saved or native output on expansion.
+  async function _loadCompleteToolOutput(button) {
+    if (button.disabled || button.dataset.loaded) return;
+    button.disabled = true;
+    button.textContent = 'Loading full output…';
+    try {
+      const response = await fetch(button.dataset.outputUrl, { cccPriority: 'user' });
+      const data = await response.json();
+      if (!response.ok || !data.ok || typeof data.output !== 'string') {
+        throw new Error(data.error || 'Could not load full output');
+      }
+      const output = button.parentElement.querySelector('.kimi-tool-io.is-output');
+      if (output) output.textContent = data.output;
+      button.dataset.loaded = '1';
+      button.remove();
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = 'Retry loading full output';
+      button.title = error.message || 'Could not load full output';
+    }
+  }
+
+  document.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-output-url]');
+    if (button) { _loadCompleteToolOutput(button); return; }
+    const head = event.target.closest('.kimi-tool-head');
+    if (head && head.parentElement.classList.contains('open')) {
+      const pending = head.parentElement.querySelector('[data-output-url]');
+      if (pending) _loadCompleteToolOutput(pending);
+    }
+  });
+
   // Rebuild the tool grouping inside one `.kimi-turn`: runs of >=2
   // consecutive `.kimi-tool` rows fuse into ONE `.kimi-tool-group` card
   // (kimi-web ToolGroup.vue); single tools stay standalone. Hidden marker
@@ -68450,13 +68482,17 @@
   // neither join nor break a run. Collapse state survives a regroup via a
   // data flag mirrored onto the rows.
   function _kimiRegroupTools(turn) {
-    const collapsedBefore = [];
+    const view = turn.closest('.conversations-view');
+    const scrollTop = view && view.scrollTop;
     Array.from(turn.querySelectorAll(':scope > .kimi-tool-group')).forEach(g => {
-      if (g.classList.contains('collapsed')) collapsedBefore.push(g);
       const body = g.querySelector('.kimi-tool-group-body');
       while (body && body.firstElementChild) {
         const row = body.firstElementChild;
         row.dataset.kimiCollapsed = g.classList.contains('collapsed') ? '1' : '0';
+        // Compact expansion belongs to the reader, including when a new
+        // tool forces this wrapper to be rebuilt on the next live tick.
+        if (g.dataset.ccRun) row.dataset.ccRun = g.dataset.ccRun;
+        row.classList.toggle('cc-run-open', g.classList.contains('cc-run-open'));
         g.parentNode.insertBefore(row, g);
       }
       g.remove();
@@ -68489,6 +68525,11 @@
       if (run.length >= 2) {
         const grp = document.createElement('div');
         grp.className = 'kimi-tool-group';
+        const expandedRun = run.find(r => r.classList.contains('cc-run-open'));
+        if (expandedRun) {
+          grp.classList.add('cc-run-open');
+          if (expandedRun.dataset.ccRun) grp.dataset.ccRun = expandedRun.dataset.ccRun;
+        }
         // Default to collapsed: only stay open when the run's rows carry an
         // explicit "was expanded" flag from a prior regroup.
         if (run.every(r => r.dataset.kimiCollapsed !== '0')) grp.classList.add('collapsed');
@@ -68516,6 +68557,9 @@
       flush();
     }
     flush();
+    // Moving a tall expanded result briefly shrinks its scroller. Restore
+    // the reading position after the complete group is back in the DOM.
+    if (view && view.scrollTop !== scrollTop) view.scrollTop = scrollTop;
   }
 
   // Aggregate status for a ToolGroup header (kimi-web ToolGroup.vue):
@@ -70683,6 +70727,26 @@
               out.className = 'kimi-tool-io is-output';
               out.textContent = text || 'No error details returned.';
               pad.appendChild(out);
+              if (ev.output_truncated) {
+                const load = document.createElement('button');
+                load.type = 'button';
+                load.className = 'tool-result-expand-toggle';
+                load.textContent = 'Show full output';
+                if (ev.line != null) {
+                  load.dataset.outputUrl = '/api/conversations/' + encodeURIComponent(renderedConversationId)
+                    + '/tool-output?line=' + encodeURIComponent(ev.line)
+                    + '&tool_use_id=' + encodeURIComponent(ev.tool_use_id);
+                } else {
+                  const context = window.CCCCodexClientContext($view.closest('.conv-pane'));
+                  load.dataset.outputUrl = '/api/codex/client/tool-output?thread_id=' + encodeURIComponent(context.threadId)
+                    + '&repo_path=' + encodeURIComponent(context.repoPath)
+                    + '&environment_id=' + encodeURIComponent(context.environmentId || '')
+                    + '&turn_id=' + encodeURIComponent(ev.turn_id || '')
+                    + '&item_id=' + encodeURIComponent(ev.tool_use_id);
+                }
+                pad.appendChild(load);
+                if (row.classList.contains('open')) _loadCompleteToolOutput(load);
+              }
               // Late-landing output (codex call_id results, wire-tail
               // tool_result folds) gets the same collapsed-row peek a
               // server-rendered output_preview would have had.

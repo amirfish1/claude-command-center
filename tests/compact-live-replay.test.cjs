@@ -51,10 +51,26 @@ test('compact live replays preserve tool groups, fold chips, and reader position
         height: view.scrollHeight === before.height, scroll: view.scrollTop === before.top };
       append('text', '<div class="assistant-text"><p>Checking the live transcript. New content.</p></div>');
       markRuns(view);
+      // A new tool (rather than an identical replay) rebuilds the group.
+      const firstTool = view.querySelector('.kimi-tool');
+      firstTool.classList.add('open');
+      firstTool.querySelector('.kimi-tool-body').textContent = 'Full brief\n'.repeat(120) + 'END OF BRIEF';
+      view.scrollTop = 350;
+      const readingTop = view.scrollTop;
+      append('new-tool', '<div class="kimi-tool" data-tool-use-id="new-tool"><div class="kimi-tool-name">Bash</div></div>');
+      markRuns(view);
+      const afterNewTool = {
+        expanded: view.querySelector('.kimi-tool-group').classList.contains('cc-run-open'),
+        visible: getComputedStyle(firstTool).display !== 'none',
+        toolOpen: firstTool.classList.contains('open'),
+        scroll: view.scrollTop === readingTop,
+        complete: firstTool.textContent.endsWith('END OF BRIEF'),
+      };
       return { ...stable, textUpdated: view.querySelector('.assistant-text').textContent === 'Checking the live transcript. New content.',
-        chips: view.querySelectorAll('.cc-run-chip').length };
+        chips: view.querySelectorAll('.cc-run-chip').length, afterNewTool };
     });
     assert.deepEqual(result, { group: true, chip: true, paragraph: true, expanded: true,
-      height: true, scroll: true, textUpdated: true, chips: 1 });
+      height: true, scroll: true, textUpdated: true, chips: 1,
+      afterNewTool: { expanded: true, visible: true, toolOpen: true, scroll: true, complete: true } });
   } finally { await browser.close(); }
 });

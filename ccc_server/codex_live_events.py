@@ -173,6 +173,7 @@ def _map_tool_item(turn_id, item, name, detail, *, command=None):
         events.append({
             "type": "tool_result",
             "text": _text(output, _MAX_TOOL_OUTPUT),
+            "output_truncated": len(output.strip()) > _MAX_TOOL_OUTPUT,
             "tool_use_id": item_id,
             "is_error": status == "failed",
             "turn_id": turn_id,
