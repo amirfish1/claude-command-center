@@ -16,7 +16,7 @@
     body:has(#mobileBottomNav .mobile-nav-menu:not([hidden])) #pwaInstallBanner { display:none !important; }
     #mobileBottomNav .mobile-nav-menu { max-height:calc(100dvh - 100px); overflow-y:auto; overscroll-behavior:contain; min-width:220px; max-width:calc(100vw - 16px); }
     #mobileBottomNav .ccc-mobile-app-list { display:flex; flex-direction:column; border-top:1px solid var(--border); margin-top:6px; padding-top:6px; }
-    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-btn { flex:none; flex-direction:row; justify-content:flex-start; gap:12px; min-height:44px; padding:8px 12px; }
+    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-btn, #mobileBottomNav .ccc-guided-decisions-shortcut { flex:none; flex-direction:row; justify-content:flex-start; gap:12px; min-height:44px; padding:8px 12px; }
     #mobileBottomNav .ccc-mobile-app-list .mobile-nav-label { font-size:15px; }
     #mobileBottomNav .ccc-mobile-app-heading { padding:8px 12px; color:var(--text-muted); font-size:12px; }
     #mobileBottomNav[data-ccc-apps-open] .mobile-nav-menu:not([hidden]) { display:flex; }
@@ -35,6 +35,7 @@
     nav.toggleAttribute('data-ccc-apps-open', open);
     nav.querySelector('.mobile-nav-menu').hidden = !open;
     nav.querySelectorAll('[data-mobile-nav-menu], :scope > [data-mobile-nav="more"]').forEach(b => b.setAttribute('aria-expanded', String(open)));
+    if (open && typeof window.cccRefreshRail === 'function') window.cccRefreshRail();
   }
   function mark() {
     document.querySelectorAll('[data-mobile-app]').forEach(el => {
@@ -102,12 +103,18 @@
     if (!list) { list = document.createElement('div'); list.className = 'ccc-mobile-app-list'; list.setAttribute('role','group'); list.setAttribute('aria-label','Apps'); menu.appendChild(list); }
     list.replaceChildren();
     const heading = document.createElement('span'); heading.className = 'ccc-mobile-app-heading'; heading.textContent = 'Apps'; list.appendChild(heading);
+    menu.querySelectorAll('[data-guided-decisions-shortcut]').forEach(el => el.remove());
     apps.filter(a => a.enabled !== false && appURL(a)).forEach(app => {
       const a = document.createElement('a'); a.className = 'mobile-nav-btn'; a.dataset.mobileApp = app.id;
       a.href = app.id === 'sessions' ? '/' : '/?ccc_app=' + encodeURIComponent(app.id); a.setAttribute('role','menuitem');
       const icon = document.createElement('span'); icon.className = 'mobile-nav-icon'; icon.textContent = app.icon || ''; icon.setAttribute('aria-hidden','true');
       const label = document.createElement('span'); label.className = 'mobile-nav-label'; label.textContent = app.label;
-      a.append(icon,label); list.appendChild(a);
+      a.append(icon,label);
+      if (app.id === 'decision-guide') {
+        a.classList.add('ccc-guided-decisions-shortcut');
+        a.dataset.guidedDecisionsShortcut = '';
+        menu.prepend(a);
+      } else list.appendChild(a);
     });
     mark();
     if (document.readyState === 'complete') restore();
