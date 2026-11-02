@@ -338,6 +338,14 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       assert.equal(posts[3].url,'/api/decision-inbox/answers/reconcile');
       assert.equal(posts.filter(post=>post.url.endsWith('/send')).length,1);
     });
+    await fixture('confirmed acceptance stays clear after source stops waiting',async ({page,model,load,wait,posts})=>{
+      model.requests[0]={...base,revision:5,status:'withdrawn',needs_answer:false,can_answer:false,answer:summary('accepted')};
+      await page.evaluate(({key,id,base,exact,answerId})=>sessionStorage.setItem(key,JSON.stringify({selected:id,seen:[id],drafts:{},snapshots:{[id]:base},entries:{[id]:{payload:{request_id:id,expected_revision:4,text:exact,idempotency_key:answerId},saved:{answer_id:answerId,state:'unknown',text:exact,expected_revision:4},deliveryUnknown:true}}})),{key:'ccc:decision-guide:v1',id,base,exact,answerId});
+      await load(); await wait('Answer accepted by source.');
+      assert.equal(await page.evaluate(()=>document.body.textContent.includes('Withdrawal is not delivery confirmation.')),false);
+      assert.equal(await page.evaluate(()=>document.body.textContent.includes('Current source question has changed')),false);
+      assert.equal(posts.length,0);
+    });
     console.log(`PASS ${checks} guided queue browser scenarios; screenshots: ${screenshots}`);
   } finally { await browser.close(); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

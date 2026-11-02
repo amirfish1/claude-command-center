@@ -170,10 +170,10 @@
     if (row) {
       const snapshot = entry ? state.snapshots[id] || row : row;
       $('current').append(question(snapshot, entry));
-      if (entry && (snapshot.body !== row.body || snapshot.revision !== row.revision)) {
+      if (entry && (snapshot.body !== row.body || (row.status === 'open' && snapshot.revision !== row.revision))) {
         const changed = el('details', ''); changed.append(el('summary', 'Current source question has changed'), el('div', row.body, 'raw')); $('current').append(changed);
       }
-      if (!rows.some(r => r.request_id === id) || row.status !== 'open') $('current').append(el('p', 'No longer open at source. Withdrawal is not delivery confirmation.', 'warning'));
+      if (entry?.saved?.state !== 'accepted' && (!rows.some(r => r.request_id === id) || row.status !== 'open')) $('current').append(el('p', 'No longer open at source. Withdrawal is not delivery confirmation.', 'warning'));
     } else if (loaded) $('current').append(el('p', verified ? 'No next unanswered question. You can browse open questions and review receipts above.' : 'No verified questions to show. Check source to try again.', 'meta'));
     const reason = entry ? frozenGate(!entry.saved ? 'record' : entry.saved.state === 'pending' ? 'send' : 'reconcile', row) : gate(row);
     const changed = draft && (draft.revision !== row?.revision || draft.body !== row?.body);
