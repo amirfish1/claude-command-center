@@ -1,0 +1,1 @@
+- The usage-limit watcher no longer stats every Claude transcript on disk every 45 seconds; it rescans only project folders that changed (with a full sweep every 5 minutes), which cuts background I/O that slowed the sidebar after a restart.

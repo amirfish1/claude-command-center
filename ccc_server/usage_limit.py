@@ -695,17 +695,54 @@ def _usage_limit_codex_candidates(now):
     return out
 
 
-def _usage_limit_claude_candidates(now):
-    out = []
+# The watcher ran a stat() on every transcript ever written (~11k) every
+# 45 s; each stat hands off the GIL, so under load it stretched and slowed
+# every request (CCC-142). Between full sweeps only dirs whose mtime moved
+# (a new transcript) are re-listed and only known recent files re-stat'd.
+_USAGE_LIMIT_FULL_SWEEP_SECS = 300
+_USAGE_LIMIT_CLAUDE_SCAN = {"full_at": 0.0, "root": None, "dirs": {}, "recent": set()}
+
+
+def _usage_limit_claude_dir_scan(d, now, recent):
     try:
-        for p in Path.home().joinpath(".claude", "projects").glob("*/*.jsonl"):
+        for p in d.glob("*.jsonl"):
             try:
                 if now - p.stat().st_mtime <= _USAGE_LIMIT_CANDIDATE_WINDOW_SECS:
-                    out.append((p.stem, p))
+                    recent.add(p)
             except OSError:
                 continue
     except OSError:
         pass
+
+
+def _usage_limit_claude_candidates(now):
+    root = Path.home().joinpath(".claude", "projects")
+    state = _USAGE_LIMIT_CLAUDE_SCAN
+    full = (state["root"] != str(root)
+            or not (0 <= time.time() - state["full_at"] < _USAGE_LIMIT_FULL_SWEEP_SECS))
+    dirs = {}
+    recent = set() if full else set(state["recent"])
+    try:
+        for d in root.iterdir():
+            try:
+                mt = d.stat().st_mtime_ns
+            except OSError:
+                continue
+            dirs[d] = mt
+            if full or state["dirs"].get(d) != mt:
+                _usage_limit_claude_dir_scan(d, now, recent)
+    except OSError:
+        pass
+    out = []
+    for p in sorted(recent):
+        try:
+            if now - p.stat().st_mtime <= _USAGE_LIMIT_CANDIDATE_WINDOW_SECS:
+                out.append((p.stem, p))
+        except OSError:
+            continue
+    state.update(root=str(root), dirs=dirs, recent={p for _sid, p in out})
+    if full:
+        state["full_at"] = time.time()
     return out
 
 
