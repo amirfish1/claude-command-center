@@ -1,0 +1,1 @@
+- Switching the sidebar to a repo for the first time after a dashboard restart no longer takes 5-18s: the worktree/branch detection for each session is now saved to disk and reused instead of being recomputed from every transcript.

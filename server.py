@@ -30178,6 +30178,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Persist newly-extracted metadata so the next cold start
             # doesn't re-walk every JSONL. Atomic; only writes when dirty.
             _save_conv_meta_cache()
+            _save_effective_repo_cache()
             _attach_usage_limit_resume_fields(convs)
             self.send_json(convs)
         elif path == "/api/productivity":
@@ -45354,6 +45355,7 @@ def main():
         name="ccc-wt-items-prewarm", daemon=True,
     ).start()
     _load_conv_meta_cache()
+    _load_effective_repo_cache()
     # Seed _SEEN_INTERRUPTS from the resume ledger BEFORE any background
     # thread starts parsing transcripts. The seed makes dedup at-most-once
     # across restarts. Must run before the reaper/archive refresher threads

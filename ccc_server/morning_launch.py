@@ -17,10 +17,12 @@ import os
 import re
 import stat
 import subprocess
+import tempfile
 import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server import test_isolation_active as _test_isolation_active
 from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
 
@@ -875,12 +877,85 @@ _EFFECTIVE_REPO_REVALIDATE_S = 30.0
 _EFFECTIVE_REPO_CACHE_MAX = 4000
 
 
+# Persisted newest entry per session (CCC-298). The inference re-reads the
+# whole transcript and shells out to git, so after every restart the first
+# sidebar load of a repo redid it for each session that ever `cd`'d: 5-18 s
+# for one /api/conversations call. The key carries the JSONL mtime, so a
+# persisted entry is exactly as fresh as the in-memory one it replaces.
+_EFFECTIVE_REPO_DISK_FILE = Path(
+    os.environ.get("CCC_EFFECTIVE_REPO_CACHE_FILE")
+    or (
+        Path(tempfile.gettempdir()) / f"ccc-test-effective-repo-{os.getpid()}.json"
+        if _test_isolation_active()
+        else Path.home() / ".claude" / "command-center" / "effective_repo_cache.json"
+    )
+).expanduser()
+_EFFECTIVE_REPO_DISK_SCHEMA = 1
+_EFFECTIVE_REPO_DISK_SAVE_MIN_S = 60.0
+_EFFECTIVE_REPO_PERSIST = {}  # session_id -> (cache_key, value)
+_EFFECTIVE_REPO_PERSIST_LOCK = threading.Lock()
+_effective_repo_persist_state = {"dirty": False, "saved_at": 0.0}
+
+
 def _effective_repo_cache_put(cache_key, value):
     if len(_EFFECTIVE_REPO_CACHE) > _EFFECTIVE_REPO_CACHE_MAX:
         _EFFECTIVE_REPO_CACHE.clear()
         _EFFECTIVE_REPO_SID_LATEST.clear()
     _EFFECTIVE_REPO_CACHE[cache_key] = value
     _EFFECTIVE_REPO_SID_LATEST[cache_key[0]] = (cache_key[1], time.time(), value)
+    with _EFFECTIVE_REPO_PERSIST_LOCK:
+        _EFFECTIVE_REPO_PERSIST[cache_key[0]] = (cache_key, value)
+        _effective_repo_persist_state["dirty"] = True
+
+
+def _load_effective_repo_cache():
+    """Seed the in-memory inference cache from disk (best effort)."""
+    try:
+        with _EFFECTIVE_REPO_DISK_FILE.open("r") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(data, dict) or data.get("schema") != _EFFECTIVE_REPO_DISK_SCHEMA:
+        return 0
+    n = 0
+    with _EFFECTIVE_REPO_PERSIST_LOCK:
+        for row in data.get("entries") or ():
+            try:
+                key, value = row
+                key = tuple(key)
+            except (TypeError, ValueError):
+                continue
+            if len(key) != 4 or not isinstance(key[0], str) or not (value is None or isinstance(value, dict)):
+                continue
+            _EFFECTIVE_REPO_CACHE.setdefault(key, value)
+            # at=0: a loaded entry never feeds the 30 s "serve newest" window.
+            _EFFECTIVE_REPO_SID_LATEST.setdefault(key[0], (key[1], 0.0, value))
+            _EFFECTIVE_REPO_PERSIST.setdefault(key[0], (key, value))
+            n += 1
+    return n
+
+
+def _save_effective_repo_cache(force=False):
+    """Atomic, throttled write of the newest entry per session."""
+    now = time.time()
+    with _EFFECTIVE_REPO_PERSIST_LOCK:
+        st = _effective_repo_persist_state
+        if not st["dirty"] or (not force and now - st["saved_at"] < _EFFECTIVE_REPO_DISK_SAVE_MIN_S):
+            return False
+        entries = [[list(k), v] for k, v in _EFFECTIVE_REPO_PERSIST.values()]
+        st["dirty"] = False
+        st["saved_at"] = now
+    try:
+        _EFFECTIVE_REPO_DISK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _EFFECTIVE_REPO_DISK_FILE.with_name(_EFFECTIVE_REPO_DISK_FILE.name + f".{os.getpid()}.tmp")
+        with tmp.open("w") as f:
+            json.dump({"schema": _EFFECTIVE_REPO_DISK_SCHEMA, "entries": entries}, f)
+        os.replace(tmp, _EFFECTIVE_REPO_DISK_FILE)
+    except (OSError, TypeError, ValueError):
+        with _EFFECTIVE_REPO_PERSIST_LOCK:
+            _effective_repo_persist_state["dirty"] = True
+        return False
+    return True
 
 
 def _infer_effective_repo(session_id, literal_cwd=None, exclude_top=None, jsonl_mtime=None):
