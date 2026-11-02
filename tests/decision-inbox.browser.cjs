@@ -17,7 +17,10 @@ const ref=await page.$eval('.row-ref',e=>e.textContent); await page.type('#searc
 await page.$eval('#search',e=>{e.value='';e.dispatchEvent(new Event('input'));});
 await page.select('#statusFilter','closed');assert.ok(await page.$$eval('.decision-row',e=>e.length)>0);
 await page.select('#statusFilter','open');
-await page.setViewport({width:390,height:844});await page.screenshot({path:'/tmp/decision-mobile.png'});
+await page.setViewport({width:390,height:844});
+await page.waitForSelector('#cccMobileAppFrame');
+await page.waitForFunction(()=>document.querySelector('#cccMobileAppFrame').contentDocument?.querySelector('.decision-row'));
+await page.screenshot({path:'/tmp/decision-mobile.png'});
 assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);
 console.log('PASS desktop, mobile, expansion, pagination, search, history, no JS errors');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});

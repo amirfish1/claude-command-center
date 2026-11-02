@@ -18,7 +18,9 @@
  *
  * Navigation is plain <a href> page navigation for user apps. Sessions ↔
  * Queues is intercepted on the dashboard (cccSwitchCoreApp) so the session
- * list stays mounted; other apps still navigate. The Mac app treats any
+ * list stays mounted; mobile-app-nav.js hosts the catalog behind the mobile
+ * More menu with persistent bottom navigation. Other desktop apps navigate.
+ * The Mac app treats any
  * URL on the dashboard port as in-app (scripts/macapp/main.swift).
  *
  * Include with:  <script src="/static/app-rail.js" defer></script>
@@ -742,6 +744,8 @@
 
   function render(apps) {
     lastApps = apps;
+    window.cccRailApps = apps;
+    window.dispatchEvent(new CustomEvent("ccc:apps", { detail: apps }));
     var activeId = activeIdFor(apps);
     nav.textContent = "";
     for (var i = 0; i < apps.length; i++) {
@@ -847,6 +851,9 @@
     document.body.appendChild(accWrap);
     document.body.appendChild(pop);
     mountResizer();
+    var mobileNav = document.createElement("script");
+    mobileNav.src = "/static/mobile-app-nav.js";
+    document.head.appendChild(mobileNav);
     refresh();
     reportArrival();
     paintAccount();

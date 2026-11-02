@@ -27,7 +27,11 @@ reports from connected tools, and live queue reviews. Expand an item to see
 **Why this appeared**, including its source reference and recorded trigger
 when available. Report submission does not itself choose an option.
 
-For mobile access, open the same remotely accessible inbox URL on the phone.
+On mobile, open **More → Decisions** in CCC. The More menu includes the same
+app catalog as the desktop rail. Apps keep the bottom bar visible so you can
+switch apps or return to sessions. Direct app links also open in this shell.
+
+For remote mobile access, open the same remotely accessible inbox URL on the phone.
 If that URL uses a private network connection, connect the phone to that network
 first. Bookmark the page or add it to the phone's home screen. A localhost URL
 points to the phone itself and cannot reach a dashboard on another computer.
