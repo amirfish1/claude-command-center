@@ -1,0 +1,1 @@
+Settings now has six task-based destinations instead of a long list of pages. Launch defaults come first; setup, queue overrides, routing, reports, and tools expand inline. Existing section links still work, duplicate tour navigation is removed, and search finds collapsed settings while preserving hidden controls and disclosure state.

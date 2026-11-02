@@ -3103,7 +3103,7 @@
                   <div class="settings-row" data-keywords="spawn defaults engine new session codex claude kimi">
                     <div class="settings-row-main">
                       <div class="settings-row-label">Engine</div>
-                      <div class="settings-row-desc">Default engine used when you spawn a new session. Used by New session and by ccc-orchestration when engine is omitted.</div>
+                      <div class="settings-row-desc">Used when a new session does not specify an engine.</div>
                     </div>
                     <div class="settings-row-control">
                       <select id="spawnDefaultsEngine" class="bug-input" style="width:auto;">
@@ -3123,7 +3123,7 @@
                   <div class="settings-row" data-keywords="spawn defaults model new session">
                     <div class="settings-row-main">
                       <div class="settings-row-label">Model</div>
-                      <div class="settings-row-desc">The New session model picker mirrors this value. Explicit API payloads still win.</div>
+                      <div class="settings-row-desc">Used unless you choose a different model when starting a session.</div>
                     </div>
                     <div class="settings-row-control">
                       <select id="spawnDefaultsModel" class="bug-input" style="width:auto;"></select>
@@ -3168,7 +3168,7 @@
                   <div class="settings-row" data-keywords="worker engine watchtower spawn defaults">
                     <div class="settings-row-main">
                       <div class="settings-row-label">Engine</div>
-                      <div class="settings-row-desc">WatchTower queue workers spawn with this engine when the queue has no explicit override. Blank lets WatchTower pick (Codex when installed, else Claude).</div>
+                      <div class="settings-row-desc">Used by queues without an engine override. WatchTower default lets the queue service choose.</div>
                     </div>
                     <div class="settings-row-control">
                       <select id="spawnDefaultsWorkerEngine" class="bug-input" style="width:auto;">
@@ -3184,7 +3184,7 @@
                   <div class="settings-row" id="spawnDefaultsWorkerModelField" data-keywords="worker model watchtower spawn defaults">
                     <div class="settings-row-main">
                       <div class="settings-row-label">Model</div>
-                      <div class="settings-row-desc">The default model for WatchTower workers using the selected Worker engine. Queue-specific models still win.</div>
+                      <div class="settings-row-desc">Used by queues without a model override.</div>
                     </div>
                     <div class="settings-row-control">
                       <select id="spawnDefaultsWorkerModel" class="bug-input" style="width:auto;"></select>
@@ -4121,6 +4121,7 @@
 <script src="/static/router-detected.js" defer></script>
 <script src="/static/local-speech.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/settings-preferences.js"></script>
 <script src="/static/free-settings.js" defer></script>
 <script src="/static/leftover.js" defer></script>
 <script src="/static/restart-recovery.js" defer></script>

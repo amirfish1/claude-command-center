@@ -418,6 +418,13 @@
     _soundToggleBtn.textContent = on ? 'sound' : 'mute';
     _soundToggleBtn.style.opacity = on ? '0.85' : '0.5';
   }
+  // Reinitialize every consumer from the applied browser preferences, including
+  // startup-only layout choices. The workbench previews this reload.
+  document.addEventListener('ccc:preferences-applied', () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('ccc_settings', 'preferences');
+    window.location.replace(url.href);
+  });
   document.addEventListener('ccc:notification-policy-changed', () => { _renderSoundToggle(); refreshAppearanceChecks(); });
   function _cccBeep(freq, durationMs, type, delayMs) {
     if (!_cccSoundsEnabled()) return;
@@ -92930,7 +92937,9 @@
   function _engHubVisible() {
     const sec = document.getElementById('settingsSection-engines');
     return !!($settingsModal && !$settingsModal.hidden && sec
-      && (sec.classList.contains('is-active-section') || $settingsModal.classList.contains('is-searching')));
+      && (sec.classList.contains('is-active-section') || $settingsModalInner.classList.contains('is-searching'))
+      && !sec.classList.contains('settings-search-miss')
+      && (!sec.querySelector(':scope > details') || (sec.querySelector(':scope > details').open && !sec.querySelector(':scope > details').hidden)));
   }
 
   function _engHubDisabledSet() {
@@ -93825,7 +93834,7 @@
   const $settingsEmptyQuery = document.getElementById('settingsEmptyQuery');
   let _settingsModalPrevFocus = null;
   let _settingsSearchIndex = null;
-  let _settingsCurrentSection = 'appearance';
+  let _settingsCurrentSection = 'defaults';
 
   // Settings insight panels are refreshed on entry, not by a polling timer.
   let settingsQueueSnapshot = null;
@@ -93929,23 +93938,95 @@
       const p = document.createElement('p'); p.className='settings-section-note'; p.textContent=note;
       section.querySelector('.settings-section-eyebrow')?.after(p);
     }
-    const groups = [['Workspace',['appearance','layout','notifications','voice']],['Agents & automation',['engines','defaults','queues','routing','free','limits','leftover']],['Connections & data',['vault','api-keys','network','sessions']],['Tools & system',['tools','experimental','maintenance','help']]];
-    for (const [title,ids] of groups) {
-      const label=document.createElement('div'); label.className='settings-rail-group'; label.textContent=title; rail.append(label);
-      ids.forEach(id=>{const tab=rail.querySelector('[data-section-target="'+id+'"]');if(tab)rail.append(tab)});
-    }
-    // Optional panels register after the main app. Place them in the same group.
-    const pendingTabs = new Set(['limits', 'leftover']);
-    const observer = new MutationObserver(() => {
-      for (const id of [...pendingTabs]) {
-        const tab = rail.querySelector('[data-section-target="' + id + '"]');
-        if (!tab) continue;
-        pendingTabs.delete(id);
-        rail.querySelector('[data-section-target="routing"]')?.after(tab);
+    // Six task destinations; legacy tabs remain as hidden deep-link adapters.
+    const destinations = [
+      ['defaults', 'Agents', ['defaults','queues','engines','routing']],
+      ['appearance', 'Workspace', ['appearance','layout','preferences']],
+      ['notifications', 'Notifications & voice', ['notifications','voice']],
+      ['vault', 'Connections', ['vault','api-keys','network']],
+      ['sessions', 'Usage & budgets', ['sessions','limits','leftover','free']],
+      ['maintenance', 'System & help', ['maintenance','experimental','tools','help']],
+    ];
+    window.cccSettingsDestinations = destinations;
+    const titles = {defaults:'Launch defaults', engines:'Install & connect engines',
+      queues:'Queue overrides', routing:'Advanced model routing', appearance:'Appearance',
+      layout:'Layout & visibility', preferences:'Review & transfer preferences', notifications:'Notifications', voice:'Voice & sound',
+      vault:'Saved secrets', 'api-keys':'Model provider keys', network:'Devices & remote access',
+      sessions:'Subscription costs', limits:'Usage limits', leftover:'Use spare quota',
+      free:'Free model setup', maintenance:'Troubleshooting & services',
+      tools:'Workspace tools', help:'Help & setup', experimental:'Preview features'};
+    function consolidate() {
+      for (const [primary, title, ids] of destinations) {
+        let nav = rail.querySelector('[data-settings-destination="'+primary+'"]');
+        if (!nav) {
+          nav = document.createElement('button');
+          nav.type='button'; nav.className='settings-rail-item';
+          nav.dataset.sectionTarget=primary; nav.dataset.settingsDestination=primary;
+          nav.id='settingsDestination-'+primary; nav.textContent=title;
+          nav.setAttribute('role','tab'); nav.setAttribute('aria-selected','false');
+          rail.append(nav);
+        }
+        const controls=[];
+        for (const id of ids) {
+          const tab=document.getElementById('settingsRailTab-'+id);
+          if(tab) { tab.classList.add('settings-legacy-tab'); tab.tabIndex=-1; }
+          const section=pane.querySelector('[data-section-id="'+id+'"]');
+          if(!section) continue;
+          section.dataset.destination=primary;
+          section.setAttribute('aria-labelledby',nav.id);
+          controls.push(section.id);
+          if(section.dataset.consolidated) continue;
+          section.dataset.consolidated='true';
+          const heading=section.querySelector('.settings-section-eyebrow');
+          if(heading) heading.textContent=titles[id] || heading.textContent;
+          if(id !== primary) {
+            const disclosure=document.createElement('details');
+            disclosure.className='settings-disclosure';
+            const summary=document.createElement('summary');
+            summary.textContent=titles[id] || id;
+            disclosure.append(summary);
+            for(const child of [...section.childNodes]) disclosure.append(child);
+            if(heading) heading.classList.add('settings-disclosure-heading');
+            section.append(disclosure);
+            disclosure.addEventListener('toggle', () => {
+              if(!disclosure.open || disclosure.hidden || section.getAttribute('aria-hidden')==='true') return;
+              if(id==='queues') refreshSettingsQueues();
+              if(id==='engines') startEnginesHub();
+              if(id==='preferences') window.cccSettingsPreferences?.refresh();
+            });
+          }
+          pane.append(section);
+        }
+        nav.setAttribute('aria-controls',controls.join(' '));
       }
-      if (!pendingTabs.size) observer.disconnect();
-    });
-    observer.observe(rail, {childList:true});
+      _settingsSearchIndex=null;
+    }
+    consolidate();
+    // Optional integrations register their sections after app startup.
+    new MutationObserver(records => {
+      if(records.some(record => [...record.addedNodes].some(node =>
+        node.nodeType===1 && (node.matches('.settings-section') ||
+        (node.matches('.settings-rail-item') && !node.dataset.settingsDestination))))) consolidate();
+    }).observe(pane, {childList:true});
+    new MutationObserver(records => {
+      if(records.some(record => [...record.addedNodes].some(node =>
+        node.nodeType===1 && node.matches('.settings-rail-item') && !node.dataset.settingsDestination))) consolidate();
+    }).observe(rail, {childList:true});
+    // Reports are optional evidence, not the first obstacle to changing defaults.
+    const usage=document.getElementById('settingsModelUsage')?.closest('.settings-row');
+    if(usage) {
+      const details=document.createElement('details'); details.className='settings-disclosure settings-usage-disclosure';
+      const summary=document.createElement('summary'); summary.textContent='Starting models · last 7 days';
+      details.append(summary,usage); document.getElementById('settingsSection-defaults').append(details);
+      details.addEventListener('toggle',()=>{if(details.open && !details.hidden)refreshSettingsUsage()});
+    }
+    document.getElementById('takeTourBtn')?.closest('.settings-row')?.remove();
+    const tour=document.getElementById('runOnboardingBtn')?.closest('.settings-row');
+    if(tour) {
+      tour.querySelector('.settings-row-label').textContent='Guided tour';
+      tour.querySelector('.settings-row-desc').textContent='Walk through sessions, queues and workers.';
+    }
+    document.querySelector('#settingsSection-engines .settings-section-links')?.remove();
     rail.setAttribute('aria-orientation','vertical');
     // Associate visible row labels with native controls instead of relying on placeholders.
     pane.querySelectorAll('.settings-row').forEach((row,index)=>{
@@ -94033,25 +94114,31 @@
   function setActiveSettingsRailSection(sectionId, opts) {
     opts = opts || {};
     if (!$settingsRail || !$settingsPane || !sectionId) return;
+    const requested = $settingsPane.querySelector('[data-section-id="'+sectionId+'"]');
+    const destination = requested?.dataset.destination || sectionId;
+    const firstRun = $settingsModalInner.classList.contains('is-first-run');
     $settingsRail.querySelectorAll('.settings-rail-item').forEach(btn => {
-      const active = btn.getAttribute('data-section-target') === sectionId;
+      const active = btn.dataset.settingsDestination === destination;
+      btn.tabIndex = active ? 0 : -1;
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-selected', active ? 'true' : 'false');
       if (active && window.innerWidth <= 700) btn.scrollIntoView({block:'nearest', inline:'nearest'});
     });
     _settingsCurrentSection = sectionId;
-    if (sectionId === 'defaults') refreshSettingsUsage();
+
     if (sectionId === 'queues') refreshSettingsQueues();
-    // Single-panel mode (kimi-web parity): one section at a time. Search
-    // mode overrides this via .is-searching (shows all matches).
+    // A destination contains related sections; first-run isolates engine setup.
+    // Search crosses destinations and reveals only matching controls.
     $settingsPane.querySelectorAll('.settings-section').forEach(sec => {
-      const active = sec.getAttribute('data-section-id') === sectionId;
+      const active = firstRun ? sec.dataset.sectionId === sectionId : sec.dataset.destination === destination;
       sec.classList.toggle('is-active-section', active);
       sec.setAttribute('aria-hidden', active ? 'false' : 'true');
     });
+    if (sectionId !== destination || firstRun) { const details=requested?.querySelector(':scope > details'); if(details)details.open=true; }
     if (typeof startEnginesHub === 'function') startEnginesHub();
     if (opts.scroll === false) return;
     $settingsPane.scrollTop = 0;
+    if (sectionId !== destination) requested?.scrollIntoView({block:'start'});
   }
 
   function ensureSettingsRowCrumb(row, text) {
@@ -94077,6 +94164,7 @@
         el: row,
         section,
         sectionTitle: eyebrow ? eyebrow.textContent : '',
+        originallyHidden: row.hidden,
         hay: [
           label ? label.textContent : '',
           desc ? desc.textContent : '',
@@ -94093,8 +94181,11 @@
     const q = String(query || '').trim().toLowerCase();
     if (!q) {
       $settingsModalInner.classList.remove('is-searching');
-      _settingsSearchIndex.forEach(entry => { entry.el.hidden = false; });
-      $settingsPane.querySelectorAll('.settings-section').forEach(el => { el.classList.remove('settings-search-miss'); el.setAttribute('aria-hidden', el.dataset.sectionId === _settingsCurrentSection ? 'false' : 'true'); });
+      _settingsSearchIndex.forEach(entry => { entry.el.hidden = entry.originallyHidden; });
+      $settingsPane.querySelectorAll('details[data-search-open]').forEach(el => {
+        el.open=el.dataset.searchOpen==='true'; el.hidden=false; delete el.dataset.searchOpen;
+      });
+      $settingsPane.querySelectorAll('.settings-section').forEach(el => { el.classList.remove('settings-search-miss'); el.setAttribute('aria-hidden', el.classList.contains('is-active-section') ? 'false' : 'true'); });
       $settingsPane.querySelectorAll('.settings-section-eyebrow, .settings-reset-row').forEach(el => { el.hidden = false; });
       $settingsPane.querySelectorAll('.settings-modal-tools-slot').forEach(el => {
         el.style.display = '';
@@ -94105,10 +94196,14 @@
       return;
     }
     $settingsModalInner.classList.add('is-searching');
+    $settingsPane.querySelectorAll('details').forEach(el => {
+      if(!('searchOpen' in el.dataset)) el.dataset.searchOpen=String(el.open);
+      el.open=true;
+    });
     const sectionMatchCount = {};
     let anyMatch = false;
     _settingsSearchIndex.forEach(entry => {
-      const match = entry.hay.includes(q);
+      const match = !entry.originallyHidden && q.split(/\s+/).every(word => entry.hay.includes(word));
       entry.el.hidden = !match;
       if (match) {
         anyMatch = true;
@@ -94169,7 +94264,11 @@
       const eyebrow = section.querySelector('.settings-section-eyebrow');
       if (eyebrow) eyebrow.hidden = !has;
       const resetRow = section.querySelector('.settings-reset-row');
-      if (resetRow) resetRow.hidden = !has;
+      if (resetRow) resetRow.hidden = true;
+    });
+    $settingsPane.querySelectorAll('details').forEach(details => {
+      details.hidden = !Array.from(details.querySelectorAll('.settings-row, .eng-list, .settings-modal-tools-slot'))
+        .some(row => !row.hidden && row.style.display !== 'none');
     });
     if ($settingsEmptyState) $settingsEmptyState.hidden = anyMatch;
     if ($settingsEmptyQuery) $settingsEmptyQuery.textContent = query;
@@ -94413,7 +94512,6 @@
     if ($settingsBtn) $settingsBtn.setAttribute('aria-expanded', 'true');
     clearSettingsSearch();
     renderExperimentalFlags();
-    buildSettingsSearchIndex();
     refreshAppearanceChecks();
     refreshRepoAvatarSettings();
     refreshMonthlyClaudePlanInput();
@@ -94424,6 +94522,7 @@
     refreshVaultSettings();
     const $phoneRow = document.getElementById('phoneAccessRow');
     if ($phoneRow) $phoneRow.hidden = false;
+    buildSettingsSearchIndex();
     setActiveSettingsRailSection(_settingsCurrentSection || 'appearance', { scroll: false });
     setTimeout(() => { if ($settingsSearchInput) $settingsSearchInput.focus(); }, 0);
   }
@@ -94434,10 +94533,23 @@
   (function settingsDeepLink() {
     var want = _bootUrlParams.get('ccc_settings');
     if (!want) return;
-    var rail = document.getElementById('settingsRailTab-' + want);
     setTimeout(function () {
       openSettingsModal();
-      if (rail) rail.click();
+      function activate() {
+        const tab = document.getElementById('settingsRailTab-' + want);
+        const section = $settingsPane.querySelector('[data-section-id="' + CSS.escape(want) + '"]');
+        if (!tab || !section?.dataset.destination) return false;
+        tab.click();
+        return true;
+      }
+      if (activate()) return;
+      // Optional integrations register after startup. Observe their arrival
+      // instead of permanently losing a valid deep link during boot.
+      const observer = new MutationObserver(() => {
+        if (activate()) observer.disconnect();
+      });
+      observer.observe($settingsPane, {childList:true, subtree:true, attributes:true, attributeFilter:['data-destination']});
+      setTimeout(() => observer.disconnect(), 10000);
     }, 0);
   })();
 

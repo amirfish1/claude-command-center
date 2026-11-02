@@ -57,3 +57,45 @@ test('notification API supports callable and object callers without bypassing ap
     assert.equal(await page.evaluate(() => typeof window.cccNotify.setPref), 'function');
   } finally { await page.close(); }
 });
+
+test('notification policies preserve custom combinations and coordinate sounds', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.goto(url, {waitUntil:'load'});
+    const result = await page.evaluate(() => {
+      localStorage.clear();
+      cccNotify.setPref('digest', false);
+      const custom = cccNotify.policy();
+      const permission = cccNotify.permissionState();
+      const quiet = cccNotify.applyPolicy('quiet');
+      const quietState = [cccNotify.enabled(), localStorage.getItem('ccc-sounds-enabled')];
+      cccNotify.applyPolicy('action');
+      const action = ['enabled','tasks','digest','milestones'].map(cccNotify.pref);
+      const rejected = cccNotify.applyPolicy('__proto__');
+      return {custom, quiet, quietState, action, rejected, policy:cccNotify.policy(),
+        unchangedPermission: permission === cccNotify.permissionState()};
+    });
+    assert.deepEqual(result, {custom:'custom', quiet:true, quietState:[false,'0'],
+      action:[true,true,false,false], rejected:false, policy:'action', unchangedPermission:true});
+  } finally { await page.close(); }
+});
+
+test('a failed policy write rolls back the partial update', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.goto(url, {waitUntil:'load'});
+    const result = await page.evaluate(() => {
+      localStorage.clear();
+      cccNotify.applyPolicy('all');
+      const original = Storage.prototype.setItem;
+      let fail = true;
+      Storage.prototype.setItem = function(key, value) {
+        if (key === 'ccc-notify-digest' && fail) { fail=false; throw new Error('Storage full'); }
+        return original.call(this,key,value);
+      };
+      try { return {saved:cccNotify.applyPolicy('quiet'), policy:cccNotify.policy()}; }
+      finally { Storage.prototype.setItem=original; }
+    });
+    assert.deepEqual(result,{saved:false,policy:'all'});
+  } finally { await page.close(); }
+});

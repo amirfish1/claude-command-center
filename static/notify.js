@@ -62,6 +62,60 @@
   }
   function enabled() { return pref('enabled'); }
 
+  var POLICIES = {
+    quiet: {enabled:false, tasks:false, digest:false, milestones:false, sounds:false},
+    action: {enabled:true, tasks:true, digest:false, milestones:false, sounds:false},
+    all: {enabled:true, tasks:true, digest:true, milestones:true, sounds:true}
+  };
+  function notificationPolicy() {
+    return Object.keys(POLICIES).find(function(name) {
+      return Object.keys(POLICIES[name]).every(function(key) {
+        return POLICIES[name][key] === (key === 'sounds'
+          ? _lsGet('ccc-sounds-enabled') !== '0' : pref(key));
+      });
+    }) || 'custom';
+  }
+  function applyNotificationPolicy(name) {
+    if (!Object.prototype.hasOwnProperty.call(POLICIES, name)) return false;
+    var policy = POLICIES[name];
+    if (!policy) return false;
+    var previous = {};
+    try {
+      Object.keys(policy).forEach(function(key) {
+        var storageKey = key === 'sounds' ? 'ccc-sounds-enabled' : 'ccc-notify-' + key;
+        previous[storageKey] = localStorage.getItem(storageKey);
+      });
+      Object.keys(policy).forEach(function(key) {
+        localStorage.setItem(key === 'sounds' ? 'ccc-sounds-enabled' : 'ccc-notify-' + key, policy[key] ? '1' : '0');
+      });
+    } catch (error) {
+      Object.keys(previous).forEach(function(key) {
+        try { if (previous[key] === null) localStorage.removeItem(key); else localStorage.setItem(key, previous[key]); } catch (_) {}
+      });
+      refreshSettings();
+      return false;
+    }
+    document.dispatchEvent(new CustomEvent('ccc:notification-policy-changed'));
+    refreshSettings();
+    return true;
+  }
+  function mountNotificationPolicy() {
+    var section = document.getElementById('settingsSection-notifications');
+    if (!section || document.getElementById('notificationPolicy')) return;
+    var row = document.createElement('div');
+    row.className = 'settings-row';
+    row.dataset.keywords = 'quiet mute stop sounds notifications action required alerts policy';
+    row.innerHTML = '<div class="settings-row-main"><label class="settings-row-label" for="notificationPolicy">Notification policy</label><p class="settings-row-desc">Applies in this browser. Action required includes finished tasks and requests for input. Browser permission stays under your control.</p><p id="notificationPolicyStatus" role="status"></p></div><div class="settings-row-control"><select id="notificationPolicy" class="settings-select"><option value="quiet">Quiet</option><option value="action">Action required</option><option value="all">All activity</option><option value="custom">Custom</option></select></div>';
+    var first = section.querySelector('.settings-row');
+    section.insertBefore(row, first || null);
+    row.querySelector('select').addEventListener('change', function(event) {
+      if(event.target.value === 'custom') return;
+      var ok = applyNotificationPolicy(event.target.value);
+      document.getElementById('notificationPolicyStatus').textContent = ok ? 'Policy saved.' : 'Could not save. Your previous preferences were restored where possible.';
+    });
+  }
+
+
   function _reducedMotion() {
     try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
     catch (_) { return false; }
@@ -521,6 +575,8 @@
   var _PREFS = ['enabled', 'tasks', 'digest', 'milestones'];
 
   function refreshSettings() {
+    var policySelect = document.getElementById('notificationPolicy');
+    if (policySelect) policySelect.value = notificationPolicy();
     _PREFS.forEach(function (name) {
       var btn = document.querySelector('[data-notify-pref="' + name + '"]');
       if (!btn) return;
@@ -594,6 +650,8 @@
     enabled: enabled,
     pref: pref,
     setPref: setPref,
+    policy: notificationPolicy,
+    applyPolicy: applyNotificationPolicy,
     requestPermission: requestPermission,
     maybeAskPermission: maybeAskPermission,
     permissionState: _permissionState,
@@ -613,7 +671,10 @@
   });
 
   function _boot() {
+    mountNotificationPolicy();
     _bindSettings();
+    window.addEventListener('storage', refreshSettings);
+    document.addEventListener('click', function(event) { if(event.target.closest('[data-sounds-toggle]')) refreshSettings(); });
     refreshSettings();
     // Catch up on anything that fired while this tab was closed, then keep a
     // slow poll as the SSE fallback. First poll waits a beat so the SSE

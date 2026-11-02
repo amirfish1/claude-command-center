@@ -34045,6 +34045,20 @@ body:has(#settingsModal.open) #ideaTicketsIntroBanner { visibility:hidden; point
 
   .conv-item.is-actions-open .conv-row-end > .conv-decision-report-btn { visibility: hidden; }
 
+/* Task-based settings: six destinations, with specialist controls inline. */
+#settingsRail .settings-legacy-tab { display: none !important; }
+.settings-disclosure { border-top: 1px solid var(--border); padding: 12px 0; }
+.settings-disclosure > summary { cursor: pointer; font-size: 15px; font-weight: 600; padding: 8px 0; color: var(--text); }
+.settings-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.settings-disclosure[open] > summary { margin-bottom: 14px; }
+.settings-disclosure-heading { display: none !important; }
+.settings-modal.is-searching .settings-section-note,
+.settings-modal.is-searching .settings-section-links { display: none; }
+.settings-modal.is-first-run .settings-disclosure > summary { display: none; }
+.settings-modal.is-first-run .settings-disclosure { border: 0; padding: 0; }
+#settingsSection-defaults .eng-defaults-card { border: 0; border-radius: 0; background: transparent; padding-left: 0; padding-right: 0; }
+#settingsSection-defaults .eng-defaults-card + .eng-defaults-card { border-top: 1px solid var(--border); }
+
 /* State grouping is independent of the session ordering toolbar. */
 .conv-session-state-tools { display: flex; padding: 4px 0 6px; }
 .conv-session-state-tools :where(button.grouping-opt) { font: inherit; background: transparent; border: 0; color: inherit; cursor: pointer; }
