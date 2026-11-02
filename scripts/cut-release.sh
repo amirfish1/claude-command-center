@@ -159,7 +159,11 @@ fi
 # Run against the source version before bumping or consuming snippets. The
 # pre-push performance gate alone does not cover the full release surface.
 step "Verify source test suite before changing release state"
-run "python3 -m pytest -q --tb=short tests/"
+if [ "$ALLOW_DIRTY" = 1 ]; then
+  run "python3 -m pytest -q --tb=short tests/"
+else
+  run "./scripts/test-release-source.sh"
+fi
 
 # ── 1. Changelog rollup ─────────────────────────────────────────────────────
 step "1/9  Roll up changelog.d → CHANGELOG.md [${VERSION}]"

@@ -11,6 +11,12 @@ Short, copy-pasteable checklist for cutting a new version. Not a policy doc — 
 ./scripts/cut-release.sh X.Y.Z --skip-dmg           # source/brew only (no notarized DMG / Sparkle update)
 ```
 
+The source test gate runs in a temporary checkout of the current commit, so
+parallel edits cannot change source underneath imported Python functions.
+If the branch advances or the working tree becomes dirty during testing,
+the release stops before changing versions or tags; retry after work lands.
+The explicit `--allow-dirty` escape hatch tests the working tree in place.
+
 ## 0. Ship WatchTower first
 
 `watchtower.queue` is a hard dependency and users receive WatchTower by pulling

@@ -66,6 +66,10 @@ def _run_release_with_formula_outcome(*, push_status, published_formula, test_st
 
         script = repo / "scripts" / "cut-release.sh"
         shutil.copy2(ROOT / "scripts" / "cut-release.sh", script)
+        (repo / "scripts" / "test-release-source.sh").write_text(
+            '#!/usr/bin/env bash\nexit "$FAKE_TEST_STATUS"\n', encoding="utf-8",
+        )
+        (repo / "scripts" / "test-release-source.sh").chmod(0o755)
         (repo / "pyproject.toml").write_text('version = "0.0.0"\n', encoding="utf-8")
         (repo / "server.py").write_text('__version__ = "0.0.0"\n', encoding="utf-8")
         (repo / "CHANGELOG.md").write_text("[Unreleased]: test\n", encoding="utf-8")
