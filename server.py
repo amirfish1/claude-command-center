@@ -129,6 +129,7 @@ from ccc_server import report_routes as _report_routes
 from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
+from ccc_server import media_preview as _media_preview
 from ccc_server import cpu_accounting as _cpu_accounting
 from ccc_server import conv_reader as _conv_reader
 from ccc_server import swr_cache as _swr
@@ -32820,6 +32821,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "stat failed"}, 500)
                 return
             ext = file_path.suffix.lower()
+            is_preview = False
+            if (qs.get("preview") or [""])[0] == "1" and _media_preview.wants_preview(file_path, size):
+                # CCC-298: a full-size screenshot holds the browser's single
+                # HTTP/2 link for seconds on a slow tailnet; serve a <=150kB
+                # JPEG and let the viewer ask for the original on click.
+                pv = _media_preview.preview_path(file_path, st)
+                if pv is not None:
+                    try:
+                        size = pv.stat().st_size
+                        file_path, ext, is_preview = pv, ".jpg", True
+                    except OSError:
+                        pass
             ct_map = {
                 ".mp4": "video/mp4",
                 ".mov": "video/quicktime",
@@ -32873,6 +32886,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Disposition", "inline")
             self.send_header("Cache-Control", "private, max-age=3600")
+            if is_preview:
+                self.send_header("X-CCC-Preview", "1")
             if media_category == "html" or ext == ".svg":
                 # An arbitrary local HTML file rendered same-origin as the
                 # dashboard would otherwise run script with the dashboard's

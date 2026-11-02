@@ -1599,6 +1599,7 @@
     flex-shrink: 0;
   }
   .img-lightbox-back,
+  .img-lightbox-full,
   .img-lightbox-download,
   .img-lightbox-zoom button,
   .img-lightbox-close {
@@ -1619,10 +1620,12 @@
     flex-shrink: 0;
   }
   .img-lightbox-back:hover,
+  .img-lightbox-full:hover,
   .img-lightbox-download:hover,
   .img-lightbox-close:hover {
     background: rgba(255, 255, 255, 0.18);
   }
+  .img-lightbox-full[hidden] { display: none; }
   .img-lightbox-zoom {
     display: flex; justify-content: center; gap: 8px; padding: 8px 12px;
     background: rgba(13, 17, 23, 0.92); cursor: default; flex-shrink: 0;

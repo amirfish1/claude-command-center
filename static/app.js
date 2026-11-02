@@ -20111,6 +20111,7 @@
       '<div class="img-lightbox-bar">'
       + '<button type="button" class="img-lightbox-back" data-lightbox-close aria-label="Back to main view">\u2190 Back</button>'
       + '<span class="img-lightbox-title"></span>'
+      + '<button type="button" class="img-lightbox-full" hidden title="Load the original image">Full size</button>'
       + '<a class="img-lightbox-download" download aria-label="Download file">Download</a>'
       + '<button type="button" class="img-lightbox-close" data-lightbox-close aria-label="Close">\u2715</button>'
       + '</div>'
@@ -20122,6 +20123,19 @@
       + '</div>'
       + '<div class="img-lightbox-stage"><img alt=""></div>';
     _imgLightbox.addEventListener('click', (ev) => {
+      const full = ev.target.closest('.img-lightbox-full');
+      if (full) {
+        const img = _imgLightbox.querySelector('.img-lightbox-stage img');
+        const fullSrc = _imgLightbox.dataset.fullSrc || '';
+        if (img && fullSrc) {
+          full.disabled = true;
+          full.textContent = 'Loading\u2026';
+          img.addEventListener('load', () => { full.hidden = true; }, { once: true });
+          img.addEventListener('error', () => { full.disabled = false; full.textContent = 'Full size'; }, { once: true });
+          img.src = fullSrc;
+        }
+        return;
+      }
       const zoom = ev.target.closest('[data-image-zoom]');
       if (zoom) {
         const action = zoom.dataset.imageZoom;
@@ -20161,6 +20175,18 @@
       }
     }
   }
+  // CCC-298: large /api/media images load as a <=150kB JPEG preview so one
+  // screenshot can't hold the browser's single connection for seconds; the
+  // original is one "Full size" click away. The server ignores preview=1 for
+  // small or non-raster files and streams the original.
+  function _mediaPreviewUrl(href) {
+    try {
+      const u = new URL(href, window.location.origin);
+      if (u.pathname !== '/api/media') return '';
+      u.searchParams.set('preview', '1');
+      return u.href;
+    } catch (_) { return ''; }
+  }
   function openMediaLightbox(src, opts) {
     if (!src) return;
     const kind = (opts && opts.kind) || 'image';
@@ -20170,13 +20196,22 @@
     const $dl = lb.querySelector('.img-lightbox-download');
     const $stage = lb.querySelector('.img-lightbox-stage');
     const isImage = kind !== 'video' && kind !== 'frame';
+    const fullSrc = src;
+    if (isImage && !(opts && opts.noPreview)) src = _mediaPreviewUrl(src) || src;
+    const $full = lb.querySelector('.img-lightbox-full');
+    lb.dataset.fullSrc = src !== fullSrc ? fullSrc : '';
+    if ($full) {
+      $full.hidden = src === fullSrc;
+      $full.disabled = false;
+      $full.textContent = 'Full size';
+    }
     lb.querySelector('.img-lightbox-zoom').hidden = !isImage;
     $stage.classList.toggle('is-image', isImage);
     $stage.scrollTop = $stage.scrollLeft = 0;
     _lightboxZoom = 0;
     if ($title) $title.textContent = title;
     if ($dl) {
-      $dl.href = src;
+      $dl.href = fullSrc;
       if (title) $dl.setAttribute('download', title);
       else $dl.setAttribute('download', '');
     }
@@ -36587,7 +36622,7 @@
     function preview(f) {
       const url = mediaUrl(f.path);
       let inner;
-      if (f.category === 'images') inner = '<img src="' + escapeAttr(url) + '" alt="' + escapeAttr(f.name) + '">';
+      if (f.category === 'images') inner = '<img src="' + escapeAttr(_mediaPreviewUrl(url) || url) + '" alt="' + escapeAttr(f.name) + '">';
       else if (f.category === 'videos') inner = '<video src="' + escapeAttr(url) + '" controls></video>';
       else if (f.category === 'markdown') inner = '<div class="ffv-md tp-body">Loading\u2026</div>';
       else if (f.category === 'pdfs' || f.category === 'html') inner = '<iframe src="' + escapeAttr(url) + '"></iframe>';
