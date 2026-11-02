@@ -45,6 +45,10 @@ the [question counter and tagging guidance](user-question-tags.md) by default.
 A session question and an inbox card are separate records unless the card
 explicitly carries that question's tag; numbering alone does not publish a card.
 
+The [shadow coverage report](decision-coverage.md) compares current cached owner
+questions and review gates with retained cards using stable source identities.
+It does not change counts, merge questions or deliver answers.
+
 On mobile, open **More → Decisions** in CCC. The More menu includes the same
 app catalog as the desktop rail. Apps keep the bottom bar visible so you can
 switch apps or return to sessions. Direct app links also open in this shell.

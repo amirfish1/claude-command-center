@@ -1,0 +1,1 @@
+Add a shadow decision-request registry and read-only source coverage endpoint with stable source identities, preserved legacy references, explicit stale-source diagnostics and no changes to live answer delivery.
