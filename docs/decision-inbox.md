@@ -16,6 +16,25 @@ with a ticket-reference chip: select it to open that ticket's context and
 existing controls, then close the detail view to return to the same questions.
 Links such as `/?ticket=EXAMPLE-1` also open the ticket directly.
 
+## Guided queue experiment
+
+**Decisions 2** sits beside Decisions in the normal sidebar. It is a
+programmed question-and-answer flow, with no model calls: it reports the
+verified open-question count and shows the exact source question, ticket link
+and Pacific timestamp. **Skip / next** changes only your place in this view.
+
+When the existing owner-answer capability is explicitly enabled, **Send answer**
+records the exact reply and sends that frozen answer. Only a confirmed source
+acceptance advances the flow; acceptance does not mean the work is complete.
+Uncertain saves retain the same payload/key for an explicit retry. Uncertain
+delivery offers receipt lookup instead of resending. Existing delivery-owner
+and source-revision checks still apply. Answering remains disabled by default;
+this experiment does not activate it or enroll local interactive questions.
+
+Sidebar tab selection is local to each browser window/tab. Reload restores
+that window's selection; choosing another tab elsewhere does not move it.
+The previous shared browser preference supplies a one-time starting selection.
+
 **Reports and monitoring** retains scanner and tool reports. Scheduled scans
 can create scripted health alerts or use an analyst model for suggested
 follow-up cards; the sweep table records which path each decision used.
