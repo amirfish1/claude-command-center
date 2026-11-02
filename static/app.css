@@ -10276,10 +10276,10 @@
     flex-shrink: 0;
   }
   .conv-input-bar .conv-send-caret {
-    width: 14px; height: 32px; flex-shrink: 0;
+    width: 28px; height: 32px; flex-shrink: 0;
     border-radius: 4px; border: none; cursor: pointer;
     background: transparent; color: var(--text-muted);
-    padding: 0; font-size: 8px; line-height: 1;
+    padding: 0; font-size: 20px; line-height: 1;
     display: inline-flex; align-items: center; justify-content: center;
     transition: background 0.15s, color 0.15s;
   }
