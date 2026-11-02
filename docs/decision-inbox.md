@@ -23,7 +23,10 @@ older decision still applies. Connection failures and overdue scans are visible.
 
 **Sweep history** is a table with exact start/end and decision creation times
 in Pacific time (`America/Los_Angeles`, automatically PST or PDT). Each row
-lists added decision titles and source IDs, with an explicit **LLM used** column.
+lists added decision references, titles and source IDs, with an explicit **LLM used** column.
+Click a reference to open that exact inbox item. Existing Q-references stay the
+same; cards without one get a persistent local D-number, shared with the inbox
+list and searchable there. These numbers remain fixed when sorting or filtering.
 Empty script-only sweeps are hidden; runs that attempted an LLM request remain
 visible even when they added no decision. Pagination applies after filtering.
 

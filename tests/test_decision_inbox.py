@@ -421,12 +421,28 @@ class Persistence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p = pathlib.Path(tmp) / "cards.json"
             di.save_cards({"c1": {"id": "c1"}}, path=p)
-            self.assertEqual(di.load_cards(path=p), {"c1": {"id": "c1"}})
+            self.assertEqual(di.load_cards(path=p), {"c1": {"id": "c1", "decision_number": 1}})
             self.assertEqual(di.load_cards(path=pathlib.Path(tmp) / "missing.json"), {})
             runs = pathlib.Path(tmp) / "runs.jsonl"
             di._append_run({"run_id": "r1"}, path=runs)
             di._append_run({"run_id": "r2"}, path=runs)
             self.assertEqual(di.last_run(path=runs)["run_id"], "r2")
+
+    def test_decision_numbers_survive_reordering_and_new_reports(self):
+        cards = {"new": {"id": "new", "created_at": "2026-11-02"},
+                 "old": {"id": "old", "created_at": "2026-11-01"}}
+        self.assertTrue(di._assign_decision_numbers(cards))
+        self.assertEqual(cards["old"]["decision_number"], 1)
+        self.assertEqual(cards["new"]["decision_number"], 2)
+        cards["imported"] = {"id": "imported", "created_at": "2026-10-01"}
+        self.assertTrue(di._assign_decision_numbers(cards))
+        self.assertEqual(cards["imported"]["decision_number"], 3)
+        self.assertEqual(cards["old"]["decision_number"], 1)
+        self.assertFalse(di._assign_decision_numbers(dict(reversed(list(cards.items())))))
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = pathlib.Path(tmp) / "cards.json"
+            di.save_cards(cards, path=dest)
+            self.assertEqual(di.load_cards(path=dest), cards)
 
     def test_all_runs_paginate_in_reverse_append_order_and_skip_bad_lines(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -450,11 +466,12 @@ class Persistence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             runs = pathlib.Path(tmp) / "runs.jsonl"
             di._append_run({"run_id": "r1", "created": [{"id": "c1"}, {"id": "c2"}]}, path=runs)
-            cards = {"c1": {"run_id": "r1", "source": {"reason": "blocked"}, "created_at": "2026-09-01T00:00:00Z"},
+            cards = {"c1": {"run_id": "r1", "source": {"reason": "blocked"}, "created_at": "2026-09-01T00:00:00Z", "decision_number": 42},
                      "c2": {"run_id": "r2", "source": {"reason": "later"}}}
             added = di.decision_inbox_runs_payload(path=runs, cards=cards)["runs"][0]["created"]
             self.assertEqual(added[0]["source"]["reason"], "blocked")
             self.assertEqual(added[0]["details_from"], "retained decision")
+            self.assertEqual(added[0]["decision_number"], 42)
             self.assertNotIn("source", added[1])
             self.assertNotIn("source", json.loads(runs.read_text())["created"][0])
 

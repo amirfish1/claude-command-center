@@ -182,7 +182,34 @@ def load_cards(path=None):
     return {k: v for k, v in data.items() if isinstance(v, dict)}
 
 
+def _assign_decision_numbers(cards):
+    """Assign persistent local references; list positions are never identifiers."""
+    valid = [c.get("decision_number") for c in cards.values()
+             if type(c.get("decision_number")) is int and c["decision_number"] > 0]
+    next_number = max(valid, default=0) + 1
+    seen = set()
+    changed = False
+    for card in sorted(cards.values(), key=lambda c: (str(c.get("created_at") or ""), str(c.get("id") or ""))):
+        number = card.get("decision_number")
+        if type(number) is not int or number <= 0 or number in seen:
+            card["decision_number"] = number = next_number
+            next_number += 1
+            changed = True
+        seen.add(number)
+    return changed
+
+
+def load_numbered_cards():
+    # One-time backfill uses the same lock as incoming reports and decisions.
+    with _di_lock:
+        cards = load_cards()
+        if _assign_decision_numbers(cards):
+            save_cards(cards)
+    return cards
+
+
 def save_cards(cards, path=None):
+    _assign_decision_numbers(cards)
     p = Path(path) if path else cards_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
@@ -279,7 +306,7 @@ def decision_inbox_runs_payload(*, offset=0, limit=10, path=None, cards=None):
     except OSError:
         return {"ok": False, "error": "Cannot read sweep history"}
     records.reverse()
-    retained = load_cards() if cards is None else cards
+    retained = load_numbered_cards() if cards is None else cards
     for run in records:
         run["llm_used"], run["llm_usage_basis"] = sweep_llm_usage(run, retained)
     activity = [run for run in records if run.get("created") or run["llm_used"] is True]
@@ -291,7 +318,7 @@ def decision_inbox_runs_payload(*, offset=0, limit=10, path=None, cards=None):
             # Match the original run, never attach a later report's source.
             if card.get("run_id") != run["run_id"]:
                 continue
-            for key in ("source", "kind", "created_at"):
+            for key in ("source", "kind", "created_at", "decision_number"):
                 if key not in item and key in card:
                     item[key] = card[key]
                     item["details_from"] = "retained decision"
@@ -1079,8 +1106,10 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
 
     for c in new_cards:
         cards[c["id"]] = c
+    _assign_decision_numbers(cards)
+    for c in new_cards:
         record["created"].append({k: c.get(k) for k in
-                                  ("id", "source_id", "title", "kind", "source", "created_at", "analyst")})
+                                  ("id", "source_id", "title", "kind", "source", "created_at", "analyst", "decision_number")})
     record["duration_s"] = round(time.time() - started, 1)
     record["finished_at"] = _di_iso(time.time())
     if persist:
@@ -1170,7 +1199,7 @@ def queue_github_repos(reader=None):
 
 def decision_inbox_api_payload(*, cards=None, cfg=None, review_cards=None):
     cfg = cfg or load_config()
-    cards = load_cards() if cards is None else cards
+    cards = load_numbered_cards() if cards is None else cards
     ordered = sorted(cards.values(), key=lambda c: (c.get("status") != "open", -(_di_parse_iso(c.get("created_at")) or 0)))
     # WatchTower tickets awaiting a person's review (WT-5): derived live from
     # the queue store on every read, never persisted, so a card leaves the

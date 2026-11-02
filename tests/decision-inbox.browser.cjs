@@ -23,6 +23,16 @@ assert.notEqual(await page.$eval('.sweep',e=>e.dataset.runId),newestRun);
 await page.click('#sweepPrev');
 await page.waitForFunction(()=>document.querySelector('#sweepPage').textContent.startsWith('1–'));
 await page.screenshot({path:'/tmp/decision-desktop.png'});
+const decisionLink=await page.$eval('.sweep-decision-ref',e=>({id:e.dataset.openDecision,ref:e.textContent,href:e.getAttribute('href')}));
+assert.match(decisionLink.ref,/^(?:D-\d+|Q\d+)$/);
+await page.click('.sweep-decision-ref');
+assert.equal(await page.$eval('.decision-row',e=>e.dataset.id),decisionLink.id);
+assert.ok(await page.$eval('.decision-row',e=>e.open));
+assert.equal(await page.$eval('.row-ref',e=>e.textContent),decisionLink.ref);
+await page.reload();await page.waitForFunction(()=>document.querySelector('.decision-row')?.open);
+assert.equal(await page.$eval('.decision-row',e=>e.dataset.id),decisionLink.id);
+await page.select('#statusFilter','open');
+await page.$eval('#search',e=>{e.value='';e.dispatchEvent(new Event('input'));});
 await page.click('#next');assert.match(await page.$eval('#pageCount',e=>e.textContent),/Page 2/);
 const ref=await page.$eval('.row-ref',e=>e.textContent); await page.type('#search',ref);assert.equal(await page.$$eval('.decision-row',e=>e.length),1);
 await page.$eval('#search',e=>{e.value='';e.dispatchEvent(new Event('input'));});
@@ -42,7 +52,7 @@ await fixture.setRequestInterception(true);
 fixture.on('request',request=>{
   if(new URL(request.url()).pathname==='/api/decision-inbox/runs') return request.respond({status:200,contentType:'application/json',body:JSON.stringify({ok:true,total:3,activity_total:2,hidden_count:1,invalid_records:0,activity_runs:[
     {run_id:'fixture-llm',started_at:'2026-11-02T02:00:00Z',finished_at:'2026-11-02T02:00:01Z',created:[],llm_used:true,llm_calls:1},
-    {run_id:'fixture-script',started_at:'2026-07-01T16:00:00Z',created:[{id:'fixture-decision',title:'Example decision <tag>',source_id:'board:example'}],llm_used:false,llm_calls:0}
+    {run_id:'fixture-script',started_at:'2026-07-01T16:00:00Z',created:[{id:'fixture-decision',title:'Example decision <tag>',source_id:'board:example',decision_number:42}],llm_used:false,llm_calls:0}
   ]})});
   return request.continue();
 });
@@ -52,6 +62,7 @@ assert.equal(await fixture.$$eval('.sweep',rows=>rows.length),2);
 assert.match(await fixture.$eval('[data-run-id="fixture-llm"]',e=>e.textContent),/Nov 1, 2026, 06:00:00 PM PST/);
 assert.match(await fixture.$eval('[data-run-id="fixture-llm"]',e=>e.textContent),/No decisions added.*Yes/);
 assert.match(await fixture.$eval('[data-run-id="fixture-script"]',e=>e.textContent),/Jul 1, 2026, 09:00:00 AM PDT/);
+assert.equal(await fixture.$eval('.sweep-decision-ref',e=>e.textContent),'D-42');
 assert.match(await fixture.$eval('[data-run-id="fixture-script"]',e=>e.textContent),/Example decision <tag>.*board:example.*No/);
 assert.equal(await fixture.$$eval('#sweepHistory details, #sweepHistory summary, #sweepHistory tag',e=>e.length),0);
 assert.deepEqual(errors,[]);

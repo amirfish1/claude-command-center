@@ -115,6 +115,7 @@
   .sweep-table ul { margin:0; padding-left:18px; }
   .sweep-table li + li { margin-top:14px; }
   .sweep-table .source { display:block; color:var(--mute); font-size:12px; margin-top:4px; }
+  .sweep-decision-ref { color:var(--accent); font-weight:700; margin-right:8px; white-space:nowrap; text-underline-offset:3px; }
   .sweep-table time { font-variant-numeric:tabular-nums; }
   #sweepStatus { font-size:12px; }
   #sweepHistory .pager { flex-wrap:wrap; font-size:12px; }
@@ -199,7 +200,7 @@
   }
   function reference(c) {
     var q = String(c.title || "").match(/\[Q(\d+):[^\]]+\]/);
-    return q ? "Q" + q[1] : String(c.id || "").replace(/^dc_/, "D-");
+    return q ? "Q" + q[1] : c.decision_number ? "D-" + c.decision_number : String(c.id || "").replace(/^dc_/, "D-");
   }
   function cleanTitle(c) { return String(c.title || "Untitled decision").replace(/^\[Q\d+:[^\]]+\]\s*/, ""); }
   function toast(msg, bad) {
@@ -338,8 +339,23 @@
     }).join("") || '<div class="empty">No decisions match this view. Try another status or clear your search.</div>';
     document.querySelectorAll('.decision-row').forEach(function(el) { el.addEventListener('toggle', function() { if (el.open) state.expanded.add(el.dataset.id); else state.expanded.delete(el.dataset.id); }); });
   }
+  var pendingDecisionId = new URLSearchParams(location.hash.slice(1)).get('decision');
+  function revealDecision() {
+    if (!pendingDecisionId || !state.loaded) return;
+    var card = state.cards.find(function(c) { return c.id === pendingDecisionId; });
+    pendingDecisionId = null;
+    if (!card) { toast('This decision is no longer retained.', true); return; }
+    $('statusFilter').value = 'all'; $('sourceFilter').value = 'all'; $('search').value = card.id;
+    state.page = 0; state.expanded.add(card.id); browse();
+    var row = document.querySelector('.decision-row');
+    if (row) { row.scrollIntoView({block:'center'}); row.querySelector('summary').focus({preventScroll:true}); }
+  }
+  window.addEventListener('hashchange', function() {
+    pendingDecisionId = new URLSearchParams(location.hash.slice(1)).get('decision');
+    revealDecision();
+  });
   function render(data) {
-    state.cards = data.cards || []; state.queueRepos = data.queue_repos || {};
+    state.loaded = true; state.cards = data.cards || []; state.queueRepos = data.queue_repos || {};
     var selected = $("sourceFilter").value;
     var kinds = Array.from(new Set(state.cards.map(function(c) { return c.kind; }))).sort();
     $("sourceFilter").innerHTML = '<option value="all">All sources</option>' + kinds.map(function(k) { return '<option value="' + esc(k) + '">' + esc(k) + '</option>'; }).join('');
@@ -359,6 +375,7 @@
       (errors ? " · Last scan reported " + errors + " error(s)" : "") +
       ". Older items may need rechecking against their source." + (data.total_count > state.cards.length ? " Showing the latest " + state.cards.length + " of " + data.total_count + " stored items." : "");
     $("scanBtn").disabled = !!data.running_since;
+    revealDecision();
   }
   var sweepOffset = 0, sweepLimit = 5, sweepBusy = false, sweepFingerprint = "";
   function sweepTime(iso) {
@@ -368,7 +385,7 @@
   function sweepItems(items) {
     return '<ul>' + items.map(function(c) {
       var src = c.source || {};
-      return '<li><strong>' + esc(c.title || c.id) + '</strong><span class="source">Decision ' + esc(c.id) + ' · Source: ' + esc(c.source_id || 'Not recorded') +
+      return '<li><a class="sweep-decision-ref" href="#decision=' + encodeURIComponent(c.id) + '" data-open-decision="' + esc(c.id) + '" aria-label="Open decision ' + esc(reference(c)) + '">' + esc(reference(c)) + '</a><strong>' + esc(cleanTitle(c)) + '</strong><span class="source">ID: ' + esc(c.id) + ' · Source: ' + esc(c.source_id || 'Not recorded') +
         (c.kind ? ' · ' + esc(c.kind) : '') + '</span>' +
         (c.details_from ? '<span class="source">Details from ' + esc(c.details_from) + '</span>' : '') +
         (c.created_at ? '<span class="source">Created: ' + esc(sweepTime(c.created_at)) + '</span>' : '') +
@@ -432,6 +449,14 @@
   $("next").onclick = function() { state.page++; browse(); };
 
   document.addEventListener("click", async function (ev) {
+    var link = ev.target.closest('[data-open-decision]');
+    if (link && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && !ev.altKey) {
+      ev.preventDefault();
+      pendingDecisionId = link.dataset.openDecision;
+      history.pushState(null, '', '#decision=' + encodeURIComponent(pendingDecisionId));
+      revealDecision();
+      return;
+    }
     var b = ev.target.closest("button"); if (!b) return;
     if (b.dataset.decide) {
       var cid = b.dataset.decide, idx = +b.dataset.idx;
