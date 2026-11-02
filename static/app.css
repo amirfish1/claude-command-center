@@ -20893,7 +20893,10 @@ body.status-pos-right.status-rail-collapsed .conv-pane.has-status-rail > .conv-i
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
-  min-width: 200px;
+  min-width: min(200px, calc(100vw - 16px));
+  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  overflow-y: auto;
   padding: 5px 0;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -33018,7 +33021,7 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
   #sidebarMoreMenu .sh-more-desktop-only,
   #sidebarMoreMenu .sh-more-divider { display: none !important; }
   #convList .conv-archived-tools:not(:has(.conv-archived-tools-left)) { display: none !important; }
-  #sidebarMoreMenu { min-width: 300px; max-width: calc(100vw - 16px); }
+  #sidebarMoreMenu { min-width: min(300px, calc(100vw - 16px)); max-width: calc(100vw - 16px); }
   #sidebarMoreMenu .sh-more-item { min-height: 48px; font-size: 16px; }
   .sh-more-filters .is-phone-menu-only { display: inline-flex !important; }
   .sh-more-filters > * { max-width: 100%; }

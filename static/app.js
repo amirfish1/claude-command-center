@@ -24113,6 +24113,17 @@
   })();
   const $sidebarMoreMenu = document.getElementById('sidebarMoreMenu');
   if ($sidebarMoreBtn && $sidebarMoreMenu) {
+    const positionSidebarMore = () => {
+      if ($sidebarMoreMenu.hidden) return;
+      // A right-aligned popup can still cross the left edge when its trigger
+      // sits partway across the toolbar. Clamp the popup itself to the screen.
+      $sidebarMoreMenu.style.right = '0px';
+      const rect = $sidebarMoreMenu.getBoundingClientRect();
+      const shift = Math.max(8 - rect.left, Math.min(0, window.innerWidth - 8 - rect.right));
+      $sidebarMoreMenu.style.right = -shift + 'px';
+      $sidebarMoreMenu.style.maxHeight = Math.max(0, window.innerHeight - rect.top - 8) + 'px';
+    };
+    window.addEventListener('resize', positionSidebarMore);
     const closeSidebarMore = () => {
       $sidebarMoreMenu.hidden = true;
       $sidebarMoreBtn.setAttribute('aria-expanded', 'false');
@@ -24122,6 +24133,7 @@
       const open = $sidebarMoreMenu.hidden;
       if (open) _syncSidebarMoreFilters();
       $sidebarMoreMenu.hidden = !open;
+      if (open) positionSidebarMore();
       $sidebarMoreBtn.setAttribute('aria-expanded', String(open));
     });
     // The rows this menu replaced still hold the real buttons (collapsed via
