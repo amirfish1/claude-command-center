@@ -217,6 +217,36 @@ const base = {request_id:id, revision:4, adapter:'watchtower-block', origin_id:'
         assert.equal(posts.length,2);
       });
     }
+    await fixture(async ({page,model,posts,refresh,click,waitText}) => {
+      await page.type('textarea','draft for revision four');
+      model.requests=[{...base,revision:5,body:'Updated question for revision five'}];
+      await refresh();
+      assert.equal(await page.$eval('textarea',el=>el.value),'draft for revision four');
+      assert.match(await page.$eval('#requestRows',el=>el.textContent),/Updated question for revision five/);
+      await waitText('The question changed while you were drafting.');
+      assert.equal(await page.$eval('.request-answer button[type=submit]',el=>el.disabled),true);
+      // Editing the retained text is not consent to a different question.
+      await page.type('textarea',' plus edit');
+      assert.equal(await page.$eval('.request-answer button[type=submit]',el=>el.disabled),true);
+      await page.evaluate(()=>document.querySelector('.request-answer').requestSubmit());
+      assert.equal(posts.length,0);
+      model.source_current=false; await refresh();
+      assert.equal(await page.$('textarea'),null);
+      assert.equal(await page.evaluate(()=>[...document.querySelectorAll('#requestRows button')].some(el=>el.textContent==='Use draft for current question')),false);
+      model.source_current=true; model.requests[0].can_answer=false; await refresh(); assert.equal(await page.$('textarea'),null);
+      model.requests[0].can_answer=true; await refresh();
+      await click('Use draft for current question');
+      assert.equal(await page.$eval('.request-answer button[type=submit]',el=>el.disabled),false);
+      assert.equal(posts.length,0);
+      await click('Save answer'); await waitText('Save not confirmed');
+      assert.equal(posts[0].body.expected_revision,5); assert.equal(posts[0].body.text,'draft for revision four plus edit');
+    });
+    await fixture(async ({page,posts,refresh,click,waitText}) => {
+      await page.type('textarea','unchanged question draft'); await refresh();
+      assert.equal(await page.$eval('.request-answer button[type=submit]',el=>el.disabled),false);
+      await click('Save answer'); await waitText('Save not confirmed');
+      assert.equal(posts[0].body.expected_revision,4); assert.equal(posts[0].body.text,'unchanged question draft');
+    });
     console.log(`PASS ${checks} intercepted owner-answer UI scenarios`);
   } finally { await browser.close(); }
 })().catch(error => {console.error(error);process.exitCode=1;});

@@ -5,6 +5,7 @@
   const style = document.createElement('style');
   style.textContent = `
     body.ccc-decisions-tab #pwaInstallBanner { display:none !important; }
+    #convList > .conv-tab-bar { min-width:0; max-width:100%; overflow-x:auto; scrollbar-width:thin; }
     #convList:has(> .decisions-host) { display:flex; flex-direction:column; overflow:hidden !important; }
     #convList:has(> .decisions-host) > .conv-tab-bar { flex:0 0 auto; }
     .decisions-host { flex:1 1 auto; min-height:0; }
@@ -14,8 +15,16 @@
   `;
   document.head.append(style);
   const resize = new ResizeObserver(position);
+  function revealTab() {
+    const tab = document.querySelector('[data-conv-tab="decisions"].is-active');
+    if (!tab) return;
+    const strip = tab.parentElement, bounds = strip.getBoundingClientRect(), item = tab.getBoundingClientRect();
+    if (item.right > bounds.right) strip.scrollLeft += item.right - bounds.right;
+    else if (item.left < bounds.left) strip.scrollLeft -= bounds.left - item.left;
+  }
   function position() {
     if (!frame || !host || !host.isConnected) { if (frame) frame.hidden = true; return; }
+    revealTab();
     const rect = host.getBoundingClientRect();
     frame.hidden = rect.width < 1 || rect.height < 1;
     Object.assign(frame.style, {left:rect.left + 'px', top:rect.top + 'px', width:rect.width + 'px', height:rect.height + 'px'});
@@ -28,11 +37,15 @@
     if (!value) { value = document.createElement('span'); value.className = 'conv-tab-count'; tab.append(value); }
     value.textContent = String(count);
     tab.title = count + ' owner questions need an answer in supported sources';
+    revealTab();
   }
   function mount() {
     badge();
     const target = document.getElementById('sidebarDecisionHost');
     document.body.classList.toggle('ccc-decisions-tab', !!target);
+    // Focus may have scrolled the old tab strip's shared ancestor. Only the
+    // strip itself scrolls horizontally; the question surface stays anchored.
+    if (target && list) list.scrollLeft = 0;
     if (host !== target) { resize.disconnect(); host = target; if (host) resize.observe(host); }
     if (host && !frame) {
       frame = document.createElement('iframe'); frame.id = 'cccDecisionTabFrame';

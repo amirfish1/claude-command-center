@@ -4,6 +4,7 @@
   const $ = id => document.getElementById(id);
   if (!$('requestsSection')) return;
   let rows = [], page = 0, busy = false, answersEnabled = false, sourceCurrent = false;
+  const draftRevisions = new Map();
   const drafts = new Map(), submissions = new Map(), active = new Set(), notices = new Map();
   const storagePrefix = 'ccc:decision-answer:v1:';
   const historyPrefix = 'ccc:decision-answer-history:v1:';
@@ -71,7 +72,7 @@
       sessionStorage.setItem(historyPrefix + id, JSON.stringify(history));
       sessionStorage.removeItem(storagePrefix + id);
     } catch (_) { notices.set(id, 'Cannot retain rejection history. The saved answer has not been reset.'); render(); return; }
-    rejectedHistory.set(id, history); submissions.delete(id); drafts.delete(id); notices.delete(id); render();
+    rejectedHistory.set(id, history); submissions.delete(id); drafts.delete(id); draftRevisions.delete(id); notices.delete(id); render();
   }
   function controls(row, cell) {
     const id = row.request_id, entry = submissions.get(id), saved = answerFor(row);
@@ -112,8 +113,24 @@
     label.append(input); form.append(label);
     form.append(text('span', 'Save records this exact text only. Send is a separate action.', 'request-meta'));
     const save = text('button', 'Save answer'); save.type = 'submit';
-    save.disabled = !storageReady || !input.value.trim() || active.has(id);
-    input.oninput = () => { drafts.set(id, input.value); save.disabled = !storageReady || !input.value.trim() || active.has(id); };
+    const questionChanged = () => draftRevisions.has(id) && draftRevisions.get(id) !== row.revision;
+    save.disabled = !storageReady || !input.value.trim() || active.has(id) || questionChanged();
+    input.oninput = () => {
+      if (!draftRevisions.has(id)) draftRevisions.set(id, row.revision);
+      drafts.set(id, input.value);
+      save.disabled = !storageReady || !input.value.trim() || active.has(id) || questionChanged();
+    };
+    if (questionChanged()) {
+      const warning = text('div', 'The question changed while you were drafting. Your text is retained. Review the current question above before using this draft.', 'request-meta request-error');
+      warning.setAttribute('role', 'status'); form.append(warning);
+      const review = text('button', 'Use draft for current question'); review.type = 'button'; review.disabled = active.has(id);
+      review.onclick = () => {
+        const current = rows.find(candidate => candidate.request_id === id);
+        if (!answersEnabled || !sourceCurrent || current?.can_answer !== true || active.has(id) || answerFor(current)) return;
+        draftRevisions.set(id, current.revision); render();
+      };
+      form.append(review);
+    }
     form.onsubmit = event => { event.preventDefault(); mutate(row, 'record'); };
     form.append(save);
     if (!storageReady) form.append(text('span', 'Session storage is unavailable or unreadable. Saving is blocked to protect recovery after a lost response.', 'request-meta request-error'));
@@ -126,8 +143,9 @@
     if (action === 'record' && !entry) {
       if (!sourceCurrent || row.can_answer !== true || !storageReady) return;
       const draft = drafts.get(id) || '';
-      if (!draft.trim()) return;
-      entry = {payload:{request_id:id, expected_revision:row.revision, text:draft, idempotency_key:newKey()}};
+      const draftRevision = draftRevisions.get(id);
+      if (!draft.trim() || draftRevision !== row.revision) return;
+      entry = {payload:{request_id:id, expected_revision:draftRevision, text:draft, idempotency_key:newKey()}};
       if (!persist(id, entry)) {
         notices.set(id, 'Cannot retain this submission in session storage. Nothing was sent; keep your draft and restore session storage before saving.'); render(); return;
       }
