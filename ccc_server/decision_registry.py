@@ -237,6 +237,80 @@ class DecisionRegistry:
         finally:
             db.close()
 
+    def source_scope(self, adapter):
+        db = sqlite3.connect(str(self.db_path), timeout=self.timeout)
+        try:
+            row = db.execute('SELECT value FROM metadata WHERE key=?',
+                             ('source_scope:' + adapter,)).fetchone()
+            return json.loads(row[0]) if row else None
+        finally:
+            db.close()
+
+    def find_source_requests(self, adapter, identities):
+        db = sqlite3.connect(str(self.db_path), timeout=self.timeout)
+        db.row_factory = sqlite3.Row
+        try:
+            result = []
+            for origin, generation in identities:
+                row = db.execute('SELECT * FROM requests WHERE adapter=? AND origin_id=? AND generation=?',
+                                 (adapter, origin, generation)).fetchone()
+                if row:
+                    result.append(self._record(row))
+            return result
+        finally:
+            db.close()
+
+    def observe_source(self, adapter, scope, requests, *, version):
+        """Atomically apply a validated full local source receipt.
+
+        Scope is immutable: a switched source must be explicitly migrated,
+        never silently reuse another store's identities. Only records already
+        bound to this scope may be withdrawn by absence. Unscoped shadow rows,
+        legacy cards and other adapters are never withdrawal candidates.
+        """
+        adapter = _identity(adapter, 'adapter')
+        identity = scope.get('store_id')
+        if scope.get('backend') != 'file' or str(uuid.UUID(identity)) != identity:
+            raise ValueError('An explicit local store UUID scope is required')
+        if type(version.get('revision')) is not int or version['revision'] < 0:
+            raise ValueError('Ordered source revision required for reconciliation')
+        scope = {'backend': 'file', 'store_id': identity}
+        key = 'source_scope:' + adapter
+        with self._transaction() as db:
+            old = db.execute('SELECT value FROM metadata WHERE key=?', (key,)).fetchone()
+            if old:
+                previous = json.loads(old[0])
+                if previous['scope'] != scope:
+                    raise ValueError('Source store changed; explicit migration required')
+                if version['revision'] < previous['version']['revision']:
+                    raise ValueError('Source receipt is older than the applied revision')
+                if (version['revision'] == previous['version']['revision']
+                        and version.get('snapshot_sha256') != previous['version'].get('snapshot_sha256')):
+                    raise ValueError('Source snapshot changed without an ordered revision')
+            touched, seen = [], set()
+            for request in requests:
+                if (request.get('adapter') != adapter
+                        or request.get('source_snapshot', {}).get('store_id') != identity):
+                    raise ValueError('Request does not belong to the receipt scope')
+                origin = _identity(request.get('origin_id'), 'origin_id')
+                generation = _identity(request.get('generation'), 'generation')
+                if (origin, generation) in seen:
+                    raise ValueError('Duplicate source request identity')
+                seen.add((origin, generation))
+                touched.append(self._upsert(db, adapter=adapter, origin_id=origin,
+                    generation=generation, content=request, aliases=_aliases(request), status='open'))
+            rows = db.execute('SELECT * FROM requests WHERE adapter=?', (adapter,)).fetchall()
+            for row in rows:
+                if (row['origin_id'], row['generation']) in seen:
+                    continue
+                snapshot = json.loads(row['content']).get('source_snapshot') or {}
+                if snapshot.get('store_id') == identity and row['status'] == 'open':
+                    db.execute("UPDATE requests SET status='withdrawn', revision=revision+1 WHERE request_id=?",
+                               (row['request_id'],))
+            db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',
+                       (key, _json({'scope': scope, 'version': version})))
+            return touched
+
 
 # Short public spelling for callers composing registry and source projections.
 Registry = DecisionRegistry

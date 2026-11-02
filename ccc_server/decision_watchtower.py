@@ -21,7 +21,8 @@ class WatchTowerAnswers:
         source = row['payload']['source']
         snapshot = source.get('source_snapshot')
         if (source.get('adapter') != 'watchtower-block' or not isinstance(snapshot, dict)
-                or not snapshot.get('blocked_at') or snapshot.get('wait_kind') != 'owner'
+                or not snapshot.get('blocked_at') or not snapshot.get('store_id')
+                or snapshot.get('wait_kind') != 'owner'
                 or 'block_question' not in snapshot or 'wait' not in snapshot):
             raise ValueError('Exact owner question source snapshot required')
         request = dict(idempotency_key=row['answer_id'], text=row['payload']['answer']['text'],
@@ -72,9 +73,12 @@ class WatchTowerAnswers:
     def lookup(self, row):
         # Validate before even looking up; an old projection lacks the fields
         # needed to prove which payload a source receipt actually accepted.
-        self._request(row)
+        request = self._request(row)
         ref = row['payload']['source']['origin_id']
-        code, payload = self._call(['answer-receipt', ref, row['answer_id'], '--json'])
+        args = ['answer-receipt', ref, row['answer_id'], '--json']
+        if request.get('expected_store_id'):
+            args += ['--expected-store-id', request['expected_store_id']]
+        code, payload = self._call(args)
         if code == 1 and isinstance(payload, dict) and payload.get('error') == 'not_found':
             return dict(status='not_found', authoritative=True, answer_id=row['answer_id'])
         return self._receipt(row, payload) if code == 0 else dict(status='unknown')

@@ -38,6 +38,27 @@ Missing source rows do not resolve or withdraw registry records: that requires
 an authoritative source receipt. The endpoint returns only requests observed in
 the supplied snapshot; historical registry records are not an actionable inbox.
 
+## Authoritative local source
+
+`GET /api/decision-inbox/source-coverage` reads WatchTower's conditional owner
+export. It covers only the named local file-backed store. It does not prove
+coverage for remote providers, reviews, or session questions. Duplicate followers
+and review-stage records are excluded; rationale approvals stay read-only.
+
+A successful export binds that adapter to the source's durable store UUID.
+Source changes require explicit migration; a different store cannot reuse the
+binding. Missing requests are marked withdrawn only when previously bound to
+that same scope and absent from a successful, ordered full-source receipt.
+Withdrawal never claims an answer was delivered. Unscoped shadow records and
+legacy cards are preserved. Older or conflicting receipts cannot roll back the
+registry. After binding, display-cache reads cannot overwrite canonical content
+or reopen withdrawn records.
+
+Unavailable or incomplete sources return HTTP 503 and `requests: null`, preserving
+the last registry state. There is no fallback from failure to an empty inbox.
+Existing stores without a durable ID need WatchTower's metadata-only
+`wt answer-store-init --json`; the read-only endpoint never initializes the source.
+
 ## Delivery staging
 
 The internal answer outbox is separate from the coverage endpoint. It records

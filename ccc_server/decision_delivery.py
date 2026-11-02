@@ -75,6 +75,9 @@ class AnswerOutbox:
                     or 'wait' not in snapshot
                     or (snapshot['wait'] is not None and not isinstance(snapshot['wait'], dict))):
                 raise AnswerConflict('Request has no supported source delivery contract')
+            binding = db.execute("SELECT value FROM metadata WHERE key='source_scope:watchtower-block'").fetchone()
+            if (not binding or json.loads(binding[0])['scope']['store_id'] != snapshot.get('store_id')):
+                raise AnswerConflict('Request is not bound to the authoritative source store')
             if (request['revision'] != expected_revision or request['status'] != 'open'
                     or (request['answer_state'] != 'none' and request['delivery_state'] != 'rejected')):
                 raise AnswerConflict('Request changed or already has an answer')
@@ -90,6 +93,21 @@ class AnswerOutbox:
 
     def _claim(self, answer_id):
         with self.registry._transaction() as db:
+            pending = db.execute("SELECT * FROM answers WHERE answer_id=? AND state='pending'",
+                                 (answer_id,)).fetchone()
+            if not pending:
+                return None
+            request = db.execute('SELECT status,revision FROM requests WHERE request_id=?',
+                                 (pending['request_id'],)).fetchone()
+            expected = json.loads(pending['payload'])['answer']['expected_revision']
+            if not request or request['status'] != 'open' or request['revision'] != expected:
+                receipt = json.dumps({'status': 'rejected', 'answer_id': answer_id,
+                                      'reason': 'request_changed_before_delivery'})
+                db.execute("UPDATE answers SET state='rejected', receipt=? WHERE answer_id=?",
+                           (receipt, answer_id))
+                db.execute("UPDATE requests SET delivery_state='rejected' WHERE request_id=?",
+                           (pending['request_id'],))
+                return None
             token = str(uuid.uuid4())
             changed = db.execute("UPDATE answers SET state='sending', attempt=? "
                                  "WHERE answer_id=? AND state='pending'", (token, answer_id))

@@ -149,7 +149,15 @@ def coverage_payload(*, state_root=None, snapshot_path=None, registry_path=None)
     try:
         registry = DecisionRegistry(registry_path or root / 'decision-inbox' / 'requests.sqlite3', timeout=1)
         registry.import_cards(cards, only_if_changed=True)
-        saved = registry.upsert_requests([{key: r[key] for key in fields if key in r} for r in stable])
+        if registry.source_scope('watchtower-block'):
+            # After authoritative binding, a display cache must not replace
+            # scoped source content or reopen a withdrawn request.
+            saved = registry.find_source_requests('watchtower-block',
+                [(r['origin_id'], r['generation']) for r in stable if r['adapter'] == 'watchtower-block'])
+            reviews = [r for r in stable if r['adapter'] != 'watchtower-block']
+            saved += registry.upsert_requests([{key: r[key] for key in fields if key in r} for r in reviews])
+        else:
+            saved = registry.upsert_requests([{key: r[key] for key in fields if key in r} for r in stable])
     except sqlite3.Error:
         # Coverage data remains useful even when shadow identity persistence
         # is busy. Do not turn contention into an empty or authoritative feed.
@@ -158,8 +166,11 @@ def coverage_payload(*, state_root=None, snapshot_path=None, registry_path=None)
                     error='Shadow registry unavailable; source comparison is still shown.')
     records = {(r['adapter'], r['origin_id'], r['generation']): r for r in saved}
     for request in stable:
-        record = records[(request['adapter'], request['origin_id'], request['generation'])]
-        for field in ('request_id', 'revision', 'answer_state', 'delivery_state'):
+        record = records.get((request['adapter'], request['origin_id'], request['generation']))
+        if not record:
+            request['identity_status'] = 'awaiting_authoritative_source'
+            continue
+        for field in ('request_id', 'revision', 'answer_state', 'delivery_state', 'status'):
             request[field] = record[field]
     return dict(result, ok=True, mode='shadow', llm_used=False, source=source,
                 installation_id=registry.installation_id,

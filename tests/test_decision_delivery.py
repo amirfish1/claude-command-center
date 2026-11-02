@@ -13,9 +13,12 @@ def setup(tmp_path):
     source = dict(adapter='watchtower-block', origin_id='EXAMPLE-1', generation='episode-1',
                   source_revision='revision-1', kind='question', wait_kind='owner',
                   body='Choose region', title='Deployment', visibility='global',
-                  source_snapshot={'blocked_at': 'episode-1', 'block_question': 'Choose region',
+                  source_snapshot={'store_id': '00000000-0000-4000-8000-000000000001',
+                                   'blocked_at': 'episode-1', 'block_question': 'Choose region',
                                    'wait_kind': 'owner', 'wait': None})
-    request = registry.upsert_requests([source])[0]
+    request = registry.observe_source('watchtower-block',
+        {'backend': 'file', 'store_id': source['source_snapshot']['store_id']}, [source],
+        version={'revision': 1, 'snapshot_sha256': '0' * 64})[0]
     return registry, AnswerOutbox(registry), request, source
 
 
@@ -48,11 +51,21 @@ def test_stale_or_unsupported_answers_are_rejected_before_recording(setup):
     with pytest.raises(AnswerConflict):
         save(outbox, request)
     for changes in ({'visibility': 'local'}, {'adapter': 'legacy-card'},
-                    {'wait_kind': 'external'}, {'kind': 'review'}, {'source_snapshot': None}):
+                    {'wait_kind': 'external'}, {'kind': 'review'}, {'source_snapshot': None},
+                    {'source_snapshot': dict(source['source_snapshot'], store_id='another-store')}):
         row = registry.upsert_requests([dict(source, origin_id=str(changes), **changes)])[0]
         with pytest.raises(AnswerConflict):
             save(outbox, row)
     assert registry.list_requests()[0]['answer_state'] == 'none'
+
+
+def test_question_changed_after_recording_is_not_dispatched(setup):
+    registry, outbox, request, source = setup
+    answer = save(outbox, request)
+    registry.upsert_requests([dict(source, body='A different question')])
+    adapter = Adapter()
+    assert outbox.dispatch(answer['answer_id'], adapter)['state'] == 'rejected'
+    assert adapter.calls == 0
 
 
 class Adapter:

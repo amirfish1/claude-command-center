@@ -7,9 +7,9 @@ import subprocess
 
 import pytest
 
-from ccc_server.decision_coverage import coverage_payload
 from ccc_server.decision_delivery import AnswerOutbox
 from ccc_server.decision_registry import DecisionRegistry
+from ccc_server.decision_sources import owner_source_payload
 from ccc_server.decision_watchtower import WatchTowerAnswers
 
 
@@ -23,7 +23,8 @@ def source_item(store):
 
 
 @pytest.fixture
-def integrated(tmp_path):
+def integrated(tmp_path, monkeypatch):
+    queue = pytest.importorskip('watchtower.queue')
     executable = shutil.which('wt')
     if not executable:
         pytest.skip('WatchTower is an optional integration')
@@ -33,6 +34,8 @@ def integrated(tmp_path):
                WATCHTOWER_CONFIG_FILE=str(tmp_path / 'config.json'),
                WATCHTOWER_DATA_DIR=str(tmp_path / 'wt'),
                WATCHTOWER_ACTIVITY_LOG=str(tmp_path / 'activity.log'))
+    for key in ('WATCHTOWER_STORE', 'WATCHTOWER_CONFIG_FILE', 'WATCHTOWER_DATA_DIR', 'WATCHTOWER_ACTIVITY_LOG'):
+        monkeypatch.setenv(key, env[key])
     (tmp_path / 'config.json').write_text('{}')
 
     def runner(args, **kwargs):
@@ -46,18 +49,36 @@ def integrated(tmp_path):
                   block_question=' Choose a color? \n', history=[],
                   wait={'on': 'owner', 'block_at': 'episode-1', 'revision': 'wait-1'})
     store = tmp_path / 'queue.json'
-    store.write_text(json.dumps({'counter': 1, 'items': [ticket]}))
+    with queue._FileLock(queue._lock_path()):
+        queue._save_unlocked({'counter': 1, 'items': [ticket]})
     (root / 'wt_items_snapshot.json').write_text(json.dumps({'items': [ticket]}))
-    projected = coverage_payload(state_root=root)['requests'][0]
+    result = owner_source_payload(state_root=root, executable=executable, runner=runner)
+    assert result['ok'], result
+    projected = result['requests'][0]
     registry = DecisionRegistry(root / 'decision-inbox' / 'requests.sqlite3')
     outbox = AnswerOutbox(registry)
     answer = outbox.record(projected['request_id'], expected_revision=projected['revision'],
                            text='Blue', idempotency_key='first-answer')
-    return outbox, answer, WatchTowerAnswers(executable, runner=runner), store, ticket
+    def mutate(changes):
+        with queue._FileLock(queue._lock_path()):
+            data = queue._load_unlocked()
+            data['items'][0].update(changes)
+            queue._save_unlocked(data)
+
+    def switch_store():
+        data = queue._load_unlocked()
+        other = tmp_path / 'other.json'
+        monkeypatch.setenv('WATCHTOWER_STORE', str(other))
+        env['WATCHTOWER_STORE'] = str(other)
+        with queue._FileLock(queue._lock_path()):
+            queue._save_unlocked(data)
+        return other
+
+    return outbox, answer, WatchTowerAnswers(executable, runner=runner), store, mutate, switch_store
 
 
 def test_real_source_accepts_exact_snapshot_and_replays_once(integrated):
-    outbox, answer, adapter, store, _ = integrated
+    outbox, answer, adapter, store, *_ = integrated
     result = outbox.dispatch(answer['answer_id'], adapter)
     assert result['state'] == 'accepted'
     assert result['receipt']['source_receipt']['request']['expected_block_question'] == ' Choose a color? \n'
@@ -76,19 +97,19 @@ def test_real_source_accepts_exact_snapshot_and_replays_once(integrated):
     {'wait': {'on': 'external', 'block_at': 'episode-1', 'revision': 'wait-2'}},
 ])
 def test_real_source_rejects_stale_episode_text_and_ownership(integrated, changed):
-    outbox, answer, adapter, store, ticket = integrated
-    store.write_text(json.dumps({'counter': 1, 'items': [dict(ticket, **changed)]}))
-    before = store.read_bytes()
+    outbox, answer, adapter, store, mutate, _ = integrated
+    mutate(changed)
+    before = source_item(store)
     result = outbox.dispatch(answer['answer_id'], adapter)
     assert result['state'] == 'rejected'
     assert result['receipt']['reason'] == 'conflict'
-    assert store.read_bytes() == before
+    assert source_item(store) == before
     assert source_item(store)['needs_input']
     assert not any(e['event'] == 'answer' for e in source_item(store)['history'])
 
 
 def test_real_lost_response_reconciles_without_another_source_answer(integrated):
-    outbox, answer, adapter, store, _ = integrated
+    outbox, answer, adapter, store, *_ = integrated
     submit = adapter.submit
 
     def lose_response(row):
@@ -103,10 +124,21 @@ def test_real_lost_response_reconciles_without_another_source_answer(integrated)
 
 
 def test_receipt_must_match_the_exact_source_request(integrated):
-    _, answer, adapter, _, _ = integrated
+    _, answer, adapter, *_ = integrated
     receipt = adapter.submit(answer)['source_receipt']
     assert adapter._receipt(answer, dict(receipt, ref='EXAMPLE-2'))['status'] == 'unknown'
     assert adapter._receipt(answer, dict(receipt, idempotency_key='other'))['status'] == 'unknown'
     assert adapter._receipt(answer, dict(receipt, request={}))['status'] == 'unknown'
     changed = dict(receipt['request'], expected_store_id='another-store')
     assert adapter._receipt(answer, dict(receipt, request=changed))['status'] == 'unknown'
+
+
+def test_real_receipt_lookup_refuses_copied_receipt_in_another_store(integrated):
+    outbox, answer, adapter, _, _, switch = integrated
+    outbox._claim(answer['answer_id'])
+    assert adapter.submit(answer)['status'] == 'accepted'
+    other = switch()
+    before = source_item(other)
+    assert adapter.lookup(answer)['status'] == 'unknown'
+    assert outbox.reconcile(answer['answer_id'], adapter)['state'] == 'sending'
+    assert source_item(other) == before
