@@ -3465,6 +3465,13 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
     loaded; that rejection is repaired here, at the one choke point every
     resume passes through, so no send/steer/pump path can bounce on it.
     """
+    try:
+        from ccc_server import codex_thread_wedge
+        skipped = codex_thread_wedge.short_circuit(method, params)
+    except Exception:
+        skipped = None
+    if skipped is not None:
+        return skipped
     response = _codex_app_server_request_once(
         method, params, timeout,
         _route=_route, _null_params=_null_params,

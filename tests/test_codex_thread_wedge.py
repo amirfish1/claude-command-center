@@ -132,3 +132,58 @@ def test_delivery_gate_holds_without_touching_the_queue(monkeypatch):
 def test_delivery_gate_passes_healthy_threads():
     from ccc_server import queue_events
     assert queue_events._codex_wedge_gate(SID) is None
+
+
+def test_wedged_thread_requests_fail_fast_with_periodic_probe():
+    _timeouts(3)  # last timeout at t=1080
+    params = {"threadId": SID, "includeTurns": True}
+    skipped = w.short_circuit("thread/read", params, now=1100.0)
+    assert skipped and skipped["wedged"] and "timed out" not in skipped["error"]
+    assert w.short_circuit("thread/read", {"threadId": "healthy"}, now=1100.0) is None
+    assert w.short_circuit("thread/loaded/list", {}, now=1100.0) is None
+    # A probe goes through once per interval, then fast-fail resumes.
+    assert w.short_circuit("thread/read", params, now=1080.0 + w.PROBE_INTERVAL_S) is None
+    assert w.short_circuit("thread/read", params, now=1090.0 + w.PROBE_INTERVAL_S) is not None
+
+
+def test_choke_point_skips_wedged_thread_without_sending(monkeypatch):
+    import importlib
+    importlib.import_module("server")
+    from ccc_server import codex
+    _timeouts(3, start=time.time() - 200, step=60)
+    sent = []
+    monkeypatch.setattr(codex, "_codex_app_server_request_once",
+                        lambda *a, **k: sent.append(a) or OK)
+    out = codex._codex_app_server_request("thread/read", {"threadId": SID})
+    assert out["wedged"] is True and sent == []
+    assert w.wedged(SID) is not None  # a skip neither resets nor inflates the count
+
+
+def test_restart_is_graceful_when_the_daemon_cooperates():
+    calls = []
+    out = w._restart_daemon("codex", run=lambda c, t: calls.append(c[-1]) or {"ok": True},
+                            daemon_pid=lambda: 1234, stop_pid=lambda p: calls.append(p))
+    assert out["mode"] == "graceful" and calls == ["restart"]
+
+
+def test_hung_graceful_restart_forces_stop_and_start():
+    # A wedged daemon never finishes draining: the restart times out and the
+    # daemon refuses every thread until it is stopped and started fresh.
+    calls = []
+
+    def run(cmd, timeout):
+        calls.append(cmd[-1])
+        return {"ok": False, "error": "timed out"} if cmd[-1] == "restart" else {"ok": True}
+
+    out = w._restart_daemon("codex", run=run, daemon_pid=lambda: 1234,
+                            stop_pid=lambda p: calls.append(p))
+    assert calls == ["restart", 1234, "start"]
+    assert out["ok"] and out["mode"] == "forced" and out["killed_pid"] == 1234
+
+
+def test_daemon_pid_requires_an_app_server_process(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    d = tmp_path / "app-server-daemon"
+    d.mkdir()
+    (d / "daemon.pid").write_text(json.dumps({"pid": os.getpid()}))
+    assert w._daemon_pid() == 0  # pytest is not an app-server: never kill it
