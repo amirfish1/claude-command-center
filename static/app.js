@@ -87157,14 +87157,22 @@
   }
   async function stopCarMode() {
     carModeError('');
+    if ($carModeStopBtn) $carModeStopBtn.disabled = true;
     try {
       const res = await fetch('/api/car-mode/stop', { method: 'POST' });
       const d = await res.json().catch(() => ({}));
+      if (!res.ok || d.ok !== true) throw new Error(d.error || 'Stop was not confirmed');
       renderCarModeStatus(d);
-      showOpToast('Car Mode stopped', 'ok');
+      showOpToast('Car Mode stop requested', 'ok');
     } catch (err) {
       carModeError((err && err.message) || 'Stop failed.');
-    } finally { fetchCarModeStatus(); }
+    } finally {
+      await fetchCarModeStatus();
+      if (document.activeElement === document.body) {
+        const target = [$carModeStopBtn, $carModeStartBtn, $carModeCancelBtn].find(button => button && !button.disabled && button.getClientRects().length && getComputedStyle(button).display !== 'none');
+        target?.focus();
+      }
+    }
   }
   if ($carModeMenuBtn) $carModeMenuBtn.addEventListener('click', () => {
     closeSettingsModal();
@@ -88313,9 +88321,8 @@
   if ($phoneAccessBtn) $phoneAccessBtn.addEventListener('click', () => {
     closeSettingsModal();
     if (window.cccPhoneAccess) {
-      // Setup is one click from here: turn the preview flag on for the user.
-      Promise.resolve(window.cccPhoneAccess.enableFlag && window.cccPhoneAccess.enableFlag())
-        .catch(() => {}).then(() => window.cccPhoneAccess.open());
+      // Merely viewing setup must not enable a flag or change sharing.
+      window.cccPhoneAccess.open();
     }
   });
   if ($networkBackdrop) $networkBackdrop.addEventListener('click', networkClose);
@@ -93875,7 +93882,7 @@
       ['notifications', 'Notifications & voice', ['notifications','voice']],
       ['vault', 'Connections', ['vault','api-keys','network']],
       ['sessions', 'Usage & budgets', ['sessions','limits','leftover','free']],
-      ['maintenance', 'System', ['maintenance','experimental']],
+      ['maintenance', 'System', ['maintenance','capabilities','experimental']],
     ];
     window.cccSettingsDestinations = destinations;
     const titles = {defaults:'Launch defaults', engines:'Install & connect engines',
@@ -93883,7 +93890,7 @@
       layout:'Layout & visibility', preferences:'Review & transfer preferences', notifications:'Notifications', voice:'Voice & sound',
       vault:'Saved secrets', 'api-keys':'Model provider keys', network:'Devices & remote access',
       sessions:'Subscription costs', limits:'Usage limits', leftover:'Use spare quota',
-      free:'Free model setup', maintenance:'Diagnostics & config access',
+      free:'Free model setup', capabilities:'Optional capabilities', maintenance:'Diagnostics & config access',
       tools:'Workspace tools', help:'Help & setup', experimental:'Preview features'};
     function consolidate() {
       for (const [primary, title, ids] of destinations) {
@@ -94036,6 +94043,7 @@
     opts = opts || {};
     if (!$settingsRail || !$settingsPane || !sectionId) return;
     if (window.cccServiceConnections?.redirect(sectionId) || window.cccSettingsActions?.redirect(sectionId) || window.cccSettingsContext?.redirect(sectionId)) return;
+    window.cccSettingsCapabilities?.route(sectionId);
     const requested = $settingsPane.querySelector('[data-section-id="'+sectionId+'"]');
     const destination = requested?.dataset.destination || sectionId;
     const firstRun = $settingsModalInner.classList.contains('is-first-run');
@@ -94266,6 +94274,7 @@
           '<div class="settings-row-main">' +
             '<div class="settings-row-label">' + escapeHtml(m.label) + '</div>' +
             '<div class="settings-row-desc">' + escapeHtml(m.desc || '') + '</div>' +
+            '<div class="settings-row-desc" role="status" data-ff-status="' + escapeHtml(m.name) + '"></div>' +
           '</div>' +
           '<div class="settings-row-control">' +
             '<button type="button" class="settings-toggle' + (on ? ' is-on' : '') + '" ' +
@@ -94616,11 +94625,9 @@
     const phase = _etsPhase(_etsState);
     if (phase === 'missing') { _etsOpenedInstall = true; renderTailscaleStep(); refreshTailscaleStep(); return; }
     if (phase === 'signin') { _etsOpenedSignin = true; renderTailscaleStep(); refreshTailscaleStep(); return; }
-    // Ready or already on: the existing phone-access wizard does the rest
-    // (serve, QR, phone URL, PIN, round-trip test). The user asked for this,
-    // so the preview flag that gates it is switched on for them.
+    // Viewing the wizard is read-only. Its explicit Turn on action enables
+    // the preview gate before changing sharing.
     try {
-      if (window.cccPhoneAccess && window.cccPhoneAccess.enableFlag) await window.cccPhoneAccess.enableFlag();
       if (window.cccPhoneAccess) window.cccPhoneAccess.open();
     } catch (_) {}
     refreshTailscaleStep();
@@ -94821,23 +94828,26 @@
       const ffToggle = e.target.closest('[data-ff-toggle]');
       if (ffToggle) {
         const name = ffToggle.getAttribute('data-ff-toggle');
-        const next = ffToggle.getAttribute('aria-checked') !== 'true';
-        // Optimistic UI: flip immediately, persist to the daemon's override
-        // file, then reconcile from the server's resolved state.
-        ffToggle.classList.toggle('is-on', next);
-        ffToggle.setAttribute('aria-checked', String(next));
-        if (window.__CCC_FLAGS__) window.__CCC_FLAGS__[name] = next;
-        showSettingsSavedPulse(ffToggle.closest('.settings-row'));
+        const previous = ffToggle.getAttribute('aria-checked') === 'true';
+        const next = !previous;
+        ffToggle.disabled = true;
         fetch('/api/features/flag', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: name, on: next }),
-        }).then(r => r.json()).then(res => {
-          if (res && res.ok && res.flags) {
-            window.__CCC_FLAGS__ = res.flags;
-            renderExperimentalFlags();
-          }
-        }).catch(() => {});
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, on: next }),
+        }).then(async response => {
+          const result = await response.json();
+          if (!response.ok || !result.ok || !result.flags) throw new Error(result.error || 'Flag change rejected');
+          window.__CCC_FLAGS__ = result.flags;
+          window.dispatchEvent(new CustomEvent('ccc:flags'));
+        }).catch(error => {
+          window.__CCC_FLAGS__ = Object.assign({}, window.__CCC_FLAGS__ || {}, {[name]:previous});
+          window.dispatchEvent(new CustomEvent('ccc:flags'));
+          const status = document.querySelector('[data-ff-status="' + CSS.escape(name) + '"]');
+          if (status) status.textContent = 'Not saved: ' + error.message;
+        }).finally(() => {
+          const replacement = document.querySelector('[data-ff-toggle="' + CSS.escape(name) + '"]');
+          if (replacement) { replacement.disabled = false; if (document.activeElement === document.body) replacement.focus(); }
+        });
         return;
       }
       const heroOpenBtn = e.target.closest('[data-hero-open]');
@@ -96194,6 +96204,16 @@
     refresh: () => Promise.allSettled([refreshByokSettings(), refreshVaultSettings()]),
   });
   _settingsSearchIndex = null;
+
+  window.cccSettingsCapabilities?.mount({
+    navigate: section => {
+      clearTimeout(settingsSearchFocusTimer);
+      if ($settingsModal.hidden) openSettingsModal({focusSearch:false}); else clearSettingsSearch();
+      setActiveSettingsRailSection(section);
+    },
+    invalidate: () => { _settingsSearchIndex = null; },
+    voiceControls: () => { closeSettingsModal(); voiceOpenPanel(); $voicePanelStopBtn?.focus(); },
+  });
 
   window.cccSettingsContext?.mount({
     closeSettings: closeSettingsModal,

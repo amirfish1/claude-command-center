@@ -32948,6 +32948,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "config": config, "headroom": _headroom.headroom_payload()})
             except (OSError, ValueError) as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/settings/capabilities":
+            # Metadata only: no key reads, external probes, or service changes.
+            from ccc_server.settings_capabilities import snapshot
+            self.send_json(snapshot(sys.modules[__name__]))
         elif path == "/api/settings/preferences/registry":
             from ccc_server.settings_preferences import registry, factory_defaults
             self.send_json({"registry": registry(), "defaults": factory_defaults()})

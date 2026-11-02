@@ -152,10 +152,24 @@
     // Refresh whenever the section becomes the active pane (rail click,
     // deep link, search result, programmatic switch — all change the class).
     new MutationObserver(function () {
-      var active = sec.classList.contains('is-active-section');
-      if (active) activate(); else deactivate();
+      updateActivation();
     }).observe(sec, { attributes: true, attributeFilter: ['class'] });
   }
+
+  function updateActivation() {
+    var sec = el('settingsSection-' + SECTION_ID);
+    var details = sec && sec.querySelector(':scope > details');
+    var allowed = !window.cccSettingsCapabilities || window.cccSettingsCapabilities.configurationVisible('free');
+    var modal = el('settingsModal');
+    if (sec && sec.classList.contains('is-active-section') && (!modal || !modal.hidden) && (!details || details.open) && allowed) activate();
+    else deactivate();
+  }
+  document.addEventListener('toggle', function (event) {
+    if (event.target.closest && event.target.closest('#settingsSection-free')) updateActivation();
+  }, true);
+  window.addEventListener('ccc:capability-setup', updateActivation);
+  var settingsModal = el('settingsModal');
+  if (settingsModal) new MutationObserver(updateActivation).observe(settingsModal, {attributes:true,attributeFilter:['hidden','class']});
 
   // Deep link (?ccc_settings=free) — the modal's own lookup ran before our
   // deferred script injected the tab, so we re-do it for our id only.
@@ -276,11 +290,15 @@
 
   // ── render ──────────────────────────────────────────────────────────
 
+  var pendingActionFocus = '';
   function render() {
     var root = el('fsRoot');
     var desc = el('fsHeroDesc');
     if (!root || !desc) return;
     if (!S.loaded) return;
+    var focusedId = root.contains(document.activeElement) ? document.activeElement.id : '';
+    if (!focusedId && document.activeElement === document.body) focusedId = pendingActionFocus;
+    pendingActionFocus = '';
 
     var st = routerState();
     var html = '';
@@ -292,6 +310,10 @@
     html += renderFooter();
     root.innerHTML = html;
     wire(root);
+    if (focusedId) {
+      var focusTarget = el(focusedId) || (focusedId === 'fsStopBtn' ? el('fsStartBtn') : null);
+      if (focusTarget && !focusTarget.disabled && focusTarget.getClientRects().length) focusTarget.focus({preventScroll:true});
+    }
 
     var heroDesc = st.healthy && st.running
       ? 'Running. Every task on this engine costs $0.'
@@ -793,6 +815,7 @@
   }
 
   function doStop(ev) {
+    pendingActionFocus = document.activeElement === (ev && ev.target) ? 'fsStopBtn' : '';
     busy(ev && ev.target, true);
     api('/api/free-router/stop', { method: 'POST', body: {} }).then(function (r) {
       if (r.status === 404) {

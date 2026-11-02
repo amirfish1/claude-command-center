@@ -1,0 +1,16 @@
+#settingsCapabilities { font-size:13px; line-height:1.55; }
+#settingsCapabilities p, .capability-gate p { max-width:70ch; line-height:1.55; }
+#settingsCapabilities .settings-row, .capability-gate { align-items:start; gap:16px; }
+#settingsCapabilities [role=status], .capability-gate [role=status] { font-weight:500; }
+.capability-actions { display:flex; flex-wrap:wrap; gap:8px; flex-shrink:0; }
+#settingsCapabilities details { margin-top:8px; }
+#settingsCapabilities summary { cursor:pointer; }
+.capability-configuration[hidden] { display:none!important; }
+#settingsCapabilities :focus-visible, .capability-gate :focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+@media(max-width:700px) {
+ #settingsCapabilities .settings-row, .capability-gate { flex-direction:column; }
+ #settingsCapabilities button, .capability-gate button { min-height:44px; }
+ #settingsCapabilities summary { min-height:44px; box-sizing:border-box; padding:12px 0; }
+ .ccc-phone-backdrop .ccc-phone-box button,
+ .ccc-phone-backdrop .ccc-phone-box input { min-height:44px; box-sizing:border-box; }
+}

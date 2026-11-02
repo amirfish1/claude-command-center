@@ -1,0 +1,1 @@
+- Add a metadata-only optional capability catalog for voice, remote access, free-model routing, hands-free operation and preview feature gates. Fresh setup is deliberate, existing configuration stays accessible, and native runtime controls retain their actual effects. Viewing Phone access no longer enables its preview flag.

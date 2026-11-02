@@ -216,6 +216,7 @@
   /* open({nodeId, nodeName}) — nodeId '' means this node. */
   function open(opts) {
     opts = opts || {};
+    const opener = document.activeElement;
     injectStyle();
     const nodeId = opts.nodeId || '';
     const nodeName = opts.nodeName || '';
@@ -233,6 +234,13 @@
       + '<div class="ccc-phone-foot ccc-phone-row"><button type="button" data-act="close">Close</button></div></div>';
     document.body.appendChild(bd);
     const $ = (sel) => bd.querySelector(sel);
+    $('[data-act="close"]').focus();
+
+    function restoreAction(action) {
+      const next = action === 'enable' ? 'disable' : action === 'disable' ? 'enable' : action;
+      const target = $('[data-act="' + action + '"]') || $('[data-act="' + next + '"]') || $('[data-act="close"]');
+      if (target && !target.disabled) target.focus();
+    }
 
     function setMsg(role, text, kind, html) {
       const el = $('[data-role="' + role + '"]');
@@ -243,8 +251,12 @@
 
     function render() {
       if (!status) return;
+      const focused = bd.contains(document.activeElement) ? document.activeElement : null;
+      const action = focused?.getAttribute('data-act');
+      const role = focused?.getAttribute('data-role');
       if (status.ok === false && !status.tailscale) {
         $('[data-role="body"]').innerHTML = '<p class="ccc-phone-msg err">' + esc(status.detail || status.error || 'Could not load status') + '</p>';
+        if (focused && !focused.isConnected) $('[data-act="close"]').focus();
         return;
       }
       const ts = status.tailscale || {};
@@ -256,6 +268,10 @@
       $('[data-role="body"]').innerHTML = html;
       const pin = $('[data-role="pin"]');
       if (pin && pinVal) pin.value = pinVal;
+      if (focused && !focused.isConnected) {
+        if (action) restoreAction(action);
+        else if (role) $('[data-role="' + role + '"]')?.focus();
+      }
     }
 
     async function refresh() {
@@ -275,10 +291,26 @@
     function close() {
       clearTimeout(timer);
       bd.remove();
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey, true);
+      [opener, document.getElementById('settingsBtn'), document.querySelector('[data-mobile-nav="more"]'), document.querySelector('[data-mobile-nav-menu]')]
+        .find(node => {
+          if (!node || node === document.body || !node.isConnected || node.disabled || !node.getClientRects().length || getComputedStyle(node).visibility === 'hidden') return false;
+          const rect = node.getBoundingClientRect();
+          const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          return top === node || node.contains(top);
+        })?.focus();
     }
-    function onKey(e) { if (e.key === 'Escape') close(); }
-    document.addEventListener('keydown', onKey);
+    function onKey(e) {
+      if (e.isComposing) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+      if (e.key === 'Tab') {
+        const nodes = [...bd.querySelectorAll('button,input,select,a[href],[tabindex]')].filter(node => !node.disabled && node.tabIndex >= 0 && node.getClientRects().length);
+        const first = nodes[0], last = nodes[nodes.length - 1];
+        if (!bd.contains(document.activeElement) || (!e.shiftKey && document.activeElement === last)) { e.preventDefault(); first?.focus(); }
+        else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+      }
+    }
+    document.addEventListener('keydown', onKey, true);
 
     function failureHtml(d) {
       let html = esc(d.detail || d.error || 'Failed');
@@ -300,9 +332,14 @@
         return;
       }
       busy = true;
+      const restoreFocus = document.activeElement === btn;
       btn.disabled = true;
       try {
         if (act === 'enable' || act === 'disable') {
+          if (act === 'enable' && !nodeId && !await enableFlag()) {
+            setMsg('serve-msg', 'Could not enable Phone access. Sharing is unchanged; retry.', 'err');
+            return;
+          }
           setMsg('serve-msg', act === 'enable' ? 'Setting up tailscale serve…' : 'Turning off…');
           const d = await call(act, {}, nodeId);
           if (d.status) status = d.status;
@@ -333,6 +370,7 @@
       } finally {
         busy = false;
         btn.disabled = false;
+        if (restoreFocus && document.activeElement === document.body && bd.isConnected) restoreAction(act);
       }
     });
 
@@ -399,8 +437,9 @@
         body: JSON.stringify({ name: FLAG, on: true }),
       });
       const d = await r.json();
-      if (d && d.ok) {
+      if (r.ok && d && d.ok) {
         window.__CCC_FLAGS__ = Object.assign({}, window.__CCC_FLAGS__ || {}, d.flags || {}, { [FLAG]: true });
+        window.dispatchEvent(new CustomEvent('ccc:flags'));
         return true;
       }
     } catch (_) {}

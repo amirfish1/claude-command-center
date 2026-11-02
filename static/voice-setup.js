@@ -29,6 +29,7 @@
     get('carModeAnthropicKey').value='';get('carModeDeepgramKey').value='';
   }
   function enter() {
+    if(window.cccSettingsCapabilities&&!window.cccSettingsCapabilities.configurationVisible('voice'))return;
     if(!ready)return;listeningStatus();refreshAccess();
     if(!entered&&!loading){entered=true;reload();hooks.refreshVoices();}
   }
@@ -39,7 +40,7 @@
   function ttsLoaded(options){if(ready)get('voiceSetupReadingStatus').textContent=options.length?'This browser · '+options.length+' output voices advertised by this machine. $ marks paid output. Playback has not been tested.':'No optional output voices advertised. Random voice uses the existing speech fallback; its availability has not been tested.';}
   function ttsFailed(){if(ready)get('voiceSetupReadingStatus').textContent='Output voice catalog unavailable. The saved selection is retained; refresh to retry. Playback has not been tested.';}
   function open(part='listening'){
-    if(!ready)return false;hooks.navigate();enter();
+    if(!ready)return false;window.cccSettingsCapabilities?.reveal('voice');hooks.navigate();enter();
     const target=get('voiceSetup-'+part)||get('voiceSetup-listening');
     const disclosure=get('settingsSection-voice').querySelector(':scope > details');if(disclosure)disclosure.open=true;
     if(target.tagName==='DETAILS')target.open=true;
