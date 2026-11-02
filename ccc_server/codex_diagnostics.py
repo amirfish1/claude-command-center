@@ -12,8 +12,10 @@ and ``build_codex_session_diagnostics`` never raises.
 """
 from __future__ import annotations
 
+import collections
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -237,14 +239,16 @@ def _competition_facts(sid):
                 facts["desktop_app_server_pids"].append(pid)
     except Exception:
         pass
+    holders = []
     try:
-        conflict = _core._codex_shared_state_conflict()
-        if isinstance(conflict, dict):
-            facts["conflict_message"] = conflict.get("message")
-    except Exception:
-        pass
-    try:
-        holders = _core._codex_shared_state_db_holders()
+        # Diagnostics are a status read, not a spawn/send safety gate. Reuse
+        # the status cache instead of waiting for a host-wide lsof every TTL.
+        holders = _core._codex_shared_state_db_holders_stale_ok()
+        if holders:
+            pids = ", ".join(str(h.get("pid")) for h in holders)
+            facts["conflict_message"] = (
+                "Other Codex processes hold the shared state database (pids " + pids + ")."
+            )
         classified = _core._codex_classify_state_holders(holders, sid)
         facts["shared_state_holders"] = [
             {"pid": h.get("pid"), "command": h.get("command"),
@@ -259,7 +263,7 @@ def _competition_facts(sid):
     except Exception:
         pass
     try:
-        snap = _core._codex_thread_writer_snapshot(sid) or {}
+        snap = _core._codex_thread_writer_snapshot(sid, holders=holders) or {}
         facts["writer"] = snap.get("writer")
         facts["desktop_attached_to_rollout"] = bool(snap.get("desktop_attached"))
         facts["external_writer_active"] = bool(snap.get("external_active"))
@@ -670,3 +674,72 @@ def build_codex_session_diagnostics(session_id):
         payload["verdict"] = {"state": "idle", "severity": "ok",
                               "headline": "Idle", "detail": "No active turn detected."}
     return payload
+
+
+_CODEX_DIAGNOSTICS_TTL_S = 3.0
+_CODEX_DIAGNOSTICS_WAIT_S = 0.1
+_CODEX_DIAGNOSTICS_MAX_ENTRIES = 64
+_CODEX_DIAGNOSTICS_MAX_RUNNING = 2
+_codex_diagnostics_lock = threading.Lock()
+_codex_diagnostics_cache = collections.OrderedDict()
+
+
+def codex_session_diagnostics_snapshot(session_id):
+    """Bound the HTTP read even when a process scan or worker RPC stalls.
+
+    One collector per session, at most two globally. A cold request waits
+    briefly, then reports collection in progress; later polls get the full
+    snapshot. Expired snapshots remain visible while one refresh runs.
+    Engine mutation/ownership gates never use this display-only cache.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing session_id"}
+    launch = False
+    with _codex_diagnostics_lock:
+        entry = _codex_diagnostics_cache.get(sid)
+        if entry is None:
+            if len(_codex_diagnostics_cache) >= _CODEX_DIAGNOSTICS_MAX_ENTRIES:
+                for key, row in list(_codex_diagnostics_cache.items()):
+                    if not row["running"]:
+                        del _codex_diagnostics_cache[key]
+                        break
+            entry = {"payload": None, "updated": 0, "running": False,
+                     "done": threading.Event()}
+            _codex_diagnostics_cache[sid] = entry
+        _codex_diagnostics_cache.move_to_end(sid)
+        expired = time.monotonic() - entry["updated"] >= _CODEX_DIAGNOSTICS_TTL_S
+        running = sum(row["running"] for row in _codex_diagnostics_cache.values())
+        if (entry["payload"] is None or expired) and not entry["running"] \
+                and running < _CODEX_DIAGNOSTICS_MAX_RUNNING:
+            entry["running"] = True
+            entry["done"].clear()
+            launch = True
+        cold = entry["payload"] is None
+
+    if launch:
+        def collect():
+            try:
+                payload = _core.build_codex_session_diagnostics(sid)
+            except Exception:
+                payload = {"ok": False, "session_id": sid,
+                           "error": "diagnostics collection failed"}
+            with _codex_diagnostics_lock:
+                entry["payload"] = payload
+                entry["updated"] = time.monotonic()
+                entry["running"] = False
+                entry["done"].set()
+        try:
+            threading.Thread(target=collect, name="codex-diagnostics", daemon=True).start()
+        except RuntimeError:
+            with _codex_diagnostics_lock:
+                entry["running"] = False
+                entry["done"].set()
+    if cold and entry["running"]:
+        entry["done"].wait(_CODEX_DIAGNOSTICS_WAIT_S)
+    with _codex_diagnostics_lock:
+        if entry["payload"] is not None:
+            return dict(entry["payload"], refreshing=entry["running"],
+                        snapshot_age_s=round(time.monotonic() - entry["updated"], 1))
+    return {"ok": False, "session_id": sid, "pending": True,
+            "error": "Diagnostics collection in progress"}

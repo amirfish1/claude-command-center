@@ -30530,7 +30530,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(extract_session_workspace(sid))
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/codex-diagnostics$", path):
             sid = path.split("/")[-2]
-            self.send_json(build_codex_session_diagnostics(sid))
+            self.send_json(codex_session_diagnostics_snapshot(sid))
         elif re.match(r"^/api/session/[a-zA-Z0-9_-]+/queued-inputs$", path):
             # Durable CCC-queued input for one session, shaped as the same
             # synthetic `pending` user_text events the transcript endpoint

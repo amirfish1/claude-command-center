@@ -27,6 +27,9 @@ def _common_patches(tmpdir, log):
         mock.patch.object(server, '_codex_desktop_app_is_running', return_value=False),
         mock.patch.object(server, '_codex_desktop_app_server_procs', return_value=[]),
         mock.patch.object(server, '_codex_shared_state_conflict', return_value=None),
+        mock.patch.object(server, '_codex_shared_state_db_holders_stale_ok', return_value=[]),
+        mock.patch.object(server, '_app_server_status_preferring_worker', return_value={}),
+        mock.patch.object(server, '_codex_thread_state_resolved', return_value={}),
         mock.patch.object(server, '_codex_thread_writer_snapshot', return_value={
             'writer': None, 'desktop_attached': False, 'external_active': False}),
         mock.patch.object(server, '_codex_app_server_is_live', return_value=False),
@@ -157,13 +160,24 @@ class CodexDiagnosticsTests(unittest.TestCase):
         self.assertFalse(diag['ok'])
         self.assertEqual(diag['error'], 'missing session_id')
 
+    def test_competition_uses_one_status_sample_for_conflict_and_writer(self):
+        holders = [{'pid': 6440, 'command': 'codex'}]
+        self._patch('_codex_shared_state_db_holders_stale_ok', return_value=holders)
+        with mock.patch.object(server, '_codex_shared_state_conflict') as blocking, \
+                mock.patch.object(server, '_codex_thread_writer_snapshot', return_value={}) as writer:
+            from ccc_server import codex_diagnostics
+            facts = codex_diagnostics._competition_facts(SID)
+        blocking.assert_not_called()
+        writer.assert_called_once_with(SID, holders=holders)
+        self.assertIn('6440', facts['conflict_message'])
+
     def test_own_exec_resume_holder_is_running_exec(self):
         """A shared-state holder whose argv carries this sid through
         `codex exec resume` is CCC's own run, not a competing app."""
         capture = self.repo / f'resume-codex-{SID[:8]}-20261001T134350.log'
         capture.write_text(json.dumps({'type': 'thread.started', 'thread_id': SID}) + '\n')
         self._patch('_codex_capture_thread_row', return_value={'_ccc_capture': str(capture)})
-        self._patch('_codex_shared_state_db_holders', return_value=[{'pid': 6440, 'command': 'codex'}])
+        self._patch('_codex_shared_state_db_holders_stale_ok', return_value=[{'pid': 6440, 'command': 'codex'}])
         self._patch('_codex_classify_state_holders', return_value=[{
             'pid': 6440, 'command': 'codex',
             'argv': 'node /Users/x/.local/bin/codex exec resume --json ' + SID + ' hello',
@@ -192,7 +206,7 @@ class CodexDiagnosticsTests(unittest.TestCase):
         rollout.write_text('{}\n')
         self._patch('_resolve_codex_rollout_path', return_value=rollout)
         self._patch('_codex_thread_row', return_value={'id': SID})
-        self._patch('_codex_shared_state_db_holders', return_value=[{'pid': 999, 'command': 'codex'}])
+        self._patch('_codex_shared_state_db_holders_stale_ok', return_value=[{'pid': 999, 'command': 'codex'}])
         self._patch('_codex_classify_state_holders', return_value=[{
             'pid': 999, 'command': 'codex',
             'argv': 'codex exec resume --json other-thread-id hi',

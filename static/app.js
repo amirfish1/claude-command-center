@@ -61752,6 +61752,12 @@
   function renderCodexDiagnostics(data) {
     const el = codexDiagPanelEl();
     if (!el) return;
+    if (data && data.pending) {
+      el.innerHTML = '<div class="codex-diag-head">Codex diagnostics</div>'
+        + '<p class="codex-diag-muted" role="status">Collecting diagnostics…</p>';
+      el.hidden = false;
+      return;
+    }
     if (!data || !data.ok) {
       // Not a Codex session CCC knows about (or the probe failed): the
       // panel is Codex-only, so stay out of the way rather than show noise.
@@ -61905,7 +61911,9 @@
         + items.join('') + '</details>');
     }
 
-    el.innerHTML = '<div class="codex-diag-head">Codex diagnostics</div>' + rows.join('');
+    el.innerHTML = '<div class="codex-diag-head">Codex diagnostics'
+      + (data.refreshing ? ' <span class="codex-diag-muted">· refreshing</span>' : '')
+      + '</div>' + rows.join('');
     el.hidden = false;
   }
 
