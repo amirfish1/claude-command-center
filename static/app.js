@@ -325,28 +325,94 @@
   // the request before sending it (no free HTTP/1.1 connection), req_wait_ms is
   // send -> first byte (server accept + handler). ttfb >> server_ms needs this
   // split to tell browser queueing from server-side accept/GIL wait.
-  function _convResourceTiming(url, t0) {
+  // serverT0 (epoch ms the server started reading the request) and
+  // serverMs split req_wait into pre_handler_ms (proxy, accept, thread start)
+  // and post_handler_ms (handler done -> first byte: proxy and network).
+  // Both clocks are NTP-synced, so expect tens of ms of skew.
+  function _convResourceTiming(url, t0, serverT0, serverMs) {
     try {
       const abs = new URL(url, window.location.href).href;
       const list = performance.getEntriesByName(abs, 'resource');
       for (let i = list.length - 1; i >= 0; i--) {
         const e = list[i];
         if (e.startTime + 1 < t0 || !e.requestStart) continue;
-        return {
+        const out = {
           stall_ms: Math.round(e.requestStart - e.startTime),
           req_wait_ms: Math.round(e.responseStart - e.requestStart),
           conn_ms: Math.round(Math.max(0, e.connectEnd - e.connectStart)),
           proto: e.nextHopProtocol || '',
         };
+        if (serverT0 && performance.timeOrigin) {
+          out.pre_handler_ms = Math.round(serverT0 - (performance.timeOrigin + e.requestStart));
+          if (serverMs !== null) {
+            out.post_handler_ms = Math.round(performance.timeOrigin + e.responseStart - serverT0 - serverMs);
+          }
+        }
+        return out;
       }
     } catch (_) {}
     return null;
   }
+  // Direct conversation opens (CCC-143): the conversation-reader process
+  // serves GET /api/conversations/<id> on its own port, so an open neither
+  // waits for the busy dashboard to accept it nor shares a connection with
+  // the list polls. Used only after a ping to that port succeeds; any
+  // failure falls back to the dashboard path. localStorage
+  // ccc-conv-direct=0 turns it off.
+  const _convDirect = { base: null, downUntil: 0, probing: false, checkedAt: 0 };
+  function _convDirectProbe() {
+    if (_convDirect.probing) return;
+    try { if (localStorage.getItem('ccc-conv-direct') === '0') return; } catch (_) {}
+    _convDirect.probing = true;
+    _convDirect.checkedAt = Date.now();
+    fetch('/api/conv-reader/info', { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(info => {
+        const port = info && info.port;
+        if (!port) return null;
+        const loc = window.location;
+        const base = (loc.protocol === 'https:' ? 'https://' : 'http://') + loc.hostname.replace(/^([^\[].*:.*)$/, '[$1]') + ':' + port;
+        if (base === loc.origin) return null;
+        const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = ctl ? setTimeout(() => ctl.abort(), 4000) : null;
+        return fetch(base + '/api/conv-reader/ping', { cache: 'no-store', credentials: 'include', mode: 'cors', signal: ctl ? ctl.signal : undefined })
+          .then(r => (r.ok ? r.json() : null))
+          .then(j => { if (j && j.ok) { _convDirect.base = base; _convDirect.downUntil = 0; } })
+          .finally(() => { if (timer) clearTimeout(timer); });
+      })
+      .catch(() => {})
+      .finally(() => { _convDirect.probing = false; });
+  }
+  function _convDirectUrl(url) {
+    if (!_convDirect.base || Date.now() < _convDirect.downUntil) {
+      // Re-check now and then: the port is not offered until the reader is
+      // up, and a failed direct fetch parks it for a minute.
+      if (Date.now() - _convDirect.checkedAt > 60000) _convDirectProbe();
+      return null;
+    }
+    return /^\/api\/conversations\/(?!all(?:[?]|$)|list(?:[?]|$)|order(?:[?]|$))[^/?]+(?:[?]|$)/.test(url) ? _convDirect.base + url : null;
+  }
+  setTimeout(_convDirectProbe, 1500);
   function _fetchConvJsonTimed(url, init, keepErrors) {
     const t0 = performance.now();
     const g = window.__cccConnectionGate;
     const gate = g ? { streams: g.openStreams, pool_active: g.active, pool_queued: g.queued, direct_active: g.directActive } : null;
-    const pending = fetch(url, init).then(r => {
+    const directUrl = _convDirectUrl(url);
+    let fetchedUrl = url;
+    const viaDashboard = () => { fetchedUrl = url; return fetch(url, init); };
+    const first = directUrl
+      ? fetch(directUrl, Object.assign({}, init || {}, { credentials: 'include', mode: 'cors' })).then(r => {
+          // Declined (ACP and similar), PIN, or any error: the dashboard
+          // builds it, exactly as before.
+          if (r.ok) { fetchedUrl = directUrl; return r; }
+          return viaDashboard();
+        }, err => {
+          if (err && err.name === 'AbortError') throw err;
+          _convDirect.downUntil = Date.now() + 60000;
+          return viaDashboard();
+        })
+      : fetch(url, init);
+    const pending = first.then(r => {
       if (!r.ok && !keepErrors) return null;
       const tResp = performance.now();
       const st = r.headers.get('Server-Timing') || '';
@@ -361,7 +427,9 @@
               t0, tResp, tBody, tParse, bytes: txt.length,
               server_ms: num('app'), server_cpu_ms: num('cpu'),
               server_cache: ((st.match(/cache;desc="([^"]+)"/) || [])[1] || null),
-              gate, rt: _convResourceTiming(url, t0),
+              gate, rt: _convResourceTiming(fetchedUrl, t0,
+                +((st.match(/t0;desc="([0-9.]+)"/) || [])[1] || 0), num('app')),
+              direct: fetchedUrl !== url,
             }, enumerable: false, configurable: true });
           }
         } catch (_) {}
@@ -16443,6 +16511,7 @@
       engine: how.engine, voice: how.voice || '', cache: p.cache, head: p.head,
       chars: p.chars, clips: p.clips, target: p.target, rate: _ttsRate,
       wall_ms: Math.round(end - p.t0), mode: p.mode || 'clips', cue: !!p.cue,
+      bridge: !!p.bridge,
     } });
   }
   function _ttsPerfSilence(state, ms, kind) {
@@ -16464,7 +16533,7 @@
       max_stall_ms: Math.round(p.maxStall), stalls: p.stalls,
       voice: state.geminiVoice || '', cache: p.cache, chars: p.chars,
       clips: p.clips, played: state.index, target: p.target, rate: _ttsRate,
-      mode: p.mode || 'clips',
+      mode: p.mode || 'clips', bridge: !!p.bridge,
     } });
   }
   // A read paused and left (tab closed, reload) still reports its gaps.
@@ -16503,7 +16572,7 @@
       }
     }
     const _ttsFresh = !(Number(baseOffset) > 0) && !pauseOnStart && !_ttsKeepVoice;
-    let perf = null;
+    let perf = null, macBridge = false;
     if (!_ttsFresh && _ttsPrev && _ttsPrev.perf && !_ttsPrev.perf.flushed) {
       perf = _ttsPrev.perf;   // a restart continues the same read
     } else {
@@ -16517,10 +16586,17 @@
           gaps: 0, maxGap: 0, stalls: 0, maxStall: 0, gapT0: 0,
           cue: false,
         };
-        // Cold click on the free voice: tick now, speech follows when made.
+        // Cold click on the free voice: the built-in voice reads the first
+        // sentence at once while the free voice makes the next clip (owner,
+        // CCC-144 Q577). Kokoro needs ~2.6 s (p50) for a first sound on this
+        // host, so it can never start a cold read instantly. iPhone
+        // (continuous stream) keeps the tick: its <audio> needs the click.
         if (perf.head !== 'ready' && _ttsHeadReady) {
-          perf.cue = true;
-          try { _cccPlaySpeakerCue(); } catch (_) {}
+          if (_ttsMacBridgeOk(chunks)) perf.bridge = macBridge = true;
+          else {
+            perf.cue = true;
+            try { _cccPlaySpeakerCue(); } catch (_) {}
+          }
         }
       }
     }
@@ -16535,10 +16611,34 @@
       pauseOnStart: !!pauseOnStart,
       t0: Date.now(),
       perf,
+      macBridge,
     };
     _ttsPerfState = perf ? _ttsChunkState : null;
     _ttsSpeakNextChunk();
     return true;
+  }
+
+  // Built-in voice bridge for cold free-voice reads (CCC-144 Q577). Only the
+  // clip path (desktop streaming); localStorage ccc-tts-mac-bridge=0 opts out.
+  function _ttsMacBridgeOk(chunks) {
+    let pref = '';
+    try { pref = localStorage.getItem('ccc-tts-mac-bridge') || ''; } catch (_) {}
+    if (pref === '0' || !window.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') return false;
+    if (!chunks || chunks.length < 2) return false;
+    return !_ttsContinuousOk({ neuralOk: true, geminiVoice: _ttsKeepVoice });
+  }
+  function _ttsMacBridgeKick(state) {
+    const c = state.chunks[1];
+    state.prefetch = state.prefetch || {};
+    state.debugCache = state.debugCache || new Map();
+    if (!c || state.prefetch[1]) return;
+    const voice = state.geminiVoice || (state.paneId ? ttsVoiceForPane(state.paneId) : '');
+    const hit = _ttsHeadCache.get(c.text);
+    let p;
+    if (hit && hit.ready && (!voice || hit.voice === voice)) p = hit.p;
+    else p = _ttsFetchNeural(c.text, voice, 'fg');
+    p.catch(() => {});
+    state.prefetch[1] = p;
   }
 
   function _ttsSpeakNextChunk() {
@@ -16549,7 +16649,9 @@
     }
 
     const chunk = state.chunks[state.index];
-    if (_ttsNeuralUsable(state)) { _ttsSpeakChunkNeural(state, chunk); return; }
+    const bridging = !!(state.macBridge && state.index === 0);
+    if (!bridging && _ttsNeuralUsable(state)) { _ttsSpeakChunkNeural(state, chunk); return; }
+    if (bridging) _ttsMacBridgeKick(state);
     const utterance = new SpeechSynthesisUtterance(chunk.text);
     utterance.rate = _ttsRate;
     if (state.hebrew) utterance.lang = 'he-IL';
@@ -16558,6 +16660,7 @@
     utterance.onstart = () => {
       if (_ttsUtterance !== utterance || _ttsChunkState !== state) return;
       _ttsPerfStart(state, { engine: 'mac', voice: 'Mac voice' });
+      if (bridging) _ttsLog('BRIDGE', 'Mac voice reads clip 0 while the free voice makes clip 1');
       setTtsButtonsState(true, false, state.paneId);
       _ttsShowVoice('Mac voice');
       if (_ttsStartWhy) ttsButtons().concat(_ttsDirectBtn ? [_ttsDirectBtn] : []).forEach(btn => { btn.title = 'Mac voice: ' + _ttsStartWhy; });
@@ -16592,6 +16695,11 @@
       if (_ttsUtterance !== utterance || _ttsChunkState !== state) return;
       state.index += 1;
       _ttsUtterance = null;
+      if (bridging) {
+        // Silence from here to the free voice's first sound counts as a gap.
+        state.gapFrom = Date.now();
+        if (state.perf) state.perf.gapT0 = performance.now();
+      }
       if (skipped) {
         showOpToast('Skipped one speech segment; continuing.', 'info');
       }
@@ -60955,6 +61063,7 @@
       if (p.server_cpu_ms !== null) out.server_cpu_ms = p.server_cpu_ms;
       if (p.server_cache) out.server_cache = p.server_cache;
       if (p.gate) out.gate = p.gate;
+      if (p.direct) out.direct = true;
       if (p.rt) Object.assign(out, p.rt);
     }
     return out;
