@@ -34,3 +34,17 @@ never replays an action or proves its answer reached a source.
 Missing source rows do not resolve or withdraw registry records: that requires
 an authoritative source receipt. The endpoint returns only requests observed in
 the supplied snapshot; historical registry records are not an actionable inbox.
+
+## Delivery staging
+
+The internal answer outbox is separate from the coverage endpoint. It records
+an answer and pending delivery atomically against an expected request revision.
+It requires a conditional, idempotent source adapter; legacy card actions, local
+questions and review gates cannot enter this path. There is no public answer
+endpoint or automatic dispatcher for these records yet.
+
+A lost response leaves delivery unknown. Recovery first looks up the source's
+receipt by answer ID. Only authoritative absence permits another attempt using
+the same answer ID. An accepted receipt proves source acceptance, not resumed
+work or completed work. Definitive source rejection preserves the original
+answer and allows a new answer against the current request revision.

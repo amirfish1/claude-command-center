@@ -93,6 +93,8 @@ def test_endpoint_shadow_is_stable_and_never_rewrites_source_files(tmp_path):
     first = coverage_payload(state_root=tmp_path)
     second = coverage_payload(state_root=tmp_path)
     assert first['requests'][0]['request_id'] == second['requests'][0]['request_id']
+    assert first['requests'][0]['revision'] == second['requests'][0]['revision'] == 1
+    assert first['requests'][0]['answer_state'] == 'none'
     assert first['installation_id'] == second['installation_id']
     assert not first['llm_used'] and first['mode'] == 'shadow'
     from ccc_server.decision_registry import DecisionRegistry

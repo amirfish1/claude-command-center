@@ -137,11 +137,13 @@ def coverage_payload(*, state_root=None, snapshot_path=None, registry_path=None)
     registry = DecisionRegistry(registry_path or root / 'decision-inbox' / 'requests.sqlite3')
     registry.import_cards(cards)
     stable = [r for r in result['requests'] if r['generation']]
-    fields = ('adapter', 'origin_id', 'generation', 'kind', 'title', 'body', 'visibility', 'source_revision')
+    fields = ('adapter', 'origin_id', 'generation', 'kind', 'wait_kind', 'title', 'body', 'visibility', 'source_revision')
     saved = registry.upsert_requests([{key: r[key] for key in fields} for r in stable])
-    ids = {(r['adapter'], r['origin_id'], r['generation']): r['request_id'] for r in saved}
+    records = {(r['adapter'], r['origin_id'], r['generation']): r for r in saved}
     for request in stable:
-        request['request_id'] = ids[(request['adapter'], request['origin_id'], request['generation'])]
+        record = records[(request['adapter'], request['origin_id'], request['generation'])]
+        for field in ('request_id', 'revision', 'answer_state', 'delivery_state'):
+            request[field] = record[field]
     return dict(result, ok=True, mode='shadow', llm_used=False, source=source,
                 installation_id=registry.installation_id,
                 limitations=['Legacy ticket links do not establish the same question episode.',

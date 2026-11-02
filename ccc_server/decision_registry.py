@@ -121,6 +121,11 @@ class DecisionRegistry:
             installation_id=? AND adapter=? AND origin_id=? AND generation=?""", key).fetchone()
         serialized = _json(content)
         if previous:
+            # Source observations cannot erase a locally recorded answer or
+            # its delivery receipt while the source still reports the wait.
+            if adapter != 'legacy-card' and previous['answer_state'] != 'none':
+                answer_state = previous['answer_state']
+                delivery_state = previous['delivery_state']
             aliases = sorted(set(aliases) | set(json.loads(previous["aliases"])))
             changed = (serialized, _json(aliases), status, answer_state, delivery_state) != (
                 previous["content"], previous["aliases"], previous["status"],
