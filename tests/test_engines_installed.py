@@ -103,7 +103,8 @@ def test_engines_setup_is_not_part_of_the_tour():
     assert "Ensure agent CLIs" not in source
     app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
     assert "ccc-engines-first-run-done" in app
-    assert "Review the engines that are installed" in (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    # engine-connection.test.cjs exercises the first-run setup and its return
+    # path in the browser; introductory wording is not part of that contract.
 
 
 def _isolated_home(monkeypatch, tmp_path):
