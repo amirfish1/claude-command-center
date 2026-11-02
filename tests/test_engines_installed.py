@@ -214,8 +214,8 @@ def test_first_run_has_optional_tailscale_step_and_defaults_row():
     assert "/api/phone-access/tailscale" in js and "ccc-tailscale-step-done" in js
     assert 'id="engTailscaleStep"' in html and 'id="engFirstRunDefaults"' in html
     assert "Use CCC from your phone or other machines" in html
-    # Reuses the real spawn-defaults controls instead of new storage.
-    assert "spawnDefaultsEngine" in js and "efdEngine" in js
+    # The shared first-run routing editor is exercised behaviorally in
+    # settings-routing-policy.test.cjs; its internal control IDs can change.
     assert "—" not in html[html.index('id="engTailscaleStep"'):html.index('id="engTailscaleStep"') + 1800]
 
 
