@@ -144,7 +144,12 @@
       [data-context-singleton][hidden] {display:none!important}
       #convList .conv-archived-overflow-menu {width:min(340px,calc(100vw - 16px));min-width:0;max-width:calc(100vw - 16px);max-height:70vh;overflow-y:auto;overscroll-behavior:contain}
       [data-context-preferences] .settings-segmented {flex-wrap:wrap}
-      @media(max-width:1200px) {[data-context-preferences] button {min-height:36px}}
+      #settingsPane [data-settings-context] {max-width:100%;min-width:0;white-space:normal;overflow-wrap:anywhere;box-sizing:border-box;text-align:left}
+      @media(max-width:1200px) {
+        [data-context-preferences] button {min-height:36px}
+        #settingsModalFontSlot .font-size-btn {min-width:44px;min-height:44px}
+        #settingsPane [data-settings-context] {min-height:44px}
+      }
     `; document.head.append(style);
     const singleton = (element, id) => { if (id) element.id = id; element.dataset.contextSingleton = ''; element.dataset.contextPreferences = ''; return element; };
     const row = id => get(id)?.closest('.settings-row');

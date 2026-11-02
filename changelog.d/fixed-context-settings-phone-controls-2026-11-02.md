@@ -1,0 +1,2 @@
+- Keep contextual Settings links within narrow screens and give reader text-size controls larger phone touch targets.
+- Leave desktop reader header actions unobstructed by notification toasts.

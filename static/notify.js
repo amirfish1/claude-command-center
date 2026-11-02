@@ -130,6 +130,8 @@
       + '#cccNotifyStack{position:fixed;right:14px;top:14px;z-index:2147483000;'
       + 'display:flex;flex-direction:column;gap:8px;max-width:min(360px,calc(100vw - 28px));'
       + 'font-family:var(--font-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);}'
+      // Reserve the desktop header so notifications cannot cover reader actions.
+      + '@media(min-width:1201px){#cccNotifyStack{top:64px}}'
       + '.ccc-toast{pointer-events:auto;display:flex;gap:10px;align-items:flex-start;'
       + 'background:var(--bg-elevated,#1e2130);color:var(--text-primary,#e8eaf0);'
       + 'border:1px solid var(--border-subtle,rgba(255,255,255,.09));border-radius:10px;'

@@ -176,6 +176,7 @@ for(const width of [1440,390]){
   const page=await open(t,width,'?ccc_settings=text-size');await page.waitForFunction(()=>document.getElementById('fontPlus')===document.activeElement);
   assert.equal(await page.$eval('#settingsModal',el=>el.hidden),true);
   assert.equal(await page.$eval('#fontPlus',el=>!!el.closest(innerWidth<=1200?'#convSimpleActionsMenu':'.conv-pane-more-menu')),true);
+  if(width===390)assert.equal(await page.$$eval('#settingsModalFontSlot .font-size-btn',els=>els.every(el=>{const r=el.getBoundingClientRect();return r.width>=44&&r.height>=44;})),true);
   await page.keyboard.press('Enter');assert.equal(await page.evaluate(()=>localStorage.getItem('ccc-conv-font-scale')),'1.1');
   assert.equal(await page.$eval('.conversations-view',el=>el.style.zoom),'1.1');
   await page.click('#settingsModalFontSlot [aria-label="Reset conversation text size"]');
@@ -288,4 +289,22 @@ test('repository editor spans the collapsed phone composer grid',async t=>{
  assert.equal(await page.$eval('#contextRepoPreferences',e=>e.clientWidth>=280&&e.scrollWidth<=e.clientWidth),true);
  assert.equal(await page.$eval('#repoAvatarSelect',e=>e.getBoundingClientRect().width>=250),true);
  for(const id of ['repoAvatarUpload','repoAvatarReset'])assert.equal(await page.$eval('#'+id,e=>e.getBoundingClientRect().right<=e.closest('#contextRepoPreferences').getBoundingClientRect().right),true);
+});
+
+
+test('phone contextual Settings links wrap within the pane and retain touch targets',async t=>{
+ const page=await open(t,390);
+ const result=await page.evaluate(()=>{
+   openSettingsModal();
+   const pane=document.getElementById('settingsPane');
+   pane.style.width='350px';pane.style.maxWidth='100%';
+   return [...pane.querySelectorAll('[data-settings-context]')].map(button=>{
+     for(let node=button.parentElement;node&&node!==pane;node=node.parentElement){node.hidden=false;node.style.setProperty('display','block','important');if(node.tagName==='DETAILS')node.open=true;}
+     const row=button.parentElement;row.style.width='100%';
+     const r=button.getBoundingClientRect(),p=row.getBoundingClientRect();
+     return {height:r.height,fits:r.width<=p.width,nowrap:getComputedStyle(button).whiteSpace==='nowrap'};
+   });
+ });
+ assert(result.length>=4);
+ for(const item of result){assert(item.height>=44);assert(item.fits);assert.equal(item.nowrap,false);}
 });

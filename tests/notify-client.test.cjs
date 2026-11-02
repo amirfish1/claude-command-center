@@ -99,3 +99,28 @@ test('a failed policy write rolls back the partial update', async () => {
     assert.deepEqual(result,{saved:false,policy:'all'});
   } finally { await page.close(); }
 });
+
+
+test('desktop notification leaves the reader header focus target unobstructed', async () => {
+  const page = await browser.newPage();
+  try {
+    await page.setViewport({width:1440,height:1000});
+    await page.goto(url,{waitUntil:'load'});
+    await page.evaluate(()=>{
+      const details=document.createElement('details');
+      details.style.cssText='position:fixed;left:1143px;top:13px';
+      details.innerHTML='<summary data-role="pane-more" style="width:27px;height:26px">More</summary>';
+      document.body.append(details);
+      localStorage.setItem('ccc-popups-preview','notify-other');
+      cccNotify({title:'Synthetic update',body:'Header remains reachable.',kind:'success'});
+    });
+    await page.waitForSelector('.ccc-toast');
+    await page.focus('[data-role="pane-more"]');
+    const result=await page.evaluate(()=>{
+      const target=document.activeElement,r=target.getBoundingClientRect();
+      const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+      return {hit:hit===target||target.contains(hit),toastTop:document.querySelector('.ccc-toast').getBoundingClientRect().top,bottom:r.bottom};
+    });
+    assert.equal(result.hit,true);assert(result.toastTop>result.bottom);
+  } finally { await page.close(); }
+});
