@@ -16017,6 +16017,188 @@ _ARCHIVE_LIST_BODY_CACHE_MAX = 96
 _ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body builds
 
 
+def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload, snap_ver):
+    """(raw, gzip, etag) for a /list body: replayed from the body cache when
+    the version matches, else built once per key (single-flight)."""
+    # The version is part of the key (not just the equality check) so two
+    # alternating overlay states — e.g. a live ACP row whose counters move
+    # every poll — each keep a stable replay slot instead of evicting each
+    # other every poll.
+    # A new family edge changes the projection even if transcripts and
+    # the archive snapshot are unchanged. Preserve replay until it does.
+    from ccc_server import continuation_topics
+    body_key = (cache_key, window, bool(from_cache), snap_ver, _session_graph.parent_revision(),
+                continuation_topics.revision())
+    raw = gzip_body = etag_val = None
+
+    def _cached_body():
+        with _ARCHIVE_LIST_BODY_LOCK:
+            entry = _ARCHIVE_LIST_BODY_CACHE.get(body_key)
+            if entry is not None and entry.get("ver") == snap_ver:
+                return entry["raw"], entry.get("gzip"), entry.get("etag")
+        return None, None, None
+
+    build_lock = None
+    if snap_ver:
+        raw, gzip_body, etag_val = _cached_body()
+        if raw is None:
+            # CCC-142: single-flight per body key. Tabs polling the same
+            # window after a snapshot change each built the same ~11MB
+            # body at once, multiplying the GIL-bound work; the waiters
+            # now replay the first builder's bytes.
+            with _ARCHIVE_LIST_BODY_LOCK:
+                build_lock = _ARCHIVE_LIST_BODY_BUILD_LOCKS.setdefault(body_key, threading.Lock())
+            build_lock.acquire()
+            raw, gzip_body, etag_val = _cached_body()
+    try:
+        if raw is None:
+            raw = json.dumps(build_payload()).encode()
+            etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
+            # Level 1 halves compression time on the multi-MB 7d body
+            # (~240ms -> ~120ms) for ~30% more bytes on a local poll.
+            gzip_body = (
+                gzip.compress(raw, compresslevel=1)
+                if len(raw) >= _ARCHIVE_LIST_GZIP_MIN_BYTES else None
+            )
+            if snap_ver:
+                with _ARCHIVE_LIST_BODY_LOCK:
+                    if len(_ARCHIVE_LIST_BODY_CACHE) >= _ARCHIVE_LIST_BODY_CACHE_MAX:
+                        _ARCHIVE_LIST_BODY_CACHE.clear()
+                    _ARCHIVE_LIST_BODY_CACHE[body_key] = {
+                        "ver": snap_ver,
+                        "raw": raw,
+                        "gzip": gzip_body,
+                        "etag": etag_val,
+                    }
+                _ARCHIVE_LIST_BUILT.add((cache_key, window))
+                _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val)
+    finally:
+        if build_lock is not None:
+            build_lock.release()
+            with _ARCHIVE_LIST_BODY_LOCK:
+                if len(_ARCHIVE_LIST_BODY_BUILD_LOCKS) > 4 * _ARCHIVE_LIST_BODY_CACHE_MAX:
+                    _ARCHIVE_LIST_BODY_BUILD_LOCKS.clear()
+    return raw, gzip_body, etag_val
+
+
+# CCC-142: the /list body survives a restart. Right after a restart the
+# first full build costs ~3 CPU-s, stretched to 20-40 s wall by boot GIL
+# contention, and a reloaded page's bootstrap fetch (aborted at 45 s) sat
+# empty that whole time. During the boot window a bootstrap read (no
+# ?since=) for a (key, window) with no body built yet in this process gets
+# the last saved body at once while one background warm builds the fresh
+# one. The served body's delta token carries the old process nonce, so the
+# client's next ?since= poll is answered with a full, current body.
+_ARCHIVE_LIST_GZIP_MIN_BYTES = 1024
+_ARCHIVE_LIST_BUILT = set()  # (cache_key, window) with a body built this process
+_ARCHIVE_LIST_DISK_DIR = Path(os.environ.get("CCC_LIST_BODY_DIR") or (
+    Path(tempfile.gettempdir()) / f"ccc-test-list-body-{os.getpid()}" if test_isolation_active()
+    else Path.home() / ".claude" / "command-center" / "list_body"))
+_ARCHIVE_LIST_DISK_BOOT_S = 180.0
+_ARCHIVE_LIST_DISK_MAX_AGE_S = 6 * 3600.0
+_ARCHIVE_LIST_DISK_SAVE_MIN_S = 30.0
+_ARCHIVE_LIST_DISK_STATE = {"saved": {}, "warming": set()}
+_ARCHIVE_LIST_DISK_LOCK = threading.Lock()
+
+
+def _archive_list_disk_path(cache_key, window):
+    h = hashlib.sha1(repr((cache_key, window)).encode()).hexdigest()[:16]
+    return _ARCHIVE_LIST_DISK_DIR / f"{h}.json.gz"
+
+
+def _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val, now=None):
+    """Persist the newest body for (key, window); throttled, off-thread."""
+    now = time.time() if now is None else now
+    slot = (cache_key, window)
+    with _ARCHIVE_LIST_DISK_LOCK:
+        if now - _ARCHIVE_LIST_DISK_STATE["saved"].get(slot, 0.0) < _ARCHIVE_LIST_DISK_SAVE_MIN_S:
+            return False
+        _ARCHIVE_LIST_DISK_STATE["saved"][slot] = now
+    path = _archive_list_disk_path(cache_key, window)
+
+    def _write():
+        try:
+            blob = gzip_body if gzip_body is not None else gzip.compress(raw, compresslevel=1)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(f".{os.getpid()}.tmp")
+            with open(tmp, "wb") as fh:
+                fh.write(etag_val.encode() + b"\n" + blob)
+            os.replace(tmp, path)
+        except Exception:
+            pass
+
+    threading.Thread(target=_write, name="ccc-list-body-save", daemon=True).start()
+    return True
+
+
+def _archive_list_disk_load(cache_key, window, now=None):
+    """(raw, gzip, etag) of the saved body, or None when absent or too old."""
+    now = time.time() if now is None else now
+    path = _archive_list_disk_path(cache_key, window)
+    try:
+        if now - path.stat().st_mtime > _ARCHIVE_LIST_DISK_MAX_AGE_S:
+            return None
+        data = path.read_bytes()
+        etag_val, blob = data.split(b"\n", 1)
+        return gzip.decompress(blob), blob, etag_val.decode()
+    except Exception:
+        return None
+
+
+def _archive_list_disk_candidate(cache_key, window, since, now=None):
+    """The saved body to serve for this request, or None (normal path)."""
+    now = time.time() if now is None else now
+    if since or now - _SERVER_START_TS > _ARCHIVE_LIST_DISK_BOOT_S:
+        return None
+    if (cache_key, window) in _ARCHIVE_LIST_BUILT:
+        return None
+    return _archive_list_disk_load(cache_key, window, now)
+
+
+def _archive_list_start_warm(slot, warm):
+    """Run `warm` once per (key, window) in a background thread."""
+    with _ARCHIVE_LIST_DISK_LOCK:
+        if slot in _ARCHIVE_LIST_DISK_STATE["warming"]:
+            return False
+        _ARCHIVE_LIST_DISK_STATE["warming"].add(slot)
+
+    def _run():
+        try:
+            warm()
+        except Exception:
+            pass
+        finally:
+            with _ARCHIVE_LIST_DISK_LOCK:
+                _ARCHIVE_LIST_DISK_STATE["warming"].discard(slot)
+
+    threading.Thread(target=_run, name="ccc-list-body-warm", daemon=True).start()
+    return True
+
+
+def _archive_list_warm(cache_options, window, stale_ok):
+    """Build and cache the /list body the handler would build for a
+    bootstrap read, without a request (see _archive_list_disk_candidate)."""
+    rows, from_cache, body_ver = _archive_list_source_rows_cached(
+        cache_options, force_refresh=not stale_ok, phases={})
+    cache_key = _archive_response_cache_key(**cache_options)
+    delta = None
+    if body_ver:
+        try:
+            delta = _archive_list_delta_state(cache_key, rows, window, from_cache)
+        except Exception:
+            delta = None
+
+    def _payload():
+        payload = _archive_list_payload(rows, window=window, cached=from_cache)
+        if delta is not None:
+            payload["delta_token"] = delta["token"]
+        return payload
+
+    _archive_list_body_get_or_build(
+        cache_key, window, from_cache, _payload,
+        (body_ver, delta["ctx"]) if delta is not None else body_ver)
+
+
 def _archive_refresh_slot_available(key, now):
     """True if `key` has no background refresh in flight, or the one it has
     has been running past _ARCHIVE_REFRESH_WATCHDOG_S -- treated as abandoned
@@ -32563,13 +32745,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # in-memory ACP/Devin overlay rows were appended — either way a
             # prebuilt body may be replayed when the version matches.
             _src_phases = {}
+            list_cache_key = _archive_response_cache_key(**cache_options)
+            since = (qs.get("since", [""])[0] or "").strip()
+            _disk = _archive_list_disk_candidate(list_cache_key, window, since)
+            if _disk is not None:
+                _archive_list_start_warm(
+                    (list_cache_key, window),
+                    lambda: _archive_list_warm(cache_options, window, stale_ok),
+                )
+                _status = self._send_archive_list_body(*_disk, extra_headers=(("X-CCC-List-Body", "disk"),))
+                record_diag("list_server", (time.perf_counter() - _lt0) * 1000.0, {
+                    "window": window, "status": _status, "disk": True,
+                    "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
+                    "body_hit": True, "since": "none", "stale_ok": stale_ok,
+                })
+                return
             rows, from_cache, body_ver = _archive_list_source_rows_cached(
                 cache_options,
                 force_refresh=not stale_ok,
                 phases=_src_phases,
             )
             _lt1 = time.perf_counter()
-            list_cache_key = _archive_response_cache_key(**cache_options)
             _payload_ms = []
             # CCC-142: ?since=<delta_token> asks for only the rows that changed
             # after the client's last body. Anything the token can't vouch for
@@ -32581,7 +32777,6 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     _delta = _archive_list_delta_state(list_cache_key, rows, window, from_cache)
                 except Exception:
                     _delta = None
-            since = (qs.get("since", [""])[0] or "").strip()
             _status = None
             # CCC-201: why a client holding a token still got a full body.
             if not since:
@@ -42855,63 +43050,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         exactly the stored snapshot (identity), or (version, overlay content
         hash) when in-memory ACP/Devin overlay rows were appended; 0 disables
         the body cache and falls back to a fresh build."""
+        raw, gzip_body, etag_val = _archive_list_body_get_or_build(
+            cache_key, window, from_cache, build_payload, snap_ver)
+        return self._send_archive_list_body(raw, gzip_body, etag_val)
+
+    def _send_archive_list_body(self, raw, gzip_body, etag_val, extra_headers=()):
         accept_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
-        # The version is part of the key (not just the equality check) so two
-        # alternating overlay states — e.g. a live ACP row whose counters move
-        # every poll — each keep a stable replay slot instead of evicting each
-        # other every poll.
-        # A new family edge changes the projection even if transcripts and
-        # the archive snapshot are unchanged. Preserve replay until it does.
-        from ccc_server import continuation_topics
-        body_key = (cache_key, window, bool(from_cache), snap_ver, _session_graph.parent_revision(),
-                    continuation_topics.revision())
-        raw = gzip_body = etag_val = None
-
-        def _cached_body():
-            with _ARCHIVE_LIST_BODY_LOCK:
-                entry = _ARCHIVE_LIST_BODY_CACHE.get(body_key)
-                if entry is not None and entry.get("ver") == snap_ver:
-                    return entry["raw"], entry.get("gzip"), entry.get("etag")
-            return None, None, None
-
-        build_lock = None
-        if snap_ver:
-            raw, gzip_body, etag_val = _cached_body()
-            if raw is None:
-                # CCC-142: single-flight per body key. Tabs polling the same
-                # window after a snapshot change each built the same ~11MB
-                # body at once, multiplying the GIL-bound work; the waiters
-                # now replay the first builder's bytes.
-                with _ARCHIVE_LIST_BODY_LOCK:
-                    build_lock = _ARCHIVE_LIST_BODY_BUILD_LOCKS.setdefault(body_key, threading.Lock())
-                build_lock.acquire()
-                raw, gzip_body, etag_val = _cached_body()
-        try:
-            if raw is None:
-                raw = json.dumps(build_payload()).encode()
-                etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
-                # Level 1 halves compression time on the multi-MB 7d body
-                # (~240ms -> ~120ms) for ~30% more bytes on a local poll.
-                gzip_body = (
-                    gzip.compress(raw, compresslevel=1)
-                    if len(raw) >= self._GZIP_MIN_BYTES else None
-                )
-                if snap_ver:
-                    with _ARCHIVE_LIST_BODY_LOCK:
-                        if len(_ARCHIVE_LIST_BODY_CACHE) >= _ARCHIVE_LIST_BODY_CACHE_MAX:
-                            _ARCHIVE_LIST_BODY_CACHE.clear()
-                        _ARCHIVE_LIST_BODY_CACHE[body_key] = {
-                            "ver": snap_ver,
-                            "raw": raw,
-                            "gzip": gzip_body,
-                            "etag": etag_val,
-                        }
-        finally:
-            if build_lock is not None:
-                build_lock.release()
-                with _ARCHIVE_LIST_BODY_LOCK:
-                    if len(_ARCHIVE_LIST_BODY_BUILD_LOCKS) > 4 * _ARCHIVE_LIST_BODY_CACHE_MAX:
-                        _ARCHIVE_LIST_BODY_BUILD_LOCKS.clear()
         if self.headers.get("If-None-Match") == etag_val:
             self.send_response(304)
             self.send_header("ETag", etag_val)
@@ -42926,6 +43070,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("ETag", etag_val)
+        for hk, hv in extra_headers:
+            self.send_header(hk, hv)
         if enc:
             self.send_header("Content-Encoding", enc)
             self.send_header("Vary", "Accept-Encoding")
