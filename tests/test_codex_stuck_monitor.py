@@ -77,3 +77,33 @@ class CodexStuckMonitorUiTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_concurrent_cold_stuck_summary_builds_once(monkeypatch):
+    """CCC-142: boot pollers missing the cache together share one scan."""
+    import threading as _th
+    import time as _time
+    from ccc_server import codex as _cx
+
+    monkeypatch.setitem(_cx._codex_stuck_summary_cache, "value", None)
+    monkeypatch.setitem(_cx._codex_stuck_summary_cache, "ts", 0.0)
+    calls = []
+
+    def slow_fetch():
+        calls.append(1)
+        _time.sleep(0.2)
+        return []
+
+    monkeypatch.setattr(_cx._core, "_codex_fetch_threads", slow_fetch)
+    monkeypatch.setattr(_cx._core, "_codex_pool_alive", lambda now: False)
+    monkeypatch.setattr(_cx._core, "_live_engine_session_ids", lambda: set())
+    out = []
+    ts = [_th.Thread(target=lambda: out.append(_cx.build_codex_stuck_summary())) for _ in range(6)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len(calls) == 1
+    assert len(out) == 6 and all(o["count"] == 0 for o in out)
+    _cx.build_codex_stuck_summary(force=True)
+    assert len(calls) == 2

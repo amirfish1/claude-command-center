@@ -11919,6 +11919,9 @@ def _codex_stuck_reason(tail, mtime, now):
 
 _codex_stuck_summary_cache = {"ts": 0.0, "value": None}
 _codex_stuck_summary_lock = threading.Lock()
+# Single-flight for cold builds: at boot several pollers miss the cache at
+# once and each ran the full scan (CCC-142).
+_codex_stuck_summary_build_lock = threading.Lock()
 
 
 def _codex_stuck_summary_ttl_s():
@@ -11938,18 +11941,29 @@ def build_codex_stuck_summary(now=None, force=False):
     process signal. The read-only confirmation deliberately avoids recording
     writer-transition events: observing the counter must not mutate threads.
     """
+    def _fresh():
+        with _codex_stuck_summary_lock:
+            cached = _codex_stuck_summary_cache.get("value")
+            cached_at = float(_codex_stuck_summary_cache.get("ts") or 0)
+            if cached is not None and (time.monotonic() - cached_at) < _codex_stuck_summary_ttl_s():
+                return dict(cached)
+        return None
+
+    if not force:
+        hit = _fresh()
+        if hit is not None:
+            return hit
+    with _codex_stuck_summary_build_lock:
+        if not force:
+            hit = _fresh()
+            if hit is not None:
+                return hit
+        return _build_codex_stuck_summary_uncached(now)
+
+
+def _build_codex_stuck_summary_uncached(now):
     now = float(now if now is not None else time.time())
     cache_now = time.monotonic()
-    with _codex_stuck_summary_lock:
-        cached = _codex_stuck_summary_cache.get("value")
-        cached_at = float(_codex_stuck_summary_cache.get("ts") or 0)
-        if (
-            not force
-            and cached is not None
-            and (cache_now - cached_at) < _codex_stuck_summary_ttl_s()
-        ):
-            return dict(cached)
-
     rows = _core._codex_fetch_threads()
     pool_alive = _core._codex_pool_alive(now)
     live_ids = _core._live_engine_session_ids()

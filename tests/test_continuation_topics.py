@@ -185,7 +185,14 @@ def test_metadata_cache_is_scanned_at_most_once_per_batch(store, monkeypatch):
     topics.attach_topics(rows, names={})
     assert cache.scans == 1
     assert all(item['continuation_topic_title'] == 'TOPIC' for item in rows)
-    assert all(' WHERE sid=' in query for query in queries if query.startswith('SELECT '))
+    selects = [query for query in queries if query.startswith('SELECT ')]
+    # Indexed point or batched-PK lookups only, never a table scan.
+    assert all(' WHERE sid=' in query or ' WHERE sid IN (' in query for query in selects)
+    # CCC-142: a steady-state load prefetches rows in chunks instead of
+    # issuing 2-3 point queries per row.
+    queries.clear()
+    topics.attach_topics(rows, names={})
+    assert len([q for q in queries if q.startswith('SELECT ')]) < 10
 
 
 def test_missing_root_title_can_be_filled_later(store):

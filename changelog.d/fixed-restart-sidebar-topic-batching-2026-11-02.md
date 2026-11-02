@@ -1,0 +1,1 @@
+- The sidebar list looks up continuation topics in a few batched queries instead of several per session, and concurrent Codex stuck-summary requests after a restart share one scan.

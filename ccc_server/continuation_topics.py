@@ -81,6 +81,29 @@ class _Batch:
         self.allow_native_lookup = True
         self.capture_root_titles = False
         self.ancestors = set()
+        self._prefetch(list(self.rows))
+
+    def _prefetch(self, sids, chunk=500):
+        # One chunked IN query per table instead of 2-3 point SELECTs per row:
+        # each SQLite call releases the GIL, and thousands of them convoy
+        # behind busy threads right after a restart (CCC-142).
+        for i in range(0, len(sids), chunk):
+            part = sids[i:i + chunk]
+            marks = ','.join('?' * len(part))
+            found = {r[0]: tuple(r[1:]) for r in self.conn.execute(
+                'SELECT sid, origin, root_sid, topic_title, user_named '
+                f'FROM continuation_topics WHERE sid IN ({marks})', part)}
+            for sid in part:
+                self.records.setdefault(sid, found.get(sid, ('', '', '', 0)))
+            try:
+                origins = dict(self.conn.execute(
+                    f'SELECT sid, continuation_origin FROM session_meta WHERE sid IN ({marks})', part))
+            except sqlite3.OperationalError as exc:
+                if str(exc) != 'no such table: session_meta':
+                    raise
+                origins = {}
+            for sid in part:
+                self.indexed_origins.setdefault(sid, origins.get(sid) or '')
 
     def record(self, sid):
         if sid not in self.records:
