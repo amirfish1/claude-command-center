@@ -9,6 +9,7 @@ import copy
 import hashlib
 import json
 import re
+import sqlite3
 import time
 from pathlib import Path
 
@@ -143,11 +144,18 @@ def coverage_payload(*, state_root=None, snapshot_path=None, registry_path=None)
     cards = decision_inbox.load_cards(cards_file)
     items, source = snapshot(snapshot_path or root / 'wt_items_snapshot.json')
     result = project(items, cards)
-    registry = DecisionRegistry(registry_path or root / 'decision-inbox' / 'requests.sqlite3')
-    registry.import_cards(cards)
     stable = [r for r in result['requests'] if r['generation']]
     fields = ('adapter', 'origin_id', 'generation', 'kind', 'wait_kind', 'title', 'body', 'visibility', 'source_revision', 'source_snapshot')
-    saved = registry.upsert_requests([{key: r[key] for key in fields if key in r} for r in stable])
+    try:
+        registry = DecisionRegistry(registry_path or root / 'decision-inbox' / 'requests.sqlite3', timeout=1)
+        registry.import_cards(cards, only_if_changed=True)
+        saved = registry.upsert_requests([{key: r[key] for key in fields if key in r} for r in stable])
+    except sqlite3.Error:
+        # Coverage data remains useful even when shadow identity persistence
+        # is busy. Do not turn contention into an empty or authoritative feed.
+        return dict(result, ok=False, mode='shadow', llm_used=False, source=source,
+                    registry={'status': 'unavailable', 'retryable': True},
+                    error='Shadow registry unavailable; source comparison is still shown.')
     records = {(r['adapter'], r['origin_id'], r['generation']): r for r in saved}
     for request in stable:
         record = records[(request['adapter'], request['origin_id'], request['generation'])]

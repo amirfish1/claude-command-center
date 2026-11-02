@@ -24,11 +24,14 @@ class WatchTowerAnswers:
                 or not snapshot.get('blocked_at') or snapshot.get('wait_kind') != 'owner'
                 or 'block_question' not in snapshot or 'wait' not in snapshot):
             raise ValueError('Exact owner question source snapshot required')
-        return dict(idempotency_key=row['answer_id'], text=row['payload']['answer']['text'],
+        request = dict(idempotency_key=row['answer_id'], text=row['payload']['answer']['text'],
                     expected_blocked_at=snapshot['blocked_at'],
                     expected_block_question=snapshot['block_question'],
                     expected_wait_kind=snapshot['wait_kind'], expected_wait=snapshot['wait'],
                     session_id='', by_kind='human', tid=False, engine=None)
+        if snapshot.get('store_id'):
+            request['expected_store_id'] = snapshot['store_id']
+        return request
 
     def _call(self, args):
         result = self.runner([self.executable] + args, capture_output=True, text=True, timeout=60)
@@ -39,11 +42,19 @@ class WatchTowerAnswers:
         return result.returncode, payload
 
     def _receipt(self, row, payload):
+        expected = self._request(row)
+        actual = payload.get('request') if isinstance(payload, dict) else None
+        if isinstance(actual, dict):
+            actual = dict(actual)
+            # Older receipts predate this optional field; omitted and null
+            # have identical meaning. A concrete source identity must match.
+            actual.setdefault('expected_store_id', None)
+        expected.setdefault('expected_store_id', None)
         if (isinstance(payload, dict) and payload.get('version') == 1
                 and payload.get('accepted') is True
                 and payload.get('ref') == row['payload']['source']['origin_id']
                 and payload.get('idempotency_key') == row['answer_id']
-                and payload.get('request') == self._request(row)):
+                and actual == expected):
             return dict(status='accepted', answer_id=row['answer_id'],
                         work_completed=False, source_receipt=payload)
         return dict(status='unknown', answer_id=row['answer_id'])

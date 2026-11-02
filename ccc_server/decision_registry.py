@@ -11,6 +11,7 @@ copies. No source files, services, tickets or action handlers are accessed.
 """
 
 import json
+import hashlib
 import re
 import sqlite3
 import uuid
@@ -65,9 +66,23 @@ class DecisionRegistry:
     directly on returned records for projection consumers.
     """
 
-    def __init__(self, db_path):
+    def __init__(self, db_path, *, timeout=30):
         self.db_path = Path(db_path)
+        self.timeout = timeout
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.db_path.exists():
+            db = sqlite3.connect(str(self.db_path), timeout=min(1, self.timeout))
+            try:
+                row = db.execute("SELECT value FROM metadata WHERE key='installation_id'").fetchone()
+                db.execute('SELECT 1 FROM requests LIMIT 0')
+                if row:
+                    self.installation_id = row[0]
+                    return
+            except sqlite3.OperationalError:
+                # A concurrent first initializer may not have committed yet.
+                pass
+            finally:
+                db.close()
         with self._transaction() as db:
             db.execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             db.execute("INSERT OR IGNORE INTO metadata VALUES ('installation_id', ?)",
@@ -92,7 +107,7 @@ class DecisionRegistry:
 
     @contextmanager
     def _transaction(self):
-        db = sqlite3.connect(str(self.db_path), timeout=30, isolation_level=None)
+        db = sqlite3.connect(str(self.db_path), timeout=self.timeout, isolation_level=None)
         db.row_factory = sqlite3.Row
         try:
             db.execute("BEGIN IMMEDIATE")
@@ -163,23 +178,39 @@ class DecisionRegistry:
                 if type(generation) is int:
                     generation = str(generation)
                 generation = _identity(generation, "generation")
+                if adapter == 'legacy-card':
+                    db.execute("DELETE FROM metadata WHERE key='legacy_cards_fingerprint'")
                 results.append(self._upsert(
                     db, adapter=adapter, origin_id=origin_id, generation=generation,
                     content=request, aliases=_aliases(request),
                     status=_identity(request.get("status", "open"), "status")))
         return results
 
-    def import_cards(self, cards):
+    def import_cards(self, cards, *, only_if_changed=False):
         """Import a legacy id->card mapping or iterable of cards with explicit id.
 
         The mapping key is the legacy origin identity; an explicit card id is
         also preserved as an alias. Never merge different cards by source_id,
         Q number or content. A decided card records an answer but delivery is
         unknown regardless of any historical action result stored in content.
+        With only_if_changed=True, unchanged full snapshots return an empty
+        list without revisiting each card; the default always returns rows.
         """
+        fingerprint = None
+        if only_if_changed:
+            # This opt-in sync mode returns only on changed snapshots. Hashing
+            # outside the transaction keeps the write lock short on polls.
+            cards = cards if isinstance(cards, Mapping) else list(cards)
+            fingerprint = hashlib.sha256(_json(cards).encode()).hexdigest()
         items = cards.items() if isinstance(cards, Mapping) else ((c.get("id"), c) for c in cards)
         results = []
         with self._transaction() as db:
+            if not only_if_changed:
+                db.execute("DELETE FROM metadata WHERE key='legacy_cards_fingerprint'")
+            if fingerprint:
+                previous = db.execute("SELECT value FROM metadata WHERE key='legacy_cards_fingerprint'").fetchone()
+                if previous and previous[0] == fingerprint:
+                    return []
             for legacy_id, card in items:
                 origin_id = _identity(legacy_id, "legacy card id")
                 aliases = _aliases(card) + [origin_id]
@@ -191,11 +222,14 @@ class DecisionRegistry:
                     content=card, aliases=sorted(set(aliases)), status=status,
                     answer_state="recorded" if status == "decided" or card.get("decided") else "none",
                     delivery_state="unknown"))
+            if fingerprint:
+                db.execute("INSERT OR REPLACE INTO metadata VALUES ('legacy_cards_fingerprint', ?)",
+                           (fingerprint,))
         return results
 
     def list_requests(self):
         """Return all persisted records without fetching or modifying sources."""
-        db = sqlite3.connect(str(self.db_path), timeout=30)
+        db = sqlite3.connect(str(self.db_path), timeout=self.timeout)
         db.row_factory = sqlite3.Row
         try:
             return [self._record(row) for row in db.execute(

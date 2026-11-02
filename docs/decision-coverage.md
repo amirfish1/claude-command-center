@@ -22,6 +22,9 @@ Requests lacking a source episode are reported with `missing_generation` and
 no canonical source ID. Editing a question within an episode preserves identity;
 a new source episode gets a different identity even if its wording is identical.
 Q numbers are readable aliases, not database keys or cross-machine identities.
+If registry persistence is busy, `ok: false` and `registry.status: unavailable`
+report the problem while retaining source-comparison rows and counts. No IDs
+are manufactured and missing identity persistence is not treated as an empty inbox.
 
 The endpoint reads the local `wt_items_snapshot.json` only, so it does not block
 on a live queue provider or run `wt`. It writes only CCC's shadow registry in

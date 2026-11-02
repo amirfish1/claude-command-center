@@ -108,3 +108,5 @@ def test_receipt_must_match_the_exact_source_request(integrated):
     assert adapter._receipt(answer, dict(receipt, ref='EXAMPLE-2'))['status'] == 'unknown'
     assert adapter._receipt(answer, dict(receipt, idempotency_key='other'))['status'] == 'unknown'
     assert adapter._receipt(answer, dict(receipt, request={}))['status'] == 'unknown'
+    changed = dict(receipt['request'], expected_store_id='another-store')
+    assert adapter._receipt(answer, dict(receipt, request=changed))['status'] == 'unknown'

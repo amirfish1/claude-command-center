@@ -39,6 +39,24 @@ def test_parent_projection_api(tmp_path):
         registry.upsert_requests([{k: v for k, v in request.items() if k != "generation"}])
 
 
+def test_existing_registry_opens_while_a_writer_has_reserved_lock(registry):
+    with registry._transaction():
+        reopened = DecisionRegistry(registry.db_path)
+        assert reopened.installation_id == registry.installation_id
+
+
+def test_opt_in_legacy_sync_skips_unchanged_import_and_tracks_edits(registry):
+    cards = {'dc_one': {'title': 'Choose', 'status': 'open'}}
+    first = registry.import_cards(cards, only_if_changed=True)[0]
+    assert registry.import_cards(cards, only_if_changed=True) == []
+    assert registry.import_cards(cards)[0] == first  # Default API still returns rows.
+    cards['dc_one']['title'] = 'Choose again'
+    second = registry.import_cards(cards, only_if_changed=True)[0]
+    assert second['request_id'] == first['request_id'] and second['revision'] == 2
+    registry.import_cards({'dc_one': {'title': 'Another importer', 'status': 'open'}})
+    assert registry.import_cards(cards, only_if_changed=True)[0]['content']['title'] == 'Choose again'
+
+
 def test_import_is_idempotent_across_restart_and_preserves_legacy(registry):
     cards = {"dc_example": {"id": "dc_example", "decision_number": 12,
              "aliases": ["Q007", "D0012", "[Q7:color]"], "status": "snoozed",

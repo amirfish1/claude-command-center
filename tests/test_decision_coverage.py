@@ -109,3 +109,18 @@ def test_endpoint_shadow_is_stable_and_never_rewrites_source_files(tmp_path):
     changed['blocked_at'] = '2026-02-01T00:00:00Z'
     snap.write_text(json.dumps({'items': [changed]}))
     assert coverage_payload(state_root=tmp_path)['requests'][0]['request_id'] != first['requests'][0]['request_id']
+
+
+def test_busy_registry_returns_source_data_without_fabricated_identity(tmp_path):
+    from ccc_server.decision_coverage import coverage_payload
+    from ccc_server.decision_registry import DecisionRegistry
+    snap = tmp_path / 'wt_items_snapshot.json'
+    snap.write_text(json.dumps({'items': [ticket()]}))
+    registry = DecisionRegistry(tmp_path / 'decision-inbox' / 'requests.sqlite3')
+    with registry._transaction():
+        response = coverage_payload(state_root=tmp_path)
+    assert response['ok'] is False
+    assert response['registry']['status'] == 'unavailable'
+    assert response['counts']['owner_questions'] == 1
+    assert response['requests'][0]['request_id'] is None
+    assert not response['source']['complete']
