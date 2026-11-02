@@ -67721,7 +67721,8 @@
       if (!src) continue;
       const ext = String((img.media_type || 'image/png').split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
       const fname = 'tool-image-L' + (img.line != null ? img.line : 'x') + '-' + (img.idx != null ? img.idx : 0) + '.' + ext;
-      items += '<figure class="tool-result-image" data-tool-image-key="' + escapeAttr(_toolResultImageKey(img)) + '">'
+      items += '<figure class="tool-result-image" data-tool-image-key="' + escapeAttr(_toolResultImageKey(img))
+        + '" data-image-tool-use-id="' + escapeAttr(String((ev && ev.tool_use_id) || '')) + '">'
         + '<button type="button" class="tool-result-image-zoom" data-zoom-src="' + escapeAttr(src) + '"'
         + ' data-zoom-title="' + escapeAttr(fname) + '" title="Enlarge" aria-label="Enlarge image">+</button>'
         + '<a href="' + escapeAttr(src) + '" target="_blank" rel="noopener" title="Open full size">'
@@ -68296,6 +68297,29 @@
       }
       g.remove();
     });
+    // Bundle screenshots across intervening tools, ending at any prose or
+    // other visible content. Keep the gallery at the latest image's slot so
+    // the tools remain in order and can fold together above the thumbnails.
+    let gallery = null;
+    for (const kid of Array.from(turn.children)) {
+      if (kid.matches('.kimi-tool, .kimi-marker')) continue;
+      if (!kid.classList.contains('tool-result-images')) { gallery = null; continue; }
+      if (gallery) {
+        const media = kid.querySelector('.image-gen-media');
+        const previous = gallery.querySelector('.image-gen-media');
+        if (media && previous) {
+          media.prepend(...Array.from(previous.children));
+          gallery.remove();
+          const count = media.querySelectorAll('.tool-result-image').length;
+          const head = kid.querySelector('.image-gen-card-head');
+          if (head) {
+            const icon = head.querySelector('.image-gen-icon');
+            head.replaceChildren(...(icon ? [icon] : []), document.createTextNode(' ' + count + ' images from tool'));
+          }
+        }
+      }
+      gallery = kid;
+    }
     let run = [];
     const flush = () => {
       if (run.length >= 2) {
@@ -70514,9 +70538,8 @@
               if (grp) _kimiUpdateToolGroupHead(grp);
             }
           }
-          // CCC-275: images in the tool output render as a visible card
-          // right after the tool row (a turn-level sibling breaks the tool
-          // group run, so collapse / hide-tools never hides it). Keyed by
+          // Images stay visible outside collapsed tools. Regrouping bundles
+          // cards separated only by tools into a shared thumbnail gallery. Keyed by
           // (line, idx) so replays, reloads and repeat polls never duplicate.
           if (Array.isArray(ev.images) && ev.images.length && ev.tool_use_id) {
             const escId = (window.CSS && CSS.escape) ? CSS.escape(String(ev.tool_use_id)) : String(ev.tool_use_id);
@@ -70529,10 +70552,9 @@
             const cardHtml = row && fresh.length
               ? _toolResultImagesCardHtml(Object.assign({}, ev, { images: fresh }), renderedConversationId) : '';
             if (cardHtml) {
-              const inGroup = row.parentElement && row.parentElement.closest('.kimi-tool-group');
               row.insertAdjacentHTML('afterend', cardHtml);
               const turn = row.closest('.kimi-turn');
-              if (inGroup && turn) _kimiRegroupTools(turn);
+              if (turn) _kimiRegroupTools(turn);
             }
           }
           continue;
