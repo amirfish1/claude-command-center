@@ -88375,6 +88375,8 @@
       }
       return;
     }
+    const restoreSaveFocus = document.activeElement === $networkSaveBtn;
+    const restoreFocus = () => { if (restoreSaveFocus && document.activeElement === document.body && $networkModal.classList.contains('open')) $networkSaveBtn.focus(); };
     $networkSaveBtn.disabled = true;
     $networkSaveBtn.textContent = 'Saving…';
     if ($networkCancelBtn) $networkCancelBtn.disabled = true;
@@ -88404,9 +88406,28 @@
       $networkSaveBtn.disabled = false;
       $networkSaveBtn.textContent = 'Save & restart';
       if ($networkCancelBtn) $networkCancelBtn.disabled = false;
+      restoreFocus();
       return;
     }
-    $networkSaveBtn.textContent = 'Restarting…';
+    const warnings = Array.isArray(data.saved?.warnings) ? data.saved.warnings.filter(value => typeof value === 'string') : [];
+    if (data.saved?.revision) networkRevision = data.saved.revision;
+    if (!data.restart) {
+      try { sessionStorage.removeItem('ccc-updating'); } catch (_) {}
+      $networkSaveBtn.disabled = false;
+      $networkSaveBtn.textContent = 'Save & restart';
+      if ($networkCancelBtn) $networkCancelBtn.disabled = false;
+      restoreFocus();
+      if ($networkError) {
+        $networkError.textContent = warnings.length ? warnings.join(' ') : 'Saved. No dashboard restart was needed.';
+        $networkError.classList.add('visible');
+      }
+      return;
+    }
+    $networkSaveBtn.textContent = 'Saved · restarting…';
+    if (warnings.length && $networkError) {
+      $networkError.textContent = warnings.join(' ') + ' Dashboard restart requested.';
+      $networkError.classList.add('visible');
+    }
     setTimeout(() => { try { location.reload(); } catch (_) {} }, 1200);
   }
 

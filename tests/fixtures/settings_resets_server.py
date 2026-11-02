@@ -63,7 +63,7 @@ class Handler(server.CommandCenterHandler):
             self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.end_headers();self.wfile.write((base/'fixture.html').read_bytes());return
         if self.path=='/api/spawn-defaults?policy=1':
             if (base/'fail-consumer').exists():self.send_json({'error':'Fixture controls unavailable'},503);return
-            self.send_json({'ok':True,**server._routing_policy_snapshot()[2]});return
+            return super().do_GET()
         if self.path.startswith('/api/settings/resets'):return super().do_GET()
         if self.path in ('/api/settings/profiles','/api/settings/preferences/registry'):return super().do_GET()
         if self.path=='/api/settings/history':

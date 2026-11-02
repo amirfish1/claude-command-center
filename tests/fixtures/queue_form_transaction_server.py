@@ -82,5 +82,6 @@ class Handler(server.CommandCenterHandler):
         if self.path=='/api/queue/config':return super().do_POST()
         self.send_json({'error':'Unexpected fixture action'},403)
 httpd=server.http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+server.PORT=httpd.server_address[1]
 print(json.dumps({'url':f'http://127.0.0.1:{httpd.server_address[1]}'}),flush=True)
 httpd.serve_forever()
