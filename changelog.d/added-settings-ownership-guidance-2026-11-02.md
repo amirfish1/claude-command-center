@@ -1,0 +1,1 @@
+- Add shared “Where this applies” guidance for Settings and contextual preference editors, distinguishing browser, host, repository, queue, session and external ownership without changing native save behavior.

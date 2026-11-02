@@ -94141,7 +94141,7 @@
       return;
     }
     $settingsModalInner.classList.add('is-searching');
-    $settingsPane.querySelectorAll('details').forEach(el => {
+    $settingsPane.querySelectorAll('details:not([data-settings-scope-help])').forEach(el => {
       if(!('searchOpen' in el.dataset)) el.dataset.searchOpen=String(el.open);
       el.open=true;
     });
@@ -94212,7 +94212,7 @@
       if (resetRow) resetRow.hidden = true;
     });
     $settingsPane.querySelectorAll('details').forEach(details => {
-      if (details.hasAttribute('data-settings-search-group')) return;
+      if (details.hasAttribute('data-settings-search-group') || details.hasAttribute('data-settings-scope-help')) return;
       details.hidden = !Array.from(details.querySelectorAll('.settings-row, .eng-list, .settings-modal-tools-slot'))
         .some(row => !row.hidden && row.style.display !== 'none');
     });
