@@ -33464,23 +33464,24 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     transform: scale(0.65);
     transform-origin: bottom right;
   }
-  /* In a narrow sidebar, session text leads; secondary controls share a
-     footer instead of reserving most of the title's first line. */
+  /* In a narrow sidebar, keep the time at the title's right edge while
+     context and lane controls share a footer below the preview. */
   @container sidebar (max-width: 460px) {
     #convList#convList .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > :is(.conv-title, .conv-title-stack) {
-      grid-column: 1 / -1;
+      grid-column: 1 / 3;
     }
     #convList#convList .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > .conv-meta-col {
-      grid-column: 1;
+      grid-column: 1 / 3;
     }
     #convList#convList .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > .conv-pct-badge {
+      grid-column: 3;
       grid-row: 3;
       align-self: center;
+      justify-self: end;
     }
     #convList#convList .conv-item:not(.is-current-child-row) .conv-main-row.has-inline-step > .conv-row-end {
-      grid-row: 3;
-      align-self: center;
-      min-height: 26px;
+      grid-row: 1;
+      align-self: start;
     }
   }
   #convList#convList .conv-gap-separator { display: none; }

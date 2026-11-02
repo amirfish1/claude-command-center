@@ -1,0 +1,1 @@
+- Keep session activity times at the top right of narrow desktop sidebar rows.
