@@ -68,14 +68,19 @@ and reads the saved registry in a read-only transaction. Ordinary session
 questions remain local; only explicit promotion events enter this table.
 Legacy reports retain their existing references and actions in a separate
 Reports and monitoring section. A matching ticket tag never merges identities.
+The main tab stays within the ordinary sidebar; the conversation pane remains
+visible. Queue questions include ticket chips opening the existing ticket
+detail view, with `/?ticket=EXAMPLE-1` as a durable navigation link.
 
 The table distinguishes needs-answer, saved delivery and source withdrawal.
 It shows exact question text and Pacific timestamps. When a source cannot be
 checked, saved rows remain visible but `needs_answer_count` is null. Missing
 source episodes appear as `coverage_issues` without manufactured request IDs;
 they prevent a verified current count. The view does not initialize source
-identities or answer questions. Source answers remain disabled in this phase;
-promoted session questions link back to their conversation.
+identities or answer questions while checking coverage. Source answers remain
+disabled by default; the [opt-in controls](decision-answers.md#dashboard-controls)
+use the separate answer API. Promoted session questions link back to their
+conversation.
 
 An explicitly initialized legacy owner wait carries `episode_provenance`.
 Its timestamp is the actual initialization time, labeled **Episode initialized

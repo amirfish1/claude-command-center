@@ -1,0 +1,1 @@
+- Keep Decisions within the normal sidebar and add prominent ticket links that open the originating ticket's context without reloading the question list.

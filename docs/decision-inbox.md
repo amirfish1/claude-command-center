@@ -6,7 +6,15 @@ Open **Decisions** in the main navigation, app rail or `/decision-inbox.html`.
 The [Owner questions table](decision-coverage.md#shared-request-view) shows
 current local queue owner waits and explicitly promoted session questions.
 Interactive questions stay in their sessions. Source answers remain disabled
-in this phase, and incomplete source coverage is shown explicitly.
+by default, and incomplete source coverage is shown explicitly. Separately
+[opted-in answer controls](decision-answers.md#dashboard-controls) distinguish
+saving, sending and checking delivery.
+
+The main Decisions tab stays inside the left-hand pane, preserving the
+conversation pane and the usual sidebar width. Each queue question starts
+with a ticket-reference chip: select it to open that ticket's context and
+existing controls, then close the detail view to return to the same questions.
+Links such as `/?ticket=EXAMPLE-1` also open the ticket directly.
 
 **Reports and monitoring** retains scanner and tool reports. Scheduled scans
 can create scripted health alerts or use an analyst model for suggested

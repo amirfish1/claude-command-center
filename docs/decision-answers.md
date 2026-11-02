@@ -24,8 +24,41 @@ are server-owned; clients cannot provide an executable, command, source snapshot
 or routing target. Only an explicit server environment setting
 `CCC_DECISION_ANSWERS_ENABLED=1` permits controller operations. The default 503
 `answers_disabled` response does not initialize a registry, discover a source
-executable or contact WatchTower. The UI remains read-only in this phase; no
-automatic dispatcher or retry loop is installed.
+executable or contact WatchTower. The default UI remains read-only. With the
+same explicit opt-in, eligible source questions expose the controls below;
+no automatic dispatcher or retry loop is installed.
+
+## Dashboard controls
+
+The request response includes `answers_enabled`, per-row `can_answer`, and a
+read-only `answer` summary (`answer_id`, `state`, exact `text`, and
+`expected_revision`). Reading a summary never initializes an outbox or sends
+an answer. New answer forms require complete current source coverage, a
+supported owner question and no routine delivery owner. Local or promoted
+session questions and approvals retain their existing navigation.
+
+**Save answer** records the exact text without delivery. **Send saved answer**
+is a separate explicit action; **Check delivery** only reconciles an uncertain
+attempt. A pending answer remains visible after saving. Source acceptance is
+displayed separately from completion of the work.
+
+Before recording, the browser retains the frozen payload and idempotency key
+in session storage. An uncertain save can only retry that same submission;
+refresh and reload never resend automatically. A lost send response exposes
+receipt lookup rather than another Send action. If session storage cannot
+retain recovery state, the browser blocks the action. Unsaved drafts survive
+routine refreshes in the current document; they are not persisted on reload.
+Drafts stay attached to the revision shown when typing began. If that question
+changes, saving is blocked until the owner reviews the current question and
+explicitly selects **Use draft for current question**; refreshing alone never
+rebinds an existing draft.
+
+A definitive source rejection retains the original answer text. Once the
+source is current and the request is eligible again, **Start new answer**
+explicitly opens a new draft against its current revision while retaining the
+previous rejection. An unknown submission cannot be reset this way. These
+controls do not enable the server, change producer ownership or bypass source
+validation.
 
 Construct it with an explicit `DecisionRegistry`, an optional read-only
 `export_source()` callable returning the full owner export described by
