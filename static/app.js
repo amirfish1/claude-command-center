@@ -861,7 +861,7 @@
   }
   function _openSystemHealth() {
     _ensureSysHealthModal();
-    sysOpenModal(document.getElementById('cccSystemPill'), 'status');
+    sysOpenModal(document.getElementById('cccSystemPill'), 'health');
   }
   function _closeSystemHealth() {
     sysCloseModal();
@@ -871,9 +871,9 @@
     if (document.hidden) return;
     if (_sysHealthPollPromise) return _sysHealthPollPromise;
     _sysHealthPollPromise = fetch('/api/system-health', { cache: 'no-store' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (d) { if (d) _renderSystemHealth(d); })
-      .catch(function () {})
+      .then(function (r) { if (!r.ok) throw new Error('Resource snapshot unavailable'); return r.json(); })
+      .then(function (d) { if (!d || typeof d !== 'object') throw new Error('Resource snapshot unavailable'); _renderSystemHealth(d); })
+      .catch(function () { const body = document.getElementById('sysHealthBody'); if (body) body.textContent = 'Resource snapshot unavailable. Load again to retry; no healthy result is inferred.'; })
       .finally(function () { _sysHealthPollPromise = null; });
     return _sysHealthPollPromise;
   }
@@ -80326,12 +80326,12 @@
     recordSpawnChoice(engine, value, $convInputEffortSelect ? $convInputEffortSelect.value : '');
   }
 
-  async function loadSpawnDefaults() {
+  async function loadSpawnDefaults(options) {
     try {
       if (typeof fetchModelPickerPicksFromServer === 'function') {
         fetchModelPickerPicksFromServer();
       }
-      const res = await fetch('/api/spawn-defaults', { cache: 'no-store' });
+      const res = await fetch('/api/spawn-defaults' + (options?.readOnly ? '?policy=1' : ''), { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data && data.ok) {
         mergeSpawnDefaults(data, { preserveUserEngineChoice: true });
@@ -82639,7 +82639,11 @@
       $sysDialog.querySelectorAll(
         'button:not([disabled]):not([hidden]), summary, [href], [tabindex]:not([tabindex="-1"])'
       ),
-      el => el.offsetParent !== null || el === document.activeElement
+      el => {
+        if (!el.getClientRects().length || getComputedStyle(el).visibility === 'hidden') return false;
+        const closed = el.closest('details:not([open])');
+        return !closed || el === closed.querySelector(':scope > summary');
+      }
     );
   }
   function _sysTrapTab(e) {
@@ -82658,6 +82662,7 @@
   }
 
   function sysSelectTab(tabName) {
+    $sysDialog?.classList.toggle('is-health-evidence', tabName === 'health');
     const $btnStatus = document.getElementById('sysTabBtnStatus');
     const $btnHealth = document.getElementById('sysTabBtnHealth');
     const $btnProcesses = document.getElementById('sysTabBtnProcesses');
@@ -82678,9 +82683,9 @@
       if ($contentJobs) $contentJobs.style.display = 'none';
       if ($sysDialog) $sysDialog.classList.remove('is-wide');
       
-      _pollSystemHealth();
-      if (_sysHealthTimer) clearInterval(_sysHealthTimer);
-      _sysHealthTimer = setInterval(_pollSystemHealth, 4000);
+      if (window.cccSettingsHealth) window.cccSettingsHealth.refresh(); else _pollSystemHealth();
+      if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
+      if (_sysPollTimer) { clearInterval(_sysPollTimer); _sysPollTimer = null; }
       if (_sysProcessesTimer) { clearInterval(_sysProcessesTimer); _sysProcessesTimer = null; }
       if (_sysJobsTimer) { clearInterval(_sysJobsTimer); _sysJobsTimer = null; }
     } else if (tabName === 'processes') {
@@ -82723,6 +82728,9 @@
       if ($btnProcesses) $btnProcesses.classList.remove('active');
       if ($btnJobs) $btnJobs.classList.remove('active');
       if ($contentStatus) $contentStatus.style.display = 'block';
+      sysRefresh(true);
+      if (_sysPollTimer) clearInterval(_sysPollTimer);
+      _sysPollTimer = setInterval(() => sysRefresh(false), 5000);
       if ($contentHealth) $contentHealth.style.display = 'none';
       if ($contentProcesses) $contentProcesses.style.display = 'none';
       if ($contentJobs) $contentJobs.style.display = 'none';
@@ -82746,24 +82754,21 @@
     if ($sysChip) $sysChip.setAttribute('aria-expanded', 'true');
     _sysLastRollupLevel = '';
     
-    sysSelectTab(defaultTab || 'status');
+    sysSelectTab(defaultTab || 'health');
 
-    sysRefresh(true);
     // The worker pill inside the worker row is painted by the control-plane
     // poller, which ticks every 20s. Re-read on open so it is never stale.
-    if (typeof refreshControlPlaneStatus === 'function') refreshControlPlaneStatus();
+    if (defaultTab === 'status' && typeof refreshControlPlaneStatus === 'function') refreshControlPlaneStatus();
     // Same for the inline Queues panel: it rides its own 20s timer over a 15s
     // client cache, so on open it could be 35s behind the WatchTower row it
     // sits 12px under. Force it, so the two readouts are from one moment.
-    if (typeof _wtQueueRefresh === 'function') _wtQueueRefresh(true);
+    if (defaultTab === 'status' && typeof _wtQueueRefresh === 'function') _wtQueueRefresh(true);
     if ($sysDialog) $sysDialog.focus();
     document.addEventListener('keydown', _sysTrapTab, true);
-    if (_sysPollTimer) clearInterval(_sysPollTimer);
-    _sysPollTimer = setInterval(() => sysRefresh(false), 5000);
     // The prewarm countdown ticks once a second, independent of the 5s data
     // poll above, so it counts down smoothly instead of jumping in 5s steps.
     if (_sysSpawnedTickTimer) clearInterval(_sysSpawnedTickTimer);
-    _sysSpawnedTickTimer = setInterval(() => renderSysSpawnedList(_sysSpawnedList), 1000);
+    if (defaultTab === 'status') _sysSpawnedTickTimer = setInterval(() => renderSysSpawnedList(_sysSpawnedList), 1000);
   }
 
   function sysCloseModal() {
@@ -82780,8 +82785,14 @@
     if (_sysJobsTimer) { clearInterval(_sysJobsTimer); _sysJobsTimer = null; }
     if ($sysDialog) $sysDialog.classList.remove('is-wide');
     document.removeEventListener('keydown', _sysTrapTab, true);
-    const back = (_sysReturnFocus && document.contains(_sysReturnFocus)
-      && _sysReturnFocus.offsetParent !== null) ? _sysReturnFocus : $sysChip;
+    const back = [_sysReturnFocus, $sysChip, document.querySelector('[data-mobile-nav="more"]'),
+      document.querySelector('[data-mobile-nav-menu]'), document.getElementById('sidebarMoreBtn')]
+      .find(element => {
+        if (!element?.isConnected || element.disabled || !element.getClientRects().length || getComputedStyle(element).visibility === 'hidden') return false;
+        const rect = element.getBoundingClientRect();
+        const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return top === element || element.contains(top);
+      });
     if (back) { try { back.focus(); } catch (_) {} }
     _sysReturnFocus = null;
   }
@@ -92652,7 +92663,7 @@
     // (or an earlier Settings open) -- a stale in-memory copy is exactly what
     // let a manual spawn-defaults.json edit go unnoticed in the dialog.
     if (typeof loadSpawnDefaults === 'function') {
-      loadSpawnDefaults().then(() => {
+      loadSpawnDefaults({readOnly:true}).then(() => {
         if (typeof renderSpawnDefaultsInline === 'function') renderSpawnDefaultsInline();
       });
     } else if (typeof renderSpawnDefaultsInline === 'function') {
@@ -96244,6 +96255,24 @@
       cccSwitchCoreApp('sessions', {push: false}); mobileShowForCurrentMode();
     },
     openRepoPicker: () => document.getElementById('sidebarNewBtn')?.click(),
+  });
+
+  window.cccSettingsHealth?.mount({
+    closeSystem: sysCloseModal,
+    closeSettings: closeSettingsModal,
+    openHealth: opener => sysOpenModal(opener, 'health'),
+    services: id => {
+      sysSelectTab('status');
+      const target = document.getElementById(id === 'worker' ? 'sysRowWorker' : id === 'watchtower' ? 'sysRowWt' : 'sysTabBtnStatus');
+      if (target) { target.tabIndex = -1; target.focus(); }
+    },
+    resources: _pollSystemHealth,
+    navigate: section => {
+      clearTimeout(settingsSearchFocusTimer);
+      if ($settingsModal.hidden) openSettingsModal({focusSearch:false}); else clearSettingsSearch();
+      setActiveSettingsRailSection(section);
+      document.querySelector('#settingsSection-' + section + ' button, #settingsSection-' + section + ' input')?.focus();
+    },
   });
 
   // Trigger check on load

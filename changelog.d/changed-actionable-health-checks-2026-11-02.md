@@ -1,0 +1,1 @@
+System status now opens actionable health checks from saved launch policy and cached engine/service evidence, with canonical repair links and explicit unchecked, stale and unavailable states. Service checks and resource diagnostics remain explicit actions; opening Settings reads launch defaults without seeding or migrating them.

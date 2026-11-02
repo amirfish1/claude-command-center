@@ -22,7 +22,7 @@ def api(monkeypatch, tmp_path):
     monkeypatch.setattr(server, '_model_policy_blocked_models', lambda: set())
     monkeypatch.setattr(server, '_model_catalog_allows_model', lambda engine, model: True)
     monkeypatch.setattr(server, '_codex_context_1m_enabled', lambda: False)
-    monkeypatch.setattr(server, '_codex_context_config', lambda: {'model_context_window': 1000000})
+    monkeypatch.setattr(server, '_codex_context_config', lambda **kwargs: {'model_context_window': 1000000})
     raw = server._factory_spawn_defaults()
     raw.update(engine='claude', reasoning_effort='high', worker_engine='codex', worker_model='gpt-5-codex',
                worker_reasoning_effort='medium', future_policy={'keep': [1, 2]}, worker_fallback={

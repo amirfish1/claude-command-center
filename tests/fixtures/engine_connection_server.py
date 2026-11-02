@@ -12,7 +12,7 @@ server._model_policy_blocked_models=lambda:set()
 server._model_catalog_allows_model=lambda engine,model:True
 server._worker_fallback_catalog_models=lambda engine:[{'id':m} for m in {'claude':['claude-sonnet-4-6'],'codex':['gpt-5-codex']}.get(engine,[])]
 server._codex_context_1m_enabled=lambda:False
-server._codex_context_config=lambda:{'model_context_window':1000000}
+server._codex_context_config=lambda **kwargs:{'model_context_window':1000000}
 raw=server._factory_spawn_defaults()
 raw.update(engine='claude',future_policy={'keep':True})
 raw['models'].update(claude='claude-sonnet-4-6',codex='gpt-5-codex')

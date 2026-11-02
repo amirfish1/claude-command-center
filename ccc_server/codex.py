@@ -3352,7 +3352,7 @@ def _codex_app_server_request_to_transport(
                 _core._CODEX_APP_SERVER_INFLIGHT -= 1
 
 
-def _codex_context_config():
+def _codex_context_config(auto_compact_k=None):
     """Apply the configured CCC context budget to Codex, with compaction headroom.
 
     The shared spawn preference used to reach Claude only. Codex instead
@@ -3361,7 +3361,8 @@ def _codex_context_config():
     results. The legacy CCC_CODEX_CONTEXT_1M flag no longer lifts this budget;
     larger windows require an explicit numeric CCC_CODEX_CONTEXT_TOKENS.
     """
-    configured = _core._spawn_auto_compact_k_tokens()
+    configured = (_core._spawn_auto_compact_k_tokens() if auto_compact_k is None
+                  else _core._spawn_auto_compact_k_tokens(auto_compact_k=auto_compact_k))
     window = configured or 250000
     override = os.environ.get("CCC_CODEX_CONTEXT_TOKENS", "").strip()
     if override:

@@ -47,7 +47,7 @@ base=Path(sys.argv[1]);server.COMMAND_CENTER_STATE_DIR=base;server.SPAWN_DEFAULT
 server._model_policy_blocks=lambda model:False;server._model_policy_blocked_models=lambda:set()
 server._model_catalog_allows_model=lambda engine,model:True
 server._worker_fallback_catalog_models=lambda engine:[{'id':name} for name in {'claude':['claude-sonnet-4-6','claude-opus-4-6'],'codex':['gpt-5-codex']}.get(engine,[])]
-server._codex_context_1m_enabled=lambda:False;server._codex_context_config=lambda:{'model_context_window':1000000}
+server._codex_context_1m_enabled=lambda:False;server._codex_context_config=lambda **kwargs:{'model_context_window':1000000}
 raw=server._factory_spawn_defaults();raw.update(engine='claude',reasoning_effort='max',auto_compact_k=300,worker_engine='codex',worker_model='gpt-5-codex',worker_reasoning_effort='high',worker_auto_compact_k=600,future_policy={'keep':True})
 raw['models'].update(claude='claude-sonnet-4-6',codex='gpt-5-codex');raw['worker_fallback']={'enabled':True,'future_guard':{'keep':True},'models':[{'engine':'claude','model':'claude-sonnet-4-6','effort':'high','future_row':'first'},{'engine':'codex','model':'gpt-5-codex','effort':'medium','future_row':'second'}]}
 raw['model_profiles']={'standard':{'models':[{'engine':'claude','model':'claude-sonnet-4-6','effort':'medium','future_profile_row':True}],'future_profile':True},'future_capability':{'keep':[1,2]}}

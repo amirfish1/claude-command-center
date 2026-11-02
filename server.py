@@ -32948,6 +32948,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "config": config, "headroom": _headroom.headroom_payload()})
             except (OSError, ValueError) as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/settings/health":
+            from ccc_server.settings_health import snapshot
+            self.send_json(snapshot(sys.modules[__name__]))
         elif path == "/api/settings/capabilities":
             # Metadata only: no key reads, external probes, or service changes.
             from ccc_server.settings_capabilities import snapshot
@@ -32976,6 +32979,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 409)
                 return
+            context_key = "worker_auto_compact_k" if os.environ.get("CCC_WORKER_PROCESS") == "1" else "auto_compact_k"
+            context = _codex_context_config(auto_compact_k=defaults.get(context_key, 250))
             self.send_json({
                 "ok": True,
                 **defaults,
@@ -32990,8 +32995,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "efforts_by_engine": _reasoning_efforts_by_engine(
                     _ORCHESTRATION_SPAWN_ENGINES
                 ),
-                "codex_context_1m": _codex_context_1m_enabled(),
-                "codex_context_tokens": _codex_context_config()["model_context_window"],
+                "codex_context_1m": context["model_context_window"] >= 1000000,
+                "codex_context_tokens": context["model_context_window"],
                 # Client-side gate for the spawn/queue-config confirm prompt --
                 # let the UI warn before it sends confirm_blocked_model, rather
                 # than round-tripping a 400 first.

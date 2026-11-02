@@ -67,7 +67,7 @@ base=Path(sys.argv[1]); server.COMMAND_CENTER_STATE_DIR=base; server.SPAWN_DEFAU
 server._model_policy_blocks=lambda model: False
 server._model_policy_blocked_models=lambda: set()
 server._codex_context_1m_enabled=lambda: False
-server._codex_context_config=lambda: {'model_context_window': 1000000}
+server._codex_context_config=lambda **kwargs: {'model_context_window': 1000000}
 raw=server._factory_spawn_defaults();raw.update(engine='claude',reasoning_effort='max',auto_compact_k=300,worker_engine='codex',worker_model='independent-worker',worker_reasoning_effort='high',worker_auto_compact_k=600)
 raw['models'].update(claude='session-claude',codex='session-codex')
 raw['future_policy']={'keep':True}

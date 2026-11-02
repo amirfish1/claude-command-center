@@ -14,7 +14,7 @@ server._model_policy_error = lambda model: 'Model blocked by policy' if model ==
 server._model_policy_blocks = lambda model: False
 server._model_policy_blocked_models = lambda: set()
 server._codex_context_1m_enabled = lambda: False
-server._codex_context_config = lambda: {'model_context_window': 1000000}
+server._codex_context_config = lambda **kwargs: {'model_context_window': 1000000}
 server._spawn_fallback_model_for_engine = lambda engine: 'gpt-5-codex' if engine == 'codex' else ''
 server._model_catalog_allows_model = lambda engine, model: True
 
