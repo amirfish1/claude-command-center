@@ -45653,8 +45653,8 @@ def main():
     # contact's new messages into the session. No config, no polling.
     threading.Thread(target=_chuck_imessage_poller, daemon=True).start()
     # Keep installed harnesses and Anthropic's exact model catalog current.
-    # The first pass runs immediately in the daemon; failures are recorded for
-    # Settings and never delay server startup or request handling.
+    # The first pass waits out the boot burst (CCC_BOOT_WARM_DELAY_S); failures
+    # are recorded for Settings and never delay server startup or requests.
     threading.Thread(
         target=_engine_maintenance_loop,
         daemon=True,

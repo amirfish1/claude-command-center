@@ -1,0 +1,1 @@
+- After a restart, the hourly engine and model-catalog maintenance pass waits out the boot burst (90 s, CCC_BOOT_WARM_DELAY_S) instead of competing with the dashboard's first loads.

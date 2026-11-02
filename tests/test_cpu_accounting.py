@@ -77,6 +77,26 @@ class FlushTests(unittest.TestCase):
         self.assertIn("_busy_loop", names)
         self.assertGreater(names["_busy_loop"], 50)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "live thread CPU snapshots require Linux /proc")
+    def test_thread_born_inside_the_window_is_attributed(self):
+        """Boot-time background jobs start after the first snapshot (CCC-142)."""
+        with mock.patch("builtins.print"):
+            ca.maybe_flush(now=1000.0 + ca.WINDOW_S)          # baseline, before the thread exists
+        stop = threading.Event()
+
+        def _boot_job():
+            while not stop.is_set():
+                sum(range(2000))
+
+        t = threading.Thread(target=_boot_job, daemon=True)
+        t.start()
+        self.addCleanup(lambda: (stop.set(), t.join()))
+        time.sleep(0.4)
+        with mock.patch("builtins.print"):
+            row = ca.maybe_flush(now=1000.0 + 2 * ca.WINDOW_S + 1)
+        names = {r["name"]: r["cpu_ms"] for r in row["threads"]}
+        self.assertGreater(names.get("_boot_job", 0), 50)
+
     def test_short_lived_thread_reports_cpu_at_exit(self):
         ca.install_thread_exit_accounting()
         ca.install_thread_exit_accounting()  # idempotent

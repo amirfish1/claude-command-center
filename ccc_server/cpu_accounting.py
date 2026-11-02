@@ -180,11 +180,12 @@ def maybe_flush(now=None):
         exited, _exited = _exited, {}
     threads = dict(exited)
     for tid, (name, cpu) in snap.items():
-        base = prev.get(tid)
-        if base is None:
-            continue  # thread born inside the window: its requests are in routes
-        d = (cpu - base) * 1000.0
         key = _normalize_thread_name(name)
+        # A thread born inside the window owns all of its CPU so far. Request
+        # threads are skipped below (their CPU is in the route totals); the
+        # boot window's background jobs used to land in "other" (CCC-142).
+        base = prev.get(tid, 0.0)
+        d = (cpu - base) * 1000.0
         # Keep-alive handler threads span windows; their CPU is already in
         # the per-request route totals.
         if d >= 1 and key != "process_request_thread":

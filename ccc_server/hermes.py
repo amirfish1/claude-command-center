@@ -844,6 +844,16 @@ def _start_engine_update_pass():
 
 
 def _engine_maintenance_loop():
+    # Wait out the boot burst first (CCC-142): the first pass refreshes the
+    # model and pricing catalogs and checks engine CLIs, which cost ~9 s of
+    # CPU in the minute after a restart, exactly while the dashboard's first
+    # polls rebuild every cold cache. The pass is hourly; 90 s late is fine.
+    try:
+        delay = float(os.environ.get("CCC_BOOT_WARM_DELAY_S", "90"))
+    except ValueError:
+        delay = 90.0
+    if delay > 0:
+        time.sleep(delay)
     while True:
         try:
             _core._engine_maintenance_once()
