@@ -5979,7 +5979,7 @@
         if (placeholder && newSid) placeholder.expected_session_id = newSid;
         f2RecordContinuationLineage(sid, newSid);
         if (launch.engine === 'codex') {
-          _watchF2CodexSpawnRegistration(
+          _watchCodexSpawnRegistration(
             spawnId || tempPid,
             'spawning-' + tempPid,
             newSid,
@@ -25363,6 +25363,9 @@
     }
     pendingSpawns.delete(tempPid);
     pendingSpawns.set(realPid, placeholder);
+    if (placeholder.source === 'codex' && sessionId) {
+      _watchCodexSpawnRegistration(realPid, placeholder.id || ('spawning-' + tempPid), sessionId);
+    }
     if (!placeholder.fast_path) renderSidebar(filterConversations($convSearch.value));
     return placeholder;
   }
@@ -25706,8 +25709,8 @@
         if (body.parent_session_id && typeof f2RecordContinuationLineage === 'function') {
           try { f2RecordContinuationLineage(body.parent_session_id, newSid); } catch (_) {}
         }
-        if (String(body.engine || '') === 'codex' && typeof _watchF2CodexSpawnRegistration === 'function') {
-          _watchF2CodexSpawnRegistration(spawnId || pid, card.id, newSid);
+        if (String(body.engine || '') === 'codex' && typeof _watchCodexSpawnRegistration === 'function') {
+          _watchCodexSpawnRegistration(spawnId || pid, card.id, newSid);
         }
         if (typeof isSpawnLogPlaceholderSource === 'function' && !isSpawnLogPlaceholderSource(card.source)) {
           _watchPendingSpawnRegistration(spawnId || pid, card.id);
@@ -26002,31 +26005,50 @@
     return Array.from(pendingSpawns.values()).some(c => c && c.id === fallbackId);
   }
 
-  // F2's Codex continuation takes the fire-and-watch app-server path, which
-  // deliberately skips the generic placeholder watcher below. Confirm that
-  // the accepted spawn became a durable server row instead of trusting the
-  // optimistic response forever. Once durable, force the normal session
-  // reconciliation; if it never appears, reuse the visible failed-card state
-  // rather than leaving a selected ghost session in the sidebar.
-  function _watchF2CodexSpawnRegistration(pid, fallbackId, expectedSessionId) {
+  // Confirm app-server spawns against the durable registry, then bind the
+  // exact thread before refreshing the archive. If registration never
+  // appears, reuse the failed-card state instead of leaving a ghost session.
+  function _watchCodexSpawnRegistration(pid, fallbackId, expectedSessionId) {
+    const card = pendingSpawns.get(pid)
+      || Array.from(pendingSpawns.values()).find(c => c && c.id === fallbackId);
+    const watchKey = expectedSessionId || String(pid);
+    if (card && card._codexRegistrationWatch === watchKey) return;
+    if (card) card._codexRegistrationWatch = watchKey;
     const deadline = Date.now() + 3 * 60 * 1000;
     const tick = async () => {
       if (!_pendingSpawnStillWaiting(pid, fallbackId)) return;
-      let durable = false;
+      let durable = null;
       try {
         const res = await fetch('/api/sessions/spawned?engine=codex&_=' + Date.now(), {
           cache: 'no-store',
         });
         const rows = res.ok ? await res.json() : [];
-        durable = Array.isArray(rows) && rows.some(row => {
+        durable = Array.isArray(rows) && rows.find(row => {
           if (!row) return false;
-          if (expectedSessionId && row.session_id
-              && String(row.session_id) === String(expectedSessionId)) return true;
+          if (expectedSessionId) return !!row.session_id
+            && String(row.session_id) === String(expectedSessionId);
           const rowSpawnId = row.spawn_id || row.pid || '';
           return !!(pid && rowSpawnId && String(rowSpawnId) === String(pid));
         });
       } catch (_) {}
       if (durable) {
+        // The exact durable thread is already usable. Paint it before any
+        // full archive refresh, which may lag by tens of seconds or be
+        // paused while this same spawning placeholder is selected.
+        const sid = durable.session_id || expectedSessionId;
+        const ph = pendingSpawns.get(pid)
+          || Array.from(pendingSpawns.values()).find(c => c && c.id === fallbackId);
+        if (sid && ph && !ph._landedResolved) {
+          ph._landedResolved = true;
+          ph.pending_spawn = false;
+          ph.session_id = sid;
+          const real = Object.assign({}, ph, { id: sid });
+          if (currentConversation === ph.id || currentConversation === fallbackId) {
+            rebindCurrentSelectionToRealCard(real);
+          }
+          resolvePlaceholderPanes([ph.id, fallbackId], real);
+          renderArchiveList($convSearch ? $convSearch.value : '', { force: true });
+        }
         try { await refreshConversationList(); } catch (_) {}
         try {
           await refreshArchiveData({ force: true });
@@ -26043,7 +26065,7 @@
       }
       setTimeout(tick, 5000);
     };
-    setTimeout(tick, 5000);
+    tick();
   }
 
   // The sidebar's own cadence can't confirm a spawn: the 90s archive poll
