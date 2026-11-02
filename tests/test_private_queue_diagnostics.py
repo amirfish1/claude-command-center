@@ -108,6 +108,7 @@ def test_private_relay_sends_only_closed_envelope(server):
         )
     request = opened.call_args.args[0]
     assert json.loads(request.data) == payload
+    assert request.get_header("User-agent") == f"claude-command-center/{server.__version__}"
     assert result == {"ok": True, "report_id": "RPT-123E4567"}
 
 

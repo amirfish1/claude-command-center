@@ -20256,7 +20256,10 @@ def _send_private_diagnostic(payload, endpoint=None):
     request = urllib.request.Request(
         target,
         data=json.dumps(outbound).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": f"claude-command-center/{__version__}",
+        },
         method="POST",
     )
     try:
