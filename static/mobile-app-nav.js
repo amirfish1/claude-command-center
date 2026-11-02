@@ -17,7 +17,7 @@
     #mobileBottomNav .mobile-nav-menu { max-height:calc(100dvh - 100px); overflow-y:auto; overscroll-behavior:contain; min-width:220px; max-width:calc(100vw - 16px); }
     #mobileBottomNav .ccc-mobile-app-list { display:flex; flex-direction:column; border-top:1px solid var(--border); margin-top:6px; padding-top:6px; }
     #mobileBottomNav .ccc-mobile-app-list .mobile-nav-btn, #mobileBottomNav .ccc-guided-decisions-shortcut { flex:none; flex-direction:row; justify-content:flex-start; gap:12px; min-height:44px; padding:8px 12px; }
-    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-label { font-size:15px; }
+    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-label, #mobileBottomNav .ccc-guided-decisions-shortcut .mobile-nav-label { font-size:15px; }
     #mobileBottomNav .ccc-mobile-app-heading { padding:8px 12px; color:var(--text-muted); font-size:12px; }
     #mobileBottomNav[data-ccc-apps-open] .mobile-nav-menu:not([hidden]) { display:flex; }
     body.ccc-mobile-app-open #mobileBottomNav > [data-mobile-nav] { color:var(--text-muted); }
