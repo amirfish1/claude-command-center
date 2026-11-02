@@ -157,3 +157,25 @@ def test_crlf_surrounding_text_preserved(tmp_path):
     assert target.read_bytes().endswith(original)
     assert item.revoke(ctx) is None
     assert target.read_bytes() == original
+
+
+def test_guidance_examples_neither_publish_nor_answer_questions(tmp_path):
+    from ccc_server import question_tags as qt
+    ctx = context(tmp_path)
+    item = cc.QuestionGuidance("claude")
+    assert item.apply(ctx) is None
+    variants = [guidance(), item.targets(ctx)[0].read_text()]
+    for text in variants:
+        assert qt._BARE.search(text) is None  # safe even without injected-context filtering
+        # Exercise both fresh transcript filtering and folding persisted events.
+        for role in ("user", "assistant"):
+            assert qt._event(role, text, "guidance", "2026-01-01T00:00:02Z", "s1") is None
+        ask = {"role": "assistant", "text": "[Q42:install-scope] Which scope?",
+               "uuid": "ask", "ts": "2026-01-01T00:00:01Z", "sid": "s1"}
+        events = [ask] + [{"role": role, "text": text, "uuid": role,
+                          "ts": "2026-01-01T00:00:02Z", "sid": "s1"}
+                         for role in ("user", "assistant")]
+        questions = qt.build_index({"transcript": {"ev": events}})["questions"]
+        assert len(questions) == 1
+        assert questions[0]["tag"] == "[Q42:install-scope]"
+        assert not questions[0]["answered"]

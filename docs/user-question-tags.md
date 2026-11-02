@@ -2,8 +2,8 @@
 
 CCC bundles the [exact instruction text](../resources/owner-questions.md). It
 asks agents to run `q-next` before a necessary user question, put a tag such as
-`[Q42:install-scope]` in its first explanatory heading, reuse the tag for
-reminders, and acknowledge `[Q42] answered` once. It explicitly says that a
+`[Q<n>:install-scope]` in its first explanatory heading, reuse the tag for
+reminders, and acknowledge `[Q<n>] answered` once. It explicitly says that a
 number does **not** publish a question to an inbox or justify asking for approval.
 
 ## Installation
