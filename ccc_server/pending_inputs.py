@@ -108,6 +108,48 @@ def _queued_text_key(value):
     return attribution.strip_header(str(value or "")).strip()
 
 
+_RELAY_LABELS = {
+    "wt-deliver": "WatchTower",
+    "ccc-inject": "ccc send",
+}
+
+
+def _queued_origin(value):
+    """Who sent a queued row that did not come from the dashboard composer.
+
+    Composer input carries no sender header; peer sessions, WatchTower and
+    services do. Returns None for header-less (composer) text so the tray
+    can tell the two apart.
+    """
+    import sender_envelope as attribution
+    raw = str(value or "")
+    if attribution.COMPACT not in raw and attribution.HEADER not in raw:
+        return None
+    try:
+        attr = attribution.from_text(raw)
+    except Exception:
+        attr = None
+    if not attr:
+        return None
+    author = attr.get("author") or {}
+    vias = []
+    for hop in attr.get("relay") or []:
+        via = str((hop or {}).get("via") or "")
+        label = _RELAY_LABELS.get(via, via)
+        if label and label not in vias:
+            vias.append(label)
+    reply = attr.get("reply_to") or {}
+    return {
+        "kind": str(author.get("kind") or "unknown"),
+        "id": str(author.get("id") or ""),
+        "name": str(author.get("name_at_send") or ""),
+        "engine": str(author.get("engine") or ""),
+        "via": vias,
+        "msg_id": str(attr.get("message_id") or ""),
+        "reply": str(reply.get("addr") or ""),
+    }
+
+
 def _new_pending_entry(text):
     """A queue row for a message being enqueued right now.
 
@@ -2692,6 +2734,9 @@ def _get_queued_events_for_session(session_id):
         reason = meta.get("reason")
         if reason:
             ev["queued_reason"] = str(reason)
+        origin = _queued_origin(text)
+        if origin:
+            ev["queued_from"] = origin
         return ev
 
     for text in resume_queue:

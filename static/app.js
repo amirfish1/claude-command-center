@@ -66093,6 +66093,74 @@
   // Queued sends are actionable steer candidates, not past conversation.
   // Keep their real event nodes in a separate tray immediately above the composer
   // so ongoing output cannot scroll them out of reach.
+  // The local session a queued sender names, if CCC knows it: full id,
+  // or the short id prefix a compact sender header carries.
+  function queuedFromSessionRow(id) {
+    const want = String(id || '').trim();
+    if (!want) return null;
+    const rows = conversationsData || [];
+    const exact = rows.find(c => c && (c.session_id === want || c.id === want));
+    if (exact) return exact;
+    if (want.length < 8 || !/^[0-9a-f-]+$/i.test(want)) return null;
+    const prefixed = rows.filter(c => c && String(c.session_id || c.id || '').startsWith(want));
+    return prefixed.length === 1 ? prefixed[0] : null;
+  }
+
+  // "From: <who>" for a queued message that did not come from the composer.
+  // As descriptive as the attribution allows: session title, engine, short
+  // id, and the path it took (ccc send, WatchTower).
+  function queuedFromDescription(origin) {
+    const o = origin || {};
+    const kind = String(o.kind || 'unknown');
+    const via = Array.isArray(o.via) ? o.via.filter(Boolean) : [];
+    const row = kind === 'session' ? (queuedFromSessionRow(o.id) || queuedFromSessionRow(o.name)) : null;
+    const rowId = row ? String(row.session_id || row.id || '') : '';
+    let title = row ? sidebarRowDisplayTitle(rowRawTitle(row).rawTitle) : '';
+    if (title === '(untitled)') title = '';
+    const rawName = String(o.name || '').trim();
+    const looksLikeId = !rawName || /^[0-9a-f]{8}(-[0-9a-f-]*)?$/i.test(rawName);
+    let who;
+    if (title) who = title;
+    else if (rawName && !looksLikeId) who = rawName;
+    else if (kind === 'session') who = 'Session ' + (rawName || String(o.id || '').slice(0, 8) || 'unknown');
+    else if (via.includes('WatchTower')) who = 'WatchTower';
+    else if (kind === 'service') who = rawName || 'Service';
+    else who = 'Unknown sender';
+    const details = [];
+    const engine = String(o.engine || (row && row.engine) || '').trim();
+    if (kind === 'session') details.push(engine ? engine + ' session' : 'session');
+    else if (kind === 'service') details.push('service');
+    const shortId = (rowId || (looksLikeId ? rawName : '') || String(o.id || '')).slice(0, 8);
+    if (shortId && who.indexOf(shortId) === -1 && /^[0-9a-f]{8}$/i.test(shortId)) details.push(shortId);
+    if (via.length && !(via.length === 1 && who === via[0])) details.push('via ' + via.join(' → '));
+    return { who, details, sessionId: rowId, title: 'Message id ' + (o.msg_id || 'unknown')
+      + (o.reply ? ' · reply route ' + o.reply : ' · no reply route')
+      + ' · attribution, not authentication' };
+  }
+
+  function syncQueuedFromLabel(el) {
+    const origin = el && el._queuedFrom;
+    let label = el ? el.querySelector(':scope > .queued-from') : null;
+    if (!origin) {
+      if (label) label.remove();
+      return;
+    }
+    el.classList.add('queued-external');
+    const d = queuedFromDescription(origin);
+    if (!label) {
+      label = document.createElement('div');
+      label.className = 'queued-from';
+      el.insertBefore(label, el.firstChild);
+    }
+    const nameHtml = d.sessionId
+      ? '<a class="queued-from-name" href="?session=' + encodeURIComponent(d.sessionId) + '">' + escapeHtml(d.who) + '</a>'
+      : '<span class="queued-from-name">' + escapeHtml(d.who) + '</span>';
+    const html = '<span class="queued-from-label">From:</span> ' + nameHtml
+      + (d.details.length ? ' <span class="queued-from-meta">' + escapeHtml(d.details.join(' · ')) + '</span>' : '');
+    if (label.innerHTML !== html) label.innerHTML = html;
+    label.title = d.title;
+  }
+
   function syncQueuedSteerTray($view, paneId, replaceServerCandidates) {
     if (!$view) return;
     const pane = $view.closest('.conv-pane');
@@ -66325,6 +66393,7 @@
       // line instead of a text row stacked over a button row.
       const queuedNote = el.querySelector('.send-queued-note');
       (queuedNote || el).appendChild(actions);
+      syncQueuedFromLabel(el);
       applyQueuedSteerError(el, sessionId);
       tray.appendChild(el);
     });
@@ -69510,6 +69579,12 @@
         div.classList.add('server-queued');
         if (ev.queued_reason) div.dataset.queuedReason = String(ev.queued_reason);
         if (ev.delivery_id) div.dataset.deliveryId = String(ev.delivery_id);
+        // Not typed in the composer: another session, WatchTower or a
+        // service sent it. The tray labels and borders these differently.
+        if (ev.queued_from && typeof ev.queued_from === 'object') {
+          div._queuedFrom = ev.queued_from;
+          div.classList.add('queued-external');
+        }
       }
       if (ev.line != null) div.dataset.jsonlLine = String(ev.line);
       if (ev.turn_id != null) div.dataset.turnId = String(ev.turn_id);

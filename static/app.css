@@ -1364,6 +1364,33 @@
   }
   .queued-steer-tray .event .label,
   .queued-steer-tray .event .msg-ts { display: none; }
+  /* Sent by another session, WatchTower or a service, not typed in the
+     composer: a purple frame and a "From:" line so it never reads as the
+     user's own words. */
+  .queued-steer-tray .event.user_text.queued-external {
+    background: color-mix(in srgb, var(--purple) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--purple) 55%, transparent);
+    border-left: 3px solid var(--purple);
+  }
+  .queued-steer-tray .queued-from {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 6px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .queued-steer-tray .queued-from-label {
+    font-weight: 600;
+    color: var(--purple);
+  }
+  .queued-steer-tray .queued-from-name {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .queued-steer-tray a.queued-from-name:hover { text-decoration: underline; }
+  .queued-steer-tray .queued-from-meta { opacity: 0.8; }
   .queued-steer-actions {
     display: flex;
     flex-wrap: wrap;
@@ -31750,10 +31777,12 @@ body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assis
    there is no way to tell when an earlier turn happened. */
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text.cc-final) .msg-ts { display: inline !important; }
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text.cc-final) .assistant-message-actions { display: inline-flex !important; }
-/* Compact rows have ~1px of padding, so the absolutely-positioned stamp and
-   speak/copy actions (top:2px) landed on top of the first line of prose.
-   Hover-capable devices reveal them only on hover/focus; touch devices (no
-   hover) get a reserved strip above the text instead. */
+/* Reserve a metadata strip for every assistant text row. Revealing absolute
+   controls on hover/focus must not put them over the first line of prose,
+   including narration from engines other than Codex. */
+body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text) {
+  padding-top: 20px !important;
+}
 @media (hover: hover) {
   body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text) .msg-ts,
   body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text) .assistant-message-actions { opacity: 0; }
@@ -31761,16 +31790,9 @@ body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assis
   body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):hover .assistant-message-actions,
   body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):focus-within .assistant-message-actions { opacity: 0.85; }
 }
-@media (hover: none) {
-  body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text) { padding-top: 16px !important; }
-}
-/* Codex turn ages stay readable without hovering. Reserve the metadata
-   strip in compact mode too, so the timestamp cannot cover the prose. */
+/* Codex turn ages stay readable without hovering. */
 .conv-pane.is-codex-session .conversations-view .event.assistant:has(> .assistant-text) .msg-ts {
   opacity: 0.7 !important;
-}
-body.conv-compact.conv-compact .conv-pane.is-codex-session .conversations-view .event.assistant:has(> .assistant-text) {
-  padding-top: 20px !important;
 }
 /* The newest reply keeps its per-turn token summary and model line; the
    older turns stay clean. Merged chips ride on tool-call lines, so they stay
