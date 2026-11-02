@@ -157,6 +157,93 @@ class ReaderChildSyncTest(unittest.TestCase):
             self.assertGreater(ship_graph._last_sync_ts, 0.0)
         bg.assert_not_called()
 
+class DirectPortTest(unittest.TestCase):
+    """The reader's own HTTP port: opens skip the dashboard (CCC-143)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import server as server_mod
+        cls.server_mod = server_mod
+
+    def setUp(self):
+        self.fake = _FakeServer()
+        patches = [
+            mock.patch.object(self.server_mod, "_conversation_open_response",
+                              self.fake._conversation_open_response),
+            mock.patch.object(self.server_mod, "_resolve_runtime_network",
+                              return_value=("127.0.0.1", [], {})),
+            mock.patch.dict(os.environ, {"CCC_PROXY_SECRET": "",
+                                         "CCC_PROXY_SECRET_FILE": ""}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.srv = conv_reader._serve_http(self.server_mod, 0, 8090)
+        self.assertIsNotNone(self.srv)
+        self.addCleanup(self.srv.server_close)
+        self.addCleanup(self.srv.shutdown)
+        self.port = self.srv.server_address[1]
+
+    def _get(self, path, method="GET", origin=None):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        headers = {"Origin": origin} if origin else {}
+        conn.request(method, path, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()
+        conn.close()
+        return resp, body
+
+    def test_open_is_served_with_timing_and_cors(self):
+        resp, body = self._get("/api/conversations/abc?tail=80",
+                               origin="http://127.0.0.1:8090")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body, b'{"id": "abc"}')
+        self.assertEqual(self.fake.calls, [("abc", "tail=80", "identity", True)])
+        self.assertEqual(resp.getheader("Access-Control-Allow-Origin"),
+                         "http://127.0.0.1:8090")
+        self.assertEqual(resp.getheader("Access-Control-Allow-Credentials"), "true")
+        timing = resp.getheader("Server-Timing") or ""
+        self.assertIn('cache;desc="direct-hit"', timing)
+        self.assertIn("t0;desc=", timing)
+
+    def test_untrusted_origin_gets_no_cors(self):
+        resp, _ = self._get("/api/conversations/abc", origin="https://evil.example")
+        self.assertIsNone(resp.getheader("Access-Control-Allow-Origin"))
+
+    def test_declined_and_failed_opens_ask_for_the_dashboard(self):
+        for conv in ("declined", "boom"):
+            resp, _ = self._get("/api/conversations/" + conv)
+            self.assertEqual(resp.status, 503)
+
+    def test_only_opens_and_ping(self):
+        self.assertEqual(self._get("/api/conv-reader/ping")[0].status, 200)
+        self.assertEqual(self._get("/api/conversations/list")[0].status, 404)
+        self.assertEqual(self._get("/api/sessions")[0].status, 404)
+        self.assertEqual(self._get("/api/conversations/abc", method="POST")[0].status, 405)
+
+    def test_next_child_can_share_the_port(self):
+        if not hasattr(socket, "SO_REUSEPORT"):
+            self.skipTest("no SO_REUSEPORT")
+        second = conv_reader._serve_http(self.server_mod, self.port, 8090)
+        self.assertIsNotNone(second)
+        second.shutdown()
+        second.server_close()
+
+
+class DirectPortConfigTest(unittest.TestCase):
+    def test_default_is_dashboard_port_plus_10000(self):
+        with mock.patch.dict(os.environ, {"CCC_CONV_READER_PORT": ""}):
+            self.assertEqual(conv_reader.http_port(8091), 18091)
+            self.assertIsNone(conv_reader.http_port(60000))
+
+    def test_env_overrides_or_turns_off(self):
+        with mock.patch.dict(os.environ, {"CCC_CONV_READER_PORT": "19000"}):
+            self.assertEqual(conv_reader.http_port(8091), 19000)
+        with mock.patch.dict(os.environ, {"CCC_CONV_READER_PORT": "0"}):
+            self.assertIsNone(conv_reader.http_port(8091))
+
+
 class ConvReaderSwitchTest(unittest.TestCase):
     def test_kill_switch(self):
         saved = os.environ.get("CCC_CONV_READER")

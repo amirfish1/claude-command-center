@@ -1,0 +1,1 @@
+- Conversation opens are served by the conversation-reader process on its own port (dashboard port + 10000), so a busy or restarting dashboard no longer delays them; the UI falls back to the dashboard port when that port is not reachable.

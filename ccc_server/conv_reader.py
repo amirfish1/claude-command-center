@@ -26,6 +26,19 @@ costs a few socket calls instead of hundreds of GIL slices.
 memory_recall runs here too (MEMORY-20); the dashboard keeps owning the
 index sync and only forwards the query.
 
+Direct port (CCC-143): the child also serves GET /api/conversations/<id> over
+HTTP on 127.0.0.1:<dashboard port + 10000> (``CCC_CONV_READER_PORT`` sets
+it; ``0`` turns it off). Forwarding still made every open wait for the
+dashboard to accept the connection and start a handler thread, which a busy
+or booting dashboard delays by seconds. The browser fetches opens from this
+port on its own connection; when the page is served through
+``tailscale serve``, that port needs its own HTTPS serve entry too. It
+reuses the dashboard's handler class, so the proxy-secret, PIN and origin
+checks are the same code. CORS headers go only to origins that pass
+``_check_same_origin``. Successive children share the port with
+SO_REUSEPORT, so the previous child keeps answering while the next one
+imports server.py after a dashboard restart.
+
 Wire protocol (one request per connection): the client sends one JSON line
 ``{"conv_id", "query", "accept"}``; the child answers one JSON line
 ``{"ok": true, "len": N, "encoding", "cache"}`` followed by N body bytes, or
@@ -36,11 +49,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 try:
@@ -57,7 +72,8 @@ READY_TIMEOUT_S = 30.0
 MAX_CONSECUTIVE_ERRORS = 3
 
 _lock = threading.Lock()
-_state = {"sock": None, "proc": None, "ready": False, "errors": 0}
+_state = {"sock": None, "proc": None, "ready": False, "errors": 0,
+          "http_port": None}
 _stats = {"served": 0, "declined": 0, "errors": 0}
 
 
@@ -68,6 +84,20 @@ def enabled():
 
 def socket_path(parent_pid=None):
     return COMMAND_CENTER_STATE_DIR / f"conv-reader-{parent_pid or os.getpid()}.sock"
+
+
+def http_port(dashboard_port=None):
+    """Loopback port for direct opens, or None when turned off."""
+    raw = (os.environ.get("CCC_CONV_READER_PORT") or "").strip().lower()
+    if raw in ("0", "off", "no", "false"):
+        return None
+    if raw.isdigit() and 0 < int(raw) <= 65535:
+        return int(raw)
+    try:
+        port = int(dashboard_port or os.environ.get("PORT") or 8090) + 10000
+    except (TypeError, ValueError):
+        return None
+    return port if port <= 65535 else None
 
 
 def is_child():
@@ -82,10 +112,13 @@ def ready():
 # ---------------------------------------------------------------- dashboard
 
 
-def start():
+def start(dashboard_port=None):
     """Spawn and supervise the reader child. Called once from server.main()."""
     if not enabled() or os.environ.get("CCC_CONV_READER_CHILD") == "1":
         return None
+    with _lock:
+        _state["dashboard_port"] = dashboard_port
+        _state["http_port"] = http_port(dashboard_port)
     thread = threading.Thread(target=_supervise, name="conv-reader-supervisor",
                               daemon=True)
     thread.start()
@@ -99,9 +132,14 @@ def _spawn(path):
         path.unlink()
     except OSError:
         pass
+    with _lock:
+        port, dash_port = _state.get("http_port"), _state.get("dashboard_port")
+    extra = ["--http-port", str(port)] if port else []
+    if dash_port:
+        extra += ["--port", str(dash_port)]
     return subprocess.Popen(
         [sys.executable, "-m", "ccc_server.conv_reader",
-         "--sock", str(path), "--parent", str(os.getpid())],
+         "--sock", str(path), "--parent", str(os.getpid())] + extra,
         cwd=str(PROJECT_ROOT), env=env, stdin=subprocess.DEVNULL,
     )
 
@@ -225,6 +263,7 @@ def status():
         proc = _state.get("proc")
         return {"enabled": enabled(), "ready": bool(_state["ready"]),
                 "pid": proc.pid if proc is not None else None,
+                "http_port": _state.get("http_port"),
                 **dict(_stats)}
 
 
@@ -280,6 +319,146 @@ def _handle_op(req):
     return {"ok": False}
 
 
+_OPEN_PATH = re.compile(r"^/api/conversations/(?!all$|list$|order$)[^/]+$")
+_http = {"server": None, "active": 0}
+_http_lock = threading.Lock()
+
+
+def _http_handler(server_mod):
+    """The dashboard's handler class, narrowed to direct opens."""
+    base = server_mod.CommandCenterHandler
+
+    class ReaderHandler(base):
+        def _cors_headers(self):
+            origin = (self.headers.get("Origin") or "").strip()
+            if origin and self._check_same_origin():
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Access-Control-Allow-Credentials", "true")
+                self.send_header("Access-Control-Expose-Headers", "Server-Timing")
+                self.send_header("Timing-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
+
+        def _reply(self, status, body, encoding=None, cache=None):
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self._cors_headers()
+            self._send_server_timing(cache=cache)
+            if encoding:
+                self.send_header("Content-Encoding", encoding)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def do_GET(self):
+            with _http_lock:
+                _http["active"] += 1
+            try:
+                self._direct_get()
+            finally:
+                with _http_lock:
+                    _http["active"] -= 1
+
+        def _direct_get(self):
+            if not self._check_proxy_secret():
+                return
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path.rstrip("/")
+            if self._phone_pin_blocked(path):
+                return
+            if path == "/api/conv-reader/ping":
+                self._reply(200, json.dumps({"ok": True, "pid": os.getpid()}).encode())
+                return
+            if not _OPEN_PATH.match(path):
+                self._reply(404, b'{"error": "not found"}')
+                return
+            conv_id = path.split("/")[-1]
+            accept = self.headers.get("Accept-Encoding", "") or ""
+            try:
+                out = server_mod._conversation_open_response(
+                    conv_id, parsed.query, accept, in_reader=True)
+            except Exception as exc:
+                print(f"  [conv-reader] direct {conv_id}: {exc!r}", flush=True)
+                out = None
+            if out is None:
+                # Declined (ACP, dashboard-only Codex state) or failed: the
+                # client retries on the dashboard, which builds it in-process.
+                self._reply(503, b'{"error": "declined"}')
+                return
+            cache = out.get("cache")
+            self._reply(200, out["body"], encoding=out.get("encoding"),
+                        cache=f"direct-{cache}" if cache else "direct")
+
+        def _refuse(self):
+            self._reply(405, b'{"error": "method not allowed"}')
+
+        do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _refuse
+
+    return ReaderHandler
+
+
+def _serve_http(server_mod, port, dashboard_port=None):
+    """Bind the direct-open port (shared with the previous child via
+    SO_REUSEPORT) and serve it on a daemon thread. Returns the server or
+    None when the port is unavailable; opens then go through the dashboard."""
+    import http.server
+    import socketserver
+
+    class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+        request_queue_size = 128
+
+        def server_bind(self):
+            if hasattr(socket, "SO_REUSEPORT"):
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            # HTTPServer.server_bind would call getfqdn(), a DNS lookup.
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address[:2]
+
+    try:
+        # The origin allow-list the handler checks is resolved in the
+        # dashboard's main(); resolve it the same way here.
+        bind_host, origins, info = server_mod._resolve_runtime_network(
+            int(dashboard_port or server_mod.PORT), None)
+        server_mod.ALLOWED_ORIGINS[:] = origins
+        server_mod.RUNTIME_NETWORK_INFO = info
+    except Exception as exc:
+        print(f"  [conv-reader] origin allow-list: {exc!r}", flush=True)
+    try:
+        srv = Server(("127.0.0.1", int(port)), _http_handler(server_mod))
+    except OSError as exc:
+        print(f"  [conv-reader] direct port {port} unavailable: {exc}", flush=True)
+        return None
+    _http["server"] = srv
+    threading.Thread(target=srv.serve_forever, name="conv-reader-http",
+                     daemon=True).start()
+    print(f"  [conv-reader] direct opens on 127.0.0.1:{srv.server_address[1]}", flush=True)
+    return srv
+
+
+def _hand_off(grace_s=10.0):
+    """Stop taking direct connections, let in-flight opens finish, exit."""
+    srv = _http.get("server")
+    if srv is not None:
+        try:
+            srv.shutdown()
+            srv.server_close()
+        except OSError:
+            pass
+        deadline = time.monotonic() + grace_s
+        while time.monotonic() < deadline:
+            with _http_lock:
+                if _http["active"] <= 0:
+                    break
+            time.sleep(0.05)
+    os._exit(0)
+
+
 def _socket_inode(path):
     """Identity of the file at `path` (inode + ctime: inode numbers recycle)."""
     try:
@@ -304,15 +483,18 @@ def _watch_parent(parent_pid, path, inode=None):
                 pass
             os._exit(0)
         if inode is not None and _socket_inode(path) != inode:
-            os._exit(0)
+            # The next child is up and shares the direct port.
+            _hand_off()
         time.sleep(1.0)
 
 
-def serve(path, parent_pid):
+def serve(path, parent_pid, port=None, dashboard_port=None):
     os.umask(0o077)
     path = Path(path)
     sys.path.insert(0, str(PROJECT_ROOT))
     import server as server_mod  # noqa: E402  (heavy; child only)
+    if port:
+        _serve_http(server_mod, port, dashboard_port)
     try:
         path.unlink()
     except OSError:
@@ -340,7 +522,10 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     path = argv[argv.index("--sock") + 1]
     parent = int(argv[argv.index("--parent") + 1])
-    serve(path, parent)
+
+    def opt(name):
+        return int(argv[argv.index(name) + 1]) if name in argv else None
+    serve(path, parent, opt("--http-port"), opt("--port"))
 
 
 if __name__ == "__main__":

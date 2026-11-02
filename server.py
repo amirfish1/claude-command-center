@@ -31889,6 +31889,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             replay = qs.get("replay", [""])[0].lower() in ("1", "true", "yes")
             self._stream_spawn_deltas(sid, replay=replay)
+        elif path == "/api/conv-reader/info":
+            # Where the browser can fetch conversation opens directly
+            # (ccc_server/conv_reader.py, CCC-143). port null = not offered.
+            st = _conv_reader.status()
+            self.send_json({"port": st.get("http_port") if st.get("ready") else None,
+                            "ready": bool(st.get("ready"))})
         elif re.match(r"^/api/conversations/(?!all$|list$|order$)[^/]+$", path):
             conv_id = path.split("/")[-1]
             accept = self.headers.get("Accept-Encoding", "") or ""
@@ -43669,8 +43675,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _sc0 = getattr(self, "_ccc_req_cpu0", None)
             if _st0 is None or _sc0 is None:
                 return
-            val = "app;dur=%.0f, cpu;dur=%.0f" % ((time.time() - _st0) * 1000.0,
-                                                  (time.thread_time() - _sc0) * 1000.0)
+            # t0: wall-clock ms when this process started reading the request,
+            # so the client can split its wait into before-handler and
+            # after-handler (network) time.
+            val = "app;dur=%.0f, cpu;dur=%.0f, t0;desc=\"%.0f\"" % (
+                (time.time() - _st0) * 1000.0,
+                (time.thread_time() - _sc0) * 1000.0, _st0 * 1000.0)
             if cache:
                 val += ', cache;desc="%s"' % cache
             self.send_header("Server-Timing", val)
@@ -46081,7 +46091,7 @@ def main():
     _install_python_stack_dump_handler()
     # Conversation opens get their own process (and GIL) so background work
     # in this one cannot stall them (CCC-143). CCC_CONV_READER=0 disables.
-    _conv_reader.start()
+    _conv_reader.start(port)
     # The heaviest background warmers (gh-queue-watch, uxq-health-refresh,
     # ship-graph-warm) run in a helper process too, so /list reads stop
     # queueing behind them for this GIL (CCC-142). CCC_BG_HELPER=0 disables.

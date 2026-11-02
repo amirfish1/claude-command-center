@@ -325,28 +325,94 @@
   // the request before sending it (no free HTTP/1.1 connection), req_wait_ms is
   // send -> first byte (server accept + handler). ttfb >> server_ms needs this
   // split to tell browser queueing from server-side accept/GIL wait.
-  function _convResourceTiming(url, t0) {
+  // serverT0 (epoch ms the server started reading the request) and
+  // serverMs split req_wait into pre_handler_ms (proxy, accept, thread start)
+  // and post_handler_ms (handler done -> first byte: proxy and network).
+  // Both clocks are NTP-synced, so expect tens of ms of skew.
+  function _convResourceTiming(url, t0, serverT0, serverMs) {
     try {
       const abs = new URL(url, window.location.href).href;
       const list = performance.getEntriesByName(abs, 'resource');
       for (let i = list.length - 1; i >= 0; i--) {
         const e = list[i];
         if (e.startTime + 1 < t0 || !e.requestStart) continue;
-        return {
+        const out = {
           stall_ms: Math.round(e.requestStart - e.startTime),
           req_wait_ms: Math.round(e.responseStart - e.requestStart),
           conn_ms: Math.round(Math.max(0, e.connectEnd - e.connectStart)),
           proto: e.nextHopProtocol || '',
         };
+        if (serverT0 && performance.timeOrigin) {
+          out.pre_handler_ms = Math.round(serverT0 - (performance.timeOrigin + e.requestStart));
+          if (serverMs !== null) {
+            out.post_handler_ms = Math.round(performance.timeOrigin + e.responseStart - serverT0 - serverMs);
+          }
+        }
+        return out;
       }
     } catch (_) {}
     return null;
   }
+  // Direct conversation opens (CCC-143): the conversation-reader process
+  // serves GET /api/conversations/<id> on its own port, so an open neither
+  // waits for the busy dashboard to accept it nor shares a connection with
+  // the list polls. Used only after a ping to that port succeeds; any
+  // failure falls back to the dashboard path. localStorage
+  // ccc-conv-direct=0 turns it off.
+  const _convDirect = { base: null, downUntil: 0, probing: false, checkedAt: 0 };
+  function _convDirectProbe() {
+    if (_convDirect.probing) return;
+    try { if (localStorage.getItem('ccc-conv-direct') === '0') return; } catch (_) {}
+    _convDirect.probing = true;
+    _convDirect.checkedAt = Date.now();
+    fetch('/api/conv-reader/info', { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(info => {
+        const port = info && info.port;
+        if (!port) return null;
+        const loc = window.location;
+        const base = (loc.protocol === 'https:' ? 'https://' : 'http://') + loc.hostname.replace(/^([^\[].*:.*)$/, '[$1]') + ':' + port;
+        if (base === loc.origin) return null;
+        const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = ctl ? setTimeout(() => ctl.abort(), 4000) : null;
+        return fetch(base + '/api/conv-reader/ping', { cache: 'no-store', credentials: 'include', mode: 'cors', signal: ctl ? ctl.signal : undefined })
+          .then(r => (r.ok ? r.json() : null))
+          .then(j => { if (j && j.ok) { _convDirect.base = base; _convDirect.downUntil = 0; } })
+          .finally(() => { if (timer) clearTimeout(timer); });
+      })
+      .catch(() => {})
+      .finally(() => { _convDirect.probing = false; });
+  }
+  function _convDirectUrl(url) {
+    if (!_convDirect.base || Date.now() < _convDirect.downUntil) {
+      // Re-check now and then: the port is not offered until the reader is
+      // up, and a failed direct fetch parks it for a minute.
+      if (Date.now() - _convDirect.checkedAt > 300000) _convDirectProbe();
+      return null;
+    }
+    return /^\/api\/conversations\/(?!all(?:[?]|$)|list(?:[?]|$)|order(?:[?]|$))[^/?]+(?:[?]|$)/.test(url) ? _convDirect.base + url : null;
+  }
+  setTimeout(_convDirectProbe, 1500);
   function _fetchConvJsonTimed(url, init, keepErrors) {
     const t0 = performance.now();
     const g = window.__cccConnectionGate;
     const gate = g ? { streams: g.openStreams, pool_active: g.active, pool_queued: g.queued, direct_active: g.directActive } : null;
-    const pending = fetch(url, init).then(r => {
+    const directUrl = _convDirectUrl(url);
+    let fetchedUrl = url;
+    const viaDashboard = () => { fetchedUrl = url; return fetch(url, init); };
+    const first = directUrl
+      ? fetch(directUrl, Object.assign({}, init || {}, { credentials: 'include', mode: 'cors' })).then(r => {
+          // Declined (ACP and similar), PIN, or any error: the dashboard
+          // builds it, exactly as before.
+          if (r.ok) { fetchedUrl = directUrl; return r; }
+          return viaDashboard();
+        }, err => {
+          if (err && err.name === 'AbortError') throw err;
+          _convDirect.downUntil = Date.now() + 60000;
+          return viaDashboard();
+        })
+      : fetch(url, init);
+    const pending = first.then(r => {
       if (!r.ok && !keepErrors) return null;
       const tResp = performance.now();
       const st = r.headers.get('Server-Timing') || '';
@@ -361,7 +427,9 @@
               t0, tResp, tBody, tParse, bytes: txt.length,
               server_ms: num('app'), server_cpu_ms: num('cpu'),
               server_cache: ((st.match(/cache;desc="([^"]+)"/) || [])[1] || null),
-              gate, rt: _convResourceTiming(url, t0),
+              gate, rt: _convResourceTiming(fetchedUrl, t0,
+                +((st.match(/t0;desc="([0-9.]+)"/) || [])[1] || 0), num('app')),
+              direct: fetchedUrl !== url,
             }, enumerable: false, configurable: true });
           }
         } catch (_) {}
@@ -60995,6 +61063,7 @@
       if (p.server_cpu_ms !== null) out.server_cpu_ms = p.server_cpu_ms;
       if (p.server_cache) out.server_cache = p.server_cache;
       if (p.gate) out.gate = p.gate;
+      if (p.direct) out.direct = true;
       if (p.rt) Object.assign(out, p.rt);
     }
     return out;
