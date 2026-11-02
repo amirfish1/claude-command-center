@@ -16,8 +16,9 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
     await page.goto(base+'/?ccc_settings=defaults',{waitUntil:'domcontentloaded'});
     await page.waitForSelector('#settingsModal.open');
     const visibleTabs = () => page.evaluate(() => [...document.querySelectorAll('#settingsRail .settings-rail-item')].filter(el=>el.offsetParent).map(el=>el.textContent.trim()));
-    assert.deepEqual(await visibleTabs(),['Agents','Workspace','Notifications & voice','Connections','Usage & budgets','System & help']);
-    assert.equal(await page.$eval('.settings-usage-disclosure',el=>el.open),false);
+    assert.deepEqual(await visibleTabs(),['Agents','Workspace','Notifications & voice','Connections','Usage & budgets','System']);
+    assert.equal(await page.$$eval('#settingsPane #settingsModelUsage, #settingsPane #settingsSection-tools, #settingsPane #settingsSection-help',els=>els.length),0);
+    assert.equal(await page.$eval('#settingsActionsUsage',el=>el.open),false);
     for (const id of ['appearance','notifications','vault','sessions','maintenance','defaults']) {
       await page.click('[data-settings-destination="'+id+'"]');
       assert.equal(await page.$eval('[data-section-id="'+id+'"]',el=>el.classList.contains('is-active-section')),true);
@@ -48,6 +49,6 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
     await page.click('[data-settings-destination="vault"]');
     assert.equal(await page.$eval('.settings-modal',el=>el.scrollWidth<=el.clientWidth+1),true);
     assert.equal((await visibleTabs()).length,6);
-    console.log('PASS: six destinations, switching, collapsed reports, search restoration, multi-word search, keyboard, legacy adapters, mobile width');
+    console.log('PASS: six preference destinations, retired action sections, Stats report placement, switching, search restoration, multi-word search, keyboard, legacy adapters, mobile width');
   } finally {await browser.close()}
 })().catch(error=>{console.error(error);process.exitCode=1});

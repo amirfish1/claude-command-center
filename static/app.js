@@ -21055,7 +21055,10 @@
   ];
   const _mobileMoreMenuHome = new Map();
   function _mobileMoreMenuNodes() {
-    const nodes = _mobileMoreMenuIds.map(id => document.getElementById(id)).filter(Boolean);
+    // Workspace actions have a permanent home in the sidebar More menu.
+    // Responsive topbar updates must not reclaim them after Settings mounts.
+    const nodes = _mobileMoreMenuIds.map(id => document.getElementById(id))
+      .filter(node => node && !node.closest('#settingsActionsTools'));
     const localhostWrap = document.querySelector('.localhost-wrap');
     if (localhostWrap) nodes.push(localhostWrap);
     return nodes;
@@ -23992,30 +23995,11 @@
     });
   })();
   const $sidebarMoreBtn = document.getElementById('sidebarMoreBtn');
-  // Phones: the sidebar ⋮ is trimmed to questions + reload + the session
-  // list's view filters; the app/system items move into Settings, which the
-  // CCC icon opens. Desktop keeps the full menu (group chats and history
-  // have no other entry point there).
+  // Application actions remain in More on desktop and mobile. The CCC icon
+  // still opens Settings on phones; preferences do not contain service actions.
   const _phoneMenusMQ = window.matchMedia('(max-width: 1200px)');
   (function _phoneSidebarMenus() {
     if (!_phoneMenusMQ.matches) return;
-    const strip = document.getElementById('settingsAboutStrip');
-    const menu = document.getElementById('sidebarMoreMenu');
-    if (strip && menu) {
-      const restart = menu.querySelector('[data-proxy="cccServerStatusChip"]');
-      const moving = [restart, document.getElementById('cccWhatsNewLink'), document.getElementById('cccCheckUpdatesLink'),
-        menu.querySelector('a[href*="discord"]'), menu.querySelector('.sh-more-info')].filter(Boolean);
-      moving.forEach((n) => strip.appendChild(n));
-      strip.hidden = !moving.length;
-      // The moved Restart item is a proxy; forward it like the menu does.
-      strip.addEventListener('click', (ev) => {
-        const item = ev.target.closest('[data-proxy]');
-        if (!item) return;
-        ev.preventDefault();
-        const target = document.getElementById(item.getAttribute('data-proxy'));
-        if (target) target.click();
-      });
-    }
     const icon = document.querySelector('.sidebar .sh-app-icon');
     if (icon) {
       icon.setAttribute('role', 'button');
@@ -62665,6 +62649,7 @@
     }
     function close() { $modal.classList.remove('open'); }
 
+    window.cccSettingsActions?.setUsageOpener(open);
     document.getElementById('statsBtn').addEventListener('click', open);
     document.getElementById('statsCloseBtn').addEventListener('click', close);
     $modal.addEventListener('click', (e) => {
@@ -82888,7 +82873,7 @@
   }
 
   const $sysBtn = document.getElementById('systemStatusBtn');
-  if ($sysBtn) $sysBtn.addEventListener('click', () => sysOpenModal($sysBtn));
+  if ($sysBtn) $sysBtn.addEventListener('click', () => sysOpenModal(document.getElementById('sidebarMoreBtn') || $sysBtn));
   if ($sysChip) $sysChip.addEventListener('click', () => sysOpenModal($sysChip));
   const $sysCloseBtn = document.getElementById('sysCloseBtn');
   if ($sysCloseBtn) $sysCloseBtn.addEventListener('click', sysRequestClose);
@@ -83949,11 +83934,9 @@
     }
   }
 
-  // Shared deep link into Settings → Maintenance. The header worker badge used
-  // to be its only caller; that badge is now a decorative span inside the
-  // System status panel, whose rows carry their own Restart buttons. Kept as
-  // the one place that knows how to open that tab.
+  // Legacy dispatch-details callers follow their controls into System status.
   function openMaintenanceSettings() {
+    if (window.cccSettingsActions?.redirect('services')) return;
     const modal = document.getElementById('settingsModal');
     const settingsButton = document.getElementById('settingsBtn');
     const maintenanceTab = document.getElementById('settingsRailTab-maintenance');
@@ -93945,7 +93928,7 @@
       ['notifications', 'Notifications & voice', ['notifications','voice']],
       ['vault', 'Connections', ['vault','api-keys','network']],
       ['sessions', 'Usage & budgets', ['sessions','limits','leftover','free']],
-      ['maintenance', 'System & help', ['maintenance','experimental','tools','help']],
+      ['maintenance', 'System', ['maintenance','experimental']],
     ];
     window.cccSettingsDestinations = destinations;
     const titles = {defaults:'Launch defaults', engines:'Install & connect engines',
@@ -93953,7 +93936,7 @@
       layout:'Layout & visibility', preferences:'Review & transfer preferences', notifications:'Notifications', voice:'Voice & sound',
       vault:'Saved secrets', 'api-keys':'Model provider keys', network:'Devices & remote access',
       sessions:'Subscription costs', limits:'Usage limits', leftover:'Use spare quota',
-      free:'Free model setup', maintenance:'Troubleshooting & services',
+      free:'Free model setup', maintenance:'Diagnostics & config access',
       tools:'Workspace tools', help:'Help & setup', experimental:'Preview features'};
     function consolidate() {
       for (const [primary, title, ids] of destinations) {
@@ -94012,15 +93995,6 @@
       if(records.some(record => [...record.addedNodes].some(node =>
         node.nodeType===1 && node.matches('.settings-rail-item') && !node.dataset.settingsDestination))) consolidate();
     }).observe(rail, {childList:true});
-    // Reports are optional evidence, not the first obstacle to changing defaults.
-    const usage=document.getElementById('settingsModelUsage')?.closest('.settings-row');
-    if(usage) {
-      const details=document.createElement('details'); details.className='settings-disclosure settings-usage-disclosure';
-      const summary=document.createElement('summary'); summary.textContent='Starting models · last 7 days';
-      details.append(summary,usage); document.getElementById('settingsSection-defaults').append(details);
-      details.addEventListener('toggle',()=>{if(details.open && !details.hidden)refreshSettingsUsage()});
-    }
-    document.getElementById('takeTourBtn')?.closest('.settings-row')?.remove();
     const tour=document.getElementById('runOnboardingBtn')?.closest('.settings-row');
     if(tour) {
       tour.querySelector('.settings-row-label').textContent='Guided tour';
@@ -94114,6 +94088,7 @@
   function setActiveSettingsRailSection(sectionId, opts) {
     opts = opts || {};
     if (!$settingsRail || !$settingsPane || !sectionId) return;
+    if (window.cccSettingsActions?.redirect(sectionId)) return;
     const requested = $settingsPane.querySelector('[data-section-id="'+sectionId+'"]');
     const destination = requested?.dataset.destination || sectionId;
     const firstRun = $settingsModalInner.classList.contains('is-first-run');
@@ -94536,6 +94511,7 @@
     setTimeout(function () {
       openSettingsModal();
       function activate() {
+        if (window.cccSettingsActions?.redirect(want)) return true;
         const tab = document.getElementById('settingsRailTab-' + want);
         const section = $settingsPane.querySelector('[data-section-id="' + CSS.escape(want) + '"]');
         if (!tab || !section?.dataset.destination) return false;
@@ -96282,6 +96258,13 @@
   if (!CONV_POPOUT_MODE) {
     setTimeout(() => maybeStartFirstFlight(0), 2500);
   }
+
+  // Relocate actions only after native listener binding has completed.
+  window.cccSettingsActions?.mount({
+    closeSettings: closeSettingsModal,
+    openSystem: opener => sysOpenModal(opener, 'status'),
+    refreshUsage: refreshSettingsUsage,
+  });
 
   // Trigger check on load
   if (!CONV_POPOUT_MODE) {

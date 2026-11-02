@@ -285,7 +285,7 @@
     <span class="drain-paused-banner__icon" aria-hidden="true">&#9208;</span>
     <span class="drain-paused-banner__text" id="drainPausedBannerText"></span>
     <button type="button" class="drain-paused-banner__resume" id="drainPausedResumeBtn" title="Lift the drain; queued messages dispatch immediately">Resume dispatch</button>
-    <button type="button" class="drain-paused-banner__details" id="drainPausedDetailsBtn" title="Open Settings > Maintenance">Details</button>
+    <button type="button" class="drain-paused-banner__details" id="drainPausedDetailsBtn" title="Open System status">Details</button>
   </div>
   <!-- PWA install banner (tab-mode only). Hidden by default; surfaced after
        a short delay if the page is NOT running standalone, with copy
@@ -2123,7 +2123,7 @@
   </div>
 
   <!-- System status. Opened from the SERVER STATUS chip in the sidebar header
-       and from Settings > Maintenance > System status.
+       and from More > System status.
 
        Structural rule for this block: every id below is captured ONCE by
        getElementById at boot (static/app.js), with no re-query and no null
@@ -4120,6 +4120,7 @@
 <script src="/static/notify.js"></script>
 <script src="/static/router-detected.js" defer></script>
 <script src="/static/local-speech.js"></script>
+<script src="/static/settings-actions.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/settings-preferences.js"></script>
 <script src="/static/free-settings.js" defer></script>

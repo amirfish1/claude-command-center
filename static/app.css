@@ -33926,6 +33926,9 @@ body.has-mobile-bottom-nav .pwa-install-banner {
   .settings-row-control { max-width:100%; justify-content:flex-start; }
   .settings-section-eyebrow { font-size:21px; }
   .settings-data-card { padding:14px; }
+  .settings-usage-row { grid-template-columns:minmax(0,1fr) max-content; gap:8px 12px; }
+  .settings-usage-row > b { grid-column:2; grid-row:1; }
+  .settings-usage-row > .settings-usage-track { grid-column:1 / -1; grid-row:2; }
 }
 /* Keep passive notifications behind the active Settings dialog. */
 body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
