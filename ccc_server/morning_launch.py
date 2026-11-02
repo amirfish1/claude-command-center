@@ -1851,7 +1851,7 @@ _MODEL_RATES = {
 _FALLBACK_RATES = (3.00, 3.75, 0.30, 15.00)  # Sonnet — sane middle ground.
 
 
-def _canonical_model_name(model):
+def _canonical_model_name_uncached(model):
     m = (model or "").lower()
     if "/" in m:
         m = m.rsplit("/", 1)[-1]
@@ -1861,8 +1861,39 @@ def _canonical_model_name(model):
     return m
 
 
+# Pricing runs once per transcript row (savings, background runs): a cold
+# /api/savings priced 13k rows and spent 3.6 of its 5.7 s in these regexes
+# for a handful of distinct model ids (CCC-142). Both maps are pure functions
+# of the string and the constant _MODEL_RATES table.
+_CANONICAL_MODEL_MEMO = {}
+_RATES_KNOWN_MEMO = {}
+_MODEL_MEMO_MAX = 4096
+
+
+def _canonical_model_name(model):
+    if not isinstance(model, str):
+        return _canonical_model_name_uncached(model)
+    m = _CANONICAL_MODEL_MEMO.get(model)
+    if m is None:
+        m = _canonical_model_name_uncached(model)
+        if len(_CANONICAL_MODEL_MEMO) >= _MODEL_MEMO_MAX:
+            _CANONICAL_MODEL_MEMO.clear()
+        _CANONICAL_MODEL_MEMO[model] = m
+    return m
+
+
 def _rates_for_model_known(model):
     m = _canonical_model_name(model)
+    hit = _RATES_KNOWN_MEMO.get(m)
+    if hit is None:
+        hit = _rates_for_canonical_model(m)
+        if len(_RATES_KNOWN_MEMO) >= _MODEL_MEMO_MAX:
+            _RATES_KNOWN_MEMO.clear()
+        _RATES_KNOWN_MEMO[m] = hit
+    return list(hit[0]), hit[1]
+
+
+def _rates_for_canonical_model(m):
     if m in _MODEL_RATES:
         return list(_MODEL_RATES[m]), True
     for key, rates in _MODEL_RATES.items():

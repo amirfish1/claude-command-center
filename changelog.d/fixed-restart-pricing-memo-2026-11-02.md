@@ -1,0 +1,1 @@
+- After a restart, the savings and background-runs panels build faster: model pricing lookups are memoized instead of re-running regexes for every transcript row.
