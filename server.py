@@ -30321,6 +30321,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # vertical stage list (folders → transcripts → infer …) instead
             # of the opaque "Loading archive…" spinner.
             self.send_json(_archive_load_snapshot())
+        elif path == "/api/decision-inbox/source-coverage":
+            from ccc_server.decision_sources import owner_source_payload
+            result = owner_source_payload()
+            self.send_json(result, 200 if result.get('ok') else 503)
         elif path == "/api/decision-inbox/coverage":
             # Shadow-only source comparison: no scans, model calls or delivery.
             from ccc_server.decision_coverage import coverage_payload
@@ -32601,6 +32605,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "config": config, "headroom": _headroom.headroom_payload()})
             except (OSError, ValueError) as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/settings/preferences/registry":
+            from ccc_server.settings_preferences import registry, factory_defaults
+            self.send_json({"registry": registry(), "defaults": factory_defaults()})
         elif path == "/api/settings/model-usage":
             from ccc_server.settings_insights import model_usage, transcript_starts
             with _ARCHIVE_RESPONSE_CACHE_LOCK:
