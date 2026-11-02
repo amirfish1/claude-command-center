@@ -4272,7 +4272,7 @@
   const WORKERS_DENSITY_MODES = ['compact', 'cozy', 'detailed'];
   function sessionDensityLane() {
     let tab = null;
-    try { tab = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
+    try { tab = window.CCCNavigation.getTab(); } catch (_) {}
     return tab === 'workers' ? 'workers' : (!tab || tab === 'coding' ? 'coding' : '');
   }
   function sessionDensity(lane) {
@@ -4323,7 +4323,7 @@
       if (sessionDensity(lane) === 'compact') return '';
     } else {
       let tab = '';
-      try { tab = localStorage.getItem('ccc-sidebar-tab') || ''; } catch (_) {}
+      try { tab = window.CCCNavigation.getTab() || ''; } catch (_) {}
       // Active retains its saved row display preferences.
       if (tab !== 'inprogress' || (compactRowsOn() && !wrapTitlesOn())) return '';
     }
@@ -4357,7 +4357,7 @@
   // layout: the thread badge is redundant in Workers at every density.
   function workersLaneActive() {
     let tab = null;
-    try { tab = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
+    try { tab = window.CCCNavigation.getTab(); } catch (_) {}
     return tab === 'workers';
   }
   function workersDenseTabActive() {
@@ -21268,7 +21268,7 @@
       existingTabBtn.click();
       return;
     }
-    try { localStorage.setItem('ccc-sidebar-tab', targetTab); } catch (_) {}
+    try { window.CCCNavigation.setTab(targetTab); } catch (_) {}
     if (typeof _setSharedQueuePanelHost === 'function') {
       _setSharedQueuePanelHost(targetTab === 'queues' ? 'sidebar' : 'rail');
     }
@@ -21285,7 +21285,7 @@
     if (!show || isSimpleMode()) _setMobileAskOpen(false);
     if (!show) return;
     let tab = 'inprogress';
-    try { tab = localStorage.getItem('ccc-sidebar-tab') || 'inprogress'; } catch (_) {}
+    try { tab = window.CCCNavigation.getTab() || 'inprogress'; } catch (_) {}
     let activeNavKey = tab === 'archived' ? 'tasks' : tab === 'queues' ? 'automations' : 'home';
     // Simple Home open → the Home nav item is the current surface regardless
     // of which sidebar tab is selected underneath. A depth-3 simple screen
@@ -23766,7 +23766,7 @@
   // but the container itself persists.
   function _currentSidebarTabForSwipe() {
     try {
-      const t = localStorage.getItem('ccc-sidebar-tab');
+      const t = window.CCCNavigation.getTab();
       return normalizeSidebarTabKey(t);
     } catch (_) { return 'coding'; }
   }
@@ -24124,7 +24124,7 @@
     return tab === 'smallbugs' ? _MOBILE_LIST_SMALLBUGS_LS : _MOBILE_LIST_LS;
   }
   function _currentSidebarTabKey() {
-    try { return normalizeSidebarTabKey(localStorage.getItem('ccc-sidebar-tab')); }
+    try { return normalizeSidebarTabKey(window.CCCNavigation.getTab()); }
     catch (_) { return ''; }
   }
   function _mobileListPrefForTab(tab) {
@@ -25844,7 +25844,7 @@
     // Follow only the selected launch while its provisional tab is still
     // open. A background classification must not override manual navigation.
     if (_currentSidebarTabKey() !== 'ideas' || target === 'ideas') return;
-    try { localStorage.setItem('ccc-sidebar-tab', target); } catch (_) {}
+    try { window.CCCNavigation.setTab(target); } catch (_) {}
     showConvToast('Filed in Small bugs');
   }
 
@@ -25900,7 +25900,7 @@
     }
     if (userIdeaSpawn && !card.no_auto_select) {
       $convSearch.value = '';
-      try { localStorage.setItem('ccc-sidebar-tab', card.idea_ticket.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas'); } catch (_) {}
+      try { window.CCCNavigation.setTab(card.idea_ticket.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas'); } catch (_) {}
       if (typeof _setSharedQueuePanelHost === 'function') _setSharedQueuePanelHost('rail');
     }
     if (!card.no_auto_select && !userIdeaSpawn && !ideaTicketsOn()) {
@@ -25912,7 +25912,7 @@
         : card.spawned_lane === 'other' ? 'archived' : 'coding';
       const _curTab = _currentSidebarTabKey();
       if (_curTab !== 'inprogress' && _curTab !== _laneTab) {
-        try { localStorage.setItem('ccc-sidebar-tab', _laneTab); } catch (_) {}
+        try { window.CCCNavigation.setTab(_laneTab); } catch (_) {}
       }
     }
     pendingSpawns.set(pid, card);
@@ -33001,7 +33001,7 @@
     if (typeof _mobileBottomNavShouldShow === 'function' && !_mobileBottomNavShouldShow()) return false;
     if (typeof _coreApp !== 'undefined' && _coreApp === 'queues') return false;
     let tab = 'coding';
-    try { tab = localStorage.getItem('ccc-sidebar-tab') || 'coding'; } catch (_) {}
+    try { tab = window.CCCNavigation.getTab() || 'coding'; } catch (_) {}
     return tab === 'coding' || tab === 'workers';
   }
   function _ptrEl() { return document.getElementById('convPtr'); }
@@ -39942,7 +39942,7 @@
     }
     const _sidebarFullRows = convs;
     const _sidebarBounded = _boundSidebarRowsForRender(convs, _sidebarRenderRowLimit, (() => {
-      try { return localStorage.getItem('ccc-sidebar-tab') || 'coding'; } catch (_) { return 'coding'; }
+      try { return window.CCCNavigation.getTab() || 'coding'; } catch (_) { return 'coding'; }
     })());
     convs = _sidebarBounded.rows;
     const _sidebarRowsOmitted = _sidebarBounded.omitted;
@@ -39952,7 +39952,7 @@
     // assembled later in this function.
     const _sidebarTab = (() => {
       try {
-        const t = localStorage.getItem('ccc-sidebar-tab');
+        const t = window.CCCNavigation.getTab();
         return normalizeSidebarTabKey(t);
       } catch (_) { return 'coding'; }
     })();
@@ -45052,7 +45052,7 @@
         ['jobs', 'Jobs', _jobsTabCount()],
         ...(_otherTabCount > 0 ? [_otherTabDef] : []),
       ];
-    _tabDefs.splice(_tabDefs.findIndex(tab => tab[0] === 'jobs') + 1, 0, ['decisions', 'Decisions', 0]);
+    _tabDefs.splice(_tabDefs.findIndex(tab => tab[0] === 'jobs') + 1, 0, ['decisions', 'Decisions', 0], ['decisions2', 'Decisions 2', 0]);
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
         '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '"'
@@ -45078,6 +45078,7 @@
     const _tabBody = _sidebarTab === 'issues' ? (_forceOpen(_ghIssuesHtml, 'conv-ghissues-section') || _tabEmpty('open issues'))
       : _sidebarTab === 'queues' ? '<div class="shared-queue-host shared-queue-host-sidebar" id="sidebarQueueHost"></div>'
       : _sidebarTab === 'jobs' ? '<div class="jobs-host" id="sidebarJobsHost"></div>'
+      : _sidebarTab === 'decisions2' ? '<div class="decisions-host" id="sidebarDecisionGuideHost"></div>'
       : _sidebarTab === 'decisions' ? '<div class="decisions-host" id="sidebarDecisionHost"></div>'
       : (_sidebarTab === 'archived' || _sidebarTab === 'coding' || _sidebarTab === 'workers' || _sidebarTab === 'ideas' || _sidebarTab === 'smallbugs' || _sidebarTab === 'alltickets') ? (_forceOpen(_archivedHtml, 'conv-archived-section') || _tabEmpty('sessions'))
       // _readyToMergeHtml is built at its declaration below the In-progress
@@ -45087,7 +45088,7 @@
       // `||` fallback keeps the empty-state text when BOTH are empty while
       // still showing ready-to-merge rows when only In-progress is empty.
       : ((_readyToMergeHtml + _forceOpen(_inProgressHtml, 'conv-inprogress-section')) || _tabEmpty('in-progress sessions'));
-    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_ipSearchActive || (_sidebarTab !== 'decisions' && _sidebarTab !== 'jobs' && _sidebarTab !== 'ideas' && _sidebarTab !== 'smallbugs' && _sidebarTab !== 'alltickets')))
+    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_ipSearchActive || (_sidebarTab !== 'decisions' && _sidebarTab !== 'decisions2' && _sidebarTab !== 'jobs' && _sidebarTab !== 'ideas' && _sidebarTab !== 'smallbugs' && _sidebarTab !== 'alltickets')))
       ? '<div class="archive-empty-state"><button type="button" class="conv-window-btn" data-role="sidebar-show-more">Show '
         + Math.min(SIDEBAR_RENDER_MORE_ROWS, _sidebarRowsOmitted)
         + ' more sessions</button><div>' + _sidebarRowsOmitted + ' older rows are not rendered yet.</div></div>'
@@ -46306,13 +46307,13 @@
         const nextTab = tab.getAttribute('data-conv-tab');
         if (nextTab === 'queues') {
           try {
-            const cur = localStorage.getItem('ccc-sidebar-tab');
+            const cur = window.CCCNavigation.getTab();
             if (cur && cur !== 'queues') _mobileLastSessionTab = cur;
           } catch (_) {}
         } else if (typeof _mobileLastSessionTab !== 'undefined') {
           _mobileLastSessionTab = nextTab;
         }
-        try { localStorage.setItem('ccc-sidebar-tab', nextTab); } catch (_) {}
+        try { window.CCCNavigation.setTab(nextTab); } catch (_) {}
         _setSharedQueuePanelHost(nextTab === 'queues' ? 'sidebar' : 'rail');
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
         if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav();
@@ -52152,7 +52153,7 @@
   // Files live under Metadata. Queue is a separate status-rail tab listing
   // tickets for the selected session's project scope.
   let _sharedQueuePanelHost = (() => {
-    try { return localStorage.getItem('ccc-sidebar-tab') === 'queues' ? 'sidebar' : 'rail'; }
+    try { return window.CCCNavigation.getTab() === 'queues' ? 'sidebar' : 'rail'; }
     catch (_) { return 'rail'; }
   })();
 
@@ -52194,7 +52195,7 @@
 
   function _queueSnapshotIsForeground() {
     let tab = '';
-    try { tab = localStorage.getItem('ccc-sidebar-tab') || ''; } catch (_) {}
+    try { tab = window.CCCNavigation.getTab() || ''; } catch (_) {}
     return tab === 'workers' || tab === 'queues' || _queuePanelIsVisible();
   }
 
@@ -71908,7 +71909,7 @@
       _renderQueuePanel();
     } else {
       let sidebarTab = 'inprogress';
-      try { sidebarTab = localStorage.getItem('ccc-sidebar-tab') || 'inprogress'; } catch (_) {}
+      try { sidebarTab = window.CCCNavigation.getTab() || 'inprogress'; } catch (_) {}
       if (sidebarTab === 'queues') _setSharedQueuePanelHost('sidebar');
     }
     try { localStorage.setItem('ccc-status-rail-tab', next); } catch (_) {}
@@ -94318,7 +94319,7 @@
     return ff('idea_tickets');
   }
   function normalizeSidebarTabKey(t) {
-    if (t === 'decisions') return t;
+    if (t === 'decisions' || t === 'decisions2') return t;
     if (ideaTicketsOn()) {
       return (t === 'alltickets' || t === 'ideas' || t === 'smallbugs' || t === 'issues' || t === 'queues' || t === 'archived' || t === 'workers' || t === 'jobs') ? t : 'alltickets';
     }
@@ -94840,10 +94841,10 @@
         // Switching modes can strand the sidebar on a tab that no longer
         // exists (e.g. 'issues' when the flag just turned off) — fall back
         // to Active rather than rendering an empty/orphaned tab.
-        const _curTab = (() => { try { return localStorage.getItem('ccc-sidebar-tab') || 'inprogress'; } catch (_) { return 'inprogress'; } })();
+        const _curTab = (() => { try { return window.CCCNavigation.getTab() || 'inprogress'; } catch (_) { return 'inprogress'; } })();
         const _hiddenNow = next === 'on' ? ['coding', 'workers'] : ['issues', 'queues'];
         if (_hiddenNow.indexOf(_curTab) !== -1) {
-          try { localStorage.setItem('ccc-sidebar-tab', 'inprogress'); } catch (_) {}
+          try { window.CCCNavigation.setTab('inprogress'); } catch (_) {}
         }
         refreshAppearanceChecks();
         showSettingsSavedPulse(separateTabsToggle.closest('.settings-row'));
@@ -96307,7 +96308,7 @@
     },
     resetList: () => {
       for (const key of ['ccc-view-gh', 'ccc-separate-tabs', 'ccc-chips-mode']) localStorage.removeItem(key);
-      if (['issues', 'queues'].includes(localStorage.getItem('ccc-sidebar-tab'))) localStorage.setItem('ccc-sidebar-tab', 'inprogress');
+      if (['issues', 'queues'].includes(window.CCCNavigation.getTab())) window.CCCNavigation.setTab('inprogress');
       window.cccSetChipsMode?.('color');
       localStorage.removeItem('ccc-chips-mode');
       applyViewGh(getViewGhPref()); refreshAppearanceChecks();

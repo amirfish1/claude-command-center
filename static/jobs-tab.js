@@ -70,7 +70,7 @@
 
   function isActive() {
     let t = null;
-    try { t = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
+    try { t = window.CCCNavigation.getTab(); } catch (_) {}
     return t === 'jobs';
   }
 

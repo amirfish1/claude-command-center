@@ -97,7 +97,7 @@
     var active = list && list.querySelector('.conv-tab.is-active');
     var t = active ? active.getAttribute('data-conv-tab') : null;
     if (t == null) {
-      try { t = localStorage.getItem('ccc-sidebar-tab'); } catch (_) {}
+      try { t = window.CCCNavigation.getTab(); } catch (_) {}
     }
     return !t || t === 'coding';
   }

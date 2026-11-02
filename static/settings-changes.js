@@ -15,7 +15,7 @@
   }
   const density=lane=>['compact','cozy','detailed'].includes(raw[lane+'_density'])?raw[lane+'_density']:lane==='workers'?(raw.workers_dense_legacy==='0'?'cozy':'compact'):raw.compact_rows==='0'?'detailed':raw.wrap_titles==='1'?'cozy':'compact';
   values.coding_density=density('coding');values.workers_density=density('workers');
-  const currentTab=localStorage.getItem('ccc-sidebar-tab'),lane=currentTab==='workers'?'workers':!currentTab||currentTab==='coding'?'coding':null;
+  const currentTab=window.CCCNavigation.getTab(),lane=currentTab==='workers'?'workers':!currentTab||currentTab==='coding'?'coding':null;
   const rows=[];for(const[key,s]of Object.entries(specs)){if(!FIXED[key])continue;
    const derived=key==='coding_density'&&raw[key]===null&&(raw.compact_rows!==null||raw.wrap_titles!==null)||key==='workers_density'&&raw[key]===null&&raw.workers_dense_legacy!==null;
    if(raw[key]===null&&!derived)continue;
