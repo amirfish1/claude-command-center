@@ -19,11 +19,13 @@
       <section id="current" aria-label="Current question"></section>
     </section>
     <form id="composer" aria-label="Answer current question">
-      <label for="answer">Your answer</label>
-      <textarea id="answer" rows="4" maxlength="24000" aria-describedby="guidance" disabled></textarea>
+      <div id="answerFields" hidden>
+        <label for="answer">Your answer</label>
+        <textarea id="answer" rows="4" maxlength="24000" aria-describedby="guidance" disabled></textarea>
+      </div>
       <p id="guidance" class="meta">Checking source before answering.</p>
       <div id="recovery" class="actions"></div>
-      <div class="actions"><button id="send" class="primary" type="submit" disabled>Send answer</button><button id="skip" type="button" disabled>Skip / next</button></div>
+      <div class="actions"><button id="send" class="primary" type="submit" hidden disabled>Send answer</button><button id="skip" type="button" disabled>Skip / next</button></div>
     </form>
     <p class="meta footnote">Skipping only defers a question here. Source acceptance confirms delivery, not completion of the work.</p>
   </main>

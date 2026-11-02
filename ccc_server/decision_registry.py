@@ -14,6 +14,7 @@ import json
 import hashlib
 import re
 import sqlite3
+import time
 import uuid
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -71,7 +72,7 @@ class DecisionRegistry:
         self.timeout = timeout
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         if self.db_path.exists():
-            db = sqlite3.connect(str(self.db_path), timeout=min(1, self.timeout))
+            db = self._connect(timeout=min(1, self.timeout))
             try:
                 row = db.execute("SELECT value FROM metadata WHERE key='installation_id'").fetchone()
                 db.execute('SELECT 1 FROM requests LIMIT 0')
@@ -107,7 +108,7 @@ class DecisionRegistry:
 
     @contextmanager
     def _transaction(self):
-        db = sqlite3.connect(str(self.db_path), timeout=self.timeout, isolation_level=None)
+        db = self._connect()
         db.row_factory = sqlite3.Row
         try:
             db.execute("BEGIN IMMEDIATE")
@@ -118,6 +119,26 @@ class DecisionRegistry:
             raise
         finally:
             db.close()
+
+    def _connect(self, *, timeout=None):
+        """Allow projection commits while a dashboard reader holds a snapshot."""
+        timeout = self.timeout if timeout is None else timeout
+        db = sqlite3.connect(str(self.db_path), timeout=timeout, isolation_level=None)
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                try:
+                    if db.execute('PRAGMA journal_mode').fetchone()[0].lower() != 'wal':
+                        db.execute('PRAGMA journal_mode=WAL')
+                    return db
+                except sqlite3.OperationalError as error:
+                    if (not any(word in str(error).lower() for word in ('locked', 'busy'))
+                            or time.monotonic() >= deadline):
+                        raise
+                    time.sleep(0.01)
+        except BaseException:
+            db.close()
+            raise
 
     @staticmethod
     def _record(row):
