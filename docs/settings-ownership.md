@@ -76,6 +76,12 @@ ownership. No setting is moved into a new editor or new store by this work.
 | Settings destinations/search/close/context links/legacy redirects | Tab navigation, not saved preference scope. | `static/app.js` grouping/search; `static/settings-context.js`. |
 | Retired Settings tool/help/service/report entries | Explicit actions now in existing More/Help/System/Stats. They keep native handlers and do not become preferences. | `static/settings-actions.js`; native tool/service handlers. |
 
+Selected operational reset controls additionally use the `operational-resets`
+family in the shared catalog. Their scope is the host or the queue explicitly
+selected in that workbench; preview/cancel are read-only and apply affects future
+matching launches through the native operational journal. Browser reset remains
+its own browser family. The catalog does not invent a reset for other controls.
+
 ## Deliberate exclusions and safeguards
 
 This is an ownership inventory, not export/history/reset coverage. It does not

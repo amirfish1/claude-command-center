@@ -1,0 +1,1 @@
+- Preview and reset selected supported host launch defaults or one queue’s exceptions in Workspace preferences, with exact replacements, source checks, preserved local metadata and existing configuration-history recovery where supported. Browser reset remains separate.

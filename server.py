@@ -10446,12 +10446,12 @@ def _settings_launch_overview():
     return result
 
 
-def _queue_policy_action(payload):
+def _queue_policy_action(payload, *, source_check=None):
     with _spawn_defaults_lock:
-        return _queue_policy_action_unlocked(payload)
+        return _queue_policy_action_unlocked(payload, source_check=source_check)
 
 
-def _queue_policy_action_unlocked(payload):
+def _queue_policy_action_unlocked(payload, *, source_check=None):
     """Opt-in scoped protocol on the native queue endpoint; legacy saves stay valid."""
     from ccc_server import queue_policy as policy
     from ccc_server.launch_preview import worker_plan
@@ -10505,7 +10505,7 @@ def _queue_policy_action_unlocked(payload):
         from ccc_server.configuration_history import History
         history_result = History(sys.modules[__name__]).publish(
             "queue", key, config, prepared,
-            lambda: policy.publish(path, SPAWN_DEFAULTS_FILE, prepared, rev))
+            lambda: policy.publish(path, SPAWN_DEFAULTS_FILE, prepared, rev), source_check=source_check)
     # No reconcile call: this edits saved policy only and never starts workers.
     return {"ok": True, "queue": key, "applied": bool(diff), "changes": diff, "configuration_history": history_result}
 
@@ -33043,6 +33043,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": True, "config": config, "headroom": _headroom.headroom_payload()})
             except (OSError, ValueError) as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/settings/resets":
+            from ccc_server.settings_resets import registry
+            from ccc_server.configuration_history import Stale
+            try:
+                query = urllib.parse.parse_qs(parsed.query)
+                with _spawn_defaults_lock:
+                    result = registry(sys.modules[__name__], query.get("scope", ["machine"])[0], query.get("target", [""])[0])
+                self.send_json(result)
+            except Stale:
+                self.send_json({"ok": False, "error": "Reset sources changed; refresh again"}, 409)
+            except (OSError, ValueError):
+                self.send_json({"ok": False, "error": "Reset sources unavailable; refresh to retry"}, 503)
         elif path == "/api/settings/profiles":
             from ccc_server.settings_profiles import registry
             try:
@@ -35614,6 +35626,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 400)
             except OSError as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path == "/api/settings/resets":
+            from ccc_server.settings_resets import request as reset_request, MAX_REQUEST
+            from ccc_server.settings_profiles import decode
+            from ccc_server.configuration_history import Stale
+            from ccc_server.queue_policy import StalePreview
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length < 1 or length > MAX_REQUEST:
+                    raise ValueError("Reset request exceeds the size limit")
+                payload = decode(self.rfile.read(length), MAX_REQUEST)
+                with _spawn_defaults_lock:
+                    self.send_json(reset_request(sys.modules[__name__], payload))
+            except (Stale, StalePreview) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 409)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except OSError:
+                self.send_json({"ok": False, "error": "Reset save could not be confirmed; refresh configuration and history"}, 503)
             return
         if path == "/api/settings/profiles":
             from ccc_server.settings_profiles import request as profile_request, decode, MAX_REQUEST

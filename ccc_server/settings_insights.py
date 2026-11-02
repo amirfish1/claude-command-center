@@ -173,7 +173,7 @@ def serialize_queue_settings(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
         route = self.path.split('?', 1)[0]
-        if route.startswith(('/api/queue/', '/api/wt/queue/', '/api/settings/queue-engines/')) or route == '/api/spawn-defaults':
+        if route.startswith(('/api/queue/', '/api/wt/queue/', '/api/settings/queue-engines/')) or route in ('/api/spawn-defaults', '/api/settings/resets'):
             with _QUEUE_SETTINGS_LOCK:
                 return method(self, *args, **kwargs)
         return method(self, *args, **kwargs)

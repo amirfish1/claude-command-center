@@ -76,3 +76,13 @@ config publication into a failed-save response. Native service reconciliation,
 WT audit metadata, restart and other stores cannot be rolled back atomically
 with the document. The remaining separate operations above retain their own
 boundaries; this milestone does not make every Settings workflow atomic.
+
+Selected operational resets now share the routing/scoped queue publication and
+pending-intent journal boundaries. Queue/default/reset HTTP requests take the
+same CCC request lock. Reset previews bind the selection, target, native
+candidate and host/queue/model-policy sources; apply recomputes this before
+publication. Scoped queue publication also checks the journal source guard
+immediately before replace. Host replacement versus queue absence, dependent
+worker tuples and undo availability are shown explicitly. This does not add a
+global reset or cross-scope transaction; see
+[selected operational reset coverage](settings-operational-resets.md).

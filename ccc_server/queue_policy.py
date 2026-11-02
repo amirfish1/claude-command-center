@@ -80,6 +80,8 @@ def publish(path, defaults_path, prepared, expected):
             os.fsync(handle.fileno())
         if state_revision(read(path), defaults_text(defaults_path)) != expected:
             raise StalePreview('Queue or worker defaults changed. Refresh and preview again.')
+        from .configuration_history import check_publication
+        check_publication(path)
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
