@@ -305,7 +305,8 @@ def test_kimi_tool_row_renders_inline_output_peek():
     assert row_fn.index("_kimiToolPeekHtml(outputText)") < row_fn.index('<div class="kimi-tool-body">')
     # Late tool_result folds (codex call_id / wire-tail) add the same peek.
     fold = app_js[app_js.index("out.className = 'kimi-tool-io is-output';"):]
-    assert "body.insertAdjacentHTML('beforebegin', peekHtml)" in fold[:1200]
+    fold = fold[:fold.index("const grp = row.parentElement")]
+    assert "body.insertAdjacentHTML('beforebegin', peekHtml)" in fold
     assert "kimi-tool-peek-more" in app_js
 
     assert ".kimi-tool-peek {" in app_css
