@@ -34023,3 +34023,24 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 .conv-session-state-tools { display: flex; padding: 4px 0 6px; }
 .conv-session-state-tools :where(button.grouping-opt) { font: inherit; background: transparent; border: 0; color: inherit; cursor: pointer; }
 .conv-session-state-tools button.grouping-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Saved arguments are distinct from launch-time quota and availability. */
+[data-launch-preview] { min-width: 0; overflow-wrap: anywhere; }
+[data-launch-preview] h3 { margin: 0 0 8px; font-size: 15px; }
+[data-launch-preview] h4 { margin: 18px 0 6px; font-size: 13px; }
+.settings-launch-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.settings-launch-toolbar select { flex: 1 1 180px; min-width: 0; max-width: 100%; }
+.settings-launch-output { font-size: 12px; line-height: 1.6; }
+.settings-launch-basis { color: var(--text-muted); }
+.settings-launch-fields { margin: 12px 0; }
+.settings-launch-fields > div { display: grid; grid-template-columns: 60px minmax(0,1fr); gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.settings-launch-fields dt { color: var(--text-muted); }
+.settings-launch-fields dd { margin: 0; min-width: 0; }
+.settings-launch-fields strong,.settings-launch-fields small { display: block; }
+.settings-launch-fields .settings-source-badge { display: inline-block; margin: 5px 0; }
+.settings-launch-fields small { color: var(--text-muted); }
+.settings-launch-warning { border-left: 3px solid var(--accent); padding-left: 10px; }
+
+.settings-launch-details { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+.settings-launch-details > summary { cursor: pointer; font-weight: 600; }
+.settings-launch-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

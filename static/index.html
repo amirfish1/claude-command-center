@@ -3061,7 +3061,7 @@
 
           </section>
 
-<section class="settings-section" id="settingsSection-defaults" data-section-id="defaults" role="tabpanel" aria-labelledby="settingsRailTab-defaults"><div class="settings-section-eyebrow">Session defaults</div><p class="settings-section-note">Choose what starts next. Changes save automatically; queue pins take precedence over worker defaults.</p><div class="settings-row settings-data-card" data-keywords="model usage sessions seven days statistics"><div class="settings-row-main"><div class="settings-row-label">Sessions started · last 7 days</div><p class="settings-row-desc">Indexed local Claude and Codex sessions plus retained CCC launches, grouped by starting model. Resumes count once; missing initial models are shown separately.</p><div id="settingsModelUsage" aria-live="polite">Loading session counts…</div><button type="button" class="settings-action-btn" id="settingsUsageRefresh">Refresh counts</button></div></div>            <div class="eng-defaults">
+<section class="settings-section" id="settingsSection-defaults" data-section-id="defaults" role="tabpanel" aria-labelledby="settingsRailTab-defaults"><div class="settings-section-eyebrow">Session defaults</div><p class="settings-section-note">Choose what starts next. Changes save automatically; queue pins take precedence over worker defaults.</p><div class="settings-row settings-data-card" data-keywords="model usage sessions seven days statistics"><div class="settings-row-main"><div class="settings-row-label">Sessions started · last 7 days</div><p class="settings-row-desc">Indexed local Claude and Codex sessions plus retained CCC launches, grouped by starting model. Resumes count once; missing initial models are shown separately.</p><div id="settingsModelUsage" aria-live="polite">Loading session counts…</div><button type="button" class="settings-action-btn" id="settingsUsageRefresh">Refresh counts</button></div></div>            <div class="settings-data-card" data-launch-preview="defaults"></div><div class="eng-defaults">
               <div class="eng-card eng-defaults-card">
                 <div class="eng-card-head">
                   <div class="eng-card-title" title="What you get when you spawn without choosing.">New sessions</div>
@@ -3204,7 +3204,7 @@
             </div>
 </section>
 <section class="settings-section" id="settingsSection-queues" data-section-id="queues" role="tabpanel" aria-labelledby="settingsRailTab-queues"><div class="settings-section-eyebrow">Queue engines</div><p class="settings-section-note">Review auto-drain queues and their next worker launch. Existing workers keep their current model.</p>
-<div class="settings-row settings-data-card" data-keywords="queues engines workers auto drain bulk apply override inherit"><div class="settings-row-main">
+<div class="settings-data-card" data-launch-preview="queues"></div><div class="settings-row settings-data-card" data-keywords="queues engines workers auto drain bulk apply override inherit"><div class="settings-row-main">
 <div class="settings-row-label">Apply the saved worker default</div><p class="settings-row-desc">Choose the worker engine, model and effort in Session defaults first. Applying clears queue pins so these queues follow future worker-default changes too.</p>
 <div class="settings-bulk-toolbar"><select id="settingsQueueScope" aria-label="Queues to update"><option value="auto">Auto-drain queues only</option><option value="all">All active queues</option></select><button type="button" class="settings-action-btn" id="settingsQueuePreview">Preview changes</button><button type="button" class="settings-action-btn" id="settingsQueueRefresh">Refresh</button></div>
 <div id="settingsQueuePreviewBody" hidden></div><div id="settingsQueueStatus" role="status" aria-live="polite"></div>
@@ -4100,6 +4100,7 @@
 <script src="/static/local-speech.js"></script>
 <script src="/static/settings-actions.js"></script>
 <script src="/static/settings-context.js"></script>
+<script src="/static/settings-launch-preview.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/settings-preferences.js"></script>
 <script src="/static/free-settings.js" defer></script>

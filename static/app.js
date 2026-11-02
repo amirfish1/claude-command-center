@@ -80368,6 +80368,7 @@
     // loop (~40 req/s per idle tab, measured 2026-09-12) that starved the
     // archive bootstrap.
     if (typeof renderSpawnDefaultsInline === 'function') renderSpawnDefaultsInline();
+    window.dispatchEvent(new Event('ccc:spawn-defaults-changed'));
     // The hub's state is declared further down this closure; a merge that
     // lands before that point has run must not trip over it.
     try {
@@ -93939,9 +93940,10 @@
     try {
       const data = await settingsJSON('/api/settings/queue-engines');
       settingsQueueSnapshot = data;
+      window.cccLaunchPreview?.accept(data);
       const rows = data.queues.filter(row => row.auto_drain);
-      host.innerHTML = rows.length ? '<p class="settings-row-desc">' + rows.length + ' auto-drain queues · ' + rows.reduce((sum,row)=>sum+Number(row.workers || 0),0) + ' configured worker slots</p><div class="settings-table-wrap"><table class="settings-routing-table"><thead><tr><th>Queue</th><th>Next engine / model</th><th>Effort</th><th>Source</th><th>Workers</th></tr></thead><tbody>' + rows.map(row =>
-        '<tr><th scope="row">' + escapeHtml(row.queue) + '</th><td><strong>' + escapeHtml(row.engine) + '</strong><small>' + escapeHtml(row.model) + '</small></td><td>' + escapeHtml(row.effort) + '</td><td><span class="settings-source-badge">' + (Object.keys(row.pins).length ? 'Pinned: ' + escapeHtml(Object.keys(row.pins).join(', ')) : 'Inherited') + '</span><small>Fallback: ' + (row.fallback === true ? 'On' : row.fallback === false ? 'Off' : 'Default') + '</small></td><td>' + Number(row.workers || 0) + '</td></tr>'
+      host.innerHTML = rows.length ? '<p class="settings-row-desc">' + rows.length + ' auto-drain queues · ' + rows.reduce((sum,row)=>sum+Number(row.workers || 0),0) + ' configured worker slots</p><div class="settings-table-wrap"><table class="settings-routing-table"><thead><tr><th>Queue</th><th>Saved routing</th><th>Effort</th><th>Source</th><th>Workers</th></tr></thead><tbody>' + rows.map(row =>
+        '<tr><th scope="row">' + escapeHtml(row.queue) + '<br><button type="button" class="settings-action-btn" data-launch-queue="' + escapeHtml(row.queue) + '">Inspect launch</button></th><td><strong>' + escapeHtml(row.engine) + '</strong><small>' + escapeHtml(row.model) + '</small></td><td>' + escapeHtml(row.effort) + '</td><td><span class="settings-source-badge">' + (Object.keys(row.pins).length ? 'Pinned: ' + escapeHtml(Object.keys(row.pins).join(', ')) : 'Inherited') + '</span><small>Fallback: ' + (row.fallback === true ? 'On' : row.fallback === false ? 'Off' : 'Default') + '</small></td><td>' + Number(row.workers || 0) + '</td></tr>'
       ).join('') + '</tbody></table></div>' : '<p class="settings-empty">No auto-drain queues. Enable auto-drain from a queue to see its routing here.</p>';
     } catch (error) { host.textContent = 'Queue routing unavailable: ' + error.message; }
   }
@@ -96312,6 +96314,8 @@
     openSystem: opener => sysOpenModal(opener, 'status'),
     refreshUsage: refreshSettingsUsage,
   });
+
+  window.cccLaunchPreview?.mount();
 
   window.cccSettingsContext?.mount({
     closeSettings: closeSettingsModal,

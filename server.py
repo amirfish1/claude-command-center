@@ -10246,9 +10246,108 @@ def _spawn_model_for_engine(engine, explicit_model=None):
     return _spawn_default_model_for_engine(engine)
 
 
-def _spawn_request_engine_and_model(payload):
+def _settings_launch_overview():
+    """Read-only saved routing plus actual consumer facts, never a quota probe."""
+    from ccc_server.launch_preview import snapshot
+    from ccc_server.settings_insights import queue_overview, revision
+
+    def read_raw():
+        try:
+            return SPAWN_DEFAULTS_FILE.read_text()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise ValueError("Could not read saved launch defaults") from exc
+
+    before = read_raw()
+    try:
+        raw = json.loads(before) if before is not None else {}
+    except ValueError:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    defaults = _load_spawn_defaults(persist=False)
+    config = _wt_read_config()
+    session_facts = {}
+    try:
+        engine, model = _spawn_request_engine_and_model({}, defaults)
+        session_facts = {"verified": True, "engine": engine, "model": model,
+                         "effort": _spawn_request_reasoning_effort({}, engine, defaults)}
+        if engine == "codex":
+            canonical, error = _validate_codex_model(model, require_available=False)
+            if canonical != model and not error:
+                session_facts.update(model=canonical, model_source="consumer_validation",
+                                     model_explanation="Codex launch validation resolves this model alias.")
+            if error:
+                session_facts["warnings"] = ["Session launch would be rejected by model validation: " + error]
+    except Exception:
+        session_facts = {"warnings": ["Session consumer resolution unavailable; showing configured values only."]}
+
+    facts = {}
+    native = _wt_config if _WT_CONFIG_AVAILABLE else None
+    if native is not None:
+        try:
+            if Path(native.CCC_SPAWN_DEFAULTS_FILE).resolve() != SPAWN_DEFAULTS_FILE.resolve():
+                raise ValueError("WatchTower reads a different defaults file")
+            native_path = native.config_path() if callable(getattr(native, "config_path", None)) else native.CONFIG_FILE
+            if Path(native_path).resolve() != _wt_config_path().resolve():
+                raise ValueError("WatchTower reads a different queue file")
+            from watchtower import workers as consumer
+            policy = native.worker_fallback_policy()
+            chain = list(dict.fromkeys(engine for engine in native.fallback_chain() if engine))
+            for name in [None, *config]:
+                if name is not None and (not isinstance(config[name], dict) or config[name].get("archived")):
+                    continue
+                try:
+                    engine, model, effort = native.engine(name), native.model(name), native.effort(name)
+                    if not isinstance(engine, str) or not engine.strip():
+                        raise ValueError("Consumer did not resolve an engine")
+                    raw_model = native.raw_model(name)
+                    model_guard = consumer._is_fable_model(model or "")
+                    if model_guard:
+                        model = ""
+                    effort_dropped = bool(effort and native._effort_rejected(engine, model or native.model(name), effort))
+                    routes = []
+                    for fallback_engine in chain:
+                        fallback_model = native.fallback_model(fallback_engine)
+                        fallback_effort = native.fallback_effort(name, fallback_engine)
+                        if native._effort_rejected(fallback_engine, fallback_model or native.model(name), fallback_effort):
+                            fallback_effort = ""
+                        if consumer._is_fable_model(fallback_model or ""):
+                            fallback_model = ""
+                        routes.append({"engine": fallback_engine, "model": fallback_model,
+                                       "effort": fallback_effort, "same_engine": fallback_engine == engine})
+                    facts[name] = {"verified": True, "engine": engine, "model": model,
+                                   "raw_model": raw_model, "effort": "" if effort_dropped else effort,
+                                   "model_guard": model_guard, "effort_dropped": effort_dropped,
+                                   "model_pin_warning": native.model_pin_warning(name),
+                                   "policy": policy, "fallback_routes": routes, "fallback_verified": True}
+                except Exception:
+                    facts[name] = {"warnings": ["WatchTower consumer could not resolve this context; showing configured values only."]}
+        except Exception:
+            facts[None] = {"warnings": ["WatchTower consumer unavailable or reads different configuration; showing configured values only."]}
+    if not facts:
+        facts[None] = {"warnings": ["WatchTower consumer unavailable; no runtime engine or model is guessed."]}
+    # Native readers consult shared files. Refuse a mixed snapshot if either
+    # configuration changed during the read instead of presenting it as actual.
+    if before != read_raw() or revision(config) != revision(_wt_read_config()):
+        raise ValueError("Launch settings changed while reading. Refresh the preview.")
+    plans = snapshot(defaults, raw, config, session_facts, facts)
+    plans["observed_at"] = datetime.now(timezone.utc).isoformat()
+    by_queue = {plan["id"][6:]: plan for plan in plans["plans"] if plan["id"].startswith("queue:")}
+    def resolve(name):
+        fields = by_queue[name]["fields"]
+        return tuple(fields[key]["value"] or ("Unresolved" if key == "engine" else "Engine default")
+                     for key in ("engine", "model", "effort"))
+    result = queue_overview(config, defaults, resolve)
+    result["launch_preview"] = plans
+    return result
+
+
+def _spawn_request_engine_and_model(payload, defaults=None):
     payload = payload if isinstance(payload, dict) else {}
-    defaults = _load_spawn_defaults()
+    if defaults is None:
+        defaults = _load_spawn_defaults()
     engine_raw = payload.get("engine")
     has_engine = isinstance(engine_raw, str) and bool(engine_raw.strip())
     engine = _normalize_orchestration_spawn_engine(engine_raw) if has_engine else defaults["engine"]
@@ -10263,7 +10362,7 @@ def _spawn_request_engine_and_model(payload):
     return engine, model or None
 
 
-def _spawn_request_reasoning_effort(payload, engine):
+def _spawn_request_reasoning_effort(payload, engine, defaults=None):
     """Resolve an explicit effort or the persisted spawn default, per engine.
 
     Engines with no effort ladder resolve to "" without touching the defaults
@@ -10280,7 +10379,8 @@ def _spawn_request_reasoning_effort(payload, engine):
         # the default's sibling variant (usually `...-high`).
         value = ""
     else:
-        defaults = _load_spawn_defaults()
+        if defaults is None:
+            defaults = _load_spawn_defaults()
         value = defaults.get("reasoning_effort") or ""
     return _validate_reasoning_effort(value, engine)
 
@@ -32725,11 +32825,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             records += list(_load_spawn_registry() or []) + list(_load_spawn_history() or [])
             self.send_json(model_usage(records, now))
         elif path == "/api/settings/queue-engines":
-            from ccc_server.settings_insights import queue_overview
-            resolver = None
-            if _WT_CONFIG_AVAILABLE and _wt_config is not None:
-                resolver = lambda name: (_wt_config.engine(name), _wt_config.model(name), _wt_config.effort(name))
-            self.send_json(queue_overview(_wt_read_config(), _load_spawn_defaults(), resolver))
+            try:
+                self.send_json(_settings_launch_overview())
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 409)
         elif path == "/api/spawn-defaults":
             defaults = _load_spawn_defaults()
             self.send_json({
