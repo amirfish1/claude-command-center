@@ -22459,6 +22459,9 @@ def _resolve_apps(include_disabled=False):
     apps.append({"id": "decision-inbox", "label": "Decisions",
                  "icon": "\N{BALLOT BOX WITH CHECK}", "url": "/decision-inbox.html",
                  "builtin": False})
+    apps.append({"id": "decision-guide", "label": "Decisions 2",
+                 "icon": "\N{SPEECH BALLOON}", "url": "/decision-guide.html",
+                 "builtin": False})
     # Spawn Ledger reads a grade ledger written by an external tool; list it
     # only on machines that have one (SPAWN_LEDGER_PATH or the default file).
     if spawn_ledger_path().is_file():
@@ -40726,6 +40729,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             action = 'record' if path.endswith('/answers') else path.rsplit('/', 1)[1]
             result, status = answer_payload(action, self.rfile.read(length))
+            self.send_json(result, status)
+        elif path == "/api/sessions/old-recaps":
+            from ccc_server.session_rechecks import observe
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 8192:
+                    raise ValueError('Body must be between 1 byte and 8 KiB')
+                payload = json.loads(self.rfile.read(length))
+            except (ValueError, TypeError):
+                self.close_connection = True
+                self.send_json({'ok': False, 'error': 'Invalid recap request'}, 400)
+                return
+            try:
+                result, status = observe(payload)
+            except Exception:
+                result, status = {'ok': False, 'error': 'Session recaps are unavailable'}, 503
             self.send_json(result, status)
         elif path == "/api/decision-inbox/session-events":
             from ccc_server.decision_sessions import event_payload
