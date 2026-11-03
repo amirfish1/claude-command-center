@@ -3730,6 +3730,7 @@
       const owner = String(planned.owner || (ownerTag && ownerTag[1]) || '').trim().toLowerCase();
       if (!['user', 'amir', 'human'].includes(owner)) plan = {
         label: owner === 'agent' ? 'Waiting for agent' : owner === 'external' ? 'Waiting' : 'Next', kind: 'plan',
+        planOwner: owner,
         text: (ownerTag ? planned.text.slice(ownerTag[0].length) : planned.text).trim(),
       };
     }
@@ -18142,9 +18143,18 @@
     if (!sid || _rowQuickActionSending.has(sid) || live.needs_approval || live.question_waiting
         || c.last_event_type === 'user') return null;
     const info = rowOutcomeView(c);
-    const next = String((c.session_state || {}).next_step_user || '').trim();
-    const actions = sessionQuickActions(c.session_state, next);
-    if (!actions.length || !next || info.kind !== 'next' || (info.next || info.text) !== next) return null;
+    let next = String((c.session_state || {}).next_step_user || '').trim();
+    let actions = sessionQuickActions(c.session_state, next);
+    if (info.kind === 'plan' && info.planOwner === '' && !actions.length) {
+      // Older footers leave investigations unowned with NEXT_ACTION: null.
+      // Offer a literal resume of the scoped investigation, rather than
+      // making the owner compose it. Explicit agent/external waits stay put.
+      const planned = c.session_state?.completion?.remaining_actions?.[0];
+      next = info.text;
+      if (!planned || planned.within_scope !== true || planned.reversible !== true
+          || !/^investigate\b/i.test(next) || next.length > 340 || /[\x00-\x1f]/.test(next)) return null;
+      actions = [{ label: 'Continue investigation', reply: 'Continue the investigation: ' + next, derived: true }];
+    } else if (!actions.length || !next || info.kind !== 'next' || (info.next || info.text) !== next) return null;
     return { sid, actions, action: actions[0], key: JSON.stringify([sid, next, actions]) };
   }
   function currentRowQuickActionSource(sid) {
@@ -18196,7 +18206,7 @@
         });
         return;
       }
-      const outcome = row.querySelector('.conv-outcome.is-next');
+      const outcome = row.querySelector('.conv-outcome.is-next, .conv-outcome.is-plan');
       if (!source || !outcome) {
         row.querySelectorAll('.conv-quick-action-slot').forEach(slot => slot.remove());
         return;
