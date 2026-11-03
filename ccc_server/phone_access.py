@@ -13,6 +13,11 @@ up, and getting any one wrong leaves reads working while every write 403s:
    network.json when their mtime changes.
 3. A test that does a real POST round trip through that URL, so "it works" is
    proven rather than assumed.
+4. A second tailnet-only entry for the conversation-reader port
+   (``https://<node>:<R>`` -> ``http://127.0.0.1:<R>``, R = PORT + 10000,
+   ccc_server/conv_reader.py), so conversation opens skip the dashboard from
+   the phone too. Best effort: when it cannot be added, the UI keeps opening
+   conversations through the dashboard entry.
 
 Everything is recorded in ``phone-access.json`` (what we created, so Turn off
 removes exactly that) together with an optional PIN gate: when a PIN is set,
@@ -483,8 +488,64 @@ def enable(local_port: int | None = None) -> dict:
             "enabled_at": time.time(),
         }
     state = _update_state(_mut)
+    reader = ensure_reader_serve(port)
     return {"ok": True, "url": _url_for(state), "origin": origin, "plan": plan,
-            "created_by": state["serve"]["created_by"]}
+            "created_by": state["serve"]["created_by"], "reader": reader}
+
+
+def plan_reader_serve(serve: dict, reader_port) -> dict:
+    """Pure: expose the conversation-reader port on the same HTTPS port
+    number (the UI derives https://<node>:<reader_port> from the page). Never
+    takes over a port something else serves."""
+    if not reader_port:
+        return {"action": "none", "https_port": None, "target": None}
+    port = int(reader_port)
+    target = f"http://127.0.0.1:{port}"
+    for e in serve.get("entries") or []:
+        if e["https_port"] == port:
+            ours = e["path"] == "/" and e["proxy"] == target
+            return {"action": "reuse" if ours else "taken", "https_port": port,
+                    "target": target}
+    if port in set(serve.get("occupied_ports") or []):
+        return {"action": "taken", "https_port": port, "target": target}
+    return {"action": "create", "https_port": port, "target": target}
+
+
+def ensure_reader_serve(local_port: int | None = None, before: dict | None = None) -> dict:
+    """Add (or adopt) the reader's serve entry and record it. Never raises."""
+    try:
+        from ccc_server import conv_reader
+        reader_port = conv_reader.http_port(int(local_port or _core.PORT))
+        before = before if before is not None else serve_status()
+        plan = plan_reader_serve(before, reader_port)
+        if plan["action"] in ("none", "taken"):
+            return {"ok": False, "plan": plan}
+        if plan["action"] == "create":
+            rc, out, err = _run_tailscale(
+                ["serve", "--bg", f"--https={plan['https_port']}", plan["target"]], timeout=25.0)
+            if rc != 0:
+                return {"ok": False, "plan": plan,
+                        "detail": ((err or out) or "tailscale serve failed").strip()[:300]}
+        previous = load_state().get("reader") or {}
+        created_by = "ccc" if plan["action"] == "create" or (
+            previous.get("created_by") == "ccc"
+            and previous.get("https_port") == plan["https_port"]) else "existing"
+
+        def _mut(d):
+            d["reader"] = {"https_port": plan["https_port"], "target": plan["target"],
+                           "created_by": created_by}
+        _update_state(_mut)
+        return {"ok": True, "plan": plan, "created_by": created_by}
+    except Exception as exc:  # best effort: opens fall back to the dashboard
+        return {"ok": False, "detail": repr(exc)[:300]}
+
+
+def ensure_reader_serve_if_enabled(local_port: int | None = None) -> dict | None:
+    """Dashboard start: installs that turned Phone access on before the
+    reader port existed get its entry without re-running setup."""
+    if not (load_state().get("serve") or {}):
+        return None
+    return ensure_reader_serve(local_port)
 
 
 def _json_or_empty(text):
@@ -503,8 +564,16 @@ def disable() -> dict:
         return {"ok": True, "removed": False, "detail": "phone access was not on"}
     removed = False
     note = ""
-    if serve.get("created_by") == "ccc":
+    current = None
+    reader = state.get("reader") or {}
+    if reader.get("created_by") == "ccc":
         current = serve_status()
+        if any(e["https_port"] == reader.get("https_port") and e["path"] == "/"
+               and e["proxy"] == reader.get("target")
+               for e in current.get("entries") or []):
+            _run_tailscale(["serve", f"--https={reader['https_port']}", "off"], timeout=15.0)
+    if serve.get("created_by") == "ccc":
+        current = current or serve_status()
         still_ours = any(
             e["https_port"] == serve.get("https_port") and e["path"] == "/"
             and e["proxy"] == serve.get("target")
@@ -524,6 +593,7 @@ def disable() -> dict:
 
     def _mut(d):
         d.pop("serve", None)
+        d.pop("reader", None)
     _update_state(_mut)
     return {"ok": True, "removed": removed, "detail": note}
 

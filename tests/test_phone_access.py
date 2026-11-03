@@ -258,3 +258,55 @@ def test_tailscale_probe_reports_installed_state(monkeypatch, tmp_path):
     body, _ = pa.phone_access_handle("tailscale", {})
     assert body["tailscale"]["installed"] and body["tailscale"]["needs_login"]
     assert "qr_svg" not in body and "serve" not in body
+
+
+# -- conversation-reader serve entry (CCC-143) ---------------------------------
+
+def _entry(port, target):
+    return {"host": "n.ts.net", "https_port": port, "path": "/",
+            "proxy": target, "target": target}
+
+
+def test_reader_plan_creates_reuses_or_leaves_other_entries_alone():
+    t = "http://127.0.0.1:18090"
+    assert pa.plan_reader_serve({"entries": []}, 18090)["action"] == "create"
+    assert pa.plan_reader_serve({"entries": [_entry(18090, t)]}, 18090)["action"] == "reuse"
+    other = {"entries": [_entry(18090, "http://127.0.0.1:9999")], "occupied_ports": [18090]}
+    assert pa.plan_reader_serve(other, 18090)["action"] == "taken"
+    assert pa.plan_reader_serve({"entries": [], "occupied_ports": [18090]}, 18090)["action"] == "taken"
+    assert pa.plan_reader_serve({"entries": []}, None)["action"] == "none"
+
+
+def test_enable_adds_reader_entry_and_disable_removes_only_ours(state, monkeypatch):
+    calls = []
+    entries = [_entry(443, "http://127.0.0.1:8090")]
+    monkeypatch.setenv("CCC_CONV_READER_PORT", "")
+    monkeypatch.setattr(pa, "tailscale_status", lambda max_age_s=3.0: {
+        "installed": True, "running": True, "hostname": "n.ts.net", "ips": []})
+    monkeypatch.setattr(pa, "serve_status", lambda: {
+        "ok": True, "funnel": [], "occupied_ports": [e["https_port"] for e in entries],
+        "entries": list(entries)})
+
+    def fake_run(args, timeout=10.0):
+        calls.append(args)
+        if args[:2] == ["serve", "--bg"]:
+            port = int(args[2].split("=")[1])
+            entries.append(_entry(port, args[3]))
+        return 0, "", ""
+    monkeypatch.setattr(pa, "_run_tailscale", fake_run)
+
+    r = pa.enable(8090)
+    assert r["ok"] and r["reader"]["ok"] and r["reader"]["created_by"] == "ccc"
+    assert ["serve", "--bg", "--https=18090", "http://127.0.0.1:18090"] in calls
+    assert pa.load_state()["reader"]["https_port"] == 18090
+
+    pa.disable()
+    assert ["serve", "--https=18090", "off"] in calls
+    # The dashboard entry existed before CCC: left alone.
+    assert ["serve", "--https=443", "off"] not in calls
+    assert "reader" not in pa.load_state()
+
+
+def test_reader_entry_only_added_when_phone_access_is_on(state, monkeypatch):
+    monkeypatch.setattr(pa, "serve_status", lambda: (_ for _ in ()).throw(AssertionError))
+    assert pa.ensure_reader_serve_if_enabled(8090) is None

@@ -1,0 +1,1 @@
+- Phone access also exposes the conversation-reader port on your tailnet (and removes it on Turn off), so conversation opens skip the dashboard from a phone or another computer too; existing Phone access setups get it at the next dashboard start.

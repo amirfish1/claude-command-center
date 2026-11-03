@@ -46125,6 +46125,10 @@ def main():
     # Conversation opens get their own process (and GIL) so background work
     # in this one cannot stall them (CCC-143). CCC_CONV_READER=0 disables.
     _conv_reader.start(port)
+    # Phone access set up before the reader port existed: add its tailnet
+    # entry too (best effort, off the startup path).
+    threading.Thread(target=lambda: phone_access.ensure_reader_serve_if_enabled(port),
+                     name="phone-access-reader-serve", daemon=True).start()
     # The heaviest background warmers (gh-queue-watch, uxq-health-refresh,
     # ship-graph-warm) run in a helper process too, so /list reads stop
     # queueing behind them for this GIL (CCC-142). CCC_BG_HELPER=0 disables.

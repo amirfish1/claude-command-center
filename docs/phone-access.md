@@ -44,6 +44,15 @@ itself still only listens on `127.0.0.1`.
 - **Turn off** removes only the serve entry CCC created, and only if it still
   points at CCC. An entry you made yourself (or edited since) is forgotten by
   CCC, never deleted.
+- **Also serves the conversation-reader port.** Conversation opens come from
+  a helper process on `<ccc-port> + 10000`, so a busy dashboard doesn't
+  delay them. CCC adds a second tailnet-only entry,
+  `tailscale serve --bg --https=<ccc-port + 10000> http://127.0.0.1:<ccc-port + 10000>`,
+  on the same HTTPS port number, and Turn off removes it with the first.
+  Installs that turned Phone access on before this existed get the entry at
+  the next dashboard start. If that port is taken, conversations still open,
+  just through the dashboard. **Set up `tailscale serve` by hand?** Add that
+  second entry yourself; without it the UI quietly uses the dashboard port.
 - **Never uses Funnel.** `tailscale serve` is tailnet-only; nothing is
   published to the public internet.
 
