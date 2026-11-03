@@ -4442,6 +4442,18 @@
     visibility: hidden;
     pointer-events: none;
   }
+  /* Pictures belong in the transcript even when the ask is mirrored in a
+     summary slot. Keep the full bubble visible so prose cannot clip an
+     inline image or an attachment below it. */
+  .conversations-view .event.user_text:is(.is-pinned-in-sticky, .is-dynamic-pinned-in-sticky):has(img) {
+    display: block !important;
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .conversations-view .event.user_text:has(img) .user-msg {
+    max-height: none !important;
+    overflow: visible !important;
+  }
   .conversations-view .event.tool_result { display: none; }
   /* Tool-call group — fused "Ran N commands ▾" container. */
   .conversations-view .tool-call-group {
@@ -31805,11 +31817,10 @@ body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assis
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) > .event-model-meta { display: block !important; }
 /* Two-line clamp on messages (all but the newest assistant reply). */
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(~ .event.assistant .assistant-text) .assistant-text:not(.cc-open):not(.cc-final):not(:has(.cc-run-chip)),
-body.conv-compact.conv-compact .conversations-view .event.user_text:not(.cc-open) .user-msg {
+body.conv-compact.conv-compact .conversations-view .event.user_text:not(.cc-open):not(:has(img)) .user-msg {
   display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
   overflow: hidden; cursor: pointer;
 }
-body.conv-compact.conv-compact .conversations-view .event.user_text:not(.cc-open) img { display: none; }
 /* One-line thinking. */
 body.conv-compact.conv-compact .conversations-view .thinking-block { padding: 0 6px; margin: 1px 0; cursor: pointer; }
 body.conv-compact.conv-compact .conversations-view .thinking-block:not(.cc-open) .t-body {
