@@ -34136,3 +34136,45 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
     flex-shrink: 0;
   }
 }
+
+/* Today-only star (left of ticket rows) and the Today group atop Active. */
+/* Sits on the avatar's top-left corner (the row body is a grid, the avatar
+   and AUTO switch are absolutely placed in the left gutter). */
+#convList .conv-item .conv-main-row > .conv-today-star {
+  position: absolute; z-index: 3; top: 4px; left: calc(var(--conv-icon-left, 10px) - 8px);
+  width: 16px; height: 16px; padding: 0; margin: 0;
+  text-shadow: 0 0 3px var(--bg, #0d1117), 0 0 2px var(--bg, #0d1117);
+}
+.conv-today-star {
+  flex: 0 0 auto; width: 16px; padding: 0; margin: 0 2px 0 0;
+  background: none; border: 0; cursor: pointer; line-height: 1;
+  font-size: 13px; color: var(--text-dim, #8b949e); opacity: 0;
+  transition: opacity .12s ease, color .12s ease;
+}
+.conv-item:hover .conv-today-star,
+.conv-item.active .conv-today-star,
+.conv-today-star:focus-visible { opacity: .55; }
+.conv-today-star:hover { opacity: 1; color: #e3b341; }
+.conv-today-star.is-on { opacity: 1; color: #e3b341; }
+@media (hover: none) { .conv-today-star { opacity: .35; } }
+.today-star-group {
+  margin: 2px 0 8px; padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, #e3b341 35%, transparent);
+}
+.today-star-heading {
+  font-size: 11px; font-weight: 600; letter-spacing: .02em;
+  color: #e3b341; padding: 2px 10px 4px;
+}
+
+/* Ticket kind tint: a thin inner strip so Features and Small bugs read
+   apart at a glance without competing with the selection border. */
+/* Top-level ticket rows only. The row card reset is
+   `#convList#convList .conv-item { box-shadow: none !important }`, so the
+   strip needs !important plus higher specificity to show. */
+#convList#convList .conv-item.is-kind-feature:not(.is-current-child-row) {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, #58a6ff 70%, transparent) !important;
+}
+#convList#convList .conv-item.is-kind-bug:not(.is-current-child-row) {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--red) 75%, transparent) !important;
+  background-image: linear-gradient(color-mix(in srgb, var(--red) 5%, transparent), color-mix(in srgb, var(--red) 5%, transparent)) !important;
+}

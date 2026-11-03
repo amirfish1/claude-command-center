@@ -129,6 +129,7 @@ from ccc_server import report_routes as _report_routes
 from ccc_server import model_discovery as _model_discovery
 from ccc_server import run_in_terminal as _run_in_terminal
 from ccc_server import wt_review as _wt_review
+from ccc_server import today_stars as _today_stars
 from ccc_server import media_preview as _media_preview
 from ccc_server import cpu_accounting as _cpu_accounting
 from ccc_server import conv_reader as _conv_reader
@@ -799,6 +800,7 @@ def _install_python_stack_dump_handler(log_path=None):
 # QUESTION_RELAY_DIR in hooks/pre-tool-use.py. CCC marks the sessions it wants
 # intercepted by setting QUESTION_RELAY_ENV on the spawned process.
 QUESTION_RELAY_DIR = COMMAND_CENTER_STATE_DIR / "questions"
+TODAY_STARS_FILE = COMMAND_CENTER_STATE_DIR / "today-stars.json"  # {session_id: starred_at}
 QUESTION_RELAY_ENV = "CCC_QUESTION_RELAY"
 # Claude Code kills a hook that runs past its registered timeout. The
 # PreToolUse hook blocks here while a relayed AskUserQuestion waits for an
@@ -33284,6 +33286,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # The UI polls this to know which peers to fetch per-repo data
             # from. Read-only; loopback trust applies.
             self.send_json({"peers": _read_registry_pruned()})
+        elif path == "/api/today-stars":
+            # Today-only stars; the dashboard expires them at local midnight.
+            self.send_json({"ok": True, "stars": _today_stars.load(TODAY_STARS_FILE)})
         elif path == "/api/conversations/list":
             # Lightweight archive feed for the sidebar. This deliberately
             # projects the existing cache-backed snapshot; /all keeps its full
@@ -39847,6 +39852,28 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     },
                 )
             self.send_json(result)
+        elif path == "/api/today-stars":
+            # Body: {session_id, starred}. Publishes the full (small) map so
+            # every open dashboard repaints without polling.
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            try:
+                stars = _today_stars.set_star(
+                    TODAY_STARS_FILE, payload.get("session_id"), bool(payload.get("starred")))
+            except ValueError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+                return
+            except OSError as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+                return
+            _publish_dashboard_patch("today-stars.patch", "today-stars", "all", {"stars": stars})
+            self.send_json({"ok": True, "stars": stars})
         elif re.match(r"^/api/conversations/[^/]+/pin$", path):
             conv_id = urllib.parse.unquote(path.split("/")[-2])
             length = int(self.headers.get("Content-Length", "0"))

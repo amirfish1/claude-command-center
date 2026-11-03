@@ -141,6 +141,27 @@ test('an agent-owned pending step stays active without becoming a user decision'
 test('Active renders Needs You and working rows as one time-ordered list in every ticket tab', () => {
   const start = source.indexOf('const sectionHtml = (key, label, hint) => {');
   const body = source.slice(start, source.indexOf('if (!_sessionsByState)', start));
-  assert.ok(start > 0 && body.includes('renderSectionRows(rows)'));
+  assert.ok(start > 0 && body.includes('renderSectionRows(rows, {'));
   assert.ok(!body.includes("renderSectionRows(groups['needs-you'])"), 'Needs You must not be lifted above newer rows');
+});
+
+test('today stars count only when set after local midnight', () => {
+  const start = source.indexOf('  function _localMidnightSec(');
+  const end = source.indexOf('  function _applyTodayStars(', start);
+  const ctx = { _todayStars: {} };
+  const api = vm.runInNewContext('var _todayStars = {};' + source.slice(start, end)
+    + '\n({ todayStarActive, set: s => { _todayStars = s; }, midnight: _localMidnightSec });', ctx);
+  const midnight = api.midnight();
+  api.set({ fresh: midnight + 60, stale: midnight - 60 });
+  assert.equal(api.todayStarActive({ session_id: 'fresh' }), true);
+  assert.equal(api.todayStarActive({ session_id: 'stale' }), false);
+  assert.equal(api.todayStarActive({ session_id: 'none' }), false);
+  assert.equal(api.todayStarActive(null), false);
+});
+
+test('Active puts today-starred clusters in a Today group', () => {
+  const start = source.indexOf('const renderSectionRows = (rows, opts = {}) => {');
+  const body = source.slice(start, source.indexOf('const renderClusterList', start));
+  assert.ok(body.includes('todayStarActive(cl.rows[0] && cl.rows[0].card)'));
+  assert.ok(source.includes("renderSectionRows(rows, { todayFirst: key === 'active' })"));
 });

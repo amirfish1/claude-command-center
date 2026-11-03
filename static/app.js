@@ -4103,6 +4103,49 @@
     return false;
   }
 
+  // Today-only stars ({session_id: starred_at seconds}, server-backed so every
+  // device agrees). A star counts only if set after the viewer's local
+  // midnight, so the Today group empties itself overnight with no cleanup.
+  let _todayStars = {};
+  let _todayStarsMidnightTimer = null;
+  function _localMidnightSec(now = new Date()) {
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+  }
+  function todayStarActive(c) {
+    const sid = c && (c.session_id || c.id);
+    const at = sid ? Number(_todayStars[sid]) : 0;
+    return at > 0 && at >= _localMidnightSec();
+  }
+  function _applyTodayStars(stars) {
+    _todayStars = stars && typeof stars === 'object' ? { ...stars } : {};
+    if (_todayStarsMidnightTimer) clearTimeout(_todayStarsMidnightTimer);
+    const now = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+    _todayStarsMidnightTimer = setTimeout(() => _applyTodayStars(_todayStars), next - now);
+    if (typeof _scheduleSidebarRender === 'function') _scheduleSidebarRender({ lifecycle: true });
+  }
+  function refreshTodayStars() {
+    return fetch('/api/today-stars', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && d.ok) _applyTodayStars(d.stars); })
+      .catch(() => {});
+  }
+  async function toggleTodayStar(sid) {
+    const starred = !todayStarActive({ session_id: sid });
+    const before = _todayStars;
+    const optimistic = { ...before };
+    if (starred) optimistic[sid] = Date.now() / 1000; else delete optimistic[sid];
+    _applyTodayStars(optimistic);
+    try {
+      const data = await ccPostJson('/api/today-stars', { session_id: sid, starred });
+      if (!data || !data.ok) throw new Error((data && data.error) || 'star failed');
+      _applyTodayStars(data.stars);
+    } catch (err) {
+      _applyTodayStars(before);
+      showOpToast('Star failed (' + err.message + ')', 'error');
+    }
+  }
+
   // Lifecycle is independent of process/turn liveness. Only explicit closure
   // belongs in Finished; an idle turn and a recommendation to close stay Active.
   function ticketSessionSection(c) {
@@ -33105,6 +33148,7 @@
     '[data-role="quick-action"]',
     '[data-role="edit"]',
     '[data-role="pin"]',
+    '[data-role="today-star"]',
     '[data-role="archive"]',
     '[data-role="trash"]',
     '[data-role="untrash"]',
@@ -41422,6 +41466,16 @@
       let startBtn = '';
       let lifecycleButtons = '';
       const pinTitle = c.pinned ? 'Unpin conversation' : 'Pin conversation';
+      // Today star: only on top-level ticket rows in the ticket tabs.
+      const _todayStarred = todayStarActive(c);
+      const todayStarHtml = (lifecycleContext === 'all-main' && c.idea_ticket && !(opts.currentChildDepth > 0))
+        ? '<button type="button" class="conv-today-star' + (_todayStarred ? ' is-on' : '') + '" data-role="today-star"'
+          + ' aria-pressed="' + _todayStarred + '" title="' + (_todayStarred ? 'Unstar (starred for today)' : 'Star for today: keeps it on top until midnight') + '"'
+          + ' aria-label="' + (_todayStarred ? 'Unstar for today' : 'Star for today') + '">' + (_todayStarred ? '&#9733;' : '&#9734;') + '</button>'
+        : '';
+      const ticketKindClass = c.idea_ticket && c.idea_ticket.queue
+        ? (c.idea_ticket.queue === 'SMALL-BUGS' ? ' is-kind-bug' : (c.idea_ticket.queue === 'IDEAS' ? ' is-kind-feature' : ''))
+        : '';
       const pinBtn = lifecycleContext !== 'trash'
         ? '<button class="conv-pin-btn' + (c.pinned ? ' is-unpin' : '') + '" data-role="pin" title="' + pinTitle + '" aria-label="' + pinTitle + '"><span class="conv-pin-glyph">&#128204;</span></button>'
         : '';
@@ -41962,12 +42016,13 @@
         + (window.CCCSessionRecaps ? window.CCCSessionRecaps.render(c, _outView) : '')
         + '</div>'
         + '</div>';
-      return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-lifecycle-group="' + ticketSessionSection(c) + '" data-repo-path="' + rowRepoAttr + '">'
+      return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + ticketKindClass + (_todayStarred && todayStarHtml ? ' is-today-starred' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-lifecycle-group="' + ticketSessionSection(c) + '" data-repo-path="' + rowRepoAttr + '">'
         + waHtml
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + mobileStatusHtml
         + '<div class="conv-title-row">'
             + '<div class="conv-main-row' + (_outcomeInline ? ' has-inline-step' : '') + '">'
+            + todayStarHtml
             + sessionIconHtml
             + autoSwitchHtml
             + _nyaChevronHtml
@@ -44902,7 +44957,7 @@
     if (_ticketLifecycleView) {
       const lifecycleRows = _ideaTicketRows(_allTabView, 'archived');
       const groups = stableTicketSessionGroups(_allTabMainConvs.concat(lifecycleRows), _allTabView, currentConversation);
-      const renderSectionRows = rows => {
+      const renderSectionRows = (rows, opts = {}) => {
         let clusters = _allTabRowsToClusters(_allTabTreeRowsFor(rows));
         clusters.sort((a, b) => {
           const pinDelta = _allTabClusterPinRank(a) - _allTabClusterPinRank(b);
@@ -44911,6 +44966,21 @@
             ? _allTabClusterCost(b) - _allTabClusterCost(a)
             : _allTabClusterMtime(b) - _allTabClusterMtime(a);
         });
+        // Today-starred clusters lead Active in their own small group, still
+        // newest-first; stars expire at local midnight (todayStarActive).
+        if (opts.todayFirst) {
+          const starred = clusters.filter(cl => todayStarActive(cl.rows[0] && cl.rows[0].card));
+          if (starred.length) {
+            const rest = clusters.filter(cl => !starred.includes(cl));
+            return '<div class="today-star-group" aria-label="Starred for today">'
+              + '<div class="today-star-heading"><span aria-hidden="true">&#9733;</span> Today</div>'
+              + renderClusterList(starred) + '</div>' + renderClusterList(rest);
+          }
+        }
+        return renderClusterList(clusters);
+      };
+      const renderClusterList = clusters => {
+        if (!clusters.length) return '';
         if (!_arcShouldGroupByFolder) return _renderAllTabClusters(clusters, _isSpecificFolderFilter, false);
         const folders = new Map();
         clusters.forEach(cluster => {
@@ -44947,7 +45017,7 @@
           + '<div class="session-lifecycle-content" id="' + contentId + '"' + (collapsed ? ' hidden' : '') + '>'
           // Active is one time-ordered list in every ticket tab; the yellow
           // dot marks Needs You rows without lifting stale ones to the top.
-          + (rows.length ? renderSectionRows(rows)
+          + (rows.length ? renderSectionRows(rows, { todayFirst: key === 'active' })
             : '<div class="session-lifecycle-empty">' + ({ 'needs-you': 'Nothing needs your attention.', active: 'No active sessions in this view.', finished: 'No finished sessions in this view.', archived: 'No archived sessions in this view.' }[key]) + '</div>')
           + '</div></section>';
       };
@@ -47406,6 +47476,15 @@
           if (row !== item) row.classList.remove('is-actions-open');
         });
         item.classList.toggle('is-actions-open', willOpen);
+      });
+    });
+    $convList.querySelectorAll('[data-role="today-star"]').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const item = btn.closest('.conv-item');
+        const sid = item && item.dataset.sessionId;
+        if (sid) toggleTodayStar(sid);
       });
     });
     $convList.querySelectorAll('.conv-pin-btn').forEach(btn => {
@@ -77763,6 +77842,7 @@
       scheduleDashboardInvalidation('sessions');
       scheduleDashboardInvalidation('queue');
       scheduleDashboardInvalidation('archive');
+      refreshTodayStars();
       return true;
     }
     if (_dashboardEventState.bootId && event.boot_id !== _dashboardEventState.bootId) {
@@ -77786,6 +77866,7 @@
 
     if (event.topic === 'conversation.patch') _applyDashboardConversationPatch(event);
     else if (event.topic === 'session.patch') _applyDashboardSessionPatch(event);
+    else if (event.topic === 'today-stars.patch') _applyTodayStars(event.patch && event.patch.stars);
     else if (event.topic === 'notify.request') {
       try { if (window.cccNotify) window.cccNotify._deliver(event.patch || {}); } catch (_) {}
     }
@@ -77840,6 +77921,11 @@
   // transcript iframes) have no sidebar to invalidate. Each stream would hold
   // one of WebKit's 6 per-host connections and starve the main window.
   if (!READER_ONLY_POPOUT) connectDashboardEvents();
+  if (!READER_ONLY_POPOUT) {
+    refreshTodayStars();
+    // A tab woken after midnight or after missed events re-reads the stars.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshTodayStars(); });
+  }
   window.__cccDashboardEvents = { apply: applyDashboardEvent, schedule: scheduleDashboardInvalidation };
   // ── End unified dashboard events ──────────────────────────────────────
 
