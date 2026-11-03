@@ -1064,7 +1064,7 @@ def test_auto_unarchive_sweep_reaches_pool_codex_candidate(monkeypatch, tmp_path
     monkeypatch.setattr(server, "_codex_pool_alive", lambda now=None: True)
     monkeypatch.setattr(
         server, "_codex_fetch_threads",
-        lambda where="", params=(), limit=None: (
+        lambda where="", params=(), limit=None, columns=None: (
             [{"id": sid, "updated_at_ms": int(now * 1000) - 5000}] if not where else []
         ),
     )

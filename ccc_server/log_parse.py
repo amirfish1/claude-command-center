@@ -1788,7 +1788,10 @@ def _codex_pool_candidate_sids(now=None):
     sids = set()
     if _core._codex_pool_alive(now):
         try:
-            for row in _core._codex_fetch_threads(limit=100):
+            for row in _core._codex_fetch_threads(
+                limit=100,
+                columns=("id", "created_at", "updated_at", "created_at_ms", "updated_at_ms"),
+            ):
                 ts = _core._codex_ts_seconds(row, prefix="updated") or _core._codex_ts_seconds(row, prefix="created")
                 if ts and (now - ts) < 300:
                     tid = row.get("id")

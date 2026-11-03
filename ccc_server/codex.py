@@ -8820,16 +8820,18 @@ def _codex_db_signature(db):
     return tuple(sig)
 
 
-def _codex_fetch_threads(where="", params=(), limit=None):
+def _codex_fetch_threads(where="", params=(), limit=None, columns=None):
     """Read rows from Codex's local thread index without creating files.
 
     Codex stores durable conversation metadata in ~/.codex/state_*.sqlite,
     with each row pointing at a rollout JSONL. We open SQLite in read-only URI
     mode so a dashboard scan cannot create a missing DB or mutate state.
+    Narrow projections avoid reading prompt/source payloads on liveness paths.
     """
+    columns = tuple(columns) if columns is not None else None
     for db in _codex_state_db_candidates():
         sig = _codex_db_signature(db)
-        cache_key = (str(db), where, tuple(params), limit)
+        cache_key = (str(db), where, tuple(params), limit, columns)
         if sig is not None:
             with _CODEX_THREADS_CACHE_LOCK:
                 hit = _CODEX_THREADS_CACHE.get(cache_key)
@@ -8857,7 +8859,8 @@ def _codex_fetch_threads(where="", params=(), limit=None):
                 "agent_path", "agent_role", "memory_mode", "model", "reasoning_effort",
                 "thread_source",
             ]
-            selected = [c for c in wanted if c in cols]
+            selected = [c for c in wanted if c in cols
+                        and (columns is None or c in columns)]
             if "id" not in selected:
                 return []
             order_terms = []
