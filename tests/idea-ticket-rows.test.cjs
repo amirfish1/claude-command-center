@@ -9,7 +9,10 @@ const start = app.indexOf("    const _ideaTicketRows = (lane, bucket = 'active')
 const end = app.indexOf('    const _allTabIdeaConvs =', start);
 assert.ok(start >= 0 && end > start);
 const timeHelpers = app.slice(app.indexOf('  function _archiveWindow()'), app.indexOf('  const OPEN_ASK_RECENT_S'));
+const foldStart = app.indexOf('  function _continuationFoldMaps(');
+const foldEnd = app.indexOf('\n  let _f2ContinuationEdgesCache', foldStart);
 const source = timeHelpers + '\nconst _ipWindowCutoff = _archiveWindowCutoff();\n'
+  + app.slice(foldStart, foldEnd) + '\n'
   + app.slice(start, end) + '\nthis.ticketRows = _ideaTicketRows;';
 
 function representatives(rows, lane = 'ideas', bucket = 'active', trash = [], window = 'all', query = '') {
@@ -66,6 +69,20 @@ test('archive shaping preserves continuation identity for ticket representatives
   assert.equal(shaped.continued_from_session_id, 'origin');
   assert.deepEqual(representatives([row('origin', 'EXAMPLE-1', 20),
     {...shaped, session_id: 'successor', modified: 30}]), ['successor']);
+});
+
+test('a successor leads even when its predecessor receives newer activity', () => {
+  for (const bucket of ['active', 'archived']) {
+    const lifecycle = bucket === 'archived' ? { archived: true } : {};
+    const rows = [row('origin', 'EXAMPLE-1', 50, lifecycle),
+      row('middle', 'EXAMPLE-1', 40, { ...lifecycle,
+        parent_session_id: 'origin', continued_from_session_id: 'origin' }),
+      row('successor', 'EXAMPLE-1', 30, { ...lifecycle,
+        parent_session_id: 'middle', continued_from_session_id: 'middle' }),
+      row('lane', 'EXAMPLE-1', 60, { ...lifecycle, parent_session_id: 'origin' })];
+    assert.deepEqual(representatives(rows, 'ideas', bucket), ['successor']);
+    assert.deepEqual(representatives([...rows].reverse(), 'ideas', bucket), ['successor']);
+  }
 });
 
 test('equal timestamps remain stable across bucket/input order', () => {

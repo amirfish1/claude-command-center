@@ -35,9 +35,9 @@ test('the continuation fold preference and its Settings switch are gone', () => 
   assert.equal(html.includes('Hide earlier continued sessions'), false);
 });
 
-test('both tree builders fold the origin into its successor and re-home its lanes', () => {
+test('tree builders and ticket leads fold the origin into its successor', () => {
   assert.equal(app.includes('_isContinuationPair'), false);
-  assert.equal((app.match(/const fold = _continuationFoldMaps\(rows, /g) || []).length, 2);
+  assert.equal((app.match(/const fold = _continuationFoldMaps\(rows, /g) || []).length, 3);
   assert.equal((app.match(/if \(!id \|\| fold\.hidden\.has\(id\)\) return;/g) || []).length, 2);
   assert.equal((app.match(/const pid = fold\.headOf\(/g) || []).length, 2);
 });

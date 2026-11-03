@@ -44498,9 +44498,13 @@
       // continuations still do (they replace the earlier session).
       members.forEach((rows, ref) => {
         const ids = new Set(rows.map(_allTabSessionId));
+        // An older leg can receive late replies after its continuation
+        // starts. Fold it before recency chooses the ticket's lead, just
+        // as the session trees do, so that activity cannot reclaim the row.
+        const fold = _continuationFoldMaps(rows, _allTabSessionId);
         const spawnParent = c => (continuationParentId(c) ? ''
           : String(c.parent_session_id || c.hermes_parent_session_id || ''));
-        const leads = rows.filter(c => !ids.has(spawnParent(c)));
+        const leads = rows.filter(c => !fold.hidden.has(_allTabSessionId(c)) && !ids.has(spawnParent(c)));
         (leads.length ? leads : rows).forEach(c => {
           const prev = best.get(ref);
           if (!prev || byRecency(c, prev) < 0) best.set(ref, c);
