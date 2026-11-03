@@ -4220,6 +4220,10 @@
   .peer-structured .peer-section-label + .peer-para + .peer-para { margin-top: 8px; }
   .peer-structured .peer-list { margin: 4px 0 0; padding-left: 20px; list-style: none; }
   .peer-structured .peer-list li { margin: 2px 0; overflow-wrap: anywhere; }
+  .peer-image-gallery { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+  .peer-image-gallery figure { flex: 0 1 240px; min-width: 0; max-width: 100%; margin: 0; }
+  .peer-image-gallery img.msg-image { width: 100%; max-height: 180px; object-fit: contain; }
+  .peer-image-gallery figcaption { font-size: 12px; overflow-wrap: anywhere; }
   .event.system.peer-held .system-compact-text { opacity: 0.7; }
   .event.system.peer-held .peer-held-preview { font-style: italic; }
   /* User bubble — Claude-Desktop-style chat bubble. No label, no left

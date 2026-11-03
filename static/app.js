@@ -17689,6 +17689,47 @@
     return '<div class="peer-structured">' + html + '</div>';
   }
 
+  // Reports often name a directory once, followed by screenshot basenames.
+  // Keep the original report and add previews for its explicit file list.
+  function peerReportImagesHtml(text) {
+    const paths = new Set();
+    let inFiles = false, base = '';
+    for (const line of String(text || '').split('\n')) {
+      const label = line.trim().match(PEER_LABEL_RE);
+      if (label) inFiles = /^(?:FILES?|IMAGES?|SCREENSHOTS?)$/.test(label[1]);
+      if (!inFiles) continue;
+      const body = label ? label[2] : line;
+      for (let token of body.split(/[\s;,`"'<>()[\]]+/)) {
+        token = token.replace(/^file:\/\//i, '').replace(/[.:]+$/, '');
+        const absolute = /^(?:\/|~\/)/.test(token);
+        if (absolute) base = token.slice(0, token.lastIndexOf('/') + 1);
+        if (!/\.(?:png|jpe?g|gif|webp|svg)$/i.test(token)) continue;
+        if (!absolute && (!base || token.includes('/') || !/^[\w.-]+$/.test(token))) continue;
+        const full = absolute ? token : base + token;
+        // Upload references already have an inline image in the report body.
+        if (/\/\.claude\/(?:command-center\/)?(?:pasted-images|annotation-screenshots)\//.test(full)) continue;
+        paths.add(full);
+      }
+    }
+    if (!paths.size) return '';
+    const sid = sessionIdByConv[currentConversation] || (currentSession && currentSession.id) || '';
+    const repo = activeConvRepoPath();
+    const items = Array.from(paths, full => {
+      const query = new URLSearchParams({ path: full });
+      if (sid) query.set('session_id', sid);
+      if (repo) query.set('repo_path', repo);
+      const src = '/api/media?' + query;
+      const name = full.slice(full.lastIndexOf('/') + 1);
+      return '<figure><img class="msg-image" src="' + escapeAttr(src + '&preview=1')
+        + '" data-full-src="' + escapeAttr(src) + '" alt="' + escapeAttr(name)
+        + '" loading="lazy" onerror="this.hidden=true">'
+        + '<figcaption><a role="button" tabindex="0" class="path-link" data-path="'
+        + escapeAttr(full) + '" title="' + escapeAttr(full) + '">'
+        + escapeHtml(name) + '</a></figcaption></figure>';
+    }).join('');
+    return '<div class="peer-image-gallery">' + items + '</div>';
+  }
+
   function renderImageDescriptors(images) {
     if (!Array.isArray(images) || !images.length) return '';
     let html = '';
@@ -20492,7 +20533,7 @@
     const img = ev.target.closest('img.msg-image');
     if (img) {
       ev.preventDefault();
-      openMediaLightbox(img.src, { kind: 'image', title: img.alt || 'image.png' });
+      openMediaLightbox(img.dataset.fullSrc || img.src, { kind: 'image', title: img.alt || 'image.png' });
       return;
     }
   });
@@ -70540,6 +70581,7 @@
           + tsSpan(ev.ts)
           + ambientContextHtml(ev.ambient_context)
           + textHtml
+          + (ev.peer ? peerReportImagesHtml(cleanedText) : '')
           + eventModelMetaHtml(ev, 'user')
           + (_isPinned ? '' : imagesHtml)
           + userSteerHtml;
