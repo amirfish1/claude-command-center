@@ -1,4 +1,4 @@
-/* Deterministic owner queue. No timers, background mutations, or model calls. */
+/* Deterministic owner queue. Background refreshes only read source questions. */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -48,7 +48,8 @@
   }
   const time = new Intl.DateTimeFormat('en-US', {timeZone:'America/Los_Angeles', year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', timeZoneName:'short'});
   function current() { return rows.find(row => row.request_id === state.selected) || state.snapshots[state.selected]; }
-  function openRows() { return rows.filter(row => row.status === 'open' && row.kind === 'question'); }
+  function openRows() { return rows.filter(row => row.status === 'open' && row.kind === 'question'
+    && state.entries[row.request_id]?.saved?.state !== 'accepted' && row.answer?.state !== 'accepted'); }
   function supported(row) { return row?.adapter === 'watchtower-block' || (row?.adapter === 'session-question' && row.reply_supported === true); }
   function currentSource(row) { return row?.source_current === true || model?.source_current === true; }
   function gate(row) {
@@ -263,7 +264,14 @@
       if (!response.ok || data.ok !== true || !Array.isArray(data.requests)) throw Error(data.error || 'Cannot read source questions.');
       rows = data.requests; model = data; readError = '';
       rows.forEach(absorb); persist();
-      if (!state.selected) {
+      const selected = rows.find(r => r.request_id === state.selected);
+      const entry = state.entries[state.selected];
+      // Confirmed answers belong in history. Keep drafts and uncertain deliveries
+      // selected for recovery; a disappearing question is not an answer receipt.
+      if (entry?.saved?.state === 'accepted'
+          || (!entry && !state.drafts[state.selected] && (!selected || selected.status !== 'open'))) {
+        next(entry?.saved?.state === 'accepted');
+      } else if (!state.selected) {
         const first = openRows().find(r => state.entries[r.request_id]?.saved?.state !== 'accepted');
         if (first) select(first.request_id);
       }
@@ -285,5 +293,19 @@
   };
   $('composer').onsubmit = event => { event.preventDefault(); if (!$('send').disabled) act('record', state.selected, true); };
   $('skip').onclick = () => next(); $('refresh').onclick = refresh;
+  function refreshVisible() {
+    if (document.hidden || active !== null) return;
+    // A retained sidebar iframe is still a visible document while its frame is
+    // hidden. Avoid source subprocesses for inactive sidebar/mobile views.
+    if (window.frameElement && !window.frameElement.getClientRects().length) return;
+    refresh();
+  }
+  window.addEventListener('pageshow', event => { if (event.persisted) refreshVisible(); });
+  document.addEventListener('visibilitychange', refreshVisible);
+  window.addEventListener('message', event => {
+    if (parent !== window && event.source === parent && event.origin === location.origin
+        && event.data?.type === 'ccc:decision-refresh') refreshVisible();
+  });
+  setInterval(refreshVisible, 60000);
   refresh();
 })();

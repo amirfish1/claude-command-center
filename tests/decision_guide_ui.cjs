@@ -40,7 +40,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
           posts.push({url:url.pathname, body:JSON.parse(req.postData())});
           return await handler(req);
         }
-        if (url.pathname === '/' || url.pathname === '/static/decision-guide.html') return await req.respond({status:200,contentType:'text/html',body:assets.html});
+        if (['/','/decision-guide.html','/static/decision-guide.html'].includes(url.pathname)) return await req.respond({status:200,contentType:'text/html',body:assets.html});
         if (url.pathname === '/static/decision-guide.js') return await req.respond({status:200,contentType:'application/javascript',body:assets.js});
         if (url.pathname === '/static/decision-guide.css') return await req.respond({status:200,contentType:'text/css',body:assets.css});
         if (url.pathname === '/api/decision-inbox/requests') {
@@ -344,6 +344,67 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       await load(); await wait('Answer accepted by source.');
       assert.equal(await page.evaluate(()=>document.body.textContent.includes('Withdrawal is not delivery confirmation.')),false);
       assert.equal(await page.evaluate(()=>document.body.textContent.includes('Current source question has changed')),false);
+      assert.equal(posts.length,0);
+    });
+    await fixture('external answer refresh advances the retained selection and keeps its receipt in history',async ({page,model,load,selected,posts})=>{
+      // Reproduce returning to a saved selection answered from another view.
+      model.requests[0]={...base,revision:5,status:'withdrawn',needs_answer:false,can_answer:false,answer:summary('accepted')};
+      model.needs_answer_count=1;
+      await load();
+      assert.equal(await selected(),secondId);
+      assert.match(await page.$eval('#transcript',el=>el.textContent),/Answer accepted by source/);
+      assert.equal(await page.$$eval('#items button',nodes=>nodes.length),1);
+      assert.equal(await page.$eval('#current h2',el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),true);
+      await page.screenshot({path:path.join(screenshots,'guide-external-answer.png'),fullPage:true});
+      assert.equal(posts.length,0);
+    });
+    await fixture('foreground refresh removes answered questions without posting or losing a draft',async ({page,model,selected,posts})=>{
+      await page.type('textarea','keep my exact draft');
+      await page.$eval('textarea',el=>{el.focus();el.setSelectionRange(3,7);});
+      model.requests[0]={...base,revision:5,body:'Changed while away'};
+      await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+      await page.waitForFunction(()=>document.querySelector('#current .raw').textContent==='Changed while away');
+      assert.deepEqual(await page.$eval('textarea',el=>[el.value,document.activeElement===el,el.selectionStart,el.selectionEnd]),['keep my exact draft',true,3,7]);
+      assert.equal(await selected(),id);
+      assert.equal(await page.$eval('#send',el=>el.disabled),true);
+      assert.equal(posts.length,0);
+    });
+    await fixture('periodic refresh updates an external answer and skips hidden documents',async ({page,model,selected,posts})=>{
+      model.requests[0]={...base,status:'withdrawn',needs_answer:false,answer:summary('accepted')};
+      model.needs_answer_count=1;
+      await page.evaluate(()=>{
+        Object.defineProperty(document,'hidden',{configurable:true,value:true});
+        window.guideRefreshTick();
+      });
+      assert.equal(await selected(),id);
+      await page.evaluate(()=>{
+        Object.defineProperty(document,'hidden',{configurable:true,value:false});
+        window.guideRefreshTick();
+      });
+      await page.waitForFunction(id=>document.querySelector('#current article')?.dataset.requestId===id,{},secondId);
+      assert.match(await page.$eval('#transcript',el=>el.textContent),/Answer accepted by source/);
+      assert.equal(posts.length,0);
+    },{before:()=>{
+      const native=window.setInterval;
+      window.setInterval=(fn,ms,...args)=>ms===60000?(window.guideRefreshTick=fn,0):native(fn,ms,...args);
+    }});
+    await fixture('returning to the sidebar view refreshes its retained iframe',async ({page,model,posts})=>{
+      const tabScript=fs.readFileSync(path.join(root,'static/decision-tab.js'),'utf8');
+      // Mount the production sidebar controller around its real guide document.
+      await page.evaluate(script=>{
+        const list=document.createElement('div'); list.id='convList';
+        list.innerHTML='<div id="sidebarDecisionGuideHost" style="width:350px;height:700px"></div>';
+        document.body.append(list);
+        (0,eval)(script);
+      },tabScript);
+      await page.waitForFunction(()=>document.querySelector('#cccDecisionGuideFrame')?.contentDocument.querySelector('#current article'));
+      await page.evaluate(()=>{document.querySelector('#sidebarDecisionGuideHost').remove();window.CCCDecisionTab.mount();});
+      model.requests[0]={...base,status:'withdrawn',needs_answer:false,answer:summary('accepted')}; model.needs_answer_count=1;
+      await page.evaluate(()=>{
+        const host=document.createElement('div');host.id='sidebarDecisionGuideHost';host.style='width:350px;height:700px';
+        document.querySelector('#convList').append(host); window.CCCDecisionTab.mount();
+      });
+      await page.waitForFunction(id=>document.querySelector('#cccDecisionGuideFrame').contentDocument.querySelector('#current article')?.dataset.requestId===id,{},secondId);
       assert.equal(posts.length,0);
     });
     console.log(`PASS ${checks} guided queue browser scenarios; screenshots: ${screenshots}`);

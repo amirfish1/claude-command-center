@@ -31,10 +31,12 @@
     for (const view of views) {
       const {frame, host} = view;
       if (!frame) continue;
-      if (!host || !host.isConnected) { frame.hidden = true; continue; }
+      if (!host || !host.isConnected) { frame.hidden = true; view.visible = false; continue; }
       const rect = host.getBoundingClientRect();
       frame.hidden = rect.width < 1 || rect.height < 1;
       Object.assign(frame.style, {left:rect.left + 'px', top:rect.top + 'px', width:rect.width + 'px', height:rect.height + 'px'});
+      if (!frame.hidden && !view.visible) frame.contentWindow.postMessage({type:'ccc:decision-refresh'}, location.origin);
+      view.visible = !frame.hidden;
     }
   }
   function badge() {
