@@ -1502,11 +1502,29 @@ def _normalize_delivery_verb(mode):
     return "", "", {}, {}, "invalid mode"
 
 
+def _mark_ambiguous_uncertain(result):
+    """A worker RPC that timed out after send is an unknown outcome, not a failure.
+
+    The control-plane client returns ``ambiguous: True`` when the dashboard
+    sent the request but gave up waiting for the worker's reply; the worker
+    may well have delivered it (observed 2026-11-02: two peer reports logged
+    INJECT_REJECT "timed out" that had landed). Reporting "failed" invites
+    the caller to resend and duplicate the message (CCC-238).
+    """
+    if (isinstance(result, dict) and not result.get("ok")
+            and result.get("ambiguous") and not result.get("blocked")
+            and not result.get("uncertain")):
+        result["uncertain"] = True
+        result.setdefault("code", "delivery_unknown")
+    return result
+
+
 def _annotate_inject_result(result, *, requested, force_queue=False, fields=None):
     """Stamp the result contract onto whatever the router returned."""
     if not isinstance(result, dict):
         return result
     via = str(result.get("via") or "")
+    _mark_ambiguous_uncertain(result)
     if result.get("ok"):
         effect = "queued" if result.get("queued") else "delivered"
     elif result.get("blocked"):
@@ -1574,6 +1592,7 @@ def _log_inject_result(
             f"text=\"{_core._activity_log_preview(text)}\"",
         )
         return
+    _mark_ambiguous_uncertain(result)
     _core._log_activity(
         "inject", "INJECT_UNKNOWN" if result.get("uncertain") else "INJECT_REJECT",
         f"{detail}code={result.get('code') or '-'} "

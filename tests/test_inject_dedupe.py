@@ -456,3 +456,25 @@ def test_uncertain_inject_logs_unknown_not_rejection(window, monkeypatch):
     assert result["effect"] == "unknown"
     assert result["landed"] == "unknown"
     assert [call.args[1] for call in log_activity.call_args_list] == ["INJECT_UNKNOWN"]
+
+
+def test_worker_rpc_timeout_after_send_is_unknown_not_rejected(window, monkeypatch):
+    """A dashboard->worker RPC that timed out after send may have landed
+    (2026-11-02: two delivered peer reports logged INJECT_REJECT "timed out")."""
+    monkeypatch.setattr(
+        server, "_inject_text_into_session_router",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "available": True,
+            "ambiguous": True,
+            "error": "timed out",
+        },
+    )
+
+    with mock.patch.object(server, "_log_activity") as log_activity:
+        result = server._inject_text_into_session("s1", "peer report", source="api")
+
+    assert result["effect"] == "unknown"
+    assert result["uncertain"] is True
+    assert result["code"] == "delivery_unknown"
+    assert [call.args[1] for call in log_activity.call_args_list] == ["INJECT_UNKNOWN"]

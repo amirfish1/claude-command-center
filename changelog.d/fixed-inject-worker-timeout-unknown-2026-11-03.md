@@ -1,0 +1,1 @@
+- An inject whose dashboard-to-worker call timed out after sending is now reported as "delivery unknown" (`ccc send` exits 3) instead of a failure, so callers no longer resend a message that already landed.
