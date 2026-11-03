@@ -22515,6 +22515,8 @@ def _resolve_apps(include_disabled=False):
     apps.append({"id": "pipeline-canvas", "label": "Canvas",
                  "icon": "\N{BLACK FOUR POINTED STAR}", "url": "/canvas.html",
                  "builtin": False})
+    apps.append({"id": "allowances", "label": "Allowances", "icon": "◷",
+                 "url": "/view/allowances", "builtin": False})
     manifest_apps = _custom_links_config()[2]
     apps.extend(manifest_apps)
     # An id already declared in the manifest wins: that is how a user renames,
@@ -30302,6 +30304,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # _STATS_CACHE_LOCK).
             _save_stats_file_cache()
             self.send_json(result)
+        elif path == "/api/allowances":
+            from ccc_server import allowances
+            self.send_json(allowances.payload())
         elif path == "/api/plan-usage":
             self.send_json(get_cached_plan_usage())
         elif path == "/api/usage/snapshots":
@@ -35892,6 +35897,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             result = _set_engine_auto_update(payload["enabled"])
             self.send_json(result, 200 if result.get("ok") else 500)
+            return
+        if path == "/api/allowances":
+            from ccc_server import allowances
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                if length < 1 or length > 65536:
+                    self.send_json({"ok": False, "error": "Invalid request size"}, 400)
+                    return
+                result = allowances.mutate(json.loads(self.rfile.read(length)))
+            except (ValueError, TypeError) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+                return
+            except OSError:
+                self.send_json({"ok": False, "error": "Could not save allowance ledger"}, 500)
+                return
+            self.send_json(result)
             return
         if path in ("/api/apps/add", "/api/apps/remove", "/api/apps/arrange"):
             # Applications settings writes. Same-origin already enforced at

@@ -106,3 +106,10 @@ dashboard stays inside the prefix.
 - `GET /api/apps` returns the resolved, ordered list if you want to inspect it.
 - The rail renders its built-ins before that call returns and keeps them if it
   fails, so navigation survives a backend hiccup.
+
+### Allowances
+
+The **Allowances** app tracks separate accounts, automatic Codex usage windows,
+and manually reported research or cloud-session balances. It recommends the
+usable allowance with the earliest reset or expiration. See
+[Allowances](allowances.md) for connecting a second Codex account.
