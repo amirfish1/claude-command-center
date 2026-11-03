@@ -17,6 +17,15 @@ Claude Code runs this when a permission dialog would open. The hook:
 Anything else (no decision, wrong hash, expired, error) prints nothing, so the
 normal prompt decides. Never prompts. Stdlib only. Keep the file-name scheme
 and canonical form in lockstep with ccc_server/approval_hook.py.
+
+While it parks it also raises the session's `_needs_approval` badge itself.
+Claude Code fires the Notification hook (the usual badge source) only once a
+dialog is actually shown, and a headless `claude -p` session (CCC worker
+lanes) never shows one, so before this the session sat blocked for the whole
+wait with no badge, and neither the dashboard nor the relay offered an answer.
+A headless session parks even when the relay is off: there is no dialog for
+the prompt to fall back to (it is simply denied), so the dashboard's
+Approve/Deny delivered through this hook is the only way to answer it.
 """
 
 import hashlib
@@ -32,6 +41,10 @@ HEARTBEAT_S = 2.0
 RESOLVED_CHECK_S = 1.0
 TAIL_BYTES = 512 * 1024
 SKIP_TOOLS = ("AskUserQuestion", "ExitPlanMode")
+# Headless + relay off: only a person at the dashboard can answer, so hold the
+# prompt for a while but not the relay's full 15 min; an unattended lane gets
+# its denial and carries on.
+HEADLESS_WAIT_S = 300.0
 _SID_RE = re.compile(r"[A-Za-z0-9_\-]{1,100}")
 
 
@@ -61,6 +74,76 @@ def enabled(base, now):
         return now - os.stat(os.path.join(base, "enabled")).st_mtime <= ENABLED_FRESH_S
     except OSError:
         return False
+
+
+def headless_parent(pid=None, depth=4):
+    """True when an ancestor `claude` process runs in print mode (`-p`), i.e.
+    no permission dialog will ever open. Linux /proc only; False elsewhere.
+    CCC_APPROVAL_HOOK_HEADLESS=0/1 overrides (tests run under agent shells)."""
+    forced = os.environ.get("CCC_APPROVAL_HOOK_HEADLESS")
+    if forced in ("0", "1"):
+        return forced == "1"
+    pid = os.getppid() if pid is None else pid
+    for _ in range(depth):
+        if not pid or pid <= 1:
+            return False
+        try:
+            with open("/proc/%d/cmdline" % pid, "rb") as f:
+                argv = [a.decode("utf-8", "replace")
+                        for a in f.read().split(b"\0") if a]
+            with open("/proc/%d/stat" % pid) as f:
+                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return False
+        if argv and os.path.basename(argv[0]) == "claude":
+            return "-p" in argv or "--print" in argv
+        pid = ppid
+    return False
+
+
+def live_dir():
+    return os.environ.get("CCC_LIVE_STATE_DIR") or os.path.join(
+        os.path.expanduser("~"), ".claude", "command-center", "live-state")
+
+
+def raise_badge(sid, tool):
+    """Write the `_needs_approval` marker the dashboard and relay read, unless
+    one is already there. Returns the marker path when this hook owns it."""
+    path = os.path.join(live_dir(), "%s_needs_approval.json" % sid)
+    if os.path.exists(path):
+        return None
+    try:
+        os.makedirs(live_dir(), exist_ok=True)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "w") as f:
+            json.dump({"session_id": sid, "type": "permission_prompt",
+                       "message": "Claude needs your permission to use %s" % tool,
+                       "started_at": time.time(), "source": "permission-request",
+                       "pid": os.getpid()}, f)
+        os.replace(tmp, path)
+        return path
+    except OSError:
+        return None
+
+
+def drop_badge(path, base, sid):
+    """Remove the marker this hook raised, unless another hook of the same
+    session is still parked (its waiting file is fresh) or it was replaced."""
+    if not path:
+        return
+    try:
+        for name in os.listdir(os.path.join(base, "waiting")):
+            if name.startswith(sid + "."):
+                return
+    except OSError:
+        pass
+    try:
+        with open(path) as f:
+            doc = json.load(f)
+        if doc.get("source") == "permission-request" and doc.get("pid") == os.getpid():
+            os.unlink(path)
+    except (OSError, ValueError, AttributeError):
+        pass
 
 
 def _unlink(path):
@@ -243,14 +326,19 @@ def main():
             return
         base = base_dir()
         now = time.time()
-        if not enabled(base, now):
+        relay = enabled(base, now)
+        if not (relay or headless_parent()):
             return
-        wait = max_wait()
+        wait = max_wait() if relay else min(max_wait(), HEADLESS_WAIT_S)
         if wait <= 0:
             return
         watch = PromptWatch(str(data.get("transcript_path") or ""), tool, tin)
-        decision = wait_for_decision(base, sid, input_sha256(tool, tin), now + wait,
-                                     watch=watch)
+        badge = raise_badge(sid, tool)
+        try:
+            decision = wait_for_decision(base, sid, input_sha256(tool, tin),
+                                         now + wait, watch=watch)
+        finally:
+            drop_badge(badge, base, sid)
         if decision:
             emit(decision)
     except Exception:

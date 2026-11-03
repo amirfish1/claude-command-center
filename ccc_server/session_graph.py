@@ -5180,6 +5180,44 @@ def interrupt_input_via_keystroke(tty, terminal_app, key_code=53):
     return {"ok": True, "tty": tty}
 
 
+def claude_approval_hook_sha(session_id):
+    """sha256 of the tool call this Claude session's PermissionRequest hook is
+    parked on right now (hooks/permission-request.py), or None. The hash is
+    taken from the transcript's pending tool call, so a decision posted for it
+    only ever applies to that exact call."""
+    try:
+        from ccc_server import approval_hook as _ah
+        from ccc_server import relay_context as _rc
+        path = _find_session_jsonl(session_id)
+        inp = _rc.pending_input(str(path)) if path else None
+        if inp and _ah.waiting(session_id, inp["sha256"]):
+            return inp["sha256"]
+    except Exception:
+        pass
+    return None
+
+
+def _answer_via_approval_hook(session_id, decision):
+    """Answer through the parked PermissionRequest hook: works headless and
+    off macOS. None when no hook is parked or it did not take the decision."""
+    sha = claude_approval_hook_sha(session_id)
+    if not sha:
+        return None
+    from ccc_server import approval_hook as _ah
+    try:
+        outcome = _ah.deliver(session_id, sha,
+                              "allow" if decision == "accept" else "deny")
+    except (OSError, ValueError):
+        return None
+    if outcome != "applied":
+        return None
+    try:
+        (_core.SIDECAR_STATE_DIR / f"{session_id}_needs_approval.json").unlink()
+    except OSError:
+        pass
+    return {"ok": True, "decision": decision, "via": "hook"}
+
+
 def respond_claude_permission(session_id, decision):
     """Answer a pending Claude Code permission prompt from the dashboard.
 
@@ -5199,6 +5237,10 @@ def respond_claude_permission(session_id, decision):
     decision = (decision or "accept").strip().lower()
     if decision not in ("accept", "decline"):
         return {"ok": False, "error": f"unknown decision: {decision}"}
+    if isClaudeSource_backend(session_id):
+        hooked = _answer_via_approval_hook(session_id, decision)
+        if hooked:
+            return hooked
     if sys.platform != "darwin":
         _core._log_macos_only("claudePermissionAnswer")
         return {

@@ -31750,6 +31750,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not is_acp_status and not (is_codex_status or is_gemini_status or is_antigravity_status or is_hermes_status):
                 status["needs_approval"] = _notification_is_blocking(notif)
                 status["needs_approval_message"] = notif.get("message", "") if notif else ""
+                # A parked PermissionRequest hook can take Approve/Deny on any
+                # host, headless included (no terminal to keystroke into).
+                status["approval_hook_parked"] = bool(
+                    status["needs_approval"] and sid and claude_approval_hook_sha(sid))
             # Surface a count of CCC-initiated spawns so the client can
             # detect "a new session was just spawned (by an agent via
             # /api/sessions/spawn) — refresh the conv list NOW instead

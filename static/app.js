@@ -7543,6 +7543,7 @@
         pendingTool: data.pending_tool || null,
         needsApproval: !!data.needs_approval,
         needsApprovalMessage: data.needs_approval_message || '',
+        approvalHookParked: !!data.approval_hook_parked,
         acpPendingPermission: (
           data.acp_pending_permission && typeof data.acp_pending_permission === 'object'
         ) ? data.acp_pending_permission : null,
@@ -10011,9 +10012,13 @@
       const _isClaudeSess = !!(currentSession && isClaudeSource(currentSession.source));
       const _caps = (APP_CONFIG && APP_CONFIG.capabilities) || {};
       const _claudeLiveTty = !!(liveStatus.live && liveStatus.tty);
-      const canAnswerClaude = !canApprove && _isClaudeSess && !!_caps.answerPermission && _claudeLiveTty;
-      const claudeDormant = !canApprove && _isClaudeSess && !!_caps.answerPermission && !_claudeLiveTty;
-      const claudeNoRoute = !canApprove && _isClaudeSess && !_caps.answerPermission;
+      // A parked PermissionRequest hook takes the answer directly, on any
+      // host and headless too, so it needs neither a tty nor macOS.
+      const _claudeHookParked = !!liveStatus.approvalHookParked;
+      const canAnswerClaude = !canApprove && _isClaudeSess
+        && (_claudeHookParked || (!!_caps.answerPermission && _claudeLiveTty));
+      const claudeDormant = !canApprove && _isClaudeSess && !_claudeHookParked && !!_caps.answerPermission && !_claudeLiveTty;
+      const claudeNoRoute = !canApprove && _isClaudeSess && !_claudeHookParked && !_caps.answerPermission;
       const hasButtons = canApprove || canAnswerClaude || canAnswerAcp;
       let actionsHtml;
       if (canAnswerAcp) {

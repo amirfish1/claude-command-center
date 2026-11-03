@@ -42,7 +42,8 @@ def _asks(home):
 
 def _hook(home, script, payload):
     env = dict(os.environ, HOME=str(home), CCC_NOTIFY="0",
-               CCC_APPROVAL_HOOK_DIR=str(home / "cloud-approvals"))
+               CCC_APPROVAL_HOOK_DIR=str(home / "cloud-approvals"),
+               CCC_APPROVAL_HOOK_HEADLESS="0")
     env.pop("CCC_PORT", None)
     r = subprocess.run([sys.executable, os.path.join(HOOKS, script)],
                        input=json.dumps(dict(payload, session_id=SID)),
