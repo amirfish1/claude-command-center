@@ -27,7 +27,7 @@ const row = {
 
 test('a continuation shows its current agent plan instead of an earlier conversation block', () => {
   const result = outcome(row);
-  assert.equal(result.label, 'Next');
+  assert.equal(result.label, 'Waiting for agent');
   assert.equal(result.kind, 'plan');
   assert.equal(result.text, plan.completion.remaining_actions[0].text);
   assert.equal(result.attn, null);
