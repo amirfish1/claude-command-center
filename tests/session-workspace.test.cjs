@@ -137,3 +137,10 @@ test('an agent-owned pending step stays active without becoming a user decision'
   assert.equal(section(row('pending', { ...pending, archived: true, explicitly_archived: true })), 'archived');
   assert.equal(section(row('pending', { ...pending, archived: true, trashed: true })), 'archived');
 });
+
+test('Active renders Needs You and working rows as one time-ordered list in every ticket tab', () => {
+  const start = source.indexOf('const sectionHtml = (key, label, hint) => {');
+  const body = source.slice(start, source.indexOf('if (!_sessionsByState)', start));
+  assert.ok(start > 0 && body.includes('renderSectionRows(rows)'));
+  assert.ok(!body.includes("renderSectionRows(groups['needs-you'])"), 'Needs You must not be lifted above newer rows');
+});

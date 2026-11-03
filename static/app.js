@@ -44945,11 +44945,9 @@
           + ' title="' + hint + '" aria-expanded="' + !collapsed + '" aria-controls="' + contentId + '"><span class="session-lifecycle-dot" aria-hidden="true"></span>'
           + label + '<span class="session-lifecycle-count">' + rows.length + '</span><span class="session-lifecycle-arrow" aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span></button></h3>'
           + '<div class="session-lifecycle-content" id="' + contentId + '"' + (collapsed ? ' hidden' : '') + '>'
-          + (rows.length ? (key === 'active'
-              ? (_allTabView === 'alltickets'
-                  ? renderSectionRows(rows)
-                  : renderSectionRows(groups['needs-you']) + renderSectionRows(groups.active))
-              : renderSectionRows(rows))
+          // Active is one time-ordered list in every ticket tab; the yellow
+          // dot marks Needs You rows without lifting stale ones to the top.
+          + (rows.length ? renderSectionRows(rows)
             : '<div class="session-lifecycle-empty">' + ({ 'needs-you': 'Nothing needs your attention.', active: 'No active sessions in this view.', finished: 'No finished sessions in this view.', archived: 'No archived sessions in this view.' }[key]) + '</div>')
           + '</div></section>';
       };
@@ -44960,9 +44958,7 @@
           : renderSectionRows(rows);
       } else {
         if (!_ipSearchActive) {
-          _arcRows = sectionHtml('active', 'Active', _allTabView === 'alltickets'
-            ? 'Most recently active sessions first'
-            : 'Questions and decisions first, followed by working sessions');
+          _arcRows = sectionHtml('active', 'Active', 'Most recently active sessions first');
         }
         _ideaArchivedHtml = sectionHtml('finished', 'Finished', 'Completed work; a new message returns it to Active')
           + sectionHtml('archived', 'Archived', 'Sessions explicitly put away; restore one to resume work');
