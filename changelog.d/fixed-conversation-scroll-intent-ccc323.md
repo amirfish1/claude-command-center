@@ -1,0 +1,1 @@
+- Keep upward trackpad and touch scrolling free from bottom-follow snaps, and preserve scrolling done while earlier messages load.

@@ -49506,6 +49506,10 @@
   }
 
   function isConversationAtBottom(view) {
+    // An upward gesture opts out of following even inside the tolerance.
+    // A cleared/short view still counts as bottom on a fresh open.
+    if (view && view._pinnedToBottom === false
+        && view.scrollHeight > view.clientHeight) return false;
     return conversationDistanceFromBottom(view) <= CONV_BOTTOM_TOLERANCE;
   }
 
@@ -50166,12 +50170,14 @@
 
   function scrollConversationToEnd(view, behavior) {
     if (!view) return;
+    view._pinnedToBottom = true;
     const top = Math.max(0, view.scrollHeight - view.clientHeight);
     if (behavior === 'smooth' && typeof view.scrollTo === 'function') {
       view.scrollTo({ top, behavior: 'smooth' });
     } else {
       view.scrollTop = top;
     }
+    view._lastPinScrollTop = view.scrollTop;
     updateConversationEndAffordance(view);
   }
 
@@ -50266,7 +50272,8 @@
     // an already-bottom-pinned reader at the true tail after that reflow, but
     // never move a reader who had intentionally scrolled up.
     const restoreBottom = () => {
-      if (!view.isConnected || document.activeElement !== input) return;
+      if (!view.isConnected || document.activeElement !== input
+          || view._pinnedToBottom === false) return;
       view._pinnedToBottom = true;
       scrollConversationToEnd(view);
     };
@@ -50487,22 +50494,30 @@
     // away from the bottom flips it off, scrolling back flips it on.
     view._pinnedToBottom = true;
     view._lastPinScrollTop = view.scrollTop;
+    // Trackpad input arrives before the scroll event. Release the pin now,
+    // so a streaming mutation in between cannot cancel the first tiny tick.
+    view.addEventListener('wheel', (ev) => {
+      if (ev.deltaY < 0 && !ev.ctrlKey) view._pinnedToBottom = false;
+    }, { passive: true });
+    let touchY = null;
+    view.addEventListener('touchstart', (ev) => {
+      touchY = ev.touches.length === 1 ? ev.touches[0].clientY : null;
+    }, { passive: true });
+    view.addEventListener('touchmove', (ev) => {
+      const y = ev.touches.length === 1 ? ev.touches[0].clientY : null;
+      if (y != null && touchY != null && y > touchY) view._pinnedToBottom = false;
+      touchY = y;
+    }, { passive: true });
     view.addEventListener('scroll', () => {
       const prevTop = (typeof view._lastPinScrollTop === 'number')
         ? view._lastPinScrollTop : view.scrollTop;
       const nowTop = view.scrollTop;
       view._lastPinScrollTop = nowTop;
-      if (nowTop < prevTop - 2) {
-        // A deliberate upward scroll unpins even inside the 80px bottom
-        // tolerance. On a phone with the keyboard open the visible area
-        // can be only ~250px tall, so the tolerance used to swallow small
-        // drags whole — the next content mutation then snapped the reader
-        // back to the tail and scrolling appeared broken. Downward drift
-        // (rubber-band settle, programmatic clamps at the bottom edge)
-        // never reaches this branch: those positions are within the
-        // tolerance and take the re-pin branch above.
+      if (nowTop < prevTop) {
         view._pinnedToBottom = false;
-      } else if (isConversationAtBottom(view)) {
+      } else if (nowTop > prevTop && conversationDistanceFromBottom(view) <= 2) {
+        // Resume only at the actual end, never on a stationary scroll event
+        // or a small downward drift inside the old 80px tolerance.
         view._pinnedToBottom = true;
       }
       updateConversationEndAffordance(view);
@@ -50573,7 +50588,7 @@
     const restore = () => {
       for (const anchor of anchors) {
         if (!anchor.view || !anchor.view.isConnected) continue;
-        if (anchor.wasAtBottom) scrollConversationToEnd(anchor.view);
+        if (anchor.wasAtBottom && anchor.view._pinnedToBottom !== false) scrollConversationToEnd(anchor.view);
         else updateConversationEndAffordance(anchor.view);
       }
       ensureAllConversationEndAffordances();
@@ -60776,8 +60791,6 @@
       loading = true;
       const pane = paneByPaneId(paneId);
       if (!pane || pane.conversationId !== id) { loading = false; return; }
-      // Anchor to where the reader is, so loading history above doesn't move it.
-      const anchor = _topVisibleAnchor($view);
       const beforeLine = Number(pane.firstLine || 0);
       if (!beforeLine || beforeLine <= 1) {
         // Current segment exhausted — if this session continued from an
@@ -60805,9 +60818,9 @@
           paneAfter.loadAncestorHop = true;
           await fetchConversationEvents(paneId);
         }
-        // Restore after the prepend without leaving cleanup dependent on a
-        // paint callback (background tabs can suspend animation frames).
-        _restoreAnchor($view, anchor);
+        // _prependConversationEvents preserves the position at response
+        // time. Restoring a pre-fetch anchor would undo any scrolling the
+        // reader did while the history request was in flight.
         requestAnimationFrame(() => {
           $view.scrollTop += 1; $view.scrollTop -= 1;
           try { $view.dispatchEvent(new Event('scroll')); } catch (_) {}
