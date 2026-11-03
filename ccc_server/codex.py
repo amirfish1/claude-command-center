@@ -3472,6 +3472,16 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
         skipped = None
     if skipped is not None:
         return skipped
+    turn_ctx = None
+    if method == "turn/start":
+        try:
+            from ccc_server import codex_turn_reconcile
+            path = _core._resolve_codex_rollout_path(
+                str((params or {}).get("threadId") or ""))
+            turn_ctx = codex_turn_reconcile.before_send(
+                method, params, str(path) if path else None)
+        except Exception:
+            turn_ctx = None
     response = _codex_app_server_request_once(
         method, params, timeout,
         _route=_route, _null_params=_null_params,
@@ -3487,6 +3497,12 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
         codex_thread_wedge.note_result(method, params, response)
     except Exception:
         pass
+    if turn_ctx is not None:
+        try:
+            from ccc_server import codex_turn_reconcile
+            codex_turn_reconcile.after_response(turn_ctx, response)
+        except Exception:
+            pass
     return response
 
 

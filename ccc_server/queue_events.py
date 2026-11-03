@@ -2279,6 +2279,23 @@ def _codex_wedge_gate(session_id):
     }
 
 
+def _codex_queued_item_already_landed(session_id, item):
+    """True when an earlier timed-out turn/start of this queued message is
+    already in the rollout (so re-sending would duplicate it), else None."""
+    try:
+        from ccc_server import codex_turn_reconcile
+        if not codex_turn_reconcile.already_delivered(session_id, str(item)):
+            return None
+    except Exception:
+        return None
+    _core._log_activity(
+        "inject", "Q_RECONCILED",
+        f"session={session_id} reason=timed-out-turn-start-landed "
+        f"text={str(item)[:80]!r}",
+    )
+    return True
+
+
 def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
     refusal = _codex_wedge_gate(session_id)
     if refusal is not None:
@@ -2311,6 +2328,11 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
         "item": item,
         "claim_sequence": int(claim_value.get("claim_sequence") or 0),
     }
+    if _codex_queued_item_already_landed(session_id, item):
+        if not _core._commit_pending_input_claim(claim):
+            return {"ok": False, "code": "queued_handoff_commit_failed"}
+        return {"ok": True, "delivered": True, "queued_consumed": 1,
+                "via": "codex-reconciled-timeout"}
     ack = _core._begin_codex_queued_steer_ack_suppression(
         session_id, str(item), allow_unbound_ack=True,
     )

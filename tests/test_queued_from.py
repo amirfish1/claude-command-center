@@ -79,3 +79,17 @@ def test_relay_labels_are_human_readable(monkeypatch):
     })
     origin = pending_inputs._queued_origin(attribution.COMPACT + "x]\nbody")
     assert origin["via"] == ["WatchTower", "ccc send"]
+
+
+def test_queue_removals_are_logged(queue_env, monkeypatch):
+    lines = []
+    monkeypatch.setattr(server, "_log_activity", lambda cat, verb, detail: lines.append((verb, detail)))
+    text = "[sender: x (session) · msg ef4d9ec5-03ae-430c-ba7f-234bf8926119]\nreport"
+    server._apply_pending_input_operations(SID, [{"field": "resume", "action": "append_tail", "value": text}])
+    server._apply_pending_input_operations(SID, [{"field": "resume", "action": "pop_head_claim"}])
+    assert lines == []  # adds and temporary claims are not removals
+    server._apply_pending_input_operations(SID, [{"field": "resume", "action": "insert_front", "value": text}])
+    server._apply_pending_input_operations(SID, [{"field": "resume", "action": "clear"}])
+    (verb, detail), = lines
+    assert verb == "Q_REMOVE"
+    assert "msg=ef4d9ec5-03ae-430c-ba7f-234bf8926119" in detail and "resume:clear" in detail

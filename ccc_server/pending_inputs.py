@@ -2306,12 +2306,71 @@ def _apply_pending_input_operations(
                     results.append(True)
         return results
 
+    tracked = [
+        op for op in operations
+        if op.get("field") in ("resume", "terminal")
+        and op.get("action") not in _QUEUE_ACTIONS_NOT_REMOVING
+    ]
+
+    def logged_mutate():
+        before = _queued_snapshot(session_id) if tracked else None
+        results = mutate()
+        if tracked:
+            _log_queue_removals(session_id, before, _queued_snapshot(session_id), tracked)
+        return results
+
     return _mutate_pending_inputs(
-        {session_id}, mutate,
+        {session_id}, logged_mutate,
         include_devin_steers=include_devin,
         include_auto_resume=include_auto,
         expected_authority=expected_authority,
     )
+
+
+# Adds, and the temporary pop_head_claim a delivery attempt restores or
+# commits (commits are logged as Q_COMMIT), never lose a message by
+# themselves; every other queue operation that removes one is logged.
+_QUEUE_ACTIONS_NOT_REMOVING = frozenset({
+    "append_tail", "insert_front", "insert_before_matching", "pop_head_claim",
+})
+
+
+def _queued_snapshot(session_id):
+    out = {}
+    for name, queue_map, lock in (
+        ("resume", _core._pending_resume_queue, _core._pending_resume_lock),
+        ("terminal", _core._pending_terminal_input_queue, _core._pending_terminal_input_lock),
+    ):
+        with lock:
+            out[name] = [str(item) for item in queue_map.get(session_id) or []]
+    return out
+
+
+def _log_queue_removals(session_id, before, after, operations):
+    """One Q_REMOVE line per queued message an operation removed.
+
+    A queued Codex message vanished on 2026-11-02 and nothing recorded which
+    operation removed it; this is that record.
+    """
+    actions = ",".join(sorted({f"{op.get('field')}:{op.get('action')}" for op in operations}))
+    for name in ("resume", "terminal"):
+        remaining = list(after.get(name) or [])
+        for text in before.get(name) or []:
+            if text in remaining:
+                remaining.remove(text)
+                continue
+            msg = _queued_msg_id(text)
+            _core._log_activity(
+                "inject", "Q_REMOVE",
+                f"session={session_id} queue={name} actions={actions}"
+                + (f" msg={msg}" if msg else "")
+                + f" text={text[:80]!r}",
+            )
+
+
+def _queued_msg_id(text):
+    match = re.search(r"\bmsg ([0-9a-f-]{8,36})", str(text)[:400])
+    return match.group(1) if match else ""
 
 
 def _save_pending_inputs(
@@ -2908,6 +2967,15 @@ def _commit_pending_input_claim(claim):
         if not _core._complete_pending_input_handoff(item):
             return False
     sid = str(claim.get("session_id") or "")
+    try:
+        msg = _queued_msg_id(str(item))
+        _core._log_activity(
+            "inject", "Q_COMMIT",
+            f"session={sid} queue={claim.get('queue_name') or 'resume'}"
+            + (f" msg={msg}" if msg else "") + f" text={str(item)[:80]!r}",
+        )
+    except Exception:
+        pass
     pending_id = getattr(item, "pending_id", None)
     if sid and pending_id:
         from ccc_server import delivery as _delivery
