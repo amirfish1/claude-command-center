@@ -69574,7 +69574,10 @@
     // If they've scrolled up to read, leave the scroll position alone so
     // newly-streamed events don't yank them back down. 80px tolerance is
     // generous enough to absorb typical line-height jitter.
-    const wasAtBottom = isConversationAtBottom($view);
+    // History paging renders into a temporarily empty view. That is not a
+    // fresh open: bottom-follow and saved-open restores belong to the reader
+    // already on screen, whose position the prepend restores after rendering.
+    const wasAtBottom = !opts.prepending && isConversationAtBottom($view);
     // CCC-500 overflow toggles are decided in ONE read pass after the loop
     // (see _overflowChecks flush below). Reading scrollHeight per tool
     // result inside the loop forced a style recalc + layout per result:
@@ -71526,7 +71529,7 @@
       if (!e || e.type !== 'user_text') return false;
       return /^This session is being continued from a previous conversation that ran out of context\b/.test(e.text || '');
     });
-    if (_hasNewCompactEvent && _newCompactCard && typeof _newCompactCard.scrollIntoView === 'function') {
+    if (!opts.prepending && _hasNewCompactEvent && _newCompactCard && typeof _newCompactCard.scrollIntoView === 'function') {
       _newCompactCard.scrollIntoView({ block: 'start', behavior: 'auto' });
       updateConversationEndAffordance($view);
     } else if (events.length > 0 && wasAtBottom) {

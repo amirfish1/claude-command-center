@@ -184,3 +184,67 @@ test('a fresh open resumes following after leaving the previous conversation scr
     assert.equal(result.distance, 0);
   } finally { await page.close(); }
 });
+
+// Exercise history paging's real detach/render/reattach path and the renderer
+// scroll decision together. The isolated gesture tests above keep the DOM in
+// place, which misses the momentary empty viewport during a history response.
+const prependStart = app.indexOf('  function _prependConversationEvents(');
+const prepend = app.slice(prependStart, app.indexOf('  // ── Spawn stats', prependStart));
+const renderStart = app.indexOf('  function renderConversationEvents(');
+const bottomStart = app.indexOf('    const wasAtBottom =', renderStart);
+const renderBottom = app.slice(bottomStart, app.indexOf('\n', bottomStart));
+const decisionStart = app.indexOf('    const _newCompactCard =', renderStart);
+const renderScroll = app.slice(decisionStart, app.indexOf('    // Prepare after painting', decisionStart));
+
+for (const scenario of ['short page', 'long page', 'saved reading position', 'compact boundary']) {
+  test(`history ${scenario} preserves the visible message and keeps bottom-follow off`, async () => {
+    const page = await fixture();
+    try {
+      const result = await page.evaluate(async ({ prepend, renderBottom, renderScroll, scenario }) => {
+        window.getConvViewForPane = () => view;
+        window._currentToolGroup = null;
+        window._currentToolCount = 0;
+        window._firstUserMsgRendered = true;
+        window._dynamicAskState = null;
+        window.currentConversation = 'test';
+        window._convScrollByConv = scenario === 'saved reading position'
+          ? { test: { top: 900, atBottom: false } } : {};
+        window.renderConversationEvents = new Function('events', 'paneId', 'opts',
+          'const $view = view;\n' + renderBottom + '\n'
+          + 'for (const ev of events) {\n'
+          + '  const row = document.createElement("div");\n'
+          + '  row.className = "event" + (ev.compact ? " compact-resume-event" : "");\n'
+          + '  row.textContent = "Earlier message " + ev.line;\n'
+          + '  row.dataset.jsonlLine = ev.line;\n'
+          + '  $view.appendChild(row);\n'
+          + '}\n' + renderScroll + '\nreturn true;');
+        (0, eval)(prepend);
+        view.scrollTop = 600;
+        view.dispatchEvent(new Event('scroll'));
+        const anchor = _topVisibleAnchor(view);
+        const events = Array.from({ length: scenario === 'long page' ? 12 : 1 }, (_, i) => ({
+          line: i + 1,
+          compact: scenario === 'compact boundary',
+          type: 'user_text',
+          text: scenario === 'compact boundary'
+            ? 'This session is being continued from a previous conversation that ran out of context' : 'Earlier text',
+        }));
+        _prependConversationEvents(events, 'p1');
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const row = view.querySelector(`[data-jsonl-line="${anchor.line}"]`);
+        const afterHistory = row.offsetTop - view.scrollTop;
+        // A later poll must not undo the position preserved by the prepend.
+        view.lastElementChild.append(' polled update');
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        return { before: anchor.delta, afterHistory, afterPoll: row.offsetTop - view.scrollTop,
+          pinned: view._pinnedToBottom };
+      }, { prepend, renderBottom, renderScroll, scenario });
+      assert.equal(result.afterHistory, result.before, 'history response moved the visible message');
+      assert.equal(result.afterPoll, result.before, 'next poll moved the visible message');
+      assert.equal(result.pinned, false, 'history re-enabled bottom-follow');
+      if (scenario === 'long page' && process.env.CCC_HISTORY_SCREENSHOT) {
+        await page.screenshot({ path: process.env.CCC_HISTORY_SCREENSHOT });
+      }
+    } finally { await page.close(); }
+  });
+}

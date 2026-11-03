@@ -1,0 +1,1 @@
+- Keep the reading position when older conversation messages load instead of jumping back to the bottom.
