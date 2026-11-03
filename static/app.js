@@ -17869,6 +17869,8 @@
   }, true);
   const _rowQuickActionSending = new Set();
   const _rowQuickActionFeedback = new Map();
+  const _rowInvestigationChecks = new Map();
+  let _rowInvestigationChecksInFlight = 0;
   const _rowDecisionReportSending = new Set();
   let _rowDecisionReportEditor = null;
   function rowDecisionReportButton(c) {
@@ -18136,11 +18138,11 @@
     if (one) return [one];
     return decisionQuickActions(next == null ? state.next_step_user : next);
   }
-  function rowQuickActionSource(c) {
+  function rowQuickActionSource(c, candidateOnly = false) {
     if (!c || c.archived || c.trashed || c.pending_spawn) return null;
     const sid = String(c.session_id || c.id || '');
     const live = _applyLiveOverlayToRow(c);
-    if (!sid || _rowQuickActionSending.has(sid) || live.needs_approval || live.question_waiting
+    if (!sid || (!candidateOnly && _rowQuickActionSending.has(sid)) || live.needs_approval || live.question_waiting
         || c.last_event_type === 'user') return null;
     const info = rowOutcomeView(c);
     let next = String((c.session_state || {}).next_step_user || '').trim();
@@ -18155,7 +18157,56 @@
           || !/^investigate\b/i.test(next) || next.length > 340 || /[\x00-\x1f]/.test(next)) return null;
       actions = [{ label: 'Continue investigation', reply: 'Continue the investigation: ' + next, derived: true }];
     } else if (!actions.length || !next || info.kind !== 'next' || (info.next || info.text) !== next) return null;
-    return { sid, actions, action: actions[0], key: JSON.stringify([sid, next, actions]) };
+    const source = { sid, actions, action: actions[0], key: JSON.stringify([sid, next, actions]) };
+    if (info.kind === 'plan') {
+      source.investigation = next;
+      const check = _rowInvestigationChecks.get(sid);
+      if (!candidateOnly && (!check || check.key !== source.key || !check.idle || check.until <= Date.now())) return null;
+    }
+    return source;
+  }
+  function rowInvestigationTranscriptIdle(source, events) {
+    // A retained footer is not evidence of idleness. Inspect the final real
+    // event, including tools, instead of finding any older assistant reply.
+    const last = (events || []).filter(e => ['assistant', 'assistant_block', 'user', 'user_text', 'tool_result'].includes(e.type)).at(-1);
+    if (!last || !['assistant', 'assistant_block'].includes(last.type) || last.parent_tool_use_id) return false;
+    const blocks = last.blocks || [];
+    if (blocks.some(b => ['tool_use', 'tool_call'].includes(b.kind || b.type))) return false;
+    const text = blocks.filter(b => (b.kind || b.type) === 'text').map(b => b.text || '').join('\n');
+    const state = _ultraFreshParseState(text);
+    const current = state && rowQuickActionSource({ session_id: source.sid, state: 'idle',
+      last_event_type: 'assistant', last_assistant_text: text, session_state: state }, true);
+    return !!current && current.key === source.key;
+  }
+  async function checkRowInvestigation(source, force = false) {
+    const old = _rowInvestigationChecks.get(source.sid);
+    if (!force && old?.key === source.key && (old.pending || old.until > Date.now())) return old.pending;
+    if (!force && _rowInvestigationChecksInFlight >= 4) return;
+    const check = { key: source.key, idle: false, until: 0 };
+    if (_rowInvestigationChecks.size >= 64) {
+      for (const [sid, prior] of _rowInvestigationChecks) {
+        if (!prior.pending) _rowInvestigationChecks.delete(sid);
+        if (_rowInvestigationChecks.size < 64) break;
+      }
+    }
+    _rowInvestigationChecks.set(source.sid, check);
+    _rowInvestigationChecksInFlight++;
+    check.pending = (async () => {
+      try {
+        const res = await fetch('/api/conversations/' + encodeURIComponent(source.sid) + '?tail=20',
+          { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+        if (res.ok) check.idle = rowInvestigationTranscriptIdle(source, (await res.json()).events);
+      } catch (_) { /* Unconfirmed or unavailable means no continuation chip. */ }
+      finally {
+        check.until = Date.now() + 3000;
+        check.pending = null;
+        _rowInvestigationChecksInFlight--;
+        // Only visible candidates are rechecked; no archive-wide polling.
+        setTimeout(() => syncRowQuickActions(source.sid), 3050);
+      }
+      return check.idle;
+    })();
+    return check.pending;
   }
   function currentRowQuickActionSource(sid) {
     const base = _ultraFreshRow(sid);
@@ -18184,6 +18235,18 @@
   function syncRowQuickActions(sid) {
     const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
     document.querySelectorAll(selector).forEach(row => {
+      const rect = row.getBoundingClientRect();
+      if (rect.width && rect.height && rect.bottom > 0 && rect.top < innerHeight
+          && !_rowQuickActionSending.has(row.dataset.sessionId) && _rowInvestigationChecksInFlight < 4) {
+        const base = _ultraFreshRow(row.dataset.sessionId);
+        const candidate = base && rowQuickActionSource(_ultraFreshCurrent(base), true);
+        if (candidate?.investigation) {
+          const check = _rowInvestigationChecks.get(candidate.sid);
+          if (!check || check.key !== candidate.key || (!check.pending && check.until <= Date.now())) {
+            checkRowInvestigation(candidate).then(() => syncRowQuickActions(candidate.sid));
+          }
+        }
+      }
       const source = currentRowQuickActionSource(row.dataset.sessionId);
       const feedback = _rowQuickActionFeedback.get(row.dataset.sessionId);
       if (feedback && (!source || source.key === feedback.key || feedback.state === 'sending')) {
@@ -18248,6 +18311,16 @@
     syncRowQuickActions(sid);
     let accepted = false;
     try {
+      if (current.investigation && !await checkRowInvestigation(current, true)) {
+        throw new Error('The transcript changed or the investigation is already running. Refresh the row.');
+      }
+      if (current.investigation) {
+        const base = _ultraFreshRow(sid);
+        const latest = base && rowQuickActionSource(_ultraFreshCurrent(base), true);
+        if (!latest || latest.key !== current.key) {
+          throw new Error('This action changed. Review the updated row before sending.');
+        }
+      }
       const data = await postInjectInput(sid, action.reply, 'send', { userInitiated: true });
       if (!data.ok) throw new Error(data.error || 'Send failed');
       accepted = true;
