@@ -45,7 +45,7 @@ test('pending agent work replaces a completed milestone without asking the user'
     completion: { valid: true, ready_to_close: false,
       remaining_actions: [{ text: 'Agent: review the pending independent screenshots.' }] } };
   const info = rowOutcomeView(row(pending));
-  assert.equal(info.label, 'Next');
+  assert.equal(info.label, 'Waiting for agent');
   assert.equal(info.kind, 'plan');
   assert.equal(info.text, 'review the pending independent screenshots.');
   const waiting = rowOutcomeView(row({ ...pending, completion: { ...pending.completion,
@@ -56,6 +56,11 @@ test('pending agent work replaces a completed milestone without asking the user'
   assert.equal(rowOutcomeView(row({ ...pending, completion: { valid: true, remaining_actions: [] } })).text, pending.did);
   assert.equal(rowOutcomeView({ ...row(pending), state: 'working' }).label, 'Working');
   assert.equal(rowOutcomeView(row({ ...pending, next_step_user: 'Choose a region.' })).label, 'Decide');
+  const reopened = { ...row(pending), archived: true, idea_ticket: { closed: true } };
+  assert.equal(rowOutcomeView(reopened).label, 'Waiting for agent');
+  assert.equal(rowOutcomeView(reopened).offerClose, false);
+  assert.equal(rowOutcomeView({ ...reopened, explicitly_archived: true }).label, 'Archived');
+  assert.equal(rowOutcomeView({ ...reopened, trashed: true }).label, 'Archived');
 });
 
 

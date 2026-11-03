@@ -125,9 +125,15 @@ test('explicit Archive has its own category and a deliberate send resumes it', (
 
 test('an agent-owned pending step stays active without becoming a user decision', () => {
   const { ticketSessionSection: section } = load();
-  assert.equal(section(row('pending', { session_state: {
+  const pending = { session_state: {
     did: 'Reviewed the prior milestone.', next_step_user: 'None.',
     completion: { valid: true, ready_to_close: false,
       remaining_actions: [{ owner: 'agent', text: 'Review the pending screenshots.' }] },
-  } })), 'active');
+  } };
+  for (const retained of [{}, { idea_ticket: { closed: true } },
+    { archived: true, idea_ticket: { closed: true } }]) {
+    assert.equal(section(row('pending', { ...pending, ...retained })), 'active');
+  }
+  assert.equal(section(row('pending', { ...pending, archived: true, explicitly_archived: true })), 'archived');
+  assert.equal(section(row('pending', { ...pending, archived: true, trashed: true })), 'archived');
 });

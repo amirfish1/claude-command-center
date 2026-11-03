@@ -33966,6 +33966,11 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 }
 
 /* Completion and decisions stay distinct when scanning session summaries. */
+#convList#convList .conv-item .wa-explanation-label[data-status="waiting for agent"],
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step[data-label="Waiting for agent"]::before {
+  color: var(--accent, #58a6ff);
+  font-weight: 700;
+}
 #convList#convList .conv-item .wa-explanation-label[data-status="✓"],
 #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step[data-label="✓"]::before {
   content: "✓ ";

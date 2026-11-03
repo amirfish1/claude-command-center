@@ -3721,10 +3721,23 @@
     const hasAnswer = !!text;
     const did = String(summary.did || '').trim();
     const base = { hasAnswer, ready, offerClose, attn: null };
+    const completion = summary.completion;
+    const planned = !hasNext && completion && completion.valid === true && !completion.ready_to_close
+      && Array.isArray(completion.remaining_actions) && completion.remaining_actions[0];
+    let plan = null;
+    if (planned && typeof planned.text === 'string' && planned.text.trim()) {
+      const ownerTag = planned.text.match(/^\s*(?:owner\s*[:=]\s*)?\(?(agent|user|external|amir|human)\)?\s*[:=—–-]\s*/i);
+      const owner = String(planned.owner || (ownerTag && ownerTag[1]) || '').trim().toLowerCase();
+      if (!['user', 'amir', 'human'].includes(owner)) plan = {
+        label: owner === 'agent' ? 'Waiting for agent' : owner === 'external' ? 'Waiting' : 'Next', kind: 'plan',
+        text: (ownerTag ? planned.text.slice(ownerTag[0].length) : planned.text).trim(),
+      };
+    }
     if (working) return Object.assign(base, { label: 'Working', kind: 'working',
       text: text || (sending ? 'Sent, waiting for the first reply…' : 'Working…') });
-    // Closed rows don't invite the user to close them again.
-    if (c.archived || c.trashed) return Object.assign(base, { label: (c.trashed || (c.explicitly_archived ?? c.idea_ticket?.explicitly_archived)) ? 'Archived' : '✓', kind: 'ready',
+    // A reopened task's plan outranks retained automatic closure. Deliberate
+    // Archive and Trash still win until the owner resumes the conversation.
+    if (c.trashed || (c.archived && (!plan || (c.explicitly_archived ?? c.idea_ticket?.explicitly_archived)))) return Object.assign(base, { label: (c.trashed || (c.explicitly_archived ?? c.idea_ticket?.explicitly_archived)) ? 'Archived' : '✓', kind: 'ready',
       text: did || 'Closed session.' });
     if (ready) return Object.assign(base, { label: '✓', kind: 'ready',
       text: did || 'Reviewed as complete; archive when ready.' });
@@ -3732,17 +3745,7 @@
     const attn = hasNext ? null : sessionAttentionStep(c);
     if (attn) return Object.assign(base, { label: attn.label, kind: attn.kind, text: attn.text, attn });
     // An open task's pending work is more useful than its completed milestone.
-    const completion = summary.completion;
-    const planned = !hasNext && completion && completion.valid === true && !completion.ready_to_close
-      && Array.isArray(completion.remaining_actions) && completion.remaining_actions[0];
-    if (planned && typeof planned.text === 'string' && planned.text.trim()) {
-      const ownerTag = planned.text.match(/^\s*(?:owner\s*[:=]\s*)?\(?(agent|user|external|amir|human)\)?\s*[:=—–-]\s*/i);
-      const owner = String(planned.owner || (ownerTag && ownerTag[1]) || '').trim().toLowerCase();
-      if (!['user', 'amir', 'human'].includes(owner)) return Object.assign(base, {
-        label: owner === 'external' ? 'Waiting' : 'Next', kind: 'plan',
-        text: (ownerTag ? planned.text.slice(ownerTag[0].length) : planned.text).trim(),
-      });
-    }
+    if (plan) return Object.assign(base, plan);
     // A decision with chips reads "Decide: <the choice>", never
     // "Next: Answer Q12 ..." (CCC-276). info.next keeps the raw step so the
     // quick-action source still matches it.
@@ -4112,8 +4115,9 @@
           && _ultraFreshTime(live.last_event_ts) > _ultraFreshTime(c.modified || c.mtime))
         || sidebarSessionWorking(c, live)) return 'active';
     if (live.needs_approval || live.question_waiting) return 'needs-you';
-    if (c.archived) return 'finished';
     const outcome = rowOutcomeView(c);
+    if (outcome.kind === 'plan') return 'active';
+    if (c.archived) return 'finished';
     if (outcome.kind === 'next') return 'needs-you';
     if (outcome.kind === 'working') return 'active';
     return c.idea_ticket?.closed ? 'finished' : 'active';
