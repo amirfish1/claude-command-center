@@ -113,6 +113,81 @@
 
   /* ---------------- UI ---------------- */
   var sheet, pill, activeQuestion;
+  var pillHidden = false, pillPosition = null;
+  var PILL_PREFS = 'ccc-question-pill';
+
+  function savePill() {
+    try { localStorage.setItem(PILL_PREFS, JSON.stringify({ hidden: pillHidden, position: pillPosition })); } catch (_) {}
+  }
+
+  function positionPill() {
+    if (!pillPosition || !pill || pill.hidden || !pill.offsetWidth) return;
+    var viewport = window.visualViewport;
+    var left = viewport ? viewport.offsetLeft : 0, top = viewport ? viewport.offsetTop : 0;
+    var width = viewport ? viewport.width : window.innerWidth;
+    var height = viewport ? viewport.height : window.innerHeight;
+    pill.style.left = Math.max(left + 8, Math.min(pillPosition.x, left + width - pill.offsetWidth - 8)) + 'px';
+    pill.style.top = Math.max(top + 8, Math.min(pillPosition.y, top + height - pill.offsetHeight - 8)) + 'px';
+    pill.style.right = 'auto';
+    pill.style.bottom = 'auto';
+  }
+
+  function bindPillGestures() {
+    var drag, timer, suppressClick = false, suppressTimer;
+    function suppress() {
+      suppressClick = true;
+      clearTimeout(suppressTimer);
+      suppressTimer = setTimeout(function () { suppressClick = false; }, 400);
+    }
+    function options() {
+      clearTimeout(timer);
+      drag = null;
+      suppress();
+      showPanel();
+      var toggle = sheet.querySelector('[data-qpill-toggle]');
+      if (toggle) toggle.focus();
+    }
+    pill.addEventListener('pointerdown', function (ev) {
+      if (!ev.isPrimary || ev.button !== 0 || drag) return;
+      var rect = pill.getBoundingClientRect();
+      drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, left: rect.left, top: rect.top, moved: false };
+      timer = setTimeout(options, 600);
+      try { pill.setPointerCapture(ev.pointerId); } catch (_) {}
+    });
+    window.addEventListener('pointermove', function (ev) {
+      if (!drag || ev.pointerId !== drag.id) return;
+      var dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 8) return;
+      clearTimeout(timer);
+      drag.moved = true;
+      ev.preventDefault();
+      pillPosition = { x: drag.left + dx, y: drag.top + dy };
+      positionPill();
+    }, { passive: false });
+    function end(ev) {
+      if (!drag || ev.pointerId !== drag.id) return;
+      clearTimeout(timer);
+      if (drag.moved) { savePill(); suppress(); }
+      drag = null;
+    }
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    pill.addEventListener('lostpointercapture', end);
+    pill.addEventListener('contextmenu', function (ev) { ev.preventDefault(); options(); });
+    pill.addEventListener('keydown', function (ev) {
+      if (ev.key === 'ContextMenu' || (ev.shiftKey && ev.key === 'F10')) { ev.preventDefault(); options(); }
+    });
+    pill.addEventListener('click', function (ev) {
+      if (suppressClick) { suppressClick = false; ev.preventDefault(); return; }
+      load(true).then(showPanel);
+    });
+    window.addEventListener('blur', function () { clearTimeout(timer); drag = null; });
+    window.addEventListener('resize', positionPill);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', positionPill);
+      window.visualViewport.addEventListener('scroll', positionPill);
+    }
+  }
 
   function esc(s) {
     return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
@@ -126,6 +201,14 @@
     sheet.hidden = true;
     sheet.addEventListener('click', function (ev) {
       if (ev.target === sheet || ev.target.closest('.qtag-close')) { sheet.hidden = true; return; }
+      if (ev.target.closest('[data-qpill-toggle]')) {
+        pillHidden = !pillHidden;
+        savePill();
+        updatePill();
+        sheet.hidden = true;
+        if (!pill.hidden) pill.focus();
+        return;
+      }
       var jump = ev.target.closest('[data-qjump]');
       if (jump) { jumpTo(+jump.getAttribute('data-qjump')); return; }
       if (ev.target.closest('[data-qlist]')) { showPanel(); return; }
@@ -218,6 +301,7 @@
     var open = openQuestions(index.list);
     s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>Open questions (' + open.length + ')</strong>'
       + '<button type="button" class="qtag-close" aria-label="Close">×</button></div>'
+      + '<button type="button" class="qtag-btn qtag-pill-toggle" data-qpill-toggle>' + (pillHidden ? 'Show floating question button' : 'Hide floating question button') + '</button>'
       + (open.length ? '<ul class="qtag-list">' + open.map(function (q) {
         var first = (q.first.text.split('\n').find(function (l) { return l.indexOf(q.tag) >= 0; }) || q.first.text).replace(/[#*`]/g, '').slice(0, 140);
         return '<li><button type="button" class="qtag-row" data-qshow="' + q.n + '"><span class="qtag-chip-static">' + esc(q.tag) + '</span>'
@@ -282,9 +366,12 @@
   function updatePill() {
     if (!pill) return;
     var n = openQuestions(index.list).length;
-    pill.hidden = n === 0;
+    pill.hidden = n === 0 || pillHidden;
     pill.textContent = '? ' + n;
-    pill.title = n + ' open question' + (n === 1 ? '' : 's');    // Menu copies (phones fold the pill into the ⋮ menus) and the count
+    pill.title = n + ' open question' + (n === 1 ? '' : 's') + ' — drag to move; hold to hide';
+    pill.setAttribute('aria-label', pill.title);
+    positionPill();
+    // Menu copies (phones fold the pill into the ⋮ menus) and the count
     // badge on those menus' buttons.
     document.querySelectorAll('[data-qtag-menu]').forEach(function (el) {
       el.hidden = n === 0;
@@ -302,7 +389,12 @@
     pill.className = 'qtag-pill';
     pill.id = 'qtagPill';
     pill.hidden = true;
-    pill.addEventListener('click', function () { load(true).then(showPanel); });
+    try {
+      var prefs = JSON.parse(localStorage.getItem(PILL_PREFS) || 'null');
+      pillHidden = !!(prefs && prefs.hidden);
+      if (prefs && prefs.position && Number.isFinite(prefs.position.x) && Number.isFinite(prefs.position.y)) pillPosition = prefs.position;
+    } catch (_) {}
+    bindPillGestures();
     document.body.appendChild(pill);
 
     document.addEventListener('click', function (ev) {
