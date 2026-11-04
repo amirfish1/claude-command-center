@@ -1,0 +1,1 @@
+- Show installed marketplace apps with working Open links, clean up expired previews, and isolate Git installs from inherited checkout filters and URL rewrites.

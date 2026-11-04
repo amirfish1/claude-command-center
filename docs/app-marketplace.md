@@ -13,7 +13,8 @@ ccc app remove my-app
 ```
 
 A ZIP archive or Git repository must have `app.json` and `index.html` at its root. CCC makes a
-shallow clone; it does not run build commands, dependency installers, package
+shallow clone with inherited Git configuration disabled (including checkout
+filters, credential helpers and URL rewrites); it does not run build commands, dependency installers, package
 scripts, Git hooks, or submodules. HTTPS URLs with embedded credentials are
 refused. SSH Git URLs are not supported in this first version.
 
@@ -142,8 +143,8 @@ written atomically with mode 0600, staging directories use mode 0700, and CLI /
 server installs serialize using a filesystem lock. An isolation marker ships
 inside the installed folder. Missing/corrupt grants fail closed; a marker or
 grant tombstone keeps the app sandboxed. Removing an app revokes its grant and
-moves its folder to `apps/.removed/`, which is not HTTP-addressable. Abandoned
-preview directories are not automatically collected in this MVP.
+moves its folder to `apps/.removed/`, which is not HTTP-addressable. Preparation opportunistically removes expired preview directories in bounded
+batches; active previews and unrelated staging entries are preserved.
 
 Manually authored folders without marketplace markers/grants, built-ins and
 existing user-configured local dashboards retain their existing trusted behavior.
@@ -169,7 +170,7 @@ Index reads have a 10-second timeout and 256 KiB / 100-entry bounds.
 
 Catalog availability or claims do not imply code review, signatures or publisher
 verification. Package updates, dependency builds, network permissions, write
-permissions, publisher signatures and automatic staging cleanup are future work.
+permissions, and publisher signatures are future work.
 
 For package authoring, schemas, offline validation and the PR submission flow,
 see [Building and submitting CCC apps](building-ccc-apps.md).

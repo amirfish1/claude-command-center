@@ -347,6 +347,7 @@
     post("/api/apps/remove", {id: app.id}).then(function (r) {
       if (!r.ok) { toast(r.error || "Could not remove"); return; }
       toast(app.label + " removed");
+      window.dispatchEvent(new Event('ccc:marketplace-removed'));
       load();
       if (window.cccRefreshRail) window.cccRefreshRail();
     });

@@ -32,7 +32,7 @@ runs build scripts, package managers, Git hooks or submodules.
 }
 ```
 
-The manifest follows [`app-manifest.schema.json`](../schemas/app-manifest.schema.json).
+The manifest is limited to 16 KiB and follows [`app-manifest.schema.json`](../schemas/app-manifest.schema.json).
 IDs use 1–40 lowercase letters, digits, `_` or `-`, and cannot shadow built-ins.
 `label` and `description` are required, with limits of 80 and 1000 characters.
 `icon` is an optional string of up to eight characters. `permissions` defaults

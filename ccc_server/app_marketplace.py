@@ -27,6 +27,8 @@ RESERVED = {"sessions", "queues", "morning", "allowances", "decision-inbox",
 MARKER = ".ccc-marketplace"
 MAX_BYTES = 10 * 1024 * 1024
 MAX_FILES = 500
+PREVIEW_TTL = 900
+MAX_MANIFEST_BYTES = 16 * 1024
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css",
          ".js": "application/javascript", ".json": "application/json",
          ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
@@ -58,12 +60,20 @@ def strict_json(raw):
                 raise ValueError("Duplicate JSON field")
             result[key] = value
         return result
-    return json.loads(raw, object_pairs_hook=pairs,
-                      parse_constant=lambda value: (_ for _ in ()).throw(ValueError("Invalid JSON constant")))
+    def constant(value):
+        raise ValueError("Invalid JSON constant")
+    try:
+        return json.loads(raw, object_pairs_hook=pairs, parse_constant=constant)
+    except RecursionError as exc:
+        raise ValueError("JSON nesting is too deep") from exc
 
 
 def manifest(folder):
-    data = strict_json((folder / "app.json").read_text(encoding="utf-8"))
+    with (folder / "app.json").open("rb") as stream:
+        raw = stream.read(MAX_MANIFEST_BYTES + 1)
+    if len(raw) > MAX_MANIFEST_BYTES:
+        raise ValueError("app.json exceeds 16 KiB")
+    data = strict_json(raw)
     if not isinstance(data, dict):
         raise ValueError("app.json must be an object")
     if set(data) - {"id", "label", "description", "permissions", "icon"}:
@@ -78,13 +88,11 @@ def manifest(folder):
     if (not isinstance(perms, list) or any(not isinstance(p, str) or p not in PERMISSIONS for p in perms)
             or len(set(perms)) != len(perms)):
         raise ValueError("Unknown or duplicate permissions")
-    if "url" in data:
-        raise ValueError("Marketplace apps cannot override their sandbox URL")
     if not (folder / "index.html").is_file():
         raise ValueError("index.html is required")
     return {"id": data["id"], "label": data["label"],
             "description": data["description"], "permissions": perms,
-            "icon": str(data.get("icon", "▧"))[:8]}
+            "icon": data.get("icon", "▧")}
 
 
 def tree_digest(folder):
@@ -123,6 +131,15 @@ def git_source(source):
     # Force validation of malformed ports, even before invoking Git.
     _ = url.port
     return source
+
+
+def git_environment():
+    # A package's .gitattributes must not invoke filters from the user's Git
+    # configuration. Public HTTPS installs do not inherit helpers or rewrites.
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_LFS_SKIP_SMUDGE="1")
+    return env
 
 
 def validate_index(data, remote=False):
@@ -258,10 +275,11 @@ class Marketplace:
     def prepare(self, source):
         if not isinstance(source, str) or not source or len(source) > 2048:
             raise ValueError("Supply a Git HTTPS URL or local folder or ZIP")
-        self._setup()
-        token = secrets.token_hex(24)
-        staging = self.store / "staged" / token
-        staging.mkdir(mode=0o700)
+        with self.locked():
+            self._prune_staging()
+            token = secrets.token_hex(24)
+            staging = self.store / "staged" / token
+            staging.mkdir(mode=0o700)
         folder = staging / "app"
         try:
             if source.startswith("https://"):
@@ -270,7 +288,7 @@ class Marketplace:
                                 "-c", "protocol.https.allow=always", "clone", "--depth", "1",
                                 "--", source, str(folder)], check=True, timeout=60,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"})
+                               env=git_environment())
                 shutil.rmtree(folder / ".git")
             else:
                 original = no_links(Path(source).expanduser())
@@ -295,6 +313,18 @@ class Marketplace:
             shutil.rmtree(staging)
             raise
 
+    def _prune_staging(self):
+        """Bound cleanup work; active prepares are younger than the clone timeout."""
+        cutoff = time.time() - PREVIEW_TTL
+        with os.scandir(self.store / "staged") as entries:
+            for index, entry in enumerate(entries):
+                if index >= 100:
+                    break
+                if (re.fullmatch(r"[0-9a-f]{48}", entry.name)
+                        and entry.is_dir(follow_symlinks=False)
+                        and entry.stat(follow_symlinks=False).st_mtime < cutoff):
+                    shutil.rmtree(entry.path)
+
     def staged(self, token):
         if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{48}", token):
             raise ValueError("Invalid installation token")
@@ -314,7 +344,7 @@ class Marketplace:
             staging = self.staged(token)
             receipt = json.loads((staging / "receipt.json").read_text())
             folder = staging / "app"
-            if time.time() - receipt["created"] > 900:
+            if time.time() - receipt["created"] > PREVIEW_TTL:
                 raise ValueError("Installation preview expired; preview again")
             if tree_digest(folder) != receipt["digest"] or manifest(folder) != receipt["manifest"]:
                 raise ValueError("App changed after permission preview")
@@ -374,6 +404,9 @@ class Marketplace:
         else:
             data = strict_json((self.repo / "apps-index.json").read_text())
         rows = validate_index(data, remote=bool(configured))
+        installed = {row["id"] for row in self.installed()}
+        for row in rows:
+            row["installed"] = row["id"] in installed
         return {"ok": True, "apps": rows, "permission_descriptions": PERMISSIONS}
 
     def index_source(self, ident):

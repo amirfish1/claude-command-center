@@ -8,10 +8,6 @@ const {findChromePath} = require('../puppeteer-browser-config');
     const page = await browser.newPage();
     await page.setViewport({width:1100, height:850});
     const base = process.argv[2];
-    const forbiddenRequests = [];
-    page.on('request', request => {
-      if (request.url().includes('/api/sessions/spawn')) forbiddenRequests.push(request.url());
-    });
     await page.goto(base + '/view/session-summary');
     const element = await page.waitForSelector('#app-frame');
     const frame = await element.contentFrame();
@@ -65,6 +61,9 @@ const {findChromePath} = require('../puppeteer-browser-config');
     await page.goto(base + '/applications');
     await page.click('#browseApps');
     await page.waitForSelector('.marketplace-card button');
+    assert.equal(await page.$$eval('.marketplace-card button', buttons =>
+      buttons.filter(button => button.textContent === 'Installed' && button.disabled).length), 2);
+    assert.equal(await page.$$eval('.marketplace-card a', links => links.length), 2);
     if (process.env.CCC_MARKETPLACE_SCREENSHOT) await page.screenshot({path:process.env.CCC_MARKETPLACE_SCREENSHOT, fullPage:true});
     const dialog = new Promise(resolve => page.once('dialog', async prompt => {
       assert.match(prompt.message(), /Requested permissions:\nNone/);
@@ -94,6 +93,8 @@ const {findChromePath} = require('../puppeteer-browser-config');
     await page.goto(base + '/applications');
     await page.click('#browseApps');
     await page.waitForSelector('.marketplace-card');
+    assert.equal(await page.$$eval('.marketplace-card button', buttons =>
+      buttons.every(button => button.textContent === 'Installed' && button.disabled)), true);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     if (process.env.CCC_MARKETPLACE_MOBILE_SCREENSHOT) await page.screenshot({path:process.env.CCC_MARKETPLACE_MOBILE_SCREENSHOT, fullPage:true});
     console.log('Browser isolation, consent, denied bridge, direct SVG and mobile layout passed');

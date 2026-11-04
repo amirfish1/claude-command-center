@@ -459,3 +459,55 @@ def test_contributor_validator_rejects_manifest_disagreement(tmp_path):
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 1
     assert 'does not match' in result.stderr
+
+
+def test_deep_and_oversized_manifest_rejected(market, package):
+    for raw in ('[' * 2000 + '0' + ']' * 2000, ' ' * (apps.MAX_MANIFEST_BYTES + 1)):
+        (package / 'app.json').write_text(raw)
+        with pytest.raises(ValueError):
+            market.prepare(str(package))
+    assert list((market.store / 'staged').iterdir()) == []
+
+
+def test_catalog_reports_install_and_remove(market):
+    assert not any(row['installed'] for row in market.index()['apps'])
+    preview = market.prepare(market.index_source('effects-kit'))
+    market.install(preview['token'], True)
+    assert market.index()['apps'][0]['installed'] is True
+    market.remove('effects-kit')
+    assert market.index()['apps'][0]['installed'] is False
+
+
+def test_stale_preview_cleanup_preserves_active_and_unrelated(market, package, tmp_path):
+    import os
+    preview = market.prepare(str(package))
+    stale = market.staged(preview['token'])
+    old = apps.time.time() - apps.PREVIEW_TTL - 1
+    os.utime(stale, (old, old))
+    unrelated = market.store / 'staged/notes'
+    unrelated.mkdir()
+    os.utime(unrelated, (old, old))
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    alias = market.store / 'staged' / ('f' * 48)
+    alias.symlink_to(outside, target_is_directory=True)
+    active = market.prepare(str(package))
+    assert not stale.exists()
+    assert market.staged(active['token']).is_dir()
+    assert unrelated.is_dir() and outside.is_dir() and alias.is_symlink()
+
+
+def test_git_environment_ignores_global_filters_and_injected_config(tmp_path, monkeypatch):
+    config = tmp_path / 'gitconfig'
+    config.write_text('[filter "hostile"]\n\tsmudge = echo must-not-run\n')
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(config))
+    monkeypatch.setenv('GIT_CONFIG_COUNT', '1')
+    monkeypatch.setenv('GIT_CONFIG_KEY_0', 'filter.hostile.smudge')
+    monkeypatch.setenv('GIT_CONFIG_VALUE_0', 'echo must-not-run')
+    monkeypatch.setenv('GIT_DIR', str(tmp_path / 'unrelated'))
+    env = apps.git_environment()
+    assert 'GIT_DIR' not in env and 'GIT_CONFIG_COUNT' not in env
+    result = subprocess.run(['git', 'config', '--get', 'filter.hostile.smudge'],
+                            cwd=tmp_path, env=env, capture_output=True, timeout=5)
+    assert result.returncode == 1
+    assert result.stdout == b''
