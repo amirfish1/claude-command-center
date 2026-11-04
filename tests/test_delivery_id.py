@@ -239,6 +239,32 @@ def test_account_worker_hop_keeps_the_queued_card_id(queue_env, monkeypatch):
     assert "delivery_id" not in args
 
 
+def test_engine_host_account_shortcut_preserves_delivery_identity(queue_env, monkeypatch):
+    import contextvars
+    from types import SimpleNamespace
+    from ccc_server import codex_accounts
+    from worker_engines import EngineHost
+
+    root = EngineHost(SimpleNamespace(ledger=None))
+    isolated = EngineHost(SimpleNamespace(ledger=None))
+    root._module = isolated._module = server
+    monkeypatch.delenv("CCC_CODEX_ACCOUNT_KEY", raising=False)
+    monkeypatch.setattr(codex_accounts, "session_account", lambda sid: {"label": "Secondary"})
+    monkeypatch.setattr(server, "resume_session_codex",
+        lambda sid, text, **kw: server._queue_codex_resume(sid, text, reason="busy"))
+
+    def query(account, operation, args):
+        with monkeypatch.context() as context:
+            context.setenv("CCC_CODEX_ACCOUNT_KEY", "test-secondary")
+            return contextvars.Context().run(isolated._call, "codex", operation, args)
+
+    monkeypatch.setattr(codex_accounts, "query_account", query)
+    result = root._call("codex", "resume", {
+        "session_id": SID, "text": "hello", "delivery_id": "did-account-shortcut"})
+    assert result["queued"] is True
+    assert [ev["delivery_id"] for ev in _queued_events(SID)] == ["did-account-shortcut"]
+
+
 # ── receipts settle by the same id ───────────────────────────────────────────
 
 receipts = importlib.import_module("ccc_server.inject_receipts")

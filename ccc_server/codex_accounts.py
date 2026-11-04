@@ -247,6 +247,11 @@ def route(operation, args):
         if not account:
             return None
         forwarded = {k: v for k, v in args.items() if k != 'codex_account_id'}
+        if operation in ('spawn', 'resume', 'inject') and 'delivery_id' not in forwarded:
+            from ccc_server import delivery
+            bound = delivery.bound_id()
+            if bound:
+                forwarded['delivery_id'] = bound
         if operation == 'spawn':
             identity = query_account(account, 'rpc', {'method': 'account/read', 'params': {}})
             native = (identity.get('response') or {}).get('result') or {}
