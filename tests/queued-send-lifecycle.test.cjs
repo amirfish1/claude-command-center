@@ -492,9 +492,10 @@ test('a successful steer stays delivered after a late queue ACK and pane rebuild
     getConvView().replaceChildren();
     restorePendingSendEchoes('conversation', 'main');
     return { delivered, queued, cards: document.querySelectorAll('.send-queued').length,
-      echoes: document.querySelectorAll('.send-delivered').length };
+      echoes: document.querySelectorAll('.send-delivered').length,
+      cancel: !!document.querySelector('.send-delivered .pending-send-cancel') };
   });
-  assert.deepEqual(result, { delivered: true, queued: false, cards: 0, echoes: 1 });
+  assert.deepEqual(result, { delivered: true, queued: false, cards: 0, echoes: 1, cancel: false });
 });
 
 test('a queue ACK after durable reconciliation cannot revive a retired send', async () => {

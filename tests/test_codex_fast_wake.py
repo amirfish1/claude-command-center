@@ -300,6 +300,52 @@ def test_steer_falls_back_to_resume_on_thread_miss():
     assert env.calls == ["turn/steer", "thread/resume"]
 
 
+@pytest.mark.parametrize("retry_rejected", [False, True])
+def test_steer_refreshes_a_definitely_rejected_stale_turn_once(retry_rejected):
+    steers = []
+
+    def respond(method, params):
+        if method == "turn/steer":
+            steers.append(params)
+            if len(steers) == 1 or retry_rejected:
+                return {"error": {"message":
+                    "expected active turn id `turn-old` but found `turn-new`"}}
+            return {"result": {"turnId": "turn-new"}}
+        if method == "thread/resume":
+            return {"result": {"thread": {"status": {"type": "active"},
+                "turns": [{"id": "turn-new", "status": "inProgress"}]}}}
+        raise AssertionError(f"unexpected method: {method}")
+
+    with _SteerEnv(respond, state=_state(status="active", active_turn_id="turn-old")) as env:
+        result = codex._codex_steer_via_app_server(SID, "nudge")
+
+    assert result["ok"] is not retry_rejected
+    if retry_rejected:
+        assert result["code"] == "codex_steer_failed"
+    else:
+        assert result["turn_id"] == "turn-new"
+    assert env.calls == ["turn/steer", "thread/resume", "turn/steer"]
+    assert [p["expectedTurnId"] for p in steers] == ["turn-old", "turn-new"]
+    assert steers[0]["input"] == steers[1]["input"]
+
+
+def test_steer_does_not_repeat_an_ambiguous_stale_turn_response(monkeypatch):
+    monkeypatch.setattr(codex, "_CODEX_STEER_RECONCILE_S", 0)
+    monkeypatch.setattr(server, "_codex_rollout_contains_user_text_since", lambda *a: False)
+
+    def respond(method, params):
+        assert method == "turn/steer"
+        return {"error": {"message":
+            "expected active turn id `turn-old` but found `turn-new`"}, "ambiguous": True}
+
+    with _SteerEnv(respond, state=_state(status="active", active_turn_id="turn-old")) as env:
+        result = codex._codex_steer_via_app_server(SID, "nudge")
+
+    assert result["ok"] is False
+    assert result["code"] == "codex_steer_unknown"
+    assert env.calls == ["turn/steer"]
+
+
 def test_steer_without_known_turn_resumes_first():
     def respond(method, params):
         if method == "thread/resume":

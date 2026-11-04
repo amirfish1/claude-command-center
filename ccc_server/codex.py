@@ -7801,7 +7801,11 @@ def _codex_steer_via_app_server(session_id, text, cwd=None, model=None, image_pa
                 "session_id": session_id,
                 "resume_skipped": True,
             }
-        if _codex_error_is_thread_unloaded(steered) or _core._codex_error_is_not_steerable(steered):
+        mismatch = _codex_error_text(steered).lower()
+        stale_turn = (not steered.get("ambiguous") and bool(steered.get("error"))
+                      and "expected active turn id" in mismatch and "but found" in mismatch)
+        if (_codex_error_is_thread_unloaded(steered)
+                or _core._codex_error_is_not_steerable(steered) or stale_turn):
             pass  # stale fast-path state — resume below is the authority
         else:
             return _codex_steer_failure_result(

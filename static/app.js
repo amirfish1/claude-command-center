@@ -12960,6 +12960,7 @@
     div.classList.remove('pending', 'send-queued', 'server-queued', 'steering-optimistic');
     delete div.dataset.queuedSteerServer;
     div.classList.add('send-delivered');
+    div.querySelector('.pending-send-cancel')?.remove();
     div.querySelector('.queued-steer-actions')?.remove();
     div.querySelector('.send-queued-note')?.remove();
     let note = div.querySelector('.send-delivered-note');
