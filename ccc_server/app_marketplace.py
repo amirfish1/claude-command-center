@@ -36,6 +36,8 @@ MAX_MANIFEST_BYTES = 16 * 1024
 MAX_GIT_FILE_BYTES = 16 * 1024 * 1024
 MAX_GIT_TREE_BYTES = 1024 * 1024
 VCS_METADATA = {".git", ".hg", ".svn"}
+MAX_INDEX_BYTES = 256 * 1024
+INDEX_FETCH_TIMEOUT = 10
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css",
          ".js": "application/javascript", ".json": "application/json",
          ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
@@ -258,6 +260,33 @@ class HTTPSRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, request, response, code, message, headers, newurl):
         git_source(newurl)  # Same HTTPS/no-credentials/no-fragment URL policy.
         return super().redirect_request(request, response, code, message, headers, newurl)
+
+
+def download_index_bytes(url):
+    """Runs in the bounded fetch process; never emits more than the index cap."""
+    git_source(url)
+    opener = urllib.request.build_opener(HTTPSRedirects())
+    with opener.open(url, timeout=INDEX_FETCH_TIMEOUT) as response:
+        raw = response.read(MAX_INDEX_BYTES + 1)
+    if len(raw) > MAX_INDEX_BYTES:
+        raise ValueError("App index is too large")
+    return raw
+
+
+def remote_index(url):
+    git_source(url)
+    # A socket timeout resets on each received chunk. A disposable process gives
+    # redirects and slow trickling responses one actual wall-clock deadline.
+    runner = ("import sys; from ccc_server.app_marketplace import download_index_bytes; "
+              "sys.stdout.buffer.write(download_index_bytes(sys.argv[1]))")
+    try:
+        result = subprocess.run([sys.executable, "-c", runner, url],
+                                cwd=Path(__file__).resolve().parents[1],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, timeout=INDEX_FETCH_TIMEOUT, check=True)
+    except subprocess.SubprocessError as exc:
+        raise ValueError("HTTPS app index unavailable or exceeded its limits") from exc
+    return strict_json(result.stdout)
 
 
 def validate_index(data, remote=False):
@@ -529,13 +558,7 @@ class Marketplace:
     def index(self):
         configured = os.environ.get("CCC_APPS_INDEX_URL")
         if configured:
-            git_source(configured)
-            opener = urllib.request.build_opener(HTTPSRedirects())
-            with opener.open(configured, timeout=10) as response:
-                raw = response.read(256 * 1024 + 1)
-            if len(raw) > 256 * 1024:
-                raise ValueError("App index is too large")
-            data = strict_json(raw)
+            data = remote_index(configured)
         else:
             data = strict_json((self.repo / "apps-index.json").read_text())
         rows = validate_index(data, remote=bool(configured))

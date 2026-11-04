@@ -830,6 +830,7 @@ def https_git(git_package, package, tmp_path, monkeypatch, request):
                     '-keyout', str(key), '-out', str(certificate)], check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
     requests = []
+    release_index = threading.Event()
     class GitHandler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -843,6 +844,27 @@ def https_git(git_package, package, tmp_path, monkeypatch, request):
         def respond(self):
             parsed = urllib.parse.urlsplit(self.path)
             requests.append(parsed.path)
+            if parsed.path in ('/index.json', '/slow-index.json', '/large-index.json'):
+                row = {'id':'sample', 'name':'Sample', 'description':'Synthetic fixture',
+                       'permissions':['sessions.read'],
+                       'source':f'https://127.0.0.1:{self.server.server_port}/app.git'}
+                body = json.dumps({'apps':[row]}).encode()
+                if parsed.path == '/large-index.json':
+                    body = b'x' * (apps.MAX_INDEX_BYTES + 1)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                try:
+                    if parsed.path == '/slow-index.json':
+                        self.wfile.write(body[:1])
+                        release_index.wait(timeout=5)
+                        self.wfile.write(body[1:])
+                    else:
+                        self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError, ssl.SSLError):
+                    pass
+                return
             if parsed.path.startswith('/redirect.git/'):
                 self.send_response(302)
                 self.send_header('Location', '/app.git/info/refs?service=git-upload-pack')
@@ -883,10 +905,14 @@ def https_git(git_package, package, tmp_path, monkeypatch, request):
     # Trust only this test certificate; production still uses the OS trust store.
     monkeypatch.setattr(apps, 'git_environment', lambda: {
         **original_environment(), 'GIT_SSL_CAINFO': str(certificate), 'NO_PROXY': '127.0.0.1,localhost'})
+    monkeypatch.setenv('SSL_CERT_FILE', str(certificate))
+    monkeypatch.setenv('NO_PROXY', '127.0.0.1,localhost')
+    monkeypatch.setenv('no_proxy', '127.0.0.1,localhost')
     thread.start()
     try:
         yield f'https://127.0.0.1:{httpd.server_port}', requests
     finally:
+        release_index.set()
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
@@ -1015,3 +1041,33 @@ def test_staged_vcs_files_are_still_hashed_for_tamper_detection(market, package)
     (staged / '.git/config').write_text('injected after review')
     with pytest.raises(ValueError, match='changed'):
         market.install(preview['token'], True)
+
+
+def test_remote_catalog_fetch_uses_real_https(market, https_git, monkeypatch):
+    base, requests = https_git
+    monkeypatch.setenv('CCC_APPS_INDEX_URL', base + '/index.json')
+    rows = market.index()['apps']
+    assert len(rows) == 1
+    assert rows[0]['source'] == base + '/app.git'
+    assert rows[0]['installed'] is False
+    assert requests == ['/index.json']
+
+
+def test_remote_catalog_has_wall_clock_deadline(market, https_git, monkeypatch):
+    import time
+    base, requests = https_git
+    monkeypatch.setenv('CCC_APPS_INDEX_URL', base + '/slow-index.json')
+    monkeypatch.setattr(apps, 'INDEX_FETCH_TIMEOUT', 0.5)
+    started = time.monotonic()
+    with pytest.raises(ValueError, match='exceeded its limits'):
+        market.index()
+    assert '/slow-index.json' in requests
+    assert time.monotonic() - started < 3
+
+
+def test_remote_catalog_size_limit(market, https_git, monkeypatch):
+    base, requests = https_git
+    monkeypatch.setenv('CCC_APPS_INDEX_URL', base + '/large-index.json')
+    with pytest.raises(ValueError, match='exceeded its limits'):
+        market.index()
+    assert requests == ['/large-index.json']
