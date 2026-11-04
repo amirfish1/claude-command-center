@@ -417,3 +417,45 @@ def test_removed_archive_and_installed_symlink_unservable(market, package, tmp_p
         handler = Handler()
         apps.handle_get(handler, prefix + '.removed/' + archived.name + '/index.html', market)
         assert handler.status == 400
+
+
+@pytest.mark.parametrize('source', ['http://example.com/app.git', 'https://user:pass@example.com/app.git',
+    'https://example.com/app.git#branch', 'https://example.com:bad/app.git',
+    'https://example.com/\napp.git', 'https://example.com\\app.git', '/tmp/app',
+    'examples/apps/../private', 'examples/apps/app/subdir'])
+def test_catalog_source_rules(source):
+    row = {'id': 'sample', 'name': 'Sample', 'description': 'Test', 'permissions': [], 'source': source}
+    with pytest.raises(ValueError):
+        apps.validate_index({'apps': [row]})
+
+
+def test_catalog_duplicate_id_and_remote_local_source_refused():
+    row = {'id': 'sample', 'name': 'Sample', 'description': 'Test',
+           'permissions': [], 'source': 'examples/apps/sample'}
+    with pytest.raises(ValueError, match='Duplicate'):
+        apps.validate_index({'apps': [row, row]})
+    with pytest.raises(ValueError, match='HTTPS'):
+        apps.validate_index({'apps': [row]}, remote=True)
+    assert apps.validate_index({'apps': [row]}) == [row]
+
+
+def test_contributor_validator_offline():
+    result = subprocess.run(['python3', 'scripts/validate-apps-index.py',
+                             '--package', 'examples/apps/queue-summary'], cwd=REPO,
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert 'Valid index: 3 listings' in result.stdout
+    assert 'Valid package: queue-summary' in result.stdout
+
+
+def test_contributor_validator_rejects_manifest_disagreement(tmp_path):
+    import shutil
+    shutil.copytree(REPO / 'examples/apps/session-summary', tmp_path / 'examples/apps/session-summary')
+    row = {'id': 'session-summary', 'name': 'Session summary', 'description': 'Test',
+           'permissions': [], 'source': 'examples/apps/session-summary'}
+    index = tmp_path / 'apps-index.json'
+    index.write_text(json.dumps({'apps': [row]}))
+    result = subprocess.run(['python3', str(REPO / 'scripts/validate-apps-index.py'), str(index)],
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1
+    assert 'does not match' in result.stderr

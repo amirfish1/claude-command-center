@@ -171,6 +171,9 @@ Catalog availability or claims do not imply code review, signatures or publisher
 verification. Package updates, dependency builds, network permissions, write
 permissions, publisher signatures and automatic staging cleanup are future work.
 
+For package authoring, schemas, offline validation and the PR submission flow,
+see [Building and submitting CCC apps](building-ccc-apps.md).
+
 ## Verification
 
 ```sh

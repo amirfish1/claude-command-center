@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "title": "CCC app manifest",
+  "required": [
+    "id",
+    "label",
+    "description"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]{1,40}$",
+      "not": {
+        "enum": [
+          "allowances",
+          "decision-guide",
+          "decision-inbox",
+          "morning",
+          "pipeline-canvas",
+          "queues",
+          "savings",
+          "sessions",
+          "spawn-ledger"
+        ]
+      }
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000
+    },
+    "icon": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "sessions.read",
+          "queues.read"
+        ]
+      },
+      "uniqueItems": true,
+      "maxItems": 2
+    }
+  }
+}

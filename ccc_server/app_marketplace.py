@@ -113,6 +113,48 @@ def tree_digest(folder):
     return digest.hexdigest()
 
 
+def git_source(source):
+    if not isinstance(source, str) or not 1 <= len(source) <= 2048 or any(ord(c) < 33 for c in source):
+        raise ValueError("Invalid HTTPS Git URL")
+    url = urllib.parse.urlsplit(source)
+    if (url.scheme != "https" or not url.hostname or url.username or url.password
+            or url.fragment or "\\" in source):
+        raise ValueError("Use an HTTPS Git URL without credentials or fragment")
+    # Force validation of malformed ports, even before invoking Git.
+    _ = url.port
+    return source
+
+
+def validate_index(data, remote=False):
+    """The runtime and contributor validator share the same catalog contract."""
+    if (not isinstance(data, dict) or set(data) != {"apps"}
+            or not isinstance(data["apps"], list) or len(data["apps"]) > 100):
+        raise ValueError("Invalid app index")
+    rows = []
+    seen = set()
+    for row in data["apps"]:
+        if not isinstance(row, dict) or set(row) != {"id", "name", "description", "permissions", "source"}:
+            raise ValueError("Invalid index entry fields")
+        ident = app_id(row["id"])
+        if ident in seen:
+            raise ValueError("Duplicate app id in index")
+        seen.add(ident)
+        for key, limit in (("name", 80), ("description", 1000), ("source", 2048)):
+            if not isinstance(row[key], str) or not 1 <= len(row[key]) <= limit:
+                raise ValueError("Invalid index " + key)
+        perms = row["permissions"]
+        if (not isinstance(perms, list) or any(not isinstance(p, str) or p not in PERMISSIONS for p in perms)
+                or len(set(perms)) != len(perms)):
+            raise ValueError("Unknown or duplicate index permission")
+        source = row["source"]
+        if source.startswith("https://"):
+            git_source(source)
+        elif remote or not re.fullmatch(r"examples/apps/[a-z0-9_-]{1,40}", source):
+            raise ValueError("Use an HTTPS Git URL or a bundled examples/apps/<id> folder")
+        rows.append(dict(row))
+    return rows
+
+
 def unpack_zip(archive, folder):
     """Validate every member before writing, then stream with an actual byte cap."""
     if archive.stat().st_size > MAX_BYTES:
@@ -223,9 +265,7 @@ class Marketplace:
         folder = staging / "app"
         try:
             if source.startswith("https://"):
-                url = urllib.parse.urlsplit(source)
-                if not url.hostname or url.username or url.password or url.fragment:
-                    raise ValueError("Use an HTTPS Git URL without credentials or fragment")
+                git_source(source)
                 subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "protocol.allow=never",
                                 "-c", "protocol.https.allow=always", "clone", "--depth", "1",
                                 "--", source, str(folder)], check=True, timeout=60,
@@ -330,27 +370,10 @@ class Marketplace:
                 raw = response.read(256 * 1024 + 1)
             if len(raw) > 256 * 1024:
                 raise ValueError("App index is too large")
-            data = json.loads(raw)
+            data = strict_json(raw)
         else:
-            data = json.loads((self.repo / "apps-index.json").read_text())
-        if not isinstance(data, dict) or not isinstance(data.get("apps"), list) or len(data["apps"]) > 100:
-            raise ValueError("Invalid app index")
-        rows = []
-        for row in data["apps"]:
-            if not isinstance(row, dict):
-                raise ValueError("Invalid index entry")
-            app_id(row.get("id"))
-            if any(not isinstance(row.get(k), str) for k in ("name", "description", "source")):
-                raise ValueError("Invalid index entry")
-            perms = row.get("permissions", [])
-            if not isinstance(perms, list) or any(not isinstance(p, str) or p not in PERMISSIONS for p in perms):
-                raise ValueError("Unknown index permission")
-            # Remote indexes cannot cause arbitrary local folder reads.
-            source = row["source"]
-            if configured and not source.startswith("https://"):
-                raise ValueError("Remote index sources must use HTTPS")
-            rows.append({**{k: row[k] for k in ("id", "name", "description", "source")},
-                         "permissions": perms})
+            data = strict_json((self.repo / "apps-index.json").read_text())
+        rows = validate_index(data, remote=bool(configured))
         return {"ok": True, "apps": rows, "permission_descriptions": PERMISSIONS}
 
     def index_source(self, ident):
