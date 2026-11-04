@@ -68,12 +68,7 @@ def strict_json(raw):
         raise ValueError("JSON nesting is too deep") from exc
 
 
-def manifest(folder):
-    with (folder / "app.json").open("rb") as stream:
-        raw = stream.read(MAX_MANIFEST_BYTES + 1)
-    if len(raw) > MAX_MANIFEST_BYTES:
-        raise ValueError("app.json exceeds 16 KiB")
-    data = strict_json(raw)
+def manifest_data(data):
     if not isinstance(data, dict):
         raise ValueError("app.json must be an object")
     if set(data) - {"id", "label", "description", "permissions", "icon"}:
@@ -88,11 +83,20 @@ def manifest(folder):
     if (not isinstance(perms, list) or any(not isinstance(p, str) or p not in PERMISSIONS for p in perms)
             or len(set(perms)) != len(perms)):
         raise ValueError("Unknown or duplicate permissions")
-    if not (folder / "index.html").is_file():
-        raise ValueError("index.html is required")
     return {"id": data["id"], "label": data["label"],
             "description": data["description"], "permissions": perms,
             "icon": data.get("icon", "▧")}
+
+
+def manifest(folder):
+    with (folder / "app.json").open("rb") as stream:
+        raw = stream.read(MAX_MANIFEST_BYTES + 1)
+    if len(raw) > MAX_MANIFEST_BYTES:
+        raise ValueError("app.json exceeds 16 KiB")
+    data = manifest_data(strict_json(raw))
+    if not (folder / "index.html").is_file():
+        raise ValueError("index.html is required")
+    return data
 
 
 def tree_digest(folder):
@@ -199,6 +203,8 @@ def unpack_zip(archive, folder):
                 raise ValueError("Invalid archive directory")
             if entry.flag_bits & 1:
                 raise ValueError("Encrypted archives are unsupported")
+            if entry.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                raise ValueError("Only stored or deflated ZIP entries are supported")
             total += entry.file_size
             if total > MAX_BYTES:
                 raise ValueError("App exceeds 10 MiB")
@@ -253,13 +259,16 @@ class Marketplace:
                 or (self.apps / ident / MARKER).exists())
 
     def grant(self, ident):
-        data = json.loads(self._grant_path(ident).read_text())
-        if not isinstance(data, dict) or not data.get("installed"):
+        data = strict_json(self._grant_path(ident).read_text())
+        if not isinstance(data, dict) or data.get("installed") is not True:
             raise PermissionError("App is not installed")
-        perms = data.get("permissions")
-        if not isinstance(perms, list) or any(not isinstance(p, str) or p not in PERMISSIONS for p in perms):
+        generation = data.get("generation")
+        if (data.get("id") != ident or not isinstance(generation, str)
+                or not re.fullmatch(r"[0-9a-f]{32}", generation)):
             raise PermissionError("Invalid app grant")
-        return data
+        meta = manifest_data({key: value for key, value in data.items()
+                              if key not in ("installed", "generation")})
+        return {**meta, "installed": True, "generation": generation}
 
     def _write_grant(self, ident, data):
         dest = self._grant_path(ident)
@@ -528,7 +537,11 @@ def handle_post(handler, path, market, callbacks):
             raise ValueError("Expected object")
         action = path.rsplit("/", 1)[-1]
         if action == "prepare":
-            result = market.prepare(market.index_source(payload.get("id")))
+            ident = payload.get("id")
+            result = market.prepare(market.index_source(ident))
+            if result["id"] != ident:
+                market.cancel(result["token"])
+                raise ValueError("Catalog id does not match package")
         elif action == "install":
             result = market.install(payload.get("token"), payload.get("consent"))
         elif action == "cancel":

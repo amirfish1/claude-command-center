@@ -511,3 +511,41 @@ def test_git_environment_ignores_global_filters_and_injected_config(tmp_path, mo
                             cwd=tmp_path, env=env, capture_output=True, timeout=5)
     assert result.returncode == 1
     assert result.stdout == b''
+
+
+@pytest.mark.parametrize('patch', [
+    {'id': 'other-app'}, {'generation': None}, {'generation': 'bad'},
+    {'label': None}, {'permissions': ['sessions.read', 'sessions.read']},
+    {'installed': 'true'}, {'url': '/api/sessions/spawn'},
+])
+def test_corrupt_grants_fail_closed(market, package, patch):
+    grant = install(market, package)
+    market._grant_path('sample').write_text(json.dumps({**grant, **patch}))
+    assert market.isolated('sample')
+    assert market.installed() == []
+    handler = Handler()
+    assert apps.handle_get(handler, '/view/sample', market)
+    assert handler.status == 403
+    handler = Handler()
+    assert apps.handle_get(handler, '/marketplace-content/sample/index.html', market)
+    assert handler.status == 404
+    assert not any(row['installed'] for row in market.index()['apps'])
+
+
+def test_catalog_identity_mismatch_cancels_preview(market, package, monkeypatch):
+    monkeypatch.setattr(market, 'index_source', lambda ident: str(package))
+    handler = Handler({'id': 'different-listing'})
+    assert apps.handle_post(handler, '/api/app-marketplace/prepare', market, {})
+    assert handler.status == 400
+    assert market.installed() == []
+    assert list((market.store / 'staged').iterdir()) == []
+
+
+def test_unsupported_zip_compression_is_clean_cli_error(market, package, tmp_path, capsys):
+    import zipfile
+    archive = tmp_path / 'unsupported.zip'
+    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_BZIP2) as output:
+        output.writestr('index.html', '<h1>Example</h1>')
+    assert apps.cli(['install', str(archive), '--yes'], market.state, REPO) == 1
+    assert 'stored or deflated' in capsys.readouterr().out
+    assert list((market.store / 'staged').iterdir()) == []

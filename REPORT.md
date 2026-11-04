@@ -1,86 +1,71 @@
-# L6: sandboxed app marketplace MVP
+# W2i: app marketplace, wave 2
 
-## Delivered
+## Delivered locally
 
-Implementation commit: `69bc0c73` — `feat(apps): add sandboxed marketplace with permission consent`.
-This report is recorded in a separate documentation commit on the same branch.
+Built on L6 and rebased cleanly onto `origin/main`. No push, merge, deployment,
+managed-service restart, production-data changes or subagents.
 
-- Threat model and protocol in `docs/app-marketplace.md`; security and existing
-  Applications documentation updated.
-- Opaque-origin app iframe with server CSP sandbox headers on every package
-  asset, including direct HTML/SVG visits and legacy asset URLs.
-- Fixed read permissions (`sessions.read`, `queues.read`), host source/origin
-  checks, independent server grants, generation-based revocation, and no
-  arbitrary API forwarding. `spawn` and unknown permissions are refused.
-- Shared staged-byte validation and consent for `ccc app install/list/remove`
-  and Applications → Browse apps. Local folders and shallow HTTPS Git clones
-  are supported. Existing IDs, symlinks, special files and path escapes are
-  rejected. Built-ins and trusted local app behavior are retained.
-- Configurable HTTPS catalog with two bundled examples: the existing Effects
-  kit playground and a Session summary bridge client.
-- Changelog fragment and focused Python, JavaScript and real-browser coverage.
+- Three installable public listings: Effects kit, Session summary and Queue
+  summary. Queue summary adapts the existing read-only queue projection and
+  session bridge example. No private or personal app is included.
+- Local ZIP installs with validation before extraction, compressed/expanded
+  size limits, traversal/duplicate-path/symlink/special-file rejection and a
+  streaming byte cap. Folder and HTTPS Git installation remain supported.
+- Strict manifests reject duplicate keys, unsupported fields, malformed icons,
+  excessive size/depth and unknown permissions.
+- Chromium tests exercise direct API fetch denial, forged postMessage identity
+  and permissions, real bridge reads, consent, all three listings, opaque
+  origins, direct HTML/SVG visits and desktop/mobile layouts.
+- Installed listings retain their Installed state and Open link when reopened;
+  removing an app updates the catalog. Expired previews are pruned in bounded
+  batches. Git clones ignore inherited configuration so package attributes
+  cannot invoke user-configured checkout filters.
+- Contributor guide, PR-based submission description, JSON schemas and an
+  offline stdlib-only validator share runtime catalog rules.
 
-Work is committed locally on `astra/L6`. Nothing was pushed, merged or deployed.
-No managed service was restarted. No subagents were used.
+## Commits
+
+- `e4bcd5aa` — queue example, ZIP imports and hostile-package tests.
+- `2451f1bc` — contributor guide, schemas and catalog validator.
+- `1c536551` — installed UI state, preview cleanup, isolated Git configuration.
+
+Further hardening validates complete grant records, rejects mismatched catalog
+identities, and reports unsupported ZIP compression as a clean CLI error.
 
 ## Verification
 
-Run:
-
 ```sh
 python3 -m pytest tests/test_app_marketplace.py
+python3 scripts/validate-apps-index.py
+node --check static/app-marketplace.js
+python3 -m py_compile ccc_server/app_marketplace.py
+git diff --check
 ```
 
-Result: **39 passed**, including Puppeteer against a disposable loopback HTTP
-server using the real CCC handler. Checked successful consent and reads,
-ungranted bridge calls, `Origin: null` rejection, opaque parent/storage access,
-blocked direct API fetches, direct HTML/SVG sandboxing, working packaged assets,
-and desktop/mobile rendering. Screenshots were inspected directly.
+Last completed focused run: **90 passed**, including real Chromium against a
+disposable loopback HTTP server with temporary marketplace state. Desktop and
+mobile screenshots inspected directly. No managed server was used. Malformed-input and corrupt-grant coverage also passed.
 
-Additional checks:
+The offline validator accepts all three listings and package manifests. It
+never clones a contributor repository. The smoke suite was not run, per repo
+instructions. No external Git repository was cloned; a real local Git config
+probe verifies inherited filters and injected config are disabled.
 
-- Python compilation, JavaScript syntax checks, CLI help and `git diff --check`
-  passed.
-- `tests/test_perf_budget.py`: **152 passed, 1 failed**. The failure is
-  `test_archive_signature_delta_engine_churn_is_engine_scoped_refresh`, whose
-  Codex signature delta returned `None`. It also fails when executed against
-  the original baseline `HEAD` server source, before this implementation.
-  Archive/signature code was not changed and no performance bound was relaxed.
-- `tests/test_smoke.py` was **not run**.
-- A live external Git repository clone was not exercised; the installer uses
-  bounded-time, noninteractive HTTPS shallow cloning with package hooks disabled.
+## Remaining limits / owner decisions
 
-For manual verification after integrating the implementation:
+No owner decision is needed to review this branch. Publisher signatures,
+updates, write permissions and network permissions remain out of scope. Git
+clone download/disk consumption before checkout validation is not quota-limited
+(the existing 60-second timeout remains). Granted data may be disclosed by an
+app; the sandbox is not a CPU/memory or exfiltration-proof boundary.
 
-```sh
-ccc app install ./examples/apps/session-summary
-ccc app list
-ccc app remove session-summary
-```
+The L6 report recorded a pre-existing archive-signature performance-test failure;
+this lane does not change that subsystem or relax any performance bound.
 
-Alternatively, use Applications → Browse apps → Effects kit → Install. Consent
-must show no permissions, and the app must open in its sandboxed host.
+## Restart requirements after integration
 
-## Remaining limits
-
-- Read-only permissions only; no spawn, writes, arbitrary networking or endpoint
-  forwarding. No publisher signatures, automatic updates or dependency builds.
-- Git sources must use HTTPS and contain the manifest at repository root.
-- Clone timeout is bounded, but download/disk consumption before package
-  validation has no quota. Abandoned staging directories need manual cleanup.
-- Approved data may be disclosed by an app; this is not an exfiltration-proof
-  container, CPU/memory quota, or boundary against the same OS user.
-- The baseline archive-signature performance-test failure remains unresolved.
-
-## Owner decisions
-
-None required to review or use this MVP. Future write/spawn permissions,
-publisher verification and resource quotas require separate design review.
-
-## Restart requirements
-
-- CCC dashboard server: **needs restart after integration** for backend changes.
+- CCC dashboard server: **needs restart** for backend changes.
 - CCC worker / control-plane worker: **no restart needed**.
 - WatchTower: **no restart needed**.
 
-No restart was performed, as requested.
+No restart was performed. All changes remain local on the lane branch.
