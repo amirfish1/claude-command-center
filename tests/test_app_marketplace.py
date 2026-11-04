@@ -804,7 +804,7 @@ def test_git_checkout_does_not_invoke_inherited_filter(git_package, package, tmp
 
 
 @pytest.fixture
-def https_git(git_package, package, tmp_path, monkeypatch):
+def https_git(git_package, package, tmp_path, monkeypatch, request):
     """Real smart HTTPS Git transport, confined to a synthetic loopback fixture."""
     import http.server
     import shutil
@@ -813,6 +813,11 @@ def https_git(git_package, package, tmp_path, monkeypatch):
     import urllib.parse
     if not shutil.which('openssl'):
         pytest.skip('OpenSSL is needed for the local HTTPS Git fixture')
+    options = getattr(request, 'param', {})
+    if options.get('blob_bytes'):
+        import os
+        size = options['blob_bytes']
+        (package / 'bulk.bin').write_bytes(b'x' * size if options.get('compressible') else os.urandom(size))
     git_package()
     root = tmp_path / 'public-repos'
     root.mkdir()
@@ -864,7 +869,10 @@ def https_git(git_package, package, tmp_path, monkeypatch):
                     self.send_header(name, value.strip())
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The client may deliberately abort at its file-size limit.
 
     httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), GitHandler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -939,3 +947,71 @@ def test_marketplace_remove_cannot_archive_unmarked_local_app(market):
     with pytest.raises(ValueError, match='not a marketplace'):
         market.remove('local')
     assert (local / 'index.html').read_text() == 'trusted local content'
+
+
+@pytest.mark.parametrize('https_git', [{'blob_bytes': 128 * 1024}], indirect=True)
+def test_https_git_pack_limit_cleans_staging(market, https_git, monkeypatch):
+    base, requests = https_git
+    original_run = apps.run_git
+    def limited_run(*args, **kwargs):
+        kwargs.setdefault('file_limit', 64 * 1024)
+        return original_run(*args, **kwargs)
+    monkeypatch.setattr(apps, 'run_git', limited_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        market.prepare(base + '/app.git')
+    assert '/app.git/git-upload-pack' in requests
+    assert list((market.store / 'staged').iterdir()) == []
+    assert market.installed() == []
+
+
+@pytest.mark.parametrize('https_git', [{'blob_bytes': apps.MAX_BYTES + 1, 'compressible': True}], indirect=True)
+def test_https_git_compressed_oversized_tree_never_checks_out(market, https_git):
+    base, requests = https_git
+    with pytest.raises(ValueError, match='exceeds'):
+        market.prepare(base + '/app.git')
+    assert '/app.git/git-upload-pack' in requests
+    assert list((market.store / 'staged').iterdir()) == []
+    assert market.installed() == []
+
+
+def test_git_attribute_expansion_is_bounded_before_materialization(git_package, package, monkeypatch):
+    (package / '.gitattributes').write_text('index.html ident\n')
+    (package / 'index.html').write_text('$Id$' * 8192)
+    folder = git_package()
+    monkeypatch.setattr(apps, 'MAX_BYTES', 64 * 1024)
+    assert apps.inspect_git_tree(folder)['bytes'] < apps.MAX_BYTES
+    with pytest.raises(ValueError, match='exceeds'):
+        apps.checkout_git_tree(folder)
+    assert not (folder / 'index.html').exists()
+    assert not folder.with_name('exported').exists()
+
+
+@pytest.mark.parametrize('metadata', ['.git', '.hg', '.svn'])
+def test_folder_install_excludes_vcs_metadata(market, package, tmp_path, metadata):
+    private = tmp_path / 'private-metadata'
+    private.write_text('synthetic metadata that must not ship')
+    vcs = package / metadata
+    vcs.mkdir()
+    (vcs / 'config').write_text('synthetic repository settings')
+    (vcs / 'outside').symlink_to(private)
+    preview = market.prepare(str(package))
+    staged = market.staged(preview['token']) / 'app'
+    assert not (staged / metadata).exists()
+    market.install(preview['token'], True)
+    assert not (market.apps / 'sample' / metadata).exists()
+    assert private.read_text() == 'synthetic metadata that must not ship'
+
+
+def test_folder_install_excludes_worktree_pointer(market, package):
+    (package / '.git').write_text('gitdir: /not-a-real-repository')
+    preview = market.prepare(str(package))
+    assert not (market.staged(preview['token']) / 'app/.git').exists()
+
+
+def test_staged_vcs_files_are_still_hashed_for_tamper_detection(market, package):
+    preview = market.prepare(str(package))
+    staged = market.staged(preview['token']) / 'app'
+    (staged / '.git').mkdir()
+    (staged / '.git/config').write_text('injected after review')
+    with pytest.raises(ValueError, match='changed'):
+        market.install(preview['token'], True)

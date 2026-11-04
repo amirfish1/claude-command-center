@@ -35,6 +35,7 @@ PREVIEW_TTL = 900
 MAX_MANIFEST_BYTES = 16 * 1024
 MAX_GIT_FILE_BYTES = 16 * 1024 * 1024
 MAX_GIT_TREE_BYTES = 1024 * 1024
+VCS_METADATA = {".git", ".hg", ".svn"}
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css",
          ".js": "application/javascript", ".json": "application/json",
          ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
@@ -113,12 +114,15 @@ def manifest(folder):
     return data
 
 
-def tree_digest(folder):
+def tree_digest(folder, ignore_vcs=False):
     """Bounded validation; reject links, devices, sockets and escaped paths."""
     no_links(folder)
     digest = hashlib.sha256()
     count = total = 0
     for root, dirs, files in os.walk(folder, followlinks=False):
+        if ignore_vcs:
+            dirs[:] = [name for name in dirs if name not in VCS_METADATA]
+            files = [name for name in files if name not in VCS_METADATA]
         for name in sorted(dirs + files):
             target = Path(root) / name
             relative = target.relative_to(folder)
@@ -240,8 +244,14 @@ def inspect_git_tree(folder):
 
 def checkout_git_tree(folder):
     inspect_git_tree(folder)
-    run_git(["-C", str(folder), "checkout", "--force", "--detach", "HEAD"])
-    shutil.rmtree(folder / ".git")
+    # Built-in Git attributes can expand bytes even with external filters off.
+    # Export first, then enforce expanded ZIP limits before writing app files.
+    exported = folder.with_name("exported")
+    with tempfile.NamedTemporaryFile(dir=folder.parent, suffix=".zip") as archive:
+        run_git(["-C", str(folder), "archive", "--format=zip", "HEAD"], output=archive)
+        unpack_zip(Path(archive.name), exported, archive_limit=MAX_GIT_FILE_BYTES)
+    shutil.rmtree(folder)
+    exported.rename(folder)
 
 
 class HTTPSRedirects(urllib.request.HTTPRedirectHandler):
@@ -279,10 +289,10 @@ def validate_index(data, remote=False):
     return rows
 
 
-def unpack_zip(archive, folder):
+def unpack_zip(archive, folder, archive_limit=None):
     """Validate every member before writing, then stream with an actual byte cap."""
-    if archive.stat().st_size > MAX_BYTES:
-        raise ValueError("Archive exceeds 10 MiB")
+    if archive.stat().st_size > (MAX_BYTES if archive_limit is None else archive_limit):
+        raise ValueError("Archive exceeds its size limit")
     with zipfile.ZipFile(archive) as package:
         entries = package.infolist()
         if len(entries) > MAX_FILES:
@@ -412,8 +422,9 @@ class Marketplace:
                     unpack_zip(original, folder)
                 elif original.is_dir():
                     # Validate before copying, then validate the actual staged bytes.
-                    tree_digest(original)
-                    shutil.copytree(original, folder, symlinks=True)
+                    tree_digest(original, ignore_vcs=True)
+                    shutil.copytree(original, folder, symlinks=True,
+                                    ignore=shutil.ignore_patterns(*VCS_METADATA))
                 else:
                     raise ValueError("Source must be a local folder, ZIP or HTTPS Git URL")
             tree_digest(folder)

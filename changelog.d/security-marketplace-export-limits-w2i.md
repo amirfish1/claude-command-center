@@ -1,0 +1,1 @@
+- Recheck Git attribute-expanded exports before extraction and omit version-control metadata from local folder installs; verify both oversized HTTPS packs and compressed oversized trees using local fixtures.

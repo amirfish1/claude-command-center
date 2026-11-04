@@ -125,6 +125,8 @@ A denied request does not call the underlying reader.
 ## Consent and package handling
 
 Both CLI and Browse apps use the same preparation and installation functions.
+Local folder sources exclude `.git`, `.hg` and `.svn` metadata (including
+worktree pointer files), so repository configuration is not copied into apps.
 Preparation copies, extracts or clones into private staging, rejects symlinks and special
 files, validates the manifest, and limits packages to 500 entries / 10 MiB.
 ZIP members are checked before extraction: absolute/traversing paths, backslashes,
@@ -141,9 +143,10 @@ package digest. Previews expire after 15 minutes. Existing IDs are never
 overwritten. Remove and reinstall to update, reviewing permissions again.
 Each Git command has a 60-second timeout, which kills its private process group
 including transport helpers. Git runs with a 16 MiB per-file limit; tree metadata
-output is capped at 1 MiB. Before checkout, CCC checks tracked entry types, paths,
-file count and total expanded size. Links, submodules and oversized trees never
-materialize as working files. These are per-file and package limits, not a total
+output is capped at 1 MiB. Before materialization, CCC checks tracked entry types, paths, file count and
+blob sizes. It then exports a bounded ZIP and checks its expanded size before
+extraction, so built-in Git attribute expansion cannot bypass the package limit.
+Links, submodules and oversized packages never materialize as app files. These are per-file and package limits, not a total
 network-byte, aggregate disk, CPU or memory quota. The checkout may resolve a mutable Git branch; the reviewed staged bytes are
 fixed, but there is no publisher signature or curated-code guarantee.
 

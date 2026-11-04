@@ -37,6 +37,8 @@ managed-service restart, production-data changes or subagents.
 - `fa308619` — contributor guide, schemas and catalog validator.
 - `d60681a8` — installed UI state, preview cleanup, isolated Git configuration.
 
+- `eb729698` — constrained Git operations, real loopback HTTPS transport tests
+  and safe removal recovery.
 - `356a534e` — bounded paths/consent metadata, polished reader examples and
   browser remove/reinstall coverage.
 - `6399d0fd` — mandatory browser CI, redirect policy, validator staging and raw
@@ -56,7 +58,7 @@ python3 -m py_compile ccc_server/app_marketplace.py
 git diff --check
 ```
 
-Last completed focused run: **136 passed**, including real Chromium against a
+Last completed focused run: **144 passed**, including real Chromium against a
 disposable loopback HTTP server with temporary marketplace state. Desktop and
 mobile screenshots inspected directly. No managed server was used. Malformed-input and corrupt-grant coverage also passed. The browser
 remove/reinstall check now guards the temporarily empty catalog during rerender,

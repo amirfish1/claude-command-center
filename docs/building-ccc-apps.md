@@ -101,7 +101,9 @@ ccc app remove my-summary
 
 The validator is stdlib-only and offline. It checks the catalog, bundled
 packages, and optional package by staging in a disposable temporary directory,
-without installing or executing anything.
+without installing or executing anything. Local folder installs omit `.git`,
+`.hg` and `.svn` metadata; staged package files are all included in the consent
+digest.
 It does not fetch HTTPS sources or certify their safety. A generic JSON Schema
 validator catches structural errors; the Python validator also checks duplicate
 IDs, URL rules, actual package files and listing/manifest agreement.
@@ -116,8 +118,10 @@ ccc app install ./my-summary.zip
 Omit optional files from the command if you do not use them. For Git installs,
 publish a public repository with `app.json` and `index.html` at its root, then use an
 HTTPS clone URL without credentials or a fragment. Use the final canonical URL;
-Git redirects are disabled. Clones have no working files until the tree passes
-the package limits; symlinks and submodules are rejected. Git commands have a
+Git redirects are disabled. Clones have no working files until the tree and its exported ZIP pass
+the package limits; symlinks and submodules are rejected. Git archive attributes
+(such as `export-ignore`) affect the exported package, so ensure they do not
+exclude `app.json` or `index.html`. Git commands have a
 60-second timeout and 16 MiB per-file limit (tree metadata output: 1 MiB). CCC stages the checkout and
 shows actual permissions before installation. Existing IDs are never replaced;
 remove and reinstall to update. Never manually drop third-party packages into
