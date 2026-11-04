@@ -30,6 +30,10 @@ managed-service restart, production-data changes or subagents.
   revoked access.
 - Contributor guide, PR-based submission description, JSON schemas and an
   offline stdlib-only validator share runtime catalog rules.
+- A remote catalog fetch (`CCC_APPS_INDEX_URL`) runs inside a disposable
+  subprocess with one real wall-clock deadline — a socket timeout alone does
+  not stop an index server that trickles data. The 256 KiB cap and strict
+  JSON parsing still apply.
 
 ## Commits
 
@@ -45,6 +49,10 @@ managed-service restart, production-data changes or subagents.
   HTTP security coverage.
 - `868b7be4` — fail closed on corrupt grants and mismatched catalog identities;
   clean CLI errors for unsupported ZIP compression.
+- `3f5436c0` — wall-clock deadline and size cap for remote catalog fetches via
+  a bounded subprocess; loopback HTTPS coverage for success, trickle and
+  oversized indexes. Committed unverified at the Astra cutoff; verified
+  afterwards (see below).
 
 Rebased onto fetched `origin/main` at `709c8860`.
 
@@ -58,7 +66,7 @@ python3 -m py_compile ccc_server/app_marketplace.py
 git diff --check
 ```
 
-Last completed focused run: **144 passed**, including real Chromium against a
+Last completed focused run: **147 passed**, including real Chromium against a
 disposable loopback HTTP server with temporary marketplace state. Desktop and
 mobile screenshots inspected directly. No managed server was used. Malformed-input and corrupt-grant coverage also passed. The browser
 remove/reinstall check now guards the temporarily empty catalog during rerender,
