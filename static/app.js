@@ -93718,6 +93718,7 @@
     if (!list || !_engHubData) return;
     const rows = _engHubRows();
     window.cccChoiceEligibility?.refresh();
+    if (typeof renderAgentsOverview === 'function') renderAgentsOverview();
     if (window.cccEngineConnection?.mounted()) { window.cccEngineConnection.render(rows, {notes:_engHubNotes, unavailable:_engHubUnavailable}); return; }
     const counts = { all: rows.length, ready: 0, setup: 0, off: 0 };
     rows.forEach(r => { counts[r.state] += 1; });
@@ -94618,6 +94619,123 @@
   }
   organizeSettings();
 
+  // Agents at a glance: the colorful engine + queue overview that heads the
+  // Agents destination. Detailed editors stay in the disclosures below; each
+  // tile is a shortcut into its editor. Polls only while Agents is visible.
+  const AGENTS_OVERVIEW_POLL_MS = 15000;
+  let _agentsOverviewQueues = null, _agentsOverviewTimer = null, _agentsOverviewSig = '';
+  function agentsOverviewVisible() {
+    const sec = document.getElementById('settingsSection-defaults');
+    return !!($settingsModal && !$settingsModal.hidden && sec && sec.classList.contains('is-active-section') && !document.hidden);
+  }
+  function mountAgentsOverview() {
+    const sec = document.getElementById('settingsSection-defaults');
+    if (!sec || document.getElementById('agentsOverview')) return;
+    const box = document.createElement('div');
+    box.className = 'agents-overview'; box.id = 'agentsOverview';
+    box.innerHTML = '<div class="ao-block"><div class="ao-head"><div class="ao-head-main"><div class="ao-title" id="aoEngTitle">Engines</div>'
+      + '<div class="ao-sub" id="aoEngSub">Checking your engines…</div></div><div class="ao-stats" id="aoEngStats"></div></div>'
+      + '<div class="ao-eng-grid" id="aoEngGrid" role="list"></div></div>'
+      + '<div class="ao-block"><div class="ao-head"><div class="ao-head-main"><div class="ao-title" id="aoQueueTitle">Queues</div>'
+      + '<div class="ao-sub" id="aoQueueSub">Loading queues…</div></div></div>'
+      + '<div class="ao-q-grid" id="aoQueueGrid" role="list"></div></div>';
+    sec.prepend(box);
+    box.addEventListener('click', event => {
+      const eng = event.target.closest('[data-ao-engine]');
+      if (eng) {
+        if (!window.cccEngineConnection?.open(eng.dataset.aoEngine)) setActiveSettingsRailSection('engines');
+        return;
+      }
+      const q = event.target.closest('[data-ao-queue]');
+      if (q) openQueueManager(q.dataset.aoQueue, false, q);
+    });
+  }
+  function renderAgentsOverview() {
+    const grid = document.getElementById('aoEngGrid');
+    if (!grid) return;
+    const rows = _engHubData ? _engHubRows() : [];
+    const qd = _agentsOverviewQueues;
+    const sig = JSON.stringify([rows.map(r => [r.engine, r.state, r.limited, r.isDefault, r.isWorkerDefault, r.version]),
+      qd && qd.queues, qd && qd.worker_default]);
+    if (sig === _agentsOverviewSig) return;
+    _agentsOverviewSig = sig;
+    if (rows.length) {
+      const order = Object.keys(ENGINE_HUB_META);
+      const rank = {ready: 0, setup: 1, off: 2};
+      rows.sort((a, b) => (rank[a.state] - rank[b.state]) || ((order.indexOf(a.engine) + 99) % 99 - (order.indexOf(b.engine) + 99) % 99));
+      const counts = {ready: 0, setup: 0, off: 0};
+      rows.forEach(r => { counts[r.state] += 1; });
+      document.getElementById('aoEngTitle').textContent = counts.ready + ' of ' + rows.length + ' engines ready';
+      const limited = rows.filter(r => r.state === 'ready' && r.limited);
+      document.getElementById('aoEngSub').textContent = limited.length
+        ? limited.map(r => r.meta.label).join(', ') + ' ' + (limited.length > 1 ? 'are' : 'is') + ' out of usage right now. Click an engine to manage it.'
+        : 'Click an engine to install, sign in or change its defaults.';
+      document.getElementById('aoEngStats').innerHTML = [['ready', 'Ready', 'ok'], ['setup', 'Needs setup', 'warn'], ['off', 'Off', 'muted']]
+        .map(s => '<span class="eng-stat is-' + s[2] + '"><span class="eng-stat-num">' + counts[s[0]] + '</span><span class="eng-stat-label">' + s[1] + '</span></span>').join('');
+      const stateLabel = r => r.state === 'off' ? 'Switched off'
+        : r.state === 'setup' ? (!r.installed ? 'Not installed' : 'Not signed in')
+        : r.limited ? 'Out of usage' : 'Ready';
+      grid.innerHTML = rows.map(r => {
+        const mono = r.meta.mono || r.meta.label.replace(/[^A-Za-z]/g, '').slice(0, 2);
+        const tone = r.state === 'ready' ? (r.limited ? 'warn' : 'ok') : r.state === 'setup' ? 'warn' : 'muted';
+        const badges = (r.isDefault ? '<span class="ao-badge">Sessions</span>' : '') + (r.isWorkerDefault ? '<span class="ao-badge">Workers</span>' : '');
+        return '<button type="button" role="listitem" class="ao-eng is-' + r.state + '" style="--eng-hue:' + r.meta.hue + '" data-ao-engine="' + escapeHtml(r.engine) + '" title="Manage ' + escapeHtml(r.meta.label) + '">'
+          + '<span class="eng-mono" aria-hidden="true">' + escapeHtml(mono) + '</span>'
+          + '<span class="ao-eng-id"><span class="ao-eng-name">' + escapeHtml(r.meta.label) + '</span>'
+          + '<span class="ao-state is-' + tone + '"><span class="eng-pill-dot"></span>' + stateLabel(r) + '</span></span>'
+          + (badges ? '<span class="ao-badges">' + badges + '</span>' : '') + '</button>';
+      }).join('');
+    } else if (_engHubUnavailable) {
+      document.getElementById('aoEngSub').textContent = 'Engine status is unavailable right now. Retrying on its own.';
+    }
+    const qgrid = document.getElementById('aoQueueGrid');
+    if (!qd) return;
+    const queues = (qd.queues || []).slice().sort((a, b) => (b.auto_drain - a.auto_drain) || a.queue.localeCompare(b.queue));
+    const slots = queues.reduce((sum, q) => sum + Number(q.workers || 0), 0);
+    const autoCount = queues.filter(q => q.auto_drain).length;
+    document.getElementById('aoQueueTitle').textContent = queues.length + ' queues';
+    const wd = qd.worker_default || {};
+    document.getElementById('aoQueueSub').textContent = autoCount + ' auto-draining · ' + slots + ' worker slots · default route '
+      + [((ENGINE_HUB_META[wd.engine] || {}).label || wd.engine), wd.model, wd.effort].filter(Boolean).join(' · ') + '. Click a queue to edit it.';
+    qgrid.innerHTML = queues.length ? queues.map(q => {
+      const meta = ENGINE_HUB_META[q.engine] || {label: q.engine || 'WatchTower default', hue: 210};
+      const mono = meta.mono || String(meta.label).replace(/[^A-Za-z]/g, '').slice(0, 2);
+      const pinned = Object.keys(q.pins || {});
+      return '<button type="button" role="listitem" class="ao-q' + (q.auto_drain ? ' is-auto' : ' is-manual') + '" style="--eng-hue:' + meta.hue + '" data-ao-queue="' + escapeHtml(q.queue) + '" title="Edit queue ' + escapeHtml(q.queue) + '">'
+        + '<span class="ao-q-top"><span class="ao-q-name">' + escapeHtml(q.queue) + '</span>'
+        + '<span class="ao-q-mode"><span class="eng-pill-dot"></span>' + (q.auto_drain ? 'Auto' : 'Manual') + '</span></span>'
+        + '<span class="ao-q-route"><span class="eng-mono ao-q-mono" aria-hidden="true">' + escapeHtml(mono) + '</span>'
+        + '<span class="ao-q-model">' + escapeHtml(String(q.model || meta.label).replace(/^claude-/, '')) + '</span></span>'
+        + '<span class="ao-q-foot"><span>' + escapeHtml(q.effort || 'default') + '</span><span>' + Number(q.workers || 0) + ' worker' + (Number(q.workers) === 1 ? '' : 's') + '</span>'
+        + (pinned.length ? '<span class="ao-badge" title="Pinned: ' + escapeHtml(pinned.join(', ')) + '">Pinned</span>' : '') + '</span></button>';
+    }).join('') : '<p class="settings-empty">No active queues.</p>';
+  }
+  async function refreshAgentsOverview() {
+    if (!agentsOverviewVisible()) return;
+    const [, queues] = await Promise.all([
+      (!_engHubData || !_engHubVisible()) ? refreshEnginesHub({fresh: false}) : null,
+      fetch('/api/settings/queue-engines', {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    if (queues && queues.queues) _agentsOverviewQueues = queues;
+    else if (!_agentsOverviewQueues) { const s = document.getElementById('aoQueueSub'); if (s) s.textContent = 'Queue routing is unavailable right now. Retrying on its own.'; }
+    renderAgentsOverview();
+  }
+  function scheduleAgentsOverview() {
+    if (_agentsOverviewTimer) { clearTimeout(_agentsOverviewTimer); _agentsOverviewTimer = null; }
+    if (!agentsOverviewVisible()) return;
+    _agentsOverviewTimer = setTimeout(async () => {
+      _agentsOverviewTimer = null;
+      await refreshAgentsOverview();
+      scheduleAgentsOverview();
+    }, AGENTS_OVERVIEW_POLL_MS);
+  }
+  function startAgentsOverview() {
+    if (!agentsOverviewVisible()) return;
+    refreshAgentsOverview();
+    scheduleAgentsOverview();
+  }
+  mountAgentsOverview();
+
   function settingsModalFocusables() {
     if (!$settingsModal) return [];
     return Array.from($settingsModal.querySelectorAll(
@@ -94720,6 +94838,7 @@
     });
     if (sectionId !== destination || firstRun) { const details=requested?.querySelector(':scope > details'); if(details)details.open=true; }
     if (!opts.cachedOnly && typeof startEnginesHub === 'function') startEnginesHub();
+    if (!opts.cachedOnly && typeof startAgentsOverview === 'function') startAgentsOverview();
     if (opts.scroll === false) return;
     $settingsPane.scrollTop = 0;
     if (sectionId !== destination) requested?.scrollIntoView({block:'start'});

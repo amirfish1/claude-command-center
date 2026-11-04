@@ -1,0 +1,1 @@
+- Settings → Agents opens with a colorful at-a-glance overview again: every engine as a tile (ready / needs setup / off, session and worker defaults) and every queue as a card colored by its engine, showing model, effort, worker slots and auto-drain. Click a tile to jump into that engine's setup or that queue's policy.
