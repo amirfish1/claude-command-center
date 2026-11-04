@@ -45,7 +45,8 @@ from pathlib import Path
 from ccc_server.paths import _iter_common_cli_candidates
 
 NODE_MIN = (20, 18)
-NODE_MAX_EXCLUSIVE = (27, 0)
+# freellmapi's package.json engines is >=20.18 <25; keep the bounds aligned.
+NODE_MAX_EXCLUSIVE = (25, 0)
 NODE_DIST_BASE = os.environ.get(
     "CCC_NODE_DIST_BASE", "https://nodejs.org/dist"
 ).rstrip("/")
@@ -459,8 +460,37 @@ def _verify_sha256(path, expected):
     return digest.hexdigest().lower() == (expected or "").lower()
 
 
+def _install_node_winget(job):
+    """Windows: install the pinned Node 22 LTS line through winget."""
+    for path, ver in _node_versions_seen():
+        if _node_supported(ver):
+            job.emit(f"Node.js v{_fmt_version(ver)} is already here.")
+            return True
+    winget = shutil.which("winget")
+    if not winget:
+        raise RuntimeError(
+            "Node.js can't be installed automatically: winget wasn't found. "
+            "Install Node.js 22 LTS from nodejs.org, then run this step again."
+        )
+    job.emit("Installing Node.js 22 LTS with winget…")
+    rc = job.run_cmd(
+        [winget, "install", "--id", "OpenJS.NodeJS.22", "-e", "--silent",
+         "--accept-package-agreements", "--accept-source-agreements"],
+        timeout_s=900,
+    )
+    if rc != 0:
+        raise RuntimeError(
+            "winget couldn't install Node.js. Install Node.js 22 LTS from "
+            "nodejs.org, then run this step again."
+        )
+    job.emit("Node.js installed. If it isn't detected, restart Command Center so PATH refreshes.")
+    return True
+
+
 def _install_node(job):
     plat = _node_platform()
+    if not plat and platform.system().lower() == "windows":
+        return _install_node_winget(job)
     if not plat:
         raise RuntimeError(
             "Node.js can't be installed automatically on this system. "

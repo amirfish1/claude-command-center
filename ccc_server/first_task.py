@@ -827,6 +827,10 @@ def start_task(task_id: str, *, claude_bin: str = None, extra_env: dict = None,
     if free_env:
         from ccc_server.free_runtime import scrub_paid_env
         scrub_paid_env(env)
+        # A parent Claude Code session leaks CLAUDE_CODE_* / ANTHROPIC_* vars
+        # that win over the router values (401 authentication_failed).
+        for k in [k for k in env if k.startswith(("CLAUDE_CODE_", "ANTHROPIC_"))]:
+            env.pop(k, None)
         env.update({k: str(v) for k, v in free_env.items()})
         env["CCC_SESSION_RUNTIME"] = "free"
         runtime = "free"
