@@ -6,16 +6,18 @@ in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone, time as datetime_time
+from datetime import date, datetime, timedelta, timezone, time as datetime_time
 from pathlib import Path
 from productivity import (
     ProductivityStore,
     aggregate_productivity,
+    build_day_recap,
     collect_git_commits,
     describe_git_repo,
     discover_git_identities,
     presence_health,
     presence_summary,
+    render_recap_html,
     run_presence_sampler,
     system_local_timezone,
 )
@@ -260,6 +262,8 @@ def _productivity_turn_rows(conversations, repositories, cutoff_epoch):
                     "tokens": tokens,
                     "human_trigger": turn.get("trigger_type") == "user_text",
                     "engine": engine,
+                    "model": turn.get("model") or model_hint or "",
+                    "session_id": sid,
                     "message_id": turn.get("message_id") or "",
                 }
             )
@@ -504,6 +508,64 @@ def _productivity_payload(*, weeks=8, force_refresh=False, status_only=False):
     payload = dict(snapshot["datasets"][str(weeks)])
     payload["coverage"] = snapshot.get("coverage") or {}
     payload["refresh"] = refresh_payload
+    return payload, 200
+
+
+def _recap_day_payload(date_text, allowed_projects):
+    """Build the public-safe `ccc recap` payload for one local calendar day.
+
+    Reuses the productivity collection pipeline but scoped to a single day:
+    the response ships already-redacted rows, so the CLI (and any page it
+    generates) can render them verbatim.
+    """
+    local_tz = _core.system_local_timezone()
+    if date_text:
+        try:
+            day = date.fromisoformat(str(date_text).strip())
+        except (TypeError, ValueError):
+            return {"error": "Invalid --date; expected YYYY-MM-DD"}, 400
+    else:
+        day = datetime.now(local_tz).date()
+    cutoff = datetime.combine(day, datetime_time.min, tzinfo=local_tz)
+
+    conversations = _core.find_all_conversations(
+        resolve_pr_states=False,
+        resolve_effective=False,
+        resolve_worktree_dirty=False,
+    )
+    repositories, warnings = _productivity_known_repos(conversations)
+    identities = _core.discover_git_identities(repositories)
+    commits = []
+    seen_commits = set()
+    for repo in repositories:
+        try:
+            rows = _core.collect_git_commits(repo, cutoff, identities)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            warnings.append(f"Git history unavailable for {repo['name']}")
+            continue
+        for row in rows:
+            key = (row.get("project_id"), row.get("sha"))
+            if key in seen_commits:
+                continue
+            seen_commits.add(key)
+            commits.append(row)
+
+    turns, transcript_coverage = _productivity_turn_rows(
+        conversations, repositories, cutoff.timestamp()
+    )
+    payload = _core.build_day_recap(
+        commits=commits,
+        turns=turns,
+        tickets=[],
+        target_date=day,
+        tzinfo=local_tz,
+        allowed_projects=allowed_projects or (),
+    )
+    payload["coverage"] = {
+        "repositories": len(repositories),
+        **transcript_coverage,
+        "warnings": sorted(set(warnings))[:12],
+    }
     return payload, 200
 
 

@@ -161,11 +161,13 @@ _adopt_ccc_module("repo_paths")
 from productivity import (
     ProductivityStore,
     aggregate_productivity,
+    build_day_recap,
     collect_git_commits,
     describe_git_repo,
     discover_git_identities,
     presence_health,
     presence_summary,
+    render_recap_html,
     run_presence_sampler,
     system_local_timezone,
 )
@@ -31642,6 +31644,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload, status = _productivity_payload(
                 weeks=weeks, force_refresh=force, status_only=status_only
             )
+            self.send_json(payload, status)
+            return
+        elif path == "/api/recap":
+            qs = urllib.parse.parse_qs(parsed.query)
+            date_text = (qs.get("date", [""])[0] or "").strip()
+            repos_param = qs.get("repos", [""])[0] or ""
+            allowed = [part.strip() for part in repos_param.split(",") if part.strip()]
+            payload, status = _recap_day_payload(date_text or None, allowed)
+            fmt = (qs.get("format", ["json"])[0] or "json").lower()
+            if status == 200 and fmt == "html":
+                self.send_html(render_recap_html(payload))
+                return
             self.send_json(payload, status)
             return
         elif path == "/api/throughput/refresh/start":

@@ -38,6 +38,8 @@ command, without opening the dashboard:
 
     ccc share <session>                         # redacted replay page + card, saved locally
     ccc share --stats                           # this week's totals as a card, saved locally
+    ccc recap [--date YYYY-MM-DD] [--out file.html] [--repo name ...]
+                                                # shareable HTML recap of one day's agent work
 
     ccc consent                                 # what CCC may write into your agent config
     ccc consent show <item>                     # exact diff for one item
@@ -92,7 +94,7 @@ PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
 SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "question", "brief", "where",
-               "brain", "consent", "jobs", "vault", "secret", "remind")
+               "recap", "brain", "consent", "jobs", "vault", "secret", "remind")
 
 RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
 
@@ -186,6 +188,14 @@ def _get_json(base, path, timeout=10):
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _get_text(base, path, timeout=10, accept="text/html"):
+    req = urllib.request.Request(
+        base + path, headers={"Accept": accept, "User-Agent": _CLI_USER_AGENT}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8")
 
 
 _NODE_STATUS_TEXT = {
@@ -1165,6 +1175,61 @@ def cmd_history(args):
             print(f"{date:<12} {op:<7} {e.get('session_id') or '?':<38} {why}")
     for line in _node_status_lines(payload):
         print(line)
+    return 0
+
+
+def cmd_recap(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print(
+            "ccc: no server found — is CCC running? "
+            f"(looked for --server, $CCC_SERVER, {PORT_FILE})",
+            file=sys.stderr,
+        )
+        return 1
+    if args.date:
+        try:
+            datetime.strptime(args.date, "%Y-%m-%d")
+        except ValueError:
+            print(f"ccc recap: invalid --date {args.date!r} (expected YYYY-MM-DD)",
+                  file=sys.stderr)
+            return 2
+    repos = []
+    for raw in args.repo or []:
+        repos.extend(part.strip() for part in raw.split(",") if part.strip())
+    params = {"format": "json" if args.json else "html"}
+    if args.date:
+        params["date"] = args.date
+    if repos:
+        params["repos"] = ",".join(repos)
+    qs = urllib.parse.urlencode(params)
+    try:
+        if args.json:
+            payload = _get_json(base, f"/api/recap?{qs}", timeout=120)
+            print(json.dumps(payload, indent=2))
+            return 0
+        body = _get_text(base, f"/api/recap?{qs}", timeout=120)
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read().decode("utf-8")).get("error") or e.reason
+        except Exception:
+            detail = e.reason
+        print(f"ccc recap: server returned {e.code} ({detail})", file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    out = args.out or f"ccc-recap-{args.date or 'today'}.html"
+    if out == "-":
+        sys.stdout.write(body)
+        return 0
+    try:
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(body)
+    except OSError as e:
+        print(f"ccc recap: cannot write {out} ({e})", file=sys.stderr)
+        return 1
+    print(f"wrote {out}")
     return 0
 
 
@@ -3058,6 +3123,25 @@ def main(argv=None):
                    help="session id, id prefix, or a recall-style query (or pipe it on stdin)")
     p.add_argument("--json", action="store_true", help="raw where result JSON")
     p.set_defaults(func=cmd_where)
+
+    p = sub.add_parser(
+        "recap",
+        help="shareable HTML recap of one day's agent work",
+        description="GET /api/recap: sessions, commits, and shipped items for "
+                    "a local calendar day, rendered as a standalone HTML page "
+                    "safe to share publicly. Paths, prompts, and session "
+                    "names are never included; repo names only appear when "
+                    "passed via --repo.",
+    )
+    p.add_argument("--date", metavar="YYYY-MM-DD",
+                   help="day to recap (default: today, local timezone)")
+    p.add_argument("--out", metavar="FILE",
+                   help="output HTML file (default: ccc-recap-<date>.html; '-' for stdout)")
+    p.add_argument("--repo", action="append", metavar="NAME",
+                   help="repo allowed to appear under its real name "
+                        "(repeatable or comma-separated)")
+    p.add_argument("--json", action="store_true", help="raw recap JSON instead of HTML")
+    p.set_defaults(func=cmd_recap)
 
     p = sub.add_parser(
         "models",
