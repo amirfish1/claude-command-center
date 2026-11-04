@@ -86515,6 +86515,7 @@
     const staleChips = new Set(view.querySelectorAll('.cc-run-chip'));
     const staleFolds = new Set(view.querySelectorAll('.cc-run-fold'));
     const staleOrch = new Set(view.querySelectorAll('.cc-orch-chip'));
+    const staleThumbs = new Set(view.querySelectorAll('.cc-run-thumbs'));
     const staleFinals = new Set(view.querySelectorAll('.assistant-text.cc-final'));
     // The last text of each turn (right before the next user message, or
     // the end of the view) is the turn's summary: compact keeps it as a card.
@@ -86608,6 +86609,52 @@
           }
           orchHost.querySelectorAll(sel).forEach(c => staleOrch.delete(c));
         }
+        // CCC-333: images the folded calls returned (Read of a screenshot,
+        // tool-result images) stay visible as small thumbs next to the chips.
+        // Clicking one opens the full image in the lightbox.
+        if (orchHost) {
+          const srcs = [];
+          for (const { el } of active) {
+            el.querySelectorAll('.tool-inline-image img.msg-image, .tool-result-image img.msg-image').forEach(im => {
+              const src = im.getAttribute('src');
+              if (src && !srcs.includes(src)) srcs.push(src);
+            });
+          }
+          const tsel = '.cc-run-thumbs[data-cc-thumbs-for="' + id + '"]';
+          let strip = orchHost.querySelector(tsel);
+          if (srcs.length) {
+            const key = srcs.join('|');
+            if (!strip) {
+              strip = document.createElement('span');
+              strip.className = 'cc-run-thumbs';
+              strip.dataset.ccThumbsFor = id;
+              const lastChip = Array.from(orchHost.querySelectorAll('.cc-orch-chip[data-cc-orch-for="' + id + '"]')).pop() || chip;
+              if (lastChip) lastChip.insertAdjacentElement('afterend', strip);
+              else orchHost.appendChild(strip);
+            }
+            if (strip.dataset.ccThumbKey !== key) {
+              strip.dataset.ccThumbKey = key;
+              strip.textContent = '';
+              srcs.slice(0, 4).forEach(src => {
+                const im = document.createElement('img');
+                im.className = 'msg-image cc-run-thumb';
+                im.src = src;
+                im.alt = 'Image from folded tool call';
+                im.title = 'Enlarge';
+                im.loading = 'lazy';
+                im.onerror = () => im.remove();
+                strip.appendChild(im);
+              });
+              if (srcs.length > 4) {
+                const more = document.createElement('span');
+                more.className = 'cc-run-thumbs-more';
+                more.textContent = '+' + (srcs.length - 4);
+                strip.appendChild(more);
+              }
+            }
+            staleThumbs.delete(strip);
+          }
+        }
       }
       run = [];
     };
@@ -86633,6 +86680,7 @@
     staleChips.forEach(c => c.remove());
     staleFolds.forEach(c => c.remove());
     staleOrch.forEach(c => c.remove());
+    staleThumbs.forEach(c => c.remove());
   }
   let _ccRunsRaf = 0;
   function _ccScheduleRuns() {

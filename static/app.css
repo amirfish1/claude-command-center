@@ -34269,3 +34269,19 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
   background: linear-gradient(135deg, hsl(var(--eng-hue) 70% 94%), transparent 75%), var(--bg);
 }
 [data-theme="light"] .ao-badge { color: hsl(var(--eng-hue, 210) 60% 32%); background: hsl(var(--eng-hue, 210) 70% 92%); border-color: hsl(var(--eng-hue, 210) 50% 80%); }
+
+/* CCC-333: thumbnails of images returned inside a folded run, shown beside the
+   run chip while folded; the unfolded run shows the full inline images. */
+.cc-run-thumbs { display: none; }
+body.conv-compact .conversations-view .cc-run-thumbs {
+  display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; align-items: center;
+}
+body.conv-compact .conversations-view .cc-run-thumbs:has(~ .cc-run-open),
+body.conv-compact .conversations-view .cc-run-chip.cc-run-open ~ .cc-run-thumbs { display: none; }
+.cc-run-thumbs .msg-image.cc-run-thumb {
+  display: inline-block; width: auto; height: 28px; max-width: 56px; max-height: 28px;
+  margin: 0; border-radius: 4px; object-fit: cover;
+}
+.cc-run-thumbs-more { font-size: 11px; color: var(--text-muted); }
+body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open):not(.tool-call-group) > .cc-run-thumbs { display: inline-flex !important; }
+body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: none; }
