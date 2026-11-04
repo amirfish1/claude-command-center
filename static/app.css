@@ -4446,9 +4446,16 @@
      summary slot. Keep the full bubble visible so prose cannot clip an
      inline image or an attachment below it. */
   .conversations-view .event.user_text:is(.is-pinned-in-sticky, .is-dynamic-pinned-in-sticky):has(img) {
-    display: block !important;
     visibility: visible;
     pointer-events: auto;
+  }
+  .conversations-view .event.user_text.is-pinned-in-sticky:has(img) {
+    display: block !important;
+  }
+  /* Mirroring an ask must preserve the engine's layout. Switching a flex
+     image bubble to block changes its height and fights scroll anchoring. */
+  .conv-pane.is-webui-session .event.user_text.is-pinned-in-sticky:has(img) {
+    display: flex !important;
   }
   .conversations-view .event.user_text:has(img) .user-msg {
     max-height: none !important;

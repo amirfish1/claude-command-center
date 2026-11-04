@@ -1,0 +1,1 @@
+- Keep scrolling stable when image-containing user messages appear in the sticky ask summary.

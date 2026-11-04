@@ -21,6 +21,59 @@ test.before(async () => {
 });
 test.after(async () => { await browser?.close(); });
 
+test('mirroring image asks preserves their layout and reading position', async () => {
+  const css = fs.readFileSync(process.env.CCC_SCROLL_CSS_SOURCE || 'static/app.css', 'utf8');
+  const page = await browser.newPage();
+  try {
+    for (const width of [1100, 390]) {
+      await page.setViewport({ width, height: 800 });
+      for (const engine of ['', 'is-webui-session', 'is-webui-session is-codex-session']) {
+        await page.setContent(`<style>${css}</style><style>
+          body { display:block !important; margin:0; }
+          .conv-pane { display:block !important; width:100%; }
+          .conversations-view { height:560px !important; overflow-y:auto !important; overflow-anchor:none; }
+          .spacer { height:800px; }
+        </style><div class="conv-pane ${engine}"><div class="conversations-view">
+          <div class="spacer"></div>
+          <div class="event user_text peer-message has-user-steer"><div class="user-msg">
+            <p>A completed check with two screenshots and enough text to wrap across multiple lines.</p>
+            <div class="peer-image-gallery">${[1, 2].map(n => `<figure>
+              <img class="msg-image" alt="Example ${n}" width="240" height="180"
+                src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='180'/%3E">
+              <figcaption>Example ${n}</figcaption></figure>`).join('')}</div>
+          </div></div>
+          <div class="event assistant" data-jsonl-line="2">The answer being read</div>
+          <div class="spacer"></div>
+        </div></div>`);
+        const result = await page.evaluate(async () => {
+          await Promise.all([...document.images].map(img => img.decode()));
+          const view = document.querySelector('.conversations-view');
+          const ask = view.querySelector('.user_text');
+          const answer = view.querySelector('.assistant');
+          view.scrollTop = answer.offsetTop - 100;
+          const measure = () => ({ height:ask.offsetHeight, width:ask.offsetWidth,
+            answerTop:answer.getBoundingClientRect().top, scrollHeight:view.scrollHeight,
+            display:getComputedStyle(ask).display });
+          const before = measure();
+          ask.classList.add('is-dynamic-pinned-in-sticky');
+          const during = measure();
+          const visible = getComputedStyle(ask).visibility;
+          ask.classList.remove('is-dynamic-pinned-in-sticky');
+          const after = measure();
+          ask.classList.add('is-pinned-in-sticky');
+          return { before, during, after, visible, originalVisible:getComputedStyle(ask).visibility,
+            originalDisplay:getComputedStyle(ask).display };
+        });
+        assert.deepEqual(result.during, result.before, `mirrored image ask reflowed (${width}, ${engine})`);
+        assert.deepEqual(result.after, result.before);
+        assert.equal(result.visible, 'visible');
+        assert.equal(result.originalVisible, 'visible');
+        assert.equal(result.originalDisplay, result.before.display);
+      }
+    }
+  } finally { await page.close(); }
+});
+
 async function fixture() {
   const page = await browser.newPage();
   await page.setContent(`<style>
