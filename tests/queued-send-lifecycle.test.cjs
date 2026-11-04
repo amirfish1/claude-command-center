@@ -19,6 +19,7 @@ const lifecycle = [
   between('  function takeQueuedSendAcknowledgement(', '  // Queued sends are actionable steer candidates'),
   between('  function syncPendingSendsMapForConv(', '  function removePendingSendEcho('),
   between('  function markPendingSendQueued(', '  // State 2 of the echo lifecycle:'),
+  between('  function markPendingSendDelivered(', '  // ── WT-routed send receipts'),
   between('  function removePendingSendEcho(', '  // A send the server *queued*'),
   between('  function restorePendingSendEchoes(', '  function restoreInputAfterSendFailure('),
 ].join('\n');
@@ -31,6 +32,10 @@ const renderedUserReconciliation = between(
 const renderTail = between(
   '    // The app-server live overlay is agent-output-only.',
   '    // Re-evaluate the end-of-session outcome banner');
+const steerStart = source.lastIndexOf("  document.addEventListener('click', async (ev) => {",
+  source.indexOf("const btn = ev.target.closest('[data-steer-queued-message]')"));
+const steerHandler = source.slice(steerStart,
+  source.indexOf("  document.addEventListener('click', async (ev) => {", steerStart + 1));
 let browser;
 before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
@@ -41,9 +46,10 @@ async function fixture(run, input) {
     await page.setRequestInterception(true);
     page.on('request', request => request.abort());
     await page.setContent('<div class="conv-pane" data-pane-id="main"><div class="conversations-view"></div><div class="conv-input-bar"></div></div>');
-    await page.evaluate(({ lifecycle, reconciliation, renderedUserReconciliation, renderTail }) => {
+    await page.evaluate(({ lifecycle, reconciliation, renderedUserReconciliation, renderTail, steerHandler }) => {
       window.currentConversation = 'conversation';
       window._pendingSends = [];
+      window._ultraFresh = { entries: new Map() };
       window._PENDING_SEND_ECHO_MAX_MS = 300000;
       window.sessionIdByConv = { conversation: 'session' };
       window.fixturePane = { conversationId: 'conversation', pendingSendsByConv: {} };
@@ -57,6 +63,7 @@ async function fixture(run, input) {
       window.userMessageSteerHtml = () => '';
       window.showOptimisticAgentIndicator = () => {};
       window.clearOptimisticAgentIndicator = () => {};
+      window.setOptimisticAgentThinking = () => {};
       window.clearedGenerating = 0;
       window.clearLiveGeneratingIndicator = () => { clearedGenerating++; };
       window.scrollConversationToEnd = () => {};
@@ -108,7 +115,17 @@ async function fixture(run, input) {
       };
       window.reconcileRenderedUserRows = new Function('$view', 'paneId', renderedUserReconciliation);
       window.runRenderTail = new Function('$view', 'paneId', 'opts', 'events', renderTail);
-    }, { lifecycle, reconciliation, renderedUserReconciliation, renderTail });
+      window.trayConversationView = getConvView;
+      window.markSteerInFlight = window.clearSteerInFlight = () => {};
+      window.clearQueuedSteerError = () => {};
+      window.beginOptimisticSteerMove = rows => rows;
+      window.revertOptimisticSteerMove = () => {};
+      window.showOpToast = () => {};
+      window.setQueuedSteerError = () => { throw new Error('Unexpected steer error'); };
+      window.refreshConversationList = () => {};
+      window.formatInjectFailure = data => data.error;
+      (0, eval)(steerHandler);
+    }, { lifecycle, reconciliation, renderedUserReconciliation, renderTail, steerHandler });
     return await page.evaluate(run, input);
   } finally {
     await page.close();
@@ -459,6 +476,97 @@ test('a late original queue ACK preserves the optimistic steering presentation',
     };
   });
   assert.deepEqual(result, { queuedClass: false, steeringClass: true, hidden: true, unchangedNote: true, syncs: 0, tracked: 1 });
+});
+
+test('a successful steer stays delivered after a late queue ACK and pane rebuild', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Already steered', 'session', 'main');
+    markPendingSendQueued(pending, 'Waiting');
+    pending.element.classList.remove('send-queued');
+    pending.element.classList.add('steering-optimistic');
+    markPendingSendDelivered(pending, { via: 'codex-steer', queued_consumed: 1 });
+    markPendingSendQueued(pending, 'Late queue ACK');
+    const delivered = pending.entry.delivered;
+    const queued = pending.entry.queued;
+    document.querySelector('.queued-steer-tray')?.remove();
+    getConvView().replaceChildren();
+    restorePendingSendEchoes('conversation', 'main');
+    return { delivered, queued, cards: document.querySelectorAll('.send-queued').length,
+      echoes: document.querySelectorAll('.send-delivered').length };
+  });
+  assert.deepEqual(result, { delivered: true, queued: false, cards: 0, echoes: 1 });
+});
+
+test('a queue ACK after durable reconciliation cannot revive a retired send', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Already landed', 'session', 'main');
+    reconcileUserEvent({ text: 'Already landed' }, 'main', getConvView());
+    markPendingSendQueued(pending, 'Late queue ACK');
+    return { cards: document.querySelectorAll('.send-queued').length,
+      saved: fixturePane.pendingSendsByConv.conversation || [], tracked: _pendingSends.length };
+  });
+  assert.deepEqual(result, { cards: 0, saved: [], tracked: 0 });
+});
+
+test('confirmed queue consumption overrides a queued card even without an optimistic move', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Consumed queue', 'session', 'main');
+    markPendingSendQueued(pending, 'Waiting');
+    markPendingSendDelivered(pending, { via: 'codex-steer', queued_consumed: 1 });
+    return { delivered: pending.entry.delivered, queued: pending.entry.queued,
+      actionable: !!pending.element.querySelector('[data-steer-queued-message]') };
+  });
+  assert.deepEqual(result, { delivered: true, queued: false, actionable: false });
+});
+
+test('an ordinary send ACK cannot override an existing authoritative queued state', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Still queued', 'session', 'main');
+    markPendingSendQueued(pending, 'Waiting');
+    markPendingSendDelivered(pending, { ok: true });
+    return { queued: pending.entry.queued, delivered: !!pending.entry.delivered,
+      actionable: !!pending.element.querySelector('[data-steer-queued-message]') };
+  });
+  assert.deepEqual(result, { queued: true, delivered: false, actionable: true });
+});
+
+test('a steer completion persists delivery to its original pane after focus changes', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Original pane', 'session', 'main');
+    markPendingSendQueued(pending, 'Waiting', { sync: false });
+    window._pendingSends = [{ text: 'Other pane', ts: Date.now() }];
+    markPendingSendDelivered(pending, { via: 'codex-steer', queued_consumed: 1 });
+    return fixturePane.pendingSendsByConv.conversation.map(row => ({
+      text: row.text, delivered: row.delivered, queued: row.queued,
+    }));
+  });
+  assert.deepEqual(result, [{ text: 'Original pane', delivered: true, queued: false }]);
+});
+
+test('a missing queued steer refreshes older durable history without resending', async () => {
+  const result = await fixture(async () => {
+    currentSession.source = 'codex';
+    const pending = appendPendingSendEcho('Previously delivered', 'session', 'main');
+    markPendingSendQueued(pending, 'Waiting');
+    let requests = 0;
+    window.postInjectInput = async () => {
+      requests++;
+      return { ok: false, code: 'queued_message_missing' };
+    };
+    let refreshed;
+    const done = new Promise(resolve => { refreshed = resolve; });
+    window.fetchConversationEvents = async pid => {
+      const full = fixturePane.wantFull && fixturePane.lastLine === 0;
+      reconcileUserEvent({ text: 'Previously delivered', ts: new Date().toISOString() }, pid, getConvView());
+      refreshed(full);
+    };
+    pending.element.querySelector('[data-steer-queued-message]').click();
+    const full = await done;
+    restorePendingSendEchoes('conversation', 'main');
+    return { full, requests, tracked: _pendingSends.length,
+      queued: document.querySelectorAll('.send-queued').length };
+  });
+  assert.deepEqual(result, { full: true, requests: 1, tracked: 0, queued: 0 });
 });
 
 

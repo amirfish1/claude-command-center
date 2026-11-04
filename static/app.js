@@ -11087,6 +11087,18 @@
     };
     try {
       const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true, userInitiated: true, replaceQueuedIds: [queuedRowDeliveryId(row)] });
+      if (data && data.code === 'queued_message_missing') {
+        giveBack();
+        // This card can predate the visible transcript tail. Re-read the
+        // history once so a delivered message retires its stale saved echo,
+        // rather than repeatedly offering Steer for a row the queue lacks.
+        const pid = row.closest('.conv-pane')?.dataset.paneId || activePaneId();
+        const pane = paneByPaneId(pid);
+        if (pane) { pane.wantFull = true; pane.lastLine = 0; }
+        await fetchConversationEvents(pid);
+        showOpToast('Queue changed; conversation refreshed.');
+        return;
+      }
       if (data && data.queue_pump_started) {
         giveBack();
         showOpToast('Turn ended; sending the oldest queued message now.');
@@ -12865,6 +12877,10 @@
   // When the input finally delivers, the normal JSONL dedupe removes the echo.
   function markPendingSendQueued(pending, label, opts) {
     if (!pending || !pending.entry) return;
+    // A queue POST may return after its send was steered or acknowledged by
+    // the transcript. That older reply cannot make the message queued again.
+    if (pending.entry.delivered
+        || (pending.list && !pending.list.includes(pending.entry))) return;
     if (pending.entry.timer) { clearTimeout(pending.entry.timer); pending.entry.timer = null; }
     pending.entry.queued = true;
     pending.entry.queuedLabel = label || 'Will send when the session finishes its current step.';
@@ -12935,9 +12951,14 @@
     if (pending.entry.timer) { clearTimeout(pending.entry.timer); pending.entry.timer = null; }
     const div = pending.element;
     if (!div) return;
-    // Don't downgrade a richer state (server-queued / failed) back to delivered.
-    if (div.classList.contains('send-queued') || div.classList.contains('not-acknowledged')) return;
-    div.classList.remove('pending');
+    // Only a confirmed queue consumption may replace a queued state; an
+    // ordinary send ACK can be older than the queue snapshot already shown.
+    if ((div.classList.contains('send-queued') && !(data && data.queued_consumed))
+        || div.classList.contains('not-acknowledged')) return;
+    pending.entry.queued = false;
+    pending.entry.queuedLabel = '';
+    div.classList.remove('pending', 'send-queued', 'server-queued', 'steering-optimistic');
+    delete div.dataset.queuedSteerServer;
     div.classList.add('send-delivered');
     div.querySelector('.queued-steer-actions')?.remove();
     div.querySelector('.send-queued-note')?.remove();
@@ -12975,9 +12996,11 @@
     // cutoff to it (otherwise a long turn made the message vanish "until much
     // later" when it finally landed).
     pending.entry.delivered = true;
-    const convId = currentConversation;
-    const pane = paneByPaneId(activePaneId());
-    if (convId && pane) syncPendingSendsMapForConv(pane, convId);
+    const pane = paneByPaneId(pending.paneId || activePaneId());
+    const convId = pending.conversationId || (pane && pane.conversationId);
+    if (pane && convId && pane.conversationId === convId) {
+      syncPendingSendsMapForConv(pane, convId, pending.list);
+    }
   }
 
   // ── WT-routed send receipts (CCC-452) ─────────────────────────────────
