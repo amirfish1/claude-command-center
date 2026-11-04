@@ -94668,10 +94668,13 @@
   organizeSettings();
 
   // Agents at a glance: the colorful engine + queue overview that heads the
-  // Agents destination. Detailed editors stay in the disclosures below; each
-  // tile is a shortcut into its editor. Polls only while Agents is visible.
+  // Agents destination. Ready engines switch the session/worker default in
+  // one click; engines that need setup open the connection flow in a pop-up.
+  // Queues are one row each with live counts and quick actions. Polls only
+  // while Agents is visible.
   const AGENTS_OVERVIEW_POLL_MS = 15000;
-  let _agentsOverviewQueues = null, _agentsOverviewTimer = null, _agentsOverviewSig = '';
+  let _agentsOverviewQueues = null, _agentsOverviewCodex = null, _agentsOverviewTimer = null, _agentsOverviewSig = '';
+  let _aoBusy = false, _aoSetupHome = null;
   function agentsOverviewVisible() {
     const sec = document.getElementById('settingsSection-defaults');
     return !!($settingsModal && !$settingsModal.hidden && sec && sec.classList.contains('is-active-section') && !document.hidden);
@@ -94683,89 +94686,236 @@
     box.className = 'agents-overview'; box.id = 'agentsOverview';
     box.innerHTML = '<div class="ao-block"><div class="ao-head"><div class="ao-head-main"><div class="ao-title" id="aoEngTitle">Engines</div>'
       + '<div class="ao-sub" id="aoEngSub">Checking your engines…</div></div><div class="ao-stats" id="aoEngStats"></div></div>'
-      + '<div class="ao-eng-grid" id="aoEngGrid" role="list"></div></div>'
+      + '<div id="aoEngGroups"></div></div>'
       + '<div class="ao-block"><div class="ao-head"><div class="ao-head-main"><div class="ao-title" id="aoQueueTitle">Queues</div>'
       + '<div class="ao-sub" id="aoQueueSub">Loading queues…</div></div></div>'
-      + '<div class="ao-q-grid" id="aoQueueGrid" role="list"></div></div>';
+      + '<div class="ao-q-list" id="aoQueueList" role="list"></div></div>';
     sec.prepend(box);
     box.addEventListener('click', event => {
-      const eng = event.target.closest('[data-ao-engine]');
-      if (eng) {
-        if (!window.cccEngineConnection?.open(eng.dataset.aoEngine)) setActiveSettingsRailSection('engines');
-        return;
-      }
+      const def = event.target.closest('[data-ao-default]');
+      if (def) { if (!def.classList.contains('is-active')) aoSetDefault(def.dataset.aoEngine, def.dataset.aoDefault); return; }
+      const setup = event.target.closest('[data-ao-setup]');
+      if (setup) { openEngineSetupPopup(setup.dataset.aoSetup); return; }
+      const drain = event.target.closest('[data-ao-drain]');
+      if (drain) { aoToggleDrain(drain.dataset.aoDrain, drain); return; }
+      const spawn = event.target.closest('[data-ao-spawn]');
+      if (spawn) { aoSpawnWorker(spawn.dataset.aoSpawn, spawn); return; }
       const q = event.target.closest('[data-ao-queue]');
       if (q) openQueueManager(q.dataset.aoQueue, false, q);
     });
   }
+  function aoEngineLabel(engine) { return (ENGINE_HUB_META[engine] || {}).label || engine; }
+  async function aoPost(url, body) {
+    const res = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+    return data;
+  }
+  async function aoSetDefault(engine, which) {
+    if (_aoBusy) return;
+    _aoBusy = true;
+    const model = (spawnDefaultsState.models || {})[engine] || '';
+    // The worker model is a single value, so switching the worker engine
+    // takes that engine's saved model instead of keeping a foreign one.
+    const body = which === 'worker' ? {worker_engine: engine, worker_model: model, worker_inherit_session: false} : {engine};
+    try {
+      const data = await aoPost('/api/spawn-defaults', body);
+      mergeSpawnDefaults(data);
+      if (typeof syncSpawnEngineDependentUi === 'function') syncSpawnEngineDependentUi();
+      const follows = which === 'session' && spawnDefaultsState.worker_inherit_session === true;
+      showOpToast((which === 'worker' ? 'Queue workers now run on ' : follows ? 'New sessions and queue workers now start on ' : 'New sessions now start on ')
+        + aoEngineLabel(engine) + (model ? ' · ' + model : '') + '. Queues with their own engine keep it.', 'ok');
+    } catch (err) {
+      showOpToast('Could not change the default: ' + ((err && err.message) || 'network'), 'err');
+    } finally {
+      _aoBusy = false; _agentsOverviewSig = '';
+      renderAgentsOverview(); refreshAgentsOverview();
+    }
+  }
+  async function aoToggleDrain(queue, btn) {
+    const row = (_agentsOverviewQueues || []).find(q => q.queue === queue);
+    if (!row) return;
+    btn.disabled = true;
+    try {
+      await aoPost('/api/queue/drain', {queue, auto_drain: !row.auto_drain});
+      showOpToast(queue + (row.auto_drain ? ' auto-drain paused.' : ' auto-drain on.'), 'ok');
+    } catch (err) { showOpToast('Could not change auto-drain: ' + ((err && err.message) || 'network'), 'err'); }
+    refreshAgentsOverview();
+  }
+  async function aoSpawnWorker(queue, btn) {
+    const row = (_agentsOverviewQueues || []).find(q => q.queue === queue);
+    if (!row || !row.repo_path) return;
+    btn.disabled = true; btn.textContent = 'Starting…';
+    try {
+      await aoPost('/api/queue/spawn-worker', {repo_path: row.repo_path, project: queue});
+      showOpToast('Started a worker on ' + queue + '.', 'ok');
+    } catch (err) { showOpToast('Could not start a worker: ' + ((err && err.message) || 'network'), 'err'); }
+    refreshAgentsOverview();
+  }
+  // The connection flow lives inside the Engines disclosure and its click
+  // handlers are delegated from that section, so the pop-up overlay is a
+  // child of the section and the flow's nodes move into it while open.
+  function openEngineSetupPopup(engine) {
+    const section = document.getElementById('settingsSection-engines');
+    const header = document.getElementById('engineConnection');
+    const list = document.getElementById('engList');
+    const select = document.getElementById('engineConnectionSelect');
+    if (!section || !header || !list || !select) { window.cccEngineConnection?.open(engine) || setActiveSettingsRailSection('engines'); return; }
+    let overlay = document.getElementById('aoSetupOverlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'aoSetupOverlay'; overlay.className = 'ao-setup-overlay'; overlay.hidden = true;
+      overlay.innerHTML = '<div class="ao-setup-card" role="dialog" aria-modal="true" aria-labelledby="aoSetupTitle">'
+        + '<div class="ao-setup-head"><div class="ao-setup-title" id="aoSetupTitle"></div>'
+        + '<button type="button" class="ao-setup-close" aria-label="Close">×</button></div><div class="ao-setup-body"></div></div>';
+      section.append(overlay);
+      overlay.addEventListener('click', event => {
+        if (event.target === overlay || event.target.closest('.ao-setup-close')) closeEngineSetupPopup();
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !overlay.hidden) { event.stopPropagation(); event.preventDefault(); closeEngineSetupPopup(); }
+      }, true);
+    }
+    if (!_aoSetupHome) {
+      _aoSetupHome = {parent: list.parentNode, next: list.nextSibling};
+      overlay.querySelector('.ao-setup-body').append(header, list);
+    }
+    if (![...select.options].some(o => o.value === engine)) select.disabled = false;
+    select.value = engine;
+    select.dispatchEvent(new Event('change'));
+    overlay.querySelector('#aoSetupTitle').textContent = aoEngineLabel(engine) + ' setup';
+    overlay.hidden = false;
+    if (!_engHubData) refreshEnginesHub({fresh: true});
+    overlay.querySelector('.ao-setup-close').focus();
+  }
+  function closeEngineSetupPopup() {
+    const overlay = document.getElementById('aoSetupOverlay');
+    if (!overlay || overlay.hidden) return;
+    overlay.hidden = true;
+    const header = document.getElementById('engineConnection');
+    const list = document.getElementById('engList');
+    if (_aoSetupHome && list && header) {
+      _aoSetupHome.parent.insertBefore(list, _aoSetupHome.next);
+      _aoSetupHome.parent.insertBefore(header, list);
+    }
+    _aoSetupHome = null;
+    _agentsOverviewSig = '';
+    refreshAgentsOverview();
+  }
+  function aoCodexAccountsHtml() {
+    const rows = (_agentsOverviewCodex || []).filter(r => r.source === 'codex');
+    if (!rows.length) return '';
+    const byId = new Map();
+    rows.forEach(r => { const have = byId.get(r.id); if (!have || /weekly/i.test(r.kind || '')) byId.set(r.id, r); });
+    const accounts = [...byId.values()].sort((a, b) => (b.id === 'local-codex') - (a.id === 'local-codex'));
+    return '<span class="ao-accounts">' + accounts.map((r, i) => {
+      const role = r.id === 'local-codex' ? 'Primary' : (accounts.length > 2 ? 'Secondary ' + i : 'Secondary');
+      const left = typeof r.remaining === 'number' ? Math.round(r.remaining) + '% left' : 'no reading';
+      const tone = r.status === 'blocked' || r.error ? 'bad' : (typeof r.remaining === 'number' && r.remaining < 20 ? 'warn' : 'ok');
+      return '<span class="ao-account is-' + tone + '" title="' + escapeHtml([r.identity, r.kind, r.deadline ? 'resets ' + new Date(r.deadline).toLocaleString() : '', r.error || ''].filter(Boolean).join(' · ')) + '">'
+        + '<span class="ao-account-role">' + role + '</span><span>' + escapeHtml(r.plan || '') + '</span><span class="ao-account-left">' + left + '</span></span>';
+    }).join('') + '</span>';
+  }
+  function aoEngineTile(r) {
+    const mono = r.meta.mono || r.meta.label.replace(/[^A-Za-z]/g, '').slice(0, 2);
+    const head = '<span class="eng-mono" aria-hidden="true">' + escapeHtml(mono) + '</span>';
+    if (r.state === 'ready') {
+      const inherit = spawnDefaultsState.worker_inherit_session === true;
+      const btn = (which, text, active, eligible, tip) => !eligible ? ''
+        : '<button type="button" class="ao-default' + (active ? ' is-active' : '') + '" data-ao-engine="' + r.engine + '" data-ao-default="' + which + '" aria-pressed="' + active + '" title="' + escapeHtml(tip) + '">' + (active ? '✓ ' : '') + text + '</button>';
+      return '<div role="listitem" class="ao-eng is-ready' + (r.limited ? ' is-limited' : '') + '" style="--eng-hue:' + r.meta.hue + '">'
+        + '<span class="ao-eng-top">' + head + '<span class="ao-eng-id"><span class="ao-eng-name">' + escapeHtml(r.meta.label) + '</span>'
+        + '<span class="ao-state is-' + (r.limited ? 'warn' : 'ok') + '"><span class="eng-pill-dot"></span>' + (r.limited ? 'Out of usage' : 'Ready') + '</span></span>'
+        + '<button type="button" class="ao-gear" data-ao-setup="' + r.engine + '" title="Account, sign-in and engine details" aria-label="' + escapeHtml(r.meta.label) + ' setup">⚙</button></span>'
+        + (r.engine === 'codex' ? aoCodexAccountsHtml() : '')
+        + '<span class="ao-defaults">'
+        + btn('session', 'Sessions', r.isDefault, SPAWN_DEFAULT_ENGINES.includes(r.engine), r.isDefault ? 'New sessions start on ' + r.meta.label : 'Start new sessions on ' + r.meta.label)
+        + btn('worker', 'Workers', inherit ? r.isDefault : r.isWorkerDefault, ENGINE_HUB_WORKER_ENGINES.includes(r.engine), (inherit ? r.isDefault : r.isWorkerDefault) ? 'Queue workers run on ' + r.meta.label + (inherit ? ' (following new sessions)' : '') : 'Run queue workers on ' + r.meta.label)
+        + '</span></div>';
+    }
+    const kind = r.state === 'off' ? 'off' : !r.installed ? 'missing' : 'signin';
+    const label = {off: 'Switched off', missing: 'Not installed', signin: 'Not signed in'}[kind];
+    const cta = {off: 'Turn on →', missing: 'Install →', signin: 'Sign in →'}[kind];
+    return '<button type="button" role="listitem" class="ao-eng is-' + kind + '" style="--eng-hue:' + r.meta.hue + '" data-ao-setup="' + r.engine + '">'
+      + '<span class="ao-eng-top">' + head + '<span class="ao-eng-id"><span class="ao-eng-name">' + escapeHtml(r.meta.label) + '</span>'
+      + '<span class="ao-state"><span class="eng-pill-dot"></span>' + label + '</span></span><span class="ao-cta">' + cta + '</span></span></button>';
+  }
+  function aoQueueRow(q) {
+    const plan = q.worker_plan || {};
+    const meta = ENGINE_HUB_META[plan.engine] || {label: plan.engine || 'WatchTower default', hue: 210};
+    const mono = meta.mono || String(meta.label).replace(/[^A-Za-z]/g, '').slice(0, 2);
+    const open = Number(q.depth || 0), live = Number(q.effective_workers ?? q.workers ?? 0), want = Number(q.desired_workers || 0);
+    const status = q.stuck ? ['bad', 'Stuck'] : q.config_issue || q.spawn_issue ? ['bad', 'Needs attention']
+      : !q.auto_drain ? ['muted', 'Manual'] : live > 0 ? ['ok', 'Working'] : open > 0 ? ['warn', 'Waiting for workers'] : ['ok', 'Idle'];
+    const counts = [open + ' open', q.in_progress ? q.in_progress + ' in progress' : '', q.blocked ? '<span class="ao-q-blocked">' + q.blocked + ' blocked</span>' : '']
+      .filter(Boolean).join(' · ');
+    const custom = plan.is_default === false;
+    return '<div role="listitem" class="ao-q is-' + (q.auto_drain ? 'auto' : 'manual') + '" style="--eng-hue:' + meta.hue + '">'
+      + '<span class="ao-q-id"><span class="ao-q-name" title="' + escapeHtml(q.repo_path || '') + '">' + escapeHtml(q.queue) + '</span>'
+      + '<span class="ao-q-status is-' + status[0] + '"><span class="eng-pill-dot"></span>' + status[1] + '</span></span>'
+      + '<span class="ao-q-counts">' + counts + '</span>'
+      + '<span class="ao-q-workers" title="Live workers / wanted">' + live + ' / ' + want + (want === 1 ? ' worker' : ' workers') + '</span>'
+      + '<span class="ao-q-route"><span class="eng-mono ao-q-mono" aria-hidden="true">' + escapeHtml(mono) + '</span>'
+      + '<span class="ao-q-model">' + escapeHtml(String(plan.model || meta.label).replace(/^claude-/, '')) + (plan.effort ? ' · ' + escapeHtml(plan.effort) : '') + '</span>'
+      + (custom ? '<span class="ao-badge" title="This queue overrides the worker default">Own route</span>' : '') + '</span>'
+      + '<span class="ao-q-actions">'
+      + '<button type="button" class="ao-q-btn' + (q.auto_drain ? ' is-on' : '') + '" data-ao-drain="' + escapeHtml(q.queue) + '" title="' + (q.auto_drain ? 'Stop starting workers automatically' : 'Start workers automatically when tickets are open') + '">' + (q.auto_drain ? 'Pause' : 'Auto-drain') + '</button>'
+      + (q.repo_path ? '<button type="button" class="ao-q-btn" data-ao-spawn="' + escapeHtml(q.queue) + '" title="Start one extra worker now">+ Worker</button>' : '')
+      + '<button type="button" class="ao-q-btn" data-ao-queue="' + escapeHtml(q.queue) + '" title="Engine, model, workers and claim types">Edit</button>'
+      + '</span></div>';
+  }
   function renderAgentsOverview() {
-    const grid = document.getElementById('aoEngGrid');
-    if (!grid) return;
+    const groups = document.getElementById('aoEngGroups');
+    if (!groups) return;
     const rows = _engHubData ? _engHubRows() : [];
     const qd = _agentsOverviewQueues;
-    const sig = JSON.stringify([rows.map(r => [r.engine, r.state, r.limited, r.isDefault, r.isWorkerDefault, r.version]),
-      qd && qd.queues, qd && qd.worker_default]);
+    const sig = JSON.stringify([rows.map(r => [r.engine, r.state, r.installed, r.auth, r.limited, r.isDefault, r.isWorkerDefault]),
+      spawnDefaultsState.worker_inherit_session, qd, _agentsOverviewCodex]);
     if (sig === _agentsOverviewSig) return;
     _agentsOverviewSig = sig;
     if (rows.length) {
       const order = Object.keys(ENGINE_HUB_META);
-      const rank = {ready: 0, setup: 1, off: 2};
-      rows.sort((a, b) => (rank[a.state] - rank[b.state]) || ((order.indexOf(a.engine) + 99) % 99 - (order.indexOf(b.engine) + 99) % 99));
-      const counts = {ready: 0, setup: 0, off: 0};
-      rows.forEach(r => { counts[r.state] += 1; });
-      document.getElementById('aoEngTitle').textContent = counts.ready + ' of ' + rows.length + ' engines ready';
-      const limited = rows.filter(r => r.state === 'ready' && r.limited);
-      document.getElementById('aoEngSub').textContent = limited.length
-        ? limited.map(r => r.meta.label).join(', ') + ' ' + (limited.length > 1 ? 'are' : 'is') + ' out of usage right now. Click an engine to manage it.'
-        : 'Click an engine to install, sign in or change its defaults.';
-      document.getElementById('aoEngStats').innerHTML = [['ready', 'Ready', 'ok'], ['setup', 'Needs setup', 'warn'], ['off', 'Off', 'muted']]
-        .map(s => '<span class="eng-stat is-' + s[2] + '"><span class="eng-stat-num">' + counts[s[0]] + '</span><span class="eng-stat-label">' + s[1] + '</span></span>').join('');
-      const stateLabel = r => r.state === 'off' ? 'Switched off'
-        : r.state === 'setup' ? (!r.installed ? 'Not installed' : 'Not signed in')
-        : r.limited ? 'Out of usage' : 'Ready';
-      grid.innerHTML = rows.map(r => {
-        const mono = r.meta.mono || r.meta.label.replace(/[^A-Za-z]/g, '').slice(0, 2);
-        const tone = r.state === 'ready' ? (r.limited ? 'warn' : 'ok') : r.state === 'setup' ? 'warn' : 'muted';
-        const badges = (r.isDefault ? '<span class="ao-badge">Sessions</span>' : '') + (r.isWorkerDefault ? '<span class="ao-badge">Workers</span>' : '');
-        return '<button type="button" role="listitem" class="ao-eng is-' + r.state + '" style="--eng-hue:' + r.meta.hue + '" data-ao-engine="' + escapeHtml(r.engine) + '" title="Manage ' + escapeHtml(r.meta.label) + '">'
-          + '<span class="eng-mono" aria-hidden="true">' + escapeHtml(mono) + '</span>'
-          + '<span class="ao-eng-id"><span class="ao-eng-name">' + escapeHtml(r.meta.label) + '</span>'
-          + '<span class="ao-state is-' + tone + '"><span class="eng-pill-dot"></span>' + stateLabel(r) + '</span></span>'
-          + (badges ? '<span class="ao-badges">' + badges + '</span>' : '') + '</button>';
-      }).join('');
+      rows.sort((a, b) => order.indexOf(a.engine) - order.indexOf(b.engine));
+      const ready = rows.filter(r => r.state === 'ready');
+      const signin = rows.filter(r => r.state === 'setup' && r.installed);
+      const missing = rows.filter(r => r.state === 'setup' && !r.installed);
+      const off = rows.filter(r => r.state === 'off');
+      document.getElementById('aoEngTitle').textContent = ready.length + ' of ' + rows.length + ' engines ready';
+      const limited = ready.filter(r => r.limited);
+      document.getElementById('aoEngSub').textContent = (limited.length
+        ? limited.map(r => r.meta.label).join(', ') + ' ' + (limited.length > 1 ? 'are' : 'is') + ' out of usage right now. ' : '')
+        + 'Pick which engine new sessions and queue workers use.';
+      document.getElementById('aoEngStats').innerHTML = [[ready.length, 'Ready', 'ok'], [signin.length, 'Sign-in', signin.length ? 'bad' : 'muted'], [missing.length + off.length, 'Not installed', 'muted']]
+        .map(s => '<span class="eng-stat is-' + s[2] + '"><span class="eng-stat-num">' + s[0] + '</span><span class="eng-stat-label">' + s[1] + '</span></span>').join('');
+      const group = (cls, title, list) => !list.length ? ''
+        : '<div class="ao-eng-group is-' + cls + '">' + (title ? '<div class="ao-group-label">' + title + ' · ' + list.length + '</div>' : '')
+          + '<div class="ao-eng-grid" role="list">' + list.map(aoEngineTile).join('') + '</div></div>';
+      groups.innerHTML = group('ready', '', ready) + group('signin', 'Needs sign-in', signin)
+        + group('missing', 'Not installed', missing) + group('off', 'Switched off', off);
     } else if (_engHubUnavailable) {
       document.getElementById('aoEngSub').textContent = 'Engine status is unavailable right now. Retrying on its own.';
     }
-    const qgrid = document.getElementById('aoQueueGrid');
+    const list = document.getElementById('aoQueueList');
     if (!qd) return;
-    const queues = (qd.queues || []).slice().sort((a, b) => (b.auto_drain - a.auto_drain) || a.queue.localeCompare(b.queue));
-    const slots = queues.reduce((sum, q) => sum + Number(q.workers || 0), 0);
-    const autoCount = queues.filter(q => q.auto_drain).length;
+    const queues = qd.slice().sort((a, b) => (b.auto_drain - a.auto_drain) || (Number(b.depth || 0) - Number(a.depth || 0)) || a.queue.localeCompare(b.queue));
+    const live = queues.reduce((sum, q) => sum + Number(q.effective_workers ?? q.workers ?? 0), 0);
+    const open = queues.reduce((sum, q) => sum + Number(q.depth || 0), 0);
+    const stuck = queues.filter(q => q.stuck).length;
     document.getElementById('aoQueueTitle').textContent = queues.length + ' queues';
-    const wd = qd.worker_default || {};
-    document.getElementById('aoQueueSub').textContent = autoCount + ' auto-draining · ' + slots + ' worker slots · default route '
-      + [((ENGINE_HUB_META[wd.engine] || {}).label || wd.engine), wd.model, wd.effort].filter(Boolean).join(' · ') + '. Click a queue to edit it.';
-    qgrid.innerHTML = queues.length ? queues.map(q => {
-      const meta = ENGINE_HUB_META[q.engine] || {label: q.engine || 'WatchTower default', hue: 210};
-      const mono = meta.mono || String(meta.label).replace(/[^A-Za-z]/g, '').slice(0, 2);
-      const pinned = Object.keys(q.pins || {});
-      return '<button type="button" role="listitem" class="ao-q' + (q.auto_drain ? ' is-auto' : ' is-manual') + '" style="--eng-hue:' + meta.hue + '" data-ao-queue="' + escapeHtml(q.queue) + '" title="Edit queue ' + escapeHtml(q.queue) + '">'
-        + '<span class="ao-q-top"><span class="ao-q-name">' + escapeHtml(q.queue) + '</span>'
-        + '<span class="ao-q-mode"><span class="eng-pill-dot"></span>' + (q.auto_drain ? 'Auto' : 'Manual') + '</span></span>'
-        + '<span class="ao-q-route"><span class="eng-mono ao-q-mono" aria-hidden="true">' + escapeHtml(mono) + '</span>'
-        + '<span class="ao-q-model">' + escapeHtml(String(q.model || meta.label).replace(/^claude-/, '')) + '</span></span>'
-        + '<span class="ao-q-foot"><span>' + escapeHtml(q.effort || 'default') + '</span><span>' + Number(q.workers || 0) + ' worker' + (Number(q.workers) === 1 ? '' : 's') + '</span>'
-        + (pinned.length ? '<span class="ao-badge" title="Pinned: ' + escapeHtml(pinned.join(', ')) + '">Pinned</span>' : '') + '</span></button>';
-    }).join('') : '<p class="settings-empty">No active queues.</p>';
+    document.getElementById('aoQueueSub').textContent = queues.filter(q => q.auto_drain).length + ' auto-draining · ' + live + ' workers live · '
+      + open + ' open tickets' + (stuck ? ' · ' + stuck + ' stuck' : '');
+    list.innerHTML = queues.length ? queues.map(aoQueueRow).join('') : '<p class="settings-empty">No queues configured.</p>';
   }
   async function refreshAgentsOverview() {
     if (!agentsOverviewVisible()) return;
-    const [, queues] = await Promise.all([
+    const get = url => fetch(url, {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null);
+    const [, status, allowances] = await Promise.all([
       (!_engHubData || !_engHubVisible()) ? refreshEnginesHub({fresh: false}) : null,
-      fetch('/api/settings/queue-engines', {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null),
+      get('/api/queue/status'), get('/api/allowances'),
     ]);
-    if (queues && queues.queues) _agentsOverviewQueues = queues;
-    else if (!_agentsOverviewQueues) { const s = document.getElementById('aoQueueSub'); if (s) s.textContent = 'Queue routing is unavailable right now. Retrying on its own.'; }
+    if (status && Array.isArray(status.queues)) _agentsOverviewQueues = status.queues.filter(q => q.configured !== false);
+    else if (!_agentsOverviewQueues) { const s = document.getElementById('aoQueueSub'); if (s) s.textContent = 'Queue status is unavailable right now. Retrying on its own.'; }
+    if (allowances && Array.isArray(allowances.rows)) _agentsOverviewCodex = allowances.rows;
     renderAgentsOverview();
   }
   function scheduleAgentsOverview() {
