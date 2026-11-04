@@ -40,7 +40,7 @@ from ccc_server import core as _core
 # inside /Applications/Codex.app.
 
 CODEX_APP_BUNDLE_PATH = "/Applications/Codex.app/Contents/Resources/codex"
-CODEX_STATE_DB = Path.home() / ".codex" / "state_5.sqlite"
+CODEX_STATE_DB = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser() / "state_5.sqlite"
 # Codex stores per-thread goals (the native `/goal` feature) in their own
 # sqlite, separate from the thread index. Table `thread_goals` is keyed by
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
@@ -778,8 +778,8 @@ def _codex_managed_app_server_enabled():
 def _codex_shared_state_db_files():
     """Codex SQLite files that must not be held by more than one app-server writer."""
     return [
-        Path.home() / ".codex" / "state_5.sqlite",
-        Path.home() / ".codex" / "logs_2.sqlite",
+        _core._codex_home() / "state_5.sqlite",
+        _core._codex_home() / "logs_2.sqlite",
     ]
 
 
@@ -3411,7 +3411,7 @@ def _codex_rollout_exists_on_disk(thread_id):
     if not sid:
         return False
     try:
-        root = Path.home() / ".codex" / "sessions"
+        root = _core.CODEX_SESSIONS_ROOT
         if not root.is_dir():
             return False
         return any(root.rglob(f"*{sid}.jsonl"))
@@ -8520,10 +8520,10 @@ def _codex_interrupt_via_app_server(session_id, cwd=None):
     }
 
 
-def _codex_state_db_candidates():
+def _codex_state_db_candidates(home=None):
     """Existing Codex state DB paths, newest known schema first."""
-    base = Path.home() / ".codex"
-    candidates = [_core.CODEX_STATE_DB]
+    base = Path(home) if home is not None else _core._codex_home()
+    candidates = [base / "state_5.sqlite"] if home is not None else [_core.CODEX_STATE_DB]
     try:
         if base.is_dir():
             for p in sorted(base.glob("state*.sqlite"), key=lambda x: x.name, reverse=True):
@@ -8821,6 +8821,17 @@ def _codex_db_signature(db):
 
 
 def _codex_fetch_threads(where="", params=(), limit=None, columns=None):
+    from ccc_server.codex_accounts import homes
+    bases = [_core._codex_home()] if os.environ.get("CCC_CODEX_ACCOUNT_KEY") else homes()
+    rows = {}
+    for home in bases:
+        for row in _codex_fetch_threads_in_home(where, params, limit, columns, None if home == _core._codex_home() else home):
+            rows.setdefault(row["id"], row)
+    result = sorted(rows.values(), key=lambda r: r.get("updated_at_ms") or (r.get("updated_at") or 0) * 1000, reverse=True)
+    return result[:int(limit)] if limit else result
+
+
+def _codex_fetch_threads_in_home(where="", params=(), limit=None, columns=None, home=None):
     """Read rows from Codex's local thread index without creating files.
 
     Codex stores durable conversation metadata in ~/.codex/state_*.sqlite,
@@ -8829,7 +8840,7 @@ def _codex_fetch_threads(where="", params=(), limit=None, columns=None):
     Narrow projections avoid reading prompt/source payloads on liveness paths.
     """
     columns = tuple(columns) if columns is not None else None
-    for db in _codex_state_db_candidates():
+    for db in (_codex_state_db_candidates() if home is None else _codex_state_db_candidates(home)):
         sig = _codex_db_signature(db)
         cache_key = (str(db), where, tuple(params), limit, columns)
         if sig is not None:
@@ -10487,7 +10498,7 @@ def _codex_backfill_candidate_rows(days=None, repo_paths=None, now=None, limit=1
 
 
 def _codex_global_state_path():
-    return Path.home() / ".codex" / ".codex-global-state.json"
+    return _core._codex_home() / ".codex-global-state.json"
 
 
 def _read_codex_global_state():

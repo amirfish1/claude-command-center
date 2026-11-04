@@ -44,7 +44,7 @@ CODEX_GOALS_DB_CANDIDATES = (
     _CODEX_HOME_DIR / "sqlite" / "goals_1.sqlite",
 )
 CODEX_SESSIONS_ROOT = _CODEX_HOME_DIR / "sessions"
-CODEX_APP_SERVER_STATE_FILE = COMMAND_CENTER_STATE_DIR / "codex-app-server-state.json"
+CODEX_APP_SERVER_STATE_FILE = Path(os.environ.get("CCC_CODEX_RUNTIME_DIR", str(COMMAND_CENTER_STATE_DIR))) / "codex-app-server-state.json"
 CODEX_TELEMETRY_FILE = COMMAND_CENTER_STATE_DIR / "codex-telemetry.jsonl"
 _SPAWN_TIMELINE_FILE = COMMAND_CENTER_STATE_DIR / "spawn-timeline.json"
 

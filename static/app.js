@@ -11980,6 +11980,7 @@
   });
 
   function updateInputBar() {
+    syncCodexAccountUi();
     if (!$convInputBar) return;
     // In split-pane mode the active pane may not be p1; find its input bar so
     // we toggle 'visible' on the right element (p1's #convInputBar is always
@@ -80608,6 +80609,42 @@
   //   effortExplicit — send reasoning_effort even when blank, so a user who
   //   deliberately cleared the control overrides the saved default instead of
   //   falling back to it.
+  var _codexAccountsLoadedAt = 0;
+  var _codexAccountsLoading = false;
+  var _codexAccountSession = '';
+  function syncCodexAccountUi() {
+    const row = document.getElementById('codexAccountRow');
+    const select = document.getElementById('codexAccountSelect');
+    const badge = document.getElementById('codexSessionAccount');
+    if (!row || !select || !badge) return;
+    const isNew = currentConversation === '__new__';
+    row.hidden = !(isNew && getSpawnEngine() === 'codex');
+    const sid = !isNew && currentSession && currentSession.source === 'codex' ? String(currentConversation || '') : '';
+    badge.hidden = !sid;
+    if (sid && _codexAccountSession !== sid) {
+      _codexAccountSession = sid;
+      badge.textContent = 'Codex account…';
+      fetch('/api/codex/accounts?session_id=' + encodeURIComponent(sid)).then(r => r.json()).then(data => {
+        if (_codexAccountSession === sid) badge.textContent = 'Account: ' + data.session_account;
+      }).catch(() => { if (_codexAccountSession === sid) badge.textContent = 'Account unavailable'; });
+    }
+    if (row.hidden || _codexAccountsLoading || Date.now() - _codexAccountsLoadedAt < 30000) return;
+    _codexAccountsLoading = true;
+    fetch('/api/codex/accounts').then(r => r.json()).then(data => {
+      if (!data.ok) throw new Error('Accounts unavailable');
+      const selected = select.value;
+      select.replaceChildren(new Option('Codex · current account', '__current__'));
+      for (const account of data.accounts || []) {
+        if (!account.current) select.add(new Option(account.label, account.id));
+      }
+      if (selected && !Array.from(select.options).some(o => o.value === selected)) {
+        select.add(new Option('Selected account unavailable — reconnect in Allowances', selected));
+      }
+      select.value = selected;
+      _codexAccountsLoadedAt = Date.now();
+    }).catch(() => { _codexAccountsLoadedAt = 0; }).finally(() => { _codexAccountsLoading = false; });
+  }
+
   function buildSpawnBody(opts) {
     const o = opts || {};
     const engine = String(o.engine || '').trim();
@@ -80615,6 +80652,8 @@
     // the server's own persisted spawn-defaults engine win, which silently
     // spawned a Claude-picked model under Codex.
     const body = { prompt: o.prompt, engine };
+    const accountSelect = document.getElementById("codexAccountSelect");
+    if (engine === "codex" && accountSelect && accountSelect.value) body.codex_account_id = accountSelect.value;
     if (o.name) body.name = o.name;
     if (o.cwd) body.cwd = o.cwd;
     if (o.repoPath) body.repo_path = o.repoPath;
@@ -80894,6 +80933,7 @@
   let _emnForced = '';             // engine named by a failed spawn
   let _emnBusy = '';               // engine whose install terminal we opened
   function syncSpawnEngineDependentUi() {
+    syncCodexAccountUi();
     const engine = getSpawnEngine();
     if (typeof refreshEngineMissingNotice === 'function') {
       if (_emnInstalled) renderEngineMissingNotice(); else refreshEngineMissingNotice();

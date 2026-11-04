@@ -488,8 +488,20 @@ def _control_plane_engine_call(
     parent_work_id=None, timeout_ms=None,
 ):
     """Return worker result, or None only when no worker accepted the request."""
-    if not _control_plane_routes_engines():
+    if engine == "codex" and os.environ.get("CCC_WORKER_PROCESS") == "1":
+        from ccc_server.codex_accounts import route
+        routed = route(operation, args if isinstance(args, dict) else {})
+        if routed is not None:
+            return routed
+    def isolated_fallback_error():
+        if engine == "codex":
+            from ccc_server.codex_accounts import requires_isolation
+            if requires_isolation(operation, args if isinstance(args, dict) else {}):
+                return {"ok": False, "code": "codex_account_unavailable",
+                        "error": "The account-aware worker is unavailable; restart the CCC worker before using this account"}
         return None
+    if not _control_plane_routes_engines():
+        return None if os.environ.get("CCC_WORKER_PROCESS") == "1" else isolated_fallback_error()
     method = "engine.execute" if mutate else "engine.query"
     args = args if isinstance(args, dict) else {}
     if mutate and "delivery_id" not in args:
@@ -532,12 +544,12 @@ def _control_plane_engine_call(
         # Version skew during a rolling dashboard update: an older worker has
         # definitively rejected (and therefore did not execute) the request.
         # Falling back is safe until that idle worker is upgraded.
-        return None
+        return isolated_fallback_error()
     # A connect failure proves the worker did not receive the request, so the
     # mature in-process path remains a compatibility fallback. A timeout after
     # send is ambiguous and MUST NOT fall back or it could duplicate effects.
     if not response.get("available") and not response.get("ambiguous"):
-        return None
+        return isolated_fallback_error()
     return response
 
 
@@ -30304,6 +30316,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # _STATS_CACHE_LOCK).
             _save_stats_file_cache()
             self.send_json(result)
+        elif path == "/api/codex/accounts":
+            from ccc_server.codex_accounts import public_payload
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(public_payload(qs.get("session_id", [""])[0]))
         elif path == "/api/allowances":
             from ccc_server import allowances
             self.send_json(allowances.payload())
@@ -38535,6 +38551,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         task_key or f"prompt:{prompt_hash}",
                         dedupe_scope,
                     )
+                    if engine == "codex" and payload.get("codex_account_id"):
+                        dedupe_key += (str(payload["codex_account_id"]),)
                     with _SPAWN_DEDUPE_LOCK:
                         dedupe_slot = _SPAWN_DEDUPE_INFLIGHT.get(dedupe_key)
                         if dedupe_slot is None:
@@ -38581,6 +38599,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         result = _dedupe_existing_response(
                             matched, finished=finished_row is not None,
                         )
+                        if engine == "codex":
+                            from ccc_server.codex_accounts import dedupe_matches
+                            try:
+                                same_account = dedupe_matches(dict(payload, parent_session_id=parent_session_id), result.get("session_id"))
+                            except ValueError:
+                                same_account = False
+                            if not same_account:
+                                result = {"ok": False, "code": "codex_account_conflict",
+                                          "error": "This deduplicated task belongs to another Codex account; use a new task key for a new session"}
                         _log_activity(
                             "spawn", "DEDUPED",
                             f"key={task_key or prompt_hash!r} "
@@ -38649,6 +38676,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     if engine == "codex":
                         result = spawn_session_codex(
                             prompt,
+                            **({"codex_account_id": payload["codex_account_id"]} if payload.get("codex_account_id") else {}),
                             timeline_t0_epoch_ms=payload.get("timeline_t0_epoch_ms"),
                             name=name,
                             cwd=spawn_cwd,
@@ -39030,6 +39058,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     ) + prompt
                     result = spawn_session_codex(
                         prompt,
+                        **({"codex_account_id": payload["codex_account_id"]} if payload.get("codex_account_id") else {}),
                         timeline_t0_epoch_ms=payload.get("timeline_t0_epoch_ms"),
                         name=name,
                         cwd=str(cwd_resolved) if cwd_resolved else None,

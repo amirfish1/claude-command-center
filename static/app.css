@@ -5120,7 +5120,8 @@
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "chips chips"
-      "cwd worktree";
+      "cwd worktree"
+      "account account";
     align-items: center;
     gap: 7px 12px;
     white-space: normal;
@@ -34185,3 +34186,8 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
   box-shadow: inset 3px 0 0 color-mix(in srgb, var(--red) 75%, transparent) !important;
   background-image: linear-gradient(color-mix(in srgb, var(--red) 5%, transparent), color-mix(in srgb, var(--red) 5%, transparent)) !important;
 }
+
+  .codex-account-row { grid-area: account; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+  .codex-account-row[hidden], .codex-session-account[hidden] { display: none; }
+  .codex-account-row select { flex: 1; min-width: 0; max-width: 360px; padding: 5px 7px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+  .codex-account-row a, .codex-session-account { color: var(--text-muted); font-size: 12px; }

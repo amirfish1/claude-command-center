@@ -62,6 +62,10 @@ class WorkerRuntime:
         self.recovered = self.ledger.recover_orphaned_running(self.epoch)
         self._engine_host = None
         self._engine_host_lock = threading.Lock()
+        self._account_lock = threading.Lock()
+        self._account_requests = 0
+        self._account_retiring = False
+        self._shutdown = None
 
     def dispatch(self, method, params):
         params = params if isinstance(params, dict) else {}
@@ -198,11 +202,38 @@ class WorkerRuntime:
             )
         if method == "engine.adopt":
             return self._engines().adopt_registry()
+        if method == "account.retire":
+            if not os.environ.get("CCC_CODEX_ACCOUNT_KEY"):
+                return {"ok": False, "code": "method_not_found"}
+            with self._account_lock:
+                if self._account_requests:
+                    return {"ok": False, "code": "account_busy"}
+                host = self._engine_host
+                legacy = host._module if host else None
+                if legacy is not None:
+                    with legacy._CODEX_APP_SERVER_LOCK:
+                        states = list(legacy._CODEX_APP_SERVER_THREAD_STATE.values())
+                        if any(s.get("active_turn_id") or s.get("pending_approval") or s.get("status") == "active" for s in states):
+                            return {"ok": False, "code": "account_busy"}
+                self._account_retiring = True
+                if legacy is not None:
+                    legacy._codex_app_server_shutdown()
+                if self._shutdown:
+                    threading.Thread(target=self._shutdown, daemon=True).start()
+                return {"ok": True}
         if method in ("engine.execute", "engine.query"):
-            host = self._engines()
-            if method == "engine.execute":
-                return host.execute(params)
-            return host.query(params)
+            with self._account_lock:
+                if self._account_retiring:
+                    return {"ok": False, "code": "account_retiring", "error": "The account backend is restarting; retry this request"}
+                self._account_requests += 1
+            try:
+                host = self._engines()
+                if method == "engine.execute":
+                    return host.execute(params)
+                return host.query(params)
+            finally:
+                with self._account_lock:
+                    self._account_requests -= 1
         return {"ok": False, "code": "method_not_found", "error": "unknown method"}
 
     def _engines(self):
@@ -366,6 +397,7 @@ def serve(path=None):
     open_files = _raise_open_file_limit()
     runtime = WorkerRuntime(token=token)
     server = WorkerServer(path, runtime)
+    runtime._shutdown = server.shutdown
     os.chmod(path, 0o600)
     pidfile = worker_pid_path()
     try:

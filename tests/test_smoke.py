@@ -11331,7 +11331,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         ])
         self.assertTrue(hasattr(server, "spawn_session_codex"))
         sig = inspect.signature(server.spawn_session_codex)
-        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "reasoning_effort", "parent_session_id", "timeline_t0_epoch_ms"])
+        self.assertEqual(list(sig.parameters), ["prompt", "name", "cwd", "repo_path", "worktree", "model", "reasoning_effort", "parent_session_id", "timeline_t0_epoch_ms", "codex_account_id"])
 
     def test_spawn_session_gemini_exists(self):
         """`spawn_session_gemini` must exist alongside the other engines

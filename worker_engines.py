@@ -92,14 +92,16 @@ class EngineHost:
                     server._probe_claude_spawn_capabilities(resolved.get("bin"))
                 # Reservations are disposable and are persisted only so a
                 # replacement worker can kill any process the old owner left.
-                server._reap_orphaned_claude_prewarms()
+                if not os.environ.get("CCC_CODEX_ACCOUNT_KEY"):
+                    server._reap_orphaned_claude_prewarms()
                 # A worker restart can inherit still-live CLI children. Reopen
                 # their durable FIFOs here, in the process that owns engine
                 # execution, rather than in the restartable dashboard.
-                server._reattach_spawned_orphans(
-                    skip_engines=("kimi", "grok"),
-                    only_engines=("claude", "codex"),
-                )
+                if not os.environ.get("CCC_CODEX_ACCOUNT_KEY"):
+                    server._reattach_spawned_orphans(
+                        skip_engines=("kimi", "grok"),
+                        only_engines=("claude", "codex"),
+                    )
         return self._module
 
     def execute(self, params):
@@ -443,6 +445,11 @@ class EngineHost:
 
     def _call_unbound(self, engine, operation, args, query=False):
         legacy = self._legacy()
+        if engine == "codex":
+            from ccc_server import codex_accounts
+            routed = codex_accounts.route(operation, args)
+            if routed is not None:
+                return routed
         if operation == "takeover_deliver":
             # Dedicated immediate operation: never the durable dispatch ledger
             # or the legacy prompt router, both of which may queue input.
@@ -615,6 +622,8 @@ class EngineHost:
                             legacy._CODEX_APP_SERVER_THREAD_STATE or {}
                         ).items()
                     }
+                from ccc_server.codex_accounts import extra_states
+                states.update(extra_states())
                 return {"ok": True, "states": states}
             if operation == "active":
                 return {
@@ -824,9 +833,17 @@ class EngineHost:
                 "session_id": sid,
             }
         if engine == "codex":
-            app_active = legacy._codex_app_server_thread_is_active(
-                sid, start_if_needed=False
-            )
+            from ccc_server import codex_accounts
+            account = codex_accounts.session_account(sid) if not os.environ.get("CCC_CODEX_ACCOUNT_KEY") else None
+            if account:
+                status = codex_accounts.query_account(account, "active", {"session_id": sid})
+                if not status.get("ok"):
+                    raise RuntimeError("Cannot verify completion on the selected Codex account")
+                app_active = status.get("active")
+            else:
+                app_active = legacy._codex_app_server_thread_is_active(
+                    sid, start_if_needed=False
+                )
             if result.get("via") in ("codex-app-spawn", "codex-app-server"):
                 return bool(app_active), not bool(app_active), {"session_id": sid}
             pid = result.get("pid")

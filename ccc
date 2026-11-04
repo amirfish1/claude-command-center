@@ -1967,6 +1967,9 @@ def cmd_spawn(args):
     prompt = " ".join(args.prompt).strip()
     if not prompt and not sys.stdin.isatty():
         prompt = sys.stdin.read().strip()
+    if args.continue_from and getattr(args, "codex_account", None):
+        print("ccc spawn: an existing session keeps its account; choose --codex-account for a new session", file=sys.stderr)
+        return 2
     if args.continue_from:
         sid, err = _resolve_target(base, args.continue_from)
         if err:
@@ -1978,6 +1981,11 @@ def cmd_spawn(args):
               file=sys.stderr)
         return 2
     payload = {"prompt": prompt}
+    if getattr(args, "codex_account", None):
+        if args.engine != "codex":
+            print("ccc spawn: --codex-account requires --engine codex", file=sys.stderr)
+            return 2
+        payload["codex_account_id"] = args.codex_account
     if args.engine:
         payload["engine"] = args.engine
     if args.model:
@@ -2712,6 +2720,8 @@ def main(argv=None):
     p.add_argument("--engine",
                    help="claude (default), codex, cursor, antigravity, kilo, "
                         "opencode, aider, hermes, kimi, devin, droid, grok, pi")
+    p.add_argument("--codex-account", metavar="ACCOUNT_ID",
+                   help="connected Allowances account for this new Codex session")
     p.add_argument("--model",
                    help="model id for the engine — see `ccc models` (omit for the "
                         "server default)")

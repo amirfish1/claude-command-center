@@ -6716,7 +6716,7 @@ def spawn_session(prompt, name=None, cwd=None, repo_path=None, worktree=False, m
 
 
 @_continuation_topics.track_spawn
-def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort="", parent_session_id=None, timeline_t0_epoch_ms=None):
+def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, reasoning_effort="", parent_session_id=None, timeline_t0_epoch_ms=None, codex_account_id=None):
     """Spawn a headless Codex run and return tracking info.
 
     Spawning goes through the Codex app-server exclusively: it creates fresh
@@ -6740,6 +6740,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
     routed = _core._control_plane_engine_call(
         "codex", "spawn", {
             "prompt": prompt,
+            **({"codex_account_id": codex_account_id} if codex_account_id else {}),
             "name": name,
             "cwd": cwd,
             "repo_path": repo_path,
@@ -6757,6 +6758,7 @@ def spawn_session_codex(prompt, name=None, cwd=None, repo_path=None, worktree=Fa
         routed = _core._control_plane_engine_call(
             "codex", "spawn", {
                 "prompt": prompt, "name": name, "cwd": cwd,
+                **({"codex_account_id": codex_account_id} if codex_account_id else {}),
                 "repo_path": repo_path, "worktree": bool(worktree),
                 "model": model, "reasoning_effort": reasoning_effort,
                 "parent_session_id": parent_session_id,

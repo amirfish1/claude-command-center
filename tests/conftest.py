@@ -199,3 +199,13 @@ def isolated_sender_identity(monkeypatch):
     for key in sender_envelope._INHERITED:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(sender_envelope, '_nearest_engine', lambda: '')
+
+
+# Account bindings and indexes must not read or modify real connected profiles.
+os.environ.setdefault("CCC_CODEX_ACCOUNTS_DIR", tempfile.mkdtemp(prefix="ccc-test-accounts-"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_codex_connected_accounts(monkeypatch):
+    from ccc_server import codex_accounts
+    monkeypatch.setattr(codex_accounts, "configured", lambda: [])
