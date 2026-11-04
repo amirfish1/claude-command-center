@@ -35,10 +35,11 @@
   --out /tmp/recap.html --repo claude-command-center` then open the file.
 - `GET /api/recap?format=json` returns the same payload the HTML renders.
 
+- STRETCH (partial): the "⋯ more" menu now links "Share today's recap" to
+  `/api/recap?format=html`. OG image not done (no SVG→PNG tool confirmed
+  available on this machine).
+
 ## Left / next
-- STRETCH not done: OG image (no SVG→PNG tool confirmed available) and a
-  dashboard "Share recap" button — next most valuable step is a small
-  button in `static/` that links to `/api/recap?format=html`.
 - Sessions counted = sessions with ≥1 agent turn that day (no turn → not
   counted), matching the productivity turn pipeline.
 
