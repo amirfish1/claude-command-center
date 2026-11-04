@@ -1,1 +1,1 @@
-- Refresh the session sidebar when a new Codex session appears in any configured account, without rebuilding it for every streamed turn.
+- Show new Codex sessions from every configured account while a full sidebar rebuild is deferred, and refresh the archive on thread additions without rebuilding it for every streamed turn.

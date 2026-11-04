@@ -17428,6 +17428,10 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
         force_refresh=force_refresh,
     )
     _phase("serve_ms")
+    codex_overlay = _archive_overlay_codex_sessions(rows)
+    if codex_overlay:
+        rows = list(rows or []) + codex_overlay
+    _phase("codex_ms")
     # ACP sessions (Kimi/GLM) live in memory before their first transcript
     # lands and before the archive background refresh picks them up. Without
     # this overlay, a brand-new ACP session appears in the UI via the pending
@@ -17463,7 +17467,7 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
     if claude_overlay:
         rows = list(rows or []) + claude_overlay
     _phase("claude_reg_ms")
-    extra = ((overlay or []) + (devin_overlay or []) + (worker_overlay or [])
+    extra = ((codex_overlay or []) + (overlay or []) + (devin_overlay or []) + (worker_overlay or [])
              + (claude_overlay or []))
     body_ver = _archive_list_body_ver(key, rows, extra)
     _phase("ver_ms")
@@ -17518,6 +17522,47 @@ def _archive_claude_registry_rows():
         return out
     finally:
         _ARCHIVE_CLAUDE_REG_LOCK.release()
+
+
+def _archive_overlay_codex_sessions(rows, now=None):
+    """Recent indexed threads stay visible while a full rebuild is deferred.
+
+    One bounded, signature-cached bulk query across account homes; never read
+    transcripts or ask an engine about each row on this polling path.
+    """
+    existing = {str(r.get("session_id") or r.get("id") or "")
+                for r in rows or [] if isinstance(r, dict)}
+    columns = ("id", "title", "cwd", "model", "reasoning_effort",
+               "created_at", "created_at_ms", "updated_at", "updated_at_ms", "archived")
+    try:
+        candidates = _codex_fetch_threads(limit=200, columns=columns)
+    except Exception:
+        return []
+    missing = [r for r in candidates if r.get("id") not in existing and not r.get("archived")]
+    if not missing:
+        return []
+    now = time.time() if now is None else now
+    archived, trashed = _load_conversation_lifecycle_sets()
+    parents = _session_graph.parent_snapshot()
+    names = _load_session_name_overrides()
+    out = []
+    for row in missing:
+        sid = row["id"]
+        stamp = _codex_ts_seconds(row, "updated") or _codex_ts_seconds(row, "created")
+        if sid in archived or sid in trashed or not stamp or stamp < now - 86400:
+            continue
+        cwd = str(row.get("cwd") or "")
+        title = " ".join(str(names.get(sid) or row.get("title") or sid).split())[:200]
+        out.append({
+            "id": sid, "session_id": sid, "engine": "codex", "source": "codex",
+            "model": row.get("model") or "", "reasoning_effort": row.get("reasoning_effort") or "",
+            "display_name": title, "first_message": title,
+            "folder_label": Path(cwd).name if cwd else "Codex", "folder_path": cwd,
+            "session_cwd": cwd, "slug": _encode_project_slug(cwd) if cwd else "",
+            "mtime": stamp, "modified": stamp, "parent_session_id": parents.get(sid) or "",
+            "archived": False, "trashed": False,
+        })
+    return out
 
 
 def _archive_overlay_claude_registry_sessions(rows):
