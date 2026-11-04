@@ -12,7 +12,8 @@
  *   1. core view      — Sessions, Queues. Ship in the repo.
  *   2. CCC-hosted page — index.html served at /view/<app>, resolved from the
  *                        user apps dir first and the repo's static/ second.
- *                        Being same-origin, it can call every /api/* route.
+ *                        User-authored pages remain trusted. Marketplace
+ *                        installs use an opaque-origin host and permission bridge.
  *   3. external embed  — an http(s) URL, or a local companion dashboard
  *                        reached through /proxy/<name>/*.
  *

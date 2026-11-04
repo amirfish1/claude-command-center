@@ -1,0 +1,20 @@
+{
+  "apps": [
+    {
+      "id": "effects-kit",
+      "name": "Effects kit",
+      "description": "Try CCC animations and synthesized sounds. No access to your data.",
+      "permissions": [],
+      "source": "examples/apps/effects-kit"
+    },
+    {
+      "id": "session-summary",
+      "name": "Session summary",
+      "description": "View a snapshot of live sessions through the permission bridge.",
+      "permissions": [
+        "sessions.read"
+      ],
+      "source": "examples/apps/session-summary"
+    }
+  ]
+}

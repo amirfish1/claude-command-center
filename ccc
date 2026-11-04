@@ -92,7 +92,7 @@ PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
 SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "question", "brief", "where",
-               "brain", "consent", "jobs", "vault", "secret", "remind")
+               "brain", "consent", "jobs", "vault", "secret", "remind", "app")
 
 RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
 
@@ -2749,6 +2749,9 @@ def _register_antigravity_session():
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "app":
+        from ccc_server.app_marketplace import cli
+        return cli(argv[1:])
     _register_antigravity_session()
     # `ccc` is also the Homebrew launcher's name (foreground server /
     # --install-service). Keep one name for both roles: no args or explicit

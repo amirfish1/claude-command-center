@@ -1,0 +1,9 @@
+{
+  "id": "session-summary",
+  "label": "Session summary",
+  "description": "A read-only snapshot of live session titles, engines and states.",
+  "permissions": [
+    "sessions.read"
+  ],
+  "icon": "\ud83d\udccb"
+}

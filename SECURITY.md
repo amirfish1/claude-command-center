@@ -2,7 +2,8 @@
 
 ## Threat model
 
-Claude Command Center is a **single-user, single-host** dashboard. It is designed to run on the same machine as your editor and Claude Code sessions. The trust boundary is **loopback only** — there is no authentication, no per-user accounts, no permissions system.
+Claude Command Center is a **single-user, single-host** dashboard. It is designed to run on the same machine as your editor and Claude Code sessions. The trust boundary is **loopback only** — there is no authentication or per-user account system. Sandboxed marketplace
+apps have a narrow permission bridge; trusted local clients retain full authority.
 
 The server:
 
@@ -30,6 +31,22 @@ If you expose the port to the network, the LAN, or the internet, you are giving 
 - **No server repo switching** — `/api/repo/switch` is deprecated and returns 410. Repo-scoped APIs validate explicit `repo_path` values against known, recent, custom, or discoverable repos.
 - **Subprocess discipline** — every `subprocess.run` / `Popen` call uses list-form arguments. No `shell=True`, no `eval`, no `exec`, no `os.system`.
 - **Path-traversal protection** — every static-file handler resolves the target and verifies it lives under the served root before reading.
+
+## Third-party marketplace apps
+
+Install third-party app packages with `ccc app install` or **Applications →
+Browse apps**. The installer records explicit read permissions and serves package
+code in an opaque-origin iframe, with a CSP sandbox header on every content
+response (including direct HTML/SVG URLs). Apps cannot use the dashboard origin
+or call unrestricted APIs. A source-checked message bridge and independent
+server grant checks expose only `sessions.read` and `queues.read`; spawning and
+arbitrary endpoint forwarding are refused. No existing origin allowlist or CORS
+policy is broadened. Do not allow the opaque `null` origin in network settings.
+
+Manually dropped local apps remain trusted, as before. Do not bypass the
+installer for third-party code. Granted data may be disclosed by the app, and
+there is no CPU/memory sandbox or protection against another process running
+as the same OS user. See [the threat model and protocol](docs/app-marketplace.md).
 
 ## What we don't do
 

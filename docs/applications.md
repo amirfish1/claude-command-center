@@ -74,16 +74,22 @@ Apps always open **inside the CCC window**. An absolute URL is framed by
 site refuses to be embedded (many sites set `X-Frame-Options`); if the frame
 has not loaded after a few seconds, that link becomes the whole page.
 
-## What an app can do
+## Trusted local apps and marketplace apps
 
-An app served from `/view/<id>` is **same-origin**, so it can call any `/api/*`
-route with no extra setup. That is how the Queues page works — it is a separate
-page that calls `/api/queue/*`, `/api/ux-fixes/*`, and `/api/wt/*`.
+A manually created app served from `/view/<id>` is **trusted and same-origin**,
+so it can call any `/api/*` route, including spawning agents. Only drop folders
+here if you wrote or reviewed their code.
 
-This is also why CCC has no app store. A third-party app installed this way
-would run with your full CCC authority: your sessions, your queues, your repo
-paths, and the ability to spawn agents. Only install apps you wrote or have
-read.
+For third-party packages, use **Applications → Browse apps** or
+`ccc app install <local-path-or-https-git-url>`. Marketplace apps run inside an
+opaque-origin sandbox and can call only explicitly approved read methods through
+a checked message bridge. The installer shows requested permissions before
+asking for consent; `--yes` accepts them for scripts. `ccc app list` lists these
+installed packages, and `ccc app remove <id>` revokes access and archives the
+folder. Built-ins and existing local apps keep their current behavior.
+
+See [Sandboxed app marketplace](app-marketplace.md) for the manifest, catalog,
+permission list, bridge protocol and security limits.
 
 ## Embedding a dashboard that runs on another port
 

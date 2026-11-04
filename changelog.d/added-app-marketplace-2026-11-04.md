@@ -1,0 +1,1 @@
+- Added a sandboxed app marketplace with an Applications catalog, explicit read-permission consent, a checked message bridge, and `ccc app install/list/remove`. Third-party packages run with opaque origins; existing trusted local apps keep working.

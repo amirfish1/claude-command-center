@@ -193,6 +193,10 @@
     repo, so updating CCC never touches them. Removing an app moves its folder
     to <code>apps/.removed/</code> rather than deleting it.
   </div>
+  <button class="btn ghost" id="browseApps" type="button">Browse apps</button>
+  <section id="marketplace" aria-label="Browse apps" hidden></section>
+  <style>.marketplace-card{margin:16px 0;padding:18px;border:1px solid #333a44;border-radius:10px}.marketplace-card p{overflow-wrap:anywhere}#marketplace a{color:#5ac8fa}.marketplace-card h3{margin-bottom:8px}.marketplace-card p{margin:8px 0}.marketplace-card button{margin-top:4px}@media(max-width:500px){.pill.sandboxed{display:none}}</style>
+  <script src="/static/app-marketplace.js" defer></script>
 </main>
 
 <div class="toast" id="toast"></div>
@@ -226,6 +230,7 @@
 
   function sourceOf(app) {
     if (app.builtin) return "Built in";
+    if (app.sandboxed) return "Sandboxed marketplace app";
     if (app.url.indexOf("/view/") === 0) return "On this Mac";
     return app.url.replace(/^https?:\/\//, "").slice(0, 48);
   }
@@ -265,8 +270,8 @@
       row.appendChild(grow);
 
       var pill = document.createElement("span");
-      pill.className = "pill" + (app.builtin ? " core" : "");
-      pill.textContent = app.builtin ? "Core" : "Mine";
+      pill.className = "pill" + (app.builtin ? " core" : (app.sandboxed ? " sandboxed" : ""));
+      pill.textContent = app.builtin ? "Core" : (app.sandboxed ? "Sandboxed" : "Mine");
       row.appendChild(pill);
 
       var tg = document.createElement("button");
@@ -424,6 +429,7 @@
     };
   });
 
+  window.addEventListener('ccc:marketplace-installed', load);
   buildIcons();
   load();
   // Deep-link from the rail's + button.

@@ -1,0 +1,7 @@
+{
+  "id": "effects-kit",
+  "label": "Effects kit",
+  "description": "The existing CCC effects playground, packaged with no API permissions. Sound preferences last for this visit.",
+  "permissions": [],
+  "icon": "\u2728"
+}

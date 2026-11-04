@@ -22893,6 +22893,20 @@ MORNING_STATIC_DIR = STATIC_DIR / "morning"
 # Deliberately outside the repo checkout — a public clone is the wrong place
 # for personal apps, and `git clean` or a reinstall would wipe them.
 USER_APPS_DIR = COMMAND_CENTER_STATE_DIR / "apps"
+from ccc_server import app_marketplace
+
+def _app_marketplace():
+    return app_marketplace.Marketplace(COMMAND_CENTER_STATE_DIR, CCC_ROOT)
+
+def _marketplace_sessions():
+    return [{"session_id": row.get("session_id"), "title": row.get("name"),
+             "engine": row.get("engine"), "state": row.get("state")}
+            for row in build_session_census().get("sessions", [])]
+
+def _marketplace_queues():
+    return [{key: row.get(key) for key in ("id", "title", "status")}
+            for row in _ux_fixes_list_items_cached(None, None)]
+
 # Extension allowlist + Content-Type map shared by the /static/ and
 # /app-static/ asset routes. Adding a type here is the only place to do it.
 # .html is intentionally absent: pages are served by /view/<id>, not as assets.
@@ -22996,13 +23010,15 @@ def _discover_user_apps():
             continue
         # `url` is optional: an app that ships an index.html is served at
         # /view/<id> and needs to declare nothing beyond its label.
-        url = meta.get("url") or f"/view/{d.name}"
+        isolated = _app_marketplace().isolated(d.name)
+        url = f"/view/{d.name}" if isolated else (meta.get("url") or f"/view/{d.name}")
         if not _safe_nav_url(url):
             continue
         if url.startswith("/view/") and not (d / "index.html").is_file():
             continue
         apps.append({
             "id": d.name,
+            "sandboxed": isolated,
             "label": str(meta.get("label"))[:24],
             "icon": str(meta.get("icon", "") or "\N{LARGE BLUE CIRCLE}")[:8],
             "url": str(url)[:500],
@@ -23382,6 +23398,12 @@ def _apps_remove(app_id):
         return {"ok": False, "error": "Unknown app."}
     if app_id in ("sessions", "queues", "morning"):
         return {"ok": False, "error": "Built-in apps can't be removed."}
+
+    if _app_marketplace().isolated(app_id):
+        try:
+            return _app_marketplace().remove(app_id)
+        except (ValueError, OSError):
+            return {"ok": False, "error": "Could not remove marketplace app"}
 
     def drop(cfg):
         cfg["apps"] = [a for a in cfg.get("apps", [])
@@ -30104,6 +30126,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
+        if app_marketplace.handle_get(self, path, _app_marketplace()):
+            return
+
         if path.startswith("/api/secrets/"):
             from ccc_server import credential_broker
             credential_broker.handle(self, self.command)
@@ -34877,6 +34902,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
         if self._phone_pin_blocked(path):
             return
+        if app_marketplace.handle_post(self, path, _app_marketplace(), {
+                "sessions.read": _marketplace_sessions, "queues.read": _marketplace_queues}):
+            return
+
         if path.startswith("/api/secrets/"):
             from ccc_server import credential_broker
             credential_broker.handle(self, self.command)
