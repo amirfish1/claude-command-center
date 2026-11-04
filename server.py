@@ -35898,14 +35898,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             result = _set_engine_auto_update(payload["enabled"])
             self.send_json(result, 200 if result.get("ok") else 500)
             return
-        if path == "/api/allowances":
+        if path in ("/api/allowances", "/api/allowances/login/start",
+                    "/api/allowances/login/status", "/api/allowances/login/cancel"):
             from ccc_server import allowances
             try:
                 length = int(self.headers.get("Content-Length", "0") or 0)
                 if length < 1 or length > 65536:
                     self.send_json({"ok": False, "error": "Invalid request size"}, 400)
                     return
-                result = allowances.mutate(json.loads(self.rfile.read(length)))
+                data = json.loads(self.rfile.read(length))
+                if path.endswith("/start"):
+                    result = allowances.login_start(data)
+                elif path.endswith("/status") or path.endswith("/cancel"):
+                    result = allowances.login_status(data, cancel=path.endswith("/cancel"))
+                else:
+                    result = allowances.mutate(data)
             except (ValueError, TypeError) as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
                 return

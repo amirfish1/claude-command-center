@@ -6,14 +6,26 @@ work or switch the account used by existing sessions.
 
 ## Two Codex accounts
 
-Each account needs a separate CLI home. Keep your current home as it is. Sign in
-to the second account once in a terminal:
+In **Add allowance** (or **Edit** on a manual report), enter an account label,
+choose **Automatic · sign in with ChatGPT**, then click **Sign in with ChatGPT**.
+Open the OpenAI link, sign into the intended account, and enter the one-time code.
+Enable device code login in ChatGPT Settings → Security if required.
+
+CCC creates an isolated CLI home under its local state directory and replaces the
+manual report only after authentication and a quota read succeed. Cancellation,
+expiry, and failed sign-ins keep existing entries. Passwords are entered only on
+OpenAI's site; the Codex CLI stores credentials in the isolated home. Existing
+sessions keep their current login. This connects a usage reader, not a session
+account switcher.
+
+For an existing CLI login, choose **Automatic · existing Codex home**. Each
+account needs a separate CLI home. Terminal setup is also available:
 
 ```sh
 CODEX_HOME="$HOME/.codex-secondary" codex login
 ```
 
-Add an allowance with **Automatic · Codex home**, an account label, and the
+Add an allowance with **Automatic · existing Codex home**, an account label, and the
 absolute directory used above. The directory must exist on the dashboard host.
 For two live accounts, configure two distinct homes. CCC runs a bounded, isolated
 `codex app-server` reader for each home and caches its readings for five minutes.
