@@ -10016,6 +10016,10 @@ def _load_spawn_defaults_unlocked(*, persist=True):
     # Which Codex account (allowance id) new Codex sessions use by default;
     # "" means the machine's own Codex login.
     result["codex_account_id"] = str(raw.get("codex_account_id") or "")[:200]
+    # Same for queue workers. WatchTower cannot read CCC's account list, so
+    # saves also publish the chosen home (worker_codex_home) and every known
+    # account home (codex_account_homes) for its liveness lookups.
+    result["worker_codex_account_id"] = str(raw.get("worker_codex_account_id") or "")[:200]
     if needs_migration and persist:
         # A new engine was added to _ORCHESTRATION_SPAWN_ENGINES after this
         # file was written. Backfill it once and persist so every future
@@ -10040,6 +10044,35 @@ def _load_spawn_defaults_unlocked(*, persist=True):
             for key in (*_WORKER_DEFAULT_FIELDS, "reasoning_effort"):
                 result[key] = migrated[key]
     return result
+
+
+def _publish_codex_worker_homes(payload):
+    """Resolve the worker Codex account to a CLI home WatchTower can use."""
+    try:
+        from ccc_server import codex_accounts
+        rows = codex_accounts.configured()
+        default = str(codex_accounts.default_home())
+    except Exception:
+        return payload
+    homes = []
+    for row in rows:
+        try:
+            home = str(Path(row["codex_home"]).expanduser().resolve())
+        except (KeyError, TypeError, OSError):
+            continue
+        if home not in homes:
+            homes.append(home)
+    payload["codex_account_homes"] = homes
+    account_id = str(payload.get("worker_codex_account_id") or "")
+    row = next((r for r in rows if r.get("id") == account_id), None) if account_id else None
+    home = ""
+    if row:
+        try:
+            home = str(Path(row["codex_home"]).expanduser().resolve())
+        except (KeyError, TypeError, OSError):
+            home = ""
+    payload["worker_codex_home"] = "" if home == default else home
+    return payload
 
 
 def _apply_default_codex_account(payload):
@@ -10100,10 +10133,12 @@ def _prepare_spawn_defaults_unlocked(config):
         return {"ok": False, "error": "worker_overrides is read-only saved metadata"}
     if "worker_inherit_session" in config and type(config["worker_inherit_session"]) is not bool:
         return {"ok": False, "error": "worker_inherit_session must be a boolean"}
-    if "codex_account_id" in config:
-        account_id = config["codex_account_id"]
+    for account_key in ("codex_account_id", "worker_codex_account_id"):
+        if account_key not in config:
+            continue
+        account_id = config[account_key]
         if not isinstance(account_id, str) or len(account_id) > 200:
-            return {"ok": False, "error": "codex_account_id must be a short string"}
+            return {"ok": False, "error": f"{account_key} must be a short string"}
         if account_id and account_id != "__current__":
             from ccc_server import codex_accounts
             if not any(row.get("id") == account_id for row in codex_accounts.configured()):
@@ -10260,8 +10295,10 @@ def _prepare_spawn_defaults_unlocked(config):
                 payload[key] = stored_keys[key]
     if "worker_inherit_session" in config:
         payload["worker_inherit_session"] = inherit_next
-    if "codex_account_id" in config:
-        payload["codex_account_id"] = "" if config["codex_account_id"] == "__current__" else config["codex_account_id"]
+    for account_key in ("codex_account_id", "worker_codex_account_id"):
+        if account_key in config:
+            payload[account_key] = "" if config[account_key] == "__current__" else config[account_key]
+    _publish_codex_worker_homes(payload)
     if inherit_next and not inherited:
         saved = dict(stored_keys.get("worker_overrides") or {}) if isinstance(stored_keys.get("worker_overrides"), dict) else {}
         saved.update({key: stored_keys.get(key, current.get(key)) for key in _WORKER_DEFAULT_FIELDS})

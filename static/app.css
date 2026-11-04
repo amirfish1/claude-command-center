@@ -34361,3 +34361,6 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 .ao-setup-body #engineConnectionPanel > section.engine-connection-step:nth-of-type(n+2) { display: none; }
 #agentsOverview .ao-account-pick { flex: none; padding: 1px 8px; font-size: 10.5px; margin-left: 4px; }
 #agentsOverview .ao-account:has(.ao-account-pick.is-active) { outline: 1px solid color-mix(in srgb, hsl(var(--eng-hue) 65% 55%) 60%, transparent); }
+#agentsOverview .ao-account:has(.ao-account-picks) { flex-wrap: wrap; row-gap: 4px; padding: 4px 6px; }
+#agentsOverview .ao-account-picks { display: flex; gap: 5px; width: 100%; }
+#agentsOverview .ao-account-picks .ao-account-pick { flex: 1 1 0; margin-left: 0; }
