@@ -531,3 +531,10 @@ def test_normal_home_keeps_existing_launch_agent(monkeypatch):
     monkeypatch.delenv("CCC_FREE_ROUTER_SUPERVISOR", raising=False)
     assert free_router._supervisor_kind() == "launchd"
     assert free_router._plist_path().name == free_router.LAUNCH_AGENT_LABEL + ".plist"
+
+
+def test_registry_key_noise_is_filtered():
+    from ccc_server import free_router
+    assert free_router._is_benign_noise(
+        "ERROR: The system was unable to find the specified registry key or value.")
+    assert not free_router._is_benign_noise("npm ERR! code EBADENGINE")

@@ -426,6 +426,16 @@ def fetch_unified_key():
 # progress a novice can follow.
 # ---------------------------------------------------------------------------
 
+# Windows proxy lookups (npm/git/winhttp) print this when no proxy is set; it is
+# not an error, so keep it out of the install log a novice reads.
+_BENIGN_NOISE = ("unable to find the specified registry key",)
+
+
+def _is_benign_noise(line):
+    low = line.lower()
+    return any(n in low for n in _BENIGN_NOISE)
+
+
 def _run(cmd, cwd=None, env=None, log=None, timeout=1800):
     """Run a command, streaming combined output to `log`. Returns exit code."""
     if log:
@@ -451,6 +461,8 @@ def _run(cmd, cwd=None, env=None, log=None, timeout=1800):
         assert proc.stdout is not None
         for line in proc.stdout:
             line = line.rstrip("\n")
+            if _is_benign_noise(line):
+                continue
             tail.append(line)
             if len(tail) > 40:
                 tail.pop(0)
