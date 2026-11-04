@@ -20,6 +20,10 @@ managed-service restart, production-data changes or subagents.
   removing an app updates the catalog. Expired previews are pruned in bounded
   batches. Git clones ignore inherited configuration so package attributes
   cannot invoke user-configured checkout filters.
+- Reader examples now show responsive cards, loading/empty/error states and
+  render hostile titles as text. Path depth/length and implicit ZIP directories
+  are bounded before extraction. Consent metadata rejects invisible controls
+  and directional overrides while retaining international text and emoji.
 - Contributor guide, PR-based submission description, JSON schemas and an
   offline stdlib-only validator share runtime catalog rules.
 
@@ -29,6 +33,8 @@ managed-service restart, production-data changes or subagents.
 - `fa308619` — contributor guide, schemas and catalog validator.
 - `d60681a8` — installed UI state, preview cleanup, isolated Git configuration.
 
+- `6399d0fd` — mandatory browser CI, redirect policy, validator staging and raw
+  HTTP security coverage.
 - `868b7be4` — fail closed on corrupt grants and mismatched catalog identities;
   clean CLI errors for unsupported ZIP compression.
 
@@ -44,9 +50,11 @@ python3 -m py_compile ccc_server/app_marketplace.py
 git diff --check
 ```
 
-Last completed focused run: **109 passed**, including real Chromium against a
+Last completed focused run: **122 passed**, including real Chromium against a
 disposable loopback HTTP server with temporary marketplace state. Desktop and
-mobile screenshots inspected directly. No managed server was used. Malformed-input and corrupt-grant coverage also passed.
+mobile screenshots inspected directly. No managed server was used. Malformed-input and corrupt-grant coverage also passed. The new browser
+remove/reinstall check separately passed: old open hosts remain revoked while
+a newly opened host can read its newly approved snapshot.
 
 The offline validator accepts all three listings and package manifests. It
 never clones a contributor repository. The smoke suite was not run, per repo

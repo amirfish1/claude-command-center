@@ -27,6 +27,8 @@ RESERVED = {"sessions", "queues", "morning", "allowances", "decision-inbox",
 MARKER = ".ccc-marketplace"
 MAX_BYTES = 10 * 1024 * 1024
 MAX_FILES = 500
+MAX_DEPTH = 16
+MAX_PATH_BYTES = 1024
 PREVIEW_TTL = 900
 MAX_MANIFEST_BYTES = 16 * 1024
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css",
@@ -68,17 +70,25 @@ def strict_json(raw):
         raise ValueError("JSON nesting is too deep") from exc
 
 
+def metadata_text(value, limit, field):
+    if not isinstance(value, str) or not 1 <= len(value) <= limit:
+        raise ValueError(f"{field} must be a nonempty string (maximum {limit})")
+    # Consent text must not hide/reorder permission lines or break UTF-8 output.
+    if re.search(r"[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\ud800-\udfff]", value):
+        raise ValueError("Metadata cannot contain control or surrogate characters")
+    return value
+
+
 def manifest_data(data):
     if not isinstance(data, dict):
         raise ValueError("app.json must be an object")
     if set(data) - {"id", "label", "description", "permissions", "icon"}:
         raise ValueError("Unknown manifest field")
     app_id(data.get("id"))
-    if "icon" in data and (not isinstance(data["icon"], str) or not 1 <= len(data["icon"]) <= 8):
-        raise ValueError("icon must be a string of 1–8 characters")
+    if "icon" in data:
+        metadata_text(data["icon"], 8, "icon")
     for key, limit in (("label", 80), ("description", 1000)):
-        if not isinstance(data.get(key), str) or not 0 < len(data[key]) <= limit:
-            raise ValueError(f"{key} must be a nonempty string (maximum {limit})")
+        metadata_text(data.get(key), limit, key)
     perms = data.get("permissions", [])
     if (not isinstance(perms, list) or any(not isinstance(p, str) or p not in PERMISSIONS for p in perms)
             or len(set(perms)) != len(perms)):
@@ -107,6 +117,9 @@ def tree_digest(folder):
     for root, dirs, files in os.walk(folder, followlinks=False):
         for name in sorted(dirs + files):
             target = Path(root) / name
+            relative = target.relative_to(folder)
+            if len(relative.parts) > MAX_DEPTH or len(relative.as_posix().encode()) > MAX_PATH_BYTES:
+                raise ValueError("App path is too deep or too long")
             mode = target.lstat().st_mode
             if stat.S_ISLNK(mode) or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
                 raise ValueError("Only regular files and directories are allowed")
@@ -167,8 +180,7 @@ def validate_index(data, remote=False):
             raise ValueError("Duplicate app id in index")
         seen.add(ident)
         for key, limit in (("name", 80), ("description", 1000), ("source", 2048)):
-            if not isinstance(row[key], str) or not 1 <= len(row[key]) <= limit:
-                raise ValueError("Invalid index " + key)
+            metadata_text(row[key], limit, key)
         perms = row["permissions"]
         if (not isinstance(perms, list) or any(not isinstance(p, str) or p not in PERMISSIONS for p in perms)
                 or len(set(perms)) != len(perms)):
@@ -191,6 +203,7 @@ def unpack_zip(archive, folder):
         if len(entries) > MAX_FILES:
             raise ValueError("App has too many files")
         seen = set()
+        nodes = set()
         total = 0
         for entry in entries:
             name = entry.orig_filename
@@ -198,6 +211,12 @@ def unpack_zip(archive, folder):
             if (not name or "\\" in name or "\x00" in name or ":" in name
                     or any(part in ("", ".", "..") for part in parts)):
                 raise ValueError("Invalid archive path")
+            if len(parts) > MAX_DEPTH or len(name.encode()) > MAX_PATH_BYTES:
+                raise ValueError("App path is too deep or too long")
+            # ZIPs can omit directory records; those still consume the entry budget.
+            nodes.update("/".join(parts[:depth]) for depth in range(1, len(parts) + 1))
+            if len(nodes) > MAX_FILES:
+                raise ValueError("App has too many files")
             key = "/".join(parts)
             if key in seen:
                 raise ValueError("Duplicate archive path")
@@ -299,7 +318,8 @@ class Marketplace:
         try:
             if source.startswith("https://"):
                 git_source(source)
-                subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "protocol.allow=never",
+                subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "http.followRedirects=false",
+                                "-c", "protocol.allow=never",
                                 "-c", "protocol.https.allow=always", "clone", "--depth", "1",
                                 "--", source, str(folder)], check=True, timeout=60,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -468,7 +488,9 @@ def host_page(market, ident):
                          "generation": grant["generation"]}).replace("<", "\\u003c")
     return ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
             "<title>Sandboxed CCC app</title><style>body{margin:0;background:#0f1115;color:#eee;"
-            "font:14px system-ui}header{padding:12px}iframe{width:100%;height:calc(100vh - 55px);border:0}</style>"
+            "font:14px system-ui;display:flex;flex-direction:column;height:100vh;height:100dvh}"
+            "header{padding:12px;overflow-wrap:anywhere;flex:none}"
+            "iframe{width:100%;min-height:0;flex:1;border:0}</style>"
             f"<header>{html.escape(grant['label'])} · Sandboxed app · "
             "<a href='/applications' style='color:#5ac8fa'>Applications</a></header>"
             f"<script id=app-config type=application/json>{config}</script>"
@@ -538,7 +560,7 @@ def handle_post(handler, path, market, callbacks):
         length = int(handler.headers.get("Content-Length", "0"))
         if not 0 < length <= 8192:
             raise ValueError("Invalid body size")
-        payload = json.loads(handler.rfile.read(length))
+        payload = strict_json(handler.rfile.read(length))
         if not isinstance(payload, dict):
             raise ValueError("Expected object")
         action = path.rsplit("/", 1)[-1]

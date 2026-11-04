@@ -14,6 +14,20 @@ const {findChromePath} = require('../puppeteer-browser-config');
     await frame.waitForFunction(() => document.getElementById('status')?.textContent === 'Snapshot loaded.');
     assert.match(await frame.$eval('#sessions', el => el.textContent), /Fixture session/);
     assert.equal(await frame.evaluate(() => window.origin), 'null');
+    if (process.env.CCC_MARKETPLACE_SESSION_SCREENSHOT) await page.screenshot({path:process.env.CCC_MARKETPLACE_SESSION_SCREENSHOT, fullPage:true});
+    const snapshotId = await frame.evaluate(() => requestId);
+    async function deliverSnapshot(payload) {
+      await page.evaluate(payload => document.getElementById('app-frame').contentWindow.postMessage(payload, '*'),
+        {type:'ccc.app.result', requestId:snapshotId, ...payload});
+    }
+    await deliverSnapshot({ok:true, result:[]});
+    await frame.waitForFunction(() => document.querySelector('.empty')?.textContent === 'No live sessions in this snapshot.');
+    await deliverSnapshot({ok:true, result:[{title:'<img src=x onerror="parent.pwned=true">', engine:'test', state:'idle'}]});
+    await frame.waitForFunction(() => document.querySelector('.row-title')?.textContent.startsWith('<img'));
+    assert.equal(await frame.$('img'), null);
+    await deliverSnapshot({ok:false, error:'Permission denied'});
+    await frame.waitForFunction(() => document.getElementById('status').textContent === 'Permission denied');
+    assert.equal(await frame.$eval('#sessions', el => el.textContent), '');
     assert.equal(await frame.evaluate(() => {
       try { return parent.document.body.textContent; } catch (_) { return 'denied'; }
     }), 'denied');
@@ -57,6 +71,10 @@ const {findChromePath} = require('../puppeteer-browser-config');
     await queue.waitForFunction(() => document.getElementById('status')?.textContent === 'Snapshot loaded.');
     assert.match(await queue.$eval('#items', el => el.textContent), /Fixture queue item/);
     assert.equal(await queue.evaluate(() => window.origin), 'null');
+    await page.setViewport({width:390, height:844});
+    assert.equal(await queue.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    if (process.env.CCC_MARKETPLACE_QUEUE_SCREENSHOT) await page.screenshot({path:process.env.CCC_MARKETPLACE_QUEUE_SCREENSHOT, fullPage:true});
+    await page.setViewport({width:1100, height:850});
 
     await page.goto(base + '/applications');
     await page.click('#browseApps');
@@ -104,7 +122,49 @@ const {findChromePath} = require('../puppeteer-browser-config');
       buttons.every(button => button.textContent === 'Installed' && button.disabled)), true);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     if (process.env.CCC_MARKETPLACE_MOBILE_SCREENSHOT) await page.screenshot({path:process.env.CCC_MARKETPLACE_MOBILE_SCREENSHOT, fullPage:true});
-    console.log('Browser isolation, consent, denied bridge, direct SVG and mobile layout passed');
+    // Keep a host open across remove/reinstall: its old generation must stay revoked.
+    const oldPage = await browser.newPage();
+    await oldPage.goto(base + '/view/session-summary');
+    const oldFrame = await (await oldPage.waitForSelector('#app-frame')).contentFrame();
+    await oldFrame.waitForFunction(() => document.getElementById('status').textContent === 'Snapshot loaded.');
+    const removeDialog = new Promise(resolve => page.once('dialog', async prompt => {
+      assert.match(prompt.message(), /Remove Session summary/);
+      await prompt.accept();
+      resolve();
+    }));
+    await page.evaluate(() => [...document.querySelectorAll('.row')]
+      .find(row => row.querySelector('.name')?.textContent === 'Session summary').querySelector('.rm').click());
+    await removeDialog;
+    await page.waitForFunction(() => [...document.querySelectorAll('.marketplace-card')]
+      .find(card => card.querySelector('h3').textContent === 'Session summary').querySelector('button').textContent === 'Install');
+    assert.equal(await page.evaluate(async () => (await fetch('/marketplace-content/session-summary/index.html')).status), 404);
+    const reinstallDialog = new Promise(resolve => page.once('dialog', async prompt => {
+      assert.match(prompt.message(), /sessions.read: Read live session/);
+      await prompt.accept();
+      resolve();
+    }));
+    await page.evaluate(() => [...document.querySelectorAll('.marketplace-card')]
+      .find(card => card.querySelector('h3').textContent === 'Session summary').querySelector('button').click());
+    await reinstallDialog;
+    await page.waitForFunction(() => [...document.querySelectorAll('.marketplace-card')]
+      .find(card => card.querySelector('h3').textContent === 'Session summary').querySelector('button').textContent === 'Installed');
+    // Clear the host's one-second read throttle without changing server time.
+    await oldPage.evaluate(() => { const now = Date.now(); Date.now = () => now + 2000; });
+    const revoked = await oldFrame.evaluate(() => new Promise(resolve => {
+      window.addEventListener('message', function receive(event) {
+        if (event.data?.requestId !== 'old-generation') return;
+        window.removeEventListener('message', receive);
+        resolve(event.data);
+      });
+      parent.postMessage({type:'ccc.app.call', requestId:'old-generation', method:'sessions.read'}, '*');
+    }));
+    assert.equal(revoked.ok, false);
+    assert.equal(revoked.error, 'Permission denied');
+    await oldPage.close();
+    await page.goto(base + '/view/session-summary');
+    const newFrame = await (await page.waitForSelector('#app-frame')).contentFrame();
+    await newFrame.waitForFunction(() => document.getElementById('status').textContent === 'Snapshot loaded.');
+    console.log('Browser isolation, consent, revocation, denied bridge, direct SVG and mobile layout passed');
   } finally {
     await browser.close();
   }

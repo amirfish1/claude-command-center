@@ -1,0 +1,1 @@
+- Improve the read-only marketplace examples with responsive snapshot cards and empty/error states; bound package path depth and count implicit ZIP directories before extraction.

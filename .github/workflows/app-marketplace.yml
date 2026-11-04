@@ -8,6 +8,9 @@ on:
       - 'schemas/app*.schema.json'
       - 'scripts/validate-apps-index.py'
       - 'ccc_server/app_marketplace.py'
+      - 'server.py'
+      - 'require-puppeteer.js'
+      - 'puppeteer-browser-config.js'
       - 'static/app-marketplace*.js'
       - 'static/applications.html'
       - 'tests/*app_marketplace*'
@@ -20,6 +23,9 @@ on:
       - 'schemas/app*.schema.json'
       - 'scripts/validate-apps-index.py'
       - 'ccc_server/app_marketplace.py'
+      - 'server.py'
+      - 'require-puppeteer.js'
+      - 'puppeteer-browser-config.js'
       - 'static/app-marketplace*.js'
       - 'static/applications.html'
       - 'tests/*app_marketplace*'
@@ -54,6 +60,8 @@ jobs:
           CCC_MARKETPLACE_REQUIRE_BROWSER: '1'
           CCC_MARKETPLACE_SCREENSHOT: ${{ runner.temp }}/marketplace-desktop.png
           CCC_MARKETPLACE_MOBILE_SCREENSHOT: ${{ runner.temp }}/marketplace-mobile.png
+          CCC_MARKETPLACE_SESSION_SCREENSHOT: ${{ runner.temp }}/marketplace-session.png
+          CCC_MARKETPLACE_QUEUE_SCREENSHOT: ${{ runner.temp }}/marketplace-queue.png
         run: |
           python scripts/validate-apps-index.py
           python -m pytest -q tests/test_app_marketplace.py

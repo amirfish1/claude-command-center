@@ -16,7 +16,8 @@ A ZIP archive or Git repository must have `app.json` and `index.html` at its roo
 shallow clone with inherited Git configuration disabled (including checkout
 filters, credential helpers and URL rewrites); it does not run build commands, dependency installers, package
 scripts, Git hooks, or submodules. HTTPS URLs with embedded credentials are
-refused. SSH Git URLs are not supported in this first version.
+refused. Git HTTP redirects are disabled; use the final canonical clone URL.
+SSH Git URLs are not supported in this first version.
 
 ## Threat model
 
@@ -79,6 +80,8 @@ A marketplace manifest is deliberately small:
 ```
 
 Unknown manifest fields, duplicate JSON keys and non-string icons are rejected.
+Metadata cannot contain control characters, directional overrides or invalid
+Unicode surrogates that could disguise consent text.
 IDs must match `[a-z0-9_-]{1,40}` and cannot shadow shipped apps. A manifest
 cannot specify a navigation `url`. Missing `permissions` means no permissions.
 Unknown or duplicate permissions are refused.
@@ -127,6 +130,8 @@ files, validates the manifest, and limits packages to 500 entries / 10 MiB.
 ZIP members are checked before extraction: absolute/traversing paths, backslashes,
 duplicate paths, symlinks, special files and encrypted entries are rejected. Both
 the compressed archive and expanded bytes are limited to 10 MiB.
+Paths are limited to 16 components and 1024 UTF-8 bytes; implicit ZIP
+directories also count against the 500-entry limit.
 The CLI shows the actual manifest's requested permissions and asks once; `--yes`
 is explicit consent for scripts. The UI prepares first, then displays those
 actual permissions in a confirmation dialog. Index metadata never grants access.

@@ -38,10 +38,13 @@ IDs use 1–40 lowercase letters, digits, `_` or `-`, and cannot shadow built-in
 `icon` is an optional string of up to eight characters. `permissions` defaults
 to `[]`. Unknown fields and permissions, duplicate fields and duplicate
 permissions are rejected. There are no `url`, `scripts`, `sandbox` or networking
-options. HTML in metadata is displayed as text, never evaluated.
+options. Metadata must be one line, without control characters, directional overrides or
+invalid Unicode surrogates. Ordinary international text and emoji are supported.
+HTML in metadata is displayed as text, never evaluated.
 
 Packages are limited to 500 filesystem entries and 10 MiB, including CCC's tiny
-isolation marker. Symlinks, special files and path escapes are rejected. ZIPs
+isolation marker. Paths are limited to 16 components and 1024 UTF-8 bytes; ZIP
+directories count even when omitted from the archive directory records. Symlinks, special files and path escapes are rejected. ZIPs
 also have a 10 MiB compressed-size limit and must contain the manifest directly
 at the root, without a wrapping directory. Only stored or deflated ZIP entries are supported; encrypted ZIPs are refused.
 
@@ -110,7 +113,8 @@ ccc app install ./my-summary.zip
 
 Omit optional files from the command if you do not use them. For Git installs,
 publish a repository with `app.json` and `index.html` at its root, then use an
-HTTPS clone URL without credentials or a fragment. CCC stages the checkout and
+HTTPS clone URL without credentials or a fragment. Use the final canonical URL;
+Git redirects are disabled. CCC stages the checkout and
 shows actual permissions before installation. Existing IDs are never replaced;
 remove and reinstall to update. Never manually drop third-party packages into
 the trusted local apps directory.

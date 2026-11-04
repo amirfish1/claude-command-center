@@ -1,31 +1,81 @@
 <!doctype html>
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Session summary</title>
-<style>body{background:#0f1115;color:#e6e9ee;font:16px system-ui;margin:24px}li{padding:10px;border-bottom:1px solid #333}button{padding:10px}</style>
-<h1>Session summary</h1>
-<p>Live titles, engines and states. No transcripts or repository paths.</p>
-<button id="load">Read current snapshot</button>
-<p id="status" role="status">Waiting for the host…</p>
-<ul id="sessions"></ul>
+<style>
+:root{color-scheme:dark;font:16px/1.5 system-ui;background:#0f1115;color:#e6e9ee}
+*{box-sizing:border-box}body{margin:0}main{max-width:800px;margin:auto;padding:clamp(20px,5vw,48px)}
+.eyebrow{color:#91a1b8;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+h1{font-size:clamp(26px,5vw,36px);line-height:1.15;margin:8px 0 16px}
+.description{color:#aeb9ca;max-width:65ch}.toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:16px;margin-top:28px}
+button{font:inherit;background:#5ac8fa;color:#07101a;border:0;border-radius:8px;padding:10px 16px;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}button:focus-visible{outline:3px solid white;outline-offset:3px}
+#count{color:#aeb9ca;font-size:14px}#status{min-height:24px;font-size:14px;color:#aeb9ca}
+ul{padding:0;list-style:none;margin:24px 0}li{padding:16px 18px;background:#171c25;border:1px solid #2a3444;border-radius:10px;margin:10px 0;overflow-wrap:anywhere}
+.row-title{display:block;font-weight:600}.row-detail{display:block;color:#9eabc0;font-size:14px;margin-top:4px}
+.empty{color:#aeb9ca;background:transparent;border-style:dashed}footer{color:#7e8ca2;font-size:13px}
+</style>
+<main>
+<header><span class="eyebrow">Read-only · sessions.read</span><h1>Session summary</h1>
+<p class="description">Titles, engines and states. No transcripts or repository paths.</p></header>
+<div class="toolbar"><button id="load">Read current snapshot</button><span id="count"></span></div>
+<p id="status" role="status" aria-live="polite">Waiting for the host…</p>
+<ul id="sessions" aria-label="Session summary"></ul>
+<footer>Snapshot data comes only through your approved CCC permission. Nothing is stored by this app.</footer>
+</main>
 <script>
-let requestId;
+let requestId, timeout;
+const button = document.getElementById('load');
+const status = document.getElementById('status');
+const list = document.getElementById('sessions');
+const count = document.getElementById('count');
+function fail(message) {
+  status.textContent = message;
+  list.textContent = '';
+  count.textContent = '';
+  button.disabled = false;
+}
 function load() {
   requestId = 'sessions-' + Date.now();
+  button.disabled = true;
+  status.textContent = 'Reading snapshot…';
+  clearTimeout(timeout);
+  timeout = setTimeout(() => fail('The host did not respond. Open this app from CCC and try again.'), 10000);
   parent.postMessage({type:'ccc.app.call', requestId, method:'sessions.read'}, '*');
 }
 window.addEventListener('message', function (event) {
   if (event.source !== parent || !event.data || event.data.type !== 'ccc.app.result' || event.data.requestId !== requestId) return;
+  clearTimeout(timeout);
   const data = event.data;
-  document.getElementById('status').textContent = data.ok ? 'Snapshot loaded.' : data.error;
-  const list = document.getElementById('sessions');
+  if (!data.ok || !Array.isArray(data.result)) {
+    fail(data.error || 'Snapshot unavailable.');
+    return;
+  }
+  status.textContent = 'Snapshot loaded.';
+  button.disabled = false;
+  count.textContent = data.result.length + (data.result.length === 1 ? ' session' : ' sessions');
   list.textContent = '';
-  if (data.ok) data.result.forEach(function (session) {
+  if (!data.result.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = 'No live sessions in this snapshot.';
+    list.appendChild(empty);
+  }
+  data.result.forEach(function (row) {
+    if (!row || typeof row !== 'object') return;
     const item = document.createElement('li');
-    item.textContent = (session.title || session.session_id || 'Session') + ' · ' + (session.engine || '') + ' · ' + (session.state || '');
+    const title = document.createElement('span');
+    title.className = 'row-title';
+    title.textContent = row.title || row.session_id || 'Session';
+    const detail = document.createElement('span');
+    detail.className = 'row-detail';
+    detail.textContent = (row.engine || 'Unknown engine') + ' · ' + (row.state || 'Unknown state');
+    item.append(title, detail);
     list.appendChild(item);
   });
 });
-document.getElementById('load').onclick = load;
+button.onclick = load;
 load();
 </script>
+</html>

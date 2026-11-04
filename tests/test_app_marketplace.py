@@ -642,9 +642,78 @@ def test_published_schemas_accept_examples_and_reject_unsafe_fields():
     jsonschema.Draft202012Validator.check_schema(index_schema)
     jsonschema.validate(json.loads((REPO / 'apps-index.json').read_text()), index_schema)
     for package in (REPO / 'examples/apps').iterdir():
+        if not package.is_dir():
+            continue
         data = json.loads((package / 'app.json').read_text())
         jsonschema.validate(data, manifest_schema)
         for patch in ({'permissions': ['spawn']}, {'url': '/'}, {'id': '../outside'},
                       {'id': 'sessions'}, {'icon': {}}, {'permissions': ['queues.read', 'queues.read']}):
             with pytest.raises(jsonschema.ValidationError):
                 jsonschema.validate({**data, **patch}, manifest_schema)
+
+
+@pytest.mark.parametrize('name', ['/'.join(['d'] * (apps.MAX_DEPTH + 1)) + '/file',
+                                 'a' * (apps.MAX_PATH_BYTES + 1)])
+def test_zip_deep_or_long_paths_rejected_before_writes(tmp_path, name):
+    import zipfile
+    archive = tmp_path / 'deep.zip'
+    with zipfile.ZipFile(archive, 'w') as output:
+        output.writestr(name, 'x')
+    destination = tmp_path / 'extracted'
+    with pytest.raises(ValueError, match='too deep or too long'):
+        apps.unpack_zip(archive, destination)
+    assert not destination.exists()
+
+
+def test_zip_implicit_directories_count_toward_entry_limit(tmp_path, monkeypatch):
+    import zipfile
+    archive = tmp_path / 'directories.zip'
+    with zipfile.ZipFile(archive, 'w') as output:
+        output.writestr('a/b/c/file', 'x')
+        output.writestr('d/e/f/file', 'x')
+    monkeypatch.setattr(apps, 'MAX_FILES', 7)
+    destination = tmp_path / 'extracted'
+    with pytest.raises(ValueError, match='too many files'):
+        apps.unpack_zip(archive, destination)
+    assert not destination.exists()
+
+
+def test_local_package_depth_is_bounded(market, package):
+    target = package.joinpath(*(['deep'] * (apps.MAX_DEPTH + 1)))
+    target.mkdir(parents=True)
+    (target / 'file').write_text('x')
+    with pytest.raises(ValueError, match='too deep or too long'):
+        market.prepare(str(package))
+    assert list((market.store / 'staged').iterdir()) == []
+
+
+@pytest.mark.parametrize('raw', [b'[' * 2000 + b'0' + b']' * 2000,
+                                b'{"id":"sample","id":"different"}', b'{"consent":NaN}'])
+def test_malformed_http_envelopes_return_clean_error(market, raw):
+    handler = Handler()
+    handler.rfile = io.BytesIO(raw)
+    handler.headers['Content-Length'] = str(len(raw))
+    assert apps.handle_post(handler, '/api/app-marketplace/prepare', market, {})
+    assert handler.status == 400
+    assert market.installed() == []
+
+
+@pytest.mark.parametrize('value', ['Misleading\nRequested permissions: None', 'Hidden\x00label',
+                                  'Reversed\u202elabel', '\ud800', 'Isolate\u2066label'])
+def test_consent_metadata_cannot_spoof_lines_or_direction(market, package, value):
+    data = json.loads((package / 'app.json').read_text())
+    data['label'] = value
+    (package / 'app.json').write_text(json.dumps(data))
+    with pytest.raises(ValueError, match='control or surrogate'):
+        market.prepare(str(package))
+    assert market.installed() == []
+
+
+def test_regular_international_metadata_is_supported(market, package):
+    data = json.loads((package / 'app.json').read_text())
+    data.update(label='Résumé · שלום · 日本語', icon='🧑‍💻')
+    (package / 'app.json').write_text(json.dumps(data))
+    preview = market.prepare(str(package))
+    assert preview['label'] == data['label']
+    market.install(preview['token'], True)
+    assert market.grant('sample')['icon'] == '🧑‍💻'
