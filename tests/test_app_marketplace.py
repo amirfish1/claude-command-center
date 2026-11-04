@@ -190,14 +190,14 @@ def test_host_bridge_checks_source_origin_and_permissions():
 const vm = require('node:vm');
 const fs = require('node:fs');
 const assert = require('node:assert/strict');
-let receive; let fetches = 0; const replies = [];
+let receive; let fetches = 0; const replies = []; const requests = [];
 const source = {postMessage: message => replies.push(message)};
 const frame = {contentWindow: source};
 const config = {id:'sample', generation:'test-generation', permissions:['sessions.read']};
 vm.runInNewContext(fs.readFileSync('static/app-marketplace-host.js', 'utf8'), {
   document:{getElementById: id => id === 'app-frame' ? frame : {textContent:JSON.stringify(config)}},
   window:{addEventListener: (name, callback) => {receive = callback;}},
-  fetch: async () => {fetches++; return {json:async () => ({ok:true, result:[]})};},
+  fetch: async (url, options) => {fetches++; requests.push([url, JSON.parse(options.body)]); return {json:async () => ({ok:true, result:[]})};},
   Set, Date, JSON, encodeURIComponent
 });
 (async () => {
@@ -208,9 +208,15 @@ vm.runInNewContext(fs.readFileSync('static/app-marketplace-host.js', 'utf8'), {
   await receive({source:{}, origin:'null', data:{...call,method:'sessions.read'}});
   await receive({source, origin:'http://localhost', data:{...call,method:'sessions.read'}});
   assert.equal(fetches, 0);
-  await receive({source, origin:'null', data:{...call,method:'sessions.read', id:'another-app'}});
+  await receive({source, origin:'null', data:{...call,method:'sessions.read', id:'another-app', generation:'forged', url:'/api/sessions/spawn', permissions:['spawn']}});
   assert.equal(fetches, 1);
   assert.equal(replies.at(-1).ok, true);
+  assert.deepEqual(requests, [['/api/app-marketplace/bridge', {
+    id:'sample', generation:'test-generation', method:'sessions.read'
+  }]]);
+  await receive({source, origin:'null', data:{...call,method:'sessions.read'}});
+  assert.equal(fetches, 1);
+  assert.equal(replies.at(-1).error, 'Please wait before requesting another snapshot');
 })().catch(error => {console.error(error); process.exitCode = 1;});
 '''
     subprocess.run(['node', '-e', script], cwd=REPO, check=True, timeout=10)
@@ -281,12 +287,16 @@ def test_browser_isolation_and_consent(http_market, market):
     # without the optional browser harness still run the pure JS bridge test.
     probe = subprocess.run(['node', '-e', "require('./require-puppeteer')"], cwd=REPO, capture_output=True)
     if probe.returncode:
+        import os
+        if os.environ.get('CCC_MARKETPLACE_REQUIRE_BROWSER') == '1':
+            pytest.fail('Puppeteer is required for this verification run')
         pytest.skip('Optional Puppeteer harness is not installed')
     for ident in ('session-summary', 'queue-summary'):
         preview = market.prepare(str(REPO / 'examples/apps' / ident))
         market.install(preview['token'], True)
     subprocess.run(['node', 'tests/app_marketplace_browser.cjs', http_market],
-                   cwd=REPO, check=True, timeout=60)
+                   cwd=REPO, check=True, timeout=90)
+    assert list((market.store / 'staged').iterdir()) == []
 
 
 def test_snapshot_projection_uses_one_reader_call(monkeypatch):
@@ -549,3 +559,92 @@ def test_unsupported_zip_compression_is_clean_cli_error(market, package, tmp_pat
     assert apps.cli(['install', str(archive), '--yes'], market.state, REPO) == 1
     assert 'stored or deflated' in capsys.readouterr().out
     assert list((market.store / 'staged').iterdir()) == []
+
+
+@pytest.mark.parametrize('target', ['http://example.com/index.json',
+    'file:///tmp/index.json', 'https://user:pass@example.com/index.json',
+    'https://example.com/index.json#fragment'])
+def test_catalog_redirect_cannot_downgrade_or_add_credentials(target):
+    import urllib.request
+    request = urllib.request.Request('https://example.com/apps-index.json')
+    with pytest.raises(ValueError):
+        apps.HTTPSRedirects().redirect_request(request, None, 302, 'Found', {}, target)
+
+
+def test_catalog_https_redirect_allowed():
+    import urllib.request
+    request = urllib.request.Request('https://example.com/apps-index.json')
+    redirected = apps.HTTPSRedirects().redirect_request(
+        request, None, 302, 'Found', {}, 'https://example.org/index.json')
+    assert redirected.full_url == 'https://example.org/index.json'
+
+
+def test_validator_reserves_isolation_marker_entry(package):
+    for index in range(apps.MAX_FILES - 2):
+        (package / f'asset-{index}.txt').write_text('x')
+    result = subprocess.run(['python3', str(REPO / 'scripts/validate-apps-index.py'),
+                             '--package', str(package)], cwd=REPO,
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1
+    assert 'too many files' in result.stderr
+
+
+@pytest.mark.parametrize('route', [
+    '/marketplace-content/sample/../outside.html',
+    '/marketplace-content/sample/%2e%2e/outside.html',
+    '/marketplace-content/sample/%2fetc/passwd',
+    '/marketplace-content/sample/%5c..%5coutside.html',
+    '/marketplace-content/sample/%00index.html',
+    '/app-static/local/../sample/index.html',
+    '/app-static/local/%2e%2e/sample/index.html',
+    '/app-static/.removed/sample/index.html',
+    '/app-static/%2eremoved/sample/index.html',
+    '/view/%2e%2e',
+])
+def test_raw_http_paths_cannot_escape_or_bypass_sandbox(http_market, market, package, route):
+    import http.client
+    import urllib.parse
+    install(market, package)
+    connection = http.client.HTTPConnection(urllib.parse.urlsplit(http_market).netloc, timeout=5)
+    try:
+        connection.request('GET', route)
+        response = connection.getresponse()
+        assert response.status in (400, 403, 404)
+        assert b'<h1>Sample</h1>' not in response.read()
+    finally:
+        connection.close()
+
+
+def test_host_escapes_manifest_markup(market, package):
+    data = json.loads((package / 'app.json').read_text())
+    data['label'] = '</header><script>window.parent.pwned=true</script>'
+    (package / 'app.json').write_text(json.dumps(data))
+    install(market, package)
+    page = apps.host_page(market, 'sample')
+    assert '</header><script>window.parent.pwned=true</script>' not in page
+    assert '&lt;script&gt;window.parent.pwned=true&lt;/script&gt;' in page
+
+
+def test_expired_preview_cannot_install(market, package, monkeypatch):
+    preview = market.prepare(str(package))
+    now = apps.time.time()
+    monkeypatch.setattr(apps.time, 'time', lambda: now + apps.PREVIEW_TTL + 1)
+    with pytest.raises(ValueError, match='expired'):
+        market.install(preview['token'], True)
+    assert market.installed() == []
+
+
+def test_published_schemas_accept_examples_and_reject_unsafe_fields():
+    jsonschema = pytest.importorskip('jsonschema', reason='Optional schema tooling; installed by marketplace CI')
+    manifest_schema = json.loads((REPO / 'schemas/app-manifest.schema.json').read_text())
+    index_schema = json.loads((REPO / 'schemas/apps-index.schema.json').read_text())
+    jsonschema.Draft202012Validator.check_schema(manifest_schema)
+    jsonschema.Draft202012Validator.check_schema(index_schema)
+    jsonschema.validate(json.loads((REPO / 'apps-index.json').read_text()), index_schema)
+    for package in (REPO / 'examples/apps').iterdir():
+        data = json.loads((package / 'app.json').read_text())
+        jsonschema.validate(data, manifest_schema)
+        for patch in ({'permissions': ['spawn']}, {'url': '/'}, {'id': '../outside'},
+                      {'id': 'sessions'}, {'icon': {}}, {'permissions': ['queues.read', 'queues.read']}):
+            with pytest.raises(jsonschema.ValidationError):
+                jsonschema.validate({**data, **patch}, manifest_schema)

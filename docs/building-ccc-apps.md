@@ -43,7 +43,7 @@ options. HTML in metadata is displayed as text, never evaluated.
 Packages are limited to 500 filesystem entries and 10 MiB, including CCC's tiny
 isolation marker. Symlinks, special files and path escapes are rejected. ZIPs
 also have a 10 MiB compressed-size limit and must contain the manifest directly
-at the root, without a wrapping directory. Encrypted ZIPs are unsupported.
+at the root, without a wrapping directory. Only stored or deflated ZIP entries are supported; encrypted ZIPs are refused.
 
 ## Read permissions
 
@@ -95,7 +95,8 @@ ccc app remove my-summary
 ```
 
 The validator is stdlib-only and offline. It checks the catalog, bundled
-packages, and optional package without installing or executing anything.
+packages, and optional package by staging in a disposable temporary directory,
+without installing or executing anything.
 It does not fetch HTTPS sources or certify their safety. A generic JSON Schema
 validator catches structural errors; the Python validator also checks duplicate
 IDs, URL rules, actual package files and listing/manifest agreement.
@@ -148,6 +149,10 @@ and fixtures copied from real sessions. Use synthetic demonstration content.
 python3 scripts/validate-apps-index.py
 python3 -m pytest tests/test_app_marketplace.py
 ```
+
+The App marketplace CI workflow validates contributions and requires its browser
+checks to run (missing Puppeteer fails that job). It also checks the published
+JSON schemas and uploads screenshots from synthetic fixtures.
 
 The browser test uses Puppeteer and a disposable loopback server; it never
 restarts a managed dashboard. Test install, consent, open, remove and reinstall,

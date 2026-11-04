@@ -25,12 +25,14 @@ managed-service restart, production-data changes or subagents.
 
 ## Commits
 
-- `e4bcd5aa` — queue example, ZIP imports and hostile-package tests.
-- `2451f1bc` — contributor guide, schemas and catalog validator.
-- `1c536551` — installed UI state, preview cleanup, isolated Git configuration.
+- `ca2835f4` — queue example, ZIP imports and hostile-package tests.
+- `fa308619` — contributor guide, schemas and catalog validator.
+- `d60681a8` — installed UI state, preview cleanup, isolated Git configuration.
 
-Further hardening validates complete grant records, rejects mismatched catalog
-identities, and reports unsupported ZIP compression as a clean CLI error.
+- `868b7be4` — fail closed on corrupt grants and mismatched catalog identities;
+  clean CLI errors for unsupported ZIP compression.
+
+Rebased onto fetched `origin/main` at `709c8860`.
 
 ## Verification
 
@@ -42,13 +44,17 @@ python3 -m py_compile ccc_server/app_marketplace.py
 git diff --check
 ```
 
-Last completed focused run: **90 passed**, including real Chromium against a
+Last completed focused run: **109 passed**, including real Chromium against a
 disposable loopback HTTP server with temporary marketplace state. Desktop and
 mobile screenshots inspected directly. No managed server was used. Malformed-input and corrupt-grant coverage also passed.
 
 The offline validator accepts all three listings and package manifests. It
 never clones a contributor repository. The smoke suite was not run, per repo
-instructions. No external Git repository was cloned; a real local Git config
+instructions. A dedicated marketplace CI workflow now installs Puppeteer and requires the
+browser check instead of silently skipping it; schemas are also validated there.
+This workflow has not been run on GitHub (the branch is not pushed).
+
+No external Git repository was cloned; a real local Git config
 probe verifies inherited filters and injected config are disabled.
 
 ## Remaining limits / owner decisions

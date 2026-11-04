@@ -146,6 +146,12 @@ def git_environment():
     return env
 
 
+class HTTPSRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, newurl):
+        git_source(newurl)  # Same HTTPS/no-credentials/no-fragment URL policy.
+        return super().redirect_request(request, response, code, message, headers, newurl)
+
+
 def validate_index(data, remote=False):
     """The runtime and contributor validator share the same catalog contract."""
     if (not isinstance(data, dict) or set(data) != {"apps"}
@@ -403,9 +409,9 @@ class Marketplace:
     def index(self):
         configured = os.environ.get("CCC_APPS_INDEX_URL")
         if configured:
-            if not configured.startswith("https://"):
-                raise ValueError("CCC_APPS_INDEX_URL must use HTTPS")
-            with urllib.request.urlopen(configured, timeout=10) as response:
+            git_source(configured)
+            opener = urllib.request.build_opener(HTTPSRedirects())
+            with opener.open(configured, timeout=10) as response:
                 raw = response.read(256 * 1024 + 1)
             if len(raw) > 256 * 1024:
                 raise ValueError("App index is too large")

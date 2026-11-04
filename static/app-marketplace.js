@@ -54,7 +54,6 @@
             preview = await post('prepare', {id: app.id});
             const requested = preview.permissions.map(p => p + ': ' + preview.permission_descriptions[p]).join('\n') || 'None';
             if (!window.confirm('Install ' + preview.label + ' (' + preview.id + ')?\n\nRequested permissions:\n' + requested + '\n\nOnly approve data you want this app to read.')) {
-              await post('cancel', {token: preview.token});
               status.textContent = 'Installation cancelled.';
               return;
             }

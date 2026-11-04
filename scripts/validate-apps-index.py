@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """Validate marketplace contributions offline, using the installer's rules."""
 import argparse
-import json
 from pathlib import Path
 import sys
+import tempfile
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 from ccc_server.app_marketplace import (  # noqa: E402
-    MAX_BYTES, manifest, no_links, strict_json, tree_digest, validate_index,
+    Marketplace, no_links, strict_json, validate_index,
 )
+
+
+def check_package(folder):
+    # Exercise actual staging/manifest/marker limits without installing anything.
+    with tempfile.TemporaryDirectory(prefix='ccc-app-validation-') as temporary:
+        market = Marketplace(temporary, REPO)
+        return market.prepare(str(no_links(folder)))
 
 
 def main(argv=None):
@@ -26,18 +33,13 @@ def main(argv=None):
             if row['source'].startswith('https://'):
                 continue  # Offline validation never clones contributor code.
             folder = no_links(args.index.resolve().parent / row['source'])
-            tree_digest(folder)
-            meta = manifest(folder)
+            meta = check_package(folder)
             if (meta['id'] != row['id'] or meta['label'] != row['name']
                     or meta['permissions'] != row['permissions']):
                 raise ValueError('Listing does not match package: ' + row['id'])
-            # The isolation marker must also fit under the install size budget.
-            if sum(p.stat().st_size for p in folder.rglob('*') if p.is_file()) + 17 > MAX_BYTES:
-                raise ValueError('Package leaves no room for isolation marker')
         if args.package:
             folder = no_links(args.package)
-            tree_digest(folder)
-            meta = manifest(folder)
+            meta = check_package(folder)
             print('Valid package: ' + meta['id'])
         print(f'Valid index: {len(rows)} listings (HTTPS sources were not fetched)')
         return 0

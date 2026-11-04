@@ -65,6 +65,13 @@ const {findChromePath} = require('../puppeteer-browser-config');
       buttons.filter(button => button.textContent === 'Installed' && button.disabled).length), 2);
     assert.equal(await page.$$eval('.marketplace-card a', links => links.length), 2);
     if (process.env.CCC_MARKETPLACE_SCREENSHOT) await page.screenshot({path:process.env.CCC_MARKETPLACE_SCREENSHOT, fullPage:true});
+    const cancelDialog = new Promise(resolve => page.once('dialog', async prompt => {
+      await prompt.dismiss();
+      resolve();
+    }));
+    await page.click('.marketplace-card button');
+    await cancelDialog;
+    await page.waitForFunction(() => document.querySelector('.marketplace-card [role="status"]').textContent === 'Installation cancelled.' && !document.querySelector('.marketplace-card button').disabled);
     const dialog = new Promise(resolve => page.once('dialog', async prompt => {
       assert.match(prompt.message(), /Requested permissions:\nNone/);
       await prompt.accept();
