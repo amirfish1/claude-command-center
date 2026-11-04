@@ -9,9 +9,11 @@ import os
 from pathlib import Path
 import re
 import secrets
+import signal
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.parse
@@ -31,6 +33,8 @@ MAX_DEPTH = 16
 MAX_PATH_BYTES = 1024
 PREVIEW_TTL = 900
 MAX_MANIFEST_BYTES = 16 * 1024
+MAX_GIT_FILE_BYTES = 16 * 1024 * 1024
+MAX_GIT_TREE_BYTES = 1024 * 1024
 TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css",
          ".js": "application/javascript", ".json": "application/json",
          ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
@@ -157,6 +161,87 @@ def git_environment():
     env.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1",
                GIT_CONFIG_GLOBAL=os.devnull, GIT_LFS_SKIP_SMUDGE="1")
     return env
+
+
+# Apply process limits in a separate interpreter, never preexec_fn in the
+# threaded HTTP server. Git helpers inherit both this limit and process group.
+_GIT_RUNNER = """import os, resource, signal, sys
+limit = int(sys.argv[1])
+hard = resource.getrlimit(resource.RLIMIT_FSIZE)[1]
+if hard != resource.RLIM_INFINITY:
+    limit = min(limit, hard)
+resource.setrlimit(resource.RLIMIT_FSIZE, (limit, limit))
+signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
+os.execvpe('git', ['git', *sys.argv[2:]], os.environ)
+"""
+
+
+def run_git(args, output=None, file_limit=MAX_GIT_FILE_BYTES, timeout=60):
+    command = [sys.executable, "-c", _GIT_RUNNER, str(file_limit),
+               "-c", "core.hooksPath=/dev/null", "-c", "http.followRedirects=false",
+               "-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+               "-c", "transfer.unpackLimit=0", "-c", "fetch.unpackLimit=0",
+               "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args]
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                               stdout=output if output is not None else subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, env=git_environment(), start_new_session=True)
+    try:
+        result = process.wait(timeout=timeout)
+    except BaseException as exc:
+        # A timed-out Git transport/index-pack must not keep writing after its
+        # parent exits. Kill the entire private group, then reap the parent.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        if isinstance(exc, subprocess.TimeoutExpired):
+            raise subprocess.TimeoutExpired(["git", *args], timeout) from None
+        raise
+    if result:
+        raise subprocess.CalledProcessError(result, ["git", *args])
+
+
+def inspect_git_tree(folder):
+    """Reject oversized trees and links before Git materializes working files."""
+    with tempfile.TemporaryFile(dir=folder.parent) as output:
+        run_git(["-C", str(folder), "ls-tree", "-r", "--full-tree", "-l", "-z", "HEAD"],
+                output=output, file_limit=MAX_GIT_TREE_BYTES)
+        output.seek(0)
+        raw = output.read(MAX_GIT_TREE_BYTES + 1)
+    if len(raw) > MAX_GIT_TREE_BYTES or (raw and not raw.endswith(b"\0")):
+        raise ValueError("Git tree metadata exceeds its limit")
+    nodes = set()
+    total = 0
+    files = set()
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_name = record.split(b"\t", 1)
+        mode, kind, _object_id, size = metadata.split()
+        if kind != b"blob" or mode not in (b"100644", b"100755"):
+            raise ValueError("Only regular files are allowed in Git packages")
+        name = raw_name.decode("utf-8")
+        parts = name.split("/")
+        if ("\\" in name or ":" in name or "\x00" in name
+                or any(part in ("", ".", "..", ".git") for part in parts)):
+            raise ValueError("Invalid Git package path")
+        if len(parts) > MAX_DEPTH or len(raw_name) > MAX_PATH_BYTES:
+            raise ValueError("App path is too deep or too long")
+        nodes.update("/".join(parts[:depth]) for depth in range(1, len(parts) + 1))
+        if len(nodes) > MAX_FILES:
+            raise ValueError("App has too many files")
+        total += int(size)
+        if total > MAX_BYTES:
+            raise ValueError("App exceeds 10 MiB")
+        files.add(name)
+    if not {"app.json", "index.html"}.issubset(files):
+        raise ValueError("Git package must contain app.json and index.html at its root")
+    return {"entries": len(nodes), "bytes": total}
+
+
+def checkout_git_tree(folder):
+    inspect_git_tree(folder)
+    run_git(["-C", str(folder), "checkout", "--force", "--detach", "HEAD"])
+    shutil.rmtree(folder / ".git")
 
 
 class HTTPSRedirects(urllib.request.HTTPRedirectHandler):
@@ -318,13 +403,9 @@ class Marketplace:
         try:
             if source.startswith("https://"):
                 git_source(source)
-                subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "http.followRedirects=false",
-                                "-c", "protocol.allow=never",
-                                "-c", "protocol.https.allow=always", "clone", "--depth", "1",
-                                "--", source, str(folder)], check=True, timeout=60,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               env=git_environment())
-                shutil.rmtree(folder / ".git")
+                run_git(["clone", "--depth", "1", "--single-branch", "--no-tags",
+                         "--no-checkout", "--no-recurse-submodules", "--", source, str(folder)])
+                checkout_git_tree(folder)
             else:
                 original = no_links(Path(source).expanduser())
                 if original.is_file() and original.suffix.lower() == ".zip":
@@ -395,11 +476,19 @@ class Marketplace:
             return {"ok": True, "id": meta["id"]}
 
     def remove(self, ident):
+        ident = app_id(ident)
         with self.locked():
-            grant = self.grant(ident)
+            if not self.isolated(ident):
+                raise ValueError("App is not a marketplace installation")
+            try:
+                grant = self.grant(ident)
+            except (ValueError, OSError, PermissionError):
+                # Corrupt/missing grants and a previous failed archive move
+                # must still be removable. The tombstone always fails closed.
+                grant = {"id": ident}
             grant["installed"] = False
             self._write_grant(ident, grant)
-            folder = no_links(self.apps / app_id(ident))
+            folder = no_links(self.apps / ident)
             if folder.exists():
                 graveyard = no_links(self.apps / ".removed")
                 graveyard.mkdir(exist_ok=True)

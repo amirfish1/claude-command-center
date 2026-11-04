@@ -1,0 +1,2 @@
+- Validate Git package trees before checkout, cap Git file and metadata output sizes, disable background Git maintenance, and kill timed-out transport process groups.
+- Allow safe uninstall retries after grant corruption or a failed archive move, while keeping access revoked.

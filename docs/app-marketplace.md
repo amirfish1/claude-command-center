@@ -1,7 +1,7 @@
 # Sandboxed app marketplace (MVP)
 
 Use **Applications → Browse apps** to install an example, or install a package
-from a local folder, ZIP archive or an HTTPS Git repository:
+from a local folder, ZIP archive or a public HTTPS Git repository:
 
 ```sh
 ccc app install ./my-app
@@ -13,8 +13,8 @@ ccc app remove my-app
 ```
 
 A ZIP archive or Git repository must have `app.json` and `index.html` at its root. CCC makes a
-shallow clone with inherited Git configuration disabled (including checkout
-filters, credential helpers and URL rewrites); it does not run build commands, dependency installers, package
+shallow clone without checkout, with inherited Git configuration disabled
+(including checkout filters, credential helpers and URL rewrites); it does not run build commands, dependency installers, package
 scripts, Git hooks, or submodules. HTTPS URLs with embedded credentials are
 refused. Git HTTP redirects are disabled; use the final canonical clone URL.
 SSH Git URLs are not supported in this first version.
@@ -139,8 +139,12 @@ actual permissions in a confirmation dialog. Index metadata never grants access.
 Confirmation installs the staged bytes, checked against the reviewed SHA-256
 package digest. Previews expire after 15 minutes. Existing IDs are never
 overwritten. Remove and reinstall to update, reviewing permissions again.
-Git cloning has a 60-second timeout, but download size and temporary disk use
-are not quota-limited before checkout validation. The checkout may resolve a mutable Git branch; the reviewed staged bytes are
+Each Git command has a 60-second timeout, which kills its private process group
+including transport helpers. Git runs with a 16 MiB per-file limit; tree metadata
+output is capped at 1 MiB. Before checkout, CCC checks tracked entry types, paths,
+file count and total expanded size. Links, submodules and oversized trees never
+materialize as working files. These are per-file and package limits, not a total
+network-byte, aggregate disk, CPU or memory quota. The checkout may resolve a mutable Git branch; the reviewed staged bytes are
 fixed, but there is no publisher signature or curated-code guarantee.
 
 State is under `~/.claude/command-center/app-marketplace/`: per-app grants are
@@ -148,7 +152,9 @@ written atomically with mode 0600, staging directories use mode 0700, and CLI /
 server installs serialize using a filesystem lock. An isolation marker ships
 inside the installed folder. Missing/corrupt grants fail closed; a marker or
 grant tombstone keeps the app sandboxed. Removing an app revokes its grant and
-moves its folder to `apps/.removed/`, which is not HTTP-addressable. Preparation opportunistically removes expired preview directories in bounded
+moves its folder to `apps/.removed/`, which is not HTTP-addressable. Removal is
+idempotent and can recover corrupt/missing grants or a previous failed archive
+move, while keeping access revoked. Preparation opportunistically removes expired preview directories in bounded
 batches; active previews and unrelated staging entries are preserved.
 
 Manually authored folders without marketplace markers/grants, built-ins and

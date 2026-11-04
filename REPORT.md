@@ -24,6 +24,10 @@ managed-service restart, production-data changes or subagents.
   render hostile titles as text. Path depth/length and implicit ZIP directories
   are bounded before extraction. Consent metadata rejects invisible controls
   and directional overrides while retaining international text and emoji.
+- Git clones now use no-checkout tree inspection, file-size limits and private
+  process groups; HTTPS end-to-end coverage runs entirely on loopback. Removal
+  retries recover corrupt grants and failed archive moves without restoring
+  revoked access.
 - Contributor guide, PR-based submission description, JSON schemas and an
   offline stdlib-only validator share runtime catalog rules.
 
@@ -33,6 +37,8 @@ managed-service restart, production-data changes or subagents.
 - `fa308619` — contributor guide, schemas and catalog validator.
 - `d60681a8` — installed UI state, preview cleanup, isolated Git configuration.
 
+- `356a534e` — bounded paths/consent metadata, polished reader examples and
+  browser remove/reinstall coverage.
 - `6399d0fd` — mandatory browser CI, redirect policy, validator staging and raw
   HTTP security coverage.
 - `868b7be4` — fail closed on corrupt grants and mismatched catalog identities;
@@ -50,10 +56,11 @@ python3 -m py_compile ccc_server/app_marketplace.py
 git diff --check
 ```
 
-Last completed focused run: **122 passed**, including real Chromium against a
+Last completed focused run: **136 passed**, including real Chromium against a
 disposable loopback HTTP server with temporary marketplace state. Desktop and
-mobile screenshots inspected directly. No managed server was used. Malformed-input and corrupt-grant coverage also passed. The new browser
-remove/reinstall check separately passed: old open hosts remain revoked while
+mobile screenshots inspected directly. No managed server was used. Malformed-input and corrupt-grant coverage also passed. The browser
+remove/reinstall check now guards the temporarily empty catalog during rerender,
+resolving a test wait race found by the full run. It verifies that old open hosts remain revoked while
 a newly opened host can read its newly approved snapshot.
 
 The offline validator accepts all three listings and package manifests. It
@@ -62,15 +69,17 @@ instructions. A dedicated marketplace CI workflow now installs Puppeteer and req
 browser check instead of silently skipping it; schemas are also validated there.
 This workflow has not been run on GitHub (the branch is not pushed).
 
-No external Git repository was cloned; a real local Git config
-probe verifies inherited filters and injected config are disabled.
+No external Git repository was cloned. Real synthetic local repositories and a
+loopback smart-HTTPS Git server verify clone, tree inspection, checkout, consent,
+installation, redirect refusal, file-size limits, timeout reaping and inherited
+filter isolation. No private repository or production service was used.
 
 ## Remaining limits / owner decisions
 
 No owner decision is needed to review this branch. Publisher signatures,
-updates, write permissions and network permissions remain out of scope. Git
-clone download/disk consumption before checkout validation is not quota-limited
-(the existing 60-second timeout remains). Granted data may be disclosed by an
+updates, write permissions and network permissions remain out of scope. Git now has a 16 MiB per-file cap, 1 MiB tree-metadata cap, pre-checkout package
+validation and a 60-second timeout per command with process-group cleanup.
+These are not aggregate disk, total network-byte, CPU or memory quotas. Granted data may be disclosed by an
 app; the sandbox is not a CPU/memory or exfiltration-proof boundary.
 
 The L6 report recorded a pre-existing archive-signature performance-test failure;

@@ -8,6 +8,7 @@ const {findChromePath} = require('../puppeteer-browser-config');
     const page = await browser.newPage();
     await page.setViewport({width:1100, height:850});
     const base = process.argv[2];
+    page.on('pageerror', error => console.error('Page error:', error.message));
     await page.goto(base + '/view/session-summary');
     const element = await page.waitForSelector('#app-frame');
     const frame = await element.contentFrame();
@@ -26,7 +27,7 @@ const {findChromePath} = require('../puppeteer-browser-config');
     await frame.waitForFunction(() => document.querySelector('.row-title')?.textContent.startsWith('<img'));
     assert.equal(await frame.$('img'), null);
     await deliverSnapshot({ok:false, error:'Permission denied'});
-    await frame.waitForFunction(() => document.getElementById('status').textContent === 'Permission denied');
+    await frame.waitForFunction(() => document.getElementById('status')?.textContent === 'Permission denied');
     assert.equal(await frame.$eval('#sessions', el => el.textContent), '');
     assert.equal(await frame.evaluate(() => {
       try { return parent.document.body.textContent; } catch (_) { return 'denied'; }
@@ -126,7 +127,9 @@ const {findChromePath} = require('../puppeteer-browser-config');
     const oldPage = await browser.newPage();
     await oldPage.goto(base + '/view/session-summary');
     const oldFrame = await (await oldPage.waitForSelector('#app-frame')).contentFrame();
-    await oldFrame.waitForFunction(() => document.getElementById('status').textContent === 'Snapshot loaded.');
+    await oldFrame.waitForFunction(() => document.getElementById('status')?.textContent === 'Snapshot loaded.');
+    await page.bringToFront();
+    const removal = page.waitForResponse(response => response.url() === base + '/api/apps/remove' && response.request().method() === 'POST');
     const removeDialog = new Promise(resolve => page.once('dialog', async prompt => {
       assert.match(prompt.message(), /Remove Session summary/);
       await prompt.accept();
@@ -135,8 +138,18 @@ const {findChromePath} = require('../puppeteer-browser-config');
     await page.evaluate(() => [...document.querySelectorAll('.row')]
       .find(row => row.querySelector('.name')?.textContent === 'Session summary').querySelector('.rm').click());
     await removeDialog;
-    await page.waitForFunction(() => [...document.querySelectorAll('.marketplace-card')]
-      .find(card => card.querySelector('h3').textContent === 'Session summary').querySelector('button').textContent === 'Install');
+    assert.equal((await (await removal).json()).ok, true);
+    try {
+      await page.waitForFunction(() => [...document.querySelectorAll('.marketplace-card')]
+        .find(card => card.querySelector('h3').textContent === 'Session summary')?.querySelector('button').textContent === 'Install', {timeout:10000});
+    } catch (error) {
+      console.error('Removal state:', await page.evaluate(async () => ({
+        hidden:document.getElementById('marketplace').hidden,
+        text:document.getElementById('marketplace').textContent,
+        index:await (await fetch('/api/app-marketplace/index')).json()
+      })));
+      throw error;
+    }
     assert.equal(await page.evaluate(async () => (await fetch('/marketplace-content/session-summary/index.html')).status), 404);
     const reinstallDialog = new Promise(resolve => page.once('dialog', async prompt => {
       assert.match(prompt.message(), /sessions.read: Read live session/);
@@ -147,7 +160,7 @@ const {findChromePath} = require('../puppeteer-browser-config');
       .find(card => card.querySelector('h3').textContent === 'Session summary').querySelector('button').click());
     await reinstallDialog;
     await page.waitForFunction(() => [...document.querySelectorAll('.marketplace-card')]
-      .find(card => card.querySelector('h3').textContent === 'Session summary').querySelector('button').textContent === 'Installed');
+      .find(card => card.querySelector('h3').textContent === 'Session summary')?.querySelector('button').textContent === 'Installed');
     // Clear the host's one-second read throttle without changing server time.
     await oldPage.evaluate(() => { const now = Date.now(); Date.now = () => now + 2000; });
     const revoked = await oldFrame.evaluate(() => new Promise(resolve => {
@@ -163,7 +176,7 @@ const {findChromePath} = require('../puppeteer-browser-config');
     await oldPage.close();
     await page.goto(base + '/view/session-summary');
     const newFrame = await (await page.waitForSelector('#app-frame')).contentFrame();
-    await newFrame.waitForFunction(() => document.getElementById('status').textContent === 'Snapshot loaded.');
+    await newFrame.waitForFunction(() => document.getElementById('status')?.textContent === 'Snapshot loaded.');
     console.log('Browser isolation, consent, revocation, denied bridge, direct SVG and mobile layout passed');
   } finally {
     await browser.close();

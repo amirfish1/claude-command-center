@@ -717,3 +717,225 @@ def test_regular_international_metadata_is_supported(market, package):
     assert preview['label'] == data['label']
     market.install(preview['token'], True)
     assert market.grant('sample')['icon'] == '🧑‍💻'
+
+
+@pytest.fixture
+def git_package(package, tmp_path):
+    def git(*args):
+        return subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(package), *args],
+                              check=True, env=apps.git_environment(),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    git('init', '-q')
+    git('config', 'user.name', 'Example Contributor')
+    git('config', 'user.email', 'contributor@example.invalid')
+
+    def checkout():
+        git('add', '--', *[entry.name for entry in package.iterdir() if entry.name != '.git'])
+        git('commit', '-qm', 'Synthetic app fixture')
+        destination = tmp_path / 'checkout'
+        subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', 'clone', '--no-checkout',
+                        '--no-local', str(package), str(destination)], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+                       env=apps.git_environment())
+        return destination
+    return checkout
+
+
+def test_git_tree_validated_before_checkout(git_package, package):
+    folder = git_package()
+    assert not (folder / 'index.html').exists()
+    metadata = apps.inspect_git_tree(folder)
+    assert metadata['entries'] == 2
+    apps.checkout_git_tree(folder)
+    assert (folder / 'index.html').read_bytes() == (package / 'index.html').read_bytes()
+    assert not (folder / '.git').exists()
+    assert apps.manifest(folder)['id'] == 'sample'
+
+
+@pytest.mark.parametrize('attack', ['symlink', 'large', 'deep', 'missing-root'])
+def test_git_rejects_hostile_tree_before_checkout(git_package, package, attack):
+    if attack == 'symlink':
+        (package / 'outside').symlink_to('../outside')
+    elif attack == 'large':
+        (package / 'large').write_bytes(b'x' * (apps.MAX_BYTES + 1))
+    elif attack == 'deep':
+        deep = package.joinpath(*(['deep'] * (apps.MAX_DEPTH + 1)))
+        deep.mkdir(parents=True)
+        (deep / 'file').write_text('x')
+    else:
+        (package / 'app.json').unlink()
+    folder = git_package()
+    with pytest.raises(ValueError):
+        apps.checkout_git_tree(folder)
+    assert not (folder / 'index.html').exists()
+    assert not (folder / 'large').exists()
+
+
+def test_git_output_file_limit_is_enforced(git_package, package, tmp_path):
+    (package / 'large').write_bytes(b'x' * 4096)
+    folder = git_package()
+    with (tmp_path / 'output').open('w+b') as output:
+        with pytest.raises(subprocess.CalledProcessError):
+            apps.run_git(['-C', str(folder), 'show', 'HEAD:large'], output=output, file_limit=64)
+        assert output.tell() == 64
+    assert (tmp_path / 'output').stat().st_size == 64
+
+
+def test_git_timeout_reaps_blocked_process(tmp_path):
+    import os
+    import time
+    fifo = tmp_path / 'blocked-input'
+    os.mkfifo(fifo)
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        apps.run_git(['hash-object', str(fifo)], timeout=0.2)
+    assert time.monotonic() - started < 5
+
+
+def test_git_checkout_does_not_invoke_inherited_filter(git_package, package, tmp_path, monkeypatch):
+    (package / '.gitattributes').write_text('index.html filter=hostile\n')
+    folder = git_package()
+    # A failing filter would abort checkout if global configuration leaked in.
+    config = tmp_path / 'filter-config'
+    config.write_text('[filter "hostile"]\n\tsmudge = false\n\trequired = true\n')
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(config))
+    apps.checkout_git_tree(folder)
+    assert (folder / 'index.html').read_text() == '<h1>Sample</h1>'
+
+
+@pytest.fixture
+def https_git(git_package, package, tmp_path, monkeypatch):
+    """Real smart HTTPS Git transport, confined to a synthetic loopback fixture."""
+    import http.server
+    import shutil
+    import ssl
+    import threading
+    import urllib.parse
+    if not shutil.which('openssl'):
+        pytest.skip('OpenSSL is needed for the local HTTPS Git fixture')
+    git_package()
+    root = tmp_path / 'public-repos'
+    root.mkdir()
+    subprocess.run(['git', 'clone', '--bare', str(package), str(root / 'app.git')],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   env=apps.git_environment(), timeout=10)
+    certificate, key = tmp_path / 'certificate.pem', tmp_path / 'key.pem'
+    subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+                    '-subj', '/CN=localhost', '-addext', 'subjectAltName=IP:127.0.0.1,DNS:localhost',
+                    '-keyout', str(key), '-out', str(certificate)], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+    requests = []
+    class GitHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.respond()
+
+        def do_POST(self):
+            self.respond()
+
+        def respond(self):
+            parsed = urllib.parse.urlsplit(self.path)
+            requests.append(parsed.path)
+            if parsed.path.startswith('/redirect.git/'):
+                self.send_response(302)
+                self.send_header('Location', '/app.git/info/refs?service=git-upload-pack')
+                self.end_headers()
+                return
+            if parsed.path not in ('/app.git/info/refs', '/app.git/git-upload-pack'):
+                self.send_error(404)
+                return
+            length = int(self.headers.get('Content-Length', '0'))
+            if length > 65536:
+                self.send_error(413)
+                return
+            env = {**apps.git_environment(), 'GIT_PROJECT_ROOT': str(root), 'GIT_HTTP_EXPORT_ALL': '1',
+                   'PATH_INFO': parsed.path, 'QUERY_STRING': parsed.query,
+                   'REQUEST_METHOD': self.command, 'CONTENT_TYPE': self.headers.get('Content-Type', ''),
+                   'CONTENT_LENGTH': str(length), 'SERVER_PROTOCOL': 'HTTP/1.1'}
+            result = subprocess.run(['git', 'http-backend'], input=self.rfile.read(length),
+                                    capture_output=True, check=True, env=env, timeout=10)
+            headers, body = result.stdout.split(b'\r\n\r\n', 1)
+            self.send_response(200)
+            for line in headers.decode().split('\r\n'):
+                name, value = line.split(':', 1)
+                if name.lower() != 'status':
+                    self.send_header(name, value.strip())
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), GitHandler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certificate, key)
+    httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    original_environment = apps.git_environment
+    # Trust only this test certificate; production still uses the OS trust store.
+    monkeypatch.setattr(apps, 'git_environment', lambda: {
+        **original_environment(), 'GIT_SSL_CAINFO': str(certificate), 'NO_PROXY': '127.0.0.1,localhost'})
+    thread.start()
+    try:
+        yield f'https://127.0.0.1:{httpd.server_port}', requests
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+
+
+def test_https_git_prepare_install_end_to_end(market, https_git):
+    base, requests = https_git
+    preview = market.prepare(base + '/app.git')
+    assert preview['permissions'] == ['sessions.read']
+    assert not (market.staged(preview['token']) / 'app/.git').exists()
+    market.install(preview['token'], True)
+    assert market.grant('sample')['installed']
+    assert '/app.git/info/refs' in requests
+    assert '/app.git/git-upload-pack' in requests
+
+
+def test_https_git_redirect_is_not_followed(market, https_git):
+    base, requests = https_git
+    with pytest.raises(subprocess.CalledProcessError):
+        market.prepare(base + '/redirect.git')
+    assert requests == ['/redirect.git/info/refs']
+    assert list((market.store / 'staged').iterdir()) == []
+
+
+def test_failed_remove_revokes_access_and_can_be_retried(market, package):
+    grant = install(market, package)
+    obstruction = market.apps / '.removed'
+    obstruction.write_text('synthetic obstruction')
+    with pytest.raises(FileExistsError):
+        market.remove('sample')
+    with pytest.raises(PermissionError):
+        market.bridge('sample', grant['generation'], 'sessions.read', {})
+    assert market.isolated('sample')
+    obstruction.unlink()
+    assert market.remove('sample') == {'ok': True}
+    assert not (market.apps / 'sample').exists()
+    assert market.remove('sample') == {'ok': True}  # idempotent retry
+
+
+@pytest.mark.parametrize('damage', ['corrupt', 'missing'])
+def test_uninstall_recovers_broken_grants_without_promoting_app(market, package, damage):
+    install(market, package)
+    if damage == 'corrupt':
+        market._grant_path('sample').write_text('{invalid')
+    else:
+        market._grant_path('sample').unlink()
+    market.remove('sample')
+    assert market.isolated('sample')
+    assert not (market.apps / 'sample').exists()
+    with pytest.raises(PermissionError):
+        market.grant('sample')
+
+
+def test_marketplace_remove_cannot_archive_unmarked_local_app(market):
+    local = market.apps / 'local'
+    local.mkdir(parents=True)
+    (local / 'index.html').write_text('trusted local content')
+    with pytest.raises(ValueError, match='not a marketplace'):
+        market.remove('local')
+    assert (local / 'index.html').read_text() == 'trusted local content'

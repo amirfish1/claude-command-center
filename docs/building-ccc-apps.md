@@ -19,7 +19,9 @@ app.js            (optional)
 
 Use relative asset URLs, such as `./app.js`, rather than `/static/app.js`.
 Dependencies must be shipped inside the package; CDN scripts, remote fonts,
-network requests, workers and nested frames are blocked. The installer never
+network requests, workers and nested frames are blocked. Use classic script tags
+or inline scripts; module imports and fetch-based loaders are unsupported. Even
+`fetch('./data.json')` is blocked, so embed static data in your JavaScript. The installer never
 runs build scripts, package managers, Git hooks or submodules.
 
 ```json
@@ -112,9 +114,11 @@ ccc app install ./my-summary.zip
 ```
 
 Omit optional files from the command if you do not use them. For Git installs,
-publish a repository with `app.json` and `index.html` at its root, then use an
+publish a public repository with `app.json` and `index.html` at its root, then use an
 HTTPS clone URL without credentials or a fragment. Use the final canonical URL;
-Git redirects are disabled. CCC stages the checkout and
+Git redirects are disabled. Clones have no working files until the tree passes
+the package limits; symlinks and submodules are rejected. Git commands have a
+60-second timeout and 16 MiB per-file limit (tree metadata output: 1 MiB). CCC stages the checkout and
 shows actual permissions before installation. Existing IDs are never replaced;
 remove and reinstall to update. Never manually drop third-party packages into
 the trusted local apps directory.
