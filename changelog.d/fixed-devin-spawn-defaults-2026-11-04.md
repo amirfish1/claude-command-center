@@ -1,0 +1,1 @@
+- Settings → Spawn defaults now offers Devin as the engine for new sessions and for workers.
