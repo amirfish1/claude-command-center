@@ -5356,7 +5356,7 @@
     if (c.backlog_type === 'github' || c.issue_number || c.linked_issue) {
       rawTitle = stripGhIssueProjectTag(rawTitle);
     }
-    return { rawTitle: _uxFixesWorkerDisplayTitle(c, rawTitle), titleSource };
+    return { rawTitle: _withTicketPrefix(c, _uxFixesWorkerDisplayTitle(c, rawTitle)), titleSource };
   }
   // A continuation's latest task is context within its original topic. Keep
   // the original name (especially a human rename) as the stable first part.
@@ -78230,6 +78230,20 @@
     return _uxFixesWorkerTicketsForRow(c).filter(t => t.status === 'closed').slice(0, limit);
   }
 
+  // A session that worked a ticket leads its name with the newest one as
+  // "CCC#333", so the row says which ticket it is on before the prose does.
+  function _withTicketPrefix(c, title) {
+    try {
+      const t = String(title || '');
+      if (!c || !t || c.name_overridden || c.idea_ticket || t.startsWith('\u{1F9F5}')) return title;
+      const top = _uxFixesWorkerTicketsForRow(c, 1)[0];
+      const m = top && String(top.ref || '').match(/^([A-Z][A-Z0-9_]*)-(\d+)$/);
+      if (!m) return title;
+      const tag = m[1] + '#' + m[2];
+      if (t.toUpperCase().startsWith(tag)) return title;
+      return tag + ' ' + t;
+    } catch (e) { return title; }
+  }
   function _uxFixesWorkerDisplayTitle(c, rawTitle) {
     // Explicit user names and custom terminal names remain authoritative.
     if (!c || c.name_overridden || c.continued_from_session_id) return rawTitle;
