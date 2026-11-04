@@ -488,6 +488,14 @@ def _control_plane_engine_call(
     parent_work_id=None, timeout_ms=None,
 ):
     """Return worker result, or None only when no worker accepted the request."""
+    args = args if isinstance(args, dict) else {}
+    if mutate and "delivery_id" not in args:
+        # Bind before either worker hop, including root -> account worker.
+        # Context-local ids do not cross that extra process boundary.
+        from ccc_server import delivery as _delivery
+        bound = _delivery.bound_id()
+        if bound:
+            args = dict(args, delivery_id=bound)
     if engine == "codex" and os.environ.get("CCC_WORKER_PROCESS") == "1":
         from ccc_server.codex_accounts import route
         routed = route(operation, args if isinstance(args, dict) else {})
@@ -503,15 +511,6 @@ def _control_plane_engine_call(
     if not _control_plane_routes_engines():
         return None if os.environ.get("CCC_WORKER_PROCESS") == "1" else isolated_fallback_error()
     method = "engine.execute" if mutate else "engine.query"
-    args = args if isinstance(args, dict) else {}
-    if mutate and "delivery_id" not in args:
-        # The worker creates the queue row for a send the dashboard is
-        # routing; hand it the send's delivery_id so the row keeps the id the
-        # inject response already returned (ccc_server/delivery.py).
-        from ccc_server import delivery as _delivery
-        bound = _delivery.bound_id()
-        if bound:
-            args = dict(args, delivery_id=bound)
     payload = {
         "engine": engine,
         "operation": operation,

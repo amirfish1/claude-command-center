@@ -207,6 +207,38 @@ def test_worker_rebinds_the_id_around_the_engine_call(queue_env, monkeypatch):
     assert delivery.bound_id() is None, "the binding does not leak past the call"
 
 
+def test_account_worker_hop_keeps_the_queued_card_id(queue_env, monkeypatch):
+    import contextvars
+    from types import SimpleNamespace
+    from ccc_server import codex_accounts
+    from worker_engines import EngineHost
+
+    host = EngineHost(SimpleNamespace(ledger=None))
+    host._module = server
+    monkeypatch.setenv("CCC_WORKER_PROCESS", "1")
+    monkeypatch.setattr(server, "resume_session_codex",
+        lambda sid, text, **kw: server._queue_codex_resume(sid, text, reason="busy"))
+    forwarded = []
+
+    def route(operation, args):
+        if forwarded:
+            return None  # The destination account worker executes locally.
+        forwarded.append(dict(args))
+        # A distinct account process cannot inherit the root worker's
+        # contextvars; only explicit wire arguments cross that boundary.
+        return contextvars.Context().run(host._call, "codex", operation, args)
+
+    monkeypatch.setattr(codex_accounts, "route", route)
+    args = {"session_id": SID, "text": "hello"}
+    result = delivery.within("did-account-hop", "hello", lambda:
+        server._control_plane_engine_call("codex", "resume", args))
+
+    assert result["queued"] is True
+    assert forwarded[0].get("delivery_id") == "did-account-hop"
+    assert [ev["delivery_id"] for ev in _queued_events(SID)] == ["did-account-hop"]
+    assert "delivery_id" not in args
+
+
 # ── receipts settle by the same id ───────────────────────────────────────────
 
 receipts = importlib.import_module("ccc_server.inject_receipts")
