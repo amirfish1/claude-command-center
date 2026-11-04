@@ -10013,6 +10013,9 @@ def _load_spawn_defaults_unlocked(*, persist=True):
     for key in ("worker_inherit_session", "worker_overrides"):
         if key in raw:
             result[key] = raw[key]
+    # Which Codex account (allowance id) new Codex sessions use by default;
+    # "" means the machine's own Codex login.
+    result["codex_account_id"] = str(raw.get("codex_account_id") or "")[:200]
     if needs_migration and persist:
         # A new engine was added to _ORCHESTRATION_SPAWN_ENGINES after this
         # file was written. Backfill it once and persist so every future
@@ -10037,6 +10040,24 @@ def _load_spawn_defaults_unlocked(*, persist=True):
             for key in (*_WORKER_DEFAULT_FIELDS, "reasoning_effort"):
                 result[key] = migrated[key]
     return result
+
+
+def _apply_default_codex_account(payload):
+    """Spawns that name no Codex account use the saved default account.
+
+    A default whose allowance was since removed is ignored rather than
+    failing the spawn: the machine login is always a valid fallback.
+    """
+    account_id = str((_load_spawn_defaults() or {}).get("codex_account_id") or "")
+    if not account_id:
+        return payload
+    try:
+        from ccc_server import codex_accounts
+        if any(row.get("id") == account_id for row in codex_accounts.configured()):
+            return {**payload, "codex_account_id": account_id}
+    except Exception:
+        pass
+    return payload
 
 
 def _save_spawn_defaults(config):
@@ -10079,6 +10100,14 @@ def _prepare_spawn_defaults_unlocked(config):
         return {"ok": False, "error": "worker_overrides is read-only saved metadata"}
     if "worker_inherit_session" in config and type(config["worker_inherit_session"]) is not bool:
         return {"ok": False, "error": "worker_inherit_session must be a boolean"}
+    if "codex_account_id" in config:
+        account_id = config["codex_account_id"]
+        if not isinstance(account_id, str) or len(account_id) > 200:
+            return {"ok": False, "error": "codex_account_id must be a short string"}
+        if account_id and account_id != "__current__":
+            from ccc_server import codex_accounts
+            if not any(row.get("id") == account_id for row in codex_accounts.configured()):
+                return {"ok": False, "error": "That Codex account is not connected"}
     inherited = stored_keys.get("worker_inherit_session") is True
     inherit_next = config.get("worker_inherit_session", inherited) is True
     if inherit_next:
@@ -10231,6 +10260,8 @@ def _prepare_spawn_defaults_unlocked(config):
                 payload[key] = stored_keys[key]
     if "worker_inherit_session" in config:
         payload["worker_inherit_session"] = inherit_next
+    if "codex_account_id" in config:
+        payload["codex_account_id"] = "" if config["codex_account_id"] == "__current__" else config["codex_account_id"]
     if inherit_next and not inherited:
         saved = dict(stored_keys.get("worker_overrides") or {}) if isinstance(stored_keys.get("worker_overrides"), dict) else {}
         saved.update({key: stored_keys.get(key, current.get(key)) for key in _WORKER_DEFAULT_FIELDS})
@@ -38371,6 +38402,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             }
             engine_raw = payload.get("engine")
             engine, model = _spawn_request_engine_and_model(payload)
+            if engine == "codex" and not payload.get("codex_account_id") and not payload.get("parent_session_id"):
+                payload = _apply_default_codex_account(payload)
             # BYOK (W2-2): "key_profile" picks which stored profile's API
             # keys get injected into the spawned subprocess's env. See
             # ccc_server/byok.py. Only engines that read provider keys

@@ -34359,3 +34359,5 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 /* The pop-ups show only what the diagram cannot: no repeated defaults. */
 .ao-setup-body #routingPolicyContext option[value="defaults"] { display: none; }
 .ao-setup-body #engineConnectionPanel > section.engine-connection-step:nth-of-type(n+2) { display: none; }
+#agentsOverview .ao-account-pick { flex: none; padding: 1px 8px; font-size: 10.5px; margin-left: 4px; }
+#agentsOverview .ao-account:has(.ao-account-pick.is-active) { outline: 1px solid color-mix(in srgb, hsl(var(--eng-hue) 65% 55%) 60%, transparent); }

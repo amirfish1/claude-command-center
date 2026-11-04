@@ -80653,7 +80653,8 @@
     _codexAccountsLoading = true;
     fetch('/api/codex/accounts').then(r => r.json()).then(data => {
       if (!data.ok) throw new Error('Accounts unavailable');
-      const selected = select.value;
+      // Until the user picks one, start on the saved default account.
+      const selected = select.dataset.userPicked === '1' ? select.value : (spawnDefaultsState.codex_account_id || '__current__');
       select.replaceChildren(new Option('Codex · current account', '__current__'));
       for (const account of data.accounts || []) {
         if (!account.current) select.add(new Option(account.label, account.id));
@@ -94700,6 +94701,16 @@
       if (def) { if (!def.classList.contains('is-active')) aoSetDefault(def.dataset.aoEngine, def.dataset.aoDefault); return; }
       const setup = event.target.closest('[data-ao-setup]');
       if (setup) { openEngineSetupPopup(setup.dataset.aoSetup); return; }
+      const acct = event.target.closest('[data-ao-codex-account]');
+      if (acct) {
+        if (acct.classList.contains('is-active')) return;
+        const id = acct.dataset.aoCodexAccount;
+        const picker = document.getElementById('codexAccountSelect');
+        if (picker && picker.dataset.userPicked !== '1' && [...picker.options].some(o => o.value === id)) picker.value = id;
+        aoSaveDefaults({engine: 'codex', codex_account_id: id === 'local-codex' ? '' : id},
+          'New sessions now start on Codex (' + aoCodexAccountRole(id).toLowerCase() + ' account).');
+        return;
+      }
       const inherit = event.target.closest('[data-ao-inherit]');
       if (inherit) { aoSaveDefaults({worker_inherit_session: inherit.dataset.aoInherit === 'on'}, inherit.dataset.aoInherit === 'on' ? 'Queue workers now follow new sessions.' : 'Queue workers now have their own engine.'); return; }
       if (event.target.closest('[data-ao-advanced]')) openAdvancedRoutingPopup();
@@ -94847,6 +94858,18 @@
     if (sectionId === 'routing') setTimeout(openAdvancedRoutingPopup, 0);
     else if (sectionId === 'engines') setTimeout(() => openEngineSetupPopup(), 0);
   }
+  function aoCodexAccounts() {
+    return new Set((_agentsOverviewCodex || []).filter(r => r.source === 'codex').map(r => r.id));
+  }
+  // The account new Codex sessions use, or '' when Codex is not the default.
+  function aoCodexSessionAccount() {
+    if (spawnDefaultsState.engine !== 'codex') return '';
+    const id = spawnDefaultsState.codex_account_id || '';
+    return id && aoCodexAccounts().has(id) ? id : 'local-codex';
+  }
+  function aoCodexAccountRole(id) {
+    return !id || id === 'local-codex' ? 'Primary' : 'Secondary';
+  }
   function aoCodexAccountsHtml() {
     const rows = (_agentsOverviewCodex || []).filter(r => r.source === 'codex');
     if (!rows.length) return '';
@@ -94857,8 +94880,10 @@
       const role = r.id === 'local-codex' ? 'Primary' : (accounts.length > 2 ? 'Secondary ' + i : 'Secondary');
       const left = typeof r.remaining === 'number' ? Math.round(r.remaining) + '% left' : 'no reading';
       const tone = r.status === 'blocked' || r.error ? 'bad' : (typeof r.remaining === 'number' && r.remaining < 20 ? 'warn' : 'ok');
+      const active = aoCodexSessionAccount() === r.id;
+      const pick = accounts.length < 2 ? '' : '<button type="button" class="ao-default ao-account-pick' + (active ? ' is-active' : '') + '" data-ao-codex-account="' + escapeHtml(r.id) + '" aria-pressed="' + active + '" title="' + escapeHtml(active ? 'New Codex sessions use this account' : 'Start new sessions on Codex with this account') + '">' + (active ? '✓ ' : '') + 'Sessions</button>';
       return '<span class="ao-account is-' + tone + '" title="' + escapeHtml([r.identity, r.kind, r.deadline ? 'resets ' + new Date(r.deadline).toLocaleString() : '', r.error || ''].filter(Boolean).join(' · ')) + '">'
-        + '<span class="ao-account-role">' + role + '</span><span>' + escapeHtml(r.plan || '') + '</span><span class="ao-account-left">' + left + '</span></span>';
+        + '<span class="ao-account-role">' + role + '</span><span>' + escapeHtml(r.plan || '') + '</span><span class="ao-account-left">' + left + '</span>' + pick + '</span>';
     }).join('') + '</span>';
   }
   function aoEngineTile(r) {
@@ -94874,7 +94899,7 @@
         + '<button type="button" class="ao-gear" data-ao-setup="' + r.engine + '" title="Account and sign-in" aria-label="' + escapeHtml(r.meta.label) + ' setup">⚙</button></span>'
         + (r.engine === 'codex' ? aoCodexAccountsHtml() : '')
         + '<span class="ao-defaults">'
-        + btn('session', 'Sessions', r.isDefault, SPAWN_DEFAULT_ENGINES.includes(r.engine), r.isDefault ? 'New sessions start on ' + r.meta.label : 'Start new sessions on ' + r.meta.label)
+        + btn('session', 'Sessions', r.isDefault, SPAWN_DEFAULT_ENGINES.includes(r.engine) && !(r.engine === 'codex' && aoCodexAccounts().size > 1), r.isDefault ? 'New sessions start on ' + r.meta.label : 'Start new sessions on ' + r.meta.label)
         + btn('worker', 'Workers', inherit ? r.isDefault : r.isWorkerDefault, ENGINE_HUB_WORKER_ENGINES.includes(r.engine), (inherit ? r.isDefault : r.isWorkerDefault) ? 'Queue workers run on ' + r.meta.label : 'Run queue workers on ' + r.meta.label)
         + '</span></div>';
     }
@@ -94899,8 +94924,9 @@
   }
   function aoDefaultsBarHtml() {
     const s = spawnDefaultsState, inherit = s.worker_inherit_session === true;
+    const acct = s.engine === 'codex' && aoCodexAccounts().size > 1 ? ' · ' + aoCodexAccountRole(aoCodexSessionAccount()) : '';
     const session = '<div class="ao-def-row"><span class="ao-def-label">New sessions</span>' + aoMono(s.engine)
-      + '<span class="ao-def-engine">' + escapeHtml(aoEngineLabel(s.engine)) + '</span>'
+      + '<span class="ao-def-engine">' + escapeHtml(aoEngineLabel(s.engine) + acct) + '</span>'
       + aoModelSelect('session-model', s.engine, (s.models || {})[s.engine] || '') + aoEffortSelect('session-effort', s.engine, s.reasoning_effort || '') + '</div>';
     const we = s.worker_engine || s.engine;
     const worker = inherit
@@ -94935,7 +94961,7 @@
     const qd = _agentsOverviewQueues;
     const s = spawnDefaultsState;
     const sig = JSON.stringify([rows.map(r => [r.engine, r.state, r.installed, r.auth, r.limited, r.isDefault, r.isWorkerDefault]),
-      s.engine, s.models, s.reasoning_effort, s.worker_engine, s.worker_model, s.worker_reasoning_effort, s.worker_inherit_session, s.auto_compact_k, qd, _agentsOverviewCodex]);
+      s.engine, s.models, s.reasoning_effort, s.worker_engine, s.worker_model, s.worker_reasoning_effort, s.worker_inherit_session, s.auto_compact_k, s.codex_account_id, qd, _agentsOverviewCodex]);
     if (sig === _agentsOverviewSig) return;
     if (document.activeElement && document.activeElement.closest?.('#agentsOverview :is(select, input)')) return;   // don't yank an open picker
     _agentsOverviewSig = sig;
@@ -94998,6 +95024,7 @@
     scheduleAgentsOverview();
   }
   mountAgentsOverview();
+  document.getElementById('codexAccountSelect')?.addEventListener('change', event => { event.target.dataset.userPicked = '1'; });
 
   function settingsModalFocusables() {
     if (!$settingsModal) return [];

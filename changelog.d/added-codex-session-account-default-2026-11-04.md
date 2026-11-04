@@ -1,0 +1,1 @@
+- Settings → Agents: when Codex has more than one account, each account in the Codex tile has its own **Sessions** button, so new Codex sessions can default to the primary or the secondary account. The new-session account picker starts on that saved choice, and spawns from the API or CLI that name no account use it too.
