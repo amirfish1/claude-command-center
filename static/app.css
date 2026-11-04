@@ -34325,7 +34325,7 @@ body.conv-compact .conversations-view .cc-run-thumbs {
 }
 body.conv-compact .conversations-view .cc-run-chip.cc-run-open ~ .cc-run-thumbs { display: none; }
 .cc-run-thumbs .msg-image.cc-run-thumb {
-  display: inline-block; width: auto; height: 28px; max-width: 56px; max-height: 28px;
+  display: inline-block; width: auto; height: 56px; max-width: 112px; max-height: 56px;
   margin: 0; border-radius: 4px; object-fit: cover;
 }
 .cc-run-thumbs-more { font-size: 11px; color: var(--text-muted); }
