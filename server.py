@@ -27452,10 +27452,27 @@ def _shell_heredoc_summary(command, max_len=240):
     detail = "; ".join(p for p in parts if p)
     if basenames and detail and not any(base in detail for base in basenames[:1]):
         detail += " (" + basenames[0] + ")"
+    # `cat > drive.py <<'E'` writes a file; say which, and show the command
+    # that runs after the heredoc (the part that actually does something).
+    wrote = re.search(r"\b(?:cat|tee)\s+(?:-a\s+)?>{0,2}\s*([^\s<>|;&]+)", here.get("head", ""))
+    if wrote and label == "Inline script":
+        label = "Writes " + os.path.basename(wrote.group(1))
+    after = ""
+    try:
+        text = _redacted_shell_command_text(command, max_len=12000)
+        tag = here.get("tag", "")
+        m_end = re.search(r"(?m)^[ \t]*" + re.escape(tag) + r"[ \t]*$", text) if tag else None
+        if m_end:
+            after = re.sub(r"\s+", " ", text[m_end.end():]).strip(" \n;&")
+    except Exception:
+        after = ""
     if not detail:
         line_count = len([ln for ln in body.splitlines() if ln.strip()])
         detail = f"{line_count} line" + ("" if line_count == 1 else "s")
-    return _prompt_fragment(label + ": " + detail, max_len)
+    out = label + ": " + detail
+    if after:
+        out += " \u2192 then: " + after
+    return _prompt_fragment(out, max_len)
 
 
 def _shell_command_activity_label(command, max_len=1000):
