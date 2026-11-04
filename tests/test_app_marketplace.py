@@ -232,7 +232,7 @@ def test_cli_decline(market, package, monkeypatch):
 
 
 def test_packaged_examples_validate(market):
-    assert len(market.index()['apps']) == 2
+    assert len(market.index()['apps']) == 3
     for row in market.index()['apps']:
         preview = market.prepare(market.index_source(row['id']))
         assert preview['permissions'] == row['permissions']
@@ -249,7 +249,8 @@ def http_market(market, monkeypatch):
     monkeypatch.setattr(server, 'USER_APPS_DIR', market.apps)
     monkeypatch.setattr(server, '_marketplace_sessions', lambda: [
         {'session_id': 'fixture-session', 'title': 'Fixture session', 'engine': 'test', 'state': 'idle'}])
-    monkeypatch.setattr(server, '_marketplace_queues', lambda: [])
+    monkeypatch.setattr(server, '_marketplace_queues', lambda: [
+        {'id': 'fixture-item', 'title': 'Fixture queue item', 'status': 'open'}])
     monkeypatch.delenv('CCC_PROXY_SECRET', raising=False)
     monkeypatch.delenv('CCC_PROXY_SECRET_FILE', raising=False)
     # Real handler and real origin checks, without main() or background workers.
@@ -281,8 +282,9 @@ def test_browser_isolation_and_consent(http_market, market):
     probe = subprocess.run(['node', '-e', "require('./require-puppeteer')"], cwd=REPO, capture_output=True)
     if probe.returncode:
         pytest.skip('Optional Puppeteer harness is not installed')
-    preview = market.prepare(str(REPO / 'examples/apps/session-summary'))
-    market.install(preview['token'], True)
+    for ident in ('session-summary', 'queue-summary'):
+        preview = market.prepare(str(REPO / 'examples/apps' / ident))
+        market.install(preview['token'], True)
     subprocess.run(['node', 'tests/app_marketplace_browser.cjs', http_market],
                    cwd=REPO, check=True, timeout=60)
 
@@ -323,3 +325,95 @@ def test_existing_app_is_never_overwritten(market, package):
         market.prepare(str(package))
     assert (local / 'index.html').read_text() == 'local app'
     assert not market.isolated('sample')
+
+
+@pytest.mark.parametrize('name', ['../escape', '/absolute', 'a/../../escape',
+    'a\\escape', 'C:/escape', 'a//escape', './index.html', 'a/../index.html'])
+def test_zip_traversal_refused_before_extraction(market, package, tmp_path, name):
+    import zipfile
+    archive = tmp_path / 'hostile.zip'
+    with zipfile.ZipFile(archive, 'w') as output:
+        output.writestr('index.html', 'safe first entry')
+        output.writestr(name, 'hostile')
+    with pytest.raises(ValueError, match='archive path'):
+        market.prepare(str(archive))
+    assert list((market.store / 'staged').iterdir()) == []
+    assert not (tmp_path / 'escape').exists()
+
+
+def test_zip_symlink_and_duplicate_refused(market, tmp_path):
+    import stat
+    import zipfile
+    archive = tmp_path / 'hostile.zip'
+    link = zipfile.ZipInfo('link')
+    link.create_system = 3
+    link.external_attr = (stat.S_IFLNK | 0o777) << 16
+    with zipfile.ZipFile(archive, 'w') as output:
+        output.writestr(link, '../../outside')
+    with pytest.raises(ValueError, match='regular'):
+        market.prepare(str(archive))
+    with zipfile.ZipFile(archive, 'w') as output:
+        output.writestr('app.json', '{}')
+        with pytest.warns(UserWarning):
+            output.writestr('app.json', '{}')
+    with pytest.raises(ValueError, match='Duplicate'):
+        market.prepare(str(archive))
+
+
+def test_zip_install_and_expanded_size_limit(market, package, tmp_path, monkeypatch):
+    import zipfile
+    archive = tmp_path / 'sample.zip'
+    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as output:
+        for filename in package.iterdir():
+            output.write(filename, filename.name)
+    preview = market.prepare(str(archive))
+    market.install(preview['token'], True)
+    assert market.grant('sample')['permissions'] == ['sessions.read']
+    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as output:
+        output.writestr('large.txt', 'x' * 10001)
+    monkeypatch.setattr(apps, 'MAX_BYTES', 10000)
+    with pytest.raises(ValueError, match='exceeds'):
+        market.prepare(str(archive))
+
+
+@pytest.mark.parametrize('raw', [
+    '{"id":"safe","id":"../escape"}',
+    '{"id":"sample","label":"Sample","description":"Test","permissions":[],"permissions":["spawn"]}',
+    '{"id":"sample","label":"Sample","description":"Test","icon":{"url":"/api"}}',
+    '{"id":"sample","label":"Sample","description":"Test","sandbox":"allow-same-origin"}',
+    '{"id":"sample","label":"Sample","description":"Test","scripts":{"install":"echo unsafe"}}',
+    '{"id":"sample","label":"Sample","description":"Test","icon":NaN}',
+    '[]', 'null', '{broken',
+])
+def test_malicious_manifest_is_rejected(market, package, raw):
+    (package / 'app.json').write_text(raw)
+    with pytest.raises(ValueError):
+        market.prepare(str(package))
+    assert market.installed() == []
+    assert list((market.store / 'staged').iterdir()) == []
+
+
+@pytest.mark.parametrize('ident', ['..', '../sample', '%2e%2e', 'a\\b', '/sample', 'a\x00b'])
+def test_traversal_ids_cannot_read_or_remove_grants(market, package, ident):
+    install(market, package)
+    for operation in (market.grant, market.remove):
+        with pytest.raises(ValueError):
+            operation(ident)
+    assert market.grant('sample')['installed'] is True
+
+
+def test_removed_archive_and_installed_symlink_unservable(market, package, tmp_path):
+    install(market, package)
+    outside = tmp_path / 'private.html'
+    outside.write_text('private')
+    (market.apps / 'sample/link.html').symlink_to(outside)
+    for prefix in ('/marketplace-content/', '/app-static/'):
+        handler = Handler()
+        apps.handle_get(handler, prefix + 'sample/link.html', market)
+        assert handler.status == 404
+    market.remove('sample')
+    archived = next((market.apps / '.removed').iterdir())
+    for prefix in ('/marketplace-content/', '/app-static/'):
+        handler = Handler()
+        apps.handle_get(handler, prefix + '.removed/' + archived.name + '/index.html', market)
+        assert handler.status == 400

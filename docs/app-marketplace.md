@@ -1,17 +1,18 @@
 # Sandboxed app marketplace (MVP)
 
 Use **Applications → Browse apps** to install an example, or install a package
-from a local folder or an HTTPS Git repository:
+from a local folder, ZIP archive or an HTTPS Git repository:
 
 ```sh
 ccc app install ./my-app
+ccc app install ./my-app.zip
 ccc app install https://example.com/owner/app.git
 ccc app install ./my-app --yes
 ccc app list
 ccc app remove my-app
 ```
 
-A Git repository must have `app.json` and `index.html` at its root. CCC makes a
+A ZIP archive or Git repository must have `app.json` and `index.html` at its root. CCC makes a
 shallow clone; it does not run build commands, dependency installers, package
 scripts, Git hooks, or submodules. HTTPS URLs with embedded credentials are
 refused. SSH Git URLs are not supported in this first version.
@@ -76,6 +77,7 @@ A marketplace manifest is deliberately small:
 }
 ```
 
+Unknown manifest fields, duplicate JSON keys and non-string icons are rejected.
 IDs must match `[a-z0-9_-]{1,40}` and cannot shadow shipped apps. A manifest
 cannot specify a navigation `url`. Missing `permissions` means no permissions.
 Unknown or duplicate permissions are refused.
@@ -119,8 +121,11 @@ A denied request does not call the underlying reader.
 ## Consent and package handling
 
 Both CLI and Browse apps use the same preparation and installation functions.
-Preparation copies or clones into private staging, rejects symlinks and special
+Preparation copies, extracts or clones into private staging, rejects symlinks and special
 files, validates the manifest, and limits packages to 500 entries / 10 MiB.
+ZIP members are checked before extraction: absolute/traversing paths, backslashes,
+duplicate paths, symlinks, special files and encrypted entries are rejected. Both
+the compressed archive and expanded bytes are limited to 10 MiB.
 The CLI shows the actual manifest's requested permissions and asks once; `--yes`
 is explicit consent for scripts. The UI prepares first, then displays those
 actual permissions in a confirmation dialog. Index metadata never grants access.
@@ -147,12 +152,14 @@ Use the installer to establish the isolation record.
 
 ## Catalog
 
-The default `apps-index.json` ships two examples:
+The default `apps-index.json` ships three examples:
 
 - **Effects kit:** the existing `static/fx-demo.html` playground packaged with
   its scripts, stylesheet and icon. No API permissions. Sound preferences are
   held in memory because sandboxed apps have no localStorage.
 - **Session summary:** a small bridge client requesting `sessions.read`.
+- **Queue summary:** a read-only queue snapshot requesting `queues.read`, adapted
+  from the existing queue view and session bridge example.
 
 Set `CCC_APPS_INDEX_URL` to an HTTPS JSON index to use another catalog. The JSON
 shape is `{ "apps": [{ "id", "name", "description", "permissions", "source" }] }`.

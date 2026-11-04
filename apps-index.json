@@ -15,6 +15,15 @@
         "sessions.read"
       ],
       "source": "examples/apps/session-summary"
+    },
+    {
+      "id": "queue-summary",
+      "name": "Queue summary",
+      "description": "View queue titles and statuses through the permission bridge. No writes or item bodies.",
+      "permissions": [
+        "queues.read"
+      ],
+      "source": "examples/apps/queue-summary"
     }
   ]
 }

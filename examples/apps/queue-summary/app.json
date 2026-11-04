@@ -1,0 +1,9 @@
+{
+  "id": "queue-summary",
+  "label": "Queue summary",
+  "description": "Read-only snapshot of queue item titles and statuses.",
+  "icon": "\u2637",
+  "permissions": [
+    "queues.read"
+  ]
+}

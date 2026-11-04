@@ -16,6 +16,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+import zipfile
 
 PERMISSIONS = {
     "sessions.read": "Read live session IDs, titles, engines and states (no transcripts or paths)",
@@ -48,11 +49,28 @@ def no_links(path):
     return path
 
 
+def strict_json(raw):
+    """Ambiguous duplicate fields must never hide the permissions being reviewed."""
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("Duplicate JSON field")
+            result[key] = value
+        return result
+    return json.loads(raw, object_pairs_hook=pairs,
+                      parse_constant=lambda value: (_ for _ in ()).throw(ValueError("Invalid JSON constant")))
+
+
 def manifest(folder):
-    data = json.loads((folder / "app.json").read_text(encoding="utf-8"))
+    data = strict_json((folder / "app.json").read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("app.json must be an object")
+    if set(data) - {"id", "label", "description", "permissions", "icon"}:
+        raise ValueError("Unknown manifest field")
     app_id(data.get("id"))
+    if "icon" in data and (not isinstance(data["icon"], str) or not 1 <= len(data["icon"]) <= 8):
+        raise ValueError("icon must be a string of 1–8 characters")
     for key, limit in (("label", 80), ("description", 1000)):
         if not isinstance(data.get(key), str) or not 0 < len(data[key]) <= limit:
             raise ValueError(f"{key} must be a nonempty string (maximum {limit})")
@@ -93,6 +111,55 @@ def tree_digest(folder):
                 digest.update(len(data).to_bytes(8, "big") + data)
         dirs.sort()
     return digest.hexdigest()
+
+
+def unpack_zip(archive, folder):
+    """Validate every member before writing, then stream with an actual byte cap."""
+    if archive.stat().st_size > MAX_BYTES:
+        raise ValueError("Archive exceeds 10 MiB")
+    with zipfile.ZipFile(archive) as package:
+        entries = package.infolist()
+        if len(entries) > MAX_FILES:
+            raise ValueError("App has too many files")
+        seen = set()
+        total = 0
+        for entry in entries:
+            name = entry.orig_filename
+            parts = name.rstrip("/").split("/")
+            if (not name or "\\" in name or "\x00" in name or ":" in name
+                    or any(part in ("", ".", "..") for part in parts)):
+                raise ValueError("Invalid archive path")
+            key = "/".join(parts)
+            if key in seen:
+                raise ValueError("Duplicate archive path")
+            seen.add(key)
+            kind = stat.S_IFMT(entry.external_attr >> 16)
+            if kind not in (0, stat.S_IFREG, stat.S_IFDIR):
+                raise ValueError("Only regular files and directories are allowed")
+            if kind == stat.S_IFDIR and not entry.is_dir():
+                raise ValueError("Invalid archive directory")
+            if entry.flag_bits & 1:
+                raise ValueError("Encrypted archives are unsupported")
+            total += entry.file_size
+            if total > MAX_BYTES:
+                raise ValueError("App exceeds 10 MiB")
+        folder.mkdir()
+        total = 0
+        for entry in entries:
+            target = folder.joinpath(*entry.filename.rstrip("/").split("/"))
+            if entry.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with package.open(entry) as source, target.open("xb") as output:
+                while True:
+                    chunk = source.read(65536)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_BYTES:
+                        raise ValueError("App exceeds 10 MiB")
+                    output.write(chunk)
 
 
 class Marketplace:
@@ -148,7 +215,7 @@ class Marketplace:
 
     def prepare(self, source):
         if not isinstance(source, str) or not source or len(source) > 2048:
-            raise ValueError("Supply a Git HTTPS URL or local folder")
+            raise ValueError("Supply a Git HTTPS URL or local folder or ZIP")
         self._setup()
         token = secrets.token_hex(24)
         staging = self.store / "staged" / token
@@ -167,11 +234,14 @@ class Marketplace:
                 shutil.rmtree(folder / ".git")
             else:
                 original = no_links(Path(source).expanduser())
-                if not original.is_dir():
-                    raise ValueError("Source must be a local folder or HTTPS Git URL")
-                # Validate before copying, then validate the actual staged bytes.
-                tree_digest(original)
-                shutil.copytree(original, folder, symlinks=True)
+                if original.is_file() and original.suffix.lower() == ".zip":
+                    unpack_zip(original, folder)
+                elif original.is_dir():
+                    # Validate before copying, then validate the actual staged bytes.
+                    tree_digest(original)
+                    shutil.copytree(original, folder, symlinks=True)
+                else:
+                    raise ValueError("Source must be a local folder, ZIP or HTTPS Git URL")
             tree_digest(folder)
             meta = manifest(folder)
             if (self.apps / meta["id"]).exists():
@@ -417,7 +487,7 @@ def handle_post(handler, path, market, callbacks):
         handler.send_json(result)
     except PermissionError:
         handler.send_json({"ok": False, "error": "Permission denied"}, 403)
-    except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError):
+    except (ValueError, OSError, KeyError, TypeError, zipfile.BadZipFile, subprocess.SubprocessError):
         handler.send_json({"ok": False, "error": "Invalid or unavailable app; preview again before installing"}, 400)
     return True
 
@@ -425,7 +495,7 @@ def handle_post(handler, path, market, callbacks):
 def cli(argv, state=None, repo=None):
     parser = argparse.ArgumentParser(prog="ccc app")
     sub = parser.add_subparsers(dest="action", required=True)
-    install = sub.add_parser("install", help="Install a sandboxed app from a folder or HTTPS Git URL")
+    install = sub.add_parser("install", help="Install a sandboxed app from a folder, ZIP or HTTPS Git URL")
     install.add_argument("source")
     install.add_argument("--yes", action="store_true", help="Consent to the displayed permissions without prompting")
     sub.add_parser("list")
@@ -457,6 +527,6 @@ def cli(argv, state=None, repo=None):
             finally:
                 market.cancel(preview["token"])
         return 0
-    except (ValueError, OSError, EOFError, subprocess.SubprocessError) as exc:
+    except (ValueError, OSError, EOFError, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
         print("App operation failed: " + str(exc))
         return 1

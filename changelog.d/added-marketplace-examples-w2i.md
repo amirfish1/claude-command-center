@@ -1,0 +1,1 @@
+- Add a read-only Queue summary marketplace example and bounded local ZIP installs; reject archive traversal, links, duplicate paths, and ambiguous or unsupported manifest fields.

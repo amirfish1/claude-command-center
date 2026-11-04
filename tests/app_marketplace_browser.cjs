@@ -8,6 +8,10 @@ const {findChromePath} = require('../puppeteer-browser-config');
     const page = await browser.newPage();
     await page.setViewport({width:1100, height:850});
     const base = process.argv[2];
+    const forbiddenRequests = [];
+    page.on('request', request => {
+      if (request.url().includes('/api/sessions/spawn')) forbiddenRequests.push(request.url());
+    });
     await page.goto(base + '/view/session-summary');
     const element = await page.waitForSelector('#app-frame');
     const frame = await element.contentFrame();
@@ -31,6 +35,32 @@ const {findChromePath} = require('../puppeteer-browser-config');
     }));
     assert.equal(denied.ok, false);
     assert.equal(denied.error, 'Permission denied');
+    for (const method of ['spawn', '/api/sessions/spawn', 'queues.read']) {
+      const result = await frame.evaluate(method => new Promise(resolve => {
+        const requestId = 'escalate-' + method;
+        window.addEventListener('message', function receive(event) {
+          if (event.data?.requestId !== requestId) return;
+          window.removeEventListener('message', receive);
+          resolve(event.data);
+        });
+        parent.postMessage({type:'ccc.app.call', requestId, method,
+          id:'queue-summary', permissions:['queues.read', 'spawn'],
+          generation:'forged', url:'/api/sessions/spawn', body:{prompt:'must never run'}}, '*');
+      }), method);
+      assert.equal(result.ok, false);
+      assert.equal(result.error, 'Permission denied');
+    }
+    // No direct GET is readable, either; CSP prevents the network request.
+    assert.equal(await frame.evaluate(async base => {
+      try { await fetch(base + '/api/app-marketplace/index'); return 'allowed'; }
+      catch (_) { return 'denied'; }
+    }, base), 'denied');
+
+    await page.goto(base + '/view/queue-summary');
+    const queue = await (await page.waitForSelector('#app-frame')).contentFrame();
+    await queue.waitForFunction(() => document.getElementById('status')?.textContent === 'Snapshot loaded.');
+    assert.match(await queue.$eval('#items', el => el.textContent), /Fixture queue item/);
+    assert.equal(await queue.evaluate(() => window.origin), 'null');
 
     await page.goto(base + '/applications');
     await page.click('#browseApps');

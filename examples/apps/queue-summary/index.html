@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Queue summary</title>
+<style>body{background:#0f1115;color:#e6e9ee;font:16px system-ui;margin:24px}li{padding:10px;border-bottom:1px solid #333}button{padding:10px}</style>
+<h1>Queue summary</h1>
+<p>Read-only queue titles and statuses, adapted from the CCC queue view. No item bodies or repository paths.</p>
+<button id="load">Read current snapshot</button>
+<p id="status" role="status">Waiting for the host…</p>
+<ul id="items"></ul>
+<script>
+let requestId;
+function load() {
+  requestId = 'items-' + Date.now();
+  parent.postMessage({type:'ccc.app.call', requestId, method:'queues.read'}, '*');
+}
+window.addEventListener('message', function (event) {
+  if (event.source !== parent || !event.data || event.data.type !== 'ccc.app.result' || event.data.requestId !== requestId) return;
+  const data = event.data;
+  document.getElementById('status').textContent = data.ok ? 'Snapshot loaded.' : data.error;
+  const list = document.getElementById('items');
+  list.textContent = '';
+  if (data.ok) data.result.forEach(function (item) {
+    const node = document.createElement('li');
+    node.textContent = (item.title || item.id || 'Queue item') + ' · ' + (item.status || '');
+    list.appendChild(node);
+  });
+});
+document.getElementById('load').onclick = load;
+load();
+</script>
