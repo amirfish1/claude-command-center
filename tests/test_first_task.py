@@ -66,6 +66,13 @@ elif "dark mode" in prompt:
 
 emit({"type": "assistant", "message": {"role": "assistant", "content": [
     {"type": "text", "text": "DONE: updated the page"}]}})
+if os.environ.get("FAKE_CLAUDE_401"):
+    emit({"type": "result", "subtype": "success", "session_id": "fake-ft-1",
+          "is_error": True, "api_error_status": 401,
+          "result": "Failed to authenticate. authentication_failed",
+          "usage": {"input_tokens": 0, "output_tokens": 0}})
+    sys.exit(1)
+
 emit({"type": "result", "subtype": "success", "session_id": "fake-ft-1",
       "result": "DONE: updated the page", "is_error": False,
       "duration_ms": 1234, "num_turns": 2, "total_cost_usd": 0.0,
@@ -181,6 +188,15 @@ class TestJobLifecycle:
         state = json.loads(env["state"].read_text())
         assert "hello-3-langs" in state["tasks_done"]
         assert state["runs"][0]["runtime"] == "standard"
+
+    def test_agent_401_surfaces_real_error(self, env, monkeypatch):
+        monkeypatch.setenv("FAKE_CLAUDE_401", "1")
+        job, err = first_task.start_task("hello-3-langs")
+        assert err is None
+        done = _wait_job(job["job_id"])
+        assert done["status"] == "error"
+        assert "401" in done["error"]
+        assert "authentication_failed" in done["error"]
 
     def test_fix_test_task_passes_check(self, env):
         job, err = first_task.start_task("fix-failing-test")

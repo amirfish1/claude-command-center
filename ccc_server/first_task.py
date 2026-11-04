@@ -534,6 +534,20 @@ def _friendly_tool_line(block: dict) -> str:
     return f"{verb}…"
 
 
+def _describe_agent_error(ev: dict) -> str:
+    """Real failure detail from an is_error result event (e.g. a 401), or ''."""
+    status = ev.get("api_error_status") or ev.get("error_status")
+    text = " ".join(str(ev.get("result") or "").split())[:240]
+    if not isinstance(status, (int, str)) or isinstance(status, bool):
+        status = None
+    parts = []
+    if status:
+        parts.append(f"error {status}")
+    if text:
+        parts.append(text)
+    return ": ".join(parts)
+
+
 def _consume_event(job: dict, ev: dict) -> None:
     """Translate one stream-json event into friendly progress lines."""
     etype = ev.get("type")
@@ -589,6 +603,8 @@ def _consume_event(job: dict, ev: dict) -> None:
             "reported_cost_usd": ev.get("total_cost_usd"),
             "is_error": bool(ev.get("is_error")),
         }
+        if ev.get("is_error"):
+            job["agent_error"] = _describe_agent_error(ev)
         result_text = str(ev.get("result") or "").strip()
         if result_text:
             last_line = (job.get("lines") or [{}])[-1].get("text")
@@ -769,15 +785,18 @@ def _run_job(job: dict, prompt: str, cmd_env: dict, playground: Path) -> None:
             usage = job.get("usage") or {}
             err = None
             if usage.get("is_error"):
-                err = "The agent hit an error."
+                detail = job.get("agent_error")
+                err = f"The agent hit an error ({detail})." if detail else "The agent hit an error."
             _append_line(job, "error", f"Agent exited (code {proc.returncode}).")
             _finish_job(job, status="error",
                         error=err or "The agent stopped before finishing. Try running it again.")
             return
         usage = job.get("usage") or {}
         if usage.get("is_error"):
+            detail = job.get("agent_error")
             _finish_job(job, status="error",
-                        error="The agent reported an error. Try again.")
+                        error=(f"The agent reported an error ({detail}). Try again."
+                               if detail else "The agent reported an error. Try again."))
             return
         _finish_job(job, status="done")
     except Exception as e:
