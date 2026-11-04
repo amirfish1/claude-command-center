@@ -7149,6 +7149,13 @@ def _codex_spawn_via_app_server(
             "worktree_branch": worktree_branch or "",
         },
     )
+    if parent_session_id:
+        # Feed the live session graph now; otherwise the parent link only
+        # appears after the next restart rebuilds the graph from the registry.
+        try:
+            _core._persist_codex_parent_link(thread_id, parent_session_id)
+        except Exception:
+            pass
     _core._set_session_override(
         thread_id, model_to_use, False, "codex", reasoning_effort,
         policy_confirmed=_core._model_policy_blocks(model_to_use),
