@@ -16196,10 +16196,20 @@ def _archive_codex_extra_keys():
     Must stay in lockstep with what _archive_corpus_signature_parts folds in
     for Codex, or a codex-only delta silently falls back to a full rebuild.
     """
-    keys = {str(codex_home() / "sessions"), "ccc-codex-captures"}
+    keys = {str(home / "sessions") for home in _codex_archive_homes()}
+    keys.add("ccc-codex-captures")
     keys.update(str(p) for p in _codex_rollout_day_dirs())
     keys.add(str(cloud_catalog_signature_path()))
     return keys
+
+
+def _codex_archive_homes():
+    """Account homes whose transcript additions invalidate the archive."""
+    from ccc_server.codex_accounts import homes
+    primary = codex_home()
+    if os.environ.get("CCC_CODEX_ACCOUNT_KEY"):
+        return [primary]
+    return list(dict.fromkeys([primary, *homes()]))
 
 
 def _codex_rollout_day_dirs():
@@ -16213,10 +16223,10 @@ def _codex_rollout_day_dirs():
     transcript growing does not. Yesterday is included so a session started
     just before midnight still invalidates the cache.
     """
-    root = codex_home() / "sessions"
     now = time.time()
     return [
-        root / time.strftime("%Y/%m/%d", time.localtime(now - offset))
+        home / "sessions" / time.strftime("%Y/%m/%d", time.localtime(now - offset))
+        for home in _codex_archive_homes()
         for offset in (0, 86400)
     ]
 
@@ -16323,7 +16333,7 @@ def _archive_corpus_signature_parts():
         # registers, but it CANNOT see new threads on its own: Codex nests
         # rollouts by date, so _codex_rollout_day_dirs() below is what actually
         # detects a session being added.
-        codex_home() / "sessions",
+        *(home / "sessions" for home in _codex_archive_homes()),
         *_codex_rollout_day_dirs(),
         Path.home() / ".cursor" / "projects",
         # Antigravity, both stores: the desktop app's brain AND the CLI brain

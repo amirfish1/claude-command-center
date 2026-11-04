@@ -1,0 +1,1 @@
+- Refresh the session sidebar when a new Codex session appears in any configured account, without rebuilding it for every streamed turn.

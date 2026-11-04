@@ -67,6 +67,30 @@ class CodexRolloutDayDirsTests(unittest.TestCase):
             "stays invisible",
         )
 
+    def test_secondary_account_additions_invalidate_without_per_turn_churn(self):
+        import tempfile
+        from ccc_server import codex_accounts
+
+        server = self.server
+        with tempfile.TemporaryDirectory() as tmp:
+            primary, secondary = Path(tmp) / "primary", Path(tmp) / "secondary"
+            with mock.patch.object(server, "codex_home", return_value=primary), \
+                    mock.patch.object(codex_accounts, "homes", return_value=[primary, secondary]):
+                days = server._codex_rollout_day_dirs()
+                self.assertEqual(len(days), 4)
+                day = next(p for p in days if secondary in p.parents)
+                day.mkdir(parents=True)
+                before = server._archive_corpus_signature_parts()[2]
+                rollout = day / "rollout-example.jsonl"
+                rollout.write_text("{}\n")
+                added = server._archive_corpus_signature_parts()[2]
+                self.assertNotEqual(before[str(day)], added[str(day)])
+                self.assertIn(str(day), server._archive_codex_extra_keys())
+                with rollout.open("a") as fh:
+                    fh.write('{"turn": 2}\n')
+                appended = server._archive_corpus_signature_parts()[2]
+                self.assertEqual(added[str(day)], appended[str(day)])
+
     def test_appending_to_an_existing_rollout_does_not_bust_the_cache(self):
         """Per-turn growth must NOT force an O(all-sessions) rebuild."""
         server = self.server
