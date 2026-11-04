@@ -33429,6 +33429,28 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     padding-top: 2px !important;
     padding-bottom: 2px !important;
   }
+  /* CCC-332: a child with no inline step (nothing to say yet) still stays one
+     line; without this it fell back to the full-height session row. */
+  #convList#convList .conv-item.is-current-child-row:not(:has(.conv-main-row.has-inline-step)) {
+    padding-top: 2px !important;
+    padding-bottom: 2px !important;
+    min-height: 0 !important;
+    height: auto !important;
+  }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row:not(.has-inline-step) {
+    min-height: 22px;
+    align-items: center;
+  }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row:not(.has-inline-step) .conv-title {
+    display: block;
+    min-height: 0;
+    font-size: 14px !important;
+    line-height: 18px !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #convList#convList .conv-item.is-current-child-row:not(:has(.conv-main-row.has-inline-step)) > :is(.conv-worker-history, .conv-worker-no-tickets) { display: none; }
   #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step {
     grid-template-columns: fit-content(42%) minmax(0, 1fr) auto auto auto;
     align-items: center;
