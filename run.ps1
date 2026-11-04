@@ -135,6 +135,22 @@ New-Item -ItemType Directory -Force -Path $ServiceLogDir | Out-Null
 $python = Resolve-Python
 & $python (Join-Path $Here "ccc_server\question_defaults.py")
 
+# server.py hard-requires `import watchtower.queue` (no standalone fallback).
+# A from-source clone has not run install.ps1, so install it here if missing.
+& $python -c "import watchtower.queue" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Output "run: WatchTower (CCC's queue engine) is missing - installing it..."
+    & $python -m pip install --user --quiet "https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        & $python -m pip install --user --quiet watchtower-cli 2>$null
+    }
+    & $python -c "import watchtower.queue" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "WatchTower could not be installed. Run: $python -m pip install --user watchtower-cli (needs Python 3.11+), then re-run .\run.ps1."
+        exit 1
+    }
+}
+
 Write-Output "-> Command Center"
 Write-Output "  port     : $env:PORT"
 Write-Output "  bind     : $(if ($env:CCC_BIND_HOST) { $env:CCC_BIND_HOST } else { '(default 127.0.0.1, or from network.json)' })"

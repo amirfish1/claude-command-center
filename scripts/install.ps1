@@ -80,7 +80,7 @@ function Sync-Repo {
 # WatchTower is CCC's queue engine. Without it the dashboard silently drops
 # worker dispatch, plan-to-fleet import, and delivery receipts, so install it
 # into the SAME interpreter that runs server.py (CCC needs `import watchtower`
-# in-process). Never fatal: CCC still boots on its built-in fallback engine.
+# in-process). The install itself is never fatal, but CCC will not start until WatchTower imports (there is no built-in fallback).
 function Install-Watchtower {
     param([string]$Python)
 
@@ -92,7 +92,7 @@ function Install-Watchtower {
 
     & $Python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>$null
     if ($LASTEXITCODE -ne 0) {
-        Write-Warning "python is below WatchTower's 3.11 minimum - skipping WatchTower. CCC will use its built-in queue engine (no worker dispatch, no plan import)."
+        Write-Warning "python is below WatchTower's 3.11 minimum - skipping WatchTower. CCC will not start without it; upgrade Python to 3.11+ and re-run."
         return
     }
 
@@ -136,7 +136,7 @@ function Install-Watchtower {
         return
     }
 
-    Write-Warning "could not install WatchTower. CCC falls back to its built-in queue engine - tickets can be filed but no worker is dispatched. Retry manually: $Python -m pip install --user $WatchtowerPypiName"
+    Write-Warning "could not install WatchTower. CCC will not start until it is installed. Retry manually: $Python -m pip install --user $WatchtowerPypiName"
 }
 
 function Open-WhenReady {

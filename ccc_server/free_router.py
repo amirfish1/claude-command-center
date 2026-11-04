@@ -1106,6 +1106,8 @@ def start(wait: bool = True, log=None) -> dict:
         ok = _wait_healthy(_START_WAIT_S if wait else 0, log)
         return {"ok": ok, "supervisor": kind,
                 "error": None if ok else "router not reachable on " + base_url()}
+    if not (install_dir() / ".env").is_file():
+        return {"ok": False, "error": "not configured yet (.env missing) — run install again; it resumes at the config step"}
     node, _ver = find_node()
     if not node:
         return {"ok": False, "error": "Node.js 20.18+ not found"}
