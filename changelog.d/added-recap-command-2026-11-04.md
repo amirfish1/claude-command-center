@@ -1,1 +1,2 @@
 - Added `ccc recap --date YYYY-MM-DD --out file.html`: a public-safe HTML recap of one day's agent sessions, commits, and shipped items (with engine/model mix). Paths, prompts, and session names are never included; repo names appear only when passed via `--repo`. Served by `GET /api/recap` (JSON or `format=html`).
+- The "⋯ more" menu now has a "Share today's recap" link that opens `/api/recap?format=html` in a new tab.
