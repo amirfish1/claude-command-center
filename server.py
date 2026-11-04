@@ -13422,7 +13422,7 @@ def _census_identity_map():
     _load_archive_response_cache()
     with _ARCHIVE_RESPONSE_CACHE_LOCK:
         cache_empty = not _ARCHIVE_RESPONSE_CACHE
-        token = (registry_mtime, tuple(sorted(
+        token = (registry_mtime, _session_graph.parent_revision(), tuple(sorted(
             (key, float((entry or {}).get("cached_at") or 0))
             for key, entry in _ARCHIVE_RESPONSE_CACHE.items()
         )))
@@ -13632,6 +13632,15 @@ def _census_identity_map():
         _overlay_wt_worker_display_names_on_census(out)
     except Exception:
         pass
+    # Native and externally launched sessions can acquire a durable parent
+    # before the archive refreshes. Join the graph once per identity rebuild
+    # so live listings agree with the family tree without per-row disk reads.
+    parents = _session_graph.parent_snapshot()
+    for sid, ident in out.items():
+        parent = parents.get(sid)
+        if (parent and not ident.get("parent_session_id")
+                and parent != ident.get("continued_from_session_id")):
+            ident["parent_session_id"] = parent
     # Walk continuation chains so sessions whose prompt starts with CCC's
     # continuation preamble inherit their origin session's resolved title (and
     # subagent parent link, if the origin was itself a subagent), matching

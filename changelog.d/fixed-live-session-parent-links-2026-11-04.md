@@ -1,0 +1,1 @@
+- Show saved dispatcher parent links for externally launched sessions in the live session list, even before the conversation archive refreshes.

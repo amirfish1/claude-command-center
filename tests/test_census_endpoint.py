@@ -205,6 +205,37 @@ class TestCensusIdentityMap(unittest.TestCase):
         self.assertIs(first, second)
         self.assertEqual(len(calls), 1)
 
+    def test_graph_parent_updates_cached_external_thread_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            graph = server._SessionGraph(pathlib.Path(directory) / "graph.json")
+            with mock.patch.object(server, "_session_graph", graph), \
+                    mock.patch.object(server, "_codex_fetch_threads", return_value=[{
+                        "id": "external-thread", "title": "Independent review",
+                    }]) as fetch:
+                server._load_spawn_registry = lambda: []
+                first = server._census_identity_map()
+                self.assertIsNone(first["external-thread"]["parent_session_id"])
+                self.assertIs(first, server._census_identity_map())
+                self.assertEqual(fetch.call_count, 1)
+                graph.add_edge("dispatcher", "external-thread", engine="codex")
+                updated = server._census_identity_map()
+                self.assertEqual(updated["external-thread"]["parent_session_id"], "dispatcher")
+                self.assertIs(updated, server._census_identity_map())
+                self.assertEqual(fetch.call_count, 2)
+
+    def test_graph_fallback_preserves_explicit_parent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            graph = server._SessionGraph(pathlib.Path(directory) / "graph.json")
+            graph.add_edge("older-parent", "known-thread", engine="codex")
+            server._load_spawn_registry = lambda: [{
+                "session_id": "known-thread", "engine": "codex",
+                "parent_session_id": "explicit-parent",
+            }]
+            with mock.patch.object(server, "_session_graph", graph), \
+                    mock.patch.object(server, "_codex_fetch_threads", return_value=[]):
+                self.assertEqual(server._census_identity_map()["known-thread"]["parent_session_id"],
+                                 "explicit-parent")
+
     def test_cold_archive_cache_kicks_background_refresh(self):
         kicked = []
         orig_refresh = server._archive_refresh_response_cache_async
