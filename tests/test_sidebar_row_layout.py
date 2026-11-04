@@ -19,7 +19,7 @@ class TestSidebarRowLayout(unittest.TestCase):
 
         # The icon is the first child of the main row (left rail); later
         # markers such as the AUTO switch follow it.
-        self.assertIn("\'\">\'\n            + sessionIconHtml\n", main_row)
+        self.assertIn("+ todayStarHtml\n            + sessionIconHtml\n", main_row)
         self.assertNotIn("+   sessionIconHtml", row_end)
 
         item_css = app_css[

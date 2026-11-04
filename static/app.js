@@ -80659,7 +80659,7 @@
         if (!account.current) select.add(new Option(account.label, account.id));
       }
       if (selected && !Array.from(select.options).some(o => o.value === selected)) {
-        select.add(new Option('Selected account unavailable — reconnect in Allowances', selected));
+        select.add(new Option('Selected account unavailable: reconnect in Allowances', selected));
       }
       select.value = selected;
       _codexAccountsLoadedAt = Date.now();

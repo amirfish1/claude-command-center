@@ -7323,7 +7323,7 @@ class TestServerImports(unittest.TestCase):
             queued_handler.index("clearSteerInFlight(sid, [text])"),
             queued_handler.index("revertOptimisticSteerMove(moved, activePaneId())"),
         )
-        self.assertEqual(queued_handler.count("giveBack();"), 4)
+        self.assertEqual(queued_handler.count("giveBack();"), 5)
         # A steer whose POST is still in flight must not be re-collected from a
         # refresh that still lists the message as queued (that bounce was the
         # whole complaint).

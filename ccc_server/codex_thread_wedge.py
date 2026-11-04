@@ -32,6 +32,8 @@ import threading
 import time
 from pathlib import Path
 
+from ccc_server.paths import _is_pid_alive
+
 WEDGE_TIMEOUTS = 3
 WEDGE_MIN_SPAN_S = 60.0
 RESTART_COOLDOWN_S = 30 * 60.0
@@ -180,9 +182,7 @@ def _stop_pid(pid, grace_s=GRACEFUL_STOP_S) -> bool:
         return True
     deadline = time.time() + grace_s
     while time.time() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
+        if not _is_pid_alive(pid):
             return True
         time.sleep(0.5)
     try:
