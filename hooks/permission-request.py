@@ -106,7 +106,35 @@ def live_dir():
         os.path.expanduser("~"), ".claude", "command-center", "live-state")
 
 
-def raise_badge(sid, tool):
+_SECRET_RE = re.compile(r"(?i)\b([A-Z0-9_]*(?:PASS(?:WORD)?|PW|PWD|TOKEN|SECRET|KEY|CODE)[A-Z0-9_]*)=\S+")
+
+
+def describe_call(tool, tin, limit=240):
+    """One-line, secret-scrubbed hint of what the tool call does, for the
+    approval card. Never raises."""
+    try:
+        if not isinstance(tin, dict):
+            return ""
+        if tool == "Bash":
+            cmd = str(tin.get("command") or "").strip()
+            lines = [ln for ln in cmd.splitlines() if ln.strip()]
+            if not lines:
+                return ""
+            first = _SECRET_RE.sub(r"\1=[redacted]", lines[0].strip())
+            extra = len(lines) - 1
+            text = first[:limit] + ("\u2026" if len(first) > limit else "")
+            if extra > 0:
+                text += " (+%d more line%s)" % (extra, "" if extra == 1 else "s")
+            return text
+        for k in ("file_path", "path", "url", "pattern", "query"):
+            if tin.get(k):
+                return str(tin[k])[:limit]
+    except Exception:
+        pass
+    return ""
+
+
+def raise_badge(sid, tool, tin=None):
     """Write the `_needs_approval` marker the dashboard and relay read, unless
     one is already there. Returns the marker path when this hook owns it."""
     path = os.path.join(live_dir(), "%s_needs_approval.json" % sid)
@@ -117,7 +145,8 @@ def raise_badge(sid, tool):
         tmp = "%s.%d.tmp" % (path, os.getpid())
         with open(tmp, "w") as f:
             json.dump({"session_id": sid, "type": "permission_prompt",
-                       "message": "Claude needs your permission to use %s" % tool,
+                       "message": "Claude needs your permission to use %s%s" % (
+                           tool, (": " + describe_call(tool, tin)) if describe_call(tool, tin) else ""),
                        "started_at": time.time(), "source": "permission-request",
                        "pid": os.getpid()}, f)
         os.replace(tmp, path)
@@ -333,7 +362,7 @@ def main():
         if wait <= 0:
             return
         watch = PromptWatch(str(data.get("transcript_path") or ""), tool, tin)
-        badge = raise_badge(sid, tool)
+        badge = raise_badge(sid, tool, tin)
         try:
             decision = wait_for_decision(base, sid, input_sha256(tool, tin),
                                          now + wait, watch=watch)

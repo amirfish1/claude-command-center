@@ -5192,6 +5192,22 @@ def claude_approval_hook_sha(session_id):
         inp = _rc.pending_input(str(path)) if path else None
         if inp and _ah.waiting(session_id, inp["sha256"]):
             return inp["sha256"]
+        # Parallel tool calls: the hook can be parked on an earlier call (the
+        # Bash) while the newest pending one is a sibling (a Read). The hook
+        # only applies a decision whose hash equals its own, so any fresh
+        # waiting file of this session is a safe target.
+        wdir = os.path.join(_ah.base_dir(), "waiting")
+        for name in sorted(os.listdir(wdir)):
+            if not name.startswith(session_id + "."):
+                continue
+            full = ""
+            try:
+                with open(os.path.join(wdir, name)) as f:
+                    full = str(json.load(f).get("sha256") or "")
+            except (OSError, ValueError):
+                continue
+            if full and _ah.waiting(session_id, full):
+                return full
     except Exception:
         pass
     return None
