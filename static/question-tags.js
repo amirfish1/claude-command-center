@@ -420,7 +420,9 @@
       });
       if (queued || !pending.size) return;
       queued = true;
-      requestAnimationFrame(function () {
+      // Microtask, not rAF: chip before the browser paints, so freshly rendered
+      // text never shows one frame of raw "[Q12:slug]" then reflows (CCC-335).
+      Promise.resolve().then(function () {
         queued = false;
         var batch = Array.from(pending); pending.clear();
         mo.disconnect();
