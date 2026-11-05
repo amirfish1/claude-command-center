@@ -76,6 +76,10 @@ PRUNE_AFTER_S = 7 * 86400
 MIN_AUTO_TURNS = 6
 MIN_AUTO_SPAN_S = 2 * 3600
 STAGNANT_TURNS = 5
+# A session whose streak was mostly productive is not a stagnant loop, however
+# its last turns went (CCC-264: 24 of 39 turns productive, 7 trailing no-ops,
+# owner leased it as a false positive).
+MAX_PRODUCTIVE_SHARE = 0.5
 # Cost-weighted tokens (fresh input + 1.25x cache write + 0.1x cache read +
 # 5x output): roughly what a turn bills, unlike raw totals that cache reads
 # dominate. The floor keeps cheap pings ("reply RECEIVED") from flagging.
@@ -899,7 +903,8 @@ def evaluate(st, now):
         return False, reasons
     if sk["turns"] < MIN_AUTO_TURNS or span < MIN_AUTO_SPAN_S or sk["cost"] < MIN_COST:
         return False, reasons
-    if sk["stagnant"] >= STAGNANT_TURNS:
+    if (sk["stagnant"] >= STAGNANT_TURNS
+            and sk["productive"] < MAX_PRODUCTIVE_SHARE * sk["turns"]):
         reasons.append("stagnant")
     if sk["cost"] >= OVER_BUDGET:
         reasons.append("over_budget")

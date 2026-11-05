@@ -463,3 +463,13 @@ def test_prompt_quoting_completed_report_is_not_progress():
         "type": "message", "role": "user", "content": [{"text":
             "[sender: verifier (session)]\n" + completed_report()}]}})
     assert not st["turn"]["productive"]
+
+
+def test_mostly_productive_streak_with_idle_tail_is_not_stagnant():
+    # CCC-264: 24 productive of 39 turns, 7 trailing no-ops was a false positive.
+    st = runaway._new_state()
+    sk = st["streak"]
+    sk.update(turns=39, productive=24, stagnant=7, cost=runaway.MIN_COST,
+              first=NOW - 7 * 3600)
+    st["last_ts"] = NOW
+    assert runaway.evaluate(st, NOW) == (False, [])
