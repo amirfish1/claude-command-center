@@ -88557,7 +88557,7 @@
       }
       if ($voiceSetupBanner) {
         if (!profiles.length) {
-          $voiceSetupBanner.textContent = 'The subscription lane needs no API key; entitlement and connection are checked only when you start a call. Paid fallback is unavailable: no BYOK profile has an OpenAI key. Manage provider keys in Connections.';
+          $voiceSetupBanner.textContent = 'The subscription lane needs no API key; entitlement and connection are checked only when you start a call. Paid fallback is unavailable: no BYOK profile has an OpenAI key. Manage provider keys in Vault.';
           $voiceSetupBanner.style.display = '';
         } else {
           $voiceSetupBanner.style.display = 'none';
@@ -94597,7 +94597,7 @@
       ['defaults', 'Agents', ['defaults','queues','engines','routing']],
       ['appearance', 'Workspace', ['appearance','layout','preferences']],
       ['notifications', 'Notifications & voice', ['notifications','voice']],
-      ['vault', 'Connections', ['vault','api-keys','network']],
+      ['vault', 'Vault', ['vault','api-keys','network']],
       ['sessions', 'Usage & budgets', ['sessions','limits','leftover','free']],
       ['maintenance', 'System', ['maintenance','capabilities','experimental']],
     ];

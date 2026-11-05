@@ -61,7 +61,7 @@
         : row.auth===false?'No local sign-in evidence detected. Sign in, then recheck.': 'CCC has no sign-in probe for this engine. Use its native authentication or provider setup; a session must confirm access.')+'</p>'
         +command('Sign in',row.login)
         +(row.login?button(row.auth===true?'Sign in / switch account':row.canTerminal?'Sign in':'Copy sign-in command','login',row,unavailable||!!login?.running):'<p>Authentication is managed by this CLI or its provider configuration. Use the setup guide.</p>')
-        +(row.byokReady?'<p>Optional provider profiles are managed in Connections; a saved profile is not a connection test.</p><button type="button" class="settings-action-btn" data-settings-go="api-keys">Manage provider keys</button>':'')
+        +(row.byokReady?'<p>Optional provider profiles are managed in Vault; a saved profile is not a connection test.</p><button type="button" class="settings-action-btn" data-settings-go="api-keys">Manage provider keys</button>':'')
         +'<div id="engineConnectionLoginHost"></div>';
     const test='<p>Recheck refreshes binary and sign-in evidence only. It sends no prompt and does not prove a usable provider connection.</p>'
       +button('Recheck installation & sign-in','verify',row,!!checking)

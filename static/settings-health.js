@@ -61,7 +61,7 @@
     const list=make('ul');list.id='settingsHealthChecks';
     root.append(h,note,refreshButton,list);
     const links=make('div');links.className='settings-health-links';
-    for(const [label,target]of [['Engine setup','engines'],['Connections','connections'],['Launch policy','policy'],['Optional capabilities','capabilities'],['Service diagnostics (runs status checks)','services']]){
+    for(const [label,target]of [['Engine setup','engines'],['Vault','connections'],['Launch policy','policy'],['Optional capabilities','capabilities'],['Service diagnostics (runs status checks)','services']]){
       const button=make('button',label);button.type='button';button.className='settings-action-btn';button.dataset.healthRepair=target;button.id='health-open-'+target;links.append(button);
     }root.append(links);
     const destination=get('sysTabContentHealth');destination.prepend(root);
