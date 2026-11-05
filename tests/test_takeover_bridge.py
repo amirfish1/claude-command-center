@@ -142,6 +142,7 @@ class TakeoverBridgeTest(unittest.TestCase):
         self.assertEqual(self.handoff()["state"], "taken_back")
 
     def test_watchtower_mode_list_projection_has_no_effects(self):
+        # No rows: nothing to close, and no CCC-side handoff watchdog.
         self.assertEqual(tickets.autopilot_rows([], now=1000), 0)
         self.assertEqual(self.calls, [])
 

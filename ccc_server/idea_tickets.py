@@ -1205,10 +1205,10 @@ def autopilot_rows(rows, *, now=None):
     if not _enabled() or not _autopilot_allowed():
         return 0
     from . import takeover_bridge
-    if takeover_bridge.available():
-        # WatchTower discovers candidates and supervises on its own clock.
-        # List projection only reads the mirrored presentation state.
-        return 0
+    # WatchTower supervises unfinished work (handoffs) on its own clock, but
+    # it never closes a ticket whose session already reported closure met.
+    # CCC still closes those from the footer, so done work doesn't pile up.
+    done_only = takeover_bridge.available()
     now = time.time() if now is None else now
     data = load_state()
     views = _ticket_views(rows, data)
@@ -1233,8 +1233,10 @@ def autopilot_rows(rows, *, now=None):
             continue
         verdict = attention(lead.get("session_state"))
         if verdict == "done":
+            if done_only and (ticket.get("handoff") or {}).get("owner") == "watchtower":
+                continue  # supervised: WatchTower's normal close gates own it
             target = _autopilot_done
-        elif verdict == "handoff":
+        elif verdict == "handoff" and not done_only:
             target = _autopilot_handoff
         else:
             continue
@@ -1246,7 +1248,8 @@ def autopilot_rows(rows, *, now=None):
         started += 1
         if started >= AUTOPILOT_MAX_PER_CALL:
             break
-    _tick_watchdog(views, data, now)
+    if not done_only:
+        _tick_watchdog(views, data, now)
     return started
 
 
@@ -1282,8 +1285,7 @@ def _archive_group(sid, source):
 
 def _autopilot_done(ref, sid, mtime, did):
     with handoff_effect_lock(ref):
-        from . import takeover_bridge
-        if _watchtower_owned(ref) or takeover_bridge.available():
+        if _watchtower_owned(ref):
             with _lock:
                 _inflight.discard(("autopilot", ref))
             return

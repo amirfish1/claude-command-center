@@ -125,6 +125,32 @@ class AutopilotTest(unittest.TestCase):
         self.assertTrue(self._ticket()["closed"])
         self.assertEqual(self.injects, [])
 
+    def test_watchtower_mode_still_closes_done_tickets(self):
+        # WatchTower supervises unfinished work but never closes a ticket
+        # whose session already met closure, so CCC keeps doing that.
+        from unittest import mock
+        from ccc_server import takeover_bridge
+        with mock.patch.object(takeover_bridge, "_available", True):
+            it.autopilot_rows(self._rows(_footer(completion={"ready_to_close": True})), now=NOW)
+        self.assertEqual([c[1] for c in self.calls if c[0] == "close"], ["IDEAS-1"])
+        self.assertEqual(self.archived, [(["a1"], True, "autopilot-done")])
+        self.assertTrue(self._ticket()["closed"])
+
+    def test_watchtower_mode_leaves_tails_and_supervised_tickets_alone(self):
+        from unittest import mock
+        from ccc_server import takeover_bridge
+        tail = _footer(completion={"scope": {"closure_met": False}, "remaining_actions": [
+            {"text": "agent: verify after deploy"}]})
+        with mock.patch.object(takeover_bridge, "_available", True):
+            it.autopilot_rows(self._rows(tail), now=NOW)
+            self.assertEqual((self.injects, self.calls), ([], []))
+            it._mutate(lambda d: d["tickets"]["IDEAS-1"].update(
+                handoff={"owner": "watchtower", "state": "completed"}))
+            it.autopilot_rows(self._rows(_footer(completion={"ready_to_close": True}),
+                                         age=500), now=NOW)
+        self.assertEqual([c for c in self.calls if c[0] == "close"], [])
+        self.assertFalse(self._ticket()["closed"])
+
     def test_agent_tail_is_handed_off_once(self):
         ss = _footer(completion={"scope": {"closure_met": False}, "remaining_actions": [
             {"text": "agent: verify after deploy"}]})

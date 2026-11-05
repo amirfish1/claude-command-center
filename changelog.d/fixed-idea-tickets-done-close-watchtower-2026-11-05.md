@@ -1,0 +1,1 @@
+- Idea and small-bug tickets close again when their session reports the work done. Since WatchTower took over supervision, CCC had stopped closing finished tickets, and WatchTower only picks up unfinished work, so done tickets piled up as open.
