@@ -23,6 +23,7 @@ def state(tmp_path, monkeypatch):
     monkeypatch.setattr(server,'_model_policy_error',lambda model:None)
     monkeypatch.setattr(server,'_model_catalog_allows_model',lambda engine,model:True)
     monkeypatch.setattr(server,'_worker_fallback_catalog_models',lambda engine:[{'id':'auto'},{'id':'default'}])
+    monkeypatch.setattr(server,'_publish_codex_worker_homes',lambda payload:payload)
     monkeypatch.setattr(server,'_codex_context_1m_enabled',lambda:False)
     monkeypatch.setattr(server,'_codex_context_config',lambda **kw:{'model_context_window':1000000})
     def forbidden(*a,**kw):pytest.fail('No processes, secrets or services')
