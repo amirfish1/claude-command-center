@@ -627,18 +627,22 @@ def _commits_in_days(productivity: dict, days: int, now: float):
 
 
 def _stats_tiles(stats: dict) -> list:
-    tiles = [(stats["agents"], "agents")]
+    tiles = [(stats["agents"], "agent" if stats["agents"] == 1 else "agents")]
     if stats.get("commits") is not None:
-        tiles.append((stats["commits"], "commits"))
+        tiles.append((stats["commits"], "commit" if stats["commits"] == 1 else "commits"))
     tiles.append((stats["turns"], "agent turns"))
     return tiles
 
 
+def _count(value: int, noun: str) -> str:
+    return f"{value} {noun}" + ("" if value == 1 else "s")
+
+
 def render_stats_svg(stats: dict) -> str:
     period = "this week" if stats["days"] == 7 else f'the last {stats["days"]} days'
-    parts = [f'{stats["agents"]} agents']
-    if stats.get("commits") is not None:
-        parts.append(f'{stats["commits"]} commits')
+    parts = [_count(stats["agents"], "agent")]
+    if stats.get("commits"):
+        parts.append(_count(stats["commits"], "commit"))
     headline = ", ".join(parts) + f" {period}"
     return _svg_frame(
         '<text x="64" y="84" fill="#39d353" font-size="28">My agents, from my own machine</text>'

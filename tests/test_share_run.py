@@ -121,6 +121,14 @@ def test_commit_and_test_counts_need_a_real_invocation(command, commit, test):
     assert share_run._is_test_run(command) is test
 
 
+def test_stats_card_wording_for_small_numbers():
+    svg = share_run.render_stats_svg(
+        {"days": 7, "agents": 1, "commits": 0, "turns": 5, "tokens": 0}
+    )
+    assert "1 agent this week" in svg
+    assert "1 agents" not in svg and "0 commits this week" not in svg
+
+
 def test_title_is_the_first_sentence_cut_on_a_word():
     assert share_run._title_from("Fix the bug. Then more.") == "Fix the bug."
     long_title = share_run._title_from("word " * 60)

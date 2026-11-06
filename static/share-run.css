@@ -1,5 +1,5 @@
 /* Share this run (static/share-run.js). */
-.sr-overlay { position: fixed; inset: 0; z-index: 4000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .55); }
+.sr-overlay { position: fixed; inset: 0; z-index: 10025; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .55); }
 .sr-overlay[hidden] { display: none; }
 .sr-dialog { display: flex; flex-direction: column; width: min(1040px, calc(100vw - 32px)); height: min(760px, calc(100vh - 32px)); box-sizing: border-box; padding: 16px 18px; border: 1px solid var(--border, #30363d); border-radius: 14px; background: var(--surface, #161b22); color: var(--text, #c9d1d9); box-shadow: 0 12px 32px rgba(0, 0, 0, .35); }
 .sr-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
@@ -20,10 +20,11 @@
 .sr-note { margin: 0; color: var(--text-dim, #8b949e); line-height: 1.45; }
 .sr-error { color: var(--red, #f85149); }
 .sr-empty { padding: 28px; color: var(--text-dim, #8b949e); }
-.sr-nudge { position: fixed; right: 18px; bottom: 18px; z-index: 3800; width: min(340px, calc(100vw - 36px)); box-sizing: border-box; padding: 13px 15px; border: 1px solid var(--border, #30363d); border-radius: 12px; background: var(--surface, #161b22); color: var(--text, #c9d1d9); box-shadow: 0 8px 24px rgba(0, 0, 0, .35); font-size: 13px; line-height: 1.45; }
+.sr-nudge { position: fixed; left: 88px; bottom: 18px; z-index: 10020; width: min(340px, calc(100vw - 36px)); box-sizing: border-box; padding: 13px 15px; border: 1px solid var(--border, #30363d); border-radius: 12px; background: var(--surface, #161b22); color: var(--text, #c9d1d9); box-shadow: 0 8px 24px rgba(0, 0, 0, .35); font-size: 13px; line-height: 1.45; }
 .sr-nudge p { margin: 0 0 10px; }
 @media (max-width: 760px) {
   .sr-body { flex-direction: column; overflow-y: auto; }
   .sr-preview { flex: none; height: 55vh; }
   .sr-side { width: auto; overflow: visible; }
 }
+@media (max-width: 720px) { .sr-nudge { left: 18px; } }

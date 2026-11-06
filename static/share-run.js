@@ -228,8 +228,9 @@
   }
 
   function showNudge(stats) {
-    const parts = [stats.agents + ' agents'];
-    if (stats.commits) parts.push(stats.commits + ' commits');
+    const count = (n, noun) => n + ' ' + noun + (n === 1 ? '' : 's');
+    const parts = [count(stats.agents, 'agent')];
+    if (stats.commits) parts.push(count(stats.commits, 'commit'));
     const card = el('div', { class: 'sr-nudge', role: 'status' },
       el('p', { text: 'Your first week with CCC: ' + parts.join(', ') + '. Want a card of that? It stays on this machine unless you share it yourself.' }),
       el('div', { class: 'sr-row' },
