@@ -33433,6 +33433,16 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Decisions need the row width even when child summaries share the title
+     line. Flex sizing alone cannot move an item out of a grid column. */
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action-slot.is-decision) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    align-self: start;
+  }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action-slot.is-decision) .conv-outcome-step {
+    white-space: normal;
+  }
   #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-meta-col {
     grid-column: 3;
     grid-row: 1;
