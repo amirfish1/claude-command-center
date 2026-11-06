@@ -81011,6 +81011,16 @@
     if (engine === 'pkood') return 'pkood';
     return 'Claude';
   }
+  // Codex has a Primary and Secondary account; any engine label that names
+  // Codex says which one (CCC-345). accountId: '' / '__current__' / 'local-codex' = Primary.
+  function spawnEngineLabelWithAccount(engine, accountId) {
+    const base = spawnEngineLabel(engine);
+    if (engine !== 'codex') return base;
+    const id = accountId === undefined
+      ? ((document.getElementById('codexAccountSelect') || {}).value || spawnDefaultsState.codex_account_id || '')
+      : accountId;
+    return base + ' ' + (!id || id === '__current__' || id === 'local-codex' ? '(Primary)' : '(Secondary)');
+  }
   function spawnSourceForEngine(engine) {
     if (engine === 'codex') return 'codex';
     if (engine === 'gemini') return 'gemini';
@@ -81097,9 +81107,9 @@
       if (!data.ok) throw new Error('Accounts unavailable');
       // Until the user picks one, start on the saved default account.
       const selected = select.dataset.userPicked === '1' ? select.value : (spawnDefaultsState.codex_account_id || '__current__');
-      select.replaceChildren(new Option('Codex · current account', '__current__'));
+      select.replaceChildren(new Option('Codex (Primary) · current account', '__current__'));
       for (const account of data.accounts || []) {
-        if (!account.current) select.add(new Option(account.label, account.id));
+        if (!account.current) select.add(new Option('Codex (Secondary) · ' + account.label, account.id));
       }
       if (selected && !Array.from(select.options).some(o => o.value === selected)) {
         select.add(new Option('Selected account unavailable: reconnect in Allowances', selected));
@@ -88042,7 +88052,7 @@
     }
     const status = document.getElementById('spawnDefaultsWorkerInheritanceStatus');
     if (status) status.textContent = workerInheritanceSaving ? 'Saving worker defaults…' : workerInheritanceError || (inherited
-      ? 'Following new sessions: ' + spawnEngineLabel(spawnDefaultsState.worker_engine) + ' · ' + (spawnDefaultsState.worker_model || 'Engine default model') + ' · ' + (spawnDefaultsState.worker_reasoning_effort || 'Engine default effort') + ' · ' + spawnDefaultsState.worker_auto_compact_k + 'K. Independent worker settings are saved for return.'
+      ? 'Following new sessions: ' + spawnEngineLabelWithAccount(spawnDefaultsState.worker_engine, spawnDefaultsState.worker_codex_account_id || '') + ' · ' + (spawnDefaultsState.worker_model || 'Engine default model') + ' · ' + (spawnDefaultsState.worker_reasoning_effort || 'Engine default effort') + ' · ' + spawnDefaultsState.worker_auto_compact_k + 'K. Independent worker settings are saved for return.'
       : 'Independent worker defaults. Existing settings stay unchanged until you opt in.');
   }
   function compatibleDefaultEffort(engine, value) {
@@ -92262,7 +92272,7 @@
     const choices = nsAdvisorChoices();
     const best = choices.find(c => !c.unavailable);
     if (config?.enabled && !nsAdvisor.manual && best) applyNsAdvisorChoice(best);
-    const label = c => spawnEngineLabel(c.engine) + ' · ' + getModelPillLabel(c.engine, c.model, c.effort);
+    const label = c => spawnEngineLabelWithAccount(c.engine) + ' · ' + getModelPillLabel(c.engine, c.model, c.effort);
     const automatic = config?.enabled && !nsAdvisor.manual && !!best;
     const strip = document.getElementById('convModelPickerStrip');
     const overrides = document.getElementById('nsModelOverrides');
@@ -92275,7 +92285,7 @@
     const selected = document.getElementById('nsSelectedModel');
     const held = currentSpawnChoice();
     const selectedLabel = window.CCCFreeRuntime?.runtimeForSpawn?.(held.engine) === 'free'
-      ? 'Free · ' + spawnEngineLabel(held.engine) : label(held);
+      ? 'Free · ' + spawnEngineLabelWithAccount(held.engine) : label(held);
     if (selected) selected.innerHTML = '<span class="ns-selection-mode">' + (automatic ? 'Auto' : nsAdvisor.manual ? 'Custom' : 'Model')
       + '</span><span class="ns-selection-name">' + escapeHtml(selectedLabel) + '</span>';
     host.innerHTML = '<div class="ns-advisor-top"><div class="ns-advisor-depth" role="group" aria-label="Task depth">'
@@ -95505,7 +95515,7 @@
     scheduleAgentsOverview();
   }
   mountAgentsOverview();
-  document.getElementById('codexAccountSelect')?.addEventListener('change', event => { event.target.dataset.userPicked = '1'; });
+  document.getElementById('codexAccountSelect')?.addEventListener('change', event => { event.target.dataset.userPicked = '1'; try { renderNsAdvisor(); } catch (_) {} });
 
   function settingsModalFocusables() {
     if (!$settingsModal) return [];
@@ -96036,7 +96046,7 @@
     if (!wrap) return;
     wrap.hidden = !window.__cccEnginesFirstRun || !_engHubData;
     const summary = document.getElementById('engFirstRunDefaultSummary');
-    if (summary) summary.textContent = spawnEngineLabel(spawnDefaultsState.engine) + ' · '
+    if (summary) summary.textContent = spawnEngineLabelWithAccount(spawnDefaultsState.engine, spawnDefaultsState.codex_account_id || '') + ' · '
       + ((spawnDefaultsState.models || {})[spawnDefaultsState.engine] || 'Engine default model');
   }
   function refreshEnginesFirstRunFoot() {
