@@ -165,6 +165,35 @@ def test_usage_limit_is_not_this_lane(world):
     assert failover.detect(world['rollout']) is None
 
 
+def _saved_model(monkeypatch, model):
+    monkeypatch.setattr(accounts, 'query_account', lambda *a: {'ok': True, 'active': False}, raising=True)
+    monkeypatch.setattr(failover._core, '_get_session_override', lambda sid: {'model': model}, raising=False)
+    monkeypatch.setattr(failover._core, '_log_activity', lambda *a: None, raising=False)
+
+
+def test_send_moves_a_session_its_account_would_reject(world, monkeypatch):
+    _saved_model(monkeypatch, MODEL)
+    _on_secondary(world)
+    # None hands the send to the machine login's worker.
+    assert accounts.route('inject', {'session_id': 'sid', 'text': 'hi'}) is None
+    assert accounts.session_account('sid') is None
+
+
+def test_send_stays_when_the_account_offers_the_model(world, monkeypatch):
+    _saved_model(monkeypatch, 'gpt-small')
+    _on_secondary(world)
+    assert accounts.route('inject', {'session_id': 'sid', 'text': 'hi'})['ok']
+    assert accounts.session_account('sid')['home'] == str(world['secondary'])
+
+
+def test_send_never_moves_a_running_turn(world, monkeypatch):
+    _saved_model(monkeypatch, MODEL)
+    monkeypatch.setattr(accounts, 'query_account', lambda *a: {'ok': True, 'active': True})
+    _on_secondary(world)
+    accounts.route('inject', {'session_id': 'sid', 'text': 'hi'})
+    assert accounts.session_account('sid')['home'] == str(world['secondary'])
+
+
 def test_spawn_skips_a_saved_account_that_lost_the_model(world):
     assert accounts.spawn_account({'codex_account_id': 'secondary', 'model': MODEL}) is None
 

@@ -140,6 +140,16 @@ def homes_serving(model, exclude=None):
     return [home for home in ordered if model in (home_models(home) or ())]
 
 
+def movable_homes(model, current):
+    """Homes that offer `model` and can resume threads of `current`.
+
+    A thread lives in its rollout, so a home with its own sessions directory
+    has nothing to resume.
+    """
+    sessions = (Path(current) / 'sessions').resolve()
+    return [home for home in homes_serving(model, exclude=current) if (home / 'sessions').resolve() == sessions]
+
+
 def account_for_home(home):
     """The routing account for a home; the machine login needs none."""
     home = Path(home).expanduser().resolve()
@@ -283,6 +293,28 @@ def requires_isolation(operation, args):
     return bool(session_account(sid))
 
 
+def _moved_for_send(sid, account):
+    """Move a bound session whose saved model its account no longer offers.
+
+    Its worker validates against that account's catalog, so the send is
+    rejected before any turn starts and no rollout records the failure.
+    """
+    from ccc_server import core
+    model = (core._get_session_override(sid) or {}).get('model')
+    offered = home_models(account['home'])
+    if not model or offered is None or model in offered:
+        return account
+    serving = movable_homes(model, account['home'])
+    status = query_account(account, 'active', {'session_id': sid}) if serving else {}
+    if not status.get('ok') or status.get('active'):
+        return account
+    target = account_for_home(serving[0])
+    rebind(sid, target)
+    core._log_activity('codex-account-failover', 'MOVED-ON-SEND',
+                       f'session={sid} model={model} moved_to={label_for_home(serving[0])}')
+    return target
+
+
 def _spawn_model(args):
     from ccc_server import core
     try:
@@ -335,6 +367,8 @@ def route(operation, args):
     try:
         sid = request_session_id(operation, args)
         account = spawn_account(args) if operation == 'spawn' else session_account(sid)
+        if account and operation in ('resume', 'inject'):
+            account = _moved_for_send(sid, account)
         if not account:
             return None
         forwarded = {k: v for k, v in args.items() if k != 'codex_account_id'}

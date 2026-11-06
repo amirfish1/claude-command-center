@@ -19,7 +19,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import threading
 import time
@@ -124,14 +123,6 @@ def _claim(sid, turn_id):
     return True
 
 
-def _shares_rollouts(home, path):
-    """A home that cannot see this rollout cannot resume the thread."""
-    try:
-        return (Path(home) / "sessions").resolve() in Path(path).resolve().parents
-    except OSError:
-        return False
-
-
 def _fallback_engine():
     saved = (_core._load_spawn_defaults() or {}).get("engine")
     return saved if saved in _FALLBACK_ENGINES else _FALLBACK_ENGINES[0]
@@ -144,8 +135,7 @@ def handle(sid, found):
     model, path, text = found["model"], found["path"], found.get("text")
     account = codex_accounts.session_account(sid)
     current = account["home"] if account else codex_accounts.default_home()
-    target = next((home for home in codex_accounts.homes_serving(model, exclude=current)
-                   if _shares_rollouts(home, path)), None)
+    target = next(iter(codex_accounts.movable_homes(model, current)), None)
     if target is not None:
         # Not a wake: the next send needs this even if the retry is refused.
         codex_accounts.rebind(sid, codex_accounts.account_for_home(target))
