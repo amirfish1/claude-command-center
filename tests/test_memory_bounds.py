@@ -144,7 +144,9 @@ def test_boot_runs_server_from_bytecode_and_keeps_script_dispatch(tmp_path):
     done = subprocess.run(
         [sys.executable, str(root / "ccc_server" / "boot.py"), str(root / "server.py"),
          "--archive-refresh-worker"],
-        env={**os.environ, "HOME": str(tmp_path)}, capture_output=True, text=True, timeout=120,
+        # A new HOME hides user-site packages such as watchtower, so pass the path on.
+        env={**os.environ, "HOME": str(tmp_path), "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
+        capture_output=True, text=True, timeout=120,
     )
     assert done.returncode == 2, done.stderr
     assert "usage: server.py --archive-refresh-worker" in done.stderr

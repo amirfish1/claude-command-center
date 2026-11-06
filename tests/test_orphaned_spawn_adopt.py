@@ -102,7 +102,7 @@ def test_spawned_children_do_not_inherit_worker_marker(monkeypatch):
 
 def test_dashboard_entry_point_clears_worker_marker():
     src = (Path(__file__).resolve().parent.parent / "server.py").read_text()
-    main_block = src[src.index('\nif __name__ == "__main__":'):]
+    main_block = src[src.index("\ndef _script_main():"):]
     head = main_block[:main_block.index("--archive-refresh-worker")]
     assert re.search(r'os\.environ\.pop\("CCC_WORKER_PROCESS", None\)', head)
 
@@ -128,6 +128,6 @@ def test_spawned_children_do_not_inherit_claude_session_identity(monkeypatch):
 
 def test_dashboard_entry_point_clears_claude_session_identity():
     src = (Path(__file__).resolve().parent.parent / "server.py").read_text()
-    main_block = src[src.index('\nif __name__ == "__main__":'):]
+    main_block = src[src.index("\ndef _script_main():"):]
     head = main_block[:main_block.index("--archive-refresh-worker")]
     assert "_INHERITED_CLAUDE_SESSION_ENV" in head
