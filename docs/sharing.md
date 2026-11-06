@@ -33,7 +33,7 @@ read them before you post them.
 
 | Kept | Left out |
 |------|----------|
-| Text you typed and the agent's replies, redacted | Tool output, tool arguments and local command output |
+| Text you typed and the agent's replies, redacted | Tool output, tool arguments, local command output, and messages other people sent through a chat bridge |
 | Tool names and the program a command ran (`pytest`, `git commit`) | Thinking, sub-agent turns and reports, private planning, bookkeeping, IDE selections, hook output, skill text, messages from other sessions, queued messages |
 | Counts: tool calls, files edited, test runs, commits | Timestamps and the session id |
 | Elapsed time | |
@@ -45,33 +45,40 @@ Redaction is always on and there is no switch to turn it off.
 - **Secrets, paths, emails, links, hosts, IPs, ids and code blocks** are replaced
   with placeholders such as `[secret]` and `[path]`.
 - **Passwords:** everything after the word `password`, `passphrase`, `passcode` or
-  `api key` on that line is hidden, and the next line too if the word ended the line.
-  So is whatever follows a label such as `secret:` or `token =`, and any word joined
-  to digits, such as `Welcome123`, unless it is a known term like `sha256`. A line
-  that only talks about passwords, such as `fix the password reset flow`, loses its
-  ending. That is deliberate: no rule can tell that sentence from a real password.
-- **Seed phrases, card numbers and PINs:** runs of wallet seed words are hidden
-  whatever separates them. So are three or more groups of digits that add up to at
-  least seven, across any punctuation or line breaks, and every digit after a word
-  like `pin` or `cvv`.
+  `api key` on that line is hidden, and the words before `is my password` too. If the
+  word ends the line or sits in a table or CSV header, the whole block below it goes,
+  up to the next blank line. So does whatever follows a label such as `secret:` or
+  `token =`, and any word joined to digits, such as `Welcome123` or `Welcome.123`,
+  unless it is a known term like `sha256`. A line that only talks about passwords,
+  such as `fix the password reset flow`, loses its ending. That is deliberate: no
+  rule can tell that sentence from a real password.
+- **Seed phrases, card numbers and PINs:** runs of wallet seed words are hidden,
+  whether punctuation, numbers or bullets like `a)` and `2nd` separate them. So are
+  three or more groups of digits that add up to at least seven, across any punctuation
+  or line breaks. After `pin`, `cvv`, `otp`, `2fa` or a phrase like `door code` or
+  `verification code`, every digit on the line goes, and the block below if the word
+  ends the line. `pin the version to 3.2` is left alone.
 - **Numbers:** a bare number of four or more digits becomes `[number]`, because it
   could be a PIN or part of a card. That includes years, ports and counts, so
-  `PORT=8080` loses its value. A number with a unit stays (`1200ms`, `250MB`). Add a
-  number to **Keep these words** to bring it back.
+  `PORT=8080` loses its value. Numbers with a thousands comma go too (`185,000`). A
+  number with a unit stays (`1200ms`, `250MB`). Add a number to **Keep these words**
+  to bring it back.
 - **Names:** only words on a built-in list of common English and developer terms
   stay readable. Anything else becomes `[name-1]` or `[word-1]`. This is why a
-  client name CCC has never seen is hidden anyway.
+  client name CCC has never seen is usually hidden anyway. So is a capitalized
+  compound such as `BrightPath`, unless it ends like a type name (`ConfigParser`).
 - **You:** your git name, git email, system user name and host name are always
-  hidden, even if they are ordinary words. So are your repo and folder names.
+  hidden, even if they are ordinary words. So are your repo and folder names, apart
+  from generic ones such as `src` or `apps`.
 - **Final check:** a separate pass reads the finished export and splits it into
   words and numbers for itself. It stops the export with an error, and writes no
-  file, if it finds a known token format, a word joined to digits, readable text
-  after a password or `secret:` style label, digits after a PIN word, a run of seed
-  words, a run of ten or more digits, a number of five or more digits, an email, IP,
-  home-style path, link with a scheme, or a word you asked to hide. It is a backstop
-  for those shapes only: it does not recheck every detail above, such as a bare
-  domain or a relative folder path, and it cannot tell you that plain sentences are
-  safe.
+  file, if it finds a known token format, letters and digits fused into one word,
+  readable text after a password or `secret:` style label, digits after a PIN word,
+  a run of seed words, a run of ten or more digits, a number of five or more digits,
+  an email, IP, home-style path, link with a scheme, or a word you asked to hide. It
+  is a backstop for those shapes only: it does not recheck every detail above, such
+  as a bare domain or a relative folder path, and it cannot tell you that plain
+  sentences are safe.
 
 **Known limit: plain English stays readable.** Redaction hides shapes and unknown
 names. It does not understand meaning, so these can survive:
@@ -80,10 +87,15 @@ names. It does not understand meaning, so these can survive:
   or a well-known brand that points to your employer or a client.
 - Sensitive sentences made of ordinary words, such as `the lawsuit`, `fired` or
   `salary`.
+- A private name built from ordinary words in lower case or with an underscore,
+  such as `bright_path`. It looks the same as a variable name.
+- Personal names that are also on the word list. Common ones are hidden when
+  capitalized; a rare one may not be.
 - Street names without a house number, and host names that end in no known
   suffix (`prod-db-01` and `vault.home` are hidden; `billing` is not).
 
-Dates with a year (`March 14, 1985`) and a day after a birth word are hidden.
+Dates with a year (`March 14, 1985`, `14 Mar 85`) and a day after a birth word
+(`dob 3-14`) are hidden.
 
 So read the export before you post it. Beside the preview, the dialog lists the
 capitalized words and numbers that are still readable, most frequent first, leaving

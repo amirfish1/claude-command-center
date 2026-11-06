@@ -182,12 +182,13 @@ NAME_WORDS = frozenset("""
 # "Mark said" hides but "mark the task" stays. The first word of a sentence is
 # over-masked; that is the safe direction.
 AMBIGUOUS_NAMES = frozenset("""
-    amber april art august autumn baker bill black blake bond brown bush
+    amber april art august autumn bao baker bill black blake bond brown bush
     carpenter chase christian cook crane dawn drew faith fish ford forest gray
     green grey hall hazel heath hill holly hope hunter ivy jasmine jewel king
     lily long love major mark marsh may mercedes miller moon page paris pat
     pearl penny pierce rich river rock rocky rose rusty sage savannah shepherd
-    sky snow stone storm summer swift violet wade walker ward waters white will
+    sinclair sky snow stone storm summer swift tal violet wade walker ward waters
+    white will
     winter wolf wood young
     bell butler crystal dean don fox foster grant guy hunt jack joy knight lane
     marshall max miles mills nick park porter price ray reed sun tan uri wells
@@ -215,6 +216,8 @@ _DIGIT_WORDS = frozenset("""
     win64 x11 x264 x265 x64 x86
 """.split())
 _SPLIT_DIGITS_RE = re.compile(r"[^\W\d_][_\-]\d{3,}")
+# "Welcome.123": the same word, joined by punctuation the word splitter breaks on.
+_JOINED_DIGITS_RE = re.compile(r"(?<![\w.\-])([^\W\d_]{3,})[.:_\-](\d{2,})(?![\w.\ue001])")
 _SHORT_DIGIT_WORD_RE = re.compile(r"(?i)^(?:[a-z]\d{1,3}|\d{1,4}(?:[a-z]|ms|gb|mb|kb|px|th|st|nd|rd))$")
 
 _ACRONYM_OK = frozenset("""
@@ -363,6 +366,12 @@ _BARE_PASSWORD_RE = re.compile(
     r"(?i)\b((?:pass(?:word|wd|phrase|code)|pwd|pw)[ \t]+)(?!(?:" + _TALK_WORDS + r")\b)"
     r"(" + _ONE_VALUE + r")"
 )
+_OTHER_LANGUAGE_WORD = (
+    r"(?:密码|密碼|口令|パスワード|暗証番号|비밀번호|암호|סיסמה|סיסמא|كلمة المرور|كلمة السر|पासवर्ड|"
+    r"(?<![^\W\d_])(?:пароль|парола|passwort|kennwort|contraseña|contrasena|clave|"
+    r"mot de passe|senha|wachtwoord|lösenord|losenord|adgangskode|passord|salasana|"
+    r"hasło|haslo|heslo|jelszó|parola|şifre|sifre)(?![^\W\d_]))"
+)
 # Grammar cannot find a value ("the password I set is X", "**password** - X",
 # "password:\nX"), so location does: after one of these the rest of the line is
 # hidden, and the next line too if the label ended this one. Sentences that only
@@ -374,41 +383,76 @@ _CRED_WORD_RE = re.compile(
     r"|(?<![a-z])(?:api|access|private)[ _\-]?keys?\b"
     r"|(?<![a-z])authorization\b"
     r"|(?<![a-z])(?:user(?:name)?|login)[ \t]+\S{1,100}[ \t]+pass\b"
+    r"|(?<![a-z])(?:require|master|admin|root|db|sudo|user|my)pass\b"
+    r"|(?<![a-z])(?:pswd|psw|p[a4@]ssw[o0]rd)\b"
+    r"|" + _OTHER_LANGUAGE_WORD
 )
 # Words too common in developer talk ("token budget", "secret manager") to trip
 # on their own: they need something that reads as a label.
 _CRED_LABEL_RE = re.compile(
-    r"(?i)(?<![a-z0-9])(?:secrets?|tokens?|credentials?|creds?|otp|cvv|cvc|pwd|pw|pass|"
+    r"(?i)(?<![a-z0-9])(?:secrets?|tokens?|credentials?|creds?|otp|cv[vcn]\d?|pwd|pw|pass|"
     r"security[ _\-]?code|pin(?:[ _\-]?code)?)"
     r"[*_`'\"\s]{0,6}(?:[:=|>\u2192\u2013\u2014]|->|-(?=\s)|"
     r"\b(?:is|was|are|were|be)\b)"
+    r"|(?<![a-z0-9])keys?[*_`'\"\s]{0,6}[:=]"
 )
 _BARE_TOKEN_RE = re.compile(
-    r"(?i)(?<![a-z0-9])tokens?[ \t]+(?!(?:" + _TALK_WORDS
+    r"(?i)(?<![a-z0-9])(?:tokens?|secret|creds?|pwd|pw)[ \t]+(?!(?:" + _TALK_WORDS
     + r"|budget|budgets|burn|cost|costs|count|counts|economy|efficiency|limit|limits|"
-    r"spend|usage|use|waste|window|windows)\b)(?=[^\W\d_])"
+    r"spend|usage|use|waste|window|windows|manager|managers|store|stores|scanner|"
+    r"scanning|rotation|sauce|key|keys|name|names|file|files|ref|refs|value|values)\b)"
+    r"(?=[^\W\d_])"
+)
+# A password flag on a tool whose -p or -a means that.
+_CMD_PASS_RE = re.compile(
+    r"(?<![\w\-])(?:zip|unzip|7z|redis-cli|mysqldump)\b[^\n]{0,200}?[ \t]-[pPa][ \t]*(?=\S)"
+)
+# A short line that is only a label: "**CVV**", "your otp", "door code".
+_LABEL_LINE_RE = re.compile(
+    r"(?i)^\W*(?:\S+[ \t]+){0,2}?(?:secret|token|creds?|credentials?|pwd|pw|otp|2fa|mfa|"
+    r"cv[vcn]\d?|pin|pin[ _\-]?code|"
+    r"(?:door|gate|lock|safe|alarm|garage|locker|verification|backup|security|access|"
+    r"recovery|auth|authentication|sms|login)[ _\-]+codes?)[*_`'\"\s:|]*$"
+)
+# A rule under a heading or table header carries no value: keep looking below it.
+_RULE_LINE_RE = re.compile(r"^[\s|:+=\-_*~#]*$")
+_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$|^[\w .\-]+(?:,[\w .\-]+)+$")
+# The value comes first: "orange window is my password", "use X as the pin".
+_VALUE_FIRST_RE = re.compile(
+    r"(?i)\b(?:is|was|are|were|as)[ \t]+(?:(?:my|the|our|your|his|her|their|a|an|new|old|"
+    r"wifi|work|home|phone|door|gate|lock|safe|alarm|garage)[ \t]+){0,4}"
+    r"(?:pass(?:word|wd|phrase|code)s?|pins?|cvv|cvc|otp|"
+    r"(?:door|gate|lock|safe|alarm|garage)[ \t]+code)\b"
 )
 # Most text has none of these, and a substring test is far cheaper than the
 # patterns above, which run on every line of every message.
 _CRED_HINTS = (
-    "pass", "secret", "token", "cred", "otp", "cvv", "cvc", "pw", "security", "pin",
-    "key", "authorization",
+    "pass", "secret", "token", "cred", "otp", "cv", "pw", "psw", "p4s", "p@s", "pin",
+    "key", "authorization", "code", "2fa", "mfa", "zip", "7z", "redis", "mysqldump",
+    # Other languages, in ASCII. The rest are checked whenever text is not ASCII.
+    "kennwort", "contras", "clave", "senha", "wachtwoord", "losenord", "adgangskode",
+    "salasana", "haslo", "heslo", "parola", "sifre",
 )
 _NOTHING_LEFT_RE = re.compile(r"[^\w\ue000]*$")
 # A PIN can be split ("pin 4 8 2 1"), so every digit after the word goes. The
 # verb is the exception: "pin the version to 3.2".
-_PIN_NOUN = r"pins?\b(?![ \t]+(?:the[ \t]+)?(?:versions?|deps?|dependenc\w+|packages?|to)\b)"
+_PIN_NOUN = (
+    r"pins?\b(?![ \t]+(?:the[ \t]+)?(?:versions?|deps?|dependenc\w+|packages?)\b)"
+    r"(?![ \t]+to[ \t]+v?\d+\.\d)"
+)
+_PIN_WORDS = (
+    r"pin[ _\-]?codes?|" + _PIN_NOUN + r"|passcode|combination|combo|cv[vcn]\d?|otp|2fa|mfa|"
+    r"(?:door|gate|lock|safe|alarm|garage|locker|verification|backup|security|access|"
+    r"recovery|auth|authentication|sms|login)[ _\-]+codes?"
+)
 _PIN_WORD_RE = re.compile(
-    r"(?i)(?<![a-z0-9])(?:" + _PIN_NOUN + r"|passcode|combination|combo|cvv|cvc|cvn|otp)\b[^\n]*"
+    r"(?i)(?<![a-z0-9])(?:" + _PIN_WORDS + r")(?![a-z])[^\n]*"
 )
 _DIGITS_RE = re.compile(r"(?<![\w\ue000])\d+(?:[ .\-]\d+)*(?![\d\ue001])")
 _OTHER_LANGUAGE_LABEL_RE = re.compile(
-    r"(?i)((?:密码|密碼|口令|パスワード|暗証番号|비밀번호|암호|סיסמה|סיסמא|كلمة المرور|كلمة السر|पासवर्ड|"
-    r"(?<![^\W\d_])(?:пароль|парола|passwort|kennwort|contraseña|contrasena|clave|"
-    r"mot de passe|senha|wachtwoord|lösenord|losenord|adgangskode|passord|salasana|"
-    r"hasło|haslo|heslo|jelszó|parola|şifre|sifre)(?![^\W\d_]))"
-    r"[ \t]*(?:(?:ist|lautet|es|est|era|é|är|er|是|为|為|は|は、|는|:|=|-)[ \t]*){0,2})"
-    r"(" + _PHRASE_VALUE + r")"
+    r"(?i)(" + _OTHER_LANGUAGE_WORD
+    + r"[ \t]*(?:(?:ist|lautet|es|est|era|é|är|er|是|为|為|は|は、|는|:|=|-)[ \t]*){0,2})"
+    + r"(" + _PHRASE_VALUE + r")"
 )
 # Shell assignments: an unknown variable name may still hold a secret, so only
 # values that are plainly settings stay.
@@ -434,7 +478,13 @@ _SEED_LABEL_RE = re.compile(
 )
 _SEED_WORD_RE = re.compile(r"[A-Za-z]{3,8}")
 # Anything but letters may sit between words: tables, JSON, bullets, bold.
-_SEED_GAP_RE = re.compile(r"^[^A-Za-z]{1,12}$")
+# So may a bullet: "a)", "2nd", "w3:".
+_SEED_BULLET = (
+    r"(?<![A-Za-z])[A-Za-z](?=[).:\]])|(?<=\d)(?:st|nd|rd|th)(?![A-Za-z])"
+    r"|(?<![A-Za-z])(?:w|no)(?=[ #.]*\d)"
+)
+_SEED_BULLET_RE = re.compile(_SEED_BULLET)
+_SEED_GAP_RE = re.compile(r"^(?:[^A-Za-z]|" + _SEED_BULLET + r"){1,24}$")
 # Shortest seed phrase is 12 words; six catches a phrase pasted in halves.
 _SEED_RUN = 6
 _AUTH_HEADER_RE = re.compile(r"(?i)\b(bearer|basic|token)[ \t]{1,3}[A-Za-z0-9._~+/=\-]{8,}")
@@ -480,15 +530,16 @@ _DAY = r"(?:[0-3]?\d)(?:st|nd|rd|th)?"
 # when a birth word sits just before it.
 _WORD_DATE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9])(?:"
-    + _MONTH + r"[ \t]+" + _DAY + r"(?:[ \t]*,)?[ \t]+\d{4}"
-    + r"|" + _DAY + r"[ \t]+(?:of[ \t]+)?" + _MONTH + r"(?:[ \t]*,)?[ \t]+\d{4}"
+    + _MONTH + r"[ \t]+" + _DAY + r"(?:[ \t]*,)?[ \t]+(?:\d{4}|'?\d{2})"
+    + r"|" + _DAY + r"[ \t]+(?:of[ \t]+)?" + _MONTH + r"(?:[ \t]*,)?[ \t]+(?:\d{4}|'?\d{2})"
     + r"|\d{1,2}[-/.]\d{1,2}[-/.]\d{4}"
     + r")(?![A-Za-z0-9])"
 )
 _BIRTH_DATE_RE = re.compile(
     r"(?i)\b((?:born|birthday|birthdate|birth[ \t]*date|date[ \t]+of[ \t]+birth|dob|d\.o\.b\.)"
-    r"(?:[ \t]+(?:is|was|on|in))?[ \t]*:?[ \t]*)(?:" + _MONTH + r"[ \t]+" + _DAY
-    + r"|" + _DAY + r"[ \t]+(?:of[ \t]+)?" + _MONTH + r")(?![A-Za-z0-9])"
+    r"(?:[ \t]+(?:is|was|on|in|the)){0,2}[ \t]*:?[ \t]*)(?:" + _MONTH + r"[ \t]+" + _DAY
+    + r"|" + _DAY + r"[ \t]+(?:of[ \t]+)?" + _MONTH
+    + r"|\d{1,2}[-/.]\d{1,2}(?:[-/.]\d{2,4})?\.?)(?![A-Za-z0-9])"
 )
 _BIRTH_YEAR_RE = re.compile(
     r"(?i)\b((?:born|birthday|birthdate|birth[ \t]*date|date[ \t]+of[ \t]+birth|dob|d\.o\.b\.|"
@@ -504,9 +555,11 @@ _PHONE_RE = re.compile(r"(?<![\w.])\+?\(?\d[\d \-().]{6,22}\d(?![\w])")
 # Three or more digit groups under any separator: cards, SSNs and phone numbers
 # in lists, tables, bold or across lines. Hold markers are never part of a group.
 _DIGIT_GROUPS_RE = re.compile(
-    r"(?<![\w.\ue000])\d{1,6}(?:(?:[^\w\ue000\ue001]|_){1,40}\d{1,6}){2,12}(?![\w\ue001])"
+    r"(?<![\w.\ue000])\d{1,6}(?:(?:[^\w\ue000\ue001]|_){1,40}\d{1,6}){2,40}(?![\w\ue001])"
 )
 _DIGIT_GROUP_MIN = 7
+# "185,000" is one number, though the word splitter breaks it at the comma.
+_THOUSANDS_RE = re.compile(r"(?<![\w.,\ue000])\d{1,3}(?:,\d{3})+(?![\w\ue001])")
 _ADDRESS_RE = re.compile(
     r"(?<![\w.])\d{1,6}[ \t]+(?:[A-Za-z][A-Za-z.\-]{0,30}[ \t]+){1,3}"
     r"(?:[Ss]treet|[Ss]t|[Aa]venue|[Aa]ve|[Rr]oad|[Rr]d|[Bb]oulevard|[Bb]lvd|[Ll]ane|[Ll]n|"
@@ -531,12 +584,18 @@ _CHUNK_RE = re.compile(r"[^\s,;|()<>{}\[\]\"`*=\ue000\ue001]+")
 # card, and no separator rule can see every way of splitting one. With a unit it
 # is a measurement.
 _NUMBER_RE = re.compile(
-    r"^[+\-~]?(?:\d{1,3}(?:[.,]\d{1,3})?|\d{1,4}(?:[.,]\d{1,3})?"
+    r"^[+\-~]?(?:\d{1,3}(?:\.\d{1,3})?|\d{1,4}(?:[.,]\d{1,3})?"
     r"(?:%|x|k|m|s|ms|h|gb|mb|kb|px|th|st|nd|rd))(?:%|x|k|m|s|ms|h|gb|mb|kb|px|th|st|nd|rd)?$",
     re.I,
 )
 _VERSION_RE = re.compile(r"^v?\d{1,3}(?:\.\d{1,4}){1,3}$")
 _HEX_RE = re.compile(r"^[0-9a-fA-F]{7,}$")
+_TYPE_SUFFIXES = frozenset("""
+    adapter builder cache client config context controller error exception factory
+    handler hook id list manager map model parser provider reader request response
+    router schema server service session settings state store test tests type
+    view warning worker writer
+""".split())
 _CAMEL_RE = re.compile(r"[A-Z]{2,}(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+|[^\W\d_]+")
 _RUNS_RE = re.compile(r"\d+|[^\W\d_]+")
 _ANY_PLACEHOLDER_RE = re.compile(r"\[(?:[a-z]+(?:-\d+)?|code, \d+ lines?)\]")
@@ -555,12 +614,12 @@ _VERIFY_DIGITS = 10
 _VERIFY_BARE_NUMBER = 5
 _VERIFY_CRED_RE = re.compile(
     r"(?i)pass(?:word|wd|phrase|code|key)[a-z0-9_]*"
-    r"|(?<![a-z])pass[^a-z0-9\n]{1,3}(?:word|phrase|code|key)\b"
+    r"|(?<![a-z])pass[ \t._\-]+(?:word|phrase|code|key)\b"
     r"|(?<![a-z])(?:api|access|private)[ _\-]?keys?\b|(?<![a-z])secret[ _\-]+(?:word|phrase)\b"
 )
 _VERIFY_LABEL_RE = re.compile(r"(?i)(?<![a-z0-9])(?:secret|token|otp|cvv|cvc|pwd|pw|pass)s?[*_`'\"\s]{0,6}[:=]")
 _VERIFY_PIN_RE = re.compile(
-    r"(?i)(?<![a-z0-9])(?:" + _PIN_NOUN + r"|passcode|combination|cvv|cvc|otp)\b[^\n]*?(?<![\w.])\d"
+    r"(?i)(?<![a-z0-9])(?:" + _PIN_WORDS + r")(?![a-z])[^\n]*?(?<![\w.])\d"
 )
 
 
@@ -626,6 +685,19 @@ def _fold(value: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", value) if not unicodedata.combining(c))
 
 
+def _stems(word: str) -> set:
+    """``word`` and what it may be an inflection of."""
+    stems = {word}
+    for suffix, base in (("ies", "y"), ("ied", "y"), ("'s", ""), ("es", ""), ("s", ""),
+                         ("ed", ""), ("d", ""), ("ing", "")):
+        if word.endswith(suffix) and len(word) > len(suffix) + 1:
+            stem = word[: -len(suffix)] + base
+            stems.add(stem)
+            if suffix in ("ed", "ing") and stem[-1] == stem[-2:-1]:
+                stems.add(stem[:-1])   # planned -> plan
+    return stems
+
+
 def split_identity(value) -> set:
     """Lowercase word parts of an identity value, minus generic account names."""
     text = unicodedata.normalize("NFKC", str(value or ""))
@@ -657,6 +729,7 @@ class Redactor:
         self.hide_stems = set()
         self.phrases = []
         literals = set()
+        hidden = set()
         for value in identity:
             value = unicodedata.normalize("NFKC", str(value or "")).strip()
             if not value:
@@ -678,13 +751,12 @@ class Redactor:
                 self.phrases.append([w for w in re.split(r"[^\w]+|_", folded) if w])
             if len(words) == 1:
                 self.deny |= {words[0].casefold(), _fold(words[0]).casefold()}
-                self.hide_stems |= {words[0].casefold(), _fold(words[0]).casefold()}
+                self.hide_stems |= _stems(words[0].casefold()) | _stems(_fold(words[0]).casefold())
             else:
                 self.deny |= split_identity(value)
             if any(c.isdigit() for c in value):
                 literals.add(value)
-            # Asking to hide a word beats asking to keep it.
-            self.keep -= {value.casefold(), folded.casefold(), *(w.casefold() for w in words)}
+            hidden |= {_fold(value).casefold(), *(_fold(w).casefold() for w in words)}
         for value in phrases:
             value = unicodedata.normalize("NFKC", str(value or "")).strip()
             words = [w for w in re.split(r"[^\w]+|_", value) if w]
@@ -692,6 +764,8 @@ class Redactor:
                 continue
             if len(value) >= 3:
                 self.phrases.append(words)
+        # Asking to hide a word beats asking to keep it, in any accent or form.
+        self.keep = {k for k in self.keep if not (_stems(_fold(k)) & (hidden | self.hide_stems))}
         self.deny -= self.keep
         self.phrases = [p for p in self.phrases if " ".join(p).casefold() not in self.keep]
         self._phrase_re = None
@@ -751,10 +825,7 @@ class Redactor:
         """True for a hidden word, or a plain inflection of one the user listed."""
         if lower in self.deny:
             return True
-        return bool(self.hide_stems) and any(
-            lower.endswith(suffix) and lower[: -len(suffix)] in self.hide_stems
-            for suffix in ("s", "es", "ed", "d", "ing", "'s")
-        )
+        return bool(self.hide_stems) and bool(_stems(lower) & self.hide_stems)
 
     def _word_ok(self, part: str) -> bool:
         if not part:
@@ -798,6 +869,12 @@ class Redactor:
             return False
         parts = _CAMEL_RE.findall(piece)
         if len(parts) >= 3 and any(len(p) <= 2 and not p.isdigit() for p in parts):
+            return False
+        # "BrightPath": two allowed words make a name. "ConfigParser" is a type.
+        if (
+            len(parts) >= 2 and piece[0].isupper() and piece.isalpha()
+            and piece.casefold() not in _words() and parts[-1].casefold() not in _TYPE_SUFFIXES
+        ):
             return False
         return all(self._word_ok(part) for part in parts)
 
@@ -909,6 +986,15 @@ class Redactor:
             return match.group(0)
         return self._after_label(match)
 
+    def _joined_digits(self, match) -> str:
+        word, digits = match.groups()
+        whole = match.group(0)
+        if _digit_word_ok(word + digits) or whole.casefold() in self.keep:
+            return whole
+        if word.islower() and whole[len(word)] in "-_" and word in _words():
+            return whole   # top-10
+        return self._mask("secret")
+
     def _digit_groups(self, match) -> str:
         if sum(c.isdigit() for c in match.group(0)) < _DIGIT_GROUP_MIN:
             return match.group(0)
@@ -923,24 +1009,31 @@ class Redactor:
     def _label_lines(self, text: str) -> str:
         """Hide what follows a credential word, whatever its grammar."""
         lowered = text.casefold()
-        if not any(hint in lowered for hint in _CRED_HINTS):
+        if text.isascii() and not any(hint in lowered for hint in _CRED_HINTS):
             return text
         lines = text.split("\n")
-        pending = False
+        block = started = False   # hiding the block under a label
         for index, line in enumerate(lines):
-            if pending:
-                if line.strip():
+            if block:
+                if not line.strip():
+                    block = not started
+                elif not _RULE_LINE_RE.match(line):
                     lines[index] = self._mask("secret")
-                    pending = False
+                    started = True
                 continue
-            ends = [m.end() for rx in (_CRED_WORD_RE, _CRED_LABEL_RE, _BARE_TOKEN_RE)
+            first = _VALUE_FIRST_RE.search(line)
+            if first and line[: first.start()].strip():
+                line = lines[index] = self._mask("secret") + " " + line[first.start():]
+            ends = [m.end() for rx in (_CRED_WORD_RE, _CRED_LABEL_RE, _BARE_TOKEN_RE, _CMD_PASS_RE)
                     for m in [rx.search(line)] if m]
             if not ends:
+                if _LABEL_LINE_RE.match(line):
+                    block, started = True, False
                 continue
             end = min(ends)
-            if _NOTHING_LEFT_RE.fullmatch(line, end):
-                pending = True
-            else:
+            if _TABLE_ROW_RE.match(line) or _NOTHING_LEFT_RE.fullmatch(line, end):
+                block, started = True, False
+            if not _NOTHING_LEFT_RE.fullmatch(line, end):
                 rest = line[end:]
                 gap = rest[: len(rest) - len(rest.lstrip())]
                 if not gap and line[end - 1].isalnum():
@@ -965,8 +1058,8 @@ class Redactor:
             lambda m: m.group(1) + self._mask("secret") + m.group(3), text
         )
         text = _VALUE_IS_LABEL_RE.sub(lambda m: self._mask("secret") + m.group(2), text)
-        text = _OTHER_LANGUAGE_LABEL_RE.sub(self._after_label, text)
         text = self._label_lines(text)
+        text = _OTHER_LANGUAGE_LABEL_RE.sub(self._after_label, text)
         text = _LABEL_VALUE_RE.sub(self._after_label, text)
         text = _SECRET_ASSIGN_RE.sub(self._after_label, text)
         text = _SECRET_PROSE_RE.sub(self._after_label, text)
@@ -1001,8 +1094,10 @@ class Redactor:
         text = self._sub(_HOST_RE, "host", text)
         text = self._sub(_MONEY_RE, "amount", text)
         text = self._sub(_ADDRESS_RE, "address", text)
-        text = self._sub(_PHONE_RE, "number", text)
         text = _DIGIT_GROUPS_RE.sub(self._digit_groups, text)
+        text = self._sub(_PHONE_RE, "number", text)
+        text = self._sub(_THOUSANDS_RE, "number", text)
+        text = _JOINED_DIGITS_RE.sub(self._joined_digits, text)
         text = self._sub(_HANDLE_RE, "handle", text)
         text = self._sub(_TICKET_RE, "ref", text)
         text = self._sub(_ISSUE_RE, "ref", text)
@@ -1077,7 +1172,7 @@ class Redactor:
         """A run of wallet words, by this check's own tokenizer."""
         words = _bip39_words()
         run = 0
-        for token in re.findall(r"\[\]|[A-Za-z]+", bare):
+        for token in re.findall(r"\[\]|[A-Za-z]+", _SEED_BULLET_RE.sub(" ", bare)):
             run = run + 1 if token.casefold() in words else 0
             if run >= _SEED_RUN:
                 return True
@@ -1097,7 +1192,7 @@ class Redactor:
 
     def _verify_labels(self, bare: str) -> bool:
         """Readable text after a credential word, on that line or the next."""
-        lines = [line for line in bare.split("\n") if line.strip()]
+        lines = [line for line in bare.split("\n") if not _RULE_LINE_RE.match(line)]
         for index, line in enumerate(lines):
             for pattern in (_VERIFY_CRED_RE, _VERIFY_LABEL_RE):
                 match = pattern.search(line)

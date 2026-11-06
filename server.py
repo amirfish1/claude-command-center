@@ -29060,6 +29060,10 @@ def _parse_conversation_event_unattributed(ev, line_num):
             out_ev = {"line": line_num, "ts": ts, "type": "user_text", "text": display_text, "images": images}
             if ev.get("isSidechain"):
                 out_ev["is_sidechain"] = True
+            if ev.get("turnOrigin"):
+                out_ev["turn_origin"] = ev.get("turnOrigin")
+            if ev.get("wakeupSource"):
+                out_ev["turn_origin"] = "scheduled"
             from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
             if is_compaction_bookkeeping(ev):
                 out_ev["bookkeeping"] = True

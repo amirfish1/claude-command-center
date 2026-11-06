@@ -455,7 +455,7 @@ def _parse_opencode_conversation(session_id, after_line=0):
                         if t.strip():
                             block = {"kind": "text", "text": t}
                             if ptype == "reasoning":
-                                block["reasoning"] = True
+                                block["not_reply"] = True
                             blocks.append(block)
                     elif ptype == "tool":
                         st = p.get("state") or {}

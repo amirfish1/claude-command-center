@@ -32,6 +32,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from ccc_server import paths as _paths
+from ccc_server import runaway
 from ccc_server.share_redact import RedactionError, Redactor
 
 REPO_URL = "https://github.com/amirfish1/claude-command-center"
@@ -41,6 +42,8 @@ MAX_STEPS = 240
 MAX_PROMPT_CHARS = 700
 MAX_REPLY_CHARS = 900
 MAX_TITLE_CHARS = 90
+MAX_FOLDERS = 200
+MAX_GIT_FOLDERS = 8
 MAX_LIST_ITEMS = 1000
 MAX_LIST_ITEM_CHARS = 400
 
@@ -89,6 +92,14 @@ _MACHINE_ROW_PREFIXES = (
     "[sender:",
     "[message attribution",
 )
+_IDE_REQUEST_RE = re.compile(r"(?im)^#+ *My request for [^\n]*\n")
+_MODEL_DATE_RE = re.compile(r"-(?:\d{8}|\d{4}-\d{2}-\d{2})$")
+# Folder names too common to say anything about the user.
+_COMMON_FOLDERS = frozenset("""
+    app apps bin build code data dev dist etc home lib mnt opt private projects repo
+    repos root run share shared site sites src srv sys tmp usr users var volumes web
+    work workspace workspaces www
+""".split())
 _MODEL_WORDS = frozenset("""
     claude gpt gemini grok kimi deepseek qwen llama mistral glm devin
     fable opus sonnet haiku codex mini nano pro flash lite max turbo preview
@@ -184,10 +195,11 @@ def machine_identity(cwds=()) -> dict:
         pass
     hostname = socket.gethostname()
     people.append(hostname.split(".")[0])
-    for cwd in key or ("",):
-        git_people, git_projects = _git_identity(cwd)
-        people += git_people
-        projects += git_projects
+    for index, cwd in enumerate(key or ("",)):
+        if index < MAX_GIT_FOLDERS:
+            git_people, git_projects = _git_identity(cwd)
+            people += git_people
+            projects += git_projects
         if cwd:
             path = Path(cwd)
             try:
@@ -195,6 +207,7 @@ def machine_identity(cwds=()) -> dict:
                 projects += list(relative.parts)
             except ValueError:
                 projects.append(path.name)
+                projects += [p for p in path.parts[1:] if p.casefold() not in _COMMON_FOLDERS]
     identity = {
         "people": sorted({p for p in people if p}),
         "projects": sorted({p for p in projects if p}),
@@ -221,7 +234,7 @@ def transcript_cwds(transcript_path) -> list:
     except (OSError, TypeError):
         return []
     found = {m.decode("utf-8", "ignore").replace("\\\\", "\\") for m in _CWD_RE.findall(head)}
-    return sorted(found)[:8]
+    return sorted(found)[:MAX_FOLDERS]
 
 
 def _parse_ts(value):
@@ -290,19 +303,40 @@ def _safe_model(value) -> str:
 
 
 def _is_typed_prompt(event: dict) -> bool:
-    """True only for text the user typed: not harness, skill or peer rows."""
+    """True only for text the user typed: not harness, skill or peer rows.
+
+    A subtype marks a row someone else wrote, such as a bridged chat message.
+    """
     if any(event.get(k) for k in (
         "bookkeeping", "is_sidechain", "skill", "peer", "pending", "queued_from",
+        "subtype", "actor", "handoff",
     )):
         return False
-    return not str(event.get("text") or "").lstrip().casefold().startswith(_MACHINE_ROW_PREFIXES)
+    if event.get("turn_origin") not in (None, "", runaway.HUMAN):
+        return False
+    author = (event.get("attribution") or {}).get("author") or {}
+    if author and author.get("kind") not in ("human", "user"):
+        return False
+    text = str(event.get("text") or "")
+    if runaway.text_trigger(text) != runaway.HUMAN:
+        return False
+    return not text.lstrip().casefold().startswith(_MACHINE_ROW_PREFIXES)
+
+
+def _typed_text(event: dict) -> str:
+    """The prompt without the open tabs and selection an IDE sends with it."""
+    text = str(event.get("text") or "")
+    if text.lstrip().startswith("# Context from my IDE setup"):
+        request = _IDE_REQUEST_RE.search(text)
+        return text[request.end():] if request else ""
+    return text
 
 
 def _is_agent_reply(event: dict) -> bool:
     """True only for the agent's own reply. Parsers also use this row shape for
     command output, subagent reports and private planning.
     """
-    if event.get("is_sidechain") or event.get("subagent_report") or event.get("subtype"):
+    if any(event.get(k) for k in ("is_sidechain", "subagent_report", "subtype", "actor")):
         return False
     return not str(event.get("message_id") or "").startswith("local-cmd-")
 
@@ -313,6 +347,7 @@ def _public_model(model: str, redactor: Redactor) -> str:
     Fine-tunes carry customer names, and the name appears on the page and
     card, so it must clear the same hide list as everything else.
     """
+    model = _MODEL_DATE_RE.sub("", model)
     parts = model.split("-")
     if all(p in _MODEL_WORDS or _MODEL_PART_RE.match(p) for p in parts):
         kept = model
@@ -363,7 +398,7 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
         if kind == "user_text":
             if not _is_typed_prompt(event):
                 continue
-            text = redactor.text(event.get("text"), MAX_PROMPT_CHARS)
+            text = redactor.text(_typed_text(event), MAX_PROMPT_CHARS)
             if not text:
                 continue
             first_prompt = first_prompt or text
@@ -377,7 +412,7 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
                 models[model] += 1
             for block in event.get("blocks") or ():
                 block_kind = block.get("kind")
-                if block_kind == "text" and not block.get("reasoning"):
+                if block_kind == "text" and not block.get("not_reply"):
                     text = redactor.text(block.get("text"), MAX_REPLY_CHARS)
                     if text:
                         stats["replies"] += 1
