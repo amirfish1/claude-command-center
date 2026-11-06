@@ -58,6 +58,10 @@ zero=0000000000000000000000000000000000000000
 while read -r _lref lsha _rref rsha; do
   [ "$lsha" = "$zero" ] && continue
   if [ "$rsha" = "$zero" ]; then range="$lsha --not --remotes"; else range="$rsha..$lsha"; fi
+  # Private-name gate. The list lives outside the repo, so this skips cleanly
+  # on machines without it. stdin stays with the ref loop.
+  # shellcheck disable=SC2086
+  python3 scripts/check-private-terms.py --rev "$lsha" --log $range </dev/null
   # shellcheck disable=SC2086
   bad="$(git log --format='%h %ae %ce %s' $range 2>/dev/null | grep -E ' test@example\.com ' || true)"
   if [ -n "$bad" ]; then
