@@ -206,7 +206,10 @@ def _command_verb(command: str) -> str:
     """The allow-listed program a shell command runs, or ''."""
     for segment in re.split(r"&&|\|\||[;|\n]", str(command or "")):
         words = segment.split()
-        while words and ("=" in words[0] or words[0] in ("sudo", "env", "nice", "time")):
+        while words and (
+            "=" in words[0] or words[0] in ("sudo", "env", "nice", "time")
+            or words[0].startswith("-") or words[0].isdigit()
+        ):
             words.pop(0)
         if not words:
             continue

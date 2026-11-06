@@ -44,6 +44,40 @@ _EXTRA_WORDS = frozenset("""
     terraform timeout timeouts tmux todo tooltip typescript ubuntu ui unittest
     url urls ux vercel vite vscode vue webhook webhooks websocket windows
     worktree worktrees wsl xcode yaml
+
+    admission admit adversarial affirmative alike allowance analytics
+    appointment assessment asymmetry attend attendance attended auditor
+    autonomy autopilot awake backfill backstop beside bets bill billed blast
+    blip blocker booking breach breakfast broader brother burn burst bury buyers
+    calculator campaign cash categorical census charging chatter checklist chips
+    citing clarification cleanest coffee commitment committing confined
+    consolidation contradicting controversial coordination country cutover
+    daughter debit decline dedup defensible deliverable deliveries dense desk
+    dial dinner dip disagreement discuss dispute doctor dramatic drove dumb
+    eligibility enrollment episode escalate escalation excuse exemption expiring
+    facet family father feasibility fight film founder fresher friend friday
+    funnel game gift grader grew guardrail habit handoff hardening headline hear
+    hedge herself hero honestly hostile hospital hotfix house husband hypotheses
+    improvise inbox infra ingest injuries inquiries inquiry instructor intake
+    invoice irreversible judge kit knew ladder lane laptop lawyer ledger lesson
+    loan loud lunch marathon marketing meeting meetings mic microphone mishap
+    misread momentum monday money moot morning mother motion night nudge
+    objection occupancy office outage outreach overnight pace park parent
+    partner payable payroll pickup planner plateau playbook poison precedent
+    premise pretty price pricing productive projection promo promotion propose
+    proportionate prospects pushback reaction rebalance recap recheck reconciliation
+    recurring recycle refund reminder repro retirement retro revenue reviewer revise
+    rollout roof runaway runbook salary saturday scoring screenshot seat
+    selective senior settlement sister skim slip smoke snag social softer son
+    speaker speech spike sprint steady steer stranger streak street student
+    studio substantive sunday supervision suspicion sweep swept symptom taste
+    taught teacher teaching tech tenant tenth throwaway thursday tomorrow tonight
+    truthful tuesday typecheck unanswered unbuilt uncertain uncommitted undecided
+    undelivered unmerged unnoticed unpaid unproven untracked unwind urgent vault
+    verdict voicemail waitlist waiver wednesday weaker wedding wholesale widen
+    wife wiring withdrawal wow wrinkle yep yesterday
+    january february march april june july august september october november
+    december
 """.split())
 
 # Names, surnames and sample-data names, including those the corpus let in.
@@ -152,7 +186,11 @@ AMBIGUOUS_NAMES = frozenset("""
     pearl penny pierce rich river rock rocky rose rusty sage savannah shepherd
     sky snow stone storm summer swift violet wade walker ward waters white will
     winter wolf wood young
+    bell butler crystal dean don fox foster grant guy hunt jack joy knight lane
+    marshall max miles mills nick park porter price ray reed sun tan uri wells
+    woods
 """.split())
+NAME_WORDS = NAME_WORDS - AMBIGUOUS_NAMES
 
 _ACRONYM_OK = frozenset("""
     ai api apis ci cd cli cpu css csv cto ceo dns e2e faq gpu html http https id
@@ -251,7 +289,9 @@ _URL_RE = re.compile(
 _SCP_RE = re.compile(r"\b[\w.\-]{1,64}@[\w.\-]{1,120}:[\w./~\-]{1,500}")
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9\-]{1,63}(?:\.[A-Za-z0-9\-]{1,63}){1,6}")
 _IPV4_RE = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
-_IPV6_RE = re.compile(r"(?<![\w:])(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:])")
+_IPV6_RE = re.compile(
+    r"(?<![\w:])(?=[0-9A-Fa-f:]{0,40}::|(?:[0-9A-Fa-f]{1,4}:){4})[0-9A-Fa-f:]{3,45}(?![\w:])"
+)
 _MAC_RE = re.compile(r"(?<![\w:])(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}(?![\w:])")
 _UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
@@ -326,7 +366,7 @@ class Redactor:
                 continue
             self.deny |= split_identity(value)
             words = [w for w in re.split(r"[^\w]+|_", value) if w]
-            if len(words) > 1 or len(value) >= 3:
+            if len(value) >= 3 and value.casefold() not in _GENERIC_IDENTITY:
                 self.phrases.append(words)
         for value in phrases:
             value = unicodedata.normalize("NFKC", str(value or "")).strip()
@@ -367,7 +407,7 @@ class Redactor:
         return self._hold(self._alias_for(category, word))
 
     def _alias_for(self, category: str, word: str) -> str:
-        key = (category, word.casefold())
+        key = word.casefold()
         alias = self._aliases.get(key)
         if alias is None:
             self._alias_numbers[category] += 1
@@ -395,12 +435,12 @@ class Redactor:
             return False
         if lower in self.deny or lower in NAME_WORDS:
             return False
+        if part.isupper() and len(part) <= 5 and lower in _ACRONYM_OK:
+            return True
         capitalized = part[0].isupper()
         if capitalized and lower in AMBIGUOUS_NAMES:
             return False
         if len(part) == 1:
-            return True
-        if part.isupper() and len(part) <= 5 and lower in _ACRONYM_OK:
             return True
         words = _words()
         if lower in words:

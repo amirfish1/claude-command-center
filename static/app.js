@@ -22387,6 +22387,7 @@
     const ticketRow = !!(row && ideaTicketsOn() && row.idea_ticket && row.idea_ticket.ref);
     show('unarchive', isSession && !!explicitlyArchived && (!row.trashed || ticketRow));
     show('untrash', isSession && !!row.trashed && !ticketRow);
+    show('share-run', isSession);
     const ideaQueue = row && row.idea_ticket && row.idea_ticket.queue;
     const ideasOn = isSession && ideaTicketsOn();
     show('idea-IDEAS', ideasOn && ideaQueue !== 'IDEAS');
