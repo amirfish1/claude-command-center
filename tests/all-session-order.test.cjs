@@ -19,6 +19,7 @@ function render(rows, { lane = 'alltickets', mode = 'state', grouping = 'time' }
     _arcShouldGroupByFolder: false, _arcGrouping: grouping,
     localStorage: { getItem: key => key === 'ccc-session-state-grouping' ? mode : null },
     _ideaTicketRows: () => [],
+    todayStarActive: () => false,
     stableTicketSessionGroups: items => ({
       'needs-you': items.filter(r => r.question_waiting),
       active: items.filter(r => !r.question_waiting), finished: [], archived: [],
@@ -48,9 +49,9 @@ test('All one-list mode uses normalized activity timestamps too', () => {
   assert.deepEqual(ids(render(rows, { mode: 'list' })),
     ['touched', 'recent-question', 'new-working', 'old-question']);
 });
-test('Features keeps its questions-first behavior', () => {
+test('Features lists pins first, then one newest-first Active list', () => {
   assert.deepEqual(ids(render(rows, { lane: 'ideas' })),
-    ['old-question', 'recent-question', 'touched', 'new-working']);
+    ['old-question', 'touched', 'recent-question', 'new-working']);
 });
 test('explicit cost sorting still orders All by cost', () => {
   assert.deepEqual(ids(render(rows.map((r, i) => ({ ...r, cost_usd: i })), { mode: 'list', grouping: 'cost' })),
