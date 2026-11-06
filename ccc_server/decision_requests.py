@@ -5,11 +5,16 @@ registry itself uses a single read-only transaction. Unavailable coverage keeps
 the last observed questions visible and never becomes a verified empty inbox.
 """
 import json
+import re
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ccc_server.decision_coverage import wait_kind
 from ccc_server.decision_registry import CLOSED_PREFIX, DecisionRegistry
+
+_LEADING_TAG = re.compile(r'\s*(\[Q\d+:[a-z0-9-]+\])')
 
 
 def read_requests(database, *, answers_enabled=False, source_current=False):
@@ -98,7 +103,33 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
         connection.close()
 
 
-def requests_payload(*, state_root=None, source_loader=None):
+def github_requests(tickets):
+    """Owner waits on GitHub-backed tickets, which the local export can't see.
+
+    Read-through only: they never enter the registry and have no conditional
+    answer contract, so they are answered on the ticket itself.
+    """
+    rows = []
+    for item in tickets or []:
+        ref, body = item.get('ref'), str(item.get('block_question') or '').strip()
+        if (not str(item.get('id') or '').startswith('github:') or not ref or not body
+                or wait_kind(item) != 'owner'):
+            continue
+        blocked_at = str(item.get('blocked_at') or '')
+        tag = _LEADING_TAG.match(body)
+        rows.append(dict(
+            request_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f'ccc-github-wait:{ref}:{blocked_at}')),
+            revision=1, adapter='watchtower-github', origin_id=ref, generation=blocked_at,
+            title=item.get('title') or ref, body=body, aliases=[tag.group(1)] if tag else [],
+            kind='question', status='open', session_id=None, episode_provenance=None,
+            answer_state='none', delivery_state='none', delivery_owner=None, answer=None,
+            source_current=True, reply_supported=False, needs_answer=True, observed_at=blocked_at,
+            can_answer=False, can_close=False,
+            answer_unavailable_reason='Open the ticket to answer this GitHub-backed question.'))
+    return rows
+
+
+def requests_payload(*, state_root=None, source_loader=None, tickets=None):
     from ccc_server import decision_inbox
     from ccc_server.decision_sources import owner_source_payload
     root = Path(state_root) if state_root else decision_inbox._state_root()
@@ -114,6 +145,8 @@ def requests_payload(*, state_root=None, source_loader=None):
         return dict(ok=False, requests=None, needs_answer_count=None, source=source,
                     error='Cannot read saved requests. Retry the source check.', llm_used=False,
                     answers_enabled=enabled)
+    rows += github_requests(tickets)
+    rows.sort(key=lambda r: (r['adapter'].startswith('watchtower'), r['origin_id']))
     issues = [dict(origin_id=r.get('origin_id'), title=r.get('title'), body=r.get('body'),
                    reason='Source question has no stable episode; it has not been imported.')
               for r in (refreshed.get('requests') or []) if not r.get('generation')]
@@ -122,6 +155,7 @@ def requests_payload(*, state_root=None, source_loader=None):
                 coverage_issues=issues,
                 checked_at=datetime.now(timezone.utc).isoformat(),
                 error=refreshed.get('error') if not current else None,
-                limitations=['Coverage: local file-backed owner waits and explicitly promoted session questions.',
+                limitations=['Coverage: local file-backed owner waits, explicitly promoted session questions and GitHub-backed owner waits.',
+                             'GitHub-backed questions come from the ticket cache and are answered on the ticket.',
                              'Ordinary interactive questions stay in their sessions.',
-                             'Reviews, remote queues and untyped reports have separate lifecycles.'])
+                             'Reviews, other remote queues and untyped reports have separate lifecycles.'])

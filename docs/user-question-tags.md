@@ -74,5 +74,7 @@ worker's session with the cursor in the composer and sends nothing.
 
 The ticket decides whether the question is open: it stays open while the ticket
 is blocked on it, however the chat mentions the tag. Answer in the ticket's
-**Your Decision** box. Other questions keep the chat-based rule, where an owner
+**Your Decision** box, or with a reply chip such as **Approve plan**: while the
+ticket waits, a chip answers the ticket instead of sending a chat message, which
+would leave it blocked. Other questions keep the chat-based rule, where an owner
 reply with the tag or an agent's `[Q<n>] answered` closes them.

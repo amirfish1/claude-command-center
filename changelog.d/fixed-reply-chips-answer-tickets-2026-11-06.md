@@ -1,0 +1,1 @@
+- Reply chips such as Approve plan now answer a waiting ticket, so the ticket unblocks. They used to send only a chat message and left it blocked.

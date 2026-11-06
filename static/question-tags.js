@@ -243,6 +243,29 @@
 
   function questionName(q) { return q.ticket ? q.ticket.ref : q.tag; }
 
+  // A reply chip for a question a ticket is waiting on must answer the ticket:
+  // a chat message reaches the worker but leaves the ticket blocked. Returns
+  // null for any other reply, which stays an ordinary chat message.
+  function answerTicket(reply) {
+    var tag = /\[Q(\d+)[:\]]/.exec(reply || '');
+    var q = tag && index.byN[tag[1]];
+    if (!q || !q.ticket || !q.ticket.open) return null;
+    return fetch('/api/ux-fixes/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref: q.ticket.ref, text: reply }),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (!r.ok || !d.ok) throw new Error(d.error || 'HTTP ' + r.status);
+        q.ticket.open = false;
+        q.answered = true;
+        paintChips();
+        updatePill();
+        return q.ticket.ref;
+      });
+    });
+  }
+
   function talkToWorker(n) {
     var q = index.byN[n];
     if (!q) return;
@@ -524,5 +547,5 @@
     lookup(n, 0, activeQuestion);
   }
 
-  return { open: open, boot: boot, splitTags: splitTags, openQuestions: openQuestions, chipify: chipify };
+  return { open: open, answerTicket: answerTicket, boot: boot, splitTags: splitTags, openQuestions: openQuestions, chipify: chipify };
 });

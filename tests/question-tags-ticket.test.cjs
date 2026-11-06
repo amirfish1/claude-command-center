@@ -86,3 +86,40 @@ test('the question sheet leads to the ticket instead of a chat answer', async ()
     assert.notEqual(await page.$('.qtag-sheet[hidden]'), null);
   } finally { await browser.close(); }
 });
+
+test('a reply chip answers the waiting ticket instead of the chat', async () => {
+  const browser = await puppeteer.launch({executablePath: findChromePath(), args: ['--no-sandbox']});
+  try {
+    const page = await load(browser, [question(9, true)], needsYou);
+    await page.waitForSelector('[data-qtalk]');
+    const result = await page.evaluate(async () => {
+      const posts = [], plain = window.fetch;
+      window.fetch = async (url, options) => {
+        if (url !== '/api/ux-fixes/answer') return plain(url, options);
+        posts.push(JSON.parse(options.body));
+        return {ok: true, json: async () => ({ok: true})};
+      };
+      const ref = await window.cccQuestionTags.answerTicket('[Q9:repair] yes, approved.');
+      return {ref, posts, again: window.cccQuestionTags.answerTicket('[Q9:repair] yes, approved.')};
+    });
+    assert.equal(result.ref, 'OPS-7');
+    assert.deepEqual(result.posts, [{ref: 'OPS-7', text: '[Q9:repair] yes, approved.'}]);
+    assert.equal(result.again, null, 'an answered ticket falls back to chat');
+    await page.waitForFunction(() => !document.querySelector('[data-qtalk]'));
+  } finally { await browser.close(); }
+});
+
+test('other replies stay chat messages, and a refused answer is reported', async () => {
+  const browser = await puppeteer.launch({executablePath: findChromePath(), args: ['--no-sandbox']});
+  try {
+    const page = await load(browser, [question(9, true)], needsYou);
+    assert.equal(await page.evaluate(() => window.cccQuestionTags.answerTicket('Keep going.')), null);
+    assert.equal(await page.evaluate(() => window.cccQuestionTags.answerTicket('[Q10:other] Yes.')), null);
+    const error = await page.evaluate(async () => {
+      window.fetch = async () => ({ok: false, status: 400, json: async () => ({error: 'not blocked'})});
+      return window.cccQuestionTags.answerTicket('[Q9] Yes.').catch(e => e.message);
+    });
+    assert.equal(error, 'not blocked');
+    await page.waitForSelector('[data-qtalk]');
+  } finally { await browser.close(); }
+});

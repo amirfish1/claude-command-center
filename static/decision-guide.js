@@ -116,7 +116,7 @@
   }
   function ticket(row) {
     if (row.adapter === 'session-question' && uuid(row.session_id)) { const link = el('a', 'Open originating session', 'ticket'); link.href = '/?session=' + encodeURIComponent(row.session_id); link.target = '_top'; return link; }
-    if (row.adapter !== 'watchtower-block') return el('span', row.origin_id || '', 'meta');
+    if (row.adapter !== 'watchtower-block' && row.adapter !== 'watchtower-github') return el('span', row.origin_id || '', 'meta');
     const link = el('a', row.origin_id, 'ticket');
     link.href = '/?ticket=' + encodeURIComponent(row.origin_id); link.target = '_top'; link.title = 'Open ticket ' + row.origin_id;
     link.onclick = event => {

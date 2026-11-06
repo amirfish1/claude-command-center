@@ -5,6 +5,8 @@
 Open **Decisions** in the main navigation, app rail or `/decision-inbox.html`.
 The [Owner questions table](decision-coverage.md#shared-request-view) shows
 current local queue owner waits and explicitly promoted session questions.
+GitHub-backed queue questions appear too; they come from the cached ticket list
+and link to the ticket, where you answer them.
 Interactive questions stay in their sessions. Source answers remain disabled
 by default, and incomplete source coverage is shown explicitly. Separately
 [opted-in answer controls](decision-answers.md#dashboard-controls) distinguish

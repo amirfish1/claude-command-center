@@ -31349,7 +31349,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(result, status)
         elif path == "/api/decision-inbox/requests":
             from ccc_server.decision_requests import requests_payload
-            result = requests_payload()
+            result = requests_payload(tickets=_wt_list_items_for_requests())
             self.send_json(result, 200 if result.get('ok') else 503)
         elif path == "/api/decision-inbox/legacy-reconciliation":
             from ccc_server.decision_legacy_http import reconciliation_payload

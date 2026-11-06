@@ -18765,11 +18765,13 @@
           throw new Error('This action changed. Review the updated row before sending.');
         }
       }
-      const data = await postInjectInput(sid, action.reply, 'send', { userInitiated: true });
+      const ticketAnswer = window.cccQuestionTags?.answerTicket(action.reply);
+      if (ticketAnswer) await ticketAnswer;
+      const data = ticketAnswer ? { ok: true } : await postInjectInput(sid, action.reply, 'send', { userInitiated: true });
       if (!data.ok) throw new Error(data.error || 'Send failed');
       accepted = true;
       feedback.state = data.queued ? 'queued' : 'sent';
-      markSessionSending(sid);
+      if (!ticketAnswer) markSessionSending(sid);
       showOpToast((data.queued ? 'Queued: ' : 'Sent: ') + action.label);
       refreshConversationList();
     } catch (error) {
@@ -18948,6 +18950,17 @@
     } else if (act === 'say') {
       const input = composerInputForPane(paneId) || $convInput;
       if (!input) return;
+      const ticketAnswer = window.cccQuestionTags?.answerTicket(value);
+      if (ticketAnswer) {
+        btn.disabled = true;
+        try {
+          showOpToast('Answered ' + await ticketAnswer + ': block cleared', 'success');
+        } catch (error) {
+          btn.disabled = false;
+          showOpToast('Answer failed: ' + String(error.message || error), 'error');
+        }
+        return;
+      }
       const draft = (input.value || '').trim();
       if (draft && draft !== value && !confirm('Replace your draft and send "' + value + '"?')) return;
       input.value = value;
