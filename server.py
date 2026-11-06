@@ -30206,6 +30206,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
             self.send_json(_get_onboarding_status())
+        elif path == "/api/return-reminder":
+            from ccc_server import return_reminder
+            self.send_json(return_reminder.status())
         elif path == "/api/onboarding/moment-zero":
             # Moment Zero shell: "is this a fresh install?" — answers whether
             # any agent session history exists, so the overlay knows whether
@@ -35710,6 +35713,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(res, 200 if res.get("ok") else 400)
             else:
                 self.send_json({"ok": False, "error": "unknown action"}, 404)
+            return
+        if path == "/api/return-reminder":
+            # {"armed": false} cancels; anything else arms the one reminder.
+            if phone_access.is_remote_request(self.client_address[0], self.headers):
+                self.send_json({"ok": False, "error": "reminders are local-only"}, 403)
+                return
+            try:
+                from ccc_server import return_reminder
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                armed = not isinstance(payload, dict) or payload.get("armed") is not False
+                self.send_json(return_reminder.arm() if armed else return_reminder.cancel())
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
             return
         if path == "/api/onboarding/first-task":
             if phone_access.is_remote_request(self.client_address[0], self.headers):

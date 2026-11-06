@@ -89,7 +89,7 @@ PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
 SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "question", "brief", "where",
-               "brain", "consent", "jobs", "vault", "secret")
+               "brain", "consent", "jobs", "vault", "secret", "remind")
 
 RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
 
@@ -1827,6 +1827,37 @@ def _print_consent_item(item, with_diff):
     print()
 
 
+def cmd_remind(args):
+    base = _resolve_server(args.server)
+    if not base:
+        print("ccc: CCC isn't running, so it can't remind you. Run `ccc` to start it.",
+              file=sys.stderr)
+        return 1
+    try:
+        if args.action == "status":
+            state = _get_json(base, "/api/return-reminder", timeout=30)
+        else:
+            _, state = _post_json(base, "/api/return-reminder",
+                                  {"armed": args.action != "off"}, timeout=30)
+    except OSError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(state, indent=2))
+        return 0
+    if state.get("armed"):
+        day = datetime.fromtimestamp(state["due_at"]).strftime("%A")
+        print(f"Reminder set for {day} at 9am: one notification saying what your sessions did.")
+        if not state.get("can_notify"):
+            print("This computer has no desktop notifications, so it will only show on an open board.")
+        if not state.get("background"):
+            print("CCC has to be running then. Keep it running with: "
+                  "ccc --install-service")
+    else:
+        print("No reminder set.")
+    return 0
+
+
 def cmd_consent(args):
     base = _resolve_server(args.server)
     if not base:
@@ -2668,6 +2699,9 @@ def main(argv=None):
     if argv and argv[0] == "astra-check":
         script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "astra-check")
         os.execv(script, [script] + argv[1:])
+    # `ccc start` is the spelling the website teaches; it is bare `ccc`.
+    if argv[:1] == ["start"]:
+        argv = argv[1:]
     if not argv or argv[0] in RUN_SH_FLAGS:
         run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
         os.execv(run_sh, [run_sh] + argv)
@@ -3014,6 +3048,16 @@ def main(argv=None):
                    help="only this child (session id/prefix/name, or its rr_ route id)")
     p.add_argument("--json", action="store_true", help="raw rebind result JSON")
     p.set_defaults(func=cmd_rebind_report_to)
+
+    p = sub.add_parser(
+        "remind",
+        help="one local notification tomorrow morning saying what your sessions did",
+        description="Sets a single reminder for 9am tomorrow. It fires once, "
+                    "on this computer, and does not repeat.",
+    )
+    p.add_argument("action", nargs="?", default="on", choices=("on", "off", "status"))
+    p.add_argument("--json", action="store_true", help="raw JSON")
+    p.set_defaults(func=cmd_remind)
 
     p = sub.add_parser(
         "consent",

@@ -53,7 +53,15 @@ if ln -sfn "$TARGET" "$LINK" 2>/dev/null; then
   # shellcheck disable=SC2016
   case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
-    *) printf '%snote: %s is not on PATH — add it to use `ccc` from anywhere\n' "$LOG_PREFIX" "$BIN_DIR" ;;
+    *)
+      case "${SHELL:-}" in
+        */zsh) rc="$HOME/.zshrc" ;;
+        */bash) rc="$HOME/.bashrc" ;;
+        *) rc="your shell's startup file" ;;
+      esac
+      printf '%snote: %s is not on PATH yet. To use `ccc` from anywhere, add this line to %s:\n' "$LOG_PREFIX" "$BIN_DIR" "$rc"
+      printf '%s  export PATH="$HOME/.local/bin:$PATH"\n' "$LOG_PREFIX"
+      ;;
   esac
 else
   printf '%scould not link ccc CLI — run it as %s\n' "$LOG_PREFIX" "$TARGET"

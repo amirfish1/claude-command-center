@@ -97,7 +97,7 @@ def test_custom_port_is_kept(tmp_path):
 def test_open_when_ready_passes_the_url_to_the_browser(tmp_path):
     """The background watcher really opens the URL it was handed.
 
-    A stub `open` binary records its argument; a bound TCP socket stands in
+    A stub opener records its argument; a bound TCP socket stands in
     for the dashboard so the watcher does not poll for a full minute.
     """
     listener = socket.socket()
@@ -121,9 +121,10 @@ def test_open_when_ready_passes_the_url_to_the_browser(tmp_path):
         stub_dir = tmp_path / "bin"
         stub_dir.mkdir()
         log = tmp_path / "opened.txt"
-        stub = stub_dir / "open"
-        stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$OPEN_LOG"\n')
-        stub.chmod(0o755)
+        for opener in ("open", "xdg-open"):  # macOS and Linux respectively
+            stub = stub_dir / opener
+            stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$OPEN_LOG"\n')
+            stub.chmod(0o755)
         script = (
             f'source "{INSTALL_SH}" && '
             f'open_when_ready "http://localhost:{port}/?onboarding=1"; wait'

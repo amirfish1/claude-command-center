@@ -383,6 +383,47 @@ test('a first task finished while closed resumes to the finale with its savings'
   } finally { await page.close(); }
 });
 
+test('the finale offers one reminder only when this computer can show it', async () => {
+  const open = async (canNotify) => {
+    const page = await browser.newPage();
+    await page.goto(fixtureUrl, { waitUntil: 'load' });
+    await page.evaluate((can) => {
+      window.__posts = 0;
+      const state = { ok: true, armed: false, can_notify: can, background: false };
+      window.fetch = async (url, init) => {
+        if (String(url) !== '/api/return-reminder') throw new Error('unexpected fetch ' + url);
+        if (init && init.method === 'POST') { window.__posts += 1; state.armed = true; }
+        return { json: async () => state };
+      };
+      window.cccOnboarding.open({ scene: 'finale' });
+    }, canNotify);
+    await page.waitForSelector('.mz-finale', { visible: true });
+    return page;
+  };
+  const find = (page) => page.evaluate(() => {
+    const b = [...document.querySelectorAll('.mz-finale .mz-linklike')]
+      .find((n) => /Remind me|Set for/.test(n.textContent));
+    return b ? b.textContent : null;
+  });
+
+  const silent = await open(false);
+  try {
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(await find(silent), null);
+  } finally { await silent.close(); }
+
+  const page = await open(true);
+  try {
+    await page.waitForFunction(() => /Remind me/.test(document.querySelector('.mz-finale').textContent));
+    await page.evaluate(() => {
+      [...document.querySelectorAll('.mz-finale .mz-linklike')]
+        .find((n) => /Remind me/.test(n.textContent)).click();
+    });
+    await page.waitForFunction(() => /CCC has to be running/.test(document.querySelector('.mz-finale').textContent));
+    assert.equal(await page.evaluate(() => window.__posts), 1);
+  } finally { await page.close(); }
+});
+
 test('reopening the finale never replays a stale savings number', async () => {
   const page = await openFixture();
   try {

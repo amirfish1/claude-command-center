@@ -393,7 +393,7 @@
     card.appendChild(h);
     const sub = el('p', 'mz-sub', own
       ? 'Give it one small job in a practice folder and watch it work on your board. It uses your own Claude account and only touches ~/CCC-Playground.'
-      : 'Command Center hires a team of coding agents and runs them on $0 models. We will install everything together. About five minutes.');
+      : 'Command Center hires a team of coding agents and runs them on $0 models. We will install everything together. About ten minutes on a new computer.');
     card.appendChild(sub);
     const actions = el('div', 'mz-actions');
     const go = el('button', 'mz-btn mz-btn-primary', own ? 'Run a first task' : 'Set up my team');
@@ -1090,6 +1090,32 @@
     firstTaskError(box, step, 'The task did not start. Try again.');
   }
 
+  // One reminder, only if the person asks for it and this computer can show it.
+  async function offerReminder(card) {
+    let state;
+    try { state = await (await fetch('/api/return-reminder')).json(); } catch (_) { return; }
+    if (!state || !state.can_notify || state.armed) return;
+    const remind = el('button', 'mz-linklike', 'Remind me tomorrow morning what my sessions did');
+    remind.type = 'button';
+    remind.addEventListener('click', async () => {
+      remind.disabled = true;
+      let set = null;
+      try {
+        const res = await fetch('/api/return-reminder', { method: 'POST' });
+        set = await res.json();
+      } catch (_) {}
+      if (!set || !set.armed) {
+        remind.disabled = false;
+        remind.textContent = 'That did not save. Try again';
+        return;
+      }
+      remind.textContent = set.background
+        ? 'Set. One notification tomorrow at 9am.'
+        : 'Set for 9am tomorrow. CCC has to be running then.';
+    });
+    card.appendChild(remind);
+  }
+
   // ── Scene: Finale ──
   async function goFinale() {
     S.scene = 'finale';
@@ -1117,6 +1143,7 @@
     });
     actions.appendChild(tour);
     card.appendChild(actions);
+    offerReminder(card);
 
     shell(card);
     confetti({ origin: 'center' });

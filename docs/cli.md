@@ -35,6 +35,14 @@ The installer links the repo-root script to `~/.local/bin/ccc`. From a checkout
 you can run `./ccc`. With no known subcommand, it launches through `run.sh`,
 the same behavior as the Homebrew launcher.
 
+## Get a reminder
+
+`ccc remind` sets one local notification for 9am tomorrow saying what your
+Claude sessions did since now, such as how many ended on a question for you. It
+fires once and does not repeat. `ccc remind status` shows it; `ccc remind off`
+cancels it. CCC has to be running then, and the computer needs desktop
+notifications (`notify-send` on Linux).
+
 ## Choose a session or model
 
 `ccc sessions` shows live sessions, including spawned children under their

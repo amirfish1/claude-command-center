@@ -1,0 +1,1 @@
+- The installer no longer says your browser will open over SSH, no longer runs Linux's unrelated `open` command, prints the exact line to add `ccc` to your PATH, and says how to start CCC again after the window closes.

@@ -290,7 +290,7 @@ open_when_ready() {
   (
     for _ in $(seq 1 60); do
       if (echo > "/dev/tcp/${check_host}/${PORT}") >/dev/null 2>&1; then
-        if command -v open >/dev/null 2>&1; then
+        if [ "$(uname -s)" = "Darwin" ]; then
           open "$url" >/dev/null 2>&1 || true
         elif command -v xdg-open >/dev/null 2>&1; then
           xdg-open "$url" >/dev/null 2>&1 || true
@@ -522,7 +522,10 @@ pick_port() {
 }
 
 can_open_browser() {
-  command -v open >/dev/null 2>&1 && return 0
+  # Over SSH, `open` and xdg-open act on the far machine's screen, if any.
+  [ -z "${SSH_CONNECTION:-}" ] || return 1
+  # `open` means something else on Linux (the kbd package's openvt alias).
+  [ "$(uname -s)" = "Darwin" ] && return 0
   command -v xdg-open >/dev/null 2>&1 || return 1
   # xdg-open exists on plenty of servers; without a display it opens nothing.
   [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]
@@ -552,6 +555,17 @@ print_dashboard_notes() {
       *\?onboarding=1) note "next: the setup tour gets a first task running" ;;
       *) note "next: run claude in any project and it shows up on the board" ;;
     esac
+  fi
+  note "want a nudge tomorrow morning? run: $(ccc_command) remind"
+}
+
+# The installer links ccc into ~/.local/bin, which a stock macOS shell does not
+# have on PATH, so print a command that works when pasted.
+ccc_command() {
+  if command -v ccc >/dev/null 2>&1; then
+    printf 'ccc'
+  else
+    printf '%s' "$HOME/.local/bin/ccc"
   fi
 }
 
@@ -615,6 +629,7 @@ launch_server() {
   else
     note "starting CCC in this window on port $PORT"
     note "keep this window open; stop CCC with Ctrl+C"
+    note "CCC stops when this window closes; start it again any time with: $(ccc_command)"
     note "tip: $INSTALL_DIR/run.sh --install-service keeps CCC running in the background"
     print_dashboard_notes "$url"
     open_when_ready "$url" "${TAILNET_IP:-127.0.0.1}"

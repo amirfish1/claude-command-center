@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 
 <sub>Needs Git and Python 3.9+ (macOS or Linux; [Windows](#running-on-windows)). Opens http://localhost:8090 and asks before installing a background service. Sends one anonymous daily ping; `CCC_TELEMETRY_DISABLED=1` turns it off ([what it sends](docs/telemetry.md)).</sub>
 
-**Already use Claude Code?** Your past sessions are on the board when it opens, and anything you run with `claude` shows up by itself. No sessions yet? It offers one small job in a practice folder, on your own Claude account.
+**Already use Claude Code?** Your past sessions are on the board when it opens, and anything you run with `claude` shows up by itself. No sessions yet? It offers one small job in a practice folder, on your own Claude account. Run `ccc remind` for one local notification tomorrow morning saying what your sessions did.
 
 Or `brew install amirfish1/tap/ccc && ccc`, or grab the [macOS DMG](https://github.com/amirfish1/claude-command-center/releases/latest).
 Want to look first? The [live demo](https://ccc.amirfish.ai/demo/) runs in your browser with fake data, no install.
@@ -79,7 +79,7 @@ work ([FSL-1.1-MIT](LICENSE)).
 
 <a href="docs/product-story/assets/video/V-20-limit-hit-16x9.mp4"><img src="docs/product-story/assets/video/V-20-limit-hit-16x9.gif" alt="A Claude session hits its usage limit and CCC keeps all 12 sessions going on a free model through your own router" width="100%" /></a>
 
-## Start free in 5 minutes
+## Start free
 
 New to coding agents? The first-run wizard checks your machine, helps install
 Node, the Claude Code CLI, and a local free-model router, then runs your first

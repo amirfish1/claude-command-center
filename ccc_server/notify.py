@@ -963,6 +963,11 @@ def scheduler_loop(base_url=None, publish=None, os_notify=True, interval_s=60.0)
             emit_due(publish=publish, os_notify=os_notify, base_url=base_url)
         except Exception:
             pass
+        try:
+            from ccc_server import return_reminder
+            return_reminder.tick(base_url=base_url, publish=publish)
+        except Exception:
+            pass
         time.sleep(interval_s)
 
 
