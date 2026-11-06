@@ -1,0 +1,42 @@
+# NOT ENABLED. GitHub only runs workflows from .github/workflows/.
+# To turn this on: git mv scripts/ci-templates/readme-install.yml .github/workflows/
+#
+# install-smoke.yml tests the working tree on each push, with `claude` and
+# `uname` stubbed. This runs the README's command as written, against what is
+# published, once a day. It catches what a push cannot: a broken raw URL, a
+# moved dependency, or a base image change that hits new users before anyone
+# commits anything.
+name: readme-install
+
+on:
+  schedule:
+    - cron: '17 13 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  readme-install:
+    name: README install on ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # python:3.9-slim is the floor the README promises, and the version
+        # Apple's Command Line Tools ship.
+        image: ['ubuntu:24.04', 'debian:stable-slim', 'python:3.9-slim']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install from the README in a clean container
+        run: ./scripts/test-readme-install.sh '${{ matrix.image }}'
+
+  macos-like:
+    name: bash 3.2 and BusyBox, reporting Darwin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install this commit on a macOS-like userland
+        run: ./scripts/test-readme-install.sh --checkout --macos-like
