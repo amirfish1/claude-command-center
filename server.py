@@ -19273,10 +19273,8 @@ def _rehydrate_archive_cached_rows(rows):
             # How this session's spawn request arrived (cli/ui/ui-automated/
             # api), tagged onto the registry entry at spawn time (CCC-1026
             # follow-up) or inferred from launch metadata.
-            row["spawned_via"] = _infer_session_spawned_via(
-                row, sid=sid,
-                markers=spawn_markers, spawn_registry_by_sid=spawn_registry_by_sid,
-            )
+            # (Inferred after continued_from_session_id below: a continuation
+            # reads "resumed", not "terminal".)
             # Continuation lineage specifically (F2 "Continue in a new
             # session" / usage-limit auto-resume): the origin marker only
             # appears in continuation prompts, never in subagent spawns, so
@@ -19293,6 +19291,10 @@ def _rehydrate_archive_cached_rows(rows):
                     row.get("jsonl_path")
                 )
             row["continued_from_session_id"] = continued_from
+            row["spawned_via"] = _infer_session_spawned_via(
+                row, sid=sid,
+                markers=spawn_markers, spawn_registry_by_sid=spawn_registry_by_sid,
+            )
             idea_ticket = idea_tickets_by_sid.get(sid)
             if idea_ticket:
                 row["idea_ticket"] = idea_ticket
