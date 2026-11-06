@@ -40777,6 +40777,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 and _archive_deferred.is_busy(sid)
             )
             deferred = None
+            # Archiving a parent takes its spawned children with it (same unit
+            # Trash already cascades). Looked up outside the lock: it reads the
+            # spawn registry / transcripts. Unarchive restores only `sid`.
+            child_sids = []
+            if has_process and (
+                desired is True
+                or (not isinstance(desired, bool)
+                    and sid not in _load_archived_conversations())
+            ):
+                try:
+                    child_sids = [
+                        d for d in _find_descendant_sessions(sid)
+                        if d and d != sid and not d.startswith(("backlog-", "pkood-"))
+                    ]
+                except Exception:
+                    child_sids = []
             try:
                 # Keep retirement ordered with the state transition. If Move
                 # to Active races this request, it must run after the kill so
@@ -40787,7 +40803,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         else sid not in _load_archived_conversations()
                     )
                     changed, unchanged, _, _ = _set_conversations_archived(
-                        [sid], now_archived, source="manual",
+                        [sid, *(child_sids if now_archived else [])],
+                        now_archived, source="manual",
                     )
                     group = changed + unchanged
                     # Archiving retires the session — drop any stale Notification-hook
