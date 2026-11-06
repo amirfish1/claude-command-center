@@ -100,6 +100,24 @@
     ({ run: renderRun, week: renderWeek, badge: renderBadge })[current.tab](body);
   }
 
+  // Capitalized words and numbers still readable in the preview. A click adds
+  // one to "Also hide"; Apply then rebuilds the preview without it.
+  function renderSurvivors(box, list, hideInput, onAdd) {
+    box.replaceChildren();
+    box.hidden = !list || !list.length;
+    if (box.hidden) return;
+    box.append(el('p', { class: 'sr-note', text: 'Still readable in the preview. Click anything private to hide it:' }),
+      el('div', { class: 'sr-chips' }, list.map(item => el('button', {
+        type: 'button', class: 'sr-chip', title: item.count + ' time' + (item.count === 1 ? '' : 's'), text: item.word,
+        on: { click: () => {
+          const have = hideInput.value.split(',').map(v => v.trim()).filter(Boolean);
+          if (!have.some(v => v.toLowerCase() === item.word.toLowerCase())) have.push(item.word);
+          hideInput.value = have.join(', ');
+          onAdd();
+        } },
+      }))));
+  }
+
   function renderRun(body) {
     const preview = el('div', { class: 'sr-preview' }, el('div', { class: 'sr-empty', text: 'Redacting…' }));
     const summary = el('p', { class: 'sr-note' });
@@ -110,6 +128,7 @@
     const saveImage = el('button', { type: 'button', class: 'sr-btn', disabled: true, text: 'Save image' });
     const apply = el('button', { type: 'button', class: 'sr-btn', text: 'Apply' });
     const stale = el('p', { class: 'sr-note sr-error', hidden: true, text: STALE_NOTE });
+    const survivors = el('div', { class: 'sr-survivors', hidden: true });
     const boxes = { hide, keep, title };
     const formValues = () => ({ hide: hide.value, keep: keep.value, title: title.value });
     let applied = null;
@@ -140,6 +159,8 @@
       preview.replaceChildren(el('div', { class: 'sr-empty', text: 'Redacting…' }));
       summary.textContent = '';
       summary.classList.remove('sr-error');
+      survivors.replaceChildren();
+      survivors.hidden = true;
       let data;
       try {
         data = await fetchRun(current.sid, requested);
@@ -159,6 +180,7 @@
       frame.srcdoc = data.html;
       preview.replaceChildren(frame);
       summary.textContent = data.hidden_summary;
+      renderSurvivors(survivors, data.survivors, hide, syncSave);
       syncSave();
     }
     apply.addEventListener('click', load);
@@ -178,6 +200,7 @@
       el('label', { text: 'Title' }, title),
       el('div', { class: 'sr-row' }, apply),
       stale,
+      survivors,
       el('div', { class: 'sr-row' }, savePage, saveImage),
       el('p', { class: 'sr-note', text: SAFETY_NOTE })));
     load();

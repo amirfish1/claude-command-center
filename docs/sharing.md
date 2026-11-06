@@ -68,10 +68,14 @@ names. It does not understand meaning, so these can survive:
   or a well-known brand that points to your employer or a client.
 - Sensitive sentences made of ordinary words, such as `the lawsuit`, `fired` or
   `salary`.
-- Street names without a house number, hosts made of ordinary words, and dates
-  written out in words.
+- Street names without a house number, and host names that end in no known
+  suffix (`prod-db-01` and `vault.home` are hidden; `billing` is not).
 
-So read the export before you post it.
+Dates with a year (`March 14, 1985`) and a day after a birth word are hidden.
+
+So read the export before you post it. Beside the preview, the dialog lists every
+capitalized word and number that is still readable, most frequent first. Click one
+to add it to **Also hide**, then press Apply.
 
 Use **Also hide** for this export, or list words in `share-hide.txt` in the CCC
 state folder, one per line, to hide them every time. Words you list always apply,

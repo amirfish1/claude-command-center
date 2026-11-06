@@ -634,6 +634,25 @@ def render_svg(replay: dict) -> str:
     )
 
 
+_SURVIVOR_WORD_RE = re.compile(r"\b(?:[A-Z][A-Za-z0-9'’\-]*|\d[\d.,:\-/]*)\b")
+_SURVIVOR_CAP = 60
+
+
+def survivors(replay: dict) -> list:
+    """Capitalized words and numbers still readable in the export, most
+    frequent first. Redaction can't know a brand or a figure is private, so
+    this is the list the user scans to decide what to add to "Also hide".
+    """
+    counts = Counter()
+    texts = [replay.get("title") or ""] + [st.get("text") or "" for st in replay.get("steps") or ()]
+    for raw in texts:
+        text = re.sub(r"\[[a-z]+(?:-\d+)?(?:, \d+ lines?)?\]", " ", raw)
+        for word in _SURVIVOR_WORD_RE.findall(text):
+            counts[word] += 1
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].casefold()))
+    return [{"word": w, "count": n} for w, n in ranked[:_SURVIVOR_CAP]]
+
+
 def export_conversation(conversation_id, *, parse, transcript_path, engine="",
                         hide=(), keep=(), title="") -> tuple:
     """(payload, status) for GET /api/conversations/<id>/share.
@@ -663,6 +682,7 @@ def export_conversation(conversation_id, *, parse, transcript_path, engine="",
         "html": render_html(replay),
         "svg": render_svg(replay),
         "hidden_summary": _hidden_sentence(replay["hidden"]),
+        "survivors": survivors(replay),
     }, 200
 
 

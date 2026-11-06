@@ -28,3 +28,7 @@
   .sr-side { width: auto; overflow: visible; }
 }
 @media (max-width: 720px) { .sr-nudge { left: 18px; } }
+
+.sr-chips { display: flex; flex-wrap: wrap; gap: 4px; max-height: 140px; overflow: auto; }
+.sr-chip { font: inherit; font-size: 12px; padding: 2px 8px; border-radius: 10px; border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer; opacity: .85; }
+.sr-chip:hover { opacity: 1; }

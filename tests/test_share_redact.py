@@ -399,3 +399,42 @@ def test_final_check_accepts_measurements():
     text = "took 500ms on a 250MB file, the 4th run, 12px wider"
     assert redact(text) == text
     Redactor().verify([text])
+
+
+# --- Round 3 reproducers (REVIEW C5, C7) -------------------------------------
+
+HOSTS_OF_WORDS = ["prod-db-01", "web-server-2", "vault.home", "my.bank", "files.corp", "nas.box"]
+
+
+@pytest.mark.parametrize("host", HOSTS_OF_WORDS)
+def test_c5_hosts_made_of_ordinary_words_are_hidden(host):
+    out = redact(f"then ssh into {host} and check it")
+    assert host not in out
+    assert not any(part in out for part in host.split(".") if len(part) > 4)
+
+
+@pytest.mark.parametrize("keepable", ["gpt-4", "node.js", "step-2", "top-10", "e.g. this"])
+def test_c5_does_not_eat_ordinary_tokens(keepable):
+    assert keepable in redact(f"we used {keepable} here")
+
+
+BIRTH_DATES = [
+    "born March 14, 1985",
+    "born on 14 March 1985",
+    "DOB: Mar 14 1985",
+    "date of birth 14th of March, 1985",
+    "birthday is 14/03/1985",
+    "born 03-14-1985",
+    "my birthday is March 14",
+]
+
+
+@pytest.mark.parametrize("text", BIRTH_DATES)
+def test_c7_dates_of_birth_in_words_are_hidden(text):
+    out = redact(text)
+    assert "1985" not in out and "March" not in out and "Mar " not in out
+    assert "14" not in out or "[" in out
+
+
+def test_c7_plain_month_prose_survives():
+    assert redact("we ship in March and again in June") == "we ship in March and again in June"

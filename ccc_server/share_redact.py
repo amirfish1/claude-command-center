@@ -231,8 +231,9 @@ FILE_EXTENSIONS = frozenset("""
 """.split())
 
 _TLDS = frozenset("""
-    ai app biz ca cloud co com de dev edu eu fr gov il in info internal intranet
-    io jp lan local me net nz org ru tech tv uk us xyz
+    ai app bank biz box ca cloud co com corp de dev edu eu fr gov home il in info
+    internal intranet io jp lan local localdomain me net nz org private ru tech tv
+    uk us xyz
 """.split())
 _HOST_RE = re.compile(
     r"(?i)(?<![\w.\-])[a-z0-9\-]{1,63}(?:\.[a-z0-9\-]{1,63}){0,6}\.(?:"
@@ -424,6 +425,26 @@ _MAC_RE = re.compile(r"(?<![\w:])(?:[0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}(?![\w:
 _UUID_RE = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
 )
+_MONTH = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|"
+    r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?"
+)
+_DAY = r"(?:[0-3]?\d)(?:st|nd|rd|th)?"
+# "March 14, 1985", "14th of March 1985", "03/14/1985", and a bare "March 14"
+# when a birth word sits just before it.
+_WORD_DATE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:"
+    + _MONTH + r"[ \t]+" + _DAY + r"(?:[ \t]*,)?[ \t]+\d{4}"
+    + r"|" + _DAY + r"[ \t]+(?:of[ \t]+)?" + _MONTH + r"(?:[ \t]*,)?[ \t]+\d{4}"
+    + r"|\d{1,2}[-/.]\d{1,2}[-/.]\d{4}"
+    + r")(?![A-Za-z0-9])"
+)
+_BIRTH_DATE_RE = re.compile(
+    r"(?i)\b((?:born|birthday|birthdate|birth[ \t]*date|date[ \t]+of[ \t]+birth|dob|d\.o\.b\.)"
+    r"(?:[ \t]+(?:is|was|on|in))?[ \t]*:?[ \t]*)(?:" + _MONTH + r"[ \t]+" + _DAY
+    + r"|" + _DAY + r"[ \t]+(?:of[ \t]+)?" + _MONTH + r")(?![A-Za-z0-9])"
+)
+_HOSTNAME_SERIAL_RE = re.compile(r"(?i)^[a-z]+(?:-[a-z]+)+-\d{1,3}$")
 _DATE_RE = re.compile(r"\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?[^\s,;]{0,10})?")
 _PHONE_RE = re.compile(r"(?<![\w.])\+?\(?\d[\d \-().]{6,22}\d(?![\w])")
 # Three or more digit groups under any separator: cards and phone numbers typed
@@ -716,6 +737,8 @@ class Redactor:
             return self._classify_dotted(core)
         if "@" in core or "%" in core or "+" in core or "&" in core or "$" in core:
             return self._mask("id")
+        if _HOSTNAME_SERIAL_RE.match(core) and core.casefold() not in self.keep:
+            return self._mask("host")
         if self._parts_ok(core):
             return core
         return self._mask_word(core)
@@ -826,6 +849,8 @@ class Redactor:
         text = self._sub(_EMAIL_RE, "email", text)
         text = self._sub(_UUID_RE, "id", text)
         text = self._sub(_DATE_RE, "date", text)
+        text = self._sub(_WORD_DATE_RE, "date", text)
+        text = _BIRTH_DATE_RE.sub(lambda m: m.group(1) + self._mask("date"), text)
         text = self._sub(_IPV4_RE, "ip", text)
         text = self._sub(_MAC_RE, "ip", text)
         text = self._sub(_IPV6_RE, "ip", text)

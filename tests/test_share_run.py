@@ -415,3 +415,19 @@ def test_hidden_engine_name_falls_back_to_a_generic_label():
         identity={"people": [], "projects": []}, hide=["claude"],
     )
     assert replay["engine"] == "Coding agent"
+
+
+def test_survivors_lists_readable_capitalized_words_and_numbers():
+    replay = {"title": "Fix Acmeville", "steps": [
+        {"kind": "user", "text": "Ask Zorbo at Globex about [name-1] and 4200 rows"},
+        {"kind": "assistant", "text": "Globex has 4200 rows [code, 3 lines]"},
+    ]}
+    got = {x["word"]: x["count"] for x in share_run.survivors(replay)}
+    assert got["Globex"] == 2 and got["4200"] == 2 and got["Fix"] == 1
+    assert not any("name" in w or "code" in w for w in got)
+
+
+def test_export_payload_carries_survivors():
+    events = [{"type": "user", "text": "Meet Globexia on Tuesday"}]
+    replay, _ = share_run.build_replay(events)
+    assert isinstance(share_run.survivors(replay), list)
