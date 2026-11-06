@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from ccc_server import share_redact, share_run, usage_stats
+from ccc_server.share_redact import RedactionError
 
 ROOT = Path(__file__).resolve().parents[1]
 SID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
@@ -247,8 +248,12 @@ def test_cwd_is_read_from_the_transcript_head(tmp_path):
 
 def test_list_params_are_bounded():
     assert share_run.parse_list("a, b\nc,,") == ["a", "b", "c"]
-    assert len(share_run.parse_list(",".join(["x"] * 500))) == share_run.MAX_LIST_ITEMS
-    assert len(share_run.parse_list("y" * 500)[0]) == share_run.MAX_LIST_ITEM_CHARS
+    assert len(share_run.parse_list(",".join(["x"] * share_run.MAX_LIST_ITEMS))) == share_run.MAX_LIST_ITEMS
+    # Shortening a hide list would export what the user asked to hide.
+    with pytest.raises(RedactionError):
+        share_run.parse_list(",".join(["x"] * (share_run.MAX_LIST_ITEMS + 1)))
+    with pytest.raises(RedactionError):
+        share_run.parse_list("y" * (share_run.MAX_LIST_ITEM_CHARS + 1))
 
 
 def throughput_source(agents=12):

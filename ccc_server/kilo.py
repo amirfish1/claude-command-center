@@ -303,6 +303,22 @@ def find_kilo_conversations(
     return out
 
 
+def _kilo_session_cwd(session_id):
+    """Return the session's working directory from the Kilo DB, or None."""
+    con = _kilo_connect() if session_id else None
+    if con is None:
+        return None
+    try:
+        row = con.execute(
+            "SELECT directory FROM session WHERE id=? LIMIT 1", (session_id,)
+        ).fetchone()
+        return (row["directory"] or None) if row else None
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+
+
 def _parse_kilo_conversation(session_id, after_line=0):
     """Build a CCC transcript event list from a Kilo session's messages/parts."""
     con = _kilo_connect()
@@ -355,7 +371,10 @@ def _parse_kilo_conversation(session_id, after_line=0):
                     if ptype in ("text", "reasoning"):
                         t = p.get("text") or ""
                         if t.strip():
-                            blocks.append({"kind": "text", "text": t})
+                            block = {"kind": "text", "text": t}
+                            if ptype == "reasoning":
+                                block["reasoning"] = True
+                            blocks.append(block)
                     elif ptype == "tool":
                         st = p.get("state") or {}
                         inp = st.get("input") or {}

@@ -33,8 +33,8 @@ read them before you post them.
 
 | Kept | Left out |
 |------|----------|
-| Text you typed and the agent's replies, redacted | Tool output and tool arguments |
-| Tool names and the program a command ran (`pytest`, `git commit`) | Thinking, sub-agent turns, bookkeeping, IDE selections, hook output, skill text, messages from other sessions |
+| Text you typed and the agent's replies, redacted | Tool output, tool arguments and local command output |
+| Tool names and the program a command ran (`pytest`, `git commit`) | Thinking, sub-agent turns and reports, private planning, bookkeeping, IDE selections, hook output, skill text, messages from other sessions, queued messages |
 | Counts: tool calls, files edited, test runs, commits | Timestamps and the session id |
 | Elapsed time | |
 
@@ -44,22 +44,34 @@ Redaction is always on and there is no switch to turn it off.
 
 - **Secrets, paths, emails, links, hosts, IPs, ids and code blocks** are replaced
   with placeholders such as `[secret]` and `[path]`.
-- **Passwords:** whatever follows a password-style label or flag is hidden, up to
-  the end of the clause, even if it is plain words. So is any word joined to
-  digits, such as `Welcome123`, unless it is a known term like `sha256`. A sentence
-  that mentions a password can lose more words than it needs to. That is deliberate.
-- **Seed phrases, card numbers and PINs:** runs of wallet seed words, numbers split
-  into three or more groups, and digits after labels like `pin` or `cvv` are hidden.
+- **Passwords:** everything after the word `password`, `passphrase`, `passcode` or
+  `api key` on that line is hidden, and the next line too if the word ended the line.
+  So is whatever follows a label such as `secret:` or `token =`, and any word joined
+  to digits, such as `Welcome123`, unless it is a known term like `sha256`. A line
+  that only talks about passwords, such as `fix the password reset flow`, loses its
+  ending. That is deliberate: no rule can tell that sentence from a real password.
+- **Seed phrases, card numbers and PINs:** runs of wallet seed words are hidden
+  whatever separates them. So are three or more groups of digits that add up to at
+  least seven, across any punctuation or line breaks, and every digit after a word
+  like `pin` or `cvv`.
+- **Numbers:** a bare number of four or more digits becomes `[number]`, because it
+  could be a PIN or part of a card. That includes years, ports and counts, so
+  `PORT=8080` loses its value. A number with a unit stays (`1200ms`, `250MB`). Add a
+  number to **Keep these words** to bring it back.
 - **Names:** only words on a built-in list of common English and developer terms
   stay readable. Anything else becomes `[name-1]` or `[word-1]`. This is why a
   client name CCC has never seen is hidden anyway.
 - **You:** your git name, git email, system user name and host name are always
   hidden, even if they are ordinary words. So are your repo and folder names.
-- **Final check:** a separate pass reads the finished export. If it finds a known
-  token format, a word joined to digits, a value after a password label, a seed
-  phrase, a grouped number, a path, email, link or IP, or a word you asked to hide,
-  the export stops with an error and no file is written. It checks those shapes
-  only, so it cannot tell you that plain sentences are safe.
+- **Final check:** a separate pass reads the finished export and splits it into
+  words and numbers for itself. It stops the export with an error, and writes no
+  file, if it finds a known token format, a word joined to digits, readable text
+  after a password or `secret:` style label, digits after a PIN word, a run of seed
+  words, a run of ten or more digits, a number of five or more digits, an email, IP,
+  home-style path, link with a scheme, or a word you asked to hide. It is a backstop
+  for those shapes only: it does not recheck every detail above, such as a bare
+  domain or a relative folder path, and it cannot tell you that plain sentences are
+  safe.
 
 **Known limit: plain English stays readable.** Redaction hides shapes and unknown
 names. It does not understand meaning, so these can survive:
@@ -73,13 +85,17 @@ names. It does not understand meaning, so these can survive:
 
 Dates with a year (`March 14, 1985`) and a day after a birth word are hidden.
 
-So read the export before you post it. Beside the preview, the dialog lists every
-capitalized word and number that is still readable, most frequent first. Click one
-to add it to **Also hide**, then press Apply.
+So read the export before you post it. Beside the preview, the dialog lists the
+capitalized words and numbers that are still readable, most frequent first, leaving
+out common sentence openers and any word also written in lowercase. It shows 60 at
+most, so it does not replace reading. Click one to add it to **Also hide**, then
+press Apply.
 
 Use **Also hide** for this export, or list words in `share-hide.txt` in the CCC
 state folder, one per line, to hide them every time. Words you list always apply,
-however short or common. **Keep these words** brings back words that were hidden
+however short or common, and beat **Keep these words**. A list too long to use
+whole (over 1,000 entries, or an entry over 400 characters) stops the export rather
+than being shortened. **Keep these words** brings back words that were hidden
 as names or unknown words, including an unlabelled value you name exactly, so only
 list words you are sure about. It does not bring back anything after a password
 label, or a token, path, email or link.

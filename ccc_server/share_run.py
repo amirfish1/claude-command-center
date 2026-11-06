@@ -41,8 +41,8 @@ MAX_STEPS = 240
 MAX_PROMPT_CHARS = 700
 MAX_REPLY_CHARS = 900
 MAX_TITLE_CHARS = 90
-MAX_LIST_ITEMS = 50
-MAX_LIST_ITEM_CHARS = 80
+MAX_LIST_ITEMS = 1000
+MAX_LIST_ITEM_CHARS = 400
 
 _IDENTITY_TTL = 300
 _STATS_TTL = 300
@@ -86,6 +86,8 @@ _MACHINE_ROW_PREFIXES = (
     "this session is being continued from a previous conversation",
     "# agents.md instructions for",
     "[request interrupted",
+    "[sender:",
+    "[message attribution",
 )
 _MODEL_WORDS = frozenset("""
     claude gpt gemini grok kimi deepseek qwen llama mistral glm devin
@@ -102,10 +104,19 @@ _stats_lock = threading.Lock()
 _stats_cache = {}
 
 
+def _bounded(items: list) -> list:
+    """``items`` whole, or an error. A hide list must never be shortened quietly."""
+    if len(items) > MAX_LIST_ITEMS or any(len(i) > MAX_LIST_ITEM_CHARS for i in items):
+        raise RedactionError(
+            f"list too long: at most {MAX_LIST_ITEMS} entries of {MAX_LIST_ITEM_CHARS} characters"
+        )
+    return items
+
+
 def parse_list(value) -> list:
-    """Split a comma/newline list from a query string, bounded."""
+    """Split a comma/newline list from a query string. Raises if it is too long."""
     items = [p.strip() for p in re.split(r"[,\n]", str(value or ""))]
-    return [p[:MAX_LIST_ITEM_CHARS] for p in items if p][:MAX_LIST_ITEMS]
+    return _bounded([p for p in items if p])
 
 
 def _hide_file() -> Path:
@@ -199,7 +210,7 @@ def _user_hide_list() -> list:
     except OSError:
         return []
     items = [line.strip() for line in lines]
-    return [i[:MAX_LIST_ITEM_CHARS] for i in items if i and not i.startswith("#")]
+    return _bounded([i for i in items if i and not i.startswith("#")])
 
 
 def transcript_cwds(transcript_path) -> list:
@@ -280,9 +291,20 @@ def _safe_model(value) -> str:
 
 def _is_typed_prompt(event: dict) -> bool:
     """True only for text the user typed: not harness, skill or peer rows."""
-    if any(event.get(k) for k in ("bookkeeping", "is_sidechain", "skill", "peer")):
+    if any(event.get(k) for k in (
+        "bookkeeping", "is_sidechain", "skill", "peer", "pending", "queued_from",
+    )):
         return False
     return not str(event.get("text") or "").lstrip().casefold().startswith(_MACHINE_ROW_PREFIXES)
+
+
+def _is_agent_reply(event: dict) -> bool:
+    """True only for the agent's own reply. Parsers also use this row shape for
+    command output, subagent reports and private planning.
+    """
+    if event.get("is_sidechain") or event.get("subagent_report") or event.get("subtype"):
+        return False
+    return not str(event.get("message_id") or "").startswith("local-cmd-")
 
 
 def _public_model(model: str, redactor: Redactor) -> str:
@@ -326,6 +348,8 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
         else:
             tools = {}
             steps.append({"kind": "tools", "at": at, "tools": tools, "errors": 0})
+        if redactor.is_hidden(f"{label} {verb}"):
+            label, verb = "Command", ""
         key = f"{label} {verb}".strip()
         tools[key] = tools.get(key, 0) + 1
 
@@ -346,14 +370,14 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
             stats["prompts"] += 1
             steps.append({"kind": "user", "at": at, "text": text})
         elif kind == "assistant":
-            if event.get("is_sidechain"):
+            if not _is_agent_reply(event):
                 continue
             model = _safe_model(event.get("model"))
             if model:
                 models[model] += 1
             for block in event.get("blocks") or ():
                 block_kind = block.get("kind")
-                if block_kind == "text":
+                if block_kind == "text" and not block.get("reasoning"):
                     text = redactor.text(block.get("text"), MAX_REPLY_CHARS)
                     if text:
                         stats["replies"] += 1
@@ -405,7 +429,11 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
     }
     # The engine is a fixed label, so a repo named after one must not fail the
     # check; every field that comes from the transcript is verified.
-    redactor.verify([replay["title"], replay["model"]] + [s.get("text", "") for s in steps])
+    redactor.verify(
+        [replay["title"], replay["model"]]
+        + [s.get("text", "") for s in steps]
+        + [t["label"] for s in steps for t in s.get("tools") or ()]
+    )
     return replay, redactor
 
 
@@ -636,6 +664,18 @@ def render_svg(replay: dict) -> str:
 
 _SURVIVOR_WORD_RE = re.compile(r"\b(?:[A-Z][A-Za-z0-9'’\-]*|\d[\d.,:\-/]*)\b")
 _SURVIVOR_CAP = 60
+# Words that open sentences. Position cannot do this job: a client name at the
+# start of a line, in bold or after a colon reads the same as one mid-sentence.
+_SENTENCE_OPENERS = frozenset("""
+    a add added after again all also an and any are as at be because before but
+    by can changed check could created did do does done first fix fixed for found
+    from get go good got great had has have he her here his how i if in into is it
+    its i'll i'm i've just let let's look made make may maybe my next nice no not
+    now of ok okay on once one only or our perfect removed run see she should since
+    so some still sure thanks that the their then there these they this those to
+    try update updated use using was we were what when where which while who why
+    will with would wrote yes you your
+""".split())
 
 
 def survivors(replay: dict) -> list:
@@ -644,27 +684,22 @@ def survivors(replay: dict) -> list:
     this is the list the user scans to decide what to add to "Also hide".
     """
     counts = Counter()
-    mid = set()        # capitalized somewhere other than a sentence start
     lower = set()      # also written in lowercase somewhere
     texts = [replay.get("title") or ""] + [st.get("text") or "" for st in replay.get("steps") or ()]
     for raw in texts:
         text = re.sub(r"\[[a-z]+(?:-\d+)?(?:, \d+ lines?)?\]", " ", raw)
         lower.update(re.findall(r"\b[a-z][a-z'’\-]*\b", text))
-        for m in _SURVIVOR_WORD_RE.finditer(text):
-            word = m.group(0)
-            counts[word] += 1
-            before = text[:m.start()].rstrip()
-            if before and before[-1] not in ".!?:;\n\"'([-*#>" :
-                mid.add(word)
+        counts.update(_SURVIVOR_WORD_RE.findall(text))
     for word in list(counts):
-        if word[0].isalpha() and (word.casefold() in lower or word not in mid):
+        folded = word.casefold()
+        if word[0].isalpha() and (folded in lower or folded in _SENTENCE_OPENERS):
             del counts[word]
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].casefold()))
     return [{"word": w, "count": n} for w, n in ranked[:_SURVIVOR_CAP]]
 
 
 def export_conversation(conversation_id, *, parse, transcript_path, engine="",
-                        hide=(), keep=(), title="") -> tuple:
+                        hide=(), keep=(), title="", cwd="") -> tuple:
     """(payload, status) for GET /api/conversations/<id>/share.
 
     Reads this one session. Fails closed: if the finished text does not pass
@@ -674,7 +709,9 @@ def export_conversation(conversation_id, *, parse, transcript_path, engine="",
     events = parsed.get("events") or []
     if not events:
         return {"ok": False, "error": "This session has nothing to share yet."}, 404
-    identity = machine_identity(transcript_cwds(transcript_path))
+    # Engines that keep sessions in a database have no transcript to read a
+    # folder from, so the caller passes the session's own.
+    identity = machine_identity(sorted({*transcript_cwds(transcript_path), *([cwd] if cwd else [])}))
     try:
         replay, _redactor = build_replay(
             events, engine=engine or parsed.get("engine") or "", identity=identity,

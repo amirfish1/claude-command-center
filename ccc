@@ -901,7 +901,8 @@ def cmd_share(args):
             print(payload["hidden_summary"])
     except urllib.error.HTTPError as e:
         try:
-            detail = json.loads(e.read().decode("utf-8")).get("error")
+            body = json.loads(e.read().decode("utf-8"))
+            detail = " ".join(filter(None, (body.get("error"), body.get("detail"))))
         except (ValueError, AttributeError):
             detail = None
         print(f"ccc share: {detail or f'export failed (HTTP {e.code})'}", file=sys.stderr)

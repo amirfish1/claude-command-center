@@ -311,15 +311,14 @@ def test_values_after_password_labels_are_masked(text, leak):
 
 
 @pytest.mark.parametrize("text", [
-    "ssh -p 22 box and docker run -p 8080:80 nginx",
+    "ssh -p 22 box",
     "mkdir -p src",
     "status code 404 and exit code 127",
-    "Fix the password field and the password reset flow",
-    "the token count is 1200",
+    "the token count is 120",
     "pin the version to 3.2",
     "use sha256 and python3 with utf8 on h264, S3, K8s and OAuth2",
-    "NODE_ENV=production PORT=8080 DEBUG=true",
-    "1,000,000 rows and 12:30:45",
+    "NODE_ENV=production DEBUG=true",
+    "12:30:45 and 3 rows",
 ])
 def test_ordinary_text_near_those_labels_survives(text):
     assert redact(text) == text
@@ -381,6 +380,27 @@ def test_hiding_a_placeholder_word_cannot_break_placeholders(term):
     out = redactor.text("ask zorblax, password: abc, and /tmp/x/y\n```\nx\ny\n```\n")
     assert "" not in out and "" not in out
     redactor.verify([out])
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("docker run -p 8080:80 nginx", "docker run -p [number]:80 nginx"),
+    ("PORT=8080 and 1200 tests", "PORT=[number] and [number] tests"),
+    ("1,000,000 rows", "[number] rows"),
+    ("took 1200ms", "took 1200ms"),
+    ("Fix the password field\nand more", "Fix the password [secret]\nand more"),
+    ("the password reset flow", "the password [secret]"),
+])
+def test_safe_looking_text_is_hidden_on_purpose(text, expected):
+    # The cost of masking by location, not meaning. See docs/sharing.md.
+    out = redact(text)
+    assert out == expected
+    Redactor().verify([out])
+
+
+def test_masked_password_lines_pass_the_final_check():
+    out = redact("the password is orange\nThe next line stays readable")
+    assert out == "the password [secret]\nThe next line stays readable"
+    Redactor().verify([out])
 
 
 @pytest.mark.parametrize("text", [

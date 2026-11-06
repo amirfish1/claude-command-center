@@ -453,7 +453,10 @@ def _parse_opencode_conversation(session_id, after_line=0):
                     if ptype in ("text", "reasoning"):
                         t = p.get("text") or ""
                         if t.strip():
-                            blocks.append({"kind": "text", "text": t})
+                            block = {"kind": "text", "text": t}
+                            if ptype == "reasoning":
+                                block["reasoning"] = True
+                            blocks.append(block)
                     elif ptype == "tool":
                         st = p.get("state") or {}
                         inp = st.get("input") or {}

@@ -32429,16 +32429,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Local, redacted replay of one session. Builds it and hands it
             # back to the browser; nothing is uploaded.
             from ccc_server import share_run
+            from ccc_server.kilo import _kilo_session_cwd
             conv_id = urllib.parse.unquote(path.split("/")[-2])
             qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                hide = share_run.parse_list(qs.get("hide", [""])[0])
+                keep = share_run.parse_list(qs.get("keep", [""])[0])
+            except share_run.RedactionError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+                return
             payload, status = share_run.export_conversation(
                 conv_id,
                 parse=parse_conversation,
                 transcript_path=conversation_transcript_path(conv_id),
                 engine=_detect_session_engine(conv_id),
-                hide=share_run.parse_list(qs.get("hide", [""])[0]),
-                keep=share_run.parse_list(qs.get("keep", [""])[0]),
+                hide=hide,
+                keep=keep,
                 title=(qs.get("title", [""])[0] or "")[:200],
+                cwd=find_session_cwd(conv_id) or _kilo_session_cwd(conv_id) or "",
             )
             self.send_json(payload, status)
         elif path == "/api/sessions/ultra-fresh":
@@ -44514,8 +44522,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # that accidentally put sensitive data in a path or query string.
         if getattr(self, "path", "").startswith("/api/secrets/"):
             return
-        # Quieter logging — only errors
-        if args and "404" in str(args[0]):
+        # Quieter logging — only errors. args[0] is the whole request line, so
+        # test the status, or an id holding "404" would log every request.
+        if any(str(arg) == "404" for arg in args[:2]):
+            if "/share?" in getattr(self, "path", ""):
+                # The query is the user's list of words to hide.
+                args = (re.sub(r"\?\S*", "", str(args[0])),) + args[1:]
             super().log_message(format, *args)
 
 

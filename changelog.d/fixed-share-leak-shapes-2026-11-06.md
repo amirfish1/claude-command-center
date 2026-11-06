@@ -1,0 +1,2 @@
+- Share this run hides more: every bare number of four or more digits, digit groups and seed words split by any punctuation or line breaks, and everything after a password word on its line. Reasoning, local command output, peer and queued messages, subagent reports and private planning are left out, and the final check now reads the export with its own tokenizer.
+- A word in **Also hide** now always beats **Keep these words**, also hides its plural and unaccented forms and any tool name holding it, and a list too long to use stops the export instead of being shortened.
