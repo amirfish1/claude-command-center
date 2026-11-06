@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import getpass
 import html
+import json
 import os
 import re
 import socket
@@ -59,6 +60,11 @@ _HERMES_TYPED_KINDS = (None, "", "steer")
 # time. Measured delay: p99 11 s, max 22 s.
 _LEGACY_JOIN_BEFORE_S = 2
 _LEGACY_JOIN_AFTER_S = 30
+_CHAT_ORIGINS = ("channel", "slack-ping")
+# Codex names the program that opened a session. `codex exec`, CCC and queue
+# workers each have their own name, so only these mean a person at a terminal.
+_CODEX_TERMINAL_ORIGINATORS = ("codex-tui", "codex_cli_rs")
+_META_LINE_BYTES = 1 << 20
 _CHANNEL_ROW_RE = re.compile(r"\s*<channel\s[^>]*\bsource=")
 _RELAY_ROW_RE = re.compile(r"(?m)^\[[^\]\n]{1,80}\] New message\(s\) from ")
 
@@ -352,32 +358,32 @@ def _is_clean_row(event: dict) -> bool:
     return not text.lstrip().casefold().startswith(_MACHINE_ROW_PREFIXES)
 
 
-def _is_typed_prompt(event: dict, proven=()) -> bool:
-    """True only for text the user typed.
+def _is_typed_prompt(event: dict, proven=(), terminal=False) -> bool:
+    """True only for a row with proof that the user typed it.
 
-    `proven` holds the lines a dashboard send vouches for. Without one, the row
-    must carry no mark of arriving another way: `sdk` is every row sent through
-    the SDK path, dispatched prompts included.
+    `proven` holds the lines a dashboard send vouches for. Otherwise the row needs
+    a mark of its own: most engines mark nothing, and older Claude Code left SDK
+    rows unmarked, so an unmarked row proves nothing. `terminal` is a session the
+    transcript shows a person opened at a terminal.
     """
     if not _is_clean_row(event):
         return False
     if event.get("line") in proven:
         return True
-    if event.get("source_platform", _HERMES_TYPED_SOURCE) != _HERMES_TYPED_SOURCE:
+    if "source_platform" in event:
+        return event["source_platform"] == _HERMES_TYPED_SOURCE
+    if event.get("turn_origin") not in (None, "", runaway.HUMAN):
         return False
-    return event.get("turn_origin") in (None, "", runaway.HUMAN)
+    return bool(
+        terminal or event.get("entrypoint") == "cli"
+        or event.get("turn_origin") == runaway.HUMAN or event.get("origin_kind") == runaway.HUMAN
+    )
 
 
 def _proven_rows(events, sends) -> set:
     """Lines of the transcript rows that match a dashboard send, one row per send."""
     users = [e for e in events or () if e.get("type") == "user_text"]
-    rows = [
-        e for e in users
-        if _is_clean_row(e) and (
-            e.get("turn_origin") == "sdk"
-            or e.get("source_platform", _HERMES_TYPED_SOURCE) != _HERMES_TYPED_SOURCE
-        )
-    ]
+    rows = [e for e in users if _is_clean_row(e)]
     digests = Counter(digest for _at, digest in sends or () if digest)
     proven = set()
     for row in rows:
@@ -412,14 +418,13 @@ def _check_origin(events, engine: str, proven) -> None:
     hermes = str(engine or "").lower() == "hermes"
     scripted = vouched = False
     for event in events or ():
+        if event.get("origin_kind") in _CHAT_ORIGINS:
+            raise ChatBridgeSession("chat bridge message")
         kind = event.get("type")
         if kind not in ("user_text", "assistant"):
             continue
         text = str(event.get("text") or "")
-        if kind == "user_text" and (
-            event.get("origin_kind") == "channel" or _CHANNEL_ROW_RE.match(text)
-            or _RELAY_ROW_RE.search(text[:600])
-        ):
+        if kind == "user_text" and (_CHANNEL_ROW_RE.match(text) or _RELAY_ROW_RE.search(text[:600])):
             raise ChatBridgeSession("chat bridge message")
         if "source_platform" not in event:
             if hermes and not event.get("subtype"):
@@ -430,7 +435,7 @@ def _check_origin(events, engine: str, proven) -> None:
             scripted = True
         elif source != _HERMES_TYPED_SOURCE:
             raise ChatBridgeSession(f"Hermes source: {source or 'unknown'}")
-        if kind != "user_text" or source == _HERMES_TYPED_SOURCE or not _is_clean_row(event):
+        if kind != "user_text" or source == _HERMES_TYPED_SOURCE:
             continue
         if event.get("line") not in proven:
             raise ChatBridgeSession("Hermes prompt with no dashboard send")
@@ -484,10 +489,27 @@ def _public_engine(engine, redactor: Redactor) -> str:
     return "Coding agent" if redactor.is_hidden(label) else label
 
 
-def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title="", sends=()) -> tuple:
+def _is_terminal_session(engine, transcript_path) -> bool:
+    """True for a Codex rollout a person opened at a terminal."""
+    if str(engine or "").lower() != "codex" or not transcript_path:
+        return False
+    try:
+        with open(transcript_path, "rb") as handle:
+            row = json.loads(handle.readline(_META_LINE_BYTES))
+    except (OSError, ValueError):
+        return False
+    meta = row.get("payload") if isinstance(row, dict) and row.get("type") == "session_meta" else None
+    if not isinstance(meta, dict) or not isinstance(meta.get("source"), str):
+        return False   # a sub-agent's source is a record
+    return meta.get("originator") in _CODEX_TERMINAL_ORIGINATORS and meta["source"] != "exec"
+
+
+def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title="", sends=(),
+                 terminal=False) -> tuple:
     """Return (replay, redactor). Raises RedactionError on a verify failure.
 
-    `sends` is `sender_envelope.human_sends` for this session.
+    `sends` is `sender_envelope.human_sends` for this session. `terminal` is
+    `_is_terminal_session`.
     """
     identity = identity or {}
     proven = _proven_rows(events, sends)
@@ -524,7 +546,7 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
         at = int(ts - first_ts) if ts is not None and first_ts is not None else None
         kind = event.get("type")
         if kind == "user_text":
-            if not _is_typed_prompt(event, proven):
+            if not _is_typed_prompt(event, proven, terminal):
                 continue
             text = redactor.text(_typed_text(event), MAX_PROMPT_CHARS)
             if not text:
@@ -561,6 +583,10 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
                     step["errors"] += 1
                     break
 
+    # Replies repeat what they answer, so with no prompt of yours they are
+    # someone else's conversation.
+    if not stats["prompts"] and any(e.get("type") == "user_text" for e in events or ()):
+        raise ChatBridgeSession("no prompt CCC can prove you wrote")
     for step in steps:
         if step["kind"] == "tools":
             step["tools"] = [{"label": k, "count": v} for k, v in step["tools"].items()]
@@ -887,17 +913,18 @@ def export_conversation(conversation_id, *, parse, transcript_path, engine="",
     # Engines that keep sessions in a database have no transcript to read a
     # folder from, so the caller passes the session's own.
     identity = machine_identity(sorted({*transcript_cwds(transcript_path), *([cwd] if cwd else [])}))
+    engine = engine or parsed.get("engine") or ""
     try:
         replay, _redactor = build_replay(
-            events, engine=engine or parsed.get("engine") or "", identity=identity,
-            hide=hide, keep=keep, title=title,
+            events, engine=engine, identity=identity, hide=hide, keep=keep, title=title,
             sends=attribution.human_sends(conversation_id, _months_of(events)),
+            terminal=_is_terminal_session(engine, transcript_path),
         )
     except ChatBridgeSession as exc:
         return {
             "ok": False,
             "error": "This session can't be shared: CCC can't prove you wrote its messages. "
-                     "Chat bridge, scheduled and scripted sessions stay private.",
+                     "Chat bridge, scheduled, scripted and agent-started sessions stay private.",
             "detail": str(exc),
         }, 422
     except RedactionError as exc:

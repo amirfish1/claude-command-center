@@ -417,7 +417,7 @@ def _journal_add(entry, line, nodes):
             sends = entry['human'].setdefault(str(target or ''), {})
             sends[a['message_id']] = (float(a.get('created_at') or row.get('at') or 0),
                                       str(evidence.get('text_digest') or ''))
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, TypeError, KeyError, AttributeError):
         pass
 
 

@@ -24,7 +24,9 @@ def no_real_hide_list(monkeypatch):
 
 def replay_of(events, engine="claude", **kw):
     identity = kw.pop("identity", {})
-    replay, _ = share_run.build_replay(events, engine=engine, identity=identity, **kw)
+    # A session with no typed prompt is refused, which would hide the row under test.
+    typed = {"type": "user_text", "entrypoint": "cli", "text": "go", "ts": TS}
+    replay, _ = share_run.build_replay([*events, typed], engine=engine, identity=identity, **kw)
     return replay
 
 
@@ -38,7 +40,7 @@ def page_text(replay):
 def exported(text, **kw):
     """Full path: masks, then verify(). None means the export was refused."""
     try:
-        return page_text(replay_of([{"type": "user_text", "text": text, "ts": TS}], **kw))
+        return page_text(replay_of([{"type": "user_text", "entrypoint": "cli", "text": text, "ts": TS}], **kw))
     except RedactionError:
         return None
 
@@ -308,7 +310,7 @@ def test_leak_m5_queued_peer_message():
     # Shape copied from pending_inputs._get_queued_events_for_session, which
     # parse_conversation merges in.
     events = [
-        {"type": "user_text", "text": "ok", "ts": TS},
+        {"type": "user_text", "entrypoint": "cli", "text": "ok", "ts": TS},
         {"line": None, "ts": TS, "type": "user_text", "images": [], "pending": True,
          "text": "note from the other agent about the orange lawsuit",
          "queued_from": {"kind": "session", "name": "other"}},
@@ -363,7 +365,7 @@ def test_leak_s2_hide_variant(text, hide, value):
 
 def _tool_events():
     return [
-        {"type": "user_text", "text": "go", "ts": TS},
+        {"type": "user_text", "entrypoint": "cli", "text": "go", "ts": TS},
         {"type": "assistant", "ts": TS, "model": "x", "blocks": [
             {"kind": "tool_use", "name": "Bash", "command": "terraform apply", "id": "a"}]},
     ]
@@ -394,7 +396,7 @@ def test_leak_s2_hide_ignored_in_tool_labels():
     ("- Target\n- Google", "Target"),
 ])
 def test_leak_s4_survivor_list_misses_readable_name(text, word):
-    replay = replay_of([{"type": "user_text", "text": text, "ts": TS}])
+    replay = replay_of([{"type": "user_text", "entrypoint": "cli", "text": text, "ts": TS}])
     assert word in page_text(replay)   # readable
     assert word in [s["word"] for s in share_run.survivors(replay)]
 
@@ -404,7 +406,7 @@ def test_leak_s4_survivor_list_misses_readable_name(text, word):
 # "cwd". SQLite engines (OpenCode, Kilo, Hermes) pass no such file.
 # ---------------------------------------------------------------------------
 def test_leak_s5_folder_name_without_cwd_in_transcript():
-    events = [{"type": "user_text", "text": "the orange-window repo is broken", "ts": TS}]
+    events = [{"type": "user_text", "entrypoint": "cli", "text": "the orange-window repo is broken", "ts": TS}]
     payload, status = share_run.export_conversation(
         "x", parse=lambda _: {"events": events}, transcript_path="", engine="opencode",
         cwd="/tmp/x/orange-window",
@@ -416,7 +418,7 @@ def test_leak_s5_folder_name_without_cwd_in_transcript():
 def test_holds_folder_name_with_cwd_in_transcript(tmp_path):
     path = tmp_path / "t.jsonl"
     path.write_text(json.dumps({"cwd": "/tmp/x/orange-window"}) + "\n")
-    events = [{"type": "user_text", "text": "the orange-window repo is broken", "ts": TS}]
+    events = [{"type": "user_text", "entrypoint": "cli", "text": "the orange-window repo is broken", "ts": TS}]
     identity = share_run.machine_identity(share_run.transcript_cwds(str(path)))
     replay, _ = share_run.build_replay(events, engine="claude", identity=identity)
     assert "orange-window" not in page_text(replay)
@@ -506,7 +508,7 @@ def test_final_check_refuses_raw_shape(raw):
 ])
 def test_holds_no_markup_injection(payload):
     events = [
-        {"type": "user_text", "text": payload + " fix", "ts": TS},
+        {"type": "user_text", "entrypoint": "cli", "text": payload + " fix", "ts": TS},
         {"type": "assistant", "blocks": [{"kind": "text", "text": payload}]},
     ]
     replay = replay_of(events, title=payload)
@@ -522,7 +524,7 @@ def test_holds_422_does_not_echo_the_value():
     seed = "\n".join(f"#{i} {w}" for i, w in enumerate(SEED, 1))
     payload, status = share_run.export_conversation(
         "x",
-        parse=lambda _: {"events": [{"type": "user_text", "text": seed + "\nsk-ant-test-XXXX"}]},
+        parse=lambda _: {"events": [{"type": "user_text", "entrypoint": "cli", "text": seed + "\nsk-ant-test-XXXX"}]},
         transcript_path="",
         engine="claude",
     )
@@ -562,7 +564,7 @@ def test_too_long_hide_file_refuses_the_export(monkeypatch, tmp_path):
     hide_file.write_text("\n".join(f"w{i}" for i in range(share_run.MAX_LIST_ITEMS + 1)))
     monkeypatch.setattr(share_run, "_hide_file", lambda: hide_file)
     payload, status = share_run.export_conversation(
-        "x", parse=lambda _: {"events": [{"type": "user_text", "text": "hello", "ts": TS}]},
+        "x", parse=lambda _: {"events": [{"type": "user_text", "entrypoint": "cli", "text": "hello", "ts": TS}]},
         transcript_path="", engine="claude",
     )
     assert status == 422 and not payload["ok"]

@@ -34,35 +34,55 @@ read them before you post them.
 | Kept | Left out |
 |------|----------|
 | Text you typed and the agent's replies, redacted | Tool output, tool arguments, local command output, and console logs (Aider and the Antigravity CLI export no replies, because their reply is one capture of everything printed) |
-| Tool names and the program a command ran (`pytest`, `git commit`) | Thinking, sub-agent turns and reports, private planning, bookkeeping, IDE selections, hook output, skill text, messages from other sessions, queued messages |
+| Tool names and the program a command ran (`pytest`, `git commit`) | Thinking, sub-agent turns and reports, private planning, bookkeeping, IDE selections, hook output, skill text, messages from other sessions, and anything else CCC can't show you wrote |
 | Counts: tool calls, files edited, test runs, commits | Timestamps and the session id |
 | Elapsed time | |
 
 ## Whose words count as yours
 
 A prompt appears only if CCC can show you wrote it. If it can't, the prompt stays out.
+Most engines write nothing that says who sent a message, so a row with no proof never
+counts as yours.
 
-- **Typed in a terminal:** the transcript marks these as yours.
-- **Typed in the dashboard:** the transcript can't tell these from a prompt another
-  agent dispatched, so CCC records a fingerprint of the text when you send it (not
-  the text itself) and the row must match it. The composer, reply chips, and the new
-  session box all count. Prompts that a button writes for you, such as starting a
-  session from an issue, do not.
-- **Sessions from before this was added:** a dashboard message is matched to its
-  transcript row by time instead, within 30 seconds of the send. The first prompt of
-  an older session is never matched this way, so it stays out, and the replay may
-  start with a reply.
+- **Typed in a terminal:** Claude Code marks a row typed at its command line, and
+  Codex names the program that opened the session. Those two count, including
+  messages you queue while the agent is busy. No other engine's transcript shows this,
+  so on other engines only dashboard prompts appear. The Claude desktop app, the Codex
+  desktop app and very old Claude Code transcripts have no such mark unless the row
+  says it came from a person.
+- **Typed in the dashboard, on any engine:** CCC records a fingerprint of the text when
+  you send it (not the text itself) and the transcript row must match it word for
+  word. The composer, reply chips, and the new session box all count, once the session
+  has an id. Prompts that a button writes for you, such as starting a session from an
+  issue, do not. If CCC added its own note to a first prompt, such as a warning that
+  the work looks shipped, the row no longer matches and that prompt stays out.
+- **Sessions from before this was added:** on Claude Code, a dashboard message is
+  matched to its transcript row by time instead, within 30 seconds of the send. The
+  first prompt of an older session is never matched this way, so it stays out, and
+  the replay may start with a reply.
 - **Sent by another agent or a script:** left out, even if you asked for it.
+
+The fingerprint shows the words match something sent from the dashboard form. It is
+not a signature: a program on your machine could imitate that form on purpose.
 
 Some sessions can't be exported at all, and you get an error instead of a file:
 
+- Any session with no prompt CCC can prove you wrote. That covers sessions an agent or
+  a queue started, and terminal sessions on engines other than Claude Code and Codex.
+  Replies repeat what they answer, so they can't go out on their own.
 - Any session holding a chat bridge message, such as Telegram, WhatsApp or iMessage,
   on any engine. Leaving those messages out would not be enough, because the replies
   answer those people and quote them.
 - Hermes sessions from anywhere but the Hermes desktop app, including cron runs.
-  `hermes` command line sessions export only if every prompt was sent from the CCC
-  dashboard: a script can forward someone else's message into one, and nothing in the
-  session shows the difference.
+  `hermes` command line sessions export only if every message in them was sent from
+  the CCC dashboard, which is rare, because the first prompt of a spawned Hermes
+  session usually can't be matched. A script can forward someone else's message into
+  one, and nothing in the session shows the difference.
+
+**Known limit: replies to dropped messages stay.** In a session with at least one of
+your prompts, a message from another agent is left out but the reply to it is not. The
+reply is redacted like any other, and may still repeat what that agent said. Read the
+page before you post it.
 
 ## How redaction works
 
@@ -78,7 +98,11 @@ Redaction is always on and there is no switch to turn it off.
   `token =`, and any word joined to digits, such as `Welcome123` or `Welcome.123`,
   unless it is a known term like `sha256`. A line that only talks about passwords,
   such as `fix the password reset flow`, loses its ending. That is deliberate: no
-  rule can tell that sentence from a real password.
+  rule can tell that sentence from a real password. The same goes for near misses
+  such as `pasword`, `wifi:`, `p:`, `p/w`, `code word`, `vault key`, `signing key`,
+  `log in with admin and ...`, `admin / ...` and a short value after `the key is`.
+  A password made only of ordinary words can still survive when nothing near it
+  marks it as one, such as `sudo orange window`.
 - **Seed phrases, card numbers and PINs:** runs of wallet seed words are hidden,
   whether punctuation, numbers or bullets like `a)` and `2nd` separate them. So are
   three or more groups of digits that add up to at least seven, across any punctuation

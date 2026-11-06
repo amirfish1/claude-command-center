@@ -21,9 +21,9 @@ IDENTITY = {"people": ["Dana Okafor", "dokafor"], "projects": ["acme-billing"]}
 
 def session_events():
     return [
-        {"type": "user_text", "ts": "2026-11-05T10:00:00Z",
+        {"type": "user_text", "entrypoint": "cli", "ts": "2026-11-05T10:00:00Z",
          "text": f"Fix the refund bug for Dana Okafor in /home/dokafor/acme-billing/app.py {FAKE_TOKEN}"},
-        {"type": "user_text", "ts": "2026-11-05T10:00:01Z", "bookkeeping": True,
+        {"type": "user_text", "entrypoint": "cli", "ts": "2026-11-05T10:00:01Z", "bookkeeping": True,
          "text": "bookkeeping note that must vanish"},
         {"type": "assistant", "ts": "2026-11-05T10:00:05Z", "model": "claude-opus-5-5", "blocks": [
             {"kind": "thinking", "text": "private reasoning about Dana"},
@@ -172,7 +172,7 @@ def test_hide_and_user_hide_file(tmp_path, monkeypatch):
 def test_long_session_is_capped():
     events = []
     for index in range(1000):
-        events.append({"type": "user_text", "ts": "2026-11-05T10:00:00Z", "text": f"step {index}"})
+        events.append({"type": "user_text", "entrypoint": "cli", "ts": "2026-11-05T10:00:00Z", "text": f"step {index}"})
     replay = export(events)
     assert len(replay["steps"]) == share_run.MAX_STEPS + 1
     assert any(s["kind"] == "gap" and s["count"] == 760 for s in replay["steps"])
@@ -190,7 +190,7 @@ def test_page_is_inert_and_self_contained():
 
 
 def test_page_escapes_html_from_the_transcript():
-    events = [{"type": "user_text", "ts": "2026-11-05T10:00:00Z",
+    events = [{"type": "user_text", "entrypoint": "cli", "ts": "2026-11-05T10:00:00Z",
                "text": "<img src=x onerror=alert(1)> <script>alert(1)</script> fix"}]
     page = share_run.render_html(export(events))
     body = page.split("<body>", 1)[1].split("<script>", 1)[0]
@@ -377,15 +377,15 @@ def test_browser_harness(harness):
 
 
 @pytest.mark.parametrize("event", [
-    {"type": "user_text", "text": "<ide_opened_file>secretword</ide_opened_file>"},
-    {"type": "user_text", "text": "<user-prompt-submit-hook>secretword</user-prompt-submit-hook>"},
-    {"type": "user_text", "text": "<some-future-wrapper>secretword</some-future-wrapper>"},
-    {"type": "user_text", "text": "Base directory for this skill: x\n\nsecretword"},
-    {"type": "user_text", "text": "secretword", "is_sidechain": True},
+    {"type": "user_text", "entrypoint": "cli", "text": "<ide_opened_file>secretword</ide_opened_file>"},
+    {"type": "user_text", "entrypoint": "cli", "text": "<user-prompt-submit-hook>secretword</user-prompt-submit-hook>"},
+    {"type": "user_text", "entrypoint": "cli", "text": "<some-future-wrapper>secretword</some-future-wrapper>"},
+    {"type": "user_text", "entrypoint": "cli", "text": "Base directory for this skill: x\n\nsecretword"},
+    {"type": "user_text", "entrypoint": "cli", "text": "secretword", "is_sidechain": True},
 ])
 def test_only_typed_text_exports_as_a_prompt(event):
     replay, _ = share_run.build_replay(
-        [event, {"type": "user_text", "text": "kept prompt"}],
+        [event, {"type": "user_text", "entrypoint": "cli", "text": "kept prompt"}],
         engine="claude", identity={"people": [], "projects": []},
     )
     assert [s["text"] for s in replay["steps"]] == ["kept prompt"]
@@ -406,7 +406,7 @@ def test_parser_marks_sidechain_user_rows():
     ("claude-opus-5-5", ["claude"], ""),
 ])
 def test_model_name_clears_the_hide_list(model, hide, shown):
-    events = [{"type": "user_text", "text": "hello"},
+    events = [{"type": "user_text", "entrypoint": "cli", "text": "hello"},
               {"type": "assistant", "model": model, "blocks": [{"kind": "text", "text": "ok"}]}]
     replay, _ = share_run.build_replay(
         events, engine="claude", identity={"people": [], "projects": []}, hide=hide,
@@ -416,7 +416,7 @@ def test_model_name_clears_the_hide_list(model, hide, shown):
 
 def test_hidden_engine_name_falls_back_to_a_generic_label():
     replay, _ = share_run.build_replay(
-        [{"type": "user_text", "text": "hello"}], engine="claude",
+        [{"type": "user_text", "entrypoint": "cli", "text": "hello"}], engine="claude",
         identity={"people": [], "projects": []}, hide=["claude"],
     )
     assert replay["engine"] == "Coding agent"

@@ -5303,7 +5303,7 @@ def test_runaway_scan_opens_only_changed_active_transcripts(tmp_path, monkeypatc
     active = projects / "active-0001-aaaa.jsonl"
     active.write_text(rec * 50)
     kw = dict(projects_root=tmp_path / "projects", codex_root=tmp_path / "no-codex",
-              state_file=tmp_path / "scan.json")
+              kimi_root=tmp_path / "no-kimi", state_file=tmp_path / "scan.json")
 
     opened = []
     real_open = builtins.open

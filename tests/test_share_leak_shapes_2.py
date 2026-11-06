@@ -30,7 +30,9 @@ def server_module():
 
 
 def replay_of(events, engine="claude", **kw):
-    replay, _ = share_run.build_replay(events, engine=engine, identity=kw.pop("identity", {}), **kw)
+    # A session with no typed prompt is refused, which would hide the row under test.
+    typed = {"type": "user_text", "entrypoint": "cli", "text": "go", "ts": TS}
+    replay, _ = share_run.build_replay([*events, typed], engine=engine, identity=kw.pop("identity", {}), **kw)
     return replay
 
 
@@ -41,7 +43,7 @@ def page_text(replay):
 def exported(text, **kw):
     """Full path: masks, then verify(). None means the export was refused."""
     try:
-        return page_text(replay_of([{"type": "user_text", "text": text, "ts": TS}], **kw))
+        return page_text(replay_of([{"type": "user_text", "entrypoint": "cli", "text": text, "ts": TS}], **kw))
     except RedactionError:
         return None
 
@@ -85,7 +87,7 @@ def test_not_refused_m1_prose_with_pass_then_code(text):
 
 def test_not_refused_m1_one_agent_reply_kills_the_export():
     events = [
-        {"type": "user_text", "text": "fix the flaky test", "ts": TS},
+        {"type": "user_text", "entrypoint": "cli", "text": "fix the flaky test", "ts": TS},
         {"type": "assistant", "ts": TS, "model": "claude-opus-5-5",
          "blocks": [{"kind": "text", "text": "Done. All tests pass, code is pushed."}]},
     ]
@@ -107,7 +109,7 @@ def test_not_refused_m1_one_agent_reply_kills_the_export():
 ])
 def test_not_refused_m2_dated_model_id(model):
     events = [
-        {"type": "user_text", "text": "go", "ts": TS},
+        {"type": "user_text", "entrypoint": "cli", "text": "go", "ts": TS},
         {"type": "assistant", "ts": TS, "model": model, "blocks": [{"kind": "text", "text": "done"}]},
     ]
     replay_of(events)

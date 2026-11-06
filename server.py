@@ -28840,8 +28840,22 @@ def _skill_body_event(ev, line_num, ts):
     }
 
 
+def _stamp_row_origin(row, ev):
+    """Say how a user row arrived, whichever branch below built it."""
+    turn_origin = "scheduled" if ev.get("wakeupSource") else ev.get("turnOrigin")
+    if turn_origin:
+        row["turn_origin"] = turn_origin
+    origin = ev.get("origin")
+    if isinstance(origin, dict) and origin.get("kind"):
+        row["origin_kind"] = str(origin["kind"])
+    if ev.get("entrypoint"):
+        row["entrypoint"] = str(ev["entrypoint"])
+
+
 def _parse_conversation_event(ev, line_num):
     parsed = _parse_conversation_event_unattributed(ev, line_num)
+    if isinstance(parsed, dict) and parsed.get("type") == "user_text":
+        _stamp_row_origin(parsed, ev)
     return _attribution.decorate_event(parsed, ev.get("origin"))
 
 
@@ -29013,6 +29027,12 @@ def _parse_conversation_event_unattributed(ev, line_num):
                 "peer": _peer_block_from_origin(origin),
             }
         if ev.get("isMeta"):
+            # A chat platform's message stays out of the conversation pane like
+            # other meta rows, but Share has to know the session holds one.
+            meta_origin = ev.get("origin")
+            if isinstance(meta_origin, dict) and meta_origin.get("kind") in ("channel", "slack-ping"):
+                return {"line": line_num, "ts": ts, "type": "chat_bridge_row",
+                        "origin_kind": str(meta_origin["kind"])}
             # A loaded skill's body (the rules the Skill tool pulled in) is
             # written as an isMeta user row. The model read it and acted on
             # it, so hiding it leaves the operator seeing only "Launching
@@ -29060,13 +29080,6 @@ def _parse_conversation_event_unattributed(ev, line_num):
             out_ev = {"line": line_num, "ts": ts, "type": "user_text", "text": display_text, "images": images}
             if ev.get("isSidechain"):
                 out_ev["is_sidechain"] = True
-            if ev.get("turnOrigin"):
-                out_ev["turn_origin"] = ev.get("turnOrigin")
-            if ev.get("wakeupSource"):
-                out_ev["turn_origin"] = "scheduled"
-            origin = ev.get("origin")
-            if isinstance(origin, dict) and origin.get("kind"):
-                out_ev["origin_kind"] = str(origin["kind"])
             from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
             if is_compaction_bookkeeping(ev):
                 out_ev["bookkeeping"] = True

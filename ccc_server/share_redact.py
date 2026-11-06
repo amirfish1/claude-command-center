@@ -380,7 +380,12 @@ _CRED_WORD_RE = re.compile(
     r"(?i)pass(?:word|wd|phrase|code|key)[a-z0-9_]*"
     r"|(?<![a-z])pass[ \t._\-]+(?:word|phrase|code|key)\b"
     r"|(?<![a-z])secret[ _\-]+(?:word|phrase)\b"
-    r"|(?<![a-z])(?:api|access|private)[ _\-]?keys?\b"
+    r"|(?<![a-z])(?:api|access|private|vault|signing|encryption|decryption|master|recovery|"
+    r"licen[cs]e)[ _\-]?keys?\b"
+    # Misspelled: pasword, passowrd, passwrod.
+    r"|(?<![a-z])p[a@4]?s{1,3}[ow]{1,2}[or]{0,2}r?d\b"
+    r"|(?<![a-z])(?:log[ \-]?in|sign[ \-]?in)[ \t]+(?:with|using|as)[ \t]+\S{1,100}[ \t]+(?:and|/)(?=[ \t])"
+    r"|(?<![a-z])(?:admin|administrator|root|user|username|guest)[ \t]+/(?=[ \t]+\S)"
     r"|(?<![a-z])authorization\b"
     r"|(?<![a-z])(?:user(?:name)?|login)[ \t]+\S{1,100}[ \t]+pass\b"
     r"|(?<![a-z])(?:require|master|admin|root|db|sudo|user|my)pass\b"
@@ -390,11 +395,14 @@ _CRED_WORD_RE = re.compile(
 # Words too common in developer talk ("token budget", "secret manager") to trip
 # on their own: they need something that reads as a label.
 _CRED_LABEL_RE = re.compile(
-    r"(?i)(?<![a-z0-9])(?:secrets?|tokens?|credentials?|creds?|otp|cv[vcn]\d?|pwd|pw|pass|"
-    r"security[ _\-]?code|pin(?:[ _\-]?code)?)"
+    r"(?i)(?<![a-z0-9])(?:secrets?|tokens?|credentials?|creds?|otp|cv[vcn]\d?|pwd|pw|p/w|pass|"
+    r"wi[ _\-]?fi|code[ _\-]?word|safe[ _\-]?word|security[ _\-]?code|pin(?:[ _\-]?code)?)"
     r"[*_`'\"\s]{0,6}(?:[:=|>\u2192\u2013\u2014]|->|-(?=\s)|"
     r"\b(?:is|was|are|were|be)\b)"
     r"|(?<![a-z0-9])keys?[*_`'\"\s]{0,6}[:=]"
+    r"|(?<![\w/.\-])p[ \t]*[:=](?=[ \t])"
+    # "The key is to retry" stays: only a short value that ends the line goes.
+    r"|\b(?:the|my|our|your)[ \t]+key[ \t]+(?:is|was)(?=(?:[ \t]+\S+){1,3}[ \t]*$)"
 )
 _BARE_TOKEN_RE = re.compile(
     r"(?i)(?<![a-z0-9])(?:tokens?|secret|creds?|pwd|pw)[ \t]+(?!(?:" + _TALK_WORDS
@@ -419,7 +427,7 @@ _RULE_LINE_RE = re.compile(r"^[\s|:+=\-_*~#]*$")
 _TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$|^[\w .\-\"']+(?:[,;\t|][\w .\-\"']+)+\r?$")
 # The value comes first: "orange window is my password", "use X as the pin".
 _VALUE_FIRST_RE = re.compile(
-    r"(?i)\b(?:is|was|are|were|as)[ \t]+(?:(?:my|the|our|your|his|her|their|a|an|new|old|"
+    r"(?i)\b(?:is|was|are|were|as|that[\'\u2019]?s)[ \t]+(?:(?:my|the|our|your|his|her|their|a|an|new|old|"
     r"wifi|work|home|phone|door|gate|lock|safe|alarm|garage)[ \t]+){0,4}"
     r"(?:pass(?:word|wd|phrase|code)s?|pins?|cvv|cvc|otp|"
     r"(?:door|gate|lock|safe|alarm|garage)[ \t]+code)\b"
@@ -429,6 +437,8 @@ _VALUE_FIRST_RE = re.compile(
 _CRED_HINTS = (
     "pass", "secret", "token", "cred", "otp", "cv", "pw", "psw", "p4s", "p@s", "pin",
     "key", "authorization", "code", "2fa", "mfa", "zip", "7z", "redis", "mysqldump",
+    "wifi", "wi-fi", "wi fi", "safe word", "safeword", "p:", "p=", "p =", "p :", "p/w",
+    "pasw", "pssw", "log in", "log-in", "login", "sign in", "sign-in", "signin", " /",
     # Other languages, in ASCII. The rest are checked whenever text is not ASCII.
     "kennwort", "contras", "clave", "senha", "wachtwoord", "losenord", "adgangskode",
     "salasana", "haslo", "heslo", "parola", "sifre",
@@ -437,7 +447,8 @@ _NOTHING_LEFT_RE = re.compile(r"[^\w\ue000]*$")
 # Words after a label that still leave the value on the next line: "password
 # is:", "password for the router:", "api key below".
 _LABEL_TAIL_RE = re.compile(
-    r"(?i)(?:[^\n:]{0,80}:|[^\n]{0,80}\b(?:is|was|are|were|below|here|follows))[^\w\ue000]*$"
+    r"(?i)(?:[^\n:]{0,80}:|[^\n]{0,80}\b(?:is|was|are|were|below|here|follows|"
+    r"(?:been[ \t]+)?(?:set|changed|reset|updated)))[^\w\ue000]*$"
 )
 # A PIN can be split ("pin 4 8 2 1"), so every digit after the word goes. The
 # verb is the exception: "pin the version to 3.2".

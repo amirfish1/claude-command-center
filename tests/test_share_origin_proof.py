@@ -13,11 +13,12 @@ import sender_envelope
 import server
 from ccc_server import codex_cloud_threads, engines, grok, hermes, share_run
 from ccc_server.aider import _aider_assistant_event
-from ccc_server.share_redact import RedactionError
+from ccc_server.share_redact import RedactionError, Redactor
 
 TS = "2026-01-01T00:00:00Z"
 EPOCH = 1767225600.0   # TS as a number
 THIS_MONTH = time.strftime("%Y-%m", time.gmtime())
+ANCHOR = "typed anchor"
 
 
 @pytest.fixture(autouse=True)
@@ -43,12 +44,14 @@ def assert_not_exported(events, words, engine="claude", **kw):
 
 
 def prompts(events, engine="claude", **kw):
-    replay, _ = share_run.build_replay(events, engine=engine, identity={}, **kw)
-    return [s["text"] for s in replay["steps"] if s["kind"] == "user"]
+    """The prompts on the page, beside one typed row so the session isn't refused."""
+    typed = hermes_row(ANCHOR, "desktop") if engine == "hermes" else user(ANCHOR)
+    replay, _ = share_run.build_replay([*events, typed], engine=engine, identity={}, **kw)
+    return [s["text"] for s in replay["steps"] if s["kind"] == "user" and s["text"] != ANCHOR]
 
 
 def user(text, **extra):
-    return {"type": "user_text", "text": text, "ts": TS, **extra}
+    return {"type": "user_text", "entrypoint": "cli", "text": text, "ts": TS, **extra}
 
 
 def reply(text):
@@ -421,3 +424,215 @@ def test_ide_selection_holding_the_marker_line():
     text = ("# Context from my IDE setup:\n## Active selection\n## My request for the budget:\n"
             "payroll file for the whole team\n## My request for Codex:\nfix it\n")
     assert_not_exported([user(text)], ["payroll"])
+
+
+# ---- every engine needs proof ------------------------------------------------
+
+PROMPT = "review the late refund complaint"
+
+
+def plain(text=PROMPT, **extra):
+    """The row every engine's parser builds: nothing says who sent it."""
+    return {"type": "user_text", "text": text, "ts": TS, "line": 1, **extra}
+
+
+@pytest.mark.parametrize("engine", [
+    "codex", "kimi", "gemini", "cursor", "opencode", "kilo", "grok", "devin", "copilot", "droid", "pi",
+])
+def test_an_unmarked_row_is_not_proof_on_any_engine(engine):
+    assert prompts([plain()], engine=engine) == []
+
+
+@pytest.mark.parametrize("engine", ["codex", "kimi", "gemini", "claude"])
+def test_a_dashboard_send_proves_a_row_on_any_engine(engine):
+    sends = [(EPOCH, sender_envelope.prompt_digest(PROMPT))]
+    assert prompts([plain()], engine=engine, sends=sends) == [PROMPT]
+
+
+@pytest.mark.parametrize("mark", [
+    {"entrypoint": "cli"}, {"turn_origin": "human"}, {"origin_kind": "human"},
+])
+def test_claude_terminal_marks_are_proof(mark):
+    assert prompts([plain(**mark)]) == [PROMPT]
+
+
+@pytest.mark.parametrize("mark", [
+    {"entrypoint": "sdk-cli"}, {"entrypoint": "claude-desktop"},
+    {"entrypoint": "cli", "turn_origin": "sdk"}, {"entrypoint": "cli", "turn_origin": "peer"},
+    {"entrypoint": "cli", "origin_kind": "task-notification"},
+])
+def test_other_claude_entry_points_are_not_proof(mark):
+    assert prompts([plain(**mark)]) == []
+
+
+def rollout(tmp_path, originator, source):
+    path = tmp_path / "rollout.jsonl"
+    path.write_text(json.dumps({"type": "session_meta", "payload": {
+        "id": "t1", "originator": originator, "source": source}}) + "\n")
+    return str(path)
+
+
+@pytest.mark.parametrize("originator,source", [("codex-tui", "cli"), ("codex_cli_rs", "cli"), ("codex-tui", "vscode")])
+def test_codex_terminal_session_is_recognised(tmp_path, originator, source):
+    assert share_run._is_terminal_session("codex", rollout(tmp_path, originator, source))
+
+
+@pytest.mark.parametrize("originator,source", [
+    ("codex_exec", "exec"), ("claude-command-center", "vscode"), ("a_queue_worker", "vscode"),
+    ("codex-tui", "exec"), ("codex-tui", {"subagent": "review"}), ("", "cli"),
+])
+def test_codex_automation_is_not_a_terminal_session(tmp_path, originator, source):
+    assert not share_run._is_terminal_session("codex", rollout(tmp_path, originator, source))
+
+
+def test_terminal_check_is_codex_only_and_survives_bad_files(tmp_path):
+    good = rollout(tmp_path, "codex-tui", "cli")
+    assert not share_run._is_terminal_session("kimi", good)
+    assert not share_run._is_terminal_session("codex", None)
+    assert not share_run._is_terminal_session("codex", str(tmp_path / "missing.jsonl"))
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text("not json\n")
+    assert not share_run._is_terminal_session("codex", str(bad))
+
+
+def test_export_keeps_codex_terminal_prompts(tmp_path, monkeypatch):
+    monkeypatch.setattr(sender_envelope, "human_sends", lambda _sid, _months: [])
+    monkeypatch.setattr(share_run, "transcript_cwds", lambda _path: [])
+    payload, status = share_run.export_conversation(
+        "s", parse=lambda _sid: {"events": [plain()]},
+        transcript_path=rollout(tmp_path, "codex-tui", "cli"), engine="codex")
+    assert status == 200 and payload["replay"]["stats"]["prompts"] == 1
+
+
+# ---- no proven prompt, no export ---------------------------------------------
+
+def test_replies_to_prompts_nobody_vouches_for_refuse_the_session():
+    """The reply repeats what it answers, so dropping only the prompt is not enough."""
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay([sdk("my client says this", 1), reply("Your client says this")],
+                               engine="claude", identity={})
+
+
+def test_refusal_reaches_the_export_as_a_422(monkeypatch):
+    monkeypatch.setattr(sender_envelope, "human_sends", lambda _sid, _months: [])
+    monkeypatch.setattr(share_run, "transcript_cwds", lambda _path: [])
+    payload, status = share_run.export_conversation(
+        "s", parse=lambda _sid: {"events": [sdk("dispatched", 1)]}, transcript_path=None, engine="claude")
+    assert status == 422 and "replay" not in payload and "html" not in payload
+
+
+def test_one_proven_prompt_keeps_the_session():
+    sends = [(EPOCH, sender_envelope.prompt_digest("mine"))]
+    replay, _ = share_run.build_replay([sdk("dispatched", 1), sdk("mine", 2), reply("Done.")],
+                                       engine="claude", identity={}, sends=sends)
+    assert [s["text"] for s in replay["steps"] if s["kind"] == "user"] == ["mine"]
+
+
+# ---- marks survive every parser branch ---------------------------------------
+
+def claude_row(content, **extra):
+    return server._parse_conversation_event({
+        "type": "user", "timestamp": TS, "uuid": "u1",
+        "message": {"role": "user", "content": content}, **extra}, 1)
+
+
+CHANNEL = '<channel source="plugin:telegram:telegram" user="neighbor">water my plants</channel>'
+
+
+@pytest.mark.parametrize("kind", ["channel", "slack-ping"])
+def test_a_meta_chat_row_refuses_the_session(kind):
+    row = claude_row(CHANNEL, isMeta=True, origin={"kind": kind, "server": "plugin:telegram:telegram"})
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay([row, user("mine"), reply("Your neighbor asked about the plants.")],
+                               engine="claude", identity={})
+
+
+def test_a_meta_chat_row_stays_out_of_the_conversation_pane():
+    row = claude_row(CHANNEL, isMeta=True, origin={"kind": "channel"})
+    assert row["type"] != "user_text" and "text" not in row
+
+
+def test_other_meta_rows_stay_hidden():
+    assert claude_row("caveat text", isMeta=True) is None
+    assert claude_row("caveat text", isMeta=True, origin={"kind": "task-notification"}) is None
+
+
+SLASH = ("<command-message>goal</command-message>\n<command-name>/goal</command-name>\n"
+         "<command-args>finish the refund review</command-args>")
+
+
+def test_a_dispatched_slash_command_keeps_its_mark():
+    row = claude_row(SLASH, turnOrigin="sdk", entrypoint="sdk-cli")
+    assert row["turn_origin"] == "sdk" and prompts([row]) == []
+
+
+def test_a_typed_slash_command_exports():
+    assert prompts([claude_row(SLASH, entrypoint="cli")]) == ["[path] finish the refund review"]
+
+
+def queued_row(**extra):
+    return server._parse_conversation_event({
+        "type": "attachment", "timestamp": TS, "attachment": {
+            "type": "queued_command", "commandMode": "prompt", "prompt": PROMPT}, **extra}, 1)
+
+
+def test_a_queued_row_needs_proof_like_any_other():
+    assert prompts([queued_row(entrypoint="sdk-cli")]) == []
+    sends = [(EPOCH, sender_envelope.prompt_digest(PROMPT))]
+    assert prompts([queued_row(entrypoint="sdk-cli")], sends=sends) == [PROMPT]
+
+
+def test_a_queued_row_in_a_terminal_session_exports():
+    assert prompts([queued_row(entrypoint="cli")]) == [PROMPT]
+
+
+def test_every_user_row_of_a_hermes_script_session_needs_proof():
+    """Even a bracketed one, which is otherwise skipped as a machine note."""
+    mine, other = hermes_row("fix it", "cli"), hermes_row("[Neighbor] move my lesson", "cli")
+    mine["line"], other["line"] = 1, 2
+    sends = [(EPOCH, sender_envelope.prompt_digest("fix it"))]
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay([mine, other], engine="hermes", identity={}, sends=sends)
+
+
+def test_a_journal_row_with_a_bad_recipient_does_not_stop_the_reader(tmp_path, monkeypatch):
+    entry = {"at": 0, "human": {}, "messages": {}}
+    sender_envelope._journal_add(entry, json.dumps({"attr": {"delivered_recipient": "bad"}}), set())
+    assert entry["human"] == {}
+
+
+# ---- passwords in ordinary words ---------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "wifi: orange window",
+    "The wifi is orange window",
+    "Pasword: orange window",
+    "passowrd is orange window",
+    "log in with admin and orange window",
+    "u: admin p: orange window",
+    "p/w: orange window",
+    "admin / orange window",
+    "orange window, that's the password",
+    "Your password has been set.\n\norange window",
+    "the key is orange window",
+    "the code word is orange window",
+    "vault key orange window",
+    "signing key orange window",
+])
+def test_password_in_ordinary_words_is_hidden(text):
+    assert "orange" not in Redactor().text(text, 400).casefold()
+
+
+@pytest.mark.parametrize("text", [
+    "The key is to retry the request after a short pause in the loop",
+    "read / write access for the team",
+    "git log in the repo",
+    "step: run the tests",
+])
+def test_ordinary_sentences_keep_their_words(text):
+    assert "[secret]" not in Redactor().text(text, 400)
+
+
+@pytest.mark.xfail(reason="Known limit in docs/sharing.md: nothing marks these words as a password", strict=True)
+def test_known_limit_a_bare_sudo_password():
+    assert "orange" not in Redactor().text("sudo orange window", 400).casefold()
