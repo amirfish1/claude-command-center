@@ -428,6 +428,41 @@ test('existing install does not auto-claim', async () => {
   }
 });
 
+test('agent history skips every first-run screen so the board shows', async () => {
+  const page = await openFixture();
+  try {
+    const state = await page.evaluate(async () => {
+      window.__cccEnginesFirstRun = true;
+      window.cccPopups = { allowed: () => true };
+      window.cccOnboarding._setDriver({
+        freshInstall: async () => ({ ok: true, fresh_install: false, has_history: true }),
+      });
+      const claimed = await window.cccOnboarding.claimFirstRun();
+      return {
+        claimed,
+        engines: window.__cccEnginesFirstRun,
+        tour: localStorage.getItem('ccc-tour-done'),
+      };
+    });
+    assert.deepEqual(state, { claimed: false, engines: false, tour: 'skipped-after-welcome' });
+  } finally {
+    await page.close();
+  }
+});
+
+test('leaving the welcome does not start the guide on its own', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => window.cccOnboarding.open());
+    await page.evaluate(() => [...document.querySelectorAll('#cccMomentZero button')]
+      .find((b) => b.textContent === 'I will explore on my own').click());
+    const tour = await page.evaluate(() => localStorage.getItem('ccc-tour-done'));
+    assert.equal(tour, 'skipped-after-welcome');
+  } finally {
+    await page.close();
+  }
+});
+
 test('?onboarding=1 force-opens even for a returning user', async () => {
   const page = await openFixture('?onboarding=1');
   try {

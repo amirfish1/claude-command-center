@@ -251,16 +251,26 @@ clone_into_install_dir() {
 # Launch + open browser
 # ---------------------------------------------------------------------------
 
-# The URL the browser opens once the port answers. First-time installs land
-# on the guided setup tour (/?onboarding=1); anyone who already finished
-# onboarding gets the dashboard itself. The check reads the same
-# onboarding.json the dashboard writes, so re-running this installer after a
-# finished setup does not replay the tour, while an interrupted setup picks
-# up where it left off.
+# Same signal as ccc_server/moment_zero.py: this person already runs an agent.
+has_agent_history() {
+  [ -n "$(find "$HOME/.claude/projects" -mindepth 2 -maxdepth 2 -name '*.jsonl' -print -quit 2>/dev/null)" ] && return 0
+  [ -n "$(find "$HOME/.codex/sessions" -type f -print -quit 2>/dev/null)" ]
+}
+
+# The URL the browser opens once the port answers. Someone with no agent
+# history lands on the guided setup tour (/?onboarding=1). Anyone who already
+# finished onboarding, or who already has Claude Code or Codex sessions, gets
+# the dashboard itself: their own sessions on the board are the first thing
+# worth seeing, and the tour's free-model setup is not for them. The check
+# reads the same onboarding.json the dashboard writes, so re-running this
+# installer after a finished setup does not replay the tour, while an
+# interrupted setup picks up where it left off.
 dashboard_open_url() {
   local base="${1:-$DASHBOARD_URL}"
   local state="$HOME/.claude/command-center/onboarding.json"
   if [ -f "$state" ] && grep -Eq '"completed"[[:space:]]*:[[:space:]]*true' "$state" 2>/dev/null; then
+    printf '%s' "$base"
+  elif has_agent_history; then
     printf '%s' "$base"
   else
     printf '%s/?onboarding=1' "$base"

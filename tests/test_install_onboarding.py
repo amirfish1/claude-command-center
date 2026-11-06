@@ -44,6 +44,21 @@ def _write_state(home: Path, text: str) -> None:
     (state_dir / "onboarding.json").write_text(text)
 
 
+def test_claude_history_opens_the_dashboard_not_the_tour(tmp_path):
+    project = tmp_path / ".claude" / "projects" / "-home-me-app"
+    project.mkdir(parents=True)
+    assert _open_url(tmp_path).endswith("/?onboarding=1")
+    (project / "abc.jsonl").write_text("{}\n")
+    assert _open_url(tmp_path) == "http://localhost:8090"
+
+
+def test_codex_history_opens_the_dashboard_not_the_tour(tmp_path):
+    day = tmp_path / ".codex" / "sessions" / "2026" / "11" / "05"
+    day.mkdir(parents=True)
+    (day / "rollout.jsonl").write_text("{}\n")
+    assert _open_url(tmp_path) == "http://localhost:8090"
+
+
 def test_install_sh_is_valid_bash():
     subprocess.run(["bash", "-n", str(INSTALL_SH)], check=True)
 

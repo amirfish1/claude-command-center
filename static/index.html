@@ -4983,6 +4983,16 @@
     if (last && (Date.now() - last) < RENAG_AFTER_MS) return;
   } catch (_) {}
 
+  // Not on the very first load: someone who just installed has not seen the
+  // board yet, so asking them to install it again is noise.
+  try {
+    const FIRST_SEEN_KEY = 'ccc-pwa-first-seen';
+    if (!localStorage.getItem(FIRST_SEEN_KEY)) {
+      localStorage.setItem(FIRST_SEEN_KEY, String(Date.now()));
+      return;
+    }
+  } catch (_) {}
+
   // Platform sniff — only used to pick the right copy. Browsers don't all
   // expose the same install affordance, so we tailor the instructions:
   //   • iOS Safari   → Share sheet → Add to Home Screen

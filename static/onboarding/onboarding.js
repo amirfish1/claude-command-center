@@ -23,6 +23,7 @@
   const LS_JOB = 'ccc-onboarding-job';
   const LS_FIRST_TASK = 'ccc-onboarding-first-task';
   const LS_ENG_DONE = 'ccc-engines-first-run-done';
+  const LS_TOUR_DONE = 'ccc-tour-done';
   const LS_SOUNDS = 'ccc-sounds-enabled';
   const LS_SKIPPED = 'ccc-onboarding-skipped-steps';
   const POLL_MS = 900;
@@ -1105,6 +1106,14 @@
     try { window.__cccEnginesFirstRun = false; } catch (_) {}
   }
 
+  // The dashboard auto-starts the First Flight guide on any browser that has
+  // not seen it. Anyone leaving Moment Zero has already had their welcome, and
+  // the finale offers the guide as a choice. Settings > Take the tour still
+  // starts it.
+  function skipAutoTour() {
+    if (!lsGet(LS_TOUR_DONE)) lsSet(LS_TOUR_DONE, 'skipped-after-welcome');
+  }
+
   function open(opts) {
     opts = opts || {};
     if (S.open) return;
@@ -1142,6 +1151,7 @@
   function close() {
     if (!S.open) return;
     S.open = false;
+    skipAutoTour();
     clearTimeout(S.jobTimer);
     S.jobTimer = null;
     clearTimeout(S.firstTaskTimer);
@@ -1193,6 +1203,12 @@
           markDone();
           open();
           return true;
+        }
+        // Already runs an agent: their sessions on the board are the first
+        // thing worth seeing, so no setup screen or guide goes on top of it.
+        if (d && d.has_history) {
+          markDone();
+          skipAutoTour();
         }
         return false;
       })
