@@ -1,7 +1,12 @@
 /* Question tags: turns `[Q<n>:<slug>]` in session messages into chips.
  * Tapping a chip shows the first message that carried the tag (the full
- * explanation) without scrolling up, and a pill lists questions still open.
+ * explanation) without scrolling up.
  * Backed by GET /api/question-tags (ccc_server/question_tags.py).
+ *
+ * The floating pill is NOT a tag counter. Its number is the Decisions 2 count
+ * (needs_answer_count from GET /api/decision-inbox/requests, the same field that
+ * badges the tab), and clicking it opens Decisions 2: the one queue the owner
+ * works through. Tags found in transcripts are history (see classify()).
  *
  * A question a ticket blocked on goes by that ticket instead: its chip shows
  * the ticket ref and opens the ticket, and "Needs you" gains Talk to worker.
@@ -28,6 +33,11 @@
   var POLL_MS = 60000;
   var index = { byN: {}, list: [], scanning: false, at: 0 };
   var loadGeneration = 0;
+  // The owner queue (Decisions 2). count stays null until a verified read, and
+  // keeps its last verified value while a refresh is in flight or unverified.
+  var queue = { count: null, rows: [], at: 0 };
+  var queueGeneration = 0;
+  var RECENT_MS = 48 * 3600 * 1000;
 
   // known(n) gates the short forms; without it only full tags split out.
   function splitTags(text, known) {
@@ -47,6 +57,62 @@
   function knownQuestion(n) { return !!index.byN[n]; }
 
   function openQuestions(list) { return (list || []).filter(function (q) { return !q.answered; }); }
+
+  // Tag numbers and ticket refs the owner queue already carries.
+  function queueKeys(rows) {
+    var keys = { n: {}, ref: {} };
+    (rows || []).forEach(function (r) {
+      if (r.origin_id) keys.ref[r.origin_id] = true;
+      (r.aliases || []).concat([(r.body || '').trim()]).forEach(function (t) {
+        var m = /^\[Q(\d+)[:\]]/.exec(t || '');
+        if (m) keys.n[m[1]] = true;
+      });
+    });
+    return keys;
+  }
+
+  function lastAsked(q) {
+    return (q.mentions || []).reduce(function (a, m) { return m.ts > a ? m.ts : a; }, q.first.ts);
+  }
+
+  // Where one transcript tag stands relative to the owner queue:
+  //   answered  settled
+  //   queue     in Decisions 2 (counted by the pill)
+  //   ticket    tied to an open ticket that is not an owner wait
+  //   recent    asked in the last 48h, never reached the queue (may be live)
+  //   history   older and unresolved; nothing tracks it as a to-do
+  function classify(q, keys, now) {
+    if (q.answered) return 'answered';
+    if (keys.n[q.n] || (q.ticket && keys.ref[q.ticket.ref])) return 'queue';
+    if (q.ticket && q.ticket.open) return 'ticket';
+    var at = Date.parse(lastAsked(q));
+    return !isNaN(at) && (now || Date.now()) - at < RECENT_MS ? 'recent' : 'history';
+  }
+
+  function groups(list, rows, now) {
+    var keys = queueKeys(rows), out = { queue: [], ticket: [], recent: [], history: [] };
+    (list || []).forEach(function (q) { var g = classify(q, keys, now); if (out[g]) out[g].push(q); });
+    return out;
+  }
+
+  // The pill's number: Decisions 2's, nothing else.
+  function pillCount() { return queue.count; }
+
+  function loadQueue() {
+    var generation = ++queueGeneration;
+    return fetch('/api/decision-inbox/requests').then(function (r) { return r.json(); }).then(function (d) {
+      if (generation !== queueGeneration || !d || !d.ok) return queue;
+      var rows = d.requests || [];
+      // An unverified source reports no count: keep what was last verified.
+      if (d.source_current === true && Number.isInteger(d.needs_answer_count) && d.needs_answer_count >= 0) {
+        queue.count = d.needs_answer_count;
+        queue.rows = rows.filter(function (r) { return r.needs_answer; });
+        queue.at = Date.now();
+      }
+      updatePill();
+      return queue;
+    }).catch(function () { return queue; });
+  }
 
   function chipify(rootEl, skipPaint) {
     var hosts = rootEl.matches && rootEl.matches(TARGETS) ? [rootEl] : [];
@@ -231,7 +297,7 @@
     });
     pill.addEventListener('click', function (ev) {
       if (suppressClick) { suppressClick = false; ev.preventDefault(); return; }
-      load(true).then(showPanel);
+      openQueue();
     });
     window.addEventListener('blur', function () { clearTimeout(timer); drag = null; });
     window.addEventListener('resize', positionPill);
@@ -242,6 +308,38 @@
   }
 
   function questionName(q) { return q.ticket ? q.ticket.ref : q.tag; }
+
+  // The pill and the "Open questions" menu items go to the one queue.
+  function openQueue() {
+    if (sheet) sheet.hidden = true;
+    var tab = document.querySelector('[data-conv-tab="decisions2"]');
+    try {
+      if (tab) tab.click();
+      else if (window.CCCNavigation && window.CCCNavigation.setTab) window.CCCNavigation.setTab('decisions2');
+      else return load(true).then(showPanel);
+    } catch (_) { return load(true).then(showPanel); }
+  }
+
+  // "- [Q9:gap-month] If a member skips..." -> "If a member skips...".
+  function plain(text) {
+    return String(text || '').replace(/\[Q\d+(?::[a-z0-9-]+)?\]/g, '').replace(/[#*`]/g, '')
+      .replace(/^[\s\-:.,;|]+/, '').replace(/\s*\|\s*/g, ' · ').replace(/\s+/g, ' ').trim();
+  }
+  function humanSlug(q) { return String(q.slug || '').replace(/-/g, ' '); }
+  function headline(q) {
+    if (q.ticket && q.ticket.title) return q.ticket.title;
+    // The tag's own line, or the next ones when it is only a label ("Stramp: [Q1:x], [Q2:y].").
+    var lines = q.first.text.split('\n'), at = Math.max(0, lines.findIndex(function (l) { return l.indexOf(q.tag) >= 0; }));
+    for (var i = at; i < Math.min(lines.length, at + 4); i++) {
+      var t = plain(lines[i]);
+      if (/^(NEXT_ACTION|NEXT_STEP_USER|COMPLETION|DID|INSIGHT)\b/.test(t)) continue;  // footer lines that merely mention a tag
+      if (t.replace(/[^A-Za-z]/g, '').length >= 12) return t.slice(0, 140);
+    }
+    return humanSlug(q);
+  }
+  function fmtDay(ts) {
+    try { return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); } catch (_) { return ''; }
+  }
 
   // A reply chip for a question a ticket is waiting on must answer the ticket:
   // a chat message reaches the worker but leaves the ticket blocked. Returns
@@ -260,7 +358,7 @@
         q.ticket.open = false;
         q.answered = true;
         paintChips();
-        updatePill();
+        loadQueue();
         return q.ticket.ref;
       });
     });
@@ -296,6 +394,7 @@
       var jump = ev.target.closest('[data-qjump]');
       if (jump) { jumpTo(+jump.getAttribute('data-qjump')); return; }
       if (ev.target.closest('[data-qlist]')) { showPanel(); return; }
+      if (ev.target.closest('[data-qqueue]')) { openQueue(); return; }
       var ticket = ev.target.closest('[data-qticket]');
       if (ticket) { sheet.hidden = true; window.cccOpenTicket(ticket.getAttribute('data-qticket')); return; }
       var send = ev.target.closest('[data-qsend]');
@@ -328,7 +427,14 @@
       body = '<p class="qtag-empty">' + (waiting ? 'Looking for Q' + n + '…' : 'No explanation found for Q' + n + ' yet.') + '</p>';
     } else {
       var md = typeof window.cccRenderMarkdown === 'function' ? window.cccRenderMarkdown(q.first.text) : null;
-      body = '<div class="qtag-meta">' + (q.answered ? '<span class="qtag-st qtag-st-done">answered</span>' : '<span class="qtag-st qtag-st-open">open</span>')
+      var where = classify(q, queueKeys(queue.rows));
+      body = '<div class="qtag-meta">' + ({
+        answered: '<span class="qtag-st qtag-st-done">answered</span>',
+        queue: '<span class="qtag-st qtag-st-open">waiting on you · in Decisions 2</span>',
+        ticket: '<span class="qtag-st">tied to an open ticket, not waiting on you</span>',
+        recent: '<span class="qtag-st qtag-st-open">asked recently · not in Decisions 2</span>',
+        history: '<span class="qtag-st">old history · not a to-do</span>',
+      })[where]
         + ' first asked ' + esc(fmtTs(q.first.ts)) + ' · ' + q.mentions.length + ' reminder' + (q.mentions.length === 1 ? '' : 's') + '</div>'
         + '<div class="qtag-text assistant-text-plain">' + (md || '<p style="white-space:pre-wrap">' + esc(q.first.text) + '</p>') + '</div>'
         // A ticket question is answered on the ticket: a chat reply can't unblock it.
@@ -338,8 +444,9 @@
           + '<textarea id="qtagAns" class="qtag-ans" rows="3" placeholder="Type your answer, then choose Send answer or Add to composer."></textarea>'
           + '<div class="qtag-actions"><button type="button" class="qtag-btn qtag-primary" data-qsend="' + q.n + '">Send answer</button>'
           + '<button type="button" class="qtag-btn" data-qadd="' + q.n + '">Add to composer</button>')
+        + (where === 'queue' ? '<button type="button" class="qtag-btn" data-qqueue="1">Open Decisions 2</button>' : '')
         + '<button type="button" class="qtag-btn" data-qjump="' + q.n + '">Jump to original</button>'
-        + (openQuestions(index.list).length > 1 ? '<button type="button" class="qtag-btn" data-qlist="1">All open questions</button>' : '')
+        + '<button type="button" class="qtag-btn" data-qlist="1">Question history</button>'
         + '</div><div class="qtag-added" aria-live="polite"></div>';
     }
     s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>' + (q ? esc(questionName(q)) : 'Q' + n) + '</strong>'
@@ -384,18 +491,36 @@
     }).finally(function () { sending.delete(key); button.disabled = false; });
   }
 
+  function historyRow(q) {
+    var sub = q.ticket ? plain(q.first.text).slice(0, 140) : '';
+    return '<li><button type="button" class="qtag-row" data-qshow="' + q.n + '"><span class="qtag-row-title">'
+      + (q.ticket ? '<span class="qtag-chip-static">' + esc(q.ticket.ref) + '</span> ' : '') + esc(headline(q)) + '</span>'
+      + '<span class="qtag-sub">asked ' + esc(fmtDay(q.first.ts)) + (sub && sub !== headline(q) ? ' · ' + esc(sub) : '') + '</span></button></li>';
+  }
+
+  function byRecent(a, b) { return lastAsked(b) < lastAsked(a) ? -1 : 1; }
+
+  // Not a to-do list: the record of tagged questions found in session
+  // transcripts, split by how they relate to the owner queue.
   function showPanel() {
     activeQuestion = null;
     var s = ensureSheet();
-    var open = openQuestions(index.list);
-    s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>Open questions (' + open.length + ')</strong>'
+    var g = groups(index.list, queue.rows);
+    var live = g.recent.concat(g.ticket).sort(byRecent), old = g.history.sort(byRecent);
+    var count = pillCount();
+    s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>Question history</strong>'
       + '<button type="button" class="qtag-close" aria-label="Close">×</button></div>'
-      + '<button type="button" class="qtag-btn qtag-pill-toggle" data-qpill-toggle>' + (pillHidden ? 'Show floating question button' : 'Hide floating question button') + '</button>'
-      + (open.length ? '<ul class="qtag-list">' + open.map(function (q) {
-        var first = (q.first.text.split('\n').find(function (l) { return l.indexOf(q.tag) >= 0; }) || q.first.text).replace(/[#*`]/g, '').slice(0, 140);
-        return '<li><button type="button" class="qtag-row" data-qshow="' + q.n + '"><span class="qtag-chip-static">' + esc(questionName(q)) + '</span>'
-          + '<span class="qtag-sub">' + esc(first) + '</span></button></li>';
-      }).join('') + '</ul>' : '<p class="qtag-empty">' + (index.scanning ? 'Building the question index (first run only)…' : 'Nothing waiting on you.') + '</p>')
+      + '<p class="qtag-intro">Your to-do list is <strong>Decisions 2</strong>'
+      + (count === null ? '.' : ': ' + (count ? count + ' need' + (count === 1 ? 's' : '') + ' you' : 'nothing needs you') + '.')
+      + ' This page is only a record of questions found in session transcripts.</p>'
+      + '<button type="button" class="qtag-btn qtag-primary" data-qqueue="1">Open Decisions 2</button>'
+      + '<button type="button" class="qtag-btn qtag-pill-toggle" data-qpill-toggle style="margin-top:8px">' + (pillHidden ? 'Show floating question button' : 'Hide floating question button') + '</button>'
+      + (live.length ? '<h4 class="qtag-h">Asked in a session, not in Decisions 2 (' + live.length + ')</h4>'
+        + '<p class="qtag-note">Recent questions, or ones tied to an open ticket that is not waiting on you. Not counted in the number.</p>'
+        + '<ul class="qtag-list">' + live.map(historyRow).join('') + '</ul>' : '')
+      + (old.length ? '<details class="qtag-old"><summary>Older tagged questions (' + old.length + ') — history, not a to-do list</summary>'
+        + '<ul class="qtag-list">' + old.map(historyRow).join('') + '</ul></details>' : '')
+      + (!live.length && !old.length ? '<p class="qtag-empty">' + (index.scanning ? 'Building the question index (first run only)…' : 'No unresolved tagged questions outside Decisions 2.') + '</p>' : '')
       + '</div>';
     s.hidden = false;
   }
@@ -454,20 +579,22 @@
 
   function updatePill() {
     if (!pill) return;
-    var n = openQuestions(index.list).length;
-    pill.hidden = n === 0 || pillHidden;
-    pill.textContent = '? ' + n;
-    pill.title = n + ' open question' + (n === 1 ? '' : 's') + ' — drag to move; hold to hide';
+    var n = pillCount();
+    var known = n !== null;
+    pill.hidden = !known || n === 0 || pillHidden;
+    var label = (known ? n : 0) + ' need' + (n === 1 ? 's' : '') + ' you';
+    pill.textContent = '? ' + (known ? n : '');
+    pill.title = label + ' in Decisions 2 — click to answer; drag to move; hold for options';
     pill.setAttribute('aria-label', pill.title);
     positionPill();
     // Menu copies (phones fold the pill into the ⋮ menus) and the count
     // badge on those menus' buttons.
     document.querySelectorAll('[data-qtag-menu]').forEach(function (el) {
-      el.hidden = n === 0;
-      el.textContent = 'Open questions (' + n + ')';
+      el.hidden = !known || n === 0;
+      el.textContent = 'Decisions 2 (' + (known ? n : 0) + ')';
     });
     document.querySelectorAll('[data-qtag-badge]').forEach(function (el) {
-      el.setAttribute('data-qtag-count', n ? String(n) : '');
+      el.setAttribute('data-qtag-count', known && n ? String(n) : '');
     });
   }
 
@@ -539,7 +666,14 @@
     mo.observe(document.body, { childList: true, subtree: true, characterData: true });
     chipify(document.body);
     load(true);
-    setInterval(function () { if (!document.hidden) load(true); }, POLL_MS);
+    loadQueue();
+    // Decisions 2 reports its own count the moment it changes (an answer, a
+    // close); take it so the pill never lags the tab badge, then confirm.
+    window.addEventListener('ccc:decision-count', function (ev) {
+      var c = ev.detail && ev.detail.count;
+      if (Number.isInteger(c) && c >= 0) { queue.count = c; updatePill(); loadQueue(); }
+    });
+    setInterval(function () { if (!document.hidden) { load(true); loadQueue(); } }, POLL_MS);
   }
 
   function open(n, sid) {
@@ -547,5 +681,11 @@
     lookup(n, 0, activeQuestion);
   }
 
-  return { open: open, answerTicket: answerTicket, boot: boot, splitTags: splitTags, openQuestions: openQuestions, chipify: chipify };
+  return {
+    open: open, answerTicket: answerTicket, boot: boot, splitTags: splitTags, openQuestions: openQuestions, chipify: chipify,
+    classify: classify, groups: groups, queueKeys: queueKeys, plain: plain,
+    // Test seams: the pill number and the queue it reads.
+    _setQueue: function (count, rows) { queue.count = count; queue.rows = rows || []; },
+    _pillCount: pillCount,
+  };
 });

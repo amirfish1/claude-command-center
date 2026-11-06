@@ -85,6 +85,7 @@
     if (!native || event.data.type !== 'ccc:decision-count') return;
     const value = event.data.count;
     count = Number.isInteger(value) && value >= 0 ? value : null; badge();
+    window.dispatchEvent(new CustomEvent('ccc:decision-count', {detail:{count}}));
   });
   const list = document.getElementById('convList');
   if (list) new MutationObserver(mount).observe(list, {childList:true});
