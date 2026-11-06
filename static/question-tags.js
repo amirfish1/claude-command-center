@@ -328,7 +328,7 @@
   function humanSlug(q) { return String(q.slug || '').replace(/-/g, ' '); }
   function headline(q) {
     if (q.ticket && q.ticket.title) return q.ticket.title;
-    // The tag's own line, or the next ones when it is only a label ("Stramp: [Q1:x], [Q2:y].").
+    // The tag's own line, or the next ones when it is only a label ("Topic: [Q1:x], [Q2:y].").
     var lines = q.first.text.split('\n'), at = Math.max(0, lines.findIndex(function (l) { return l.indexOf(q.tag) >= 0; }));
     for (var i = at; i < Math.min(lines.length, at + 4); i++) {
       var t = plain(lines[i]);
