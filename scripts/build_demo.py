@@ -33,6 +33,7 @@ SKIP_NAMES = {"sw.js"}
 DEMO_HEAD = """<meta charset="utf-8">
 <!-- try-demo: invented data and an in-browser fake backend. Nothing here talks to a server. -->
 <script src="demo/dataset.js"></script>
+<script src="demo/panels.js"></script>
 <script src="demo/backend.js"></script>
 <link rel="stylesheet" href="demo/demo.css">
 <script src="demo/tour.js" defer></script>
@@ -48,7 +49,18 @@ def relativize(text):
     # Repo avatars are <img> tags, which no fetch shim sees. A blank image keeps
     # the initials showing without a 404 per repo.
     text = text.replace('<img src="/api/repo/avatar?repo_path=', '<img src="demo/no-avatar.svg?repo_path=')
+    text = text.replace("url:'/decision-inbox.html'", "url:'static/decision-inbox.html'")
     return ABSOLUTE_STATIC.sub(lambda m: m.group(1) + "static/", text)
+
+
+# Pages the app embeds in an iframe. They sit in static/ next to their scripts, so
+# "/static/x" becomes "x", and a shim sends their fetches to the parent's fake backend.
+FRAME_PAGES = {"decision-inbox.html"}
+
+
+def frame_page(text):
+    text = ABSOLUTE_STATIC.sub(lambda m: m.group(1), text)
+    return text.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n<script src="../demo/frame.js"></script>', 1)
 
 
 def build(out_dir):
@@ -62,7 +74,9 @@ def build(out_dir):
             continue
         dest = out_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if src.suffix in TEXT_SUFFIXES:
+        if src.name in FRAME_PAGES:
+            dest.write_text(frame_page(src.read_text(encoding="utf-8")), encoding="utf-8")
+        elif src.suffix in TEXT_SUFFIXES:
             dest.write_text(relativize(src.read_text(encoding="utf-8")), encoding="utf-8")
         else:
             shutil.copyfile(src, dest)

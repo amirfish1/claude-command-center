@@ -29,9 +29,9 @@ body { margin-top: var(--try-demo-h) !important; }
 /* These need a machine, a queue or account data the demo does not invent. */
 #cccProductivityPill, #cccSystemPill, #cccThroughputPill, #voiceTalkBtn,
 #cccSavingsTicker, #shareCccBtn, #cccVersionLabel, .speaker-tools, .conv-scroll-speak-btn,
-.mobile-nav-btn[data-mobile-nav="workers"], [data-rail-tab="queue"],
+[data-rail-tab="queue"],
 .conv-row-read, .mic-btn, .ccc-side-nav .add, .ccc-side-nav a[href*="q2"], .ccc-side-nav button:not(.add),
-[data-conv-tab="workers"], [data-conv-tab="decisions"], [data-conv-tab="decisions2"] { display: none !important; }
+[data-conv-tab="decisions2"] { display: none !important; }
 
 .ccc-side-nav { top: var(--try-demo-h) !important; }
 

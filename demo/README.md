@@ -19,9 +19,11 @@ node scripts/verify-try-demo.js --out out/try-demo-shots
 for path rewrites, so the demo follows the app with no fixture snapshot to
 refresh. When the UI calls a new endpoint, `window.__demoMisses` lists it.
 
-Jobs shows invented scheduled jobs. Workers, Queue and the two Decisions tabs
-are still hidden: Decisions loads separate pages with their own data, and
-Workers and Queue need ticket and worker data the demo does not invent yet.
+Jobs, Workers and Decisions show invented data (`panels.js` holds the decision
+cards, queues, workers and tickets). Decisions is an embedded page; `frame.js`
+sends its requests to the parent page's fake backend. Decisions 2 and the Queue
+panel are still hidden: Decisions 2 needs a revisioned question feed and Queue
+needs a full ticket model.
 Voice is hidden too. Settings pages that configure a real machine show a short
 install note instead of an error.
 

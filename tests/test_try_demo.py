@@ -29,6 +29,14 @@ class TryDemoBuild(unittest.TestCase):
         self.assertLess(backend, self.index.index("<script>"))
         self.assertLess(backend, self.index.index("static/app.js"))
 
+    def test_decisions_frame_runs_without_a_server(self):
+        self.assertIn("static/decision-inbox.html", (self.out / "static" / "decision-tab.js").read_text(encoding="utf-8"))
+        page = (self.out / "static" / "decision-inbox.html").read_text(encoding="utf-8")
+        self.assertIn('src="../demo/frame.js"', page)
+        self.assertNotIn("/static/", page)
+        self.assertTrue((self.out / "demo" / "panels.js").is_file())
+        self.assertLess(self.index.index('src="demo/panels.js"'), self.index.index('src="demo/backend.js"'))
+
     def test_bundle_has_no_root_absolute_static_paths(self):
         for path in [self.out / "index.html", *self.out.glob("static/*.js"), *self.out.glob("static/*.css")]:
             text = path.read_text(encoding="utf-8")

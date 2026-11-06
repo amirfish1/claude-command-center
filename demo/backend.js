@@ -280,8 +280,6 @@
       { queue: 'SHOP', auto_drain: true, pins: {}, effective: { engine: 'claude' } },
       { queue: 'TEA-OPS', auto_drain: false, pins: {}, effective: { engine: 'claude' } }] },
     '/api/allowances': { ok: true, rows: [] },
-    '/api/queue/list': { ok: true, queues: [] },
-    '/api/queue/status': { ok: true, items: [] },
     '/api/model-picker/picks': { ok: true, picks: [] },
     '/api/secrets/pending': { ok: true, requests: [] },
     '/api/notify/pending': { ok: true, items: [] },
@@ -322,7 +320,6 @@
     '/api/throughput/daily': { ok: true, days: [] },
     '/api/throughput/history': { ok: true, history: [] },
     '/api/vault': { ok: true, entries: [] },
-    '/api/wt/workers': { ok: true, workers: [] },
     '/api/sessions/children': { ok: true, children: [] },
     '/api/sessions/family': { ok: true, sessions: [] },
     '/api/session/spawn-timeline': { ok: true, events: [] },
@@ -380,6 +377,8 @@
       headless_present: s.state === 'working' };
   }
   function answer(path, q, method, body) {
+    const extra = window.__tryDemoExtra;
+    if (extra) { const x = method === 'GET' ? extra.get(path, q) : extra.post(path, body); if (x !== undefined) return x; }
     if (method !== 'GET') return post(path, body);
     if (path === '/api/conversations/list' || path === '/api/conversations/all') {
       const rows = snapshot();

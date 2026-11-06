@@ -185,6 +185,28 @@ const rowText = (page, sid) => page.evaluate((id) => {
     const jobsText = await page.$eval('#sidebarJobsHost', (e) => e.innerText);
     check('Jobs tab shows invented jobs', /Link checker/.test(jobsText) && !/could not|unavailable/i.test(jobsText), jobsText.replace(/\s+/g, ' ').slice(0, 70));
     await page.screenshot({ path: path.join(OUT, '09-jobs.png') });
+    // Decisions: an embedded page with its own feed. Open it, see invented cards, decide one.
+    await page.evaluate(() => document.querySelector('[data-conv-tab="decisions"]').click());
+    await sleep(2500);
+    const decFrame = page.frames().find((f) => /decision-inbox/.test(f.url()));
+    const decText = decFrame ? await decFrame.evaluate(() => document.body.innerText) : '';
+    check('Decisions tab lists invented decisions', !!decFrame && /refund-window/i.test(decText) && /Gift wrap/i.test(decText) && !/Cannot refresh|HTTP 404|undefined/i.test(decText), decText.replace(/\s+/g, ' ').slice(0, 70));
+    await page.screenshot({ path: path.join(OUT, '10-decisions.png') });
+    if (decFrame) {
+      const before = await decFrame.evaluate(() => document.getElementById('openCount').innerText);
+      await decFrame.evaluate(() => { document.querySelector('.decision-row summary').click(); });
+      await sleep(400);
+      await decFrame.evaluate(() => document.querySelector('button[data-decide]').click());
+      await sleep(1200);
+      const after = await decFrame.evaluate(() => document.getElementById('openCount').innerText);
+      check('deciding a card lowers the open count', before !== after, before + ' -> ' + after);
+    }
+    // Workers: queues with live and past workers.
+    await page.evaluate(() => document.querySelector('[data-conv-tab="workers"]').click());
+    await sleep(2500);
+    const wText = await page.evaluate(() => document.querySelector('#convList').innerText);
+    check('Workers tab shows invented queues and workers', /SHOP/.test(wText) && /shop-worker-1/.test(wText) && !/could not|unavailable|undefined/i.test(wText), wText.replace(/\s+/g, ' ').slice(0, 90));
+    await page.screenshot({ path: path.join(OUT, '11-workers.png') });
     await page.evaluate(() => [...document.querySelectorAll('[data-conv-tab]')].find((x) => /^active/i.test(x.innerText.trim())).click());
     await sleep(500);
     await sleep(400);
