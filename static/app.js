@@ -7662,8 +7662,7 @@
           .forEach(p => markPendingSendQueued(p,
             "Queued - this Devin session is open in another client "
             + "(e.g. Devin Desktop); it'll deliver when that client lets go. "
-            + "If nothing else has it open, use Restart session from the "
-            + "⋯ menu."));
+            + "If nothing else has it open, close and reopen the session."));
       }
       // A pending devin-browser sign-in (or other ACP attach failure) gets
       // the same annotation — the backend reason string already says what
@@ -17402,7 +17401,6 @@
       el.style.height = 'auto';
       const mode = (barEl && barEl.dataset.composerMode) || 'regular';
       const max = mode === 'expand' ? Math.round(window.innerHeight * 0.7)
-        : mode === 'minimize' ? 24  // matches the CSS max-height: 24px !important floor
         : 240;  // ~10 rows at our current font/line-height
       el.style.height = Math.min(el.scrollHeight, max) + 'px';
       if (view && view.scrollTop !== viewTop) view.scrollTop = viewTop;
@@ -17515,23 +17513,13 @@
     _autosizeConvInput();
   }
 
-  // Composer sizing (kimi-web maximize parity, extended for mobile).
-  // Desktop: binary regular <-> expand (30-70vh multi-line mode), unchanged.
-  // Mobile (isMobile()): tri-state cycle regular -> expand -> minimize -> regular,
-  // where minimize pins the textarea to its smallest ("regular", empty) height —
-  // see the CSS comment on .is-composer-minimized for why 24px specifically.
+  // Composer sizing (kimi-web maximize parity): regular <-> expand. There is
+  // no minimized state: it once squeezed the input to a sliver on phones.
   function setComposerMode(mode) {
     const bar = $convInputBar;
     if (!bar) return;
     bar.dataset.composerMode = mode === 'regular' ? '' : mode;
     bar.classList.toggle('is-composer-expanded', mode === 'expand');
-    bar.classList.toggle('is-composer-minimized', mode === 'minimize');
-    // Minimize means minimize — also collapse the stale-session rail/panel
-    // (inside the bar) and the Goal pill (a sibling before it, reached via
-    // the shared .conv-pane parent) so the whole composer area shrinks to
-    // just the textarea + icon row, not only the textarea itself.
-    const pane = bar.closest('.conv-pane');
-    if (pane) pane.classList.toggle('is-composer-minimized', mode === 'minimize');
     _autosizeConvInput();
   }
   // Back-compat wrapper — the send/clear hook above calls this by name.
@@ -88718,7 +88706,12 @@
   const $voiceCallBtnToggle = document.getElementById('settingsVoiceCallBtnToggle');
   function voiceApplyCallButtonPref() {
     let on = false;
-    try { on = localStorage.getItem('ccc-voice-call-button') === '1'; } catch (_) {}
+    // Runs before getVoiceMobileBtnPref's key constant is initialised, so it
+    // reads storage directly; the rule must match that function.
+    try {
+      on = localStorage.getItem('ccc-voice-call-button') === '1'
+        && localStorage.getItem('ccc-voice-mobile-btn') !== '0';
+    } catch (_) {}
     document.body.classList.toggle('voice-call-btn-off', !on);
     if ($voiceCallBtnToggle) {
       $voiceCallBtnToggle.classList.toggle('is-on', on);
@@ -88728,8 +88721,7 @@
   }
   if ($voiceCallBtnToggle) $voiceCallBtnToggle.addEventListener('click', () => {
     const on = $voiceCallBtnToggle.getAttribute('aria-checked') !== 'true';
-    try { localStorage.setItem('ccc-voice-call-button', on ? '1' : '0'); } catch (_) {}
-    if (window.cccVoiceSetup?.mounted()) setVoiceMobileBtnPref(on);
+    setVoiceMobileBtnPref(on);
     voiceApplyCallButtonPref();
   });
   voiceApplyCallButtonPref();
@@ -93201,12 +93193,23 @@
   function getQueueRhsListPref() { return localStorage.getItem('ccc-queue-rhs-list') === 'on'; }
   const VOICE_MOBILE_BTN_STORAGE_KEY = 'ccc-voice-mobile-btn';
   function getVoiceMobileBtnPref() {
-    try { return localStorage.getItem(VOICE_MOBILE_BTN_STORAGE_KEY) !== '0'; }
-    catch (_) { return true; }
+    // Hidden unless deliberately enabled. Two saved keys exist for history;
+    // every control reads this one answer and writes both (setter below), so
+    // no switch can say "on" while the button stays hidden.
+    try {
+      return localStorage.getItem(VOICE_MOBILE_BTN_STORAGE_KEY) !== '0'
+        && localStorage.getItem('ccc-voice-call-button') === '1';
+    } catch (_) { return false; }
   }
 
   function applyVoiceMobileBtn(show) {
     document.body.classList.toggle('hide-voice-mobile-btn', !show);
+    document.body.classList.toggle('voice-call-btn-off', !show);
+    const $callToggle = document.getElementById('settingsVoiceCallBtnToggle');
+    if ($callToggle) {
+      $callToggle.classList.toggle('is-on', show);
+      $callToggle.setAttribute('aria-checked', String(show));
+    }
     const $btn = document.getElementById('voiceMobileBtn');
     if ($btn) {
       if (!show) {
@@ -93234,6 +93237,7 @@
   function setVoiceMobileBtnPref(show) {
     try {
       localStorage.setItem(VOICE_MOBILE_BTN_STORAGE_KEY, show ? '1' : '0');
+      localStorage.setItem('ccc-voice-call-button', show ? '1' : '0');
     } catch (_) {}
     applyVoiceMobileBtn(show);
     window.cccVoiceSetup?.refreshAccess();

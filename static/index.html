@@ -540,7 +540,8 @@
           }
         } catch (_) {}
         // Floating voice call button on mobile view. Persisted as
-        // `ccc-voice-mobile-btn` ('0' = hidden, '1'/unset = shown).
+        // `ccc-voice-mobile-btn` ('0' = hidden). The <body> starts with
+        // voice-call-btn-off, so it stays hidden until deliberately enabled.
         try {
           if (localStorage.getItem('ccc-voice-mobile-btn') === '0') {
             document.body.classList.add('hide-voice-mobile-btn');
@@ -2933,10 +2934,10 @@
             <div class="settings-row" data-keywords="voice call mobile phone icon button hide remove show">
               <div class="settings-row-main">
                 <div class="settings-row-label">Show voice call button on mobile</div>
-                <div class="settings-row-desc">Show the floating "CALL" button on mobile view to start or return to voice sessions.</div>
+                <div class="settings-row-desc">Off by default. Show the floating "CALL" button on mobile view to start or return to voice sessions; an active call always shows it.</div>
               </div>
               <div class="settings-row-control">
-                <button type="button" class="settings-toggle is-on" id="settingsVoiceMobileToggle" data-voice-mobile-toggle role="switch" aria-checked="true" aria-label="Show voice call button on mobile">
+                <button type="button" class="settings-toggle" id="settingsVoiceMobileToggle" data-voice-mobile-toggle role="switch" aria-checked="false" aria-label="Show voice call button on mobile">
                   <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
                 </button>
               </div>

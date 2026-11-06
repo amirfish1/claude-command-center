@@ -2719,57 +2719,10 @@
     max-height: 70vh !important;
   }
 
-  /* Minimized composer (mobile tri-state 3rd step): pins the textarea to
-     the same 24px it already renders at in the empty "regular" state (see
-     min-height: 24px above and the mobile font-size/line-height combo) so
-     minimize reads as "back to the smallest the composer ever gets", not an
-     arbitrary shrink. overflow-y stays auto so multi-line text scrolls
-     inside the fixed box instead of growing it. */
-  .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
-    max-height: 24px !important;
-    overflow-y: auto !important;
-  }
-  /* Minimize collapses the whole composer area, not just the textarea: the
-     stale-session rail/panel (children of the bar) and the Goal pill (a
-     sibling before the bar, reached via the shared .conv-pane parent). */
-  .conv-input-bar.is-composer-minimized .f2c-rail,
-  .conv-input-bar.is-composer-minimized .f2c-panel {
-    display: none !important;
-  }
-  .conv-pane.is-composer-minimized > .conv-goal-strip {
-    display: none !important;
-  }
-  /* Minimize also merges the textarea row and the button row into one line
-     — "as short as it gets" means one row, not two. */
-  .conv-input-bar.visible.is-composer-minimized {
-    flex-direction: row;
-    align-items: center;
-  }
-  .conv-input-bar.is-composer-minimized > .conv-input-row-top {
-    order: 0;
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-  .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
-    order: 1;
-    width: auto;
-    flex: 0 0 auto;
-    margin-top: 0;
-  }
-  .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
-    padding-right: 4px;
-  }
-
   /* Editing the folder path on a phone: hide the composer and model strip so
      the folder row and its suggestions have the room above the keyboard. */
   .conv-pane.is-cwd-editing > .conv-input-bar,
   .conv-pane.is-cwd-editing > .conv-model-picker-strip { display: none !important; }
-
-  /* Minimized new-session composer is one row: the engine/model/effort
-     selects (full-width on phones) would squeeze the textarea to a sliver.
-     The model chips above still choose the model. */
-  .conv-input-bar.is-composer-minimized .conv-input-selectors { display: none !important; }
-  .conv-input-bar.is-composer-minimized .conv-input-row-bottom { flex-wrap: nowrap; }
 
   /* Context ring (kimi-web ContextRing parity) inside the usage pill. */
   .ctx-ring { vertical-align: -2.5px; margin-right: 4px; }
@@ -13290,7 +13243,7 @@
   .voice-button-options[hidden] { display: none; }
   .voice-button-options .upd-btn { width: 100%; min-height: 44px; }
   .voice-button-options p { margin: 8px 0 0; font-size: 12px; line-height: 1.5; }
-  body.hide-voice-mobile-btn .voice-mobile-btn { display: none !important; }
+  body.hide-voice-mobile-btn .voice-mobile-btn:not(.live) { display: none !important; }
   @media (max-width: 1200px) {
     .voice-mobile-btn {
       position: fixed; right: max(16px, env(safe-area-inset-right, 0px));
@@ -13308,7 +13261,7 @@
     .voice-mobile-btn.live { background: #1a6330; }
     .voice-mobile-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
     body.voice-panel-open .voice-mobile-btn,
-    body.hide-voice-mobile-btn .voice-mobile-btn { display: none !important; }
+    body.hide-voice-mobile-btn .voice-mobile-btn:not(.live) { display: none !important; }
     .voice-panel {
       right: max(12px, env(safe-area-inset-right, 0px));
       bottom: calc(16px + env(safe-area-inset-bottom, 0px));
@@ -32074,24 +32027,6 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
    mic, ⚡, Send) is grouped at the right. `display: contents` flattens the
    button cluster so they all share the one row. */
 @media (max-width: 1200px) {
-  /* Even minimized, typing gets its own row. Playback controls can fill a
-     phone's entire width; sharing their row collapses the input to a sliver. */
-  .conv-input-bar.visible.is-composer-minimized {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .conv-input-bar.is-composer-minimized > .conv-input-row-top,
-  .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
-    flex: 0 0 auto;
-    width: 100%;
-  }
-  .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
-    flex-wrap: wrap;
-  }
-  .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
-    min-height: 44px;
-    max-height: 44px !important;
-  }
   .conv-input-bar .conv-input-row-top textarea {
     min-width: 0;
     width: 100%;

@@ -49,6 +49,25 @@ class TestVoiceMobileButtonStatic(unittest.TestCase):
         self.assertIn("localStorage.getItem('ccc-voice-mobile-btn') === '0'", self.index)
         self.assertIn("document.body.classList.add('hide-voice-mobile-btn')", self.index)
 
+    def test_button_stays_hidden_unless_deliberately_enabled(self):
+        # The pref needs the old key explicitly on: an unset browser is hidden.
+        self.assertIn("localStorage.getItem('ccc-voice-call-button') === '1';", self.app)
+        self.assertIn("catch (_) { return false; }", self.app)
+        self.assertIn('<body class="voice-call-btn-off">', self.index)
+        toggle = self.index.split('id="settingsVoiceMobileToggle"', 1)[0].rsplit("<button", 1)[1]
+        self.assertNotIn("is-on", toggle)
+        tag = self.index.split('id="settingsVoiceMobileToggle"', 1)[1].split(">", 1)[0]
+        self.assertIn('aria-checked="false"', tag)
+
+    def test_every_control_writes_both_saved_keys(self):
+        setter = self.app.split("function setVoiceMobileBtnPref(", 1)[1].split("applyTheme", 1)[0]
+        self.assertIn("VOICE_MOBILE_BTN_STORAGE_KEY, show", setter)
+        self.assertIn("'ccc-voice-call-button', show", setter)
+
+    def test_live_call_is_never_hidden_by_the_pref(self):
+        self.assertIn("body.hide-voice-mobile-btn .voice-mobile-btn:not(.live)", self.css)
+        self.assertNotIn("body.hide-voice-mobile-btn .voice-mobile-btn {", self.css)
+
     def test_voice_config_default_and_sanitize(self):
         cfg = rv._default_config()
         self.assertIn("show_mobile_btn", cfg)
