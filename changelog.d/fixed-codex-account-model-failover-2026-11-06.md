@@ -1,0 +1,1 @@
+Codex sessions now switch by themselves to another connected account, or to a fallback engine, when an account's plan refuses the model. New sessions also skip a saved account that no longer offers the model.

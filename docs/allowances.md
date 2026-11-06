@@ -34,6 +34,14 @@ It never copies credentials or changes the fleet's active account. The CLI may
 refresh its own credentials while reading. Log in with ChatGPT rather than an
 API key to obtain subscription quotas.
 
+If an account's plan no longer offers a session's model, CCC moves on by itself.
+A new session skips a saved account whose model catalog lacks the model. A running
+session refused with "model is not supported when using Codex" moves to a connected
+account that offers it, and CCC sends the message again. If no account offers it,
+CCC continues the work on your default engine, or Claude when that is Codex. Each
+failed turn gets one retry, within 30 minutes, under the shared limit on automatic
+wakes (`CCC_AUTO_WAKE=0` turns retries off). Usage limits still wait for your approval.
+
 Weekly and short-window balances are displayed separately when returned. An
 exhausted or elapsed window excludes that entire account from recommendations.
 Provider errors show **No reading**; missing values never become zero or full.
