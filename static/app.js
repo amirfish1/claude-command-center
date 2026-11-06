@@ -456,6 +456,30 @@
       _ltObs.observe({ entryTypes: ['longtask'] });
     }
   } catch (_) {}
+  // Long Animation Frames name the script behind a block (CCC-343): which
+  // function/invoker ran longest inside a >=200ms frame. Logged as
+  // [LOAF] so the top main-thread sources can be ranked from service logs.
+  try {
+    if (typeof PerformanceObserver === 'function'
+        && (PerformanceObserver.supportedEntryTypes || []).includes('long-animation-frame')) {
+      let _loafLast = 0;
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          if (e.duration < 200) continue;
+          const now = Date.now();
+          if (now - _loafLast < 2000) continue;
+          _loafLast = now;
+          const sc = (e.scripts || []).slice().sort((x, y) => y.duration - x.duration)[0];
+          const src = sc ? ((sc.invoker || sc.sourceFunctionName || sc.type || '?')
+            + ' @' + String(sc.sourceURL || '').split('/').pop() + ':' + (sc.sourceCharPosition || 0)
+            + ' script=' + Math.round(sc.duration) + 'ms') : 'no-script';
+          const render = Math.round(Math.max(0, (e.startTime + e.duration) - (e.renderStart || (e.startTime + e.duration))));
+          _clientLog('[LOAF] ' + Math.round(e.duration) + 'ms ' + src
+            + ' block=' + Math.round(e.blockingDuration || 0) + 'ms render=' + render + 'ms');
+        }
+      }).observe({ type: 'long-animation-frame', buffered: false });
+    }
+  } catch (_) {}
 
   // ── Session-completion sounds ────────────────────────────────────────────
   // Lightweight Web-Audio beeps when the agent finishes a turn or goes idle.
