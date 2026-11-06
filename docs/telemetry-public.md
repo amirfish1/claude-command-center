@@ -13,11 +13,11 @@ download clicks — without exposing event rows.
 | App endpoints | `/v1/open` (active); `/v1/ping` (accepted for old clients, no longer sent by current builds — retired 2026-09-28) |
 | Landing endpoint | `/v1/download` |
 | Public aggregates | `/v1/stats` |
-| Worker source SHA at deploy | [`fb1c0e37`](https://github.com/amirfish1/claude-command-center/tree/fb1c0e37/infra/telemetry-worker) |
+| Worker source SHA at deploy | [`1037b37d`](https://github.com/amirfish1/claude-command-center/tree/1037b37d/infra/telemetry-worker) |
 | D1 migration | `infra/telemetry-worker/migrations/0003-opens-weekly-monthly-geo.sql` adds `first_this_week`, `first_this_month`, `country`, `region` to `opens` |
-| Worker deployed | 2026-09-28 (beacon v2: weekly/monthly flags + country/region); 2026-07-15 (download counter); initially 2026-05-22 |
+| Worker deployed | 2026-11-06 (hourly stats cache in KV; nothing new is collected); 2026-09-28 (beacon v2: weekly/monthly flags + country/region); 2026-07-15 (download counter); initially 2026-05-22 |
 | Collection started | 2026-05-22 |
-| Storage | Cloudflare D1 (`ccc-telemetry`), with bounded `pings`, `opens`, and `downloads` tables documented in [`telemetry.md`](telemetry.md) |
+| Storage | Cloudflare D1 (`ccc-telemetry`), with bounded `pings`, `opens`, and `downloads` tables documented in [`telemetry.md`](telemetry.md). Cloudflare KV holds one copy of the public aggregates only |
 
 The persistence guarantees are in
 [`infra/telemetry-worker/index.js`](../infra/telemetry-worker/index.js)
