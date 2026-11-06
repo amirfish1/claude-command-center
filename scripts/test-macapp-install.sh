@@ -93,6 +93,13 @@ if [ ! -x "$EXECUTABLE" ]; then
   exit 1
 fi
 
+# First launch asks "Keep the CCC server running in the background?" in a
+# modal NSAlert (f31082e7) that blocks the main thread before the installer
+# starts, so an unattended run never serves. Pre-answer "Only While Open"; the
+# assertions below expect the server to stop with the app.
+HOME="$TEST_HOME" CFFIXED_USER_HOME="$TEST_HOME" \
+  defaults write com.github.claude-command-center CCCServerMode app
+
 HOME="$TEST_HOME" \
 CFFIXED_USER_HOME="$TEST_HOME" \
 TMPDIR="$TEST_ROOT/tmp" \
