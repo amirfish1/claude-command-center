@@ -43977,6 +43977,23 @@
           if (_subagentRowIsRecentBlocked(c)) rehomedOpenAsks.push(c);
           return false;
         });
+        // A kept child whose parent fell outside this list (older than the
+        // window, or a WT worker filtered from Current sessions) would render
+        // as a loose top-level row with nothing to collapse under. Pull the
+        // parent chain in as anchor rows so the child nests (CCC-352).
+        const keptIds = new Set(keptRows.map(_currentSessionId));
+        const pool = new Map();
+        (_visibleSessionConvs || []).forEach(c => {
+          const id = _currentSessionId(c);
+          if (id) pool.set(id, c);
+        });
+        for (let i = 0; i < keptRows.length; i++) {
+          const pid = _currentSessionParentId(keptRows[i]);
+          const parent = pid && !keptIds.has(pid) ? pool.get(pid) : null;
+          if (!parent || _currentSessionParentId(parent) === _currentSessionId(keptRows[i])) continue;
+          keptIds.add(pid);
+          keptRows.push(parent);
+        }
         return { rows: keptRows, openAsks: rehomedOpenAsks };
       };
       const _curId = _currentSessionId;
