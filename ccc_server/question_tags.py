@@ -9,7 +9,9 @@ later mentions) so the UI can resolve a chip back to its explanation and list
 questions that are still open.
 
 A question is answered when the owner's reply mentions its tag, or an agent
-writes `[Q<n>] answered`.
+writes `[Q<n>] answered`. A question a WatchTower ticket blocked on is the
+exception: the ticket is its identity and owns its state, so it stays open
+while the ticket is blocked on it, however the chat mentions the tag.
 
 Cost model: no model calls. A transcript is only parsed when it changed
 ((mtime, size) differs from the persisted cache) and only when a cheap bytes
@@ -436,11 +438,79 @@ def build_index(files: dict | None = None) -> dict:
     return {"questions": [qs[n] for n in sorted(qs)]}
 
 
-def payload() -> dict:
+_links_memo: dict = {"items": None, "links": {}}
+
+
+def _ticket_session(item: dict) -> str:
+    """The session that asked: mirrors WatchTower's `answer_session` order."""
+    parked = (item.get("parked") or {}).get("session_id")
+    claimed = item.get("claimed_session_id")
+    if not parked and claimed and item.get("status") == "in_progress":
+        return str(claimed)
+    prior = (item.get("pending_answer") or {}).get("prior_session_id")
+    return str(parked or prior or claimed or "")
+
+
+def ticket_links(items: list) -> dict:
+    """Map question numbers to the ticket that blocked on them.
+
+    Only the leading tag of a block question counts: a later one is a
+    reference to some other question. Past blocks stay in the map so a question
+    keeps its ticket after it is answered. Tickets arrive as one shared list
+    object per refresh, so the fold runs once per refresh, not per request.
+    """
+    if items is _links_memo["items"]:
+        return _links_memo["links"]
+    links: dict[int, dict] = {}
+    for item in items or []:
+        ref = item.get("ref")
+        if not ref:
+            continue
+        asks = [(e.get("at") or "", e.get("question") or "")
+                for e in item.get("history") or []
+                if isinstance(e, dict) and e.get("event") == "block"]
+        current = None
+        if item.get("needs_input") and item.get("status") != "closed":
+            current = _TAG.match((item.get("block_question") or "").lstrip())
+            if current:
+                asks.append((item.get("blocked_at") or "", current.group(0)))
+        for at, text in asks:
+            m = _TAG.match(text.lstrip())
+            if not m:
+                continue
+            n = int(m.group(1))
+            is_open = bool(current) and int(current.group(1)) == n
+            known = links.get(n)
+            # One question can span tickets; the waiting one is the identity.
+            if known and (known["open"], known["at"]) >= (is_open, at):
+                continue
+            links[n] = {"ref": ref, "title": item.get("title") or "", "open": is_open,
+                        "session_id": _ticket_session(item), "at": at}
+    _links_memo.update(items=items, links=links)
+    return links
+
+
+def apply_tickets(questions: list, items: list) -> None:
+    """Give each ticket-bound question its ticket and let the ticket decide
+    whether it is open; other questions keep the transcript's verdict."""
+    links = ticket_links(items)
+    for q in questions:
+        link = links.get(q["n"])
+        if not link:
+            continue
+        q["ticket"] = {k: link[k] for k in ("ref", "title", "open", "session_id")}
+        if link["open"]:
+            q["answered"], q["answered_by"] = False, ""
+        elif not q["answered"]:
+            q["answered"], q["answered_by"] = True, "ticket"
+
+
+def payload(tickets: list | None = None) -> dict:
     """API payload. Never scans inside the request: a stale index kicks a
     background refresh and is served as-is. `scanning` is true only until the
     first full index exists (cold start); `refreshing` means a rescan is in
-    flight, so a tag the UI cannot resolve yet may appear shortly."""
+    flight, so a tag the UI cannot resolve yet may appear shortly. `tickets` is
+    the caller's cached ticket list, which must not block on a source."""
     with _lock:
         _load_cache()
         stale = time.time() - _last_scan >= _SCAN_MIN_GAP and not _scanning
@@ -449,6 +519,8 @@ def payload() -> dict:
         threading.Thread(target=refresh, daemon=True, name="qtags-scan").start()
         scanning_now = True
     out = build_index()
+    if tickets:
+        apply_tickets(out["questions"], tickets)
     out["ok"] = True
     out["scanning"] = not _ready
     out["refreshing"] = scanning_now

@@ -3380,6 +3380,24 @@ def _wt_list_items_snapshot_only():
     return _wt_snapshot_file_memo["items"]
 
 
+_wt_items_refresh_lock = threading.Lock()
+
+
+def _wt_list_items_for_requests():
+    """Cached tickets for a request path: never waits on GitHub. An expired
+    list is served as-is while one background refresh replaces it."""
+    with _wt_items_memo_lock:
+        fresh = time.time() - _wt_items_memo["at"] < _WT_ITEMS_SNAPSHOT_TTL_S
+    if not fresh and _wt_items_refresh_lock.acquire(blocking=False):
+        def refresh():
+            try:
+                _wt_list_items_display_cached()
+            finally:
+                _wt_items_refresh_lock.release()
+        threading.Thread(target=refresh, daemon=True, name="wt-items-refresh").start()
+    return _wt_list_items_snapshot_only()
+
+
 def _apply_watchtower_worker_display_names(rows):
     """Layer WT ticket names onto live WT worker session rows.
 
@@ -30881,7 +30899,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 fresh_s=10.0, max_stale_s=300.0))
         elif path == "/api/question-tags":
             from ccc_server import question_tags as _question_tags
-            self.send_json(_question_tags.payload())
+            self.send_json(_question_tags.payload(tickets=_wt_list_items_for_requests()))
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()

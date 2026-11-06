@@ -1,0 +1,1 @@
+- Ticket links in chat open the ticket inside CCC; Cmd/Ctrl/Shift-click still opens the WatchTower page.

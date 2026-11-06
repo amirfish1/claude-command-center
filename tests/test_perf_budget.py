@@ -5485,6 +5485,28 @@ def test_question_tags_sources_walk_is_memoised_between_scans(tmp_path, monkeypa
     assert len(walks) == 2
 
 
+def test_question_ticket_links_fold_once_per_ticket_refresh():
+    """The index is polled per client; thousands of tickets must not be
+    re-folded on each poll, only when a refresh hands over a new list."""
+    from ccc_server import question_tags as qt
+
+    class Counted(list):
+        reads = 0
+
+        def __iter__(self):
+            type(self).reads += 1
+            return super().__iter__()
+
+    rows = [{"ref": "OPS-1", "needs_input": True, "status": "open",
+             "block_question": "[Q7:publish] OK?"}]
+    items, refreshed = Counted(rows), Counted(rows)
+    for _ in range(10):
+        qt.apply_tickets([{"n": 7, "answered": False}], items)
+    assert Counted.reads == 1
+    qt.apply_tickets([{"n": 7, "answered": False}], refreshed)
+    assert Counted.reads == 2
+
+
 # ── Attribution journal on the conversation-open path (CCC-143) ──────────────
 
 def test_attribution_journal_append_does_not_reread_the_month(monkeypatch, tmp_path):

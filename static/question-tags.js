@@ -3,6 +3,9 @@
  * explanation) without scrolling up, and a pill lists questions still open.
  * Backed by GET /api/question-tags (ccc_server/question_tags.py).
  *
+ * A question a ticket blocked on goes by that ticket instead: its chip shows
+ * the ticket ref and opens the ticket, and "Needs you" gains Talk to worker.
+ *
  * Self-contained: one MutationObserver, one cached index fetch (refreshed
  * lazily on a chip tap / panel open and every 60s while visible).
  */
@@ -81,12 +84,61 @@
     if (!skipPaint) paintChips();
   }
 
+  // "BECKY-1 is blocked on BECKY-1" says nothing: right after its own ticket
+  // ref, the chip names the question instead.
+  function followsRef(chip, ref) {
+    var host = chip.closest(TARGETS);
+    if (!host) return false;
+    var range = document.createRange();
+    range.setStart(host, 0);
+    range.setEndBefore(chip);
+    return range.toString().slice(-60).indexOf(ref) >= 0;
+  }
+
+  function paintTicketChip(chip, q) {
+    var label = followsRef(chip, q.ticket.ref) ? (q.ticket.open ? 'open question' : 'question') : q.ticket.ref;
+    // Writing unchanged text would wake the observer that repaints chips.
+    if (chip.textContent !== label) chip.textContent = label;
+    chip.title = q.ticket.ref + ' (' + q.tag + ') — open ticket';
+    chip.setAttribute('aria-label', chip.title);
+  }
+
+  function talkButton(n) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ssb-action';
+    b.setAttribute('data-qtalk', n);
+    b.title = 'Open the worker\'s session to discuss this. Nothing is sent.';
+    b.textContent = 'Talk to worker';
+    return b;
+  }
+
+  function paintNeedsYou() {
+    document.querySelectorAll('.ssb-next').forEach(function (row) {
+      var talk = row.querySelector('[data-qtalk]');
+      var waiting = Array.prototype.map.call(row.querySelectorAll('.qtag-chip'), function (c) {
+        return index.byN[c.getAttribute('data-qn')];
+      }).filter(function (q) { return q && q.ticket && q.ticket.open; })[0];
+      if (!waiting) { if (talk) talk.remove(); return; }
+      if (talk) return;
+      var actions = row.querySelector('.ssb-actions');
+      if (!actions) {
+        actions = document.createElement('span');
+        actions.className = 'ssb-actions';
+        row.append(' ', actions);
+      }
+      actions.append(' ', talkButton(waiting.n));
+    });
+  }
+
   function paintChips() {
     document.querySelectorAll('.qtag-chip').forEach(function (c) {
       var q = index.byN[c.getAttribute('data-qn')];
       c.classList.toggle('qtag-answered', !!(q && q.answered));
       c.classList.toggle('qtag-unknown', !q);
+      if (q && q.ticket) paintTicketChip(c, q);
     });
+    paintNeedsYou();
   }
 
   function load(force) {
@@ -189,6 +241,15 @@
     }
   }
 
+  function questionName(q) { return q.ticket ? q.ticket.ref : q.tag; }
+
+  function talkToWorker(n) {
+    var q = index.byN[n];
+    if (!q) return;
+    if (sheet) sheet.hidden = true;
+    window.cccFocusComposer(q.ticket && q.ticket.session_id || q.first.sid);
+  }
+
   function esc(s) {
     return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
   }
@@ -212,6 +273,8 @@
       var jump = ev.target.closest('[data-qjump]');
       if (jump) { jumpTo(+jump.getAttribute('data-qjump')); return; }
       if (ev.target.closest('[data-qlist]')) { showPanel(); return; }
+      var ticket = ev.target.closest('[data-qticket]');
+      if (ticket) { sheet.hidden = true; window.cccOpenTicket(ticket.getAttribute('data-qticket')); return; }
       var send = ev.target.closest('[data-qsend]');
       if (send) { sendAnswer(+send.getAttribute('data-qsend'), send); return; }
       var add = ev.target.closest('[data-qadd]');
@@ -245,15 +308,18 @@
       body = '<div class="qtag-meta">' + (q.answered ? '<span class="qtag-st qtag-st-done">answered</span>' : '<span class="qtag-st qtag-st-open">open</span>')
         + ' first asked ' + esc(fmtTs(q.first.ts)) + ' · ' + q.mentions.length + ' reminder' + (q.mentions.length === 1 ? '' : 's') + '</div>'
         + '<div class="qtag-text assistant-text-plain">' + (md || '<p style="white-space:pre-wrap">' + esc(q.first.text) + '</p>') + '</div>'
-        + '<label class="qtag-ans-label" for="qtagAns">Your answer</label>'
-        + '<textarea id="qtagAns" class="qtag-ans" rows="3" placeholder="Type your answer, then choose Send answer or Add to composer."></textarea>'
-        + '<div class="qtag-actions"><button type="button" class="qtag-btn qtag-primary" data-qsend="' + q.n + '">Send answer</button>'
-        + '<button type="button" class="qtag-btn" data-qadd="' + q.n + '">Add to composer</button>'
+        // A ticket question is answered on the ticket: a chat reply can't unblock it.
+        + (q.ticket ? '<div class="qtag-actions"><button type="button" class="qtag-btn qtag-primary" data-qticket="' + esc(q.ticket.ref) + '">Open ticket</button>'
+          + (q.ticket.open ? '<button type="button" class="qtag-btn" data-qtalk="' + q.n + '">Talk to worker</button>' : '')
+          : '<label class="qtag-ans-label" for="qtagAns">Your answer</label>'
+          + '<textarea id="qtagAns" class="qtag-ans" rows="3" placeholder="Type your answer, then choose Send answer or Add to composer."></textarea>'
+          + '<div class="qtag-actions"><button type="button" class="qtag-btn qtag-primary" data-qsend="' + q.n + '">Send answer</button>'
+          + '<button type="button" class="qtag-btn" data-qadd="' + q.n + '">Add to composer</button>')
         + '<button type="button" class="qtag-btn" data-qjump="' + q.n + '">Jump to original</button>'
         + (openQuestions(index.list).length > 1 ? '<button type="button" class="qtag-btn" data-qlist="1">All open questions</button>' : '')
         + '</div><div class="qtag-added" aria-live="polite"></div>';
     }
-    s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>' + (q ? esc(q.tag) : 'Q' + n) + '</strong>'
+    s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>' + (q ? esc(questionName(q)) : 'Q' + n) + '</strong>'
       + '<button type="button" class="qtag-close" aria-label="Close">×</button></div>' + body + '</div>';
     if (waiting) s.setAttribute('data-qwait', n); else s.removeAttribute('data-qwait');
     s.hidden = false;
@@ -304,7 +370,7 @@
       + '<button type="button" class="qtag-btn qtag-pill-toggle" data-qpill-toggle>' + (pillHidden ? 'Show floating question button' : 'Hide floating question button') + '</button>'
       + (open.length ? '<ul class="qtag-list">' + open.map(function (q) {
         var first = (q.first.text.split('\n').find(function (l) { return l.indexOf(q.tag) >= 0; }) || q.first.text).replace(/[#*`]/g, '').slice(0, 140);
-        return '<li><button type="button" class="qtag-row" data-qshow="' + q.n + '"><span class="qtag-chip-static">' + esc(q.tag) + '</span>'
+        return '<li><button type="button" class="qtag-row" data-qshow="' + q.n + '"><span class="qtag-chip-static">' + esc(questionName(q)) + '</span>'
           + '<span class="qtag-sub">' + esc(first) + '</span></button></li>';
       }).join('') + '</ul>' : '<p class="qtag-empty">' + (index.scanning ? 'Building the question index (first run only)…' : 'Nothing waiting on you.') + '</p>')
       + '</div>';
@@ -398,10 +464,19 @@
     document.body.appendChild(pill);
 
     document.addEventListener('click', function (ev) {
+      var talk = ev.target.closest && ev.target.closest('[data-qtalk]');
+      if (talk) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        talkToWorker(+talk.getAttribute('data-qtalk'));
+        return;
+      }
       var chip = ev.target.closest && ev.target.closest('.qtag-chip[data-qn]');
       if (!chip) return;
       ev.preventDefault();
       ev.stopPropagation();
+      var bound = index.byN[chip.getAttribute('data-qn')];
+      if (bound && bound.ticket && window.cccOpenTicket && window.cccOpenTicket(bound.ticket.ref)) return;
       var row = chip.closest('.conv-item[data-session-id]');
       var sid = row ? row.getAttribute('data-session-id')
         : (typeof window.cccFrontSessionId === 'function' ? window.cccFrontSessionId() : '');

@@ -18,7 +18,7 @@
   // Question-tags panel: put text into a session's composer WITHOUT sending, so
   // the owner can stack several answers and submit on their own time. Opens the
   // session first when it is not already in front.
-  window.cccAppendToComposer = function (sid, text) {
+  function withSessionComposer(sid) {
     return new Promise((resolve) => {
       let tries = 0;
       const attempt = () => {
@@ -26,19 +26,31 @@
         try {
           if (window.cccFrontSessionId() === sid) input = composerInputForPane(activePaneId());
         } catch (_) {}
-        if (input) {
-          const cur = input.value || '';
-          input.value = cur.trim() ? cur.replace(/\s+$/, '') + '\n\n' + text : text;
-          moveInputCaretToEnd(input);
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          try { rememberComposerDraftForPane(activePaneId()); } catch (_) {}
-          resolve(true);
-        } else if (++tries > 40) resolve(false);
+        if (input) resolve(input);
+        else if (++tries > 40) resolve(null);
         else setTimeout(attempt, 150);
       };
       try { if (window.cccFrontSessionId() !== sid) selectConversation(sid); } catch (_) {}
       attempt();
     });
+  }
+  window.cccAppendToComposer = async function (sid, text) {
+    const input = await withSessionComposer(sid);
+    if (!input) return false;
+    const cur = input.value || '';
+    input.value = cur.trim() ? cur.replace(/\s+$/, '') + '\n\n' + text : text;
+    moveInputCaretToEnd(input);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    try { rememberComposerDraftForPane(activePaneId()); } catch (_) {}
+    return true;
+  };
+  // Talk to worker: the session in front, cursor in its composer, nothing sent.
+  window.cccFocusComposer = async function (sid) {
+    const input = await withSessionComposer(sid);
+    if (!input) return false;
+    input.focus();
+    moveInputCaretToEnd(input);
+    return true;
   };
   // An explicit Send answer click carries the same human provenance as the composer.
   window.cccSendQuestionAnswer = async function (sid, text) {
@@ -20694,6 +20706,9 @@
     ev.preventDefault();
     const ref = link.dataset.watchtowerTicket;
     if (!ref) return;
+    // Stay in CCC: the ticket view leads to the worker's session. A modified
+    // click still reaches the WatchTower page.
+    if (!ev.metaKey && !ev.ctrlKey && !ev.shiftKey && window.cccOpenTicket && window.cccOpenTicket(ref)) return;
     const target = watchtowerTicketUrl(ref, watchtowerServiceUrl);
     const tmp = document.createElement('a');
     tmp.href = target;
