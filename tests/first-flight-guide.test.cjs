@@ -10,7 +10,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
+const net = require('node:net');
 const os = require('node:os');
+const { execFileSync, spawn } = require('node:child_process');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
@@ -136,6 +138,14 @@ test.before(async () => {
 test.after(async () => {
   await browser?.close();
   if (fixtureServer) await new Promise((resolve) => fixtureServer.close(resolve));
+  if (dashboardProc && dashboardProc.exitCode === null) {
+    const exited = new Promise((resolve) => dashboardProc.once('exit', resolve));
+    dashboardProc.kill();
+    await exited;
+  }
+  if (dashboardHome) {
+    fs.rmSync(dashboardHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
 });
 
 async function openFixture(startOpts) {
@@ -441,29 +451,64 @@ function urlResponds(url, timeoutMs = 800) {
   });
 }
 
-async function resolveDashboardUrl() {
-  const portFile = path.join(os.homedir(), '.claude', 'command-center', 'port.txt');
-  let fromFile;
+// A private dashboard from this checkout, on an empty HOME: what a new user
+// gets. Pointing at the machine's running dashboard tested whatever code it
+// last restarted on, and raced that dashboard's own load and session list.
+let dashboardProc = null;
+let dashboardHome = null;
+let dashboardStart = null;
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+}
+async function startDashboard() {
+  const port = await freePort();
+  dashboardHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccc-ftue-home-'));
+  let userBase = '';
   try {
-    const raw = fs.readFileSync(portFile, 'utf8').trim();
-    if (/^https?:\/\//.test(raw)) fromFile = raw;
-    else if (/^\d+$/.test(raw)) fromFile = `http://127.0.0.1:${raw}`;
+    userBase = execFileSync('python3', ['-m', 'site', '--user-base'], { encoding: 'utf8' }).trim();
   } catch (_) {}
-  const candidates = [fromFile, 'http://127.0.0.1:8090'].filter(Boolean);
-  for (const url of candidates) {
+  dashboardProc = spawn('python3', [path.join(ROOT, 'server.py')], {
+    cwd: ROOT,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      HOME: dashboardHome,
+      PORT: String(port),
+      CCC_EPHEMERAL: '1',
+      CCC_SKIP_SKILL_INSTALL: '1',
+      CCC_TELEMETRY_DISABLED: '1',
+      CCC_CHAT_ORCHESTRATOR: 'builtin',
+      CCC_WARM_CACHE_ON_STARTUP: '0',
+      // The faked HOME hides a user-site `watchtower` install.
+      ...(userBase ? { PYTHONUSERBASE: userBase } : {}),
+    },
+  });
+  const url = `http://127.0.0.1:${port}/`;
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    if (dashboardProc.exitCode !== null) return null;
     if (await urlResponds(url)) return url;
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return null;
+}
+function resolveDashboardUrl() {
+  if (!dashboardStart) dashboardStart = startDashboard();
+  return dashboardStart;
 }
 
 test('live dashboard walk keeps composer, Queue, Workers, and Delegation on real controls', async () => {
   const logLive = path.join(SCRATCH, 'ftue-live-walk.log');
   const unavailable = path.join(SCRATCH, 'ftue-launch-unavailable.log');
   const url = await resolveDashboardUrl();
-  if (!url) {
-    fs.writeFileSync(unavailable, 'dashboard URL did not respond\n', 'utf8');
-    return;
-  }
+  assert.ok(url, 'private dashboard did not start');
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (err) => errors.push(String(err)));
@@ -612,10 +657,7 @@ test('headless dashboard launch starts the guide twice with a non-empty first st
   const shot = path.join(SCRATCH, 'ftue.png');
   const unavailable = path.join(SCRATCH, 'ftue-launch-unavailable.log');
   const url = await resolveDashboardUrl();
-  if (!url) {
-    fs.writeFileSync(unavailable, 'dashboard URL did not respond\n', 'utf8');
-    return;
-  }
+  assert.ok(url, 'private dashboard did not start');
   const lines = [];
   async function oneLaunch(tag) {
     const page = await browser.newPage();

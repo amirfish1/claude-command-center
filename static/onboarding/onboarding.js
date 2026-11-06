@@ -23,6 +23,8 @@
   const LS_JOB = 'ccc-onboarding-job';
   const LS_FIRST_TASK = 'ccc-onboarding-first-task';
   const LS_ENG_DONE = 'ccc-engines-first-run-done';
+  const LS_TOUR_DONE = 'ccc-tour-done';
+  const LS_OWN_CLAUDE = 'ccc-onboarding-own-claude';
   const LS_SOUNDS = 'ccc-sounds-enabled';
   const LS_SKIPPED = 'ccc-onboarding-skipped-steps';
   const POLL_MS = 900;
@@ -166,10 +168,10 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(key ? { platform, key } : { platform }),
     }),
-    firstTask: (taskId) => api('/api/onboarding/first-task', {
+    firstTask: (taskId, runtime) => api('/api/onboarding/first-task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task_id: taskId, runtime: 'free' }),
+      body: JSON.stringify({ task_id: taskId, runtime: runtime || 'free' }),
     }).then((r) => r.job),
     savings: () => api('/api/savings?range=today'),
     freshInstall: () => api('/api/onboarding/moment-zero'),
@@ -240,6 +242,9 @@
     running: false,
     savedUsd: null,
     firstTaskDone: false,
+    claudeFound: false,   // Claude Code is on this machine, no free router yet
+    welcomeChecked: false,
+    ownClaude: !!lsGet(LS_OWN_CLAUDE), // first task runs on the user's own Claude account
     firstTaskJobId: null,
     firstTaskTimer: null,
     force: false,
@@ -358,39 +363,63 @@
   }
 
   // ── Scene: Welcome ──
-  function renderWelcome() {
+  // Someone who already has Claude Code doesn't need Node, a router and a
+  // free key to see CCC work, so the welcome leads with their own agent.
+  function checkClaudeOnWelcome() {
+    if (S.welcomeChecked || typeof driver.getPlan !== 'function') return;
+    S.welcomeChecked = true;
+    Promise.resolve().then(() => driver.getPlan()).then((plan) => {
+      S.plan = plan;
+      const steps = (plan && Array.isArray(plan.steps)) ? plan.steps : [];
+      const status = (id) => (steps.find((st) => st.id === id) || {}).status;
+      S.claudeFound = status('claude_cli') === 'ok' && status('free_router') !== 'ok';
+      if (S.claudeFound && S.open && S.scene === 'welcome') renderWelcome({ quiet: true });
+    }).catch(() => {});
+  }
+
+  function renderWelcome(opts) {
+    const own = S.claudeFound;
     const card = el('section', 'mz-card mz-welcome');
     card.innerHTML = logoSvg();
     const h = el('h1', 'mz-headline');
-    h.setAttribute('aria-label', 'Your own AI dev team. Free.');
+    const line1 = own ? 'Claude Code found.' : 'Your own AI dev team.';
+    const line2 = own ? ' Try it here.' : ' Free.';
+    h.setAttribute('aria-label', line1 + line2);
     const typed = el('span', 'mz-typed');
     const caret = el('span', 'mz-caret');
     caret.setAttribute('aria-hidden', 'true');
     h.appendChild(typed);
     h.appendChild(caret);
     card.appendChild(h);
-    const sub = el('p', 'mz-sub', 'Command Center hires a team of coding agents and runs them on $0 models. We will install everything together. About five minutes.');
+    const sub = el('p', 'mz-sub', own
+      ? 'Give it one small job in a practice folder and watch it work on your board. It uses your own Claude account and only touches ~/CCC-Playground.'
+      : 'Command Center hires a team of coding agents and runs them on $0 models. We will install everything together. About ten minutes on a new computer.');
     card.appendChild(sub);
     const actions = el('div', 'mz-actions');
-    const go = el('button', 'mz-btn mz-btn-primary', 'Set up my team');
+    const go = el('button', 'mz-btn mz-btn-primary', own ? 'Run a first task' : 'Set up my team');
     go.type = 'button';
-    go.addEventListener('click', () => { sfx('whoosh'); goSteps(); });
+    go.addEventListener('click', () => { sfx('whoosh'); if (own) goOwnClaudeTask(); else goSteps(); });
     const ghost = el('button', 'mz-btn mz-btn-ghost', 'I will explore on my own');
     ghost.type = 'button';
     ghost.addEventListener('click', () => { sfx('whoosh'); markDone(); close(); });
     actions.appendChild(go);
     actions.appendChild(ghost);
     card.appendChild(actions);
+    if (own) {
+      const free = el('button', 'mz-linklike', 'Set up free models instead');
+      free.type = 'button';
+      free.addEventListener('click', () => { sfx('whoosh'); setOwnClaude(false); goSteps(); });
+      card.appendChild(free);
+    }
     const connect = engineConnectionAction(); if (connect) card.appendChild(connect);
     const hint = el('p', 'mz-kbd-hint', 'Press Enter to begin');
     card.appendChild(hint);
 
     shell(card);
     focusSoon(go);
-    sfx('welcome');
+    if (!(opts && opts.quiet)) sfx('welcome');
+    checkClaudeOnWelcome();
 
-    const line1 = 'Your own AI dev team.';
-    const line2 = ' Free.';
     if (reducedMotion()) {
       typed.innerHTML = esc(line1) + '<span class="mz-free">' + esc(line2) + '</span>';
       return;
@@ -406,6 +435,28 @@
       typed.innerHTML = esc(a) + (b ? '<span class="mz-free">' + esc(b) + '</span>' : '');
       if (i < full.length) setTimeout(tick, 34 + Math.random() * 40);
     })();
+  }
+
+  // ── Scene: first task on the user's own Claude Code ──
+  // Stored so a run that outlives a page reload still finishes honestly.
+  function setOwnClaude(on) {
+    S.ownClaude = !!on;
+    if (on) lsSet(LS_OWN_CLAUDE, '1'); else lsDel(LS_OWN_CLAUDE);
+  }
+
+  function goOwnClaudeTask() {
+    S.scene = 'own-task';
+    setOwnClaude(true);
+    sfx('step');
+    const card = el('section', 'mz-card mz-steps-card');
+    const head = el('div', 'mz-steps-head');
+    head.appendChild(el('div', 'mz-eyebrow', 'First task'));
+    head.appendChild(el('h2', 'mz-title', 'Pick a small job'));
+    card.appendChild(head);
+    const host = el('div');
+    card.appendChild(host);
+    shell(card);
+    renderFirstTaskStep(host, { id: 'first_task', status: 'missing' });
   }
 
   // ── Scene: Steps ──
@@ -923,7 +974,9 @@
   function renderFirstTaskStep(host, step) {
     host.textContent = '';
     const box = el('div', 'mz-taskbox');
-    box.appendChild(el('div', 'mz-hint', 'Pick one. Your agent does it alone, start to finish, on a $0 model.'));
+    box.appendChild(el('div', 'mz-hint', S.ownClaude
+      ? 'Pick one. Claude Code does it alone, start to finish, on your own Claude account.'
+      : 'Pick one. Your agent does it alone, start to finish, on a $0 model.'));
     const grid = el('div', 'mz-task-grid');
     FIRST_TASKS.forEach((t) => {
       const c = el('button', 'mz-task-card');
@@ -934,9 +987,13 @@
       grid.appendChild(c);
     });
     box.appendChild(grid);
-    const skip = el('button', 'mz-linklike', 'Skip to the finale');
+    const skip = el('button', 'mz-linklike', S.ownClaude ? 'Skip to the dashboard' : 'Skip to the finale');
     skip.type = 'button';
-    skip.addEventListener('click', () => { step.status = 'ok'; goFinale(); });
+    skip.addEventListener('click', () => {
+      if (S.ownClaude) { markDone(); close(); return; }
+      step.status = 'ok';
+      goFinale();
+    });
     box.appendChild(skip);
     host.appendChild(box);
     const saved = lsGet(LS_FIRST_TASK);
@@ -947,7 +1004,10 @@
     box.textContent = '';
     const error = el('div', 'mz-task-error');
     error.setAttribute('role', 'alert');
-    error.appendChild(el('p', 'mz-hint', message));
+    const signedOut = /not logged in|\/login/i.test(String(message || ''));
+    error.appendChild(el('p', 'mz-hint', signedOut
+      ? 'Claude Code is not signed in yet. Open a terminal, run claude, sign in, then try again here.'
+      : message));
     const retry = el('button', 'mz-btn mz-btn-primary', 'Try again');
     retry.type = 'button';
     retry.addEventListener('click', () => renderFirstTaskStep(box.parentNode, step));
@@ -962,7 +1022,7 @@
     box.textContent = '';
     const run = el('div', 'mz-taskrun');
     run.appendChild(el('div', 'mz-taskrun-title', 'Your agent is on it.'));
-    const status = el('div', 'mz-taskrun-status', 'Spinning up a $0 model…');
+    const status = el('div', 'mz-taskrun-status', S.ownClaude ? 'Starting Claude Code…' : 'Spinning up a $0 model…');
     status.setAttribute('aria-live', 'polite');
     run.appendChild(status);
     const bar = el('div', 'mz-progress mz-progress-indet');
@@ -973,7 +1033,7 @@
 
     let res = null;
     try {
-      res = savedJob ? { job_id: savedJob } : await driver.firstTask(task.id);
+      res = savedJob ? { job_id: savedJob } : await driver.firstTask(task.id, S.ownClaude ? 'standard' : 'free');
     } catch (e) {
       // An unavailable first-task runner remains retryable, without a finale.
       firstTaskError(box, step, (e && e.message) || 'The task could not start. Try again.');
@@ -1000,14 +1060,18 @@
           if (j.status !== 'running') {
             S.firstTaskJobId = null;
             lsDel(LS_FIRST_TASK);
-            if (j.status === 'done' && j.runtime === 'free' && j.result && j.result.verified) {
+            const ranOk = j.status === 'done' && j.result && j.result.verified;
+            if (ranOk && (j.runtime === 'free' || (S.ownClaude && j.runtime === 'standard'))) {
               S.firstTaskDone = true;
-              S.savedUsd = Number(j.usage && j.usage.api_value_usd) || null;
+              setOwnClaude(j.runtime === 'standard');
+              S.savedUsd = S.ownClaude ? null : (Number(j.usage && j.usage.api_value_usd) || null);
               step.status = 'ok';
               sfx('success');
               goFinale();
             } else {
-              firstTaskError(box, step, j.error || 'The task did not finish on a free model. Try again.');
+              firstTaskError(box, step, j.error || (S.ownClaude
+                ? 'The task did not finish. Check that Claude Code is signed in (run claude in a terminal), then try again.'
+                : 'The task did not finish on a free model. Try again.'));
             }
             return;
           }
@@ -1026,14 +1090,40 @@
     firstTaskError(box, step, 'The task did not start. Try again.');
   }
 
+  // One reminder, only if the person asks for it and this computer can show it.
+  async function offerReminder(card) {
+    let state;
+    try { state = await (await fetch('/api/return-reminder')).json(); } catch (_) { return; }
+    if (!state || !state.can_notify || state.armed) return;
+    const remind = el('button', 'mz-linklike', 'Remind me tomorrow morning what my sessions did');
+    remind.type = 'button';
+    remind.addEventListener('click', async () => {
+      remind.disabled = true;
+      let set = null;
+      try {
+        const res = await fetch('/api/return-reminder', { method: 'POST' });
+        set = await res.json();
+      } catch (_) {}
+      if (!set || !set.armed) {
+        remind.disabled = false;
+        remind.textContent = 'That did not save. Try again';
+        return;
+      }
+      remind.textContent = set.background
+        ? 'Set. One notification tomorrow at 9am.'
+        : 'Set for 9am tomorrow. CCC has to be running then.';
+    });
+    card.appendChild(remind);
+  }
+
   // ── Scene: Finale ──
   async function goFinale() {
     S.scene = 'finale';
     const card = el('section', 'mz-card mz-finale');
-    card.appendChild(el('div', 'mz-eyebrow', 'Moment zero'));
-    card.appendChild(el('h2', 'mz-title mz-finale-title', 'You are live.'));
-    const big = el('div', 'mz-big-cost', '$0');
-    card.appendChild(big);
+    const own = S.ownClaude && S.firstTaskDone;
+    card.appendChild(el('div', 'mz-eyebrow', own ? 'First task' : 'Moment zero'));
+    card.appendChild(el('h2', 'mz-title mz-finale-title', own ? 'Done. It is on your board.' : 'You are live.'));
+    if (!own) card.appendChild(el('div', 'mz-big-cost', '$0'));
 
     const line = el('p', 'mz-finale-line');
     card.appendChild(line);
@@ -1053,6 +1143,7 @@
     });
     actions.appendChild(tour);
     card.appendChild(actions);
+    offerReminder(card);
 
     shell(card);
     confetti({ origin: 'center' });
@@ -1061,7 +1152,9 @@
 
     // Savings line: only the verified first task's own usage, never a daily total.
     const usd = S.firstTaskDone ? S.savedUsd : null;
-    if (usd != null && isFinite(usd) && usd > 0) {
+    if (own) {
+      line.textContent = 'It ran on your own Claude account. Anything you run with claude in a terminal shows up on this board too.';
+    } else if (usd != null && isFinite(usd) && usd > 0) {
       line.textContent = '';
       line.appendChild(el('span', null, 'This run cost $0. At API prices it would have cost about '));
       const num = el('strong', 'mz-saved-num');
@@ -1105,6 +1198,14 @@
     try { window.__cccEnginesFirstRun = false; } catch (_) {}
   }
 
+  // The dashboard auto-starts the First Flight guide on any browser that has
+  // not seen it. Anyone leaving Moment Zero has already had their welcome, and
+  // the finale offers the guide as a choice. Settings > Take the tour still
+  // starts it.
+  function skipAutoTour() {
+    if (!lsGet(LS_TOUR_DONE)) lsSet(LS_TOUR_DONE, 'skipped-after-welcome');
+  }
+
   function open(opts) {
     opts = opts || {};
     if (S.open) return;
@@ -1142,6 +1243,7 @@
   function close() {
     if (!S.open) return;
     S.open = false;
+    skipAutoTour();
     clearTimeout(S.jobTimer);
     S.jobTimer = null;
     clearTimeout(S.firstTaskTimer);
@@ -1153,7 +1255,11 @@
     // welcome is not a "setup complete" event worth notifying about.
     if (S.scene === 'finale') {
       try {
-        if (window.cccNotify) window.cccNotify('Setup complete', 'Your team is ready. Runs on free models cost $0.', 'success');
+        if (window.cccNotify) {
+          window.cccNotify('Setup complete', S.ownClaude
+            ? 'Your first task is on the board.'
+            : 'Your team is ready. Runs on free models cost $0.', 'success');
+        }
       } catch (_) {}
     }
     if (S.prevFocus && typeof S.prevFocus.focus === 'function') {
@@ -1193,6 +1299,12 @@
           markDone();
           open();
           return true;
+        }
+        // Already runs an agent: their sessions on the board are the first
+        // thing worth seeing, so no setup screen or guide goes on top of it.
+        if (d && d.has_history) {
+          markDone();
+          skipAutoTour();
         }
         return false;
       })

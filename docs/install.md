@@ -16,8 +16,13 @@ platform. Windows can run in PowerShell; WSL2 is the Linux service option.
 
 ### curl
 
-Clones into `~/.ccc/claude-command-center` and runs in the foreground. Re-run
-it to update the checkout.
+Clones into `~/.ccc/claude-command-center` and asks whether to keep CCC running
+in the background. If you say no, or there is no terminal to ask in, it runs in
+the foreground and stops when that window closes; `ccc` starts it again. Re-run
+the install line to update the checkout.
+
+The `ccc` command lands in `~/.local/bin`. A stock macOS shell does not have
+that on `PATH`, and the installer prints the line to add.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash

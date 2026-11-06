@@ -32,6 +32,8 @@ CCC 完全在本地运行，源码公开，个人和公司都可以免费使用�
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
 ```
 
+已经在用 Claude Code？打开时，过去的会话已在看板上，之后用 `claude` 运行的会话也会自动出现。还没有会话？它会提议在练习文件夹里，用你自己的 Claude 账号做一个小任务。
+
 用 Homebrew 安装：
 
 ```bash

@@ -1388,7 +1388,7 @@
           <span class="conv-presentation-zero-cost" data-role="presentation-cost" title="Present is local; Mode 3 asks the working agent to author slides">0 extra tokens</span>
         </div>
         <div class="conversations-view" id="conversationsView">
-          <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
+          <div class="empty-state" style="height:auto;padding:40px;">Pick a session on the left, or press New session to start one</div>
         </div>
         <!-- CCC-1033: last-write timestamp for the open conversation, centered
              below the transcript. Populated + ticked by _updateLastWrittenLine()
@@ -4984,6 +4984,16 @@
   try {
     const last = parseInt(localStorage.getItem(DISMISS_KEY) || '0', 10);
     if (last && (Date.now() - last) < RENAG_AFTER_MS) return;
+  } catch (_) {}
+
+  // Not on the very first load: someone who just installed has not seen the
+  // board yet, so asking them to install it again is noise.
+  try {
+    const FIRST_SEEN_KEY = 'ccc-pwa-first-seen';
+    if (!localStorage.getItem(FIRST_SEEN_KEY)) {
+      localStorage.setItem(FIRST_SEEN_KEY, String(Date.now()));
+      return;
+    }
   } catch (_) {}
 
   // Platform sniff — only used to pick the right copy. Browsers don't all

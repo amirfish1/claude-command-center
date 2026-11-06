@@ -44,6 +44,21 @@ def _write_state(home: Path, text: str) -> None:
     (state_dir / "onboarding.json").write_text(text)
 
 
+def test_claude_history_opens_the_dashboard_not_the_tour(tmp_path):
+    project = tmp_path / ".claude" / "projects" / "-home-me-app"
+    project.mkdir(parents=True)
+    assert _open_url(tmp_path).endswith("/?onboarding=1")
+    (project / "abc.jsonl").write_text("{}\n")
+    assert _open_url(tmp_path) == "http://localhost:8090"
+
+
+def test_codex_history_opens_the_dashboard_not_the_tour(tmp_path):
+    day = tmp_path / ".codex" / "sessions" / "2026" / "11" / "05"
+    day.mkdir(parents=True)
+    (day / "rollout.jsonl").write_text("{}\n")
+    assert _open_url(tmp_path) == "http://localhost:8090"
+
+
 def test_install_sh_is_valid_bash():
     subprocess.run(["bash", "-n", str(INSTALL_SH)], check=True)
 
@@ -82,7 +97,7 @@ def test_custom_port_is_kept(tmp_path):
 def test_open_when_ready_passes_the_url_to_the_browser(tmp_path):
     """The background watcher really opens the URL it was handed.
 
-    A stub `open` binary records its argument; a bound TCP socket stands in
+    A stub opener records its argument; a bound TCP socket stands in
     for the dashboard so the watcher does not poll for a full minute.
     """
     listener = socket.socket()
@@ -106,9 +121,10 @@ def test_open_when_ready_passes_the_url_to_the_browser(tmp_path):
         stub_dir = tmp_path / "bin"
         stub_dir.mkdir()
         log = tmp_path / "opened.txt"
-        stub = stub_dir / "open"
-        stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$OPEN_LOG"\n')
-        stub.chmod(0o755)
+        for opener in ("open", "xdg-open"):  # macOS and Linux respectively
+            stub = stub_dir / opener
+            stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$OPEN_LOG"\n')
+            stub.chmod(0o755)
         script = (
             f'source "{INSTALL_SH}" && '
             f'open_when_ready "http://localhost:{port}/?onboarding=1"; wait'
@@ -204,3 +220,44 @@ def test_copy_button_behavior_in_site_js():
 def test_no_em_dash_in_install_page_copy():
     # Novice-facing copy stays in plain punctuation.
     assert "—" not in SITE_INSTALL.read_text()
+
+
+def _dashboard_notes(home: Path, url: str, **env) -> str:
+    """What the installer prints last, with no display and no opener on PATH."""
+    clean = {k: v for k, v in os.environ.items()
+             if k not in ("DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION")}
+    bindir = home / "emptybin"
+    bindir.mkdir(exist_ok=True)
+    bash = subprocess.run(["bash", "-c", "command -v bash"], capture_output=True,
+                          text=True, check=True).stdout.strip()
+    return subprocess.run(
+        [bash, "-c",
+         'source "$1"; PORT=8090; note() { printf "%s\\n" "$1"; }; '
+         'command() { [ "$2" = open ] || [ "$2" = xdg-open ] && return 1; builtin command "$@"; }; '
+         'print_dashboard_notes "$2"',
+         "_", str(INSTALL_SH), url],
+        env={**clean, "HOME": str(home), **env},
+        capture_output=True, text=True, check=True,
+    ).stdout
+
+
+def test_headless_install_prints_the_url_it_could_not_open(tmp_path):
+    url = "http://localhost:8090/?onboarding=1"
+    out = _dashboard_notes(tmp_path, url)
+    assert f"open this in your browser: {url}" in out
+    assert "your browser will open" not in out
+    assert "ssh -L" not in out
+    assert "next: the setup tour" in out
+
+
+def test_install_over_ssh_explains_the_tunnel(tmp_path):
+    out = _dashboard_notes(tmp_path, "http://localhost:8090/", SSH_CONNECTION="1 2 3 4")
+    assert "ssh -L 8090:127.0.0.1:8090" in out
+
+
+def test_install_with_history_says_the_board_is_ready(tmp_path):
+    project = tmp_path / ".claude" / "projects" / "-home-me-app"
+    project.mkdir(parents=True)
+    (project / "abc.jsonl").write_text("{}\n")
+    out = _dashboard_notes(tmp_path, "http://localhost:8090/")
+    assert "your past sessions are on the board" in out

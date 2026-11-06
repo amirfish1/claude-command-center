@@ -102,6 +102,35 @@ class TestInstallScript(unittest.TestCase):
             f"unexpected shebang: {first_line!r}",
         )
 
+    def test_linux_open_is_not_a_browser(self):
+        """`open` on Linux can be the kbd package's openvt alias."""
+        result = _run_install_script_function(
+            'uname() { echo Linux; }; open() { :; }; '
+            'unset DISPLAY WAYLAND_DISPLAY SSH_CONNECTION; '
+            'PATH=/nonexistent can_open_browser && echo yes || echo no',
+        )
+        self.assertEqual(result.stdout.strip(), "no", result.stderr)
+
+    def test_no_browser_promise_over_ssh(self):
+        result = _run_install_script_function(
+            'uname() { echo Darwin; }; can_open_browser && echo yes || echo no',
+            env_extra={"SSH_CONNECTION": "10.0.0.1 1 10.0.0.2 22"},
+        )
+        self.assertEqual(result.stdout.strip(), "no", result.stderr)
+
+    def test_mac_desktop_opens_a_browser(self):
+        result = _run_install_script_function(
+            'uname() { echo Darwin; }; unset SSH_CONNECTION; '
+            'can_open_browser && echo yes || echo no',
+        )
+        self.assertEqual(result.stdout.strip(), "yes", result.stderr)
+
+    def test_reminder_command_works_when_pasted(self):
+        result = _run_install_script_function(
+            'PATH=/usr/bin:/bin; HOME=/h; ccc_command',
+        )
+        self.assertEqual(result.stdout, "/h/.local/bin/ccc", result.stderr)
+
     def test_python_gate_accepts_39_and_honors_override(self):
         script = Path(INSTALL_SCRIPT).read_text(encoding="utf-8")
 
