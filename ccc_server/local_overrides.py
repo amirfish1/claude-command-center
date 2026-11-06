@@ -13,6 +13,7 @@ falls back to its generic behaviour. Example:
       "repo_aliases": {"acme-web": ["\\\\bacme\\\\b"]},
       "ticket_title_noise": ["Acme: Home"],
       "commit_scopes": {"apps/acme-web": "web"},
+      "ticket_prefix_repos": {"ACME": ["acme-web"]},
       "remote_apps_dir": "/srv/agent/Apps"
     }
 
@@ -101,6 +102,15 @@ def ticket_title_noise() -> list[str]:
     """Substrings that mark a ticket title as a page title, not a summary."""
     raw = _load().get("ticket_title_noise")
     return [t for t in raw if isinstance(t, str) and t] if isinstance(raw, list) else []
+
+
+def ticket_prefix_repos() -> dict[str, list[str]]:
+    """Upper-cased ticket prefix -> the only repos its tickets belong to."""
+    raw = _load().get("ticket_prefix_repos")
+    if not isinstance(raw, dict):
+        return {}
+    return {k.upper(): [r for r in v if isinstance(r, str)]
+            for k, v in raw.items() if isinstance(k, str) and k and isinstance(v, list)}
 
 
 def remote_apps_dir() -> str:

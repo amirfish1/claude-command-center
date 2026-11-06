@@ -72,6 +72,14 @@ def test_page_title_noise_through_config(overrides):
     assert ship_graph._clean_ticket_title(title, text) == "Fix the checkout button"
 
 
+def test_ticket_prefix_ownership_through_config(overrides):
+    assert ship_graph._ticket_matches_repo("ACME-12", "other-repo") is True
+    overrides({"ticket_prefix_repos": {"acme": ["acme-web"]}})
+    assert ship_graph._ticket_matches_repo("ACME-12", "other-repo") is False
+    assert ship_graph._ticket_matches_repo("ACME-12", "acme-web") is True
+    assert ship_graph._ticket_matches_repo("OTHER-1", "other-repo") is True
+
+
 def test_commit_scope_through_config_longest_prefix_wins(overrides):
     assert github_issues._ship_commit_scope("apps/acme-ios/App.swift") == "apps"
     overrides({"commit_scopes": {"apps/acme": "acme", "apps/acme-ios": "ios"}})
@@ -207,3 +215,16 @@ def test_gate_checks_file_names_and_commit_messages(repo, term_list):
 def test_pre_push_runs_the_gate():
     source = (ROOT / "scripts" / "pre-push.sh").read_text(encoding="utf-8")
     assert "scripts/check-private-terms.py" in source
+
+
+def test_pre_push_loop_runs_when_the_ref_line_has_no_newline(tmp_path):
+    """A delegating hook strips the trailing newline; the gate must still run."""
+    source = (ROOT / "scripts" / "pre-push.sh").read_text(encoding="utf-8")
+    loop = source[source.index("while read -r _lref"):]
+    loop = loop[:loop.index("\ndone\n") + 6]
+    body = 'while read -r _lref lsha _rref rsha || [ -n "${lsha:-}" ]; do'
+    assert loop.startswith(body)
+    res = subprocess.run(["bash", "-c", body + ' echo "ran:$lsha"; done'],
+                         input="refs/heads/main abc refs/heads/main def",
+                         capture_output=True, text=True)
+    assert res.stdout.strip() == "ran:abc"

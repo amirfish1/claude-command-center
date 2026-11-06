@@ -1823,7 +1823,8 @@ def _ticket_matches_repo(t_ref: str, repo: str) -> bool:
         return False
     if pfx in ("WT", "WATCHTOWER") and repo != "watchtower":
         return False
-    if pfx in ("BYM", "BECKY", "BYMOPS") and repo not in ("BYM", "becky-pro", "amirfish1__BYM-Finie"):
+    owners = _local_overrides.ticket_prefix_repos().get(pfx)
+    if owners and repo not in owners:
         return False
     return True
 

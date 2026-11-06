@@ -55,7 +55,9 @@ fi
 # wrote that into this clone's .git/config, and ~180 commits shipped under it.
 # Refuse to push any commit authored or committed as the fixture identity.
 zero=0000000000000000000000000000000000000000
-while read -r _lref lsha _rref rsha; do
+# A delegating hook can pass the ref line without its trailing newline, and
+# read then reports EOF on the only line, so test for a partial read too.
+while read -r _lref lsha _rref rsha || [ -n "${lsha:-}" ]; do
   [ "$lsha" = "$zero" ] && continue
   if [ "$rsha" = "$zero" ]; then range="$lsha --not --remotes"; else range="$rsha..$lsha"; fi
   # Private-name gate. The list lives outside the repo, so this skips cleanly
