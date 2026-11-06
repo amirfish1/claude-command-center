@@ -60586,6 +60586,16 @@
   // Longer than this and the network usually wins anyway; a slow disk must
   // never delay the fresh render.
   const CONV_CACHE_READ_BUDGET_MS = 250;
+  // conv_open's `ms` stops when the render call returns, before the observers
+  // and the frame it triggers, so a page frozen after the render read as fast
+  // (CCC-143). paint_ms is click -> first frame after it; a hidden tab paints
+  // no frames, so the sample still sends with paint_ms null.
+  function _convOpenAfterPaint(t0, send) {
+    let done = false;
+    const finish = (ms) => { if (!done) { done = true; send(ms); } };
+    requestAnimationFrame(() => setTimeout(() => finish(Math.round(performance.now() - t0)), 0));
+    setTimeout(() => finish(null), 2000);
+  }
   let _convCacheDbP = null;
   function _convCacheDb() {
     if (_convCacheDbP) return _convCacheDbP;
@@ -61617,7 +61627,7 @@
               const _perfEnd = performance.now();
               const _perfWall = _perfEnd - _perfConvOpen.t0;
               const _perfActive = _perfActiveElapsed(_perfConvOpen.t0, _perfEnd);
-              _perfEvent('conv_open', _perfActive, {
+              const _perfOpenEvent = {
                 conv_id: id,
                 detail: {
                   events: Array.isArray(data.events) ? data.events.length : 0,
@@ -61632,6 +61642,10 @@
                   // fetch_at < 0 means a hover/restore prefetch started first.
                   ..._convOpenPhases(data, _perfConvOpen.t0, _perfDataAt, _perfRenderAt, _perfEnd, id),
                 },
+              };
+              _convOpenAfterPaint(_perfConvOpen.t0, (paintMs) => {
+                _perfOpenEvent.detail.paint_ms = paintMs;
+                _perfEvent('conv_open', _perfActive, _perfOpenEvent);
               });
               if (typeof window.__cccPerfRow === 'function') {
                 window.__cccPerfRow('open', {
@@ -68969,7 +68983,16 @@
   // divs (`.kimi-marker`, per-event dedupe anchors) are transparent — they
   // neither join nor break a run. Collapse state survives a regroup via a
   // data flag mirrored onto the rows.
+  // One open appends hundreds of events to a turn. Regrouping after each one
+  // re-read layout and rebuilt every group (CCC-143), so a first render only
+  // records the turns and regroups each once, when its events are all in place.
+  function _kimiFlushRegroups() {
+    const turns = _kimiRegroupTools.batch;
+    _kimiRegroupTools.batch = null;
+    if (turns) for (const turn of turns) if (turn.isConnected) _kimiRegroupTools(turn);
+  }
   function _kimiRegroupTools(turn) {
+    if (_kimiRegroupTools.batch) { _kimiRegroupTools.batch.add(turn); return; }
     const view = turn.closest('.conversations-view');
     const scrollTop = view && view.scrollTop;
     Array.from(turn.querySelectorAll(':scope > .kimi-tool-group')).forEach(g => {
@@ -69787,6 +69810,9 @@
         + '<pre class="codex-ambient-context__body">' + escapeHtml(String(context.text)) + '</pre>'
         + '</details>';
     }
+    const _ownsRegroupBatch = !!opts.initialLoad && !_kimiRegroupTools.batch;
+    if (_ownsRegroupBatch) _kimiRegroupTools.batch = new Set();
+    try {
     for (const sourceEvent of events) {
       // A transport hop does not make ordinary dashboard input a peer
       // message. Keep its evidence, but use normal input rendering unless
@@ -71473,6 +71499,9 @@
         }
         if (ev.type === 'assistant' && !handedOffStreamingBubble) _convLiveRevealNewText(div, paneId, opts);
       }
+    }
+    } finally {
+      if (_ownsRegroupBatch) _kimiFlushRegroups();
     }
     // Batched CCC-500 overflow check: one layout read for all results
     // appended above, then the writes. Reads-then-writes = one recalc.
