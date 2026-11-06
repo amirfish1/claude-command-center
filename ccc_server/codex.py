@@ -8898,12 +8898,37 @@ def _codex_fetch_threads_in_home(where="", params=(), limit=None, columns=None, 
             sql = f"SELECT {', '.join(selected)} FROM threads"
             if where:
                 sql += f" WHERE {where}"
+            fallback_order = order
+            if limit and columns is not None and order_terms and not where:
+                # Bounded sidebar/liveness projections must not sort the whole
+                # thread table on every WAL change. Native timestamp indexes
+                # cannot satisfy COALESCE, even when its first column is never
+                # NULL. Prove that case in the same read snapshot as the query;
+                # older/mixed schemas retain the original fallback ordering.
+                con.execute("BEGIN")
+                primary = order_terms[0].split()[0]
+                missing = con.execute(
+                    f"SELECT 1 FROM threads WHERE {primary} IS NULL LIMIT 1",
+                ).fetchone()
+                if missing is None:
+                    # The former table scan broke timestamp ties by rowid.
+                    # Preserve that order rather than adopting the index's id
+                    # tie-breaker (which could change which rows fit the limit).
+                    order = f"{primary} DESC, rowid ASC"
+            base_sql = sql
             sql += f" ORDER BY {order}"
             if limit:
                 sql += " LIMIT ?"
                 params = tuple(params) + (int(limit),)
             deleted = _core._codex_deleted_thread_ids()
-            all_rows = [dict(r) for r in con.execute(sql, tuple(params)).fetchall()]
+            try:
+                all_rows = [dict(r) for r in con.execute(sql, tuple(params)).fetchall()]
+            except sqlite3.OperationalError as exc:
+                if order == fallback_order or "no such column: rowid" not in str(exc):
+                    raise
+                # Unusual WITHOUT ROWID stores still support the legacy query.
+                sql = f"{base_sql} ORDER BY {fallback_order} LIMIT ?"
+                all_rows = [dict(r) for r in con.execute(sql, tuple(params)).fetchall()]
             if sig is not None and _codex_db_signature(db) == sig:
                 with _CODEX_THREADS_CACHE_LOCK:
                     if len(_CODEX_THREADS_CACHE) > 64:
