@@ -52,6 +52,7 @@ _TOOL_NAMES = frozenset("""
     WebFetch WebSearch Write apply_patch exec_command read_file shell
     update_plan write_stdin
 """.split())
+_SHELL_TOOLS = frozenset(("Bash", "exec_command", "shell"))
 _EDIT_TOOLS = frozenset(("Edit", "MultiEdit", "NotebookEdit", "Write", "apply_patch"))
 _COMMAND_VERBS = frozenset("""
     bun bundle cargo cat cmake composer curl deno docker dotnet eslint flake8
@@ -73,10 +74,10 @@ _MODEL_RE = re.compile(
     r"^(?:claude|gpt|o[134]|gemini|grok|kimi|deepseek|qwen|llama|mistral|glm|devin)"
     r"[a-z0-9.\-]{0,40}$"
 )
-_COMMIT_RE = re.compile(r"\bgit(?:\s+-[^\s]+(?:\s+[^\s-][^\s]*)?)*\s+commit\b")
-_TEST_RE = re.compile(
-    r"\b(?:pytest|unittest|vitest|jest|npm\s+(?:run\s+)?test|pnpm\s+test|"
-    r"yarn\s+test|go\s+test|cargo\s+test|rspec|mvn\s+test|make\s+test)\b"
+_TEST_COMMAND_RE = re.compile(
+    r"^(?:(?:python3?\s+-m\s+)?(?:pytest|unittest)|vitest|jest|rspec|"
+    r"npx\s+(?:jest|vitest)|(?:npm|pnpm|yarn)\s+(?:run\s+)?test|"
+    r"(?:go|cargo|mvn|make)\s+test)\b"
 )
 _CWD_RE = re.compile(rb'"cwd"\s*:\s*"([^"\n]{1,1024})"')
 _PLACEHOLDER_RE = re.compile(r"\[(?:[a-z]+(?:-\d+)?|code, \d+ lines?)\]")
@@ -202,8 +203,8 @@ def _parse_ts(value):
         return None
 
 
-def _command_verb(command: str) -> str:
-    """The allow-listed program a shell command runs, or ''."""
+def _command_segments(command: str):
+    """Each pipeline stage of a shell command, without wrappers or env vars."""
     for segment in re.split(r"&&|\|\||[;|\n]", str(command or "")):
         words = segment.split()
         while words and (
@@ -211,9 +212,15 @@ def _command_verb(command: str) -> str:
             or words[0].startswith("-") or words[0].isdigit()
         ):
             words.pop(0)
-        if not words:
-            continue
-        verb = words[0].rsplit("/", 1)[-1]
+        if words:
+            words[0] = words[0].rsplit("/", 1)[-1]
+            yield words
+
+
+def _command_verb(command: str) -> str:
+    """The allow-listed program a shell command runs, or ''."""
+    for words in _command_segments(command):
+        verb = words[0]
         if verb not in _COMMAND_VERBS:
             continue
         if verb == "git":
@@ -223,13 +230,28 @@ def _command_verb(command: str) -> str:
     return ""
 
 
+def _is_commit(command: str) -> bool:
+    return any(
+        words[0] == "git" and next((w for w in words[1:] if w in _GIT_VERBS), "") == "commit"
+        for words in _command_segments(command)
+    )
+
+
+def _is_test_run(command: str) -> bool:
+    return any(_TEST_COMMAND_RE.match(" ".join(words)) for words in _command_segments(command))
+
+
+def _shell_command(block: dict) -> str:
+    """Short commands are only in ``detail``; long ones have ``command`` too."""
+    if str(block.get("name") or "") not in _SHELL_TOOLS:
+        return ""
+    return str(block.get("command") or block.get("detail") or "")
+
+
 def _tool_label(block: dict) -> tuple:
     name = str(block.get("name") or "")
     known = name if name in _TOOL_NAMES else "Tool"
-    verb = ""
-    if name in ("Bash", "shell", "exec_command"):
-        verb = _command_verb(block.get("command") or "")
-    return known, verb
+    return known, _command_verb(_shell_command(block))
 
 
 def _safe_model(value) -> str:
@@ -295,11 +317,9 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
                     label, verb = _tool_label(block)
                     add_tool(at, label, verb)
                     stats["tool_calls"] += 1
-                    command = str(block.get("command") or "")
-                    if _COMMIT_RE.search(command):
-                        stats["commits"] += 1
-                    if _TEST_RE.search(command):
-                        stats["test_runs"] += 1
+                    command = _shell_command(block)
+                    stats["commits"] += _is_commit(command)
+                    stats["test_runs"] += _is_test_run(command)
                     if label in _EDIT_TOOLS:
                         edited.add(str(block.get("detail") or block.get("id") or ""))
         elif kind == "tool_result" and event.get("is_error"):
@@ -319,7 +339,7 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
 
     chosen_title = redactor.text(title, MAX_TITLE_CHARS) if title else ""
     if not chosen_title:
-        chosen_title = first_prompt.split("\n")[0][:MAX_TITLE_CHARS].strip() or "An agent run"
+        chosen_title = _title_from(first_prompt)
     duration = int(last_ts - first_ts) if first_ts is not None and last_ts is not None else 0
     replay = {
         "title": chosen_title,
@@ -342,6 +362,16 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
     # must not fail the check; every free-text field is verified.
     redactor.verify([replay["title"]] + [s.get("text", "") for s in steps])
     return replay, redactor
+
+
+def _title_from(prompt: str) -> str:
+    """First sentence of the prompt, cut on a word boundary."""
+    line = prompt.split("\n")[0].strip()
+    sentence = re.match(r".*?[.!?](?=\s|$)", line)
+    title = sentence.group(0) if sentence else line
+    if len(title) > MAX_TITLE_CHARS:
+        title = title[:MAX_TITLE_CHARS].rsplit(" ", 1)[0].rstrip(" ,;:") + " …"
+    return title or "An agent run"
 
 
 def _esc(value) -> str:
@@ -377,11 +407,15 @@ def _stat_tiles(replay: dict) -> list:
 
 def _hidden_sentence(hidden: dict) -> str:
     labels = (
-        ("secret", "secrets"), ("path", "paths"), ("name", "names"), ("word", "words"),
-        ("email", "emails"), ("url", "links"), ("host", "hosts"), ("ip", "IPs"),
-        ("code", "code blocks"),
+        ("secret", "secret", "secrets"), ("path", "path", "paths"), ("name", "name", "names"),
+        ("word", "word", "words"), ("email", "email", "emails"), ("url", "link", "links"),
+        ("host", "host", "hosts"), ("ip", "IP", "IPs"), ("code", "code block", "code blocks"),
     )
-    parts = [f"{hidden[k]} {label}" for k, label in labels if hidden.get(k)]
+    parts = [
+        f"{hidden[key]} {one if hidden[key] == 1 else many}"
+        for key, one, many in labels
+        if hidden.get(key)
+    ]
     return "Redacted on the author's machine: " + (", ".join(parts) or "nothing matched") + "."
 
 

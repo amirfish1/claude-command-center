@@ -335,7 +335,9 @@ def _words() -> frozenset:
     except OSError:
         # A missing list must fail safe: fewer words survive, none leak.
         base = []
-    return frozenset(base) | _EXTRA_WORDS
+    # The curated list is singular nouns and base verbs, so its plurals are
+    # safe to add. Corpus words do not get this: "Banks" and "Rivers" are names.
+    return frozenset(base) | _EXTRA_WORDS | {f"{w}s" for w in _EXTRA_WORDS}
 
 
 def split_identity(value) -> set:

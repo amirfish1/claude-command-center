@@ -97,6 +97,42 @@ def test_command_label_is_allow_listed(command, verb):
     assert share_run._command_verb(command) == verb
 
 
+def test_short_commands_are_read_from_detail():
+    events = [{"type": "assistant", "ts": "2026-11-05T10:00:00Z", "blocks": [
+        {"kind": "tool_use", "name": "Bash", "id": "1", "detail": "cd /x && pytest tests/a.py"},
+        {"kind": "tool_use", "name": "Bash", "id": "2", "detail": "git -C /x commit -m 'y'"},
+        {"kind": "tool_use", "name": "Read", "id": "3", "detail": "git commit pytest"},
+    ]}]
+    replay = export(events)
+    assert (replay["stats"]["test_runs"], replay["stats"]["commits"]) == (1, 1)
+    labels = [t["label"] for t in replay["steps"][0]["tools"]]
+    assert labels == ["Bash pytest", "Bash git commit", "Read"]
+
+
+@pytest.mark.parametrize("command,commit,test", [
+    ("python3 -m pytest -q", False, True),
+    ("nice -n 15 npm run test", False, True),
+    ("git commit --only a -m 'b'", True, False),
+    ("rg 'git commit' docs && grep pytest notes.md", False, False),
+    ("echo pytest", False, False),
+])
+def test_commit_and_test_counts_need_a_real_invocation(command, commit, test):
+    assert share_run._is_commit(command) is commit
+    assert share_run._is_test_run(command) is test
+
+
+def test_title_is_the_first_sentence_cut_on_a_word():
+    assert share_run._title_from("Fix the bug. Then more.") == "Fix the bug."
+    long_title = share_run._title_from("word " * 60)
+    assert long_title.endswith("word …") and len(long_title) <= share_run.MAX_TITLE_CHARS + 2
+
+
+def test_hidden_summary_counts_read_naturally():
+    assert share_run._hidden_sentence({"secret": 1, "path": 2}) == (
+        "Redacted on the author's machine: 1 secret, 2 paths."
+    )
+
+
 def test_title_override_is_redacted_too():
     replay = export(title="Refund fix for Dana Okafor")
     assert "Dana" not in replay["title"] and replay["title"].startswith("Refund fix")
