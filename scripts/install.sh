@@ -521,6 +521,40 @@ pick_port() {
   export PORT
 }
 
+can_open_browser() {
+  command -v open >/dev/null 2>&1 && return 0
+  command -v xdg-open >/dev/null 2>&1 || return 1
+  # xdg-open exists on plenty of servers; without a display it opens nothing.
+  [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]
+}
+
+# The last thing printed before the server takes over, so it has to say where
+# to go and what to do there. Print the URL the browser would have opened: on a
+# headless box the person copies this line, and the plain dashboard URL loses
+# the setup tour.
+print_dashboard_notes() {
+  local url="$1"
+  if [ -n "${TAILNET_URL:-}" ]; then
+    note "dashboard (tailnet): $TAILNET_URL"
+    note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
+  elif can_open_browser; then
+    note "your browser will open in a moment: $url"
+  else
+    note "open this in your browser: $url"
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+      note "over SSH? run this on your own computer first: ssh -L ${PORT}:127.0.0.1:${PORT} <this-machine>"
+    fi
+  fi
+  if has_agent_history; then
+    note "next: your past sessions are on the board; anything you run with claude shows up there too"
+  else
+    case "$url" in
+      *\?onboarding=1) note "next: the setup tour gets a first task running" ;;
+      *) note "next: run claude in any project and it shows up on the board" ;;
+    esac
+  fi
+}
+
 launch_server() {
   if is_app_install; then
     cd "$INSTALL_DIR"
@@ -545,12 +579,8 @@ launch_server() {
   pick_port
   configure_tailnet "$PORT" "$@"
 
-  local url open_hint
+  local url
   url="$(dashboard_open_url "$DASHBOARD_URL")"
-  case "$url" in
-    *\?onboarding=1) open_hint="your browser will open a short setup tour in a moment" ;;
-    *)             open_hint="your browser will open the dashboard in a moment" ;;
-  esac
 
   if ask_install_service; then
     note "setting CCC up as a background service"
@@ -559,25 +589,13 @@ launch_server() {
     if ./run.sh --install-service; then
       printf '\n'
       ok "CCC is installed and running in the background"
-      note "$open_hint"
-      if [ -n "${TAILNET_URL:-}" ]; then
-        note "dashboard (tailnet): $TAILNET_URL"
-        note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
-      else
-        note "dashboard: $DASHBOARD_URL"
-      fi
+      print_dashboard_notes "$url"
       exit 0
     fi
     if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet ccc.service 2>/dev/null; then
       printf '\n'
       ok "CCC is running in the background (it was slow to start)"
-      note "$open_hint"
-      if [ -n "${TAILNET_URL:-}" ]; then
-        note "dashboard (tailnet): $TAILNET_URL"
-        note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
-      else
-        note "dashboard: $DASHBOARD_URL"
-      fi
+      print_dashboard_notes "$url"
       exit 0
     fi
     if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
@@ -587,13 +605,7 @@ launch_server() {
       if launchctl print "$service_target" >/dev/null 2>&1 || launchctl list 2>/dev/null | grep -qF "$service_label"; then
         printf '\n'
         ok "CCC is running in the background (it was slow to start)"
-        note "$open_hint"
-        if [ -n "${TAILNET_URL:-}" ]; then
-          note "dashboard (tailnet): $TAILNET_URL"
-          note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
-        else
-          note "dashboard: $DASHBOARD_URL"
-        fi
+        print_dashboard_notes "$url"
         exit 0
       fi
     fi
@@ -603,14 +615,8 @@ launch_server() {
   else
     note "starting CCC in this window on port $PORT"
     note "keep this window open; stop CCC with Ctrl+C"
-    note "tip: ./run.sh --install-service keeps CCC running in the background"
-    note "$open_hint"
-    if [ -n "${TAILNET_URL:-}" ]; then
-      note "dashboard (tailnet): $TAILNET_URL"
-      note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
-    else
-      note "dashboard: $DASHBOARD_URL"
-    fi
+    note "tip: $INSTALL_DIR/run.sh --install-service keeps CCC running in the background"
+    print_dashboard_notes "$url"
     open_when_ready "$url" "${TAILNET_IP:-127.0.0.1}"
     cd "$INSTALL_DIR"
     exec ./run.sh

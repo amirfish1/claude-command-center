@@ -40580,6 +40580,20 @@
     return { rows: result, omitted: Math.max(0, source.length - result.length) };
   }
 
+  // What an empty list says on a brand-new install: what to do first, in
+  // place of a dead end. Sessions started anywhere appear by themselves.
+  function firstRunEmptyHtml() {
+    return '<div class="empty-state first-run" style="height:auto;padding:28px 20px;font-size:13px;flex-direction:column;gap:10px;align-items:flex-start;color:var(--text-muted);">'
+      + '<div style="font-size:14px;color:var(--text);font-weight:600;">No sessions yet</div>'
+      + '<div style="line-height:1.5;">Run <code style="background:var(--bg);padding:2px 6px;border-radius:3px;color:var(--text);">claude</code> in any project and it shows up here by itself.</div>'
+      + '<div style="line-height:1.5;">Or start one from here:</div>'
+      + '<button type="button" class="settings-action-btn" data-first-run-new-session>New session</button>'
+      + '</div>';
+  }
+  document.addEventListener('click', (e) => {
+    if (e.target?.closest?.('[data-first-run-new-session]')) document.getElementById('sidebarNewBtn')?.click();
+  });
+
   function renderConversationList(convs) {
     if (window.__cccTourActive) return; // FIRST FLIGHT tour owns the list DOM
     convs = filterGhIssues(convs);
@@ -40628,12 +40642,7 @@
     }
     if (!convs.length) {
       _convListRenderSig = null;
-      $convList.innerHTML =
-        '<div class="empty-state first-run" style="height:auto;padding:28px 20px;font-size:13px;flex-direction:column;gap:10px;align-items:flex-start;color:var(--text-muted);">'
-        + '<div style="font-size:14px;color:var(--text);font-weight:600;">No sessions yet</div>'
-        + '<div style="line-height:1.5;">Open a terminal and run <code style="background:var(--bg);padding:2px 6px;border-radius:3px;color:var(--text);">claude</code> to start one - it\'ll show up here automatically.</div>'
-        + '<div style="line-height:1.5;">Or type a prompt in the <strong style="color:var(--text);">New session prompt</strong> field above and click <strong style="color:var(--text);">Run</strong>.</div>'
-        + '</div>';
+      $convList.innerHTML = firstRunEmptyHtml();
       return;
     }
     // Threshold for inserting a date-gap separator between rows. The list
@@ -73312,7 +73321,14 @@
   function orchExecutor() {
     let id = '';
     try { id = localStorage.getItem('ccc-orch-executor') || ''; } catch (_) {}
-    return ORCH_EXECUTORS.find(e => e.id === id) || ORCH_EXECUTORS[0];
+    // No saved choice: default to an agent this machine has. Naming one the
+    // user doesn't have is the first thing a Claude-only install reads here.
+    let installed = null;
+    // This pane can render during init, before _emnInstalled's declaration runs.
+    try { installed = _emnInstalled; } catch (_) {}
+    return ORCH_EXECUTORS.find(e => e.id === id)
+      || ORCH_EXECUTORS.find(e => installed && installed[e.engine] === true)
+      || ORCH_EXECUTORS[0];
   }
   function orchSetExecutor(id) {
     // If the composer still holds the previous model's spawn draft (task
@@ -73485,9 +73501,14 @@
     setTimeout(() => btn.classList.remove('is-drafted'), 320);
   }
 
+  let _orchEnginesProbed = false;
   function renderOrchPlaybooks() {
     const host = document.getElementById('orchPlaybooks');
     if (!host) return;
+    if (!_orchEnginesProbed) {
+      _orchEnginesProbed = true;
+      refreshEngineMissingNotice();
+    }
     const ex = orchExecutor();
     const tester = orchTester(ex);
     const critics = orchCritics(ex);
@@ -80115,7 +80136,7 @@
       return;
     }
     if (!archiveRows.length && !hasGc && !pendingSpawns.size) {
-      _renderArchiveEmpty('<div class="archive-empty-state">No conversations on disk.</div>');
+      _renderArchiveEmpty(firstRunEmptyHtml());
       return;
     }
     // When the unwindowed set has rows but the time-window filter hid them
@@ -92708,6 +92729,7 @@
       _emnInstalled = map;
       _emnObservedAt = new Date().toISOString();
       window.cccChoiceEligibility?.refresh();
+      renderOrchPlaybooks();
     } catch (_) { /* keep the last answer; never block the composer on this */ }
     renderEngineMissingNotice();
     renderNsAdvisor();

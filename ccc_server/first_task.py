@@ -369,6 +369,11 @@ TASKS = [
     },
 ]
 
+# The prompt's first line becomes the session's title on the board, so it has
+# to name the job rather than open with the briefing.
+for _task in TASKS:
+    _task["prompt"] = f"{_task['title']}\n\n{_task['prompt']}"
+
 _TASK_BY_ID = {t["id"]: t for t in TASKS}
 
 

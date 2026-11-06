@@ -324,6 +324,51 @@ def _dashboard_session_watch_tick(previous):
     return current
 
 
+# A new install has a handful of transcripts, and a `claude` run in a terminal
+# has no CCC spawn to announce it. Without this watch that session waits out
+# the 5-minute serve TTL plus the 5-minute recovery poll, so someone trying CCC
+# for the first time sees nothing happen. New files only (appends don't count),
+# and the walk stops at the limit: past it the watch retires itself, because
+# an established archive has no first impression to protect and must not pay
+# for a transcript walk every few seconds.
+_SMALL_ARCHIVE_TRANSCRIPT_LIMIT = 50
+_SMALL_ARCHIVE_WATCH_INTERVAL_S = 5.0
+_ARCHIVE_NEW_TRANSCRIPT_GATE_GRACE_S = 30.0
+_ARCHIVE_REFRESH_GATE_BYPASS_UNTIL = [0.0]
+
+
+def _small_archive_transcripts():
+    """Claude transcript paths, or None once there are more than the limit."""
+    found = set()
+    for directory in _archive_canonical_project_dirs(PROJECTS_ROOT):
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.name.endswith(".jsonl"):
+                        found.add(entry.path)
+                        if len(found) > _SMALL_ARCHIVE_TRANSCRIPT_LIMIT:
+                            return None
+        except OSError:
+            continue
+    return found
+
+
+def _dashboard_small_archive_watch_tick(previous):
+    """Return the next baseline; None retires the watch for this loop."""
+    current = _small_archive_transcripts()
+    if current is None:
+        return None
+    if current - previous:
+        # This is one event, not a poll, so it may pass the load gate once:
+        # the worker is cheap at this size and the row is what the user is
+        # waiting to see.
+        _ARCHIVE_REFRESH_GATE_BYPASS_UNTIL[0] = (
+            time.time() + _ARCHIVE_NEW_TRANSCRIPT_GATE_GRACE_S)
+        _restamp_archive_serve_cache_after_mutation()
+        _invalidate_dashboard("archive", reason="new-transcript")
+    return current
+
+
 def _dashboard_event_watch_loop():
     global _dashboard_event_watch_thread
     try:
@@ -340,6 +385,11 @@ def _dashboard_event_watch_loop():
     # in-flight base load and guarantees one post-baseline snapshot.
     _invalidate_dashboard("archive", reason="subscriber-baseline")
     try:
+        previous_transcripts = _small_archive_transcripts()
+    except Exception:
+        previous_transcripts = None
+    next_transcript_check = time.time() + _SMALL_ARCHIVE_WATCH_INTERVAL_S
+    try:
         while True:
             with _dashboard_event_watch_lock:
                 if _dashboard_event_watch_subscribers <= 0:
@@ -347,6 +397,12 @@ def _dashboard_event_watch_loop():
             time.sleep(1.0)
             previous_queue = _dashboard_queue_watch_tick(previous_queue)
             previous_sessions = _dashboard_session_watch_tick(previous_sessions)
+            if previous_transcripts is not None and time.time() >= next_transcript_check:
+                next_transcript_check = time.time() + _SMALL_ARCHIVE_WATCH_INTERVAL_S
+                try:
+                    previous_transcripts = _dashboard_small_archive_watch_tick(previous_transcripts)
+                except Exception:
+                    pass
     finally:
         try:
             gh_queue_watch_exit()
@@ -16854,6 +16910,8 @@ def _archive_refresh_load_blocked(now):
     """True when spawning the detached archive refresh would feed a saturated
     machine. Any probe failure means "not blocked" — a broken load check must
     never freeze refresh spawning or the request path."""
+    if now < _ARCHIVE_REFRESH_GATE_BYPASS_UNTIL[0]:
+        return False
     try:
         load1, ncpu = _machine_load()
         if float(load1) < _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU * float(ncpu):
@@ -18705,8 +18763,14 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
 
 def _archive_serve_refresh(key, cache_options, serve_generation, started_at):
     global _archive_serve_refreshing
+    with _archive_serve_lock:
+        rows_before = len((_archive_serve_cache.get(key) or {}).get("rows") or [])
     try:
-        _archive_compute_rows_detached(key, cache_options, serve_generation)
+        rows, _from_cache = _archive_compute_rows_detached(key, cache_options, serve_generation)
+        # A client that asked before this finished holds the old list, and an
+        # idle dashboard on the event stream won't ask again for minutes.
+        if len(rows) != rows_before:
+            _invalidate_dashboard("archive", reason="refresh-row-count")
     except Exception as e:
         print(f"  [archive-serve] background refresh failed: {e}")
     finally:
@@ -45846,18 +45910,18 @@ def build_memory_doctor():
     else:
         model_dir = index.get("embed_model_dir") or {}
         if not index.get("ollama_reachable"):
-            warnings.append("Ollama unreachable — semantic search is running FTS-only")
+            warnings.append("Ollama unreachable — semantic search is running FTS-only (optional; keyword search still works)")
         elif index.get("embed_model_present") is False:
             warnings.append(f"Ollama is up but {_session_fts.EMB_MODEL!r} is not pulled")
         if model_dir.get("reachable") is False:
             warnings.append(
                 f"embedding model directory unreachable: {model_dir.get('path')} "
-                "(unmounted share? see OPS-1251)"
+                "(is the drive or share unmounted?)"
             )
         elif model_dir.get("on_volumes"):
             warnings.append(
                 f"embedding model directory is on a mounted volume ({model_dir.get('resolved')}) "
-                "— an unmount silently breaks embeddings (OPS-1251)"
+                "— an unmount silently breaks embeddings"
             )
         sdoc_rows = index.get("sdoc_rows") or 0
         semb_sids = index.get("semb_sids") or 0

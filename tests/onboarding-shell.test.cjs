@@ -428,6 +428,78 @@ test('existing install does not auto-claim', async () => {
   }
 });
 
+test('Claude Code users run the first task on their own account, with no $0 claim', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({ steps: [
+          { id: 'node', status: 'missing' },
+          { id: 'claude_cli', status: 'ok' },
+          { id: 'free_router', status: 'missing' },
+        ] }),
+        firstTask: async (id, runtime) => { window.__mzRuntime = runtime; return { job_id: 'own' }; },
+        pollFirstTask: async () => ({ status: 'done', runtime: 'standard',
+          result: { verified: true }, usage: { api_value_usd: 0.3 }, lines: [] }),
+      });
+      window.cccOnboarding.open();
+    });
+    await page.waitForFunction(() => document.querySelector('.mz-btn-primary')?.textContent === 'Run a first task');
+    assert.ok(await page.evaluate(() => /your own Claude account/.test(document.querySelector('.mz-sub').textContent)));
+    await page.click('.mz-btn-primary');
+    await page.waitForSelector('.mz-task-card');
+    await page.click('.mz-task-card');
+    await page.waitForSelector('.mz-finale', { visible: true });
+    const finale = await page.evaluate(() => ({
+      runtime: window.__mzRuntime,
+      text: document.querySelector('.mz-finale').textContent,
+    }));
+    assert.equal(finale.runtime, 'standard');
+    assert.ok(!finale.text.includes('$0'), finale.text);
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});
+
+test('a signed-out Claude Code gets a plain sign-in instruction', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({ steps: [{ id: 'first_task', status: 'missing' }] }),
+        firstTask: async () => { throw new Error('The agent hit an error (Not logged in · Please run /login).'); },
+      });
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+    await page.waitForSelector('.mz-task-card');
+    await page.click('.mz-task-card');
+    await page.waitForSelector('.mz-task-error', { visible: true, timeout: 2000 });
+    const text = await page.evaluate(() => document.querySelector('.mz-task-error').textContent);
+    assert.match(text, /run claude, sign in/);
+    assert.ok(!text.includes('/login'), text);
+  } finally { await page.close(); }
+});
+
+test('Claude Code users can still choose the free-model setup', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({ steps: [
+          { id: 'claude_cli', status: 'ok' },
+          { id: 'free_router', status: 'missing', needs_consent: true },
+        ] }),
+      });
+      window.cccOnboarding.open();
+    });
+    await page.waitForFunction(() => [...document.querySelectorAll('.mz-linklike')]
+      .some((b) => b.textContent === 'Set up free models instead'));
+    await page.evaluate(() => [...document.querySelectorAll('.mz-linklike')]
+      .find((b) => b.textContent === 'Set up free models instead').click());
+    await page.waitForSelector('.mz-steps-card');
+    assert.equal(await page.$('.mz-task-card'), null);
+  } finally { await page.close(); }
+});
+
 test('agent history skips every first-run screen so the board shows', async () => {
   const page = await openFixture();
   try {

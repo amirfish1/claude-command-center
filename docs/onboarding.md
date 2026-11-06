@@ -33,6 +33,11 @@ the normal case on a brand-new install. If you already have sessions it
 stays out of your way. You can open it again any time from **Settings**,
 or directly at `http://127.0.0.1:8090/?onboarding=1`.
 
+If Claude Code is already installed but has no sessions yet, the welcome
+skips the free-model setup and offers to run the first task on your own
+Claude account, which only touches `~/CCC-Playground`. **Set up free models
+instead** takes the full route below.
+
 ## The setup steps
 
 Every step is a card with what it installs, where it goes, and a consent

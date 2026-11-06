@@ -5504,3 +5504,89 @@ def test_attribution_journal_append_does_not_reread_the_month(monkeypatch, tmp_p
     assert envelope.journal(envelope.make("r", basis="runtime"), app="wt", transport_id="t-new")
     assert envelope.lookup(transport_id="t-new")
     assert len(rows) == 1
+
+
+def _small_archive_watch_env(monkeypatch, tmp_path):
+    project = tmp_path / "projects" / "-code-app"
+    project.mkdir(parents=True)
+    monkeypatch.setattr(server, "PROJECTS_ROOT", tmp_path / "projects")
+    monkeypatch.setattr(server, "_ARCHIVE_REFRESH_GATE_BYPASS_UNTIL", [0.0])
+    invalidated = []
+    monkeypatch.setattr(
+        server, "_invalidate_dashboard",
+        lambda resource, **kw: invalidated.append((resource, kw.get("reason"))),
+    )
+    return project, invalidated
+
+
+def test_small_archive_watch_announces_only_new_transcripts(
+    isolated_archive_cache, monkeypatch, tmp_path,
+):
+    """A session started in a terminal has no spawn to announce it; on a new
+    install the file appearing is the only signal the board gets."""
+    project, invalidated = _small_archive_watch_env(monkeypatch, tmp_path)
+    first = project / "a.jsonl"
+    first.write_text("{}\n")
+    baseline = server._small_archive_transcripts()
+
+    first.write_text("{}\n{}\n")  # an append is not a new session
+    assert server._dashboard_small_archive_watch_tick(baseline) == baseline
+    assert invalidated == []
+
+    (project / "b.jsonl").write_text("{}\n")
+    nxt = server._dashboard_small_archive_watch_tick(baseline)
+    assert len(nxt) == 2
+    assert invalidated == [("archive", "new-transcript")]
+
+
+def test_new_transcript_passes_the_load_gate_once(
+    isolated_archive_cache, monkeypatch, tmp_path,
+):
+    """Saturation must not hide the session the user just started, but the
+    pass is time-boxed so ordinary polls stay gated."""
+    project, _invalidated = _small_archive_watch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_machine_load", lambda: (13.0, 8))
+    now = time.time()
+    assert server._archive_refresh_load_blocked(now) is True
+
+    (project / "b.jsonl").write_text("{}\n")
+    server._dashboard_small_archive_watch_tick(set())
+    assert server._archive_refresh_load_blocked(time.time()) is False
+    later = time.time() + server._ARCHIVE_NEW_TRANSCRIPT_GATE_GRACE_S + 1
+    assert server._archive_refresh_load_blocked(later) is True
+
+
+def test_small_archive_watch_retires_past_its_limit(
+    isolated_archive_cache, monkeypatch, tmp_path,
+):
+    """An established archive must never pay for this walk: it stops at the
+    limit and the loop drops the watch."""
+    project, invalidated = _small_archive_watch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_SMALL_ARCHIVE_TRANSCRIPT_LIMIT", 2)
+    for i in range(3):
+        (project / f"{i}.jsonl").write_text("{}\n")
+    assert server._small_archive_transcripts() is None
+    assert server._dashboard_small_archive_watch_tick(set()) is None
+    assert invalidated == []
+
+
+def test_refresh_that_changes_row_count_tells_dashboards(
+    isolated_archive_cache, monkeypatch, tmp_path,
+):
+    _project, invalidated = _small_archive_watch_env(monkeypatch, tmp_path)
+    assert server._archive_serve_cache_store(
+        _ALL_KEY, [{"session_id": "a"}], server._archive_serve_generation)
+    monkeypatch.setattr(
+        server, "_archive_compute_rows_detached",
+        lambda *a: ([{"session_id": "a"}, {"session_id": "b"}], False),
+    )
+    server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, 0, 1.0)
+    assert invalidated == [("archive", "refresh-row-count")]
+
+    invalidated.clear()
+    monkeypatch.setattr(
+        server, "_archive_compute_rows_detached",
+        lambda *a: ([{"session_id": "a"}], False),
+    )
+    server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, 0, 1.0)
+    assert invalidated == []

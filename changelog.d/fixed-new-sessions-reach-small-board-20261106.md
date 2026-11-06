@@ -1,0 +1,1 @@
+- On a new install, a session you start in a terminal now reaches the board within seconds instead of up to ten minutes, even on a busy machine. The first task shows under its own name rather than its internal instructions.

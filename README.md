@@ -4,10 +4,10 @@
 
 **Your coding agents outgrew your terminal.**
 
-CCC is a free, local command center for coding agents. Every Claude Code, Codex,
-Cursor, Grok, Devin and Kimi session lands on one live board. Each row tells you
-what the agent did and what it needs from you, so you answer the one that's
-blocked and leave the rest working. Not affiliated with Anthropic.
+See every coding agent you run on one live board, and answer the one that's stuck without opening the rest.
+Free and local: it reads the Claude Code, Codex, Cursor, Grok, Devin and Kimi sessions you already have, with nothing to wrap or migrate.
+
+Not affiliated with Anthropic.
 
 <table>
 <tr>
@@ -34,6 +34,8 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 ```
 
 <sub>Needs Git and Python 3.9+ (macOS or Linux; [Windows](#running-on-windows)). Opens http://localhost:8090 and asks before installing a background service. Sends one anonymous daily ping; `CCC_TELEMETRY_DISABLED=1` turns it off ([what it sends](docs/telemetry.md)).</sub>
+
+**Already use Claude Code?** Your past sessions are on the board when it opens, and anything you run with `claude` shows up by itself. No sessions yet? It offers one small job in a practice folder, on your own Claude account.
 
 Or `brew install amirfish1/tap/ccc && ccc`, or grab the [macOS DMG](https://github.com/amirfish1/claude-command-center/releases/latest).
 Want to look first? The [live demo](https://ccc.amirfish.ai/demo/) runs in your browser with fake data, no install.

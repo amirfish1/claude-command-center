@@ -219,3 +219,44 @@ def test_copy_button_behavior_in_site_js():
 def test_no_em_dash_in_install_page_copy():
     # Novice-facing copy stays in plain punctuation.
     assert "—" not in SITE_INSTALL.read_text()
+
+
+def _dashboard_notes(home: Path, url: str, **env) -> str:
+    """What the installer prints last, with no display and no opener on PATH."""
+    clean = {k: v for k, v in os.environ.items()
+             if k not in ("DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION")}
+    bindir = home / "emptybin"
+    bindir.mkdir(exist_ok=True)
+    bash = subprocess.run(["bash", "-c", "command -v bash"], capture_output=True,
+                          text=True, check=True).stdout.strip()
+    return subprocess.run(
+        [bash, "-c",
+         'source "$1"; PORT=8090; note() { printf "%s\\n" "$1"; }; '
+         'command() { [ "$2" = open ] || [ "$2" = xdg-open ] && return 1; builtin command "$@"; }; '
+         'print_dashboard_notes "$2"',
+         "_", str(INSTALL_SH), url],
+        env={**clean, "HOME": str(home), **env},
+        capture_output=True, text=True, check=True,
+    ).stdout
+
+
+def test_headless_install_prints_the_url_it_could_not_open(tmp_path):
+    url = "http://localhost:8090/?onboarding=1"
+    out = _dashboard_notes(tmp_path, url)
+    assert f"open this in your browser: {url}" in out
+    assert "your browser will open" not in out
+    assert "ssh -L" not in out
+    assert "next: the setup tour" in out
+
+
+def test_install_over_ssh_explains_the_tunnel(tmp_path):
+    out = _dashboard_notes(tmp_path, "http://localhost:8090/", SSH_CONNECTION="1 2 3 4")
+    assert "ssh -L 8090:127.0.0.1:8090" in out
+
+
+def test_install_with_history_says_the_board_is_ready(tmp_path):
+    project = tmp_path / ".claude" / "projects" / "-home-me-app"
+    project.mkdir(parents=True)
+    (project / "abc.jsonl").write_text("{}\n")
+    out = _dashboard_notes(tmp_path, "http://localhost:8090/")
+    assert "your past sessions are on the board" in out
