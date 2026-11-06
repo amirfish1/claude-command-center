@@ -71,7 +71,7 @@ def test_search_hermes_messages_finds_and_ranks_by_bm25(hermes_env):
             (2, "sess-b", "assistant", "unrelated weather chat", 1001.0),
             (3, "sess-c", "user", "frobnicator", 1002.0),
         ],
-        sessions=[("sess-a", "/home/hermes", 1000.0), ("sess-c", "", 1002.0)],
+        sessions=[("sess-a", "/home/dev", 1000.0), ("sess-c", "", 1002.0)],
     )
 
     hits = hermes.search_hermes_messages("frobnicator")
@@ -119,12 +119,12 @@ def test_hermes_meta_for_sids_is_bounded_by_requested_sids(hermes_env):
     _write_hermes_db(
         hermes_env,
         messages=[(1, "sess-a", "user", "hello", 500.0)],
-        sessions=[("sess-a", "/home/hermes/work", 500.0), ("sess-other", "/tmp", 999.0)],
+        sessions=[("sess-a", "/home/dev/work", 500.0), ("sess-other", "/tmp", 999.0)],
     )
 
     meta = hermes.hermes_meta_for_sids(["sess-a", "sess-missing"])
 
-    assert meta["sess-a"] == {"path": "", "cwd": "/home/hermes/work", "engine": "hermes", "mtime": 500.0}
+    assert meta["sess-a"] == {"path": "", "cwd": "/home/dev/work", "engine": "hermes", "mtime": 500.0}
     assert "sess-other" not in meta  # never requested, never returned
     assert "sess-missing" not in meta  # requested but absent -- no fabricated row
 
@@ -187,7 +187,7 @@ def test_search_sessions_enriched_labels_hermes_hit_and_has_snippet(fts_env, her
     _write_hermes_db(
         hermes_env,
         messages=[(1, "hermes-sess-2", "user", "quixotic pipeline throughput regression", 3000.0)],
-        sessions=[("hermes-sess-2", "/home/hermes/repo", 3000.0)],
+        sessions=[("hermes-sess-2", "/home/dev/repo", 3000.0)],
     )
 
     rows = session_fts.search_sessions_enriched("quixotic pipeline")
@@ -195,7 +195,7 @@ def test_search_sessions_enriched_labels_hermes_hit_and_has_snippet(fts_env, her
     hit = next((r for r in rows if r["session_id"] == "hermes-sess-2"), None)
     assert hit is not None
     assert hit["type"] == "hermes"
-    assert hit["cwd"] == "/home/hermes/repo"
+    assert hit["cwd"] == "/home/dev/repo"
     assert hit["snippet"]  # falls back to Hermes' own messages_fts snippet()
 
 

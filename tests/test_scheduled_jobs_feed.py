@@ -15,7 +15,7 @@ ActiveState=active
 UnitFileState=enabled
 @@CCCJOB:SVC
 Description=BYM scheduled release — pin next, PR to main
-WorkingDirectory=/home/hermes/Apps/BYM+Finie
+WorkingDirectory=/home/agent/Apps/Acme+Web
 ExecStart={ path=/bin/bash ; argv[]=/bin/bash scripts/x.sh ; ignore_errors=no }
 ActiveState=inactive
 Result=success
@@ -145,7 +145,7 @@ class HermesParse(unittest.TestCase):
     def test_description_project_and_dashes(self):
         j = self.jobs["bym-ship"]
         self.assertEqual(j["description"], "BYM scheduled release: pin next, PR to main")
-        self.assertEqual((j["project"], j["repo_path"]), ("BYM+Finie", "/home/hermes/Apps/BYM+Finie"))
+        self.assertEqual((j["project"], j["repo_path"]), ("Acme+Web", "/home/agent/Apps/Acme+Web"))
         self.assertEqual(self.jobs["off"]["project"], "ccc-cloud")
         self.assertEqual(self.jobs["bad"]["project"], "Other")
 

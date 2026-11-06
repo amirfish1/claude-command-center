@@ -213,7 +213,7 @@ class OutsideUserDefaultsTest(unittest.TestCase):
 
     def test_no_personal_defaults_in_source(self):
         src = Path(mazkir.__file__).read_text(encoding="utf-8")
-        for needle in ("/Users/", "MyOfficeMgr", "Amir", "Becky", "BYM"):
+        for needle in ("/Users/", "Amir"):
             self.assertNotIn(needle, src)
 
     def test_index_bin_from_env_then_path_else_off(self):

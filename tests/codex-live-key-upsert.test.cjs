@@ -1,5 +1,5 @@
 // Slice 2 of the Codex single-renderer merge (see
-// CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md): teaches
+// the private plans repo, codex-single-renderer-merge): teaches
 // renderConversationEvents to upsert/reconcile `data-live-key` provisional
 // rows. Nothing feeds a live_key-bearing event yet (that's Slice 4) -- these
 // tests exercise the standalone DOM helpers the render loop's per-event loop

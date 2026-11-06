@@ -109,13 +109,13 @@ class TestActivityErrorAlerts(_Fixture):
         self._write_log([
             _stamp(NOW - 90) + " UTC  CCC-GH          ERROR    " + message,
             _stamp(NOW - 60) + " UTC  TODO            ERROR    " + message,
-            _stamp(NOW - 30) + " UTC  STRAMP          ERROR    " + message,
+            _stamp(NOW - 30) + " UTC  PRODUCT          ERROR    " + message,
         ])
         out = self.collect()
         self.assertEqual(out["total"], 1)
         alert = out["alerts"][0]
         self.assertEqual(alert["count"], 3)
-        self.assertEqual(alert["queues"], ["CCC-GH", "STRAMP", "TODO"])
+        self.assertEqual(alert["queues"], ["CCC-GH", "PRODUCT", "TODO"])
 
     def test_repeated_error_lines_group_per_queue_with_count(self):
         cmd = ("GitHub list failed: gh issue list --repo x/y --state open --json a,b "
@@ -123,7 +123,7 @@ class TestActivityErrorAlerts(_Fixture):
         self._write_log([
             _stamp(NOW - 720) + " UTC  CCC-GH          ERROR    " + cmd,
             _stamp(NOW - 540) + " UTC  CCC-GH          ERROR    " + cmd.replace("--state open", "--state closed"),
-            _stamp(NOW - 600) + " UTC  STRAMP          ERROR    " + cmd,
+            _stamp(NOW - 600) + " UTC  PRODUCT          ERROR    " + cmd,
             _stamp(NOW - 300) + " UTC  CCC-GH          CLAIM    CCC-1 by ccc-abc — fine",
             # Outside the 48h window: history, not an alert.
             _stamp(NOW - 3 * 86400) + " UTC  OLD             ERROR    something ancient failed: nope",
@@ -134,7 +134,7 @@ class TestActivityErrorAlerts(_Fixture):
         self.assertEqual(alert["kind"], "activity_error")
         self.assertEqual(alert["severity"], "warning")
         self.assertEqual(alert["count"], 3)  # open + closed + queue variants collapse
-        self.assertEqual(alert["queues"], ["CCC-GH", "STRAMP"])
+        self.assertEqual(alert["queues"], ["CCC-GH", "PRODUCT"])
         self.assertEqual(alert["title"], "GitHub list failed")
         self.assertIn("gh auth login", alert["detail"])
         self.assertEqual(alert["age_seconds"], 540)  # newest occurrence

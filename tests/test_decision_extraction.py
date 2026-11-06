@@ -39,7 +39,7 @@ def _write_session(projects_dir, project, sid, lines, cwd=None):
     out = []
     for line in lines:
         d = dict(line)
-        d.setdefault("cwd", cwd or f"/Users/amirfish/Apps/{project}")
+        d.setdefault("cwd", cwd or f"/Users/dev/Apps/{project}")
         d.setdefault("timestamp", "2026-09-20T10:00:00Z")
         out.append(json.dumps(d))
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
@@ -200,14 +200,14 @@ def test_genuine_user_text_strips_injected_system_reminder():
 # ── file-level extraction ────────────────────────────────────────────────────
 
 def test_extract_decisions_from_file_claude(dex_env):
-    path = _write_session(dex_env["projects_dir"], "-Users-amirfish-Apps-widgetco", "sess-1", [
+    path = _write_session(dex_env["projects_dir"], "-Users-dev-Apps-widgetco", "sess-1", [
         _user_line("Can we add a retry button to the upload flow?"),
         {"type": "assistant", "message": {"role": "assistant", "content": [
             {"type": "text", "text": "We could retry automatically or add a manual button."},
         ]}, "timestamp": "2026-09-20T10:01:00Z"},
         _user_line("We decided to go with the manual retry button, it's simpler.",
                    ts="2026-09-20T10:02:00Z"),
-    ], cwd="/Users/amirfish/Apps/widgetco")
+    ], cwd="/Users/dev/Apps/widgetco")
 
     found = dex.extract_decisions_from_file(str(path), engine="claude")
     assert len(found) == 1
@@ -215,7 +215,7 @@ def test_extract_decisions_from_file_claude(dex_env):
     assert d["repo"] == "widgetco"
     assert d["session_id"] == "sess-1"
     assert "manual retry button" in d["quote"]
-    assert d["project_dir"] == "-Users-amirfish-Apps-widgetco"
+    assert d["project_dir"] == "-Users-dev-Apps-widgetco"
     assert d["confidence"] >= 0.85
 
 
@@ -225,7 +225,7 @@ def test_extract_decisions_from_file_codex(dex_env):
     sess_dir.mkdir(parents=True, exist_ok=True)
     path = sess_dir / "rollout-codex-1.jsonl"
     lines = [
-        {"type": "session_meta", "payload": {"id": "codex-1", "cwd": "/Users/amirfish/Apps/widgetco"},
+        {"type": "session_meta", "payload": {"id": "codex-1", "cwd": "/Users/dev/Apps/widgetco"},
          "timestamp": "2026-09-20T10:00:00Z"},
         {"type": "response_item", "payload": {
             "type": "message", "role": "user",
@@ -282,7 +282,7 @@ def test_run_once_reparses_after_file_changes(dex_env):
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps({
             "type": "user", "message": {"role": "user", "content": "We decided to ship it today."},
-            "timestamp": "2026-09-20T11:00:00Z", "cwd": "/Users/amirfish/Apps/proj",
+            "timestamp": "2026-09-20T11:00:00Z", "cwd": "/Users/dev/Apps/proj",
         }) + "\n")
     import os
     os.utime(path, (time.time() + 5, time.time() + 5))
@@ -308,10 +308,10 @@ def test_run_once_respects_max_files_per_run(dex_env):
 def test_list_decisions_filters_by_repo(dex_env):
     _write_session(dex_env["projects_dir"], "proja", "s1", [
         _user_line("We decided to use Redis for caching here."),
-    ], cwd="/Users/amirfish/Apps/proja")
+    ], cwd="/Users/dev/Apps/proja")
     _write_session(dex_env["projects_dir"], "projb", "s2", [
         _user_line("We decided to use Memcached for caching there."),
-    ], cwd="/Users/amirfish/Apps/projb")
+    ], cwd="/Users/dev/Apps/projb")
     dex.run_once()
 
     only_a = dex.list_decisions(repo="proja")
@@ -357,11 +357,11 @@ def test_model_fallback_when_enabled_drops_rejected_and_caps_budget(dex_env):
 # ── MEMORY.md staleness audit (report-only) ──────────────────────────────────
 
 def test_audit_memory_staleness_flags_newer_overlapping_decision(dex_env, tmp_path):
-    project_dir_name = "-Users-amirfish-Apps-widgetco"
+    project_dir_name = "-Users-dev-Apps-widgetco"
     path = _write_session(dex_env["projects_dir"], project_dir_name, "sess-9", [
         _user_line("We decided to use Postgres instead of Mongo for the export table.",
                    ts="2026-09-25T09:00:00Z"),
-    ], cwd="/Users/amirfish/Apps/widgetco")
+    ], cwd="/Users/dev/Apps/widgetco")
 
     dex.run_once()
 
@@ -391,11 +391,11 @@ def test_audit_memory_staleness_flags_newer_overlapping_decision(dex_env, tmp_pa
 
 
 def test_audit_memory_staleness_ignores_decisions_older_than_memory(dex_env):
-    project_dir_name = "-Users-amirfish-Apps-widgetco"
+    project_dir_name = "-Users-dev-Apps-widgetco"
     _write_session(dex_env["projects_dir"], project_dir_name, "sess-old", [
         _user_line("We decided to use Postgres instead of Mongo for the export table.",
                    ts="2026-01-01T09:00:00Z"),
-    ], cwd="/Users/amirfish/Apps/widgetco")
+    ], cwd="/Users/dev/Apps/widgetco")
     dex.run_once()
 
     mem_dir = dex_env["projects_dir"] / project_dir_name / "memory"
@@ -416,11 +416,11 @@ def test_audit_memory_staleness_ignores_decisions_older_than_memory(dex_env):
 
 
 def test_audit_memory_staleness_never_writes_memory_files(dex_env):
-    project_dir_name = "-Users-amirfish-Apps-widgetco"
+    project_dir_name = "-Users-dev-Apps-widgetco"
     _write_session(dex_env["projects_dir"], project_dir_name, "sess-9", [
         _user_line("We decided to use Postgres instead of Mongo for the export table.",
                    ts="2026-09-25T09:00:00Z"),
-    ], cwd="/Users/amirfish/Apps/widgetco")
+    ], cwd="/Users/dev/Apps/widgetco")
     dex.run_once()
 
     mem_dir = dex_env["projects_dir"] / project_dir_name / "memory"

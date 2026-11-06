@@ -26,15 +26,15 @@ def _bits(matrix):
 # different (equally valid) mask: compare against every mask for the first,
 # and the auto-selected mask for the second, where both agree.
 QR_GOLDEN = {
-    "https://hermes-gcp.tail1234.ts.net:8443/":
-        (29, "8dadc926678852b98c47112e9ce26f6eb53120d0ace3187d933aa62d886c87cf"),
-    "https://amirs-macbook-air-2.taild20a42.ts.net:10000/":
-        (33, "4d22cfd3a7c09ca04d67f879f2478ffb53dc3b43bc03ea43accd9f8debca61b9"),
+    "https://vm-node-01.tail1234.ts.net:8443/":
+        (29, "8908d1617a263e2999980e23c92fe53fa45a8b2bfd1f14740aeb8deea4c1d79d"),
+    "https://dev-laptop-machine0.tail56789a.ts.net:10000/":
+        (33, "56f2c33f5ebeb5c8a0cc90f0d592d3042da6a9dcc6f1ec0ad29adba0d86678ce"),
 }
 
 
 def test_qr_matches_libqrencode_for_some_mask():
-    text = "https://hermes-gcp.tail1234.ts.net:8443/"
+    text = "https://vm-node-01.tail1234.ts.net:8443/"
     size, digest = QR_GOLDEN[text]
     digests = {hashlib.sha256(_bits(qrcode.encode(text, mask=m)).encode()).hexdigest()
                for m in range(8)}
@@ -43,7 +43,7 @@ def test_qr_matches_libqrencode_for_some_mask():
 
 
 def test_qr_auto_mask_matches_libqrencode():
-    text = "https://amirs-macbook-air-2.taild20a42.ts.net:10000/"
+    text = "https://dev-laptop-machine0.tail56789a.ts.net:10000/"
     size, digest = QR_GOLDEN[text]
     m = qrcode.encode(text)
     assert len(m) == size

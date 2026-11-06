@@ -4479,7 +4479,7 @@ class TestServerImports(unittest.TestCase):
         with mock.patch.object(server, "_wt_read_config", return_value={
             "BYM-GH-FINIE": {
                 "backend": "github",
-                "repo_path": "/Users/amirfish/Apps/BYM+Finie",
+                "repo_path": "/Users/dev/Apps/Acme+Web",
                 "auto_drain": False,
             },
         }), mock.patch.object(server._q, "list_items", return_value=[]):
@@ -4489,7 +4489,7 @@ class TestServerImports(unittest.TestCase):
         self.assertTrue(row["configured"])
         self.assertEqual(row["total"], 0)
         self.assertIsNone(row["last_activity_seconds"])
-        self.assertEqual(row["repo_path"], "/Users/amirfish/Apps/BYM+Finie")
+        self.assertEqual(row["repo_path"], "/Users/dev/Apps/Acme+Web")
 
     def test_compute_queues_health_respects_watchtower_claimable_flag(self):
         """GitHub-backed WT queues list all open issues, but only runnable
@@ -4499,7 +4499,7 @@ class TestServerImports(unittest.TestCase):
         with mock.patch.object(server, "_wt_read_config", return_value={
             "BYM-GH-FINIE": {
                 "backend": "github",
-                "repo_path": "/Users/amirfish/Apps/BYM+Finie",
+                "repo_path": "/Users/dev/Apps/Acme+Web",
                 "auto_drain": True,
             },
         }), mock.patch.object(server._q, "list_items", return_value=[{
@@ -8068,11 +8068,10 @@ class TestRepoContextHelpers(unittest.TestCase):
         explicit project > configured repo_path match > repo basename > source.
 
         NOTE (found while removing the ux_fixes_queue fallback, see WT-92):
-        this test used to be named test_bym_production_repo_routes_to_bymprod_queue
-        and asserted "BYMPROD" for both cases below -- but it called
+        this test used to be named test_production_repo_routes_to_production_queue
+        and asserted one queue code for both cases below -- but it called
         ux_fixes_queue._project_for() directly, which had a hardcoded alias
-        table ({"bookyourmat": "BYMPROD", "bym+finie": "BYMPROD", ...}, source
-        "bym" -> "BYMPROD") that watchtower.queue._project_for() does not
+        table (repo folder and source names -> one production queue) that watchtower.queue._project_for() does not
         replicate; watchtower only does basename/source normalization plus a
         configured-repo_path lookup (config.all_queues()). Since server._q has
         been watchtower.queue in production for a while (WT-32 Phase 2), this
@@ -8084,20 +8083,20 @@ class TestRepoContextHelpers(unittest.TestCase):
         """
         self.assertEqual(
             self.server._q._project_for(
-                repo_path="/tmp/BYM+Finie/apps/bookyourmat"
+                repo_path="/tmp/Acme+Web/apps/acmeshop"
             ),
-            "BOOKYOURMAT",
+            "ACMESHOP",
         )
         self.assertEqual(
-            self.server._q._project_for(source="bym"),
-            "BYM",
+            self.server._q._project_for(source="acme"),
+            "ACME",
         )
 
     def test_repo_path_with_plus_resolves_when_query_decoded_to_space(self):
         """A repo with `+` in its name arrives as a space via URL query-string
         decoding (`+` → ` `). resolve_repo_path() must recover by trying `+`
         variants instead of forcing every caller to encode as %2B."""
-        plus_repo = pathlib.Path(self.tmp_home, "BYM+Finie").resolve()
+        plus_repo = pathlib.Path(self.tmp_home, "Acme+Web").resolve()
         plus_repo.mkdir()
         (plus_repo / ".git").mkdir()
         # 1. Exact path still works.
@@ -8117,7 +8116,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         the on-disk cache cold), find_conversations() should return within
         a few seconds even with hundreds of seeded sessions.
 
-        This is the perf guard for the BYM+Finie regression where 128
+        This is the perf guard for the Acme+Web regression where 128
         missing cwds + per-session os.walk burnt ~40s on every cold scan.
         """
         seed_count = 200
@@ -11246,14 +11245,14 @@ class TestRepoContextHelpers(unittest.TestCase):
         server = importlib.import_module("server")
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp).resolve()
-            app = root / "apps" / "bookyourmat"
+            app = root / "apps" / "acmeshop"
             finie = root / "apps" / "finie"
             app.mkdir(parents=True)
             finie.mkdir(parents=True)
             (root / "turbo.json").write_text(json.dumps({"tasks": {"dev": {"persistent": True}}}))
             (root / "package.json").write_text(json.dumps({"workspaces": ["apps/*"]}))
             (app / "package.json").write_text(json.dumps({
-                "name": "bookyourmat",
+                "name": "acmeshop",
                 "scripts": {"dev": "next dev --port 39001"},
                 "dependencies": {"next": "16.1.6"},
             }))
@@ -11268,11 +11267,11 @@ class TestRepoContextHelpers(unittest.TestCase):
             status = server.nextjs_status(str(root), str(app))
             root_status = server.nextjs_status(str(root))
 
-        self.assertEqual(cmd, ["npx", "turbo", "dev", "--filter=bookyourmat"])
+        self.assertEqual(cmd, ["npx", "turbo", "dev", "--filter=acmeshop"])
         self.assertEqual(cwd, root)
-        self.assertEqual(status["launch_cmd"], "npx turbo dev --filter=bookyourmat")
+        self.assertEqual(status["launch_cmd"], "npx turbo dev --filter=acmeshop")
         self.assertEqual(root_status["target_path"], str(app))
-        self.assertEqual(root_status["launch_cmd"], "npx turbo dev --filter=bookyourmat")
+        self.assertEqual(root_status["launch_cmd"], "npx turbo dev --filter=acmeshop")
 
     def test_nextjs_process_match_ignores_prompt_text(self):
         """Process rediscovery must not match an agent command line that
@@ -11281,19 +11280,19 @@ class TestRepoContextHelpers(unittest.TestCase):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
         info = {
-            "target_path": pathlib.Path("/tmp/repo/apps/bookyourmat"),
+            "target_path": pathlib.Path("/tmp/repo/apps/acmeshop"),
             "run_cwd": pathlib.Path("/tmp/repo"),
-            "package_name": "bookyourmat",
+            "package_name": "acmeshop",
             "filter_expected": True,
             "ports": [3001],
         }
         self.assertTrue(server._nextjs_command_matches(
-            "npx turbo dev --filter=bookyourmat", info))
+            "npx turbo dev --filter=acmeshop", info))
         self.assertTrue(server._nextjs_command_matches(
             "node /tmp/repo/node_modules/.bin/next dev --port 3001", info))
         self.assertFalse(server._nextjs_command_matches(
             "/opt/homebrew/bin/codex exec --json -- prompt contains "
-            "turbo dev --filter=bookyourmat and next dev --port 3001",
+            "turbo dev --filter=acmeshop and next dev --port 3001",
             info,
         ))
 
@@ -11711,7 +11710,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "input": (
                     "const r = await tools.exec_command({\n"
                     "  cmd: \"wt status -q CHUCK --json\",\n"
-                    "  workdir: \"/home/hermes/projects/chuck-realtor-web\",\n"
+                    "  workdir: \"/home/dev/projects/example-web\",\n"
                     "  sandbox_permissions: \"require_escalated\",\n"
                     "  justification: \"Allow this read-only WatchTower status check?\"\n"
                     "});\n"
@@ -15037,7 +15036,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server._ENGINE_DETECT_CACHE.clear()
 
     def test_hermes_reads_profile_worker_dbs(self):
-        """Profile workers (e.g. the chuckrealtor 'Becky' agent) keep their own
+        """Profile workers (e.g. the 'example-worker' agent) keep their own
         state.db under ~/.hermes/profiles/<name>/. CCC must ingest those too —
         they're the sessions that actually write code — tag each row with its
         profile, and route transcript reads to the owning DB."""
@@ -15078,7 +15077,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             root = pathlib.Path(tmp)
             main_db = root / "state.db"
             profiles = root / "profiles"
-            worker_db = profiles / "chuckrealtor" / "state.db"
+            worker_db = profiles / "example-worker" / "state.db"
             worker_db.parent.mkdir(parents=True)
             gateway = root / "sessions" / "sessions.json"
             gateway.parent.mkdir(parents=True)
@@ -15108,7 +15107,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 self.assertIn("20260601_120000_gateway", by_id)
                 self.assertIn("20260601_130000_worker", by_id)
                 self.assertEqual(by_id["20260601_120000_gateway"]["hermes_profile"], "")
-                self.assertEqual(by_id["20260601_130000_worker"]["hermes_profile"], "chuckrealtor")
+                self.assertEqual(by_id["20260601_130000_worker"]["hermes_profile"], "example-worker")
                 # The worker session id is owned by the profile DB and its
                 # transcript reads route there.
                 self.assertEqual(
@@ -15140,7 +15139,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            db = root / "profiles" / "chuckrealtor" / "state.db"
+            db = root / "profiles" / "example-worker" / "state.db"
             db.parent.mkdir(parents=True)
             con = sqlite3.connect(db)
             try:
@@ -21713,7 +21712,7 @@ def test_session_live_status_cwd_match_ignores_other_sessions():
 
     target_sid = "1ebdd168-a845-4952-bbc7-c206fab7b2c1"
     other_sid = "30741fa7-e236-43d1-a88b-c09813293f7c"
-    session_cwd = "/Users/amirfish/Apps/BYM"
+    session_cwd = "/Users/dev/Apps/Acme"
 
     # Mock find_live_antigravity_processes to return a process running in the same CWD,
     # but targeting other_sid.
