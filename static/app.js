@@ -18033,6 +18033,21 @@
       + (sid ? '&session_id=' + encodeURIComponent(sid) : '')
       + '" alt="pasted image" loading="lazy">';
   }
+  // Thumbnails for every pasted/annotation image path mentioned in `text`
+  // (raw, unescaped). For surfaces that show a clipped or plain-text
+  // description of an ask, where the path itself would otherwise be lost.
+  function pastedImageThumbsHtml(text) {
+    if (!text) return '';
+    const seen = new Set();
+    for (const re of [PASTED_IMG_RE, ANNOTATION_IMG_RE]) {
+      const rx = new RegExp(re.source, 'gi');
+      let m;
+      while ((m = rx.exec(String(text)))) seen.add(m[1]);
+    }
+    if (!seen.size) return '';
+    return Array.from(seen, p => '<a href="/api/pasted-image?path=' + encodeURIComponent(p)
+      + '" target="_blank" rel="noopener">' + pastedImageTag(p) + '</a>').join('');
+  }
   function linkifyPastedImages(escapedHtml) {
     if (!escapedHtml) return escapedHtml;
     return String(escapedHtml)
@@ -21625,6 +21640,14 @@
     messageEl.textContent = cleaned;
     messageEl.hidden = !cleaned;
     messageEl.title = cleaned;
+    // Images the message pasted: shown only while the header text is expanded.
+    const thumbs = pastedImageThumbsHtml(text);
+    if (thumbs) {
+      const box = document.createElement('span');
+      box.className = 'pane-header-images';
+      box.innerHTML = thumbs;
+      messageEl.appendChild(box);
+    }
     // Same CCC-1172 affordance as the pane title: hover shows the full text,
     // click/Enter toggles .is-expanded inline.
     if (cleaned) {
@@ -49915,6 +49938,13 @@
           const restText = row && row.wt_ticket_context_rest;
           if (restText) {
             railTitleRestEl.textContent = restText;
+            const railThumbs = pastedImageThumbsHtml(restText);
+            if (railThumbs) {
+              const box = document.createElement('div');
+              box.className = 'status-rail-title-images';
+              box.innerHTML = railThumbs;
+              railTitleRestEl.appendChild(box);
+            }
             railTitleRestEl.hidden = false;
           } else {
             railTitleRestEl.textContent = '';
@@ -70459,6 +70489,7 @@
                       h += '<div class="user-msg" dir="auto">';
                       h += '<span class="ux-ticket-ref">' + escapeHtml(mostRecent.ref) + '</span> ';
                       h += '<span class="ask-first">' + escapeHtml(recentText) + '</span>';
+                      h += pastedImageThumbsHtml(mostRecent.note || mostRecent.title || '');
                       h += '</div>';
                       if (handled.length) {
                         h += '<details class="csh-tickets-handled">';

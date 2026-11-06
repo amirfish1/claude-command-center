@@ -34324,3 +34324,18 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 #agentsOverview .ao-account:has(.ao-account-picks) { flex-wrap: wrap; row-gap: 4px; padding: 4px 6px; }
 #agentsOverview .ao-account-picks { display: flex; gap: 5px; width: 100%; }
 #agentsOverview .ao-account-picks .ao-account-pick { flex: 1 1 0; margin-left: 0; }
+
+/* Pasted images mentioned by a session's ask: shown under the expanded pane
+   header message and under the rail's description text. */
+.conv-pane-last-user-message .pane-header-images { display: none; }
+.conv-pane-last-user-message.is-expanded .pane-header-images { display: block; margin-top: 6px; }
+.pane-header-images img,
+.status-rail-title-images img,
+.csh-ask-original .user-msg > a > img {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  margin-top: 6px;
+  border-radius: 6px;
+}
+.status-rail-title-images { margin-top: 6px; }
