@@ -69,10 +69,14 @@ class ComposePromptTest(unittest.TestCase):
 
 class ValidateTest(unittest.TestCase):
     def setUp(self):
+        patcher = mock.patch.object(jobs_add._local_overrides, "remote_apps_dir",
+                                    return_value="/home/dev/Apps")
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = pathlib.Path(self.tmp.name).resolve()
-        self.repo = root / "BYM"
+        self.repo = root / "Acme"
         self.repo.mkdir()
         self.known = [str(self.repo)]
 
@@ -94,7 +98,7 @@ class ValidateTest(unittest.TestCase):
         f, err = self._v()
         self.assertIsNone(err)
         self.assertEqual(f["repo"], str(self.repo))
-        f, err = self._v(repo="BYM")
+        f, err = self._v(repo="Acme")
         self.assertEqual(f["repo"], str(self.repo))
 
     def test_laptop_unknown_repo(self):
@@ -102,17 +106,17 @@ class ValidateTest(unittest.TestCase):
         self.assertIn("not a known repo", self._v(repo="Other")[1])
 
     def test_hermes_repo_forms(self):
-        f, err = self._v(host="hermes", repo="BYM+Finie")
+        f, err = self._v(host="hermes", repo="Acme+Web")
         self.assertIsNone(err)
-        self.assertEqual(f["repo"], "/home/hermes/Apps/BYM+Finie")
-        f, _ = self._v(host="hermes", repo="/home/hermes/Apps/BYM")
-        self.assertEqual(f["repo"], "/home/hermes/Apps/BYM")
+        self.assertEqual(f["repo"], "/home/dev/Apps/Acme+Web")
+        f, _ = self._v(host="hermes", repo="/home/dev/Apps/Acme")
+        self.assertEqual(f["repo"], "/home/dev/Apps/Acme")
         # A known laptop repo maps to the same folder on the VM.
         f, _ = self._v(host="hermes", repo=str(self.repo))
-        self.assertEqual(f["repo"], "/home/hermes/Apps/BYM")
+        self.assertEqual(f["repo"], "/home/dev/Apps/Acme")
 
     def test_hermes_rejects_escape_and_foreign_paths(self):
-        for bad in ("/home/hermes/Apps/../etc", "/etc/passwd", "..", "/home/hermes/Apps/a/b"):
+        for bad in ("/home/dev/Apps/../etc", "/etc/passwd", "..", "/home/dev/Apps/a/b"):
             self.assertIsNotNone(self._v(host="hermes", repo=bad)[1], bad)
 
     def test_name_slug(self):
@@ -120,7 +124,7 @@ class ValidateTest(unittest.TestCase):
         self.assertIn("kebab-case", self._v(name="Bad Name")[1])
 
     def test_spawn_cwd_and_body(self):
-        f, _ = self._v(host="hermes", repo="BYM", model="opus", effort="high")
+        f, _ = self._v(host="hermes", repo="Acme", model="opus", effort="high")
         self.assertEqual(jobs_add.spawn_cwd(f, self.known, "/fallback"), str(self.repo))
         g, _ = self._v(host="hermes", repo="Elsewhere")
         self.assertEqual(jobs_add.spawn_cwd(g, self.known, "/fallback"), "/fallback")
@@ -130,7 +134,7 @@ class ValidateTest(unittest.TestCase):
         self.assertEqual(body["reasoning_effort"], "high")
         self.assertEqual(body["report_to"], "sid-1")
         self.assertNotIn("junk", body)
-        self.assertIn("/home/hermes/Apps/BYM", body["prompt"])
+        self.assertIn("/home/dev/Apps/Acme", body["prompt"])
 
     def test_handle_rejects_before_spawning(self):
         with mock.patch.object(jobs_add, "post_spawn") as post:
@@ -158,11 +162,11 @@ class CliTest(unittest.TestCase):
         return captured["args"]
 
     def test_jobs_add_args(self):
-        a = self._parse(["jobs", "add", "--host", "hermes", "--repo", "BYM+Finie",
+        a = self._parse(["jobs", "add", "--host", "hermes", "--repo", "Acme+Web",
                          "--what", "watch releases", "--when", "hourly",
                          "--name", "bym-release-watch", "--wait"])
         self.assertEqual((a.host, a.repo, a.what, a.when, a.name, a.wait),
-                         ("hermes", "BYM+Finie", "watch releases", "hourly", "bym-release-watch", True))
+                         ("hermes", "Acme+Web", "watch releases", "hourly", "bym-release-watch", True))
         self.assertIsNone(a.model)
 
     def test_jobs_add_requires_fields_and_valid_host(self):

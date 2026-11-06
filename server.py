@@ -123,6 +123,7 @@ import ccc_peer_uds
 # Pure/stdlib, no imports from server.py -- mirrors ccc_peer_uds.py's split
 # between wire-format helpers (here) and registry/routing (server.py below).
 import ccc_peer_inbound
+from ccc_server import local_overrides as _local_overrides
 from ccc_server import test_isolation_active, register as _ccc_core_register
 # Rebindable report_to routes (CCC-1202). Imported as a namespace, not
 # adopted, so its short function names don't land on server globals.
@@ -45443,6 +45444,7 @@ def get_app_config():
     config = {
         "app_name": "Command Center for Claude, Codex, and Anti-Gravity",
         "title_strip": TITLE_STRIP_PREFIXES,
+        "repo_project_map": _local_overrides.repo_project_map(),
         "repo": "",
         "vercel_enabled": bool(_VERCEL_PROJECT_ENV),
         "vercel_project": _VERCEL_PROJECT_ENV,

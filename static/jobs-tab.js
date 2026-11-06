@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Amir Fish. All rights reserved.
 // SPDX-License-Identifier: LicenseRef-CCC-Software-License
 /**
- * Sidebar "Jobs" tab: scheduled jobs with outcomes (hermes-gcp systemd timers +
+ * Sidebar "Jobs" tab: scheduled jobs with outcomes (server systemd timers +
  * scheduled laptop launchd agents). Data: GET /api/jobs (server-cached, refreshed
  * in the background). The sidebar list re-renders often and replaces the host
  * element, so app.js calls CCCJobsTab.mount() after each rebuild; mount()
@@ -90,8 +90,14 @@
   }
 
   // The host view in effect. Unset means "this machine's view": the VM's own
-  // timers on Linux, everything (laptop + hermes-gcp) on a laptop. The Laptop
+  // timers on Linux, everything (laptop + server) on a laptop. The Laptop
   // view is always empty on Linux, so it is never offered or honored there.
+  // A host's own name as the feed reports it; generic until it has reported.
+  function hostLabel(k) {
+    const h = (_data && _data.hosts && _data.hosts[k]) || {};
+    return h.label || (k === 'hermes' ? 'Server' : 'Laptop');
+  }
+
   function activeHost() {
     const local = _data && _data.local_host;
     if (local === 'hermes' && (_host === 'laptop' || !_host)) return 'hermes';
@@ -142,7 +148,7 @@
     const running = jobs.filter(j => j.status === 'running').length;
     const disabled = jobs.filter(j => j.enabled === false).length;
     const hostKeys = _data.local_host === 'hermes' ? ['hermes'] : ['all', 'hermes', 'laptop'];
-    const hostOptions = hostKeys.map(k => '<option value="' + k + '"' + (host === k ? ' selected' : '') + '>' + (k === 'all' ? 'All machines' : k === 'hermes' ? 'hermes-gcp' : 'Laptop') + '</option>').join('');
+    const hostOptions = hostKeys.map(k => '<option value="' + k + '"' + (host === k ? ' selected' : '') + '>' + (k === 'all' ? 'All machines' : esc(hostLabel(k))) + '</option>').join('');
     const views = [['overview', 'Overview'], ['upcoming', 'Upcoming'], ['recent', 'Recent runs'], ['all', 'All jobs']];
     const projects = [...new Set(jobs.map(j => j.project || 'Other'))].sort();
     return '<div class="jobs-head">'
@@ -236,7 +242,7 @@
       + '<button type="button" class="job-toggle" data-job-toggle aria-expanded="' + open + '" aria-label="' + esc(name + ': ' + label + '. ' + (open ? 'Hide' : 'Show') + ' details') + '">'
       + '<span class="job-line1"><span class="job-name">' + esc(name) + '</span><span class="job-status">' + esc(label) + '</span><span class="job-chevron" aria-hidden="true">' + (open ? '−' : '+') + '</span></span>'
       + '<span class="job-purpose">' + esc(nodash(j.description) || shortName(j.name)) + '</span>'
-      + '<span class="job-meta"><span>' + esc(j.project || 'Other') + '</span><span>' + esc(j.schedule || 'Schedule unknown') + '</span>' + (activeHost() === 'all' ? '<span>' + esc(j.host === 'hermes' ? 'hermes-gcp' : 'Laptop') + '</span>' : '') + '</span>'
+      + '<span class="job-meta"><span>' + esc(j.project || 'Other') + '</span><span>' + esc(j.schedule || 'Schedule unknown') + '</span>' + (activeHost() === 'all' ? '<span>' + esc(hostLabel(j.host === 'hermes' ? 'hermes' : 'laptop')) + '</span>' : '') + '</span>'
       + '<span class="job-timing"><span title="' + esc(j.last_run_at ? fmtLocal(j.last_run_at) : '') + '">' + esc(j.last_run_at ? (running ? 'Started ' : 'Last run ') + rel(j.last_run_at) : 'No recorded run') + '</span><span title="' + esc(j.next_run_at ? fmtLocal(j.next_run_at) : '') + '">' + esc(next) + '</span></span>'
       + (result ? '<span class="job-result">' + esc(result) + '</span>' : '') + '</button>';
     if (open) {
@@ -435,8 +441,8 @@
       + '<div class="jobs-add-title">Add a scheduled job</div>'
       + '<div class="jobs-add-sub">An agent session creates it and checks it appears here.</div>'
       + '<label>Host<select name="host">'
-      + '<option value="hermes"' + (host === 'hermes' ? ' selected' : '') + '>hermes-gcp</option>'
-      + '<option value="laptop"' + (host === 'laptop' ? ' selected' : '') + '>Laptop</option></select></label>'
+      + '<option value="hermes"' + (host === 'hermes' ? ' selected' : '') + '>' + esc(hostLabel('hermes')) + '</option>'
+      + '<option value="laptop"' + (host === 'laptop' ? ' selected' : '') + '>' + esc(hostLabel('laptop')) + '</option></select></label>'
       + '<label>Repo / project folder<input name="repo" list="jobsAddRepos" autocomplete="off" placeholder="/path/to/repo"></label>'
       + '<datalist id="jobsAddRepos"></datalist>'
       + '<label>What should it do<textarea name="what" rows="3" placeholder="e.g. Summarize yesterday\'s failed CI runs and file tickets"></textarea></label>'

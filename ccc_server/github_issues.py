@@ -3,7 +3,7 @@
 """Extracted from server.py (originally lines 45282-48047).
 
 Part of the server.py decomposition; see
-CCC-private-docs/plans/server-py-decomposition.md. Names still living
+the private plans repo (server-py-decomposition). Names still living
 in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ import time
 from ccc_server import core as _core
 from ccc_server.paths import _is_pid_alive
 from ccc_server import github_quota as _github_quota
+from ccc_server import local_overrides as _local_overrides
 
 # ---------------------------------------------------------------------------
 # GitHub issues
@@ -984,10 +985,10 @@ def _ship_classify_remaining(path):
 
 def _ship_commit_scope(path):
     """Best-effort conventional-commit scope from a path."""
-    if path.startswith("apps/bym-ios"):
-        return "ios"
-    if path.startswith("apps/bookyourmat"):
-        return "bym"
+    scopes = _local_overrides.commit_scopes()
+    for prefix in sorted(scopes, key=len, reverse=True):
+        if path.startswith(prefix):
+            return scopes[prefix]
     if path.startswith("packages/"):
         parts = path.split("/")
         return parts[1] if len(parts) > 1 else "pkg"

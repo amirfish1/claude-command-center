@@ -26063,8 +26063,8 @@
 
   function normalizePendingPrompt(value) {
     // Punctuation-insensitive: placeholder titles are often the slugged spawn
-    // name ("why https bookyourmat com buy …") while the archive row carries
-    // the raw prompt ("why https://bookyourmat.com/buy/…"). Slug and raw must
+    // name ("why https example com buy …") while the archive row carries
+    // the raw prompt ("why https://example.com/buy/…"). Slug and raw must
     // still fuzzy-match or the placeholder never reconciles and the session
     // shows up twice. Guards that keep this safe live in the caller: a >=24
     // char head match, equal cwd, and a 2-minute recency window.
@@ -41509,7 +41509,7 @@
         }
         // Profile-worker chip. Sessions from a profile's own state.db
         // (~/.hermes/profiles/<name>) are the agents that do the real work —
-        // e.g. the "chuckrealtor" worker. Surface the profile so it's clear a
+        // e.g. an "example-worker" agent. Surface the profile so it's clear a
         // row isn't a plain gateway conversation.
         const hermesProfile = String(c.hermes_profile || '').trim();
         if (hermesProfile) {
@@ -54170,8 +54170,9 @@
   // source normalization plus configured-repo_path matching) -- the old
   // ux_fixes_queue.py fallback (removed WT-92) used to mirror this table
   // server-side too, but watchtower.queue never carried it forward.
+  // Repos of your own go in local-overrides.json; /api/config serves them as
+  // repo_project_map and they win over these built-ins.
   const _REPO_PROJECT_MAP = {
-    'bym+finie': 'BYMPROD', 'bym-finie': 'BYMPROD', 'bookyourmat': 'BYMPROD', 'bymprod': 'BYMPROD',
     'claude-command-center': 'CCC', 'command-center': 'CCC',
     'watchtower': 'WT',
   };
@@ -54233,6 +54234,8 @@
     if (!repoPath) return '';
     const base = String(repoPath).replace(/\/+$/, '').split('/').pop().toLowerCase();
     if (!base) return '';
+    const localMap = (APP_CONFIG && APP_CONFIG.repo_project_map) || {};
+    if (localMap[base]) return localMap[base];
     if (_REPO_PROJECT_MAP[base]) return _REPO_PROJECT_MAP[base];
     // Normalized basename (uppercase, alnum/-/_), mirrors _norm_project.
     return base.toUpperCase().replace(/[^A-Z0-9\-_]/g, '').replace(/^[-_]+|[-_]+$/g, '');
@@ -68637,7 +68640,7 @@
     return '<div class="stream-block-plan plan-card">' + rows.join('') + '</div>';
   }
 
-  // Codex single-renderer merge, slice 3 (CCC-private-docs plan
+  // Codex single-renderer merge, slice 3 (private plans repo,
   // 2026-09-12-codex-single-renderer-merge.md): the native app-server pane
   // (static/codex-client.js) renders a turn-level diff, generated images and
   // pending approval/question/permission/elicitation requests that the
@@ -69828,7 +69831,7 @@
 
   // --- Provisional (live) event upsert/reconcile helpers -------------------
   // Slice 2 of the Codex single-renderer merge (see
-  // CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md). Once
+  // the private plans repo, codex-single-renderer-merge). Once
   // Slice 4 wires up a live app-server data source, provisional events (rows
   // the CLI has already run but the rollout JSONL hasn't caught up to writing
   // yet, ~15s lag) will be upserted by renderConversationEvents's per-event
