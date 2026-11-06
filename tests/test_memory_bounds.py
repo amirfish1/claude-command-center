@@ -6,6 +6,7 @@ cache lost its byte budget: restore it, don't raise the number.
 """
 import importlib
 import os
+import site
 import subprocess
 import sys
 import textwrap
@@ -144,8 +145,9 @@ def test_boot_runs_server_from_bytecode_and_keeps_script_dispatch(tmp_path):
     done = subprocess.run(
         [sys.executable, str(root / "ccc_server" / "boot.py"), str(root / "server.py"),
          "--archive-refresh-worker"],
-        # A new HOME hides user-site packages such as watchtower, so pass the path on.
-        env={**os.environ, "HOME": str(tmp_path), "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)},
+        # A new HOME hides the user site, where CI installs watchtower through a
+        # .pth file, so PYTHONPATH can't reach it. Pin the user base instead.
+        env={**os.environ, "HOME": str(tmp_path), "PYTHONUSERBASE": site.getuserbase()},
         capture_output=True, text=True, timeout=120,
     )
     assert done.returncode == 2, done.stderr
