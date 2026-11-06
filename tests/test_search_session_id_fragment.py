@@ -61,3 +61,11 @@ def test_client_checks_the_id_before_any_filter_and_ranks_it_top():
     body = app[app.index("function filterConversations(q)"):]
     assert body.index("_sessionIdSearchRank(c, idNeedle)") < body.index("Recent-only filter")
     assert "if (source === 'id') return 4;" in app
+
+
+def test_sidebar_list_shows_id_hits_that_are_not_loaded():
+    app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    body = app[app.index("function renderArchiveList(filter, opts)"):]
+    union = body[body.index("if (q && _historyState.query === q && _historyState.map.size)"):]
+    assert "hit.source === 'id'" in union[:900]
+    assert "_historySyntheticRow(sid, hit)" in union[:900]

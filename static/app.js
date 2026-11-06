@@ -71972,6 +71972,30 @@
       .filter(c => !!(c.session_id || c.id));
   }
 
+  function _historySyntheticRow(sid, hit) {
+    const titleSrc = _stripHistoryHtml(hit.snippet).trim();
+    return {
+      id: sid,
+      session_id: sid,
+      display_name: titleSrc.slice(0, 80) || ('Session ' + sid.slice(0, 8)),
+      first_message: '',
+      last_prompt: '',
+      branch: '',
+      source: 'history',
+      cwd: hit.cwd || '',
+      session_cwd: hit.cwd || '',
+      modified: _historyTsSeconds(hit.ts),
+      size: 0,
+      archived: false,
+      _historyMatch: true,
+      _historySnippet: hit.snippet,
+      _historySource: hit.source || 'bm25',
+      _historyChainCollapsed: hit.chainCollapsed || 0,
+      _historyChainCollapsedSids: hit.chainCollapsedSids || [],
+      _historyOnly: true,
+    };
+  }
+
   function _decorateWithHistoryMatches(localSorted, qLower) {
     // Empty query or stale state → strip any leftover decorations and bail.
     if (!qLower || _historyState.query !== qLower) {
@@ -72033,27 +72057,7 @@
     const synthetic = [];
     for (const [sid, hit] of map.entries()) {
       if (seen.has(sid)) continue;
-      const titleSrc = _stripHistoryHtml(hit.snippet).trim();
-      synthetic.push({
-        id: sid,
-        session_id: sid,
-        display_name: titleSrc.slice(0, 80) || ('Session ' + sid.slice(0, 8)),
-        first_message: '',
-        last_prompt: '',
-        branch: '',
-        source: 'history',
-        cwd: hit.cwd || '',
-        session_cwd: hit.cwd || '',
-        modified: _historyTsSeconds(hit.ts),
-        size: 0,
-        archived: false,
-        _historyMatch: true,
-        _historySnippet: hit.snippet,
-        _historySource: hit.source || 'bm25',
-        _historyChainCollapsed: hit.chainCollapsed || 0,
-        _historyChainCollapsedSids: hit.chainCollapsedSids || [],
-        _historyOnly: true,
-      });
+      synthetic.push(_historySyntheticRow(sid, hit));
     }
     const syntheticRepo = [];
     for (const row of repoRows) {
@@ -79714,7 +79718,12 @@
       const extra = [];
       for (const c of byFolder) {
         const sid = c.session_id || c.id;
-        if (!seen.has(sid) && _historyState.map.has(sid)) extra.push(c);
+        if (!seen.has(sid) && _historyState.map.has(sid)) { extra.push(c); seen.add(sid); }
+      }
+      // An id hit is a direct lookup: show it even when the session is not
+      // in the loaded list at all.
+      for (const [sid, hit] of _historyState.map.entries()) {
+        if (hit.source === 'id' && !seen.has(sid)) extra.push(_historySyntheticRow(sid, hit));
       }
       if (extra.length) rows = rows.concat(extra);
     }
