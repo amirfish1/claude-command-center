@@ -87,9 +87,17 @@ def build(out_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=str(ROOT / "out" / "try-demo"))
+    parser.add_argument("--no-private-check", action="store_true",
+                        help="skip the private-terms check (never for a bundle you will publish)")
     args = parser.parse_args()
     out_dir = pathlib.Path(args.out).resolve()
     copied = build(out_dir)
+    if not args.no_private_check:
+        # The terms list lives outside the repo; see scripts/check_demo_private_terms.py.
+        rc = subprocess.call([sys.executable, str(ROOT / "scripts" / "check_demo_private_terms.py"),
+                              "--rewrite", str(out_dir)])
+        if rc:
+            sys.exit(rc)
     size = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
     print(f"built {out_dir}: {copied} static files, {size / 1e6:.1f} MB uncompressed")
 

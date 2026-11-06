@@ -19,5 +19,25 @@ node scripts/verify-try-demo.js --out out/try-demo-shots
 for path rewrites, so the demo follows the app with no fixture snapshot to
 refresh. When the UI calls a new endpoint, `window.__demoMisses` lists it.
 
-Workers, Jobs, Queues and the Decisions tabs are hidden: they need data the
-demo does not invent yet. Voice is hidden too.
+Jobs shows invented scheduled jobs. Workers, Queue and the two Decisions tabs
+are still hidden: Decisions loads separate pages with their own data, and
+Workers and Queue need ticket and worker data the demo does not invent yet.
+Voice is hidden too. Settings pages that configure a real machine show a short
+install note instead of an error.
+
+## The 60-second path
+
+The ribbon walks a visitor through three things (tap a decision, approve the
+blocked agent, type a reply) and then the Install CCC step. Steps reached are
+counted in this browser only, under `localStorage["ccc-try-demo-steps"]`, and
+mirrored on `window.__tryDemoSteps`. Nothing is sent anywhere. A future,
+owner-approved analytics hook can subscribe with
+`window.__tryDemoAnalyticsHook = (step, count) => {...}`; none exists today.
+
+## Private-terms check
+
+`build_demo.py` fails if the bundle contains any term from a list kept outside
+the repo (`$CCC_PRIVATE_TERMS_FILE`, else `~/.config/ccc-private-terms/demo.txt`).
+A line `term => replacement` also rewrites that term in the demo copy of shared
+app code. A missing list fails the build; `--no-private-check` skips it for
+local experiments only.

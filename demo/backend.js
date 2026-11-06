@@ -139,7 +139,9 @@
   function finishTurn(rec, kind, spec, t, quiet) {
     const s = rec.s;
     s.session_state = stateFor(kind, spec);
-    s.state = 'idle';
+    // A decision is the app's own "waiting" state, so the row dot, the footer
+    // pill and the ribbon all count it through the one predicate the UI uses.
+    s.state = kind === 'decide' ? 'waiting' : 'idle';
     s.last_event_type = 'assistant';
     clearTool(s);
     const prose = [spec.did, spec.insight].filter(Boolean).join(' ');
@@ -167,6 +169,9 @@
     const test = (chip && chip.test) || (approval ? 'scripts/health-check.sh staging' : 'npm test');
     const after = (chip && chip.after) || (denied ? 'Understood. Nothing was applied, and staging is unchanged.' : rec.spec.after)
       || 'Pretend agent here: this is a demo, so no real agent read that. Install CCC to reply to real sessions.';
+    // Working at once: the row's live state must be newer than the owner's tap.
+    setTool(s, tool);
+    s.last_event_ts = now();
     const say = (ms, fn) => rec.timers.push(setTimeout(fn, ms));
     // The row holds its optimistic "sending" state only until the first reply,
     // so it needs the live state in hand before then or it flickers to idle.
@@ -212,8 +217,7 @@
     return {
       total: live.length,
       working: live.filter(s => s.state === 'working').length,
-      needsYou: live.filter(s => s.needs_approval || (s.state !== 'working' && s.session_state
-        && !/^none/i.test(s.session_state.next_step_user || 'none'))).length,
+      needsYou: live.filter(s => s.needs_approval || s.state === 'waiting').length,
     };
   } };
 
@@ -259,8 +263,23 @@
     '/api/control-plane/status': { ok: true, available: false, active: 0, queued: 0, counts: {}, drain: { enabled: false } },
     '/api/free-runtime/status': { ok: true, ready: false, engines: {} },
     '/api/objects': { objects: [], parents: {} },
-    '/api/jobs': { ok: true, hosts: {}, jobs: [] },
+    '/api/system/scheduled-jobs/log': { ok: true, log: 'Invented log, no real job ran.\nchecked 40 pages\nfound 2 broken links\ndone' },
+    '/api/jobs': () => {
+      const at = (h) => isoAt(now() + h * 3600);
+      const job = (id, name, description, project, schedule, status, lastH, nextH, outcome) => ({
+        id, name, description, project, schedule, host: 'laptop', status, enabled: true, last_run_at: at(lastH), next_run_at: at(nextH),
+        outcome_kind: outcome ? 'summary' : '', outcome: outcome || '' });
+      return { ok: true, local_host: 'laptop', hosts: { laptop: { status: 'ok' }, hermes: { status: 'ok' } }, jobs: [
+        job('demo-job-1', 'nightly-order-digest', 'Summarise the day\'s orders for the shop owner.', 'tea-shop', 'Every day at 9:00pm', 'ok', -2, 22, 'Sent a digest of 31 invented orders.'),
+        job('demo-job-2', 'stock-sync', 'Compare the tea stock sheet with the storefront.', 'tea-shop', 'Every hour', 'running', -0.1, 1, ''),
+        job('demo-job-3', 'weekly-changelog', 'Draft release notes from merged changes.', 'tea-app', 'Mondays at 8:00am', 'ok', -60, 100, 'Drafted notes for 14 invented changes.'),
+        job('demo-job-4', 'link-checker', 'Find broken links on the shop pages.', 'tea-site', 'Every day at 3:00am', 'failed', -19, 5, 'Two invented links returned 404.')] };
+    },
     '/api/group-chats/active': { ok: true, chats: [] },
+    '/api/settings/queue-engines': { ok: true, revision: 'demo', defaults_revision: 'demo', queues: [
+      { queue: 'SHOP', auto_drain: true, pins: {}, effective: { engine: 'claude' } },
+      { queue: 'TEA-OPS', auto_drain: false, pins: {}, effective: { engine: 'claude' } }] },
+    '/api/allowances': { ok: true, rows: [] },
     '/api/queue/list': { ok: true, queues: [] },
     '/api/queue/status': { ok: true, items: [] },
     '/api/model-picker/picks': { ok: true, picks: [] },
@@ -269,7 +288,11 @@
     '/api/interrupt-asks': { ok: true, items: [] },
     '/api/watchtower/alerts': { ok: true, alerts: [] },
     '/api/watchtower/service/status': { ok: true, installed: false, running: false, state: 'absent' },
-    '/api/headroom': { ok: true, rows: [], accounts: [] },
+    '/api/headroom': () => ({ ok: true, accounts: [], rows: [
+      { id: 'demo-claude', engine: 'claude', label: 'Claude', account: 'demo', available: true, percent_left: 64,
+        resets_at: now() + 3 * 3600, hours_to_reset: 3, projected_expiring_pct: 10, burn_pct_per_hour: 6 },
+      { id: 'demo-codex', engine: 'codex', label: 'Codex', account: 'demo', available: true, percent_left: 82,
+        resets_at: now() + 26 * 3600, hours_to_reset: 26, projected_expiring_pct: 30, burn_pct_per_hour: 1 }] }),
     '/api/usage/current': { ok: false },
     '/api/savings': { ok: false },
     '/api/sessions/spawned': { ok: true, sessions: [] },
@@ -342,7 +365,7 @@
     for (const { s } of sessions) {
       out[s.session_id] = { is_live: true, state: s.state, last_event_type: s.last_event_type, mtime: s.mtime, modified: s.modified,
         sidecar_status: s.sidecar_status, sidecar_in_flight: s.sidecar_in_flight, sidecar_tool: s.sidecar_tool,
-        sidecar_file: s.sidecar_file, sidecar_ts: s.sidecar_ts || 0, sidecar_has_writes: s.sidecar_has_writes,
+        sidecar_file: s.sidecar_file, sidecar_ts: s.sidecar_ts || 0, last_event_ts: s.last_event_ts || 0, sidecar_has_writes: s.sidecar_has_writes,
         needs_approval: s.needs_approval, needs_approval_message: s.needs_approval_message || '', question_waiting: false };
     }
     return { sessions: out, kill_events: [], prewarm_events: [], interrupt_asks: [], recent_spawns: [] };
@@ -374,7 +397,10 @@
     if (/^\/api\/session\/[^/]+\/(usage|spawn-info|workspace)$/.test(path)) return { ok: false };
     if (/^\/api\/session\/[^/]+\/timeline$/.test(path)) return { ok: true, events: [] };
     if (/\/spawn-[a-z]+\/availability$/.test(path)) return { available: true, bin: 'demo', model: '', source: 'demo' };
-    if (Object.prototype.hasOwnProperty.call(STATIC, path)) return STATIC[path];
+    if (Object.prototype.hasOwnProperty.call(STATIC, path)) {
+      const v = STATIC[path];
+      return typeof v === 'function' ? v() : v;
+    }
     misses['GET ' + path] = (misses['GET ' + path] || 0) + 1;
     return { ok: false, demo: true };
   }
@@ -383,8 +409,11 @@
     if (path === '/api/inject-input') {
       const rec = byId.get(body && body.session_id);
       if (!rec) return { ok: false, error: 'Unknown demo session' };
-      deliver(rec, String(body.text || ''));
+      const sent = String(body.text || '');
+      const isChip = (rec.spec.chips || []).concat((rec.spec.becomes && rec.spec.becomes.chips) || []).some(c => c.reply === sent);
+      deliver(rec, sent);
       api.taps = (api.taps || 0) + 1;
+      window.dispatchEvent(new CustomEvent('tryDemo:step', { detail: isChip ? 'decision' : 'reply' }));
       return { ok: true, queued: false, delivered: true, delivery_id: 'demo-' + Date.now() };
     }
     if (path === '/api/claude/permission') {
@@ -392,6 +421,7 @@
       if (!rec) return { ok: false, error: 'Unknown demo session' };
       api.taps = (api.taps || 0) + 1;
       deliver(rec, body.decision === 'decline' ? 'Denied. Do not run that.' : 'Approved.');
+      window.dispatchEvent(new CustomEvent('tryDemo:step', { detail: 'approval' }));
       return { ok: true };
     }
     const archive = path.match(/^\/api\/conversations\/([^/]+)\/archive$/);
