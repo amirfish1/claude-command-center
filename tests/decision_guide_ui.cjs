@@ -52,7 +52,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
     });
     const ready = () => page.waitForFunction(() => !document.querySelector('#refresh').disabled && !document.querySelector('#intro').textContent.startsWith('Loading'));
     const load = async () => { await page.goto(origin+'/static/decision-guide.html'); await ready(); };
-    const refresh = async () => { await page.click('#refresh'); await ready(); };
+    const refresh = async () => { await page.evaluate(()=>document.querySelector('#refresh').click()); await ready(); };
     const click = label => page.evaluate(label => {
       const button = [...document.querySelectorAll('button')].find(b=>b.textContent===label);
       if (!button || button.disabled) throw Error('Button unavailable: '+label);
@@ -64,6 +64,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
     const reply = (req,state='pending',changes={}) => req.respond({status:200,contentType:'application/json',body:JSON.stringify({ok:true,request_id:id,answer_id:answerId,state,answer:{request_id:id,expected_revision:4,text:exact,actor:'owner'},work_completed:false,...changes})});
     try {
       await load();
+      assert.equal(await page.$eval('#refresh',el=>getComputedStyle(el).display),'none');
       await run({page,model,posts,load,refresh,click,wait,idle,selected,reply,setHandler:fn=>{handler=fn;},setReadHandler:fn=>{readHandler=fn;}});
       assert.deepEqual(errors,[]); checks++; console.log('PASS '+name);
     } finally { await page.close(); }
@@ -362,7 +363,8 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
         },modifier),false);
       }
       model.source_current=false; model.needs_answer_count=900;
-      await frame.click('#refresh'); await page.waitForFunction(()=>window.decisionCounts.length===2);
+      await frame.evaluate(()=>document.querySelector('#refresh').click()); await page.waitForFunction(()=>window.decisionCounts.length===2);
+      assert.equal(await frame.$eval('#refresh',el=>getComputedStyle(el).display!=='none'),true);
       assert.deepEqual(await page.evaluate(()=>window.decisionCounts),[2,null]);
       assert.equal(await page.evaluate(()=>window.ticketMessages.length),1); assert.equal(posts.length,0);
     });

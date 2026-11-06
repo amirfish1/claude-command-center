@@ -57,7 +57,7 @@
   function currentSource(row) { return row?.source_current === true || model?.source_current === true; }
   function gate(row) {
     if (!storageReady) return 'Session storage is unavailable or unreadable. Answers are blocked to protect recovery.';
-    if (!model || readError || !currentSource(row)) return 'Source coverage is unavailable. Check source before submitting an answer.';
+    if (!model || readError || !currentSource(row)) return 'Could not confirm this list is current. Use Try again before answering.';
     if (model.answers_enabled !== true) return 'Source answers are not enabled. This question is read-only.';
     if (!row || !rows.some(r => r.request_id === row.request_id) || row.status !== 'open') return 'This question is no longer open at source. This is not a delivery receipt.';
     if (row.can_answer !== true) return row.answer_unavailable_reason || 'The source does not allow an answer to this question.';
@@ -71,7 +71,7 @@
     // The immutable key is replayed before backend freshness checks. A save retry
     // never sends, and receipt lookup also remains safe without source coverage.
     if (action === 'record' || action === 'reconcile') return '';
-    if (readError || !currentSource(row)) return 'Source coverage is unavailable. Check source before sending the saved answer.';
+    if (readError || !currentSource(row)) return 'Could not confirm this list is current. Use Try again before sending the saved answer.';
     if (!row || !supported(row) || row.kind !== 'question' || row.delivery_owner === 'routine') return row?.answer_unavailable_reason || 'This source does not support sending the saved answer here.';
     return '';
   }
@@ -165,8 +165,10 @@
     $('refresh').disabled = loading;
     const verified = model?.source_current === true && !readError && Number.isSafeInteger(model.needs_answer_count) && model.needs_answer_count >= 0;
     $('intro').textContent = verified ? (model.needs_answer_count ? `Hi, you have ${model.needs_answer_count} open questions. Here is the ${state.seen.length > 1 ? 'next' : 'first'} one.` : 'Hi, you have 0 open questions needing an answer.') : loaded ? 'Current question count unavailable. Previously observed questions remain below.' : 'Loading open questions…';
+    // Auto-refresh keeps a healthy list current; retry is only for a failed read.
+    $('refresh').hidden = !loaded || verified;
     const checked = new Date(model?.checked_at);
-    $('coverage').textContent = readError || (!model ? 'Checking source coverage…' : verified ? 'Source checked' + (Number.isFinite(checked.getTime()) ? ' ' + time.format(checked) : '') + '. Local owner waits and promoted session questions only.' : (model.error || 'Source coverage incomplete or unavailable.') + ' This is not a current count.');
+    $('coverage').textContent = readError || (!model ? 'Checking source coverage…' : verified ? (Number.isFinite(checked.getTime()) ? 'Updated ' + time.format(checked) + '. ' : '') + 'Updates automatically.' : (model.error || 'Source coverage incomplete or unavailable.') + ' This is not a current count.');
     $('coverage').classList.toggle('warning', loaded && !verified);
     $('queueCount').textContent = `(${openRows().length} listed)`;
     $('items').replaceChildren();
@@ -191,7 +193,7 @@
         const changed = el('details', ''); changed.append(el('summary', 'Current source question has changed'), el('div', row.body, 'raw')); $('current').append(changed);
       }
       if (entry?.saved?.state !== 'accepted' && (!rows.some(r => r.request_id === id) || row.status !== 'open')) $('current').append(el('p', 'No longer open at source. Withdrawal is not delivery confirmation.', 'warning'));
-    } else if (loaded) $('current').append(el('p', verified ? 'No next unanswered question. You can browse open questions and review receipts above.' : 'No verified questions to show. Check source to try again.', 'meta'));
+    } else if (loaded) $('current').append(el('p', verified ? 'No next unanswered question. You can browse open questions and review receipts above.' : 'No verified questions to show. Use Try again.', 'meta'));
     const reason = entry ? frozenGate(!entry.saved ? 'record' : entry.saved.state === 'pending' ? 'send' : 'reconcile', row) : gate(row);
     const changed = draft && (draft.revision !== row?.revision || draft.body !== row?.body);
     $('answer').value = entry ? entry.payload.text : draft?.text || '';
