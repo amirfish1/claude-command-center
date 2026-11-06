@@ -11987,9 +11987,14 @@
     if (sid) {
       const cleared = _recentlyClearedGoals.get(sid);
       if (cleared) {
-        if (objective && objective === cleared.objective && (Date.now() - cleared.at) < 120000) {
+        // CCC-346: the 2-minute window was too short -- Claude rows only
+        // re-derive `goal` on a full archive rescan, which can serve the
+        // pre-clear text well past 2 min, so the banner came back. Keep
+        // suppressing until the server reports a different/empty goal (that
+        // confirms the clear), with a 30-minute backstop.
+        if (objective && objective === cleared.objective && (Date.now() - cleared.at) < 1800000) {
           objective = '';
-        } else if (objective !== cleared.objective) {
+        } else {
           _recentlyClearedGoals.delete(sid);
         }
       }
