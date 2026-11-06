@@ -75,7 +75,7 @@
     const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
     return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
   }
-  function supported(row) { return row?.adapter === 'watchtower-block' || (row?.adapter === 'session-question' && row.reply_supported === true); }
+  function supported(row) { return row?.adapter === 'watchtower-block' || row?.adapter === 'watchtower-github' || (row?.adapter === 'session-question' && row.reply_supported === true); }
   function currentSource(row) { return row?.source_current === true || sourceCurrent; }
   function startNewAnswer(row) {
     const id = row.request_id, saved = answerFor(row);

@@ -41520,7 +41520,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({'ok': False, 'error': 'body_too_large'}, 413)
                 return
             action = 'record' if path.endswith('/answers') else path.rsplit('/', 1)[1]
-            result, status = answer_payload(action, self.rfile.read(length))
+            result, status = answer_payload(action, self.rfile.read(length),
+                                            github_tickets=_wt_list_items_for_requests)
+            if result.get('state') == 'accepted':
+                with _wt_items_memo_lock:
+                    _wt_items_memo["at"] = 0  # An answered wait must leave the queue promptly.
             self.send_json(result, status)
         elif path == "/api/decision-inbox/close":
             from ccc_server.decision_answer_api import MAX_BODY_BYTES

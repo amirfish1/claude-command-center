@@ -12,13 +12,19 @@ from ccc_server.decision_answer_api import AnswerAPIError, DecisionAnswerAPI, OP
 
 
 def answer_payload(action, body=b'', *, answer_id=None, state_root=None, environ=None,
-                   export_source=None, adapter=None, session_wake=None):
+                   export_source=None, adapter=None, session_wake=None, github_tickets=None):
     from ccc_server import decision_inbox
     from ccc_server.decision_answer_settings import answer_environment
     root = Path(state_root) if state_root else decision_inbox._state_root()
     settings = answer_environment(root, environ)
     if settings.get(OPT_IN) != '1':
         return {'ok': False, 'error': 'answers_disabled'}, 503
+    if action == 'record' and github_tickets is not None:
+        from ccc_server.decision_github_answers import answer_github_wait
+        from ccc_server.watchtower_msg import _wt_cli_path
+        handled = answer_github_wait(body, github_tickets(), executable=_wt_cli_path())
+        if handled is not None:
+            return handled
     try:
         from ccc_server.decision_registry import DecisionRegistry
         registry = DecisionRegistry(root / 'decision-inbox' / 'requests.sqlite3', timeout=5)

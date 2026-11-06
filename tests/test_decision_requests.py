@@ -200,14 +200,16 @@ def _github_ticket(ref='OPS-7', **fields):
     return item
 
 
-def test_github_owner_wait_is_listed_and_answered_on_its_ticket():
-    (row,) = github_requests([_github_ticket()])
+def test_github_owner_wait_is_listed_and_answerable_when_answers_are_enabled():
+    (row,) = github_requests([_github_ticket()], answers_enabled=True)
     assert (row['adapter'], row['origin_id'], row['body']) == (
         'watchtower-github', 'OPS-7', '[Q9:repair] Approve the plan?')
     assert row['aliases'] == ['[Q9:repair]']
     assert row['needs_answer'] is True
-    assert row['can_answer'] is False and row['can_close'] is False
-    assert row['answer_unavailable_reason']
+    assert row['can_answer'] is True and row['can_close'] is False
+    assert row['reply_supported'] is True and row['answer_unavailable_reason'] == ''
+    (disabled,) = github_requests([_github_ticket()])
+    assert disabled['can_answer'] is False and disabled['answer_unavailable_reason']
     assert row['request_id'] == github_requests([_github_ticket()])[0]['request_id']
     assert row['request_id'] != github_requests([_github_ticket(blocked_at='2026-01-02')])[0]['request_id']
 

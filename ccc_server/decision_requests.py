@@ -103,11 +103,11 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
         connection.close()
 
 
-def github_requests(tickets):
+def github_requests(tickets, *, answers_enabled=False):
     """Owner waits on GitHub-backed tickets, which the local export can't see.
 
     Read-through only: they never enter the registry and have no conditional
-    answer contract, so they are answered on the ticket itself.
+    answer contract. decision_github_answers rechecks the ticket, then answers it.
     """
     rows = []
     for item in tickets or []:
@@ -123,9 +123,9 @@ def github_requests(tickets):
             title=item.get('title') or ref, body=body, aliases=[tag.group(1)] if tag else [],
             kind='question', status='open', session_id=None, episode_provenance=None,
             answer_state='none', delivery_state='none', delivery_owner=None, answer=None,
-            source_current=True, reply_supported=False, needs_answer=True, observed_at=blocked_at,
-            can_answer=False, can_close=False,
-            answer_unavailable_reason='Open the ticket to answer this GitHub-backed question.'))
+            source_current=True, reply_supported=True, needs_answer=True, observed_at=blocked_at,
+            can_answer=bool(answers_enabled), can_close=False,
+            answer_unavailable_reason='' if answers_enabled else 'Source answers are not enabled in this phase.'))
     return rows
 
 
@@ -145,7 +145,7 @@ def requests_payload(*, state_root=None, source_loader=None, tickets=None):
         return dict(ok=False, requests=None, needs_answer_count=None, source=source,
                     error='Cannot read saved requests. Retry the source check.', llm_used=False,
                     answers_enabled=enabled)
-    rows += github_requests(tickets)
+    rows += github_requests(tickets, answers_enabled=enabled)
     rows.sort(key=lambda r: (r['adapter'].startswith('watchtower'), r['origin_id']))
     issues = [dict(origin_id=r.get('origin_id'), title=r.get('title'), body=r.get('body'),
                    reason='Source question has no stable episode; it has not been imported.')
@@ -156,6 +156,6 @@ def requests_payload(*, state_root=None, source_loader=None, tickets=None):
                 checked_at=datetime.now(timezone.utc).isoformat(),
                 error=refreshed.get('error') if not current else None,
                 limitations=['Coverage: local file-backed owner waits, explicitly promoted session questions and GitHub-backed owner waits.',
-                             'GitHub-backed questions come from the ticket cache and are answered on the ticket.',
+                             'GitHub-backed questions come from the ticket cache; an answer rechecks the live ticket first.',
                              'Ordinary interactive questions stay in their sessions.',
                              'Reviews, other remote queues and untyped reports have separate lifecycles.'])

@@ -53,7 +53,7 @@
   function current() { return rows.find(row => row.request_id === state.selected) || state.snapshots[state.selected]; }
   function openRows() { return rows.filter(row => row.status === 'open' && row.kind === 'question' && !state.closed[row.request_id]
     && state.entries[row.request_id]?.saved?.state !== 'accepted' && row.answer?.state !== 'accepted'); }
-  function supported(row) { return row?.adapter === 'watchtower-block' || (row?.adapter === 'session-question' && row.reply_supported === true); }
+  function supported(row) { return row?.adapter === 'watchtower-block' || row?.adapter === 'watchtower-github' || (row?.adapter === 'session-question' && row.reply_supported === true); }
   function currentSource(row) { return row?.source_current === true || model?.source_current === true; }
   function gate(row) {
     if (!storageReady) return 'Session storage is unavailable or unreadable. Answers are blocked to protect recovery.';
