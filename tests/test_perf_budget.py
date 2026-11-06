@@ -12,6 +12,7 @@ These tests assert *how much work* happens, not just that the output is right:
 If one fails, a hot path lost its gating or caching — don't relax the bound,
 restore the gate. See CLAUDE.md "Performance gates".
 """
+import inspect
 import importlib
 import importlib.util
 import concurrent.futures
@@ -5554,6 +5555,14 @@ def test_new_transcript_passes_the_load_gate_once(
     assert server._archive_refresh_load_blocked(time.time()) is False
     later = time.time() + server._ARCHIVE_NEW_TRANSCRIPT_GATE_GRACE_S + 1
     assert server._archive_refresh_load_blocked(later) is True
+
+
+def test_small_archive_watch_counts_sessions_from_before_the_page():
+    """A transcript written before the first subscriber must still refresh a
+    snapshot built earlier, or the list stays empty on a saturated box."""
+    source = inspect.getsource(server._dashboard_event_watch_loop)
+    assert "previous_transcripts = set()" in source
+    assert "previous_transcripts = _small_archive_transcripts()" not in source
 
 
 def test_small_archive_watch_retires_past_its_limit(

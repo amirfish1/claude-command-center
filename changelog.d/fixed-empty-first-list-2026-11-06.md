@@ -1,0 +1,1 @@
+- Sessions started before you open the dashboard now appear on a small board within seconds. The list could stay on "No sessions yet" for five minutes, or longer on a busy machine.

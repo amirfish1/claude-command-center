@@ -385,11 +385,12 @@ def _dashboard_event_watch_loop():
     # response and this watcher baseline. The client coalesces this with any
     # in-flight base load and guarantees one post-baseline snapshot.
     _invalidate_dashboard("archive", reason="subscriber-baseline")
-    try:
-        previous_transcripts = _small_archive_transcripts()
-    except Exception:
-        previous_transcripts = None
-    next_transcript_check = time.time() + _SMALL_ARCHIVE_WATCH_INTERVAL_S
+    # Start from nothing, so everything on disk counts as new once. A session
+    # written before this page opened would otherwise sit in the baseline
+    # behind an older snapshot: an empty list for the serve TTL, or for as long
+    # as the load gate stays shut. The first tick retires this on a big archive.
+    previous_transcripts = set()
+    next_transcript_check = 0.0
     try:
         while True:
             with _dashboard_event_watch_lock:
