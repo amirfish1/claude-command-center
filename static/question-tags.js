@@ -45,7 +45,7 @@
 
   function openQuestions(list) { return (list || []).filter(function (q) { return !q.answered; }); }
 
-  function chipify(rootEl) {
+  function chipify(rootEl, skipPaint) {
     var hosts = rootEl.matches && rootEl.matches(TARGETS) ? [rootEl] : [];
     if (rootEl.querySelectorAll) hosts = hosts.concat(Array.from(rootEl.querySelectorAll(TARGETS)));
     hosts.forEach(function (host) {
@@ -78,7 +78,7 @@
         node.parentNode.replaceChild(frag, node);
       });
     });
-    paintChips();
+    if (!skipPaint) paintChips();
   }
 
   function paintChips() {
@@ -426,11 +426,15 @@
         queued = false;
         var batch = Array.from(pending); pending.clear();
         mo.disconnect();
+        // One transcript render adds hundreds of nodes under a few hosts:
+        // visit each host once and repaint once, not once per node (CCC-143).
+        var roots = new Set();
         batch.forEach(function (el) {
           if (!el.isConnected) return;
-          var host = el.closest ? el.closest(TARGETS) : null;
-          chipify(host || el);
+          roots.add((el.closest ? el.closest(TARGETS) : null) || el);
         });
+        roots.forEach(function (root) { chipify(root, true); });
+        if (roots.size) paintChips();
         mo.observe(document.body, { childList: true, subtree: true, characterData: true });
       });
     });
