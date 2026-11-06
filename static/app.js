@@ -16406,6 +16406,11 @@
       URL.revokeObjectURL(url);
     };
     const audio = _ttsAudio || (_ttsAudio = new Audio());
+    // Where a first sound's wait goes, for the first playing event's sample.
+    const mark = (name) => {
+      const p = state.perf;
+      if (p && !p.started) (p.split = p.split || {})[name] = Math.round(performance.now() - p.t0);
+    };
     // Per-clip playback from the clip being heard.
     const toClips = (why, broken) => {
       if (stale()) return;
@@ -16462,7 +16467,9 @@
           if (!got.body) throw new Error('not a stream');
           if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
           if (got.model) model = got.model;
+          mark('clip_ms');
           await feedClip(got);
+          mark('fed_ms');
         } catch (_) {
           if (stale()) return;
           delete state.prefetch[from + j];
@@ -16513,6 +16520,7 @@
     source.addEventListener('sourceopen', () => {
       clearTimeout(openTimer);
       if (stale()) return;
+      mark('open_ms');
       try {
         buffer = source.addSourceBuffer('audio/mpeg');
         buffer.mode = 'sequence';   // each clip's timestamps follow the last
@@ -16613,12 +16621,26 @@
       toClips('media error', true);
     };
     if (_ttsPaused) return;
-    audio.play().catch((error) => {
+    let retried = false;
+    const playStream = () => audio.play().catch((error) => {
       if (stale()) return;
       _ttsLog('ERROR', 'chained play rejected: ' + (error?.name || 'unknown'));
       if (error?.name === 'NotAllowedError') { _ttsPlayBlocked(state); return; }
+      // AbortError = a pause or load interrupted the pending play. The stream
+      // is still ours, and leaving it cost a 13 s silence (CCC-144).
+      if (error?.name === 'AbortError' && !retried) {
+        retried = true;
+        if (_ttsPaused) return;   // the listener paused; resuming plays it
+        let fired = false;
+        const again = () => { if (fired || stale() || _ttsPaused) return; fired = true; playStream(); };
+        audio.addEventListener('canplay', again, { once: true });
+        setTimeout(again, 1500);
+        return;
+      }
       toClips('play rejected');
     });
+    playStream();
+    mark('play_ms');
   }
 
   // One-time iOS-Safari engine prime (CCC-31). Must run inside a user gesture.
@@ -16900,7 +16922,7 @@
       wall_ms: Math.round(end - p.t0), mode: p.mode || 'clips', cue: !!p.cue,
       bridge: !!p.bridge, event_lag_ms: Math.round(seen - end),
       longtask_ms: _perfLongTaskMs(p.t0, seen), client: _ttsClientTag(),
-      session_ms: p.sessionMs,
+      session_ms: p.sessionMs, split: p.split,
     } });
   }
   // Time the audio has already been sounding when its `playing` event reaches
@@ -17585,6 +17607,12 @@
     const rest = _ttsBoundUtteranceText.slice(offset);
     if (!rest.trim()) return false;
     const wasPaused = _ttsPaused;
+    // The old voice's unfinished clips can't be used: stop them competing with
+    // the new voice's first clip (1-2 s stalls while trying voices, CCC-144).
+    if (voice !== undefined) {
+      try { _ttsFgAbort?.abort(); } catch (_) {}
+      _ttsFgAbort = null;
+    }
     _ttsKeepVoice = voice !== undefined ? voice
       : ((_ttsChunkState && _ttsChunkState.geminiVoice) || '');
     _ttsChunkState = null;

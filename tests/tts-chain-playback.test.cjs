@@ -162,6 +162,32 @@ test('a clip that fails hands over to the per-clip player at that clip', async (
   await page.close();
 });
 
+test('an interrupted play keeps the stream instead of leaving it', async () => {
+  const page = await freshPage();
+  const result = await page.evaluate(async () => {
+    speak([0.4, 0.4]);
+    audio().pause();   // rejects the pending play with AbortError
+    await until(() => window.finished, 8000);
+    return { logs: window.logs, noChain: !!readState().noChain };
+  });
+  assert.equal(result.noChain, false, result.logs.join('\n'));
+  assert.ok(result.logs.some(l => l.startsWith('ENDED chained read')), result.logs.join('\n'));
+  await page.close();
+});
+
+test('a listener who paused during that play stays paused', async () => {
+  const page = await freshPage();
+  const result = await page.evaluate(async () => {
+    speak([0.4, 0.4]);
+    _ttsPaused = true;
+    audio().pause();
+    await new Promise(r => setTimeout(r, 1800));
+    return { paused: audio().paused, noChain: !!readState().noChain };
+  });
+  assert.deepEqual(result, { paused: true, noChain: false });
+  await page.close();
+});
+
 test('a seek inside made audio moves in the stream without a new request', async () => {
   const page = await freshPage();
   const result = await page.evaluate(async () => {
