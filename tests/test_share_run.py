@@ -423,7 +423,7 @@ def test_survivors_lists_readable_capitalized_words_and_numbers():
         {"kind": "assistant", "text": "Globex has 4200 rows [code, 3 lines]"},
     ]}
     got = {x["word"]: x["count"] for x in share_run.survivors(replay)}
-    assert got["Globex"] == 2 and got["4200"] == 2 and got["Fix"] == 1
+    assert got["Globex"] == 2 and got["4200"] == 2 and "Fix" not in got  # sentence starter (R5)
     assert not any("name" in w or "code" in w for w in got)
 
 

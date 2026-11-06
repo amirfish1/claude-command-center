@@ -644,11 +644,21 @@ def survivors(replay: dict) -> list:
     this is the list the user scans to decide what to add to "Also hide".
     """
     counts = Counter()
+    mid = set()        # capitalized somewhere other than a sentence start
+    lower = set()      # also written in lowercase somewhere
     texts = [replay.get("title") or ""] + [st.get("text") or "" for st in replay.get("steps") or ()]
     for raw in texts:
         text = re.sub(r"\[[a-z]+(?:-\d+)?(?:, \d+ lines?)?\]", " ", raw)
-        for word in _SURVIVOR_WORD_RE.findall(text):
+        lower.update(re.findall(r"\b[a-z][a-z'’\-]*\b", text))
+        for m in _SURVIVOR_WORD_RE.finditer(text):
+            word = m.group(0)
             counts[word] += 1
+            before = text[:m.start()].rstrip()
+            if before and before[-1] not in ".!?:;\n\"'([-*#>" :
+                mid.add(word)
+    for word in list(counts):
+        if word[0].isalpha() and (word.casefold() in lower or word not in mid):
+            del counts[word]
     ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].casefold()))
     return [{"word": w, "count": n} for w, n in ranked[:_SURVIVOR_CAP]]
 

@@ -303,7 +303,7 @@ _SECRET_PROSE_RE = re.compile(
     r"(?: is| was| would be| to)[ \t]{1,3})" + _HELD + r"(\S{1,500})"
 )
 _CRED_LABEL = (
-    r"(?:pass(?:word|wd|phrase|code|key)|pwd|pw|secret|token|otp|cvv|cvc|"
+    r"(?:pass(?:word|wd|[ _\-]?phrase|code|key)|pwd|pw|secret|token|otp|cvv|cvc|"
     r"api[ _\-]?key|access[ _\-]?key|pin(?:[ _\-]?code)?|security[ _\-]?code)"
 )
 # "the password for prod is X", "password: X", "wifi pass was X".
@@ -377,13 +377,14 @@ _SAFE_SETTING_RE = re.compile(
 # Digits after a pin-style label. Status and exit codes are not secrets.
 _PIN_RE = re.compile(
     r"(?i)(?<!status )(?<!exit )(?<!error )(?<!response )(?<!return )(?<!http )(?<!line )"
-    r"(?<![A-Za-z0-9])((?:pin|passcode|code|cvv|cvc|cvn|otp|2fa)\b[^\n\d]{0,12}?)"
+    r"(?<![A-Za-z0-9])((?:pin|passcode|code|cvv|cvc|cvn|otp|2fa)\b"
+    r"(?:[^\n\d]{0,12}?|[^\n\d]{0,40}?\b(?:is|was)\b[ \t]*[:=]?[ \t]*))"
     r"(?<![\w.\-])(\d{3,8})(?![\w\-])"
 )
 _SEED_LABEL_RE = re.compile(
     r"(?i)\b((?:seed(?=[ \t]*(?:[:=]|is\b))|(?:seed|mnemonic|recovery|backup|wallet)"
     r"[ _\-]?(?:phrase|words?|code|key)|mnemonic|secret[ _\-]?(?:recovery[ _\-]?)?phrase|"
-    r"passphrase)\b(?:[ \t]+(?:is|was|are|were))?[ \t]*[:=\-]?\s*)"
+    r"pass[ _\-]?phrase)\b(?:[ \t]+(?:is|was|are|were))?[ \t]*[:=\-]?\s*)"
     r"((?:\d{1,2}[.)][ \t]*)?[a-z]{3,10}(?:[\s,]+(?:\d{1,2}[.)][ \t]*)?[a-z]{3,10}){2,29})"
 )
 _SEED_WORD_RE = re.compile(r"[A-Za-z]{3,8}")
@@ -444,6 +445,14 @@ _BIRTH_DATE_RE = re.compile(
     r"(?:[ \t]+(?:is|was|on|in))?[ \t]*:?[ \t]*)(?:" + _MONTH + r"[ \t]+" + _DAY
     + r"|" + _DAY + r"[ \t]+(?:of[ \t]+)?" + _MONTH + r")(?![A-Za-z0-9])"
 )
+_BIRTH_YEAR_RE = re.compile(
+    r"(?i)\b((?:born|birthday|birthdate|birth[ \t]*date|date[ \t]+of[ \t]+birth|dob|d\.o\.b\.|"
+    r"geboren|n[ée]e?|nacido|nata|nato)"
+    r"(?:[ \t]+(?:is|was|on|in|am|le|en|el))?[ \t]*:?[ \t]*)"
+    r"(?:\d{1,2}\.?[ \t]*(?:[A-Za-z\u00c0-\u00ff]{3,9}|[IVX]{1,4})\.?[ \t]*\d{2,4}"
+    r"|[A-Za-z\u00c0-\u00ff]{3,9}\.?[ \t]+\d{4}"
+    r"|\d{4})(?![A-Za-z0-9])"
+)
 _HOSTNAME_SERIAL_RE = re.compile(r"(?i)^[a-z]+(?:-[a-z]+)+-\d{1,3}$")
 _DATE_RE = re.compile(r"\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2})?[^\s,;]{0,10})?")
 _PHONE_RE = re.compile(r"(?<![\w.])\+?\(?\d[\d \-().]{6,22}\d(?![\w])")
@@ -453,6 +462,12 @@ _DIGIT_GROUPS_RE = re.compile(
     r"(?<![\w.])\d{2,6}(?:[ \t]{0,2}[,_:;\n\r\-./][ \t]{0,2}\d{2,6}|[ \t]{1,2}\d{2,6}){2,12}(?![\w])"
 )
 _DIGIT_GROUP_MIN = 7
+# Dashes, pipes and bullets between digit groups become a plain hyphen before
+# matching, so " – ", " | " and " • " cannot hide a card number.
+_ODD_SEP_RE = re.compile(r"(?<=\d)[ \t]*[\u2010-\u2015\u2212\u2022\u00b7\u2219|][ \t]*(?=\d)|(?<=\d)[ \t]+-[ \t]+(?=\d)")
+# verify(): independent of the masking pattern. Twelve or more digits across
+# anything that is not a letter is a card-length number.
+_VERIFY_DIGITS_RE = re.compile(r"\d(?:[^A-Za-z\d\n]{0,4}\d){11,}")
 _ADDRESS_RE = re.compile(
     r"(?<![\w.])\d{1,6}[ \t]+(?:[A-Za-z][A-Za-z.\-]{0,30}[ \t]+){1,3}"
     r"(?:[Ss]treet|[Ss]t|[Aa]venue|[Aa]ve|[Rr]oad|[Rr]d|[Bb]oulevard|[Bb]lvd|[Ll]ane|[Ll]n|"
@@ -850,6 +865,7 @@ class Redactor:
         text = self._sub(_UUID_RE, "id", text)
         text = self._sub(_DATE_RE, "date", text)
         text = self._sub(_WORD_DATE_RE, "date", text)
+        text = _BIRTH_YEAR_RE.sub(lambda m: m.group(1) + self._mask("date"), text)
         text = _BIRTH_DATE_RE.sub(lambda m: m.group(1) + self._mask("date"), text)
         text = self._sub(_IPV4_RE, "ip", text)
         text = self._sub(_MAC_RE, "ip", text)
@@ -892,6 +908,7 @@ class Redactor:
         text = unicodedata.normalize("NFKC", str(value or "")[:MAX_INPUT_CHARS])
         text = _INVISIBLE_RE.sub("", text)
         text = _CONTROL_RE.sub(" ", text)
+        text = _ODD_SEP_RE.sub("-", text)
         self._stash = []
         text = self._strip_structure(text)
         text = self._detectors(text)
@@ -952,6 +969,8 @@ class Redactor:
             raise RedactionError("identity phrase in export")
         if _seed_runs(bare, _VERIFY_SEED_RUN):
             raise RedactionError("unredacted secret in export")
+        if _VERIFY_DIGITS_RE.search(bare):
+            raise RedactionError("unredacted number in export")
         for match in _DIGIT_GROUPS_RE.finditer(bare):
             if sum(c.isdigit() for c in match.group(0)) >= _DIGIT_GROUP_MIN:
                 raise RedactionError("unredacted number in export")
