@@ -444,8 +444,8 @@ def _cached_codex_thread_registry_data():
     data["authoritative"] = False
     data.setdefault("source", "ccc-wt-codex-reconciliation")
     _CODEX_THREAD_REGISTRY_CACHE["token"] = token
-    _CODEX_THREAD_REGISTRY_CACHE["data"] = copy.deepcopy(data)
-    return _CODEX_THREAD_REGISTRY_CACHE["data"]
+    _CODEX_THREAD_REGISTRY_CACHE["data"] = data
+    return data
 
 
 def _load_codex_thread_registry():
