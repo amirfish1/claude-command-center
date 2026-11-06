@@ -276,3 +276,10 @@ def test_hostile_input_stays_fast(value):
     started = time.monotonic()
     Redactor(identity=["Dana Okafor"]).text(value)
     assert time.monotonic() - started < 2.0
+
+
+def test_bare_scheme_in_prose_is_masked_not_refused():
+    redactor = Redactor()
+    masked = redactor.text("Links that start with `http://` are rejected.")
+    assert "://" not in masked
+    redactor.verify([masked])

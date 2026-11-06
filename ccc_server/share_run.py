@@ -416,6 +416,10 @@ def _hidden_sentence(hidden: dict) -> str:
         for key, one, many in labels
         if hidden.get(key)
     ]
+    named = {key for key, _, _ in labels}
+    other = sum(count for key, count in hidden.items() if key not in named)
+    if other:
+        parts.append(f"{other} other detail" + ("" if other == 1 else "s"))
     return "Redacted on the author's machine: " + (", ".join(parts) or "nothing matched") + "."
 
 

@@ -141,6 +141,20 @@ def test_hidden_summary_counts_read_naturally():
     )
 
 
+def test_hidden_summary_counts_every_category():
+    assert share_run._hidden_sentence({"name": 2, "date": 1, "ref": 2}) == (
+        "Redacted on the author's machine: 2 names, 3 other details."
+    )
+
+
+def test_cli_out_accepts_a_file_name_or_a_directory():
+    from importlib.machinery import SourceFileLoader
+    cli = SourceFileLoader("ccc_cli_share", str(Path(__file__).resolve().parents[1] / "ccc")).load_module()
+    files = {"agent-run-replay.html": "a", "agent-run.svg": "b"}
+    assert set(cli._share_targets("demo/run.html", files)) == {"demo/run.html", "demo/run.svg"}
+    assert set(cli._share_targets("demo", files)) == {"demo/agent-run-replay.html", "demo/agent-run.svg"}
+
+
 def test_title_override_is_redacted_too():
     replay = export(title="Refund fix for Dana Okafor")
     assert "Dana" not in replay["title"] and replay["title"].startswith("Refund fix")

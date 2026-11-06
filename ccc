@@ -861,6 +861,14 @@ def _brief_link_text(link):
     return f"{tag}{sid}{title}{also}"
 
 
+def _share_targets(out, files):
+    """Map export files to paths; ``--out x.html`` names them, others are dirs."""
+    stem, ext = os.path.splitext(out)
+    if ext.lower() in (".html", ".svg"):
+        return {stem + os.path.splitext(name)[1]: body for name, body in files.items()}
+    return {os.path.join(out, name): body for name, body in files.items()}
+
+
 def cmd_share(args):
     """Save a redacted replay or stats card. Nothing leaves this machine."""
     base = _resolve_server(args.server)
@@ -901,9 +909,8 @@ def cmd_share(args):
     except OSError as e:
         print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
         return 1
-    os.makedirs(out_dir, exist_ok=True)
-    for name, body in files.items():
-        path = os.path.join(out_dir, name)
+    for path, body in _share_targets(out_dir, files).items():
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(body)
         print(path)
@@ -2940,7 +2947,7 @@ def main(argv=None):
     p.add_argument("--days", type=int, choices=(7, 30), default=7, help="stats card period")
     p.add_argument("--hide", action="append", default=[], help="extra word or phrase to mask (repeatable)")
     p.add_argument("--keep", action="append", default=[], help="word the redactor over-masked (repeatable)")
-    p.add_argument("--out", default=".", help="directory to write to (default: current directory)")
+    p.add_argument("--out", default=".", help="directory, or a .html/.svg file name (default: current directory)")
     p.set_defaults(func=cmd_share)
 
     p = sub.add_parser("question", help="explicit session question lifecycle (JSON output)")
