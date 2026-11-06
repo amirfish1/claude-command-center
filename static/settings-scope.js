@@ -114,10 +114,21 @@
   }
   function schedule(){if(!scheduled){scheduled=true;queueMicrotask(mount);}}
   window.cccSettingsScope=Object.freeze({families,describe,mount,audit:()=>candidates().filter(n=>describe(n)===unknown||n.dataset.settingsScope!==describe(n).id||!(n.getAttribute('aria-describedby')||'').split(/\s+/).some(id=>id.startsWith('settings-scope-')&&document.getElementById(id))).map(n=>({tag:n.tagName,id:n.id||'',section:n.closest('.settings-section')?.dataset.sectionId||''}))});
+  // Runs for every DOM change on the page, so it must stay cheap: searching the
+  // subtree of each record's target made a transcript render quadratic (CCC-143:
+  // ~10s of frozen page per large open). Only added nodes can bring a new root
+  // inside them, the transcript never holds one, and a target needs one check.
+  const transcript='.conversations-view';
   new MutationObserver(records=>{
-    const relevant=node=>node.nodeType===1&&!node.closest('[data-settings-scope-help]')&&
-      (node.closest(roots)||node.matches(roots)||node.querySelector(roots));
-    if(records.some(record=>relevant(record.target)||[...record.addedNodes].some(relevant)))schedule();
+    if(scheduled)return;
+    const targets=new Set();
+    const skip=node=>node.nodeType!==1||!!node.closest(transcript)||!!node.closest('[data-settings-scope-help]');
+    const inRoot=node=>!skip(node)&&!!node.closest(roots);
+    const added=node=>!skip(node)&&!!(node.closest(roots)||node.querySelector(roots));
+    for(const record of records) {
+      if(!targets.has(record.target)){targets.add(record.target);if(inRoot(record.target)){schedule();return;}}
+      for(const node of record.addedNodes)if(added(node)){schedule();return;}
+    }
   }).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','id','data-section-id','data-context-preferences','data-role']});
   mount();
 })();
