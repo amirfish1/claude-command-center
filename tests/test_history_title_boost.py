@@ -54,7 +54,7 @@ def _build_index(db_path: Path) -> None:
     # are not. A synthetic harness injection precedes the real first message
     # and must NOT shadow it.
     add("sess-title", 1, "<recommended_plugins> synthetic harness block")
-    add("sess-title", 2, "I need help fixing the zephyr campaign for joyce")
+    add("sess-title", 2, "I need help fixing the zephyr campaign for maya")
     add("sess-title", 3, "looks good, ship it", "assistant")
     add("sess-title", 4, "done", "assistant")
 
@@ -166,8 +166,8 @@ def test_search_conversation_history_also_boosts_titles(_sfts_title_env):
     projects_dir = _sfts_title_env
     _write_titled_session(
         projects_dir, "sess-title-0001",
-        "fix the zephyr campaign for joyce",
-        "I need help fixing the zephyr campaign for joyce",
+        "fix the zephyr campaign for maya",
+        "I need help fixing the zephyr campaign for maya",
     )
     for s in range(15):
         sid = f"sess-filler-{s:04d}"

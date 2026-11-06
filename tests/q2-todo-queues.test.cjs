@@ -26,11 +26,11 @@ test('queues on a repo named TODO (any owner, any case) are pinned', () => {
 
 test('other repos, local queues and unknown queues are not pinned', () => {
   state.configs = {
-    BECKY: { github_repo: 'amirfish1/BYM-Finie' },
+    WREN: { github_repo: 'example/harbor-tern' },
     STUFF: { github_repo: 'amirfish1/TODO-archive' },
     LOCAL: {},
   };
-  assert.equal(isTodoRepoQueue({ queue: 'BECKY' }), false);
+  assert.equal(isTodoRepoQueue({ queue: 'WREN' }), false);
   assert.equal(isTodoRepoQueue({ queue: 'STUFF' }), false);
   assert.equal(isTodoRepoQueue({ queue: 'LOCAL' }), false);
   assert.equal(isTodoRepoQueue({ queue: 'MISSING' }), false);

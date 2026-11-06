@@ -14,7 +14,9 @@ falls back to its generic behaviour. Example:
       "ticket_title_noise": ["Acme: Home"],
       "commit_scopes": {"apps/acme-web": "web"},
       "ticket_prefix_repos": {"ACME": ["acme-web"]},
-      "remote_apps_dir": "/srv/agent/Apps"
+      "remote_apps_dir": "/srv/agent/Apps",
+      "hermes_pending_dir": "~/.hermes/whatsapp/acme_pending",
+      "owner_names": ["alex"]
     }
 
 Stdlib only. The parse is cached by (mtime, size), so a lookup on a hot path
@@ -117,3 +119,17 @@ def remote_apps_dir() -> str:
     """Folder holding repo checkouts on the always-on Linux host, or ""."""
     raw = _load().get("remote_apps_dir")
     return raw.rstrip("/") if isinstance(raw, str) and raw.startswith("/") else ""
+
+
+def hermes_pending_dir() -> str:
+    """Folder of pending Hermes WhatsApp items, or '' for the default."""
+    value = _load().get("hermes_pending_dir")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def owner_names() -> list[str]:
+    """Lower-cased names that mean "the human owner" in action text."""
+    raw = _load().get("owner_names")
+    if not isinstance(raw, list):
+        return []
+    return [n.strip().lower() for n in raw if isinstance(n, str) and n.strip()]

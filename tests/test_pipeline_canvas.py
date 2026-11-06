@@ -16,10 +16,10 @@ pc = importlib.import_module("ccc_server.pipeline_canvas")
 
 def _configs():
     return {
-        "BECKY-DESIGN": {"auto_drain": True, "engine": "claude",
+        "WREN-DESIGN": {"auto_drain": True, "engine": "claude",
                          "model": "claude-opus-5", "effort": "high",
                          "desired_workers": 2, "repo_path": "/r/app"},
-        "BECKY": {"auto_drain": False, "engine": "claude",
+        "WREN": {"auto_drain": False, "engine": "claude",
                   "model": "claude-sonnet-5", "backend": "github",
                   "github_repo": "owner/repo", "product_gate": True},
         "FLEET-VERIFY": {"auto_drain": True, "engine": "kimi"},
@@ -28,7 +28,7 @@ def _configs():
 
 def _health():
     return [
-        {"queue": "BECKY", "state": "backlog", "depth": 5, "claimable": 3,
+        {"queue": "WREN", "state": "backlog", "depth": 5, "claimable": 3,
          "in_progress": 1, "workers": 0, "auto_drain": False, "stuck": False,
          "staffing_alarm": False, "configured": True,
          "worker_plan": {"engine": "claude", "engine_source": "queue",
@@ -40,7 +40,7 @@ def _health():
 
 class ArchetypeClassification(unittest.TestCase):
     def test_design_suffix_is_planner(self):
-        self.assertEqual(pc.archetype_for_queue("BECKY-DESIGN"), "planner")
+        self.assertEqual(pc.archetype_for_queue("WREN-DESIGN"), "planner")
         self.assertEqual(pc.archetype_for_queue("app_design"), "planner")
 
     def test_verify_review_names_are_reviewer(self):
@@ -48,23 +48,23 @@ class ArchetypeClassification(unittest.TestCase):
         self.assertEqual(pc.archetype_for_queue("CODE-REVIEW"), "reviewer")
 
     def test_default_is_executor(self):
-        self.assertEqual(pc.archetype_for_queue("BECKY"), "executor")
+        self.assertEqual(pc.archetype_for_queue("WREN"), "executor")
         self.assertEqual(pc.archetype_for_queue(""), "executor")
 
     def test_planner_base_name(self):
-        self.assertEqual(pc.planner_base_name("BECKY-DESIGN"), "BECKY")
-        self.assertEqual(pc.planner_base_name("BECKY"), "")
+        self.assertEqual(pc.planner_base_name("WREN-DESIGN"), "WREN")
+        self.assertEqual(pc.planner_base_name("WREN"), "")
 
 
 class ConventionEdges(unittest.TestCase):
     def test_planner_edges_to_existing_base_queue(self):
-        edges = pc.derive_convention_edges(["BECKY", "BECKY-DESIGN"], _configs())
+        edges = pc.derive_convention_edges(["WREN", "WREN-DESIGN"], _configs())
         conv = [e for e in edges if e["kind"] == "convention"]
         self.assertEqual(len(conv), 1)
-        self.assertEqual(conv[0]["source"], "queue:BECKY-DESIGN")
-        self.assertEqual(conv[0]["target"], "queue:BECKY")
-        self.assertIn("BECKY", conv[0]["contract"])
-        self.assertEqual(conv[0]["filing_label"], "watchtower:BECKY")
+        self.assertEqual(conv[0]["source"], "queue:WREN-DESIGN")
+        self.assertEqual(conv[0]["target"], "queue:WREN")
+        self.assertIn("WREN", conv[0]["contract"])
+        self.assertEqual(conv[0]["filing_label"], "watchtower:WREN")
 
     def test_planner_without_base_has_no_convention_edge(self):
         edges = pc.derive_convention_edges(["ORPHAN-DESIGN"], {"ORPHAN-DESIGN": {}})
@@ -78,8 +78,8 @@ class ConventionEdges(unittest.TestCase):
         self.assertEqual(gate[0]["label"], "design sign-off")
 
     def test_product_gate_config_edges_to_gate(self):
-        edges = pc.derive_convention_edges(["BECKY"], _configs())
-        gate = [e for e in edges if e["source"] == "queue:BECKY"]
+        edges = pc.derive_convention_edges(["WREN"], _configs())
+        gate = [e for e in edges if e["source"] == "queue:WREN"]
         self.assertEqual(len(gate), 1)
         self.assertEqual(gate[0]["label"], "product gate")
 
@@ -94,15 +94,15 @@ class CanvasState(unittest.TestCase):
                              now=1_790_000_000, sources=[])
         self.assertTrue(st["ok"])
         nodes = {n["id"]: n for n in st["nodes"]}
-        becky = nodes["queue:BECKY"]
-        self.assertEqual(becky["archetype"], "executor")
-        self.assertEqual(becky["engine"], "claude")
-        self.assertEqual(becky["model"], "claude-sonnet-5")
-        self.assertFalse(becky["auto_drain"])          # shown honestly
-        self.assertEqual(becky["depth"], 5)
-        self.assertEqual(becky["claimable"], 3)
-        self.assertEqual(becky["github_repo"], "owner/repo")
-        design = nodes["queue:BECKY-DESIGN"]
+        wren = nodes["queue:WREN"]
+        self.assertEqual(wren["archetype"], "executor")
+        self.assertEqual(wren["engine"], "claude")
+        self.assertEqual(wren["model"], "claude-sonnet-5")
+        self.assertFalse(wren["auto_drain"])          # shown honestly
+        self.assertEqual(wren["depth"], 5)
+        self.assertEqual(wren["claimable"], 3)
+        self.assertEqual(wren["github_repo"], "owner/repo")
+        design = nodes["queue:WREN-DESIGN"]
         self.assertEqual(design["archetype"], "planner")
         self.assertEqual(design["desired_workers"], 2)
         self.assertEqual(design["desired_workers_source"], "queue")
@@ -117,8 +117,8 @@ class CanvasState(unittest.TestCase):
         self.assertEqual(fv["desired_workers"], 1)
         self.assertEqual(fv["desired_workers_source"], "default")
         self.assertEqual(fv["effort_source"], "engine_default")
-        becky = nodes["queue:BECKY"]
-        self.assertEqual(becky["effort_source"], "engine_default")  # config has no effort
+        wren = nodes["queue:WREN"]
+        self.assertEqual(wren["effort_source"], "engine_default")  # config has no effort
 
     def test_health_only_queue_renders_unconfigured(self):
         st = pc.canvas_state(configs=_configs(), health_rows=_health(), sources=[])
@@ -137,9 +137,9 @@ class CanvasState(unittest.TestCase):
     def test_edges_come_along(self):
         st = pc.canvas_state(configs=_configs(), health_rows=_health(), sources=[])
         kinds = {(e["source"], e["kind"]) for e in st["edges"]}
-        self.assertIn(("queue:BECKY-DESIGN", "convention"), kinds)
-        self.assertIn(("queue:BECKY-DESIGN", "gate"), kinds)
-        self.assertIn(("queue:BECKY", "gate"), kinds)
+        self.assertIn(("queue:WREN-DESIGN", "convention"), kinds)
+        self.assertIn(("queue:WREN-DESIGN", "gate"), kinds)
+        self.assertIn(("queue:WREN", "gate"), kinds)
 
     def test_empty_fleet_still_ok(self):
         st = pc.canvas_state(configs={}, health_rows=[], sources=[])
@@ -153,7 +153,7 @@ class LayoutValidation(unittest.TestCase):
         doc = {
             "version": 1,
             "nodes": {
-                "queue:BECKY": {"x": 100, "y": -40.5},
+                "queue:WREN": {"x": 100, "y": -40.5},
                 "designed:abc": {"x": 0, "y": 0, "kind": "designed",
                                  "component": "planner", "category": "workers",
                                  "archetype": "planner", "label": "My planner",
@@ -161,13 +161,13 @@ class LayoutValidation(unittest.TestCase):
                                             "cadence": "*/15 * * * *",
                                             "desired_workers": 2}},
             },
-            "edges": [{"source": "designed:abc", "target": "queue:BECKY",
+            "edges": [{"source": "designed:abc", "target": "queue:WREN",
                        "label": "files builds to"}],
             "viewport": {"x": 10, "y": 20, "zoom": 1.5},
         }
         clean, err = pc.validate_layout(doc)
         self.assertIsNone(err)
-        self.assertEqual(clean["nodes"]["queue:BECKY"], {"x": 100.0, "y": -40.5})
+        self.assertEqual(clean["nodes"]["queue:WREN"], {"x": 100.0, "y": -40.5})
         designed = clean["nodes"]["designed:abc"]
         self.assertEqual(designed["archetype"], "planner")
         self.assertEqual(designed["component"], "planner")
@@ -175,7 +175,7 @@ class LayoutValidation(unittest.TestCase):
         self.assertEqual(designed["config"]["engine"], "claude")
         # Generic sketch keys pass through (they are design data, never real).
         self.assertEqual(designed["config"]["cadence"], "*/15 * * * *")
-        self.assertEqual(clean["edges"][0]["id"], "user:designed:abc->queue:BECKY")
+        self.assertEqual(clean["edges"][0]["id"], "user:designed:abc->queue:WREN")
         self.assertEqual(clean["viewport"]["zoom"], 1.5)
 
     def test_unknown_category_dropped_and_config_capped(self):

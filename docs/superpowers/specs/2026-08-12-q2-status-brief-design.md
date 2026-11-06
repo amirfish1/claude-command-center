@@ -7,9 +7,9 @@ promotion of the brief to own a column) is explicitly out of scope here.
 ## Problem
 
 The q2 board shows a queue's mechanical state (backlog/watcher/worker/closed) but
-nothing about the *content* of its tickets. On a queue like BYM-GH-FINIE (0 open,
+nothing about the *content* of its tickets. On a queue like HARBOR-GH-TERN (0 open,
 14 needs-input), the owner has to open 14 tickets one by one to discover that ~8
-of them are symptoms of one root cause (Arketa package-import credit ledgers).
+of them are symptoms of one root cause (one failing importer).
 The brief's primary value is identifying commonalities across tickets, then the
 decisions the owner must make, then next steps. Reading order matters: the brief
 must appear *before* the ticket list, not beside it.
@@ -22,11 +22,11 @@ learnings). Contents:
 
 ```json
 {
-  "queue": "BYM-GH-FINIE",
+  "queue": "HARBOR-GH-TERN",
   "generated_at": "2026-08-12T09:02:11Z",
   "model": "claude-sonnet-5",
   "duration_s": 41.2,
-  "ticket_signatures": {"BYM-GH-FINIE-674": "needs_input|<updated-ts>", ...},
+  "ticket_signatures": {"HARBOR-GH-TERN-674": "needs_input|<updated-ts>", ...},
   "brief": {
     "headline": "≤120 chars",
     "summary": "2–4 sentences",

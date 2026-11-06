@@ -236,7 +236,7 @@ class DevinQueueTests(unittest.TestCase):
         con.execute(
             "INSERT INTO sessions (id, working_directory, created_at, last_activity_at) "
             "VALUES (?, ?, ?, ?)",
-            ("ferret-test", "/tmp/bym", spawn_ts, spawn_ts),
+            ("ferret-test", "/tmp/harbor", spawn_ts, spawn_ts),
         )
         con.execute(
             "INSERT INTO prompt_history (session_id, content, timestamp, is_shell) "
@@ -258,8 +258,8 @@ class DevinQueueTests(unittest.TestCase):
 
         entry = {
             "engine": "devin",
-            "cwd": "/tmp/bym",
-            "repo_path": "/tmp/bym",
+            "cwd": "/tmp/harbor",
+            "repo_path": "/tmp/harbor",
             "command_summary": "fix the client portal bug",
             "spawned_at": spawned_at,
         }
@@ -304,7 +304,7 @@ class DevinQueueTests(unittest.TestCase):
             entry = {
                 "engine": "devin",
                 "pid": 51894,
-                "cwd": "/tmp/bym",
+                "cwd": "/tmp/harbor",
                 "prompt": "unrelated because lock pid should win",
             }
             self.assertEqual(

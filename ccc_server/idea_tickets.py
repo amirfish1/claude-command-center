@@ -50,6 +50,7 @@ except ImportError:  # Windows: in-process lock only
     fcntl = None
 
 from ccc_server import core as _core
+from ccc_server import local_overrides as _local_overrides
 
 FLAG = "idea_tickets"
 STATE_FILE_NAME = "idea-tickets.json"
@@ -1109,9 +1110,7 @@ _ACTIVE_HANDOFF = ("running", "blocked", "waiting")
 _NONE_STEP_RE = re.compile(
     r"^(?:none|nothing|no action(?: is)?(?: needed| required)?|n/?a|not applicable)?"
     r"\s*[.!]?\s*(?:[—–(:-].*)?$", re.I | re.S)
-_OWNER_RE = re.compile(
-    r"\bowner\s*[:=]\s*(agent|user|external|amir|human)\b"
-    r"|^\s*\(?(agent|user|external|amir|human)\)?\s*[:\u2014\u2013-]", re.I)
+_OWNER_WORDS = ("agent", "user", "external", "owner", "human")
 _BUSY_STATES = ("working", "running", "thinking", "tool")
 _watch = {"at": 0.0, "running": False}
 _closed_sync = {"at": 0.0, "running": False}
@@ -1121,15 +1120,23 @@ def _is_none(text):
     return bool(_NONE_STEP_RE.match(str(text or "").strip()))
 
 
+def _owner_re(names):
+    words = "|".join(map(re.escape, (*_OWNER_WORDS, *names)))
+    return re.compile(
+        rf"\bowner\s*[:=]\s*({words})\b"
+        rf"|^\s*\(?({words})\)?\s*[:\u2014\u2013-]", re.I)
+
+
 def _action_owner(action):
     """'agent' | 'user' | 'external' for a remaining action ('' unknown)."""
     if not isinstance(action, dict):
         return ""
+    names = _local_overrides.owner_names()
     owner = str(action.get("owner") or "").strip().lower()
     if not owner:
-        m = _OWNER_RE.search(str(action.get("text") or ""))
+        m = _owner_re(names).search(str(action.get("text") or ""))
         owner = (m.group(1) or m.group(2)).lower() if m else ""
-    return {"amir": "user", "human": "user"}.get(owner, owner)
+    return "user" if owner in ("owner", "human", *names) else owner
 
 
 def attention(session_state):

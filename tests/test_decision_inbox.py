@@ -550,7 +550,7 @@ class ExternalIngest(unittest.TestCase):
     """POST /api/decision-inbox from producers outside CCC (OPS-928)."""
 
     PRODUCER = {"source_id": "digest:studio-a:no-sessions",
-                "title": "bym-studio-digest: studio-a soft failure",
+                "title": "harbor-studio-digest: studio-a soft failure",
                 "context": "0 sessions extracted in 24h"}
 
     def test_producer_shorthand_payload_creates_card_with_default_options(self):
@@ -776,12 +776,12 @@ class GovernorMute(unittest.TestCase):
 
 class QueueGithubRepos(unittest.TestCase):
     def test_only_github_backed_queues_are_exposed(self):
-        conf = {"BECKY": {"github_repo": "example/repo", "backend": "github"},
-                "CHUCK": {"backend": "local"},
+        conf = {"WREN": {"github_repo": "example/repo", "backend": "github"},
+                "HERON": {"backend": "local"},
                 "BROKEN": "not-a-dict",
                 "EMPTY": {}}
         repos = di.queue_github_repos(reader=lambda: conf)
-        self.assertEqual(repos, {"BECKY": "example/repo"})
+        self.assertEqual(repos, {"WREN": "example/repo"})
 
     def test_reader_failure_yields_empty_map(self):
         def boom():

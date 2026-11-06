@@ -74,8 +74,8 @@ class TestScheduledJobs(unittest.TestCase):
     def test_collect_hermes_mocked(self):
         fake_timers = [
             {
-                "unit": "bym-senior-review.timer",
-                "activates": "bym-senior-review.service",
+                "unit": "harbor-senior-review.timer",
+                "activates": "harbor-senior-review.service",
                 "next": 1789613400000000,
                 "last": 1789612201602013,
             }
@@ -83,7 +83,7 @@ class TestScheduledJobs(unittest.TestCase):
         fake_show_output = (
             "Result=success\n"
             "ExecMainStatus=0\n"
-            "Id=bym-senior-review.service\n"
+            "Id=harbor-senior-review.service\n"
             "ActiveState=inactive\n"
             "SubState=dead\n"
         )
@@ -97,8 +97,8 @@ class TestScheduledJobs(unittest.TestCase):
             self.assertEqual(host_info["status"], "online")
             self.assertEqual(len(jobs), 1)
             job = jobs[0]
-            self.assertEqual(job["id"], "hermes:bym-senior-review.service")
-            self.assertEqual(job["name"], "bym-senior-review")
+            self.assertEqual(job["id"], "hermes:harbor-senior-review.service")
+            self.assertEqual(job["name"], "harbor-senior-review")
             self.assertEqual(job["status"], "success")
             self.assertEqual(job["exit_code"], 0)
 
@@ -128,7 +128,7 @@ class TestScheduledJobLive(unittest.TestCase):
         proc = MagicMock(returncode=rc, stdout=stdout, stderr="boom")
         with patch("platform.system", return_value="Darwin"), \
                 patch("ccc_server.scheduled_jobs.subprocess.run", return_value=proc) as run:
-            return get_scheduled_job_log_live("hermes:bym-ship.service", **kw), run
+            return get_scheduled_job_log_live("hermes:harbor-ship.service", **kw), run
 
     def test_parses_state_cursor_and_lines(self):
         out = "@@STATE:activating\nline one\nline two\n-- cursor: s=abc;i=1f\n"
@@ -140,7 +140,7 @@ class TestScheduledJobLive(unittest.TestCase):
         self.assertEqual(run.call_count, 1)  # one ssh per poll
         args = run.call_args[0][0]
         self.assertEqual(args[0], "ssh")
-        self.assertIn("bym-ship.service", args[-1])
+        self.assertIn("harbor-ship.service", args[-1])
         self.assertTrue(args[-1].rstrip().endswith("-"))  # no cursor yet
 
     def test_finished_and_cursor_passthrough(self):

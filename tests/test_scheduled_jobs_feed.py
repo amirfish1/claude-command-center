@@ -5,8 +5,8 @@ from unittest import mock
 
 from ccc_server import scheduled_jobs_feed as f
 
-CANNED = """@@CCCJOB:TIMER bym-ship.timer
-Unit=bym-ship.service
+CANNED = """@@CCCJOB:TIMER harbor-ship.timer
+Unit=harbor-ship.service
 TimersCalendar={ OnCalendar=*-*-* 19:00:00 America/Los_Angeles ; next_elapse=Wed 2026-09-30 02:00:00 UTC }
 TimersCalendar={ OnCalendar=*-*-* 09:00:00 America/Los_Angeles ; next_elapse=Wed 2026-09-30 16:00:00 UTC }
 NextElapseUSecRealtime=Wed 2026-09-30 02:00:00 UTC
@@ -14,7 +14,7 @@ LastTriggerUSec=Tue 2026-09-29 16:00:01 UTC
 ActiveState=active
 UnitFileState=enabled
 @@CCCJOB:SVC
-Description=BYM scheduled release — pin next, PR to main
+Description=HARBOR scheduled release — pin next, PR to main
 WorkingDirectory=/home/agent/Apps/Acme+Web
 ExecStart={ path=/bin/bash ; argv[]=/bin/bash scripts/x.sh ; ignore_errors=no }
 ActiveState=inactive
@@ -24,22 +24,22 @@ ExecMainStartTimestamp=@1790697601
 ExecMainExitTimestamp=@1790697612
 InvocationID=abc
 @@CCCJOB:HIST
-1790647213.1 host systemd[1]: bym-ship.service: Deactivated successfully.
-1790697612.6 host systemd[1]: bym-ship.service: Failed with result 'exit-code'.
-1790697700.6 host systemd[1]: bym-ship.service: Deactivated successfully.
+1790647213.1 host systemd[1]: harbor-ship.service: Deactivated successfully.
+1790697612.6 host systemd[1]: harbor-ship.service: Failed with result 'exit-code'.
+1790697700.6 host systemd[1]: harbor-ship.service: Deactivated successfully.
 @@CCCJOB:OUT
 starting
-Finished bym-ship.service - x.
-bym-ship.service: Consumed 3s CPU time.
-filed BECKY-TEACH-4 and BECKY-12 -> https://github.com/acme/repo/issues/125
+Finished harbor-ship.service - x.
+harbor-ship.service: Consumed 3s CPU time.
+filed WREN-TEACH-4 and WREN-12 -> https://github.com/acme/repo/issues/125
 opened https://github.com/acme/repo/pull/1857 and PR #9; SHA-256 UTF-8 2026-09-29 v1.2.3-4
 CCC_OUTCOME: merged PR #12
 \x1b[32mdone\x1b[0m
 @@CCCJOB:EVENTS
-1790695000.4 host bym-ship.service[411]: 2026-09-29T16:10:00Z CCC_EVENT: PR #2148 pinned at d6bd723 (87 commits)
-1790696000.7 host bym-ship.service[412]: CCC_EVENT: Release r-20260929-0210: CI -> MERGING (PR #2148)
-1790697000.2 host bym-ship.service[413]: \x1b[32m2026-09-29T16:30:00Z CCC_EVENT: PR #2148 live in production\x1b[0m
-1790697001.2 host bym-ship.service[413]: a line without the marker
+1790695000.4 host harbor-ship.service[411]: 2026-09-29T16:10:00Z CCC_EVENT: PR #2148 pinned at d6bd723 (87 commits)
+1790696000.7 host harbor-ship.service[412]: CCC_EVENT: Release r-20260929-0210: CI -> MERGING (PR #2148)
+1790697000.2 host harbor-ship.service[413]: \x1b[32m2026-09-29T16:30:00Z CCC_EVENT: PR #2148 live in production\x1b[0m
+1790697001.2 host harbor-ship.service[413]: a line without the marker
 @@CCCJOB:ENDUNIT
 @@CCCJOB:TIMER off.timer
 Unit=off.service
@@ -84,8 +84,8 @@ class HermesParse(unittest.TestCase):
         self.jobs = {j["name"]: j for j in f.parse_hermes_output(CANNED)}
 
     def test_ok_job(self):
-        j = self.jobs["bym-ship"]
-        self.assertEqual(j["id"], "hermes:bym-ship.service")
+        j = self.jobs["harbor-ship"]
+        self.assertEqual(j["id"], "hermes:harbor-ship.service")
         self.assertEqual(j["last_duration_s"], 11.0)
         self.assertEqual(j["exit_code"], 0)
         self.assertTrue(j["enabled"])
@@ -93,12 +93,12 @@ class HermesParse(unittest.TestCase):
         self.assertEqual(j["next_run_at"], "2026-09-30T02:00:00+00:00")
 
     def test_outcome_prefers_ccc_outcome_and_strips_ansi(self):
-        self.assertEqual(self.jobs["bym-ship"]["outcome"], "merged PR #12")
-        self.assertEqual(self.jobs["bym-ship"]["outcome_kind"], "summary")
+        self.assertEqual(self.jobs["harbor-ship"]["outcome"], "merged PR #12")
+        self.assertEqual(self.jobs["harbor-ship"]["outcome_kind"], "summary")
         self.assertEqual(f.pick_outcome(["a", "\x1b[32mdone\x1b[0m", ""]), ("done", "output"))
 
     def test_events_parsed_sorted_and_stripped(self):
-        ev = self.jobs["bym-ship"]["events"]
+        ev = self.jobs["harbor-ship"]["events"]
         self.assertEqual(len(ev), 3)
         self.assertEqual([e["text"] for e in ev], [
             "PR #2148 pinned at d6bd723 (87 commits)",
@@ -130,7 +130,7 @@ class HermesParse(unittest.TestCase):
                          ["PR #2148 pinned at d6bd723 (87 commits)", "bracketed ts works", "ansi line"])
 
     def test_outcome_behind_log_timestamp(self):
-        # CCC-1240: bym-ship's log() stamps every line, so the marker sits behind
+        # CCC-1240: harbor-ship's log() stamps every line, so the marker sits behind
         # a timestamp; it must still win over the chip/raw-output fallback.
         lines = ["2026-09-30T14:27:37Z CCC_OUTCOME: Shipped PR #1884 (3 commits).", "trailing noise"]
         self.assertEqual(f.pick_outcome(lines), ("Shipped PR #1884 (3 commits).", "summary"))
@@ -143,26 +143,26 @@ class HermesParse(unittest.TestCase):
         self.assertEqual(self.jobs["bad"]["outcome"], "")
 
     def test_description_project_and_dashes(self):
-        j = self.jobs["bym-ship"]
-        self.assertEqual(j["description"], "BYM scheduled release: pin next, PR to main")
+        j = self.jobs["harbor-ship"]
+        self.assertEqual(j["description"], "HARBOR scheduled release: pin next, PR to main")
         self.assertEqual((j["project"], j["repo_path"]), ("Acme+Web", "/home/agent/Apps/Acme+Web"))
         self.assertEqual(self.jobs["off"]["project"], "ccc-cloud")
         self.assertEqual(self.jobs["bad"]["project"], "Other")
 
     def test_ticket_extraction(self):
-        refs = {(t["kind"], t["ref"]) for t in self.jobs["bym-ship"]["tickets"]}
-        self.assertIn(("watchtower", "BECKY-TEACH-4"), refs)
-        self.assertIn(("watchtower", "BECKY-12"), refs)
+        refs = {(t["kind"], t["ref"]) for t in self.jobs["harbor-ship"]["tickets"]}
+        self.assertIn(("watchtower", "WREN-TEACH-4"), refs)
+        self.assertIn(("watchtower", "WREN-12"), refs)
         self.assertIn(("issue", "#125"), refs)
         self.assertIn(("pr", "PR #1857"), refs)
         self.assertIn(("pr", "PR #9"), refs)
         self.assertNotIn(("watchtower", "SHA-256"), refs)
         self.assertNotIn(("watchtower", "UTF-8"), refs)
         self.assertFalse([r for k, r in refs if k == "watchtower" and r.startswith(("v1", "2026"))])
-        self.assertEqual(len(refs), len(self.jobs["bym-ship"]["tickets"]))
+        self.assertEqual(len(refs), len(self.jobs["harbor-ship"]["tickets"]))
 
     def test_timeline(self):
-        tl = self.jobs["bym-ship"]["timeline"]
+        tl = self.jobs["harbor-ship"]["timeline"]
         self.assertEqual(tl["kind"], "times")
         self.assertEqual(len(tl["minutes"]), 2)
         self.assertEqual(self.jobs["bad"]["timeline"], {"kind": "interval", "interval_s": 3600, "minutes": [], "weekdays": []})
@@ -266,23 +266,23 @@ if __name__ == "__main__":
 
 
 class UserScopeAndCronTests(unittest.TestCase):
-    USER = """@@CCCJOB:TIMER user/bym-outreach-replies.timer
-Unit=bym-outreach-replies.service
+    USER = """@@CCCJOB:TIMER user/harbor-outreach-replies.timer
+Unit=harbor-outreach-replies.service
 TimersMonotonic={ OnUnitActiveUSec=5min ; next_elapse=3w 2d }
 NextElapseUSecRealtime=
 LastTriggerUSec=Mon 2026-10-19 03:47:23 UTC
 ActiveState=active
 UnitFileState=enabled
 @@CCCJOB:SVC
-Description=BYM outreach reply capture
+Description=HARBOR outreach reply capture
 ActiveState=inactive
 Result=success
 ExecMainStatus=0
 ExecMainStartTimestamp=@{start}
 ExecMainExitTimestamp=@{start}
 @@CCCJOB:HIST
-1.0 host systemd[9]: bym-outreach-replies.service: Failed with result 'exit-code'.
-2.0 host systemd[9]: Finished bym-outreach-replies.service - x.
+1.0 host systemd[9]: harbor-outreach-replies.service: Failed with result 'exit-code'.
+2.0 host systemd[9]: Finished harbor-outreach-replies.service - x.
 @@CCCJOB:OUT
 ok
 @@CCCJOB:EVENTS
@@ -304,20 +304,20 @@ MAILTO=x
 
     def test_user_timer_gets_scope_and_distinct_id(self):
         jobs, _ = self._parse()
-        j = next(x for x in jobs if x["name"] == "bym-outreach-replies")
+        j = next(x for x in jobs if x["name"] == "harbor-outreach-replies")
         self.assertEqual(j["scope"], "user")
-        self.assertEqual(j["id"], "hermes:user/bym-outreach-replies.service")
+        self.assertEqual(j["id"], "hermes:user/harbor-outreach-replies.service")
         self.assertEqual([h["ok"] for h in j["history"]], [False, True])
 
     def test_interval_timer_without_realtime_next_is_ok_when_recent(self):
         jobs, _ = self._parse(age_s=120)
-        j = next(x for x in jobs if x["name"] == "bym-outreach-replies")
+        j = next(x for x in jobs if x["name"] == "harbor-outreach-replies")
         self.assertEqual(j["status"], "ok")
         self.assertTrue(j["next_run_estimated"] and j["next_run_at"])
 
     def test_interval_timer_is_stale_when_last_run_is_long_ago(self):
         jobs, _ = self._parse(age_s=86400)
-        j = next(x for x in jobs if x["name"] == "bym-outreach-replies")
+        j = next(x for x in jobs if x["name"] == "harbor-outreach-replies")
         self.assertEqual(j["status"], "stale")
 
     def test_crontab_entries_become_jobs_with_honest_status(self):

@@ -169,15 +169,15 @@ class TestDeadNotifyAlerts(_Fixture):
         }
 
     def test_dead_needs_input_notice_surfaces_with_ref_and_queue(self):
-        self._write_outbox([self._dead_notify("BECKY-DESIGN-1574")])
+        self._write_outbox([self._dead_notify("WREN-DESIGN-1574")])
         out = self.collect()
         self.assertEqual(out["total"], 1)
         a = out["alerts"][0]
         self.assertEqual(a["kind"], "dead_notify")
         self.assertEqual(a["severity"], "error")
-        self.assertEqual(a["id"], "dead-notify:BECKY-DESIGN-1574")
-        self.assertEqual(a["queue"], "BECKY-DESIGN")
-        self.assertEqual(a["title"], "Needs your input: BECKY-DESIGN-1574")
+        self.assertEqual(a["id"], "dead-notify:WREN-DESIGN-1574")
+        self.assertEqual(a["queue"], "WREN-DESIGN")
+        self.assertEqual(a["title"], "Needs your input: WREN-DESIGN-1574")
         self.assertEqual(a["detail"], "ticket notification could not be delivered")
 
     def test_dead_notice_does_not_fade_with_the_error_freshness_window(self):

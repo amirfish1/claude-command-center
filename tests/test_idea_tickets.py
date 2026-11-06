@@ -441,9 +441,9 @@ class IdeaTicketsTest(unittest.TestCase):
                  "auto_titled": True, "first_message": "Can we fix this"}]
         it.sweep_rows(rows)
         self.assertFalse([c for c in self.calls if c[0] == "edit"])  # WT badge name
-        rows[0]["display_name"] = "bym-growth auto-update stall"
+        rows[0]["display_name"] = "harbor-growth auto-update stall"
         it.sweep_rows(rows)
-        self.assertIn(["edit", ref, "--title", "bym-growth auto-update stall"], self.calls)
+        self.assertIn(["edit", ref, "--title", "harbor-growth auto-update stall"], self.calls)
         it.sweep_rows(rows)
         self.assertEqual(len([c for c in self.calls if c[0] == "edit"]), 1)
 

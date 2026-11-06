@@ -406,7 +406,10 @@
   }
 
   // ------------------------------------------------------------- transcript --
-  var ROLE_LABEL = { client: 'Client', becky: 'Becky', owner: 'Owner', system: 'System', tool: 'Tool' };
+  var ROLE_LABEL = { client: 'Client', agent: 'Agent', owner: 'Owner', system: 'System', tool: 'Tool' };
+  // Conversation providers name their own assistant, so any role that is not
+  // a known person or system speaker is the assistant: it sits on the right.
+  var LEFT_ROLES = { client: 1, owner: 1 };
   function fmtWhen(iso) {
     if (!iso) return '';
     var d = new Date(iso);
@@ -435,7 +438,7 @@
       var t = data.turns[i] || {};
       var role = String(t.role || 'system');
       var label = ROLE_LABEL[role] || role;
-      var side = (role === 'becky') ? 'is-right' : (role === 'system' || role === 'tool') ? 'is-center' : 'is-left';
+      var side = (role === 'system' || role === 'tool') ? 'is-center' : LEFT_ROLES[role] ? 'is-left' : 'is-right';
       var when = fmtWhen(t.at);
       html.push('<div class="tp-msg ' + side + ' is-' + escAttr(role) + '">'
         + '<div class="tp-msg-head"><span class="tp-msg-role">' + esc(label) + '</span>'

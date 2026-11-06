@@ -259,7 +259,7 @@
       wt_accept: "Accept", wt_reject: "Reject…" }[k] || k;
   }
 
-  var REF_RE = /\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+\b|\bBECKY(?:-DESIGN|-TEACH)?#\d+\b/g;
+  var REF_RE = /\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+\b|\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*#\d+\b/g;
 
   function cardRefs(c) {
     var text = String(c.title || "") + " " + String(c.context || "") + " " + String(c.source_id || "");

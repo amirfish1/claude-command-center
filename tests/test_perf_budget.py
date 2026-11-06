@@ -496,7 +496,7 @@ def big_projects(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "HERMES_GATEWAY_SESSIONS", hermes_home / "sessions" / "sessions.json")
     monkeypatch.setattr(server, "HERMES_WHATSAPP_DIR", hermes_home / "whatsapp")
     monkeypatch.setattr(server, "HERMES_WHATSAPP_BRIDGE_LOG", hermes_home / "whatsapp" / "bridge.log")
-    monkeypatch.setattr(server, "HERMES_CHUCK_PENDING_DIR", hermes_home / "whatsapp" / "chuck_realtor_pending")
+    monkeypatch.setattr(server, "HERMES_PENDING_DIR", hermes_home / "whatsapp" / "pending")
     monkeypatch.setattr(server, "HERMES_PROFILES_DIR", hermes_home / "profiles")
     # Devin CLI reads its sessions DB via CCC_DEVIN_DB (env override, checked
     # fresh per call) rather than a server-module global, so it isn't covered
@@ -1135,8 +1135,8 @@ def test_ux_fixes_health_no_all_sessions_or_subprocess(monkeypatch):
     items = (
         [_item(i, "CCC", "open") for i in range(1, 15)]
         + [_item(100, "CCC", "in_progress", claimed_by=sid_a)]
-        + [_item(i, "BYM", "closed", claimed_by=sid_b) for i in range(200, 260)]
-        + [_item(300, "BYM", "open")]
+        + [_item(i, "HARBOR", "closed", claimed_by=sid_b) for i in range(200, 260)]
+        + [_item(300, "HARBOR", "open")]
     )
     monkeypatch.setattr(server._q, "list_items", lambda *a, **k: list(items))
 
@@ -1148,7 +1148,7 @@ def test_ux_fixes_health_no_all_sessions_or_subprocess(monkeypatch):
     health = server.compute_ux_fixes_health()
 
     projects = {p["project"] for p in health}
-    assert {"CCC", "BYM"} <= projects, f"expected CCC+BYM in health, got {projects}"
+    assert {"CCC", "HARBOR"} <= projects, f"expected CCC+HARBOR in health, got {projects}"
     # One liveness probe per project-with-open-tickets (2), not per ticket (~75).
     assert len(live_calls) <= 4, (
         f"_archive_session_is_live called {len(live_calls)}x — health is probing "

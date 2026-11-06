@@ -43,5 +43,5 @@ test('WatchTower ticket links resolve to the corresponding queue page', () => {
   assert.ok(start >= 0 && end > start, 'WatchTower ticket URL helper found');
   const ticketUrl = new Function(app.slice(start, end) + '; return watchtowerTicketUrl;')();
   assert.equal(ticketUrl('OPS-1148', 'http://127.0.0.1:8787/'), 'http://127.0.0.1:8787/q/OPS#OPS-1148');
-  assert.equal(ticketUrl('BYM-GH-FINIE-402', 'http://localhost:8787'), 'http://localhost:8787/q/BYM-GH-FINIE#BYM-GH-FINIE-402');
+  assert.equal(ticketUrl('HARBOR-GH-TERN-402', 'http://localhost:8787'), 'http://localhost:8787/q/HARBOR-GH-TERN#HARBOR-GH-TERN-402');
 });

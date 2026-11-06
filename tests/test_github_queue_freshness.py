@@ -244,16 +244,16 @@ def test_compute_queues_health_carries_backend_and_github_repo_from_config():
     server = _load_server()
     qe = sys.modules["ccc_server.queue_events"]
     config = {
-        "BECKY-DESIGN": {
+        "WREN-DESIGN": {
             "auto_drain": True, "backend": "github",
-            "github_repo": "amirfish1/BYM-Finie", "repo_path": "/tmp/BYM",
+            "github_repo": "example/harbor-tern", "repo_path": "/tmp/HARBOR",
         },
         "LOCAL": {"auto_drain": False, "repo_path": "/tmp/local"},
     }
     with mock.patch.object(server, "_wt_read_config", return_value=config):
         rows = {r["queue"]: r for r in qe.compute_queues_health(health=[], wt_workers=[], items=[])}
-    assert rows["BECKY-DESIGN"]["backend"] == "github"
-    assert rows["BECKY-DESIGN"]["github_repo"] == "amirfish1/BYM-Finie"
+    assert rows["WREN-DESIGN"]["backend"] == "github"
+    assert rows["WREN-DESIGN"]["github_repo"] == "example/harbor-tern"
     assert rows["LOCAL"]["backend"] == ""
     assert rows["LOCAL"]["github_repo"] == ""
 

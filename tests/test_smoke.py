@@ -4477,7 +4477,7 @@ class TestServerImports(unittest.TestCase):
         server = importlib.import_module("server")
 
         with mock.patch.object(server, "_wt_read_config", return_value={
-            "BYM-GH-FINIE": {
+            "HARBOR-GH-TERN": {
                 "backend": "github",
                 "repo_path": "/Users/dev/Apps/Acme+Web",
                 "auto_drain": False,
@@ -4485,7 +4485,7 @@ class TestServerImports(unittest.TestCase):
         }), mock.patch.object(server._q, "list_items", return_value=[]):
             rows = {r["queue"]: r for r in server.compute_queues_health([], [])}
 
-        row = rows["BYM-GH-FINIE"]
+        row = rows["HARBOR-GH-TERN"]
         self.assertTrue(row["configured"])
         self.assertEqual(row["total"], 0)
         self.assertIsNone(row["last_activity_seconds"])
@@ -4497,14 +4497,14 @@ class TestServerImports(unittest.TestCase):
         server = importlib.import_module("server")
 
         with mock.patch.object(server, "_wt_read_config", return_value={
-            "BYM-GH-FINIE": {
+            "HARBOR-GH-TERN": {
                 "backend": "github",
                 "repo_path": "/Users/dev/Apps/Acme+Web",
                 "auto_drain": True,
             },
         }), mock.patch.object(server._q, "list_items", return_value=[{
-            "project": "BYM-GH-FINIE",
-            "ref": "BYM-GH-FINIE-402",
+            "project": "HARBOR-GH-TERN",
+            "ref": "HARBOR-GH-TERN-402",
             "status": "open",
             "type": "bug",
             "claimable": False,
@@ -4514,14 +4514,14 @@ class TestServerImports(unittest.TestCase):
         }]):
             rows = {r["queue"]: r for r in server.compute_queues_health([
                 {
-                    "project": "BYM-GH-FINIE",
+                    "project": "HARBOR-GH-TERN",
                     "depth": 1,
                     "oldest_open_age_seconds": 60,
                     "stuck": True,
                 }
             ], [])}
 
-        row = rows["BYM-GH-FINIE"]
+        row = rows["HARBOR-GH-TERN"]
         self.assertEqual(row["depth"], 1)
         self.assertEqual(row["claimable"], 0)
         self.assertFalse(row["stuck"])
@@ -7039,11 +7039,11 @@ class TestServerImports(unittest.TestCase):
         import server
         f = server._hermes_decision_summary
         s = f('{"intent":"work_request","complexity":"nontrivial","confidence":0.95,'
-              '"addressed_to":"becky","reply":"","request_text":"a fairly long value '
+              '"addressed_to":"wren","reply":"","request_text":"a fairly long value '
               'that exceeds the per-field cap and is skipped"}')
         self.assertIn("→ work_request", s)
         self.assertIn("95%", s)
-        self.assertIn("to: becky", s)
+        self.assertIn("to: wren", s)
         # Long scalar fields are skipped so the line stays legible.
         self.assertNotIn("fairly long value", s)
         # Confidence already on a 0-1 scale renders as a percentage.
@@ -11246,9 +11246,9 @@ class TestRepoContextHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp).resolve()
             app = root / "apps" / "acmeshop"
-            finie = root / "apps" / "finie"
+            tern = root / "apps" / "tern"
             app.mkdir(parents=True)
-            finie.mkdir(parents=True)
+            tern.mkdir(parents=True)
             (root / "turbo.json").write_text(json.dumps({"tasks": {"dev": {"persistent": True}}}))
             (root / "package.json").write_text(json.dumps({"workspaces": ["apps/*"]}))
             (app / "package.json").write_text(json.dumps({
@@ -11256,8 +11256,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "scripts": {"dev": "next dev --port 39001"},
                 "dependencies": {"next": "16.1.6"},
             }))
-            (finie / "package.json").write_text(json.dumps({
-                "name": "finie",
+            (tern / "package.json").write_text(json.dumps({
+                "name": "tern",
                 "scripts": {"dev": "next dev --port 3000"},
                 "dependencies": {"next": "16.1.6"},
             }))
@@ -11709,7 +11709,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "status": "completed",
                 "input": (
                     "const r = await tools.exec_command({\n"
-                    "  cmd: \"wt status -q CHUCK --json\",\n"
+                    "  cmd: \"wt status -q HERON --json\",\n"
                     "  workdir: \"/home/dev/projects/example-web\",\n"
                     "  sandbox_permissions: \"require_escalated\",\n"
                     "  justification: \"Allow this read-only WatchTower status check?\"\n"
@@ -11762,7 +11762,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "call_id": "call_custom",
                 "input": (
                     "const r = await tools.exec_command({\n"
-                    "  cmd: \"wt status -q CHUCK --json\",\n"
+                    "  cmd: \"wt status -q HERON --json\",\n"
                     "  sandbox_permissions: \"require_escalated\",\n"
                     "  justification: \"Allow status?\"\n"
                     "});\n"
@@ -13767,9 +13767,9 @@ class TestRepoContextHelpers(unittest.TestCase):
                     "id": "item-shell",
                     "type": "commandExecution",
                     "status": "completed",
-                    "command": "wt find CHUCK-51 --json",
+                    "command": "wt find HERON-51 --json",
                     "exitCode": 0,
-                    "aggregatedOutput": "{\"ref\":\"CHUCK-51\"}",
+                    "aggregatedOutput": "{\"ref\":\"HERON-51\"}",
                 },
             },
         })
@@ -13789,7 +13789,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(events[0]["subtype"], "codex_app_server_item")
         self.assertEqual(events[0]["tool"], "Bash")
         self.assertIn("wt find", events[0]["detail"])
-        self.assertIn("CHUCK-51", events[0]["output"])
+        self.assertIn("HERON-51", events[0]["output"])
 
         with mock.patch.object(server, "_detect_session_engine", return_value="codex"):
             queued = server._get_queued_events_for_session(sid)
@@ -15085,7 +15085,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             _make_db(str(main_db), "20260601_120000_gateway", "whatsapp",
                      "Gateway chat", "hi from the gateway")
             _make_db(str(worker_db), "20260601_130000_worker", "cli",
-                     "Becky work", "change the price to 785000")
+                     "Wren work", "change the price to 785000")
 
             orig_db = server.HERMES_STATE_DB
             orig_profiles = getattr(server, "HERMES_PROFILES_DIR", None)
@@ -15159,7 +15159,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 con.execute(
                     "INSERT INTO sessions (id,source,model,title,started_at,ended_at,"
                     "parent_session_id,tool_call_count,cwd,archived) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (sid, "cli", "gpt-5.5", "", 1783273030.0, 0.0, "", 22, "/tmp/chuck", 0),
+                    (sid, "cli", "gpt-5.5", "", 1783273030.0, 0.0, "", 22, "/tmp/heron", 0),
                 )
                 con.execute(
                     "INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
@@ -15399,10 +15399,10 @@ class TestRepoContextHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             orig_db = server.HERMES_STATE_DB
             orig_bridge = server.HERMES_WHATSAPP_BRIDGE_LOG
-            orig_pending = server.HERMES_CHUCK_PENDING_DIR
+            orig_pending = server.HERMES_PENDING_DIR
             server.HERMES_STATE_DB = pathlib.Path(tmp) / "missing-state.db"
             server.HERMES_WHATSAPP_BRIDGE_LOG = pathlib.Path(tmp) / "missing-bridge.log"
-            server.HERMES_CHUCK_PENDING_DIR = pathlib.Path(tmp) / "missing-pending"
+            server.HERMES_PENDING_DIR = pathlib.Path(tmp) / "missing-pending"
             server._HERMES_ID_CACHE["key"] = None
             server._HERMES_ID_CACHE["ids"] = set()
             try:
@@ -15410,7 +15410,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             finally:
                 server.HERMES_STATE_DB = orig_db
                 server.HERMES_WHATSAPP_BRIDGE_LOG = orig_bridge
-                server.HERMES_CHUCK_PENDING_DIR = orig_pending
+                server.HERMES_PENDING_DIR = orig_pending
                 server._HERMES_ID_CACHE["key"] = None
                 server._HERMES_ID_CACHE["ids"] = set()
 
@@ -15424,7 +15424,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             bridge = root / "bridge.log"
-            pending_dir = root / "chuck_realtor_pending"
+            pending_dir = root / "pending"
             pending_dir.mkdir()
             chat_id = "group-test@g.us"
             bridge.write_text(
@@ -15462,10 +15462,10 @@ class TestRepoContextHelpers(unittest.TestCase):
 
             orig_db = server.HERMES_STATE_DB
             orig_bridge = server.HERMES_WHATSAPP_BRIDGE_LOG
-            orig_pending = server.HERMES_CHUCK_PENDING_DIR
+            orig_pending = server.HERMES_PENDING_DIR
             server.HERMES_STATE_DB = root / "missing-state.db"
             server.HERMES_WHATSAPP_BRIDGE_LOG = bridge
-            server.HERMES_CHUCK_PENDING_DIR = pending_dir
+            server.HERMES_PENDING_DIR = pending_dir
             server._HERMES_ID_CACHE["key"] = None
             server._HERMES_ID_CACHE["ids"] = set()
             server._ENGINE_DETECT_CACHE.clear()
@@ -15497,7 +15497,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             finally:
                 server.HERMES_STATE_DB = orig_db
                 server.HERMES_WHATSAPP_BRIDGE_LOG = orig_bridge
-                server.HERMES_CHUCK_PENDING_DIR = orig_pending
+                server.HERMES_PENDING_DIR = orig_pending
                 server._HERMES_ID_CACHE["key"] = None
                 server._HERMES_ID_CACHE["ids"] = set()
                 server._ENGINE_DETECT_CACHE.clear()
@@ -18315,7 +18315,7 @@ class TestPendingInputs(unittest.TestCase):
                         "id": "item-shell",
                         "type": "commandExecution",
                         "tool": "Bash",
-                        "detail": "wt find CHUCK-51 --json",
+                        "detail": "wt find HERON-51 --json",
                         "status": "completed",
                         "ts": 1783600005.0,
                         "updated_at": 1783600005.0,

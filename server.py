@@ -1992,7 +1992,7 @@ def _wt_queue_brief_parse(raw):
             })
     next_steps = [str(s) for s in _l(obj.get("next_steps"))]
     # Models overshoot the headline budget despite instructions; a hard slice
-    # at 120 cut mid-word ("...Becky memor"). Break at a word boundary instead.
+    # at 120 cut mid-word ("...worker memor"). Break at a word boundary instead.
     headline = _s(obj.get("headline"))
     if len(headline) > 120:
         headline = headline[:120].rsplit(" ", 1)[0].rstrip(",;:-") + "…"
@@ -3920,8 +3920,8 @@ def _uxq_not_found_error(ref):
 
 # --- Queue context providers (linked-conversation preview) -------------------
 # Optional, user-local config mapping a queue name (or "*") to providers that
-# resolve a ticket's linked conversation — e.g. the Becky owner/client thread
-# a digest ticket describes. Each provider:
+# resolve a ticket's linked conversation — e.g. the owner/client thread a
+# digest ticket describes. Each provider:
 #   {"extract": "<regex, first capture group = conversation key>",
 #    "command": ["argv", "…", "{key}"],   # {key} substituted, stdout = JSON
 #    "cwd": "/abs/path",                   # optional
@@ -7314,7 +7314,7 @@ def _encode_project_slug(path):
     naming subdirs under ~/.claude/projects/.
 
     Claude Code 2.x replaces every non-alphanumeric character with '-'
-    (so '/foo/.claude/BYM+Finie' becomes '-foo--claude-BYM-Finie').
+    (so '/foo/.claude/Acme+Web' becomes '-foo--claude-Acme-Web').
     Older claude-code versions only replaced '/', which is why some
     legacy project dirs still contain '+', '.', etc.
 
@@ -7358,9 +7358,9 @@ def _slug_to_label(slug: str) -> str:
     """Strip the home-directory prefix and common top-level dirs from a raw
     project slug so the display label is just the project name.
 
-    e.g.  '-Users-amirfish-Apps-amirfish-com'  →  'amirfish-com'
-          '-Users-amirfish-dev-my-finance-app'  →  'my-finance-app'
-          '-Users-amirfish-agent-workshop'       →  'agent-workshop'
+    e.g.  '-Users-alex-Apps-example-com'    →  'example-com'
+          '-Users-alex-dev-my-finance-app'  →  'my-finance-app'
+          '-Users-alex-agent-workshop'      →  'agent-workshop'
     """
     import os as _os
     home_prefix = "-" + _os.path.expanduser("~").lstrip("/").replace("/", "-") + "-"
@@ -21964,7 +21964,7 @@ def enqueue_annotation_ux_fixes_queue(
     # number and a second session can see. Never interrupts anyone.
     meta = meta if isinstance(meta, dict) else {}
     # Only default repo_path to the CCC repo for CCC-origin captures. A product
-    # source (e.g. "bym") that omits repo_path must NOT be clobbered to CCC_ROOT,
+    # source (e.g. "acme") that omits repo_path must NOT be clobbered to CCC_ROOT,
     # or repo-path-wins project routing misfiles the item as CCC.
     _src = str(meta.get("source") or "ccc").lower()
     _repo_path = str(meta.get("repo_path") or "")
@@ -29484,9 +29484,10 @@ HERMES_WHATSAPP_BRIDGE_LOG = Path(
     os.environ.get("CCC_HERMES_WHATSAPP_BRIDGE_LOG")
     or (HERMES_WHATSAPP_DIR / "bridge.log")
 ).expanduser()
-HERMES_CHUCK_PENDING_DIR = Path(
-    os.environ.get("CCC_HERMES_CHUCK_PENDING_DIR")
-    or (HERMES_WHATSAPP_DIR / "chuck_realtor_pending")
+HERMES_PENDING_DIR = Path(
+    os.environ.get("CCC_HERMES_PENDING_DIR")
+    or _local_overrides.hermes_pending_dir()
+    or (HERMES_WHATSAPP_DIR / "pending")
 ).expanduser()
 HERMES_PROFILES_DIR = Path(
     os.environ.get("CCC_HERMES_PROFILES_DIR")
@@ -47085,7 +47086,7 @@ def main():
     # iMessage relay: when ~/.claude/command-center/imessage-relay.json names
     # a contact and a session, polls chat.db every 2 minutes and injects that
     # contact's new messages into the session. No config, no polling.
-    threading.Thread(target=_chuck_imessage_poller, daemon=True).start()
+    threading.Thread(target=_imessage_relay_poller, daemon=True).start()
     # Keep installed harnesses and Anthropic's exact model catalog current.
     # The first pass waits out the boot burst (CCC_BOOT_WARM_DELAY_S); failures
     # are recorded for Settings and never delay server startup or requests.
@@ -47209,23 +47210,27 @@ def main():
         server.server_close()
 
 
-# ── Chuck iMessage Poller ─────────────────────────────────────────────────────
+# ── iMessage relay poller ─────────────────────────────────────────────────────
 # The contact and target session are personal, so they live in a local file,
-# never in the source: {"phone": "+1...", "session_id": "<uuid>"}.
-_CHUCK_CONFIG_FILE = Path.home() / ".claude" / "command-center" / "imessage-relay.json"
-_CHUCK_PHONE = ""
-_CHUCK_SESSION_ID = ""
-_CHUCK_LAST_SEEN_FILE = Path("/tmp/chuck-loop-last-seen.txt")
+# never in the source: {"phone": "+1...", "session_id": "<uuid>"}. Optional
+# "label" names the contact in injected text; "tag" prefixes the injected text.
+_IMESSAGE_RELAY_CONFIG_FILE = Path.home() / ".claude" / "command-center" / "imessage-relay.json"
+_IMESSAGE_RELAY_PHONE = ""
+_IMESSAGE_RELAY_SESSION_ID = ""
+_IMESSAGE_RELAY_LABEL = "Contact"
+_IMESSAGE_RELAY_TAG = "imessage-relay"
+_IMESSAGE_RELAY_LAST_SEEN_FILE = Path("/tmp/ccc-imessage-relay-last-seen.txt")
 _IMESSAGE_DB = Path.home() / "Library" / "Messages" / "chat.db"
-_CHUCK_POLL_INTERVAL = 120  # seconds
+_IMESSAGE_RELAY_POLL_INTERVAL = 120  # seconds
 _APPLE_EPOCH_OFFSET = 978307200  # seconds between Unix epoch and Apple epoch (2001-01-01)
 
 
-def _chuck_load_config() -> bool:
+def _imessage_relay_load_config() -> bool:
     """Load the relay contact and session; False when unconfigured."""
-    global _CHUCK_PHONE, _CHUCK_SESSION_ID
+    global _IMESSAGE_RELAY_PHONE, _IMESSAGE_RELAY_SESSION_ID
+    global _IMESSAGE_RELAY_LABEL, _IMESSAGE_RELAY_TAG
     try:
-        cfg = json.loads(_CHUCK_CONFIG_FILE.read_text())
+        cfg = json.loads(_IMESSAGE_RELAY_CONFIG_FILE.read_text())
     except Exception:
         return False
     if not isinstance(cfg, dict):
@@ -47234,25 +47239,27 @@ def _chuck_load_config() -> bool:
     session_id = str(cfg.get("session_id") or "").strip()
     if not phone or not session_id:
         return False
-    _CHUCK_PHONE, _CHUCK_SESSION_ID = phone, session_id
+    _IMESSAGE_RELAY_PHONE, _IMESSAGE_RELAY_SESSION_ID = phone, session_id
+    _IMESSAGE_RELAY_LABEL = str(cfg.get("label") or "").strip() or "Contact"
+    _IMESSAGE_RELAY_TAG = str(cfg.get("tag") or "").strip() or "imessage-relay"
     return True
 
 
-def _chuck_read_last_seen() -> int:
+def _imessage_relay_read_last_seen() -> int:
     try:
-        return int(_CHUCK_LAST_SEEN_FILE.read_text().strip())
+        return int(_IMESSAGE_RELAY_LAST_SEEN_FILE.read_text().strip())
     except Exception:
         return int(time.time()) - 3600
 
 
-def _chuck_write_last_seen(ts: int) -> None:
+def _imessage_relay_write_last_seen(ts: int) -> None:
     try:
-        _CHUCK_LAST_SEEN_FILE.write_text(str(ts))
+        _IMESSAGE_RELAY_LAST_SEEN_FILE.write_text(str(ts))
     except Exception:
         pass
 
 
-def _chuck_fetch_new_messages(since_unix: int):
+def _imessage_relay_fetch_new_messages(since_unix: int):
     """Return list of (unix_ts, is_from_me, text) tuples newer than since_unix."""
     if not _IMESSAGE_DB.exists():
         return []
@@ -47272,7 +47279,7 @@ def _chuck_fetch_new_messages(since_unix: int):
               AND m.text IS NOT NULL
             ORDER BY m.date ASC
             """,
-            (_APPLE_EPOCH_OFFSET, _CHUCK_PHONE, apple_ns),
+            (_APPLE_EPOCH_OFFSET, _IMESSAGE_RELAY_PHONE, apple_ns),
         )
         rows = cur.fetchall()
         conn.close()
@@ -47281,10 +47288,10 @@ def _chuck_fetch_new_messages(since_unix: int):
         return []
 
 
-def _chuck_inject(text: str) -> None:
-    """Inject text into the CHUCK session via the local CCC inject-input API."""
+def _imessage_relay_inject(text: str) -> None:
+    """Inject text into the relay session via the local CCC inject-input API."""
     try:
-        payload = json.dumps({"session_id": _CHUCK_SESSION_ID, "text": text}).encode()
+        payload = json.dumps({"session_id": _IMESSAGE_RELAY_SESSION_ID, "text": text}).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{PORT}/api/inject-input",
             data=payload,
@@ -47296,7 +47303,7 @@ def _chuck_inject(text: str) -> None:
         pass
 
 
-def _chuck_is_quiet_hours() -> bool:
+def _imessage_relay_is_quiet_hours() -> bool:
     """Return True between 10pm and 7am US/Eastern."""
     try:
         import subprocess as _sp
@@ -47312,36 +47319,36 @@ def _chuck_is_quiet_hours() -> bool:
         return False
 
 
-def _chuck_imessage_poller() -> None:
-    """Background daemon thread: poll chat.db, inject new Chuck messages into CHUCK session."""
-    if not _chuck_load_config():
+def _imessage_relay_poller() -> None:
+    """Background daemon thread: poll chat.db, inject the contact's new messages into the session."""
+    if not _imessage_relay_load_config():
         return
     # Stagger startup so the server is fully bound before first inject attempt.
     time.sleep(15)
     while True:
         try:
-            if not _chuck_is_quiet_hours():
-                last_seen = _chuck_read_last_seen()
-                rows = _chuck_fetch_new_messages(last_seen)
+            if not _imessage_relay_is_quiet_hours():
+                last_seen = _imessage_relay_read_last_seen()
+                rows = _imessage_relay_fetch_new_messages(last_seen)
                 if rows:
-                    chuck_msgs = [(ts, txt) for ts, is_from_me, txt in rows if not is_from_me]
-                    if chuck_msgs:
+                    incoming = [(ts, txt) for ts, is_from_me, txt in rows if not is_from_me]
+                    if incoming:
                         lines = []
-                        for ts, txt in chuck_msgs:
+                        for ts, txt in incoming:
                             dt = datetime.fromtimestamp(ts).strftime("%H:%M")
-                            lines.append(f"[{dt}] CHUCK: {txt}")
+                            lines.append(f"[{dt}] {_IMESSAGE_RELAY_LABEL.upper()}: {txt}")
                         inject_text = (
-                            "[chuck-loop] New message(s) from Chuck:\n\n"
+                            f"[{_IMESSAGE_RELAY_TAG}] New message(s) from {_IMESSAGE_RELAY_LABEL}:\n\n"
                             + "\n".join(lines)
                             + "\n\nReview and decide how to proceed per the loop rules."
                         )
-                        _chuck_inject(inject_text)
+                        _imessage_relay_inject(inject_text)
                     # Bump last-seen to the newest message timestamp regardless of direction.
                     newest_ts = max(ts for ts, _, _ in rows)
-                    _chuck_write_last_seen(newest_ts + 1)
+                    _imessage_relay_write_last_seen(newest_ts + 1)
         except Exception:
             pass
-        time.sleep(_CHUCK_POLL_INTERVAL)
+        time.sleep(_IMESSAGE_RELAY_POLL_INTERVAL)
 
 
 def _server_launch_argv():

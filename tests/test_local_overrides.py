@@ -11,7 +11,7 @@ from unittest import mock
 import pytest
 
 import server  # noqa: F401  (registers the core that github_issues binds at import)
-from ccc_server import github_issues, jobs_add, local_overrides, scheduled_jobs_feed, ship_graph
+from ccc_server import github_issues, idea_tickets, jobs_add, local_overrides, scheduled_jobs_feed, ship_graph
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -34,6 +34,8 @@ def test_no_file_means_every_lookup_is_empty(overrides):
     assert local_overrides.ticket_title_noise() == []
     assert local_overrides.commit_scopes() == {}
     assert local_overrides.remote_apps_dir() == ""
+    assert local_overrides.hermes_pending_dir() == ""
+    assert local_overrides.owner_names() == []
 
 
 @pytest.mark.parametrize("bad", ["{not json", "[]", '{"repo_project_map": 3, "repo_aliases": [],'
@@ -228,3 +230,30 @@ def test_pre_push_loop_runs_when_the_ref_line_has_no_newline(tmp_path):
                          input="refs/heads/main abc refs/heads/main def",
                          capture_output=True, text=True)
     assert res.stdout.strip() == "ran:abc"
+
+
+def test_hermes_pending_dir_through_config(overrides):
+    overrides({"hermes_pending_dir": "~/.hermes/whatsapp/acme_pending"})
+    assert local_overrides.hermes_pending_dir() == "~/.hermes/whatsapp/acme_pending"
+    overrides({"hermes_pending_dir": 3})
+    assert local_overrides.hermes_pending_dir() == ""
+
+
+@pytest.mark.parametrize("action,expected", [
+    ({"text": "owner: human to approve"}, "user"),
+    ({"text": "Owner: approve the plan"}, "user"),
+    ({"text": "Fix: owner: agent runs it"}, "agent"),
+    ({"text": "(external): wait for the vendor"}, "external"),
+    ({"owner": "human"}, "user"),
+    ({"text": "Alex: approve the plan"}, ""),
+])
+def test_action_owner_is_generic_without_config(overrides, action, expected):
+    assert idea_tickets._action_owner(action) == expected
+
+
+@pytest.mark.parametrize("action", [
+    {"text": "Alex: approve the plan"}, {"text": "owner = alex"}, {"owner": "Alex"},
+])
+def test_owner_name_through_config(overrides, action):
+    overrides({"owner_names": ["Alex", 3, " "]})
+    assert idea_tickets._action_owner(action) == "user"

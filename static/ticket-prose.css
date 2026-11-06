@@ -167,7 +167,7 @@
   text-transform: uppercase;
   color: #8fa3bd;
 }
-.tp-msg.is-becky .tp-msg-role { color: #9db8e8; }
+.tp-msg.is-right .tp-msg-role { color: #9db8e8; }
 .tp-msg.is-client .tp-msg-role { color: #e8b98a; }
 .tp-msg-time { font-size: 10.5px; color: #6b7b94; font-variant-numeric: tabular-nums; }
 .tp-msg-body { word-break: break-word; }

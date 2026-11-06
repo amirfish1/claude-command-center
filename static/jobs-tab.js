@@ -65,7 +65,7 @@
   }
 
   function shortName(n) {
-    return String(n || '').replace(/^com\.amirfish\./, '').replace(/^com\.amir\./, '');
+    return String(n || '').replace(/^com\.(?!apple\.)[^.]+\./, '');
   }
 
   function isActive() {

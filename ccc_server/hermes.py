@@ -137,7 +137,7 @@ def _hermes_file_key(paths):
 
 def _hermes_pending_paths():
     try:
-        pdir = Path(_core.HERMES_CHUCK_PENDING_DIR).expanduser()
+        pdir = Path(_core.HERMES_PENDING_DIR).expanduser()
         if not pdir.is_dir():
             return []
         return [

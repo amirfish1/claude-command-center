@@ -54279,7 +54279,7 @@
     const fallback = _uxqDominantOpenProject(items);
     return fallback || requested;
   }
-  // Project the open session's Queue should show (e.g. "BYMPROD", "CCC"). A queue
+  // Project the open session's Queue should show (e.g. "ACMEPROD", "CCC"). A queue
   // worker uses its progress record (CCC-99); ANY other session falls back to
   // its repo's project (CCC-175) so a project session shows its tickets instead
   // of the global, CCC-dominated list.
@@ -54637,7 +54637,7 @@
     + '</svg>';
   // Parent resolution: a sub-queue's parent is the LONGEST existing root
   // queue that its name starts with, plus '-'. Do NOT chop the last hyphen
-  // segment — BECKY-CONTEXT-DIET's parent is BECKY, not BECKY-CONTEXT.
+  // segment — ACME-CONTEXT-DIET's parent is ACME, not ACME-CONTEXT.
   // "Root" = a queue whose name is not itself a child (no longer-root prefix).
   function _uxqPickerParentOf(name, rootNames) {
     const n = _uxqProjectKey(name);
@@ -55004,7 +55004,7 @@
     $trig.classList.toggle('is-open', open);
   }
   // Worker/session label prefixed with the machine tag WatchTower stamps on
-  // worker events (by.machine / item.claimed_machine) — "her-bym-a1b2". The
+  // worker events (by.machine / item.claimed_machine) — "srv-acme-a1b2". The
   // tag rides as its own field so claim matching still sees the bare id; a
   // label that already carries it isn't double-prefixed.
   function _uxqWithMachine(worker, machine) {
@@ -55809,7 +55809,7 @@
     return String(item._github_body || item.text || item.note || '');
   }
   // Fetch the transcript a ticket points at (server resolves it via the
-  // user's local queue-context providers, e.g. the Becky conversation a
+  // user's local queue-context providers, e.g. the conversation a
   // digest ticket describes) and reveal the hidden section if one exists.
   async function _uxqLoadLinkedConversation(modal, ref) {
     const sec = modal.querySelector('.uxq-td-conv-sec');
@@ -56080,7 +56080,7 @@
             : '<pre class="uxq-td-prompt">' + escapeHtml(fullBody) + '</pre>')
         + '</div>'
       : '';
-    // Linked conversation (e.g. the Becky owner/client thread a digest ticket
+    // Linked conversation (e.g. the owner/client thread a digest ticket
     // is about) — filled in async by _uxqLoadLinkedConversation after the
     // modal mounts; stays hidden unless the server resolves a transcript.
     const convSecHtml =
@@ -56261,7 +56261,7 @@
           : _propRow('Worker', '<span class="uxq-td-pr-empty">unassigned</span>'))
       + (function () {
           // claimed_session_id is backfilled by the queue reconciler and can
-          // stay empty for a worker-id claim (e.g. "bymprod-cda69c9a") even
+          // stay empty for a worker-id claim (e.g. "acmeprod-cda69c9a") even
           // long after claim — the button then silently vanishes (CCC-937).
           // Fall back to matching claimed_by against a live conversation's
           // _worker_id so the link still resolves; when the conversation
@@ -58773,7 +58773,7 @@
       .map(q => String((q && q.queue) || '').trim()).filter(Boolean)));
   }
   // CCC-163: the panel "+" used to file silently into whatever queue the panel
-  // was scoped to (e.g. BECKY) with no queue shown; it now shows the Queue
+  // was scoped to (e.g. ACME) with no queue shown; it now shows the Queue
   // picker preselected to that scope and files where the user picks.
   async function _addQueueTicket() {
     const scoped = _uxqLastResolvedProject || _uxqWorkerProject();
