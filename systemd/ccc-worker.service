@@ -8,14 +8,14 @@ StartLimitIntervalSec=0
 Type=simple
 User=hermes
 Group=hermes
-WorkingDirectory=/home/hermes/Apps/claude-command-center
+WorkingDirectory=__CCC_HOME__/Apps/claude-command-center
 
-Environment=HOME=/home/hermes
-Environment=PATH=/home/hermes/.local/bin:/home/hermes/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=__CCC_HOME__
+Environment=PATH=__CCC_HOME__/.local/bin:__CCC_HOME__/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=PYTHONUNBUFFERED=1
 Environment=LANG=en_US.UTF-8
 
-ExecStart=/usr/bin/python3 /home/hermes/Apps/claude-command-center/ccc_worker.py
+ExecStart=/usr/bin/python3 __CCC_HOME__/Apps/claude-command-center/ccc_worker.py
 
 Restart=always
 RestartSec=2s
@@ -30,8 +30,8 @@ MemorySwapMax=0
 
 LimitNOFILE=4096
 
-StandardOutput=append:/home/hermes/.claude/command-center/logs/vm-worker.out.log
-StandardError=append:/home/hermes/.claude/command-center/logs/vm-worker.err.log
+StandardOutput=append:__CCC_HOME__/.claude/command-center/logs/vm-worker.out.log
+StandardError=append:__CCC_HOME__/.claude/command-center/logs/vm-worker.err.log
 
 [Install]
 WantedBy=multi-user.target
