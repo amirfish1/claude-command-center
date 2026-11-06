@@ -27,12 +27,15 @@ _DEFAULT_DAYS = 2.0
 _MAX_DAYS = 30.0
 
 
-def search_recent_sessions(query, days=_DEFAULT_DAYS, limit=20, cwd_like=None):
+def search_recent_sessions(query, days=_DEFAULT_DAYS, limit=20, cwd_like=None, match_ids=False):
     """Search recent sessions across all harnesses for session-level hits.
 
     `days` bounds the recency window (default 2 -- the "last day or two" case
     the sidebar search is for); results come back ranked by session_fts's
     BM25 + local-embeddings retrieval, not purely by recency.
+
+    `match_ids` puts sessions whose id contains the query first, at any age.
+    Sidebar only: a hex-looking word must not pull random sessions into Ask.
     """
     q = (query or "").strip()
     if not q:
@@ -51,4 +54,8 @@ def search_recent_sessions(query, days=_DEFAULT_DAYS, limit=20, cwd_like=None):
     results = _sfts.search_sessions_enriched(
         q, limit=limit, cwd_like=cwd_like, since_ts=since_ts, source="recall",
     )
+    if match_ids:
+        id_hits = _sfts.session_id_hits(q, limit=min(limit, 20))
+        seen = {hit["session_id"] for hit in id_hits}
+        results = (id_hits + [r for r in results if r.get("session_id") not in seen])[:limit]
     return {"results": results}

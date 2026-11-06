@@ -33057,7 +33057,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 limit_raw = (qs.get("limit", ["20"])[0] or "20").strip()
                 days_raw = (qs.get("days", ["2"])[0] or "2").strip()
                 self.send_json(search_recent_sessions(
-                    q, days=days_raw, limit=limit_raw, cwd_like=cwd_like,
+                    q, days=days_raw, limit=limit_raw, cwd_like=cwd_like, match_ids=True,
                 ))
         elif path == "/api/history/status":
             # Lay-of-the-land for the topbar pill: is the index file there,

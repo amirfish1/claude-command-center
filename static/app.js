@@ -71780,8 +71780,11 @@
     for (const c of conversationsData) {
       if (_archivedBacklogIds.has(c.id)) c.archived = true;
     }
+    const idNeedle = q ? _uuidSearchNeedle(q) : null;
     const filtered = conversationsData.filter(c => {
       if (c.pinned && !q) return true;
+      // A session id fragment finds that session past every filter below.
+      if (idNeedle && Number.isFinite(_sessionIdSearchRank(c, idNeedle))) return true;
       // Recent-only filter (last N hours) — applies to everything, backlog included.
       // Backlog items use issue_created_at (falls back to modified).
       // Exempt the conversation the user is actively looking at: resuming a
@@ -71861,6 +71864,7 @@
 
   function _historySourceRank(source) {
     source = String(source || '').toLowerCase();
+    if (source === 'id') return 4;
     if (source === 'recall') return 3;
     if (source === 'semantic') return 2;
     if (source === 'bm25') return 1;
