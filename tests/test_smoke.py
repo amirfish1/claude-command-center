@@ -6892,7 +6892,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml)", app_js)
+        self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml, ev)", app_js)
         self.assertIn('data-steer-user-message', app_js)
         self.assertIn("postInjectInput(sid, text, 'steer'", app_js)
         inline_handler = app_js[
