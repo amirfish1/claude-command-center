@@ -81,11 +81,34 @@ const rowText = (page, sid) => page.evaluate((id) => {
     const sid = chip.sid;
     const before = await rowText(page, sid);
     await page.mouse.click(chip.x, chip.y);
+    // The turn lasts 4.6 s. Time the working state inside the page, because
+    // sampling across the browser boundary is too coarse on a busy machine.
+    const tapped = Date.now();
+    await page.evaluate((id) => {
+      const watch = { first: null, droppedMs: 0 };
+      const started = performance.now();
+      let last = started;
+      const timer = setInterval(() => {
+        const row = document.querySelector(`#convList .conv-item[data-session-id="${id}"]`);
+        const working = !!(row && row.querySelector('.conv-outcome.is-working'));
+        const at = performance.now();
+        if (working && watch.first === null) watch.first = Math.round(at - started);
+        if (!working && watch.first !== null) watch.droppedMs += at - last;
+        last = at;
+        if (at - started > 4200) clearInterval(timer);
+      }, 20);
+      window.__rowWatch = watch;
+    }, sid);
     await sleep(1600);
     await page.screenshot({ path: path.join(OUT, '02-agent-back-at-work.png') });
     const during = await rowText(page, sid);
-    check('tap puts the agent back to work', await rowWorking(page, sid) && during !== before, during.slice(0, 90));
-    await sleep(5200);
+    await sleep(Math.max(0, 4400 - (Date.now() - tapped)));
+    const watch = await page.evaluate(() => window.__rowWatch);
+    check('tap puts the agent back to work', watch.first !== null && watch.first < 1000 && during !== before,
+      `${watch.first} ms: ${during.slice(0, 70)}`);
+    // About 0.1 s remains when the first reply lands; the row text does not change.
+    check('row stays working through the turn', watch.droppedMs < 300, `${Math.round(watch.droppedMs)} ms not working`);
+    await sleep(Math.max(0, 6800 - (Date.now() - tapped)));
     await page.screenshot({ path: path.join(OUT, '03-decision-landed.png') });
     const after = await rowText(page, sid);
     const transcript = await page.$eval('#convSplit', (e) => e.innerText).catch(() => '');
@@ -109,12 +132,30 @@ const rowText = (page, sid) => page.evaluate((id) => {
     const approved = await page.evaluate((id) => window.__tryDemo.sessions.find((r) => r.s.session_id === id).s.needs_approval, approve);
     check('approve clears the block', approved === false);
 
+    // A typed reply goes through the real composer.
+    const typed = await page.evaluate(() => window.__tryDemo.sessions.find((r) => r.spec.kind === 'decide' && r.s.session_state
+      && r.s.session_state.next_actions && !/^none/i.test(r.s.session_state.next_step_user)).s.session_id);
+    await page.click('#convList .conv-item[data-session-id="' + typed + '"]');
+    await sleep(1200);
+    await page.type('#convInput', 'What would you do?');
+    await page.keyboard.press('Enter');
+    await sleep(6500);
+    check('typed reply gets an honest answer', /no real agent read that/i.test(await page.$eval('#convSplit', (e) => e.innerText)));
+
+    // Archiving a finished row removes it from the list.
+    const finished = await page.evaluate(() => window.__tryDemo.sessions.find((r) => r.spec.kind === 'ready').s.session_id);
+    const archived = await page.evaluate(async (id) => (await (await fetch('/api/conversations/' + id + '/archive', {
+      method: 'POST', body: JSON.stringify({ archived: true }) })).json()).archived, finished);
+    check('archive updates the fake backend', archived === true);
+
     // A working session flips to a new decision while you watch.
     const flipped = await page.waitForFunction(
       () => window.__tryDemo.sessions.some((r) => r.landed), { timeout: 90000 }).then(() => true, () => false);
     check('a working agent ends its turn with a new decision', flipped);
     await sleep(1200);
     await page.screenshot({ path: path.join(OUT, '05-new-decision-arrives.png') });
+    const pill = await page.evaluate(() => [...document.querySelectorAll('.sidebar *')].some((e) => /^needs you \d/.test(e.textContent.trim()) && e.children.length === 0 && e.getClientRects().length));
+    check('footer pill clears after the approval', !pill);
 
     check('no page errors or real API calls', problems.length === 0, problems.slice(0, 4).join(' | '));
     check('first decisions visible quickly', readyMs < 10000, readyMs + ' ms');

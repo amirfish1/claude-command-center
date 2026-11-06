@@ -19,8 +19,8 @@
 
   const HINTS = {
     start: 'Invented sessions for a made-up tea shop. No agent runs and nothing leaves your browser. Tap a decision under any row.',
-    tapped: 'That agent is back at work. Watch its row land, then take the next decision.',
-    cleared: 'Inbox clear. In real life, that was your whole morning check-in.',
+    tapped: 'That agent went back to work. Its row updates when it finishes. Try the next decision.',
+    cleared: 'No decisions left. New ones arrive as the working agents finish.',
   };
   function paint() {
     const c = demo.counts();

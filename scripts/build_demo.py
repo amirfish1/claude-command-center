@@ -79,7 +79,7 @@ def build(out_dir):
     (out_dir / "index.html").write_text(index, encoding="utf-8")
     (out_dir / "static" / "index.html").unlink()
 
-    shutil.copytree(DEMO_SRC, out_dir / "demo")
+    shutil.copytree(DEMO_SRC, out_dir / "demo", ignore=shutil.ignore_patterns("README.md"))
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")
     return copied
 

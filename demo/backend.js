@@ -23,8 +23,8 @@
   try { for (const k in PREFS) if (localStorage.getItem(k) === null) localStorage.setItem(k, PREFS[k]); } catch (_) {}
 
   function sid(i) {
-    const n = String(i + 1).padStart(12, '0');
-    return 'dddddddd-0000-4000-8000-' + n;
+    const head = (0x7ea00000 + (i + 1) * 0x10a3f).toString(16);
+    return head + '-0000-4000-8000-' + String(i + 1).padStart(12, '0');
   }
   function isoAt(t) { return new Date(t * 1000).toISOString(); }
 
@@ -98,7 +98,7 @@
       s.pending_file = spec.file;
       s.last_assistant_text = spec.approval;
       pushEvent(rec, { type: 'assistant', ts: isoAt(t), blocks: [
-        { kind: 'text', text: spec.did + ' Waiting for your permission to apply it.' },
+        { kind: 'text', text: spec.did + ' Waiting for your permission to apply it.\n\n' + footer(s) },
         { kind: 'tool_use', name: spec.tool, detail: spec.file }] }, true);
     } else {
       finishTurn(rec, spec.kind, spec, t, true);
@@ -161,11 +161,16 @@
     s.state = 'working';
     s.session_state = null;
     rec.timers.forEach(clearTimeout);
-    const tool = (chip && chip.tool) || ['Read', 'README.md'];
-    const test = (chip && chip.test) || (rec.spec.kind === 'approve' ? 'scripts/health-check.sh staging' : 'npm test');
-    const after = (chip && chip.after) || rec.spec.after
+    const approval = rec.spec.kind === 'approve';
+    const denied = approval && /^denied/i.test(text);
+    const tool = (chip && chip.tool) || (approval ? [rec.spec.tool, rec.spec.file] : ['Read', 'README.md']);
+    const test = (chip && chip.test) || (approval ? 'scripts/health-check.sh staging' : 'npm test');
+    const after = (chip && chip.after) || (denied ? 'Understood. Nothing was applied, and staging is unchanged.' : rec.spec.after)
       || 'Pretend agent here: this is a demo, so no real agent read that. Install CCC to reply to real sessions.';
     const say = (ms, fn) => rec.timers.push(setTimeout(fn, ms));
+    // The row holds its optimistic "sending" state only until the first reply,
+    // so it needs the live state in hand before then or it flickers to idle.
+    say(450, invalidateRows);
     say(900, () => {
       s.last_event_type = 'assistant';
       s.last_assistant_text = s.last_assistant_preview = 'On it.';
@@ -301,10 +306,17 @@
     '/api/federation/handoff/status': { ok: true, active: false },
     '/api/nextjs/status': { ok: true, running: false },
     '/api/voice-focus': { ok: true },
+    '/api/runaway': { ok: true, sessions: [] },
+    '/api/runaway/holds': { ok: true, holds: [] },
+    '/api/vercel-deploy': { ok: true, enabled: false },
+    '/api/repo/worktrees': { ok: true, worktrees: [] },
+    '/api/repo/ship/status': { ok: true, ahead: 0, behind: 0 },
+    '/api/activity-log': { ok: true, lines: [], entries: [] },
+    '/api/spawn-advisor': { ok: true },
   };
 
   const INSTALL_NOTE = 'That needs a real machine behind it. Install CCC to do this with your own agents.';
-  const SILENT_POSTS = new Set(['/api/client-log', '/api/perf-event', '/api/objects/import',
+  const SILENT_POSTS = new Set(['/api/client-log', '/api/perf-event', '/api/objects/import', '/api/assistant/warm',
     '/api/free-runtime/tts-log', '/api/free-runtime/tts']);
 
   function snapshot() { return sessions.map(r => JSON.parse(JSON.stringify(r.s))); }
@@ -438,6 +450,29 @@
   }
   FakeEventSource.CONNECTING = 0; FakeEventSource.OPEN = 1; FakeEventSource.CLOSED = 2;
   window.EventSource = FakeEventSource;
+
+  // Pages that only exist on a real install: say so instead of a 404.
+  document.addEventListener('click', ev => {
+    const a = ev.target.closest && ev.target.closest('a[href]');
+    if (!a || a.id === 'tryDemoInstall') return;
+    let u;
+    try { u = new URL(a.href, location.href); } catch (_) { return; }
+    if (u.origin !== location.origin || u.href.split('#')[0] === location.href.split('#')[0]) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    if (window.__tryDemoToast) window.__tryDemoToast(INSTALL_NOTE);
+  }, true);
+
+  const realOpen = window.open.bind(window);
+  window.open = function (url, ...rest) {
+    try {
+      if (url && new URL(url, location.href).origin === location.origin) {
+        if (window.__tryDemoToast) window.__tryDemoToast(INSTALL_NOTE);
+        return null;
+      }
+    } catch (_) {}
+    return realOpen(url, ...rest);
+  };
 
   // No backend means no service worker to install, and root-absolute history
   // URLs would walk the visitor out of a project-path deployment.
