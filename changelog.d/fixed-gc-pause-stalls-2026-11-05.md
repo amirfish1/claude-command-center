@@ -1,0 +1,1 @@
+- The dashboard no longer stops every request for about a second, several times a minute, for Python garbage collection. Long-lived caches are now kept out of those passes, and a full pass runs every 30 minutes. Set `CCC_GC_FREEZE=0` to turn this off.

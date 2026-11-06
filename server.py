@@ -18483,6 +18483,39 @@ def _install_gc_pause_diag():
     gc.callbacks.append(on_gc)
 
 
+# Measured on the live dashboard: full collections took ~1.2s, up to a few a
+# minute, and matched the >=1s stalls of every request (CCC-142). Nearly all
+# of that heap is long-lived cache that never forms cycles. freeze() takes it
+# out of later passes in constant time, and frozen objects are still freed by
+# refcount. Only frozen cycles need a real pass, which runs on a slow timer.
+_GC_FREEZE_EVERY_S = 15.0
+_GC_FULL_PASS_EVERY_S = 1800.0
+
+
+def _gc_freeze_tick(now, next_full_pass):
+    """Returns when the next full pass is due."""
+    if now < next_full_pass:
+        gc.freeze()
+        return next_full_pass
+    gc.unfreeze()
+    gc.collect()
+    gc.freeze()
+    return now + _GC_FULL_PASS_EVERY_S
+
+
+def _start_gc_freeze_thread():
+    if os.environ.get("CCC_GC_FREEZE", "1") == "0":
+        return
+
+    def loop():
+        next_full_pass = time.monotonic() + _GC_FULL_PASS_EVERY_S
+        while True:
+            next_full_pass = _gc_freeze_tick(time.monotonic(), next_full_pass)
+            time.sleep(_GC_FREEZE_EVERY_S)
+
+    threading.Thread(target=loop, name="ccc-gc-freeze", daemon=True).start()
+
+
 def _archive_refresh_worker_main(encoded_options, output_path):
     """Build one archive snapshot in a short-lived, low-priority process."""
     try:
@@ -46795,6 +46828,7 @@ def main():
     if not os.environ.get("CCC_EPHEMERAL"):
         _load_saved_live_activity()
         _install_gc_pause_diag()
+        _start_gc_freeze_thread()
     # CCC-142: the ACP registry load (counts every ACP transcript's lines,
     # ~135MB here) runs once per process under _ACP_LOCK. Left to the first
     # caller it landed on a request thread (live_build ~30s after a restart).
