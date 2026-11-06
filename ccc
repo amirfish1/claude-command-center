@@ -41,7 +41,7 @@ command, without opening the dashboard:
     ccc consent approve <item...|all>           # or: decline / revoke <item...|all>
 
     ccc jobs ls [--host hermes]                 # scheduled jobs: status, last/next run, outcome
-    ccc jobs add --host hermes --repo BYM --what "..." --when "hourly" [--name slug] [--wait]
+    ccc jobs add --host hermes --repo my-app --what "..." --when "hourly" [--name slug] [--wait]
                                                 # an agent session creates the job (POST /api/jobs/add)
 
     ccc vault list [--json]                     # Vault entries: name/kind/service/env var, never values

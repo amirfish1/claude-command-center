@@ -431,9 +431,9 @@ class FocusedSessionAndInjectTest(unittest.TestCase):
         self.assertIn("inject_diagnostics", mazkir.system_prompt())
 
     def test_git_requests_route_to_a_spawn_proposal(self):
-        # FEAT-NEXT-148: "push bym" got "I can't push" instead of a Confirm card.
+        # FEAT-NEXT-148: "push my-app" got "I can't push" instead of a Confirm card.
         prompt = mazkir.system_prompt()
-        self.assertIn('Git work ("push bym"', prompt)
+        self.assertIn('Git work ("push my-app"', prompt)
         self.assertIn("Never ask it to force-push or skip hooks", prompt)
 
     def test_bad_or_missing_focus_is_dropped(self):

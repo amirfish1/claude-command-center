@@ -2681,7 +2681,7 @@
   }
 
   // Worker/session label prefixed with the machine tag WatchTower stamps on
-  // worker events (by.machine / item.claimed_machine) — "her-bym-a1b2". The
+  // worker events (by.machine / item.claimed_machine) — "host-app-a1b2". The
   // tag rides as its own field so claim matching still sees the bare id; a
   // label that already carries it isn't double-prefixed.
   function withMachine(worker, machine) {
@@ -2822,7 +2822,7 @@
       + esc(label) + '</button>';
   }
 
-  // Linked conversation (e.g. the Becky thread a digest ticket describes).
+  // Linked conversation (e.g. the client thread a digest ticket describes).
   // The server resolves it through the user's local queue-context providers;
   // fetched once per ref (renderDetail re-runs every 5s poll) and rendered
   // from this cache. state-free module locals on purpose: switching tickets

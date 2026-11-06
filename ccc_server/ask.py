@@ -101,7 +101,7 @@ _LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 # The question's own framing words ("what TRIGGERS X", "is it a CRON job")
 # never appear verbatim in a plist/workflow, so using them as match keys
 # only adds noise — every job file that happens to contain "automatic"
-# somewhere matches. Match on the SUBJECT words instead (e.g. "bym",
+# somewhere matches. Match on the SUBJECT words instead (e.g. "acme",
 # "preflight"), which is `terms` minus this vocabulary.
 _ASK_AUTOMATION_STOPWORDS = frozenset(
     "trigger triggers triggered schedule scheduled scheduling cron crontab "

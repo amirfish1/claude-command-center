@@ -88,7 +88,7 @@
       if (!/(AM|PM|am|pm|P[SD]?T|E[SD]?T|UTC|GMT|\d:\d{2}:\d{2})/.test(m)) return m;
       return protect('<span class="tp-time">' + m + '</span>');
     });
-    // quoted speech — the load-bearing bits of a Becky ticket. esc() leaves
+    // quoted speech — the load-bearing bits of a support ticket. esc() leaves
     // double quotes alone (text nodes don't need them escaped), so match raw.
     s = s.replace(/"([^"\n]{2,400})"/g, function (_, body) {
       return protect('<span class="tp-quote">&ldquo;' + body + '&rdquo;</span>');

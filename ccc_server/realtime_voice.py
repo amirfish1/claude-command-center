@@ -1995,7 +1995,7 @@ def _tool_specs():
             "name": "ccc_jobs",
             "description": (
                 "Scheduled jobs: systemd timers (system and user) and cron. Pass "
-                "query (job, project or script words like 'bym digest' or 'ship') "
+                "query (job, project or script words like 'ops digest' or 'ship') "
                 "to see whether it ran, whether it succeeded, last output, next run "
                 "and a verdict on why it has not run. problems_only lists failed or "
                 "stale jobs. Read-only."

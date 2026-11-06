@@ -303,7 +303,7 @@ _PENDING_DECISION_RE = re.compile(
     r"|(?:still\s+)?open|pending|unresolved|outstanding)\b"
     r"|\b(?:needs?|requires?|requiring|pending|open|unresolved|outstanding)\b[^.!?]{0,25}\bdecision\b"
     r"|\bwithout\s+a\b[^.!?]{0,15}\bdecision\b"
-    # This user's own Becky/BYM escalation workflow logs a specific template
+    # One escalation workflow logs a specific template
     # phrase, "Surface for <name>'s decision: ...", when a ticket is
     # escalated for a human ruling that has NOT happened yet.
     r"|\bsurface(?:d)? for\b[^.!?]{0,40}\bdecision\b",

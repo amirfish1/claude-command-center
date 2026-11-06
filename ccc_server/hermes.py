@@ -979,7 +979,7 @@ def _hermes_raw_content_text(value):
     """Last-resort render of a message's *own* content when the whitelist
     extraction in _hermes_visible_text yields nothing.
 
-    JSON-mode turns (e.g. the chuck-router classifier) store the model's reply
+    JSON-mode turns (e.g. a router classifier) store the model's reply
     as a bare object like {"intent": "work_request", ...} — it carries none of
     the whitelisted text keys, so _hermes_visible_text returns "" and the whole
     turn was being dropped, leaving only the user prompts (the "sparse fragment"
@@ -1004,10 +1004,10 @@ def _hermes_decision_summary(value):
     """Compact one-liner for a structured (JSON-object) assistant reply.
 
     Router/classifier turns answer with a bare object like
-    {"intent": "work_request", "confidence": 0.95, "addressed_to": "becky"} —
+    {"intent": "work_request", "confidence": 0.95, "addressed_to": "agent"} —
     readable, but you have to parse the JSON in your head. Distil the headline
     decision, a confidence %, a recipient, and a couple of other short scalar
-    fields into "-> work_request - 95% - to: becky" so the gist is legible
+    fields into "-> work_request - 95% - to: agent" so the gist is legible
     above the raw JSON. Returns "" when there's nothing scalar worth showing.
     """
     obj = _hermes_jsonish(value)

@@ -146,7 +146,7 @@ def _authored(lines):
 
 
 # A job's own log() helper often stamps each line, so `CCC_OUTCOME:` may sit
-# behind an ISO timestamp (bym-ship: "2026-09-30T14:27:37Z CCC_OUTCOME: ...").
+# behind an ISO timestamp (a release job: "2026-09-30T14:27:37Z CCC_OUTCOME: ...").
 _OUTCOME_RE = re.compile(
     r"^(?:\[?\d{4}-\d\d-\d\d[T ][\d:.]+(?:Z|[+-]\d\d:?\d\d)?\]?\s+)?CCC_OUTCOME:\s*(.*)$")
 

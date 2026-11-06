@@ -25,7 +25,7 @@ the watcher catches that.
 
 | # | Feature | What it does | Status |
 |---|---------|--------------|--------|
-| 1 | Task queue | One namespaced store of tickets per project (CCC/BYM/OPS/…), backend-agnostic API | ✅ Built |
+| 1 | Task queue | One namespaced store of tickets per project (CCC/WT/OPS/…), backend-agnostic API | ✅ Built |
 | 2 | Autonomous workers | A `/goal` session drains one project's queue: claim → fix → verify → commit → next | ✅ Built |
 | 3 | Queue-health watcher | Candidacy-gated scan: open tickets + no progress = STUCK (trusts queue, not agent) | ✅ Built |
 | 4 | Health API | `GET /api/ux-fixes/health` — per-project depth, oldest-open age, fixer liveness, stuck flag | ✅ Built |

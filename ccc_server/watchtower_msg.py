@@ -1230,7 +1230,7 @@ def _inject_blocked_recent_entries(limit=20):
 # adapter gives CCC 5s to answer /api/inject-input; a Codex steer of a long
 # comment routinely takes longer, so wt records the send as failed, parks it in
 # its outbox and retries with backoff -- while CCC delivered every attempt.
-# Observed 2026-09-01: one BYMPURCH-12 gate comment injected into a single
+# Observed 2026-09-01: one gate comment injected into a single
 # Codex session five times over nine minutes, each landing burning a full
 # 220k-token turn. The same window catches an agent relaying text a sibling
 # already delivered (an un-keyed `ccc inject --steer` of a line the terminal
