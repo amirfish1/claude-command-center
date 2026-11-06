@@ -70228,6 +70228,7 @@
             }));
         if (_queuedDup) continue;
       }
+      if (ev.type === 'chat_bridge_row') continue; // Only Share reads this row.
       const div = document.createElement('div');
       div.className = 'event ' + ev.type + (ev.pending ? ' pending' : '');
       // Fusion (devin-cli) events carry actor 'lead'|'sidekick' — the lane

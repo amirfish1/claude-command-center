@@ -28845,9 +28845,13 @@ def _stamp_row_origin(row, ev):
     turn_origin = "scheduled" if ev.get("wakeupSource") else ev.get("turnOrigin")
     if turn_origin:
         row["turn_origin"] = turn_origin
-    origin = ev.get("origin")
+    # A queued message keeps its own marks inside the attachment.
+    attachment = ev.get("attachment") if isinstance(ev.get("attachment"), dict) else {}
+    origin = ev.get("origin") or attachment.get("origin")
     if isinstance(origin, dict) and origin.get("kind"):
         row["origin_kind"] = str(origin["kind"])
+    if attachment.get("isMeta"):
+        row["queued_meta"] = True
     if ev.get("entrypoint"):
         row["entrypoint"] = str(ev["entrypoint"])
 

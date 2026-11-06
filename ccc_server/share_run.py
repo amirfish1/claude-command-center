@@ -64,8 +64,9 @@ _CHAT_ORIGINS = ("channel", "slack-ping")
 # Codex names the program that opened a session. `codex exec`, CCC and queue
 # workers each have their own name, so only these mean a person at a terminal.
 _CODEX_TERMINAL_ORIGINATORS = ("codex-tui", "codex_cli_rs")
+_CODEX_TERMINAL_SOURCES = ("cli", "vscode")   # the terminal program writes vscode too
 _META_LINE_BYTES = 1 << 20
-_CHANNEL_ROW_RE = re.compile(r"\s*<channel\s[^>]*\bsource=")
+_CHANNEL_ROW_RE = re.compile(r"\s*(?:<channel\s[^>]*\bsource=|\[MESSAGE FROM NON-USER SOURCE)")
 _RELAY_ROW_RE = re.compile(r"(?m)^\[[^\]\n]{1,80}\] New message\(s\) from ")
 
 _IDENTITY_TTL = 300
@@ -339,7 +340,7 @@ def _is_clean_row(event: dict) -> bool:
     """
     if any(event.get(k) for k in (
         "bookkeeping", "is_sidechain", "skill", "peer", "pending", "queued_from",
-        "subtype", "actor", "handoff", "delegated_from_thread",
+        "subtype", "actor", "handoff", "delegated_from_thread", "queued_meta",
     )):
         return False
     if event.get("origin_kind") not in (None, "", "human", "user"):
@@ -499,9 +500,10 @@ def _is_terminal_session(engine, transcript_path) -> bool:
     except (OSError, ValueError):
         return False
     meta = row.get("payload") if isinstance(row, dict) and row.get("type") == "session_meta" else None
-    if not isinstance(meta, dict) or not isinstance(meta.get("source"), str):
-        return False   # a sub-agent's source is a record
-    return meta.get("originator") in _CODEX_TERMINAL_ORIGINATORS and meta["source"] != "exec"
+    if not isinstance(meta, dict):
+        return False
+    return (meta.get("originator") in _CODEX_TERMINAL_ORIGINATORS
+            and str(meta.get("source")) in _CODEX_TERMINAL_SOURCES)
 
 
 def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title="", sends=(),
@@ -585,7 +587,7 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
 
     # Replies repeat what they answer, so with no prompt of yours they are
     # someone else's conversation.
-    if not stats["prompts"] and any(e.get("type") == "user_text" for e in events or ()):
+    if not stats["prompts"]:
         raise ChatBridgeSession("no prompt CCC can prove you wrote")
     for step in steps:
         if step["kind"] == "tools":

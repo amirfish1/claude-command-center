@@ -47,9 +47,10 @@ counts as yours.
 - **Typed in a terminal:** Claude Code marks a row typed at its command line, and
   Codex names the program that opened the session. Those two count, including
   messages you queue while the agent is busy. No other engine's transcript shows this,
-  so on other engines only dashboard prompts appear. The Claude desktop app, the Codex
-  desktop app and very old Claude Code transcripts have no such mark unless the row
-  says it came from a person.
+  so on other engines only dashboard prompts appear. The Claude desktop app, the Claude
+  VS Code extension, Codex's desktop, VS Code and phone apps, and very old Claude Code
+  transcripts have no such mark unless the row says it came from a person. A script
+  driving a real terminal looks the same as you typing, so CCC can't tell them apart.
 - **Typed in the dashboard, on any engine:** CCC records a fingerprint of the text when
   you send it (not the text itself) and the transcript row must match it word for
   word. The composer, reply chips, and the new session box all count, once the session
@@ -68,7 +69,8 @@ not a signature: a program on your machine could imitate that form on purpose.
 Some sessions can't be exported at all, and you get an error instead of a file:
 
 - Any session with no prompt CCC can prove you wrote. That covers sessions an agent or
-  a queue started, and terminal sessions on engines other than Claude Code and Codex.
+  a queue started, sub-agent sessions, and terminal sessions on engines other than
+  Claude Code and Codex.
   Replies repeat what they answer, so they can't go out on their own.
 - Any session holding a chat bridge message, such as Telegram, WhatsApp or iMessage,
   on any engine. Leaving those messages out would not be enough, because the replies
@@ -101,8 +103,8 @@ Redaction is always on and there is no switch to turn it off.
   rule can tell that sentence from a real password. The same goes for near misses
   such as `pasword`, `wifi:`, `p:`, `p/w`, `code word`, `vault key`, `signing key`,
   `log in with admin and ...`, `admin / ...` and a short value after `the key is`.
-  A password made only of ordinary words can still survive when nothing near it
-  marks it as one, such as `sudo orange window`.
+  A password made only of ordinary words can still survive with an unusual label, or
+  with nothing near it that marks it as one, such as `sudo orange window`.
 - **Seed phrases, card numbers and PINs:** runs of wallet seed words are hidden,
   whether punctuation, numbers or bullets like `a)` and `2nd` separate them. So are
   three or more groups of digits that add up to at least seven, across any punctuation

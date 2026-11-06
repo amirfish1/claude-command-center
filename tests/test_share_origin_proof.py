@@ -397,7 +397,7 @@ def test_codex_cloud_delegated_prompt():
 def test_codex_cloud_plan_item_is_text_the_user_saw():
     events = codex_cloud_threads.cloud_turns_to_events([{"id": "t", "startedAt": 1767225600, "items": [
         {"type": "plan", "id": "p", "text": "read the notes then rewrite the rules"}]}])[0]
-    assert html_of(events, "codex") is not None
+    assert html_of([*events, user("mine")], "codex") is not None
 
 
 # ---- smaller holes ----------------------------------------------------------
@@ -480,6 +480,7 @@ def test_codex_terminal_session_is_recognised(tmp_path, originator, source):
 @pytest.mark.parametrize("originator,source", [
     ("codex_exec", "exec"), ("claude-command-center", "vscode"), ("a_queue_worker", "vscode"),
     ("codex-tui", "exec"), ("codex-tui", {"subagent": "review"}), ("", "cli"),
+    ("codex_cli_rs", "mcp"), ("codex-tui", "unknown"),
 ])
 def test_codex_automation_is_not_a_terminal_session(tmp_path, originator, source):
     assert not share_run._is_terminal_session("codex", rollout(tmp_path, originator, source))
@@ -511,6 +512,12 @@ def test_replies_to_prompts_nobody_vouches_for_refuse_the_session():
     with pytest.raises(share_run.ChatBridgeSession):
         share_run.build_replay([sdk("my client says this", 1), reply("Your client says this")],
                                engine="claude", identity={})
+
+
+def test_a_session_with_no_user_row_is_refused():
+    """A sub-agent rollout has replies and no user row, and another agent started it."""
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay([reply("The client asked for a refund.")], engine="codex", identity={})
 
 
 def test_refusal_reaches_the_export_as_a_422(monkeypatch):
@@ -586,6 +593,37 @@ def test_a_queued_row_in_a_terminal_session_exports():
     assert prompts([queued_row(entrypoint="cli")]) == [PROMPT]
 
 
+def queued_with(text=PROMPT, origin=None, **attachment):
+    return server._parse_conversation_event({
+        "type": "attachment", "timestamp": TS, "entrypoint": "cli", "attachment": {
+            "type": "queued_command", "commandMode": "prompt", "prompt": text,
+            **({"origin": origin} if origin else {}), **attachment}}, 1)
+
+
+@pytest.mark.parametrize("kind", ["coordinator", "plugin", "observer", "unclassified"])
+def test_a_queued_row_from_a_non_person_stays_out_of_a_terminal_session(kind):
+    assert prompts([queued_with(origin={"kind": kind})]) == []
+
+
+def test_a_queued_meta_row_stays_out_of_a_terminal_session():
+    assert prompts([queued_with(isMeta=True)]) == []
+
+
+@pytest.mark.parametrize("entrypoint", ["cli", "sdk-cli"])
+@pytest.mark.parametrize("prefix", ["", "[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\n"])
+def test_a_queued_slack_ping_refuses_the_session(entrypoint, prefix):
+    row = queued_with(prefix + "the invoice is wrong", origin={"kind": "slack-ping"})
+    row["entrypoint"] = entrypoint
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay([user("mine"), row, reply("Fixing the invoice.")], engine="claude", identity={})
+
+
+def test_a_non_user_source_marker_refuses_the_session_with_no_origin():
+    row = queued_with("[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]\nthe invoice is wrong")
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay([user("mine"), row, reply("Fixing it.")], engine="claude", identity={})
+
+
 def test_every_user_row_of_a_hermes_script_session_needs_proof():
     """Even a bracketed one, which is otherwise skipped as a machine note."""
     mine, other = hermes_row("fix it", "cli"), hermes_row("[Neighbor] move my lesson", "cli")
@@ -611,6 +649,7 @@ def test_a_journal_row_with_a_bad_recipient_does_not_stop_the_reader(tmp_path, m
     "log in with admin and orange window",
     "u: admin p: orange window",
     "p/w: orange window",
+    "p/w orange window",
     "admin / orange window",
     "orange window, that's the password",
     "Your password has been set.\n\norange window",
@@ -625,6 +664,8 @@ def test_password_in_ordinary_words_is_hidden(text):
 
 @pytest.mark.parametrize("text", [
     "The key is to retry the request after a short pause in the loop",
+    "The key is to retry",
+    "p = subprocess.run(args)",
     "read / write access for the team",
     "git log in the repo",
     "step: run the tests",
@@ -636,3 +677,8 @@ def test_ordinary_sentences_keep_their_words(text):
 @pytest.mark.xfail(reason="Known limit in docs/sharing.md: nothing marks these words as a password", strict=True)
 def test_known_limit_a_bare_sudo_password():
     assert "orange" not in Redactor().text("sudo orange window", 400).casefold()
+
+
+def test_a_password_heading_does_not_hide_the_paragraph_under_it():
+    assert "the flow" in Redactor().text("Password reset\nthe flow sends a mail", 400)
+

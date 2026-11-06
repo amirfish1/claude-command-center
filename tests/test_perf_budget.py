@@ -5563,6 +5563,8 @@ def test_share_export_reads_one_session_and_forks_git_once(monkeypatch):
         ]}
         for i in range(5000)
     ]
+    events.append({"type": "user_text", "entrypoint": "cli", "text": "go",
+                   "ts": "2026-11-05T10:00:00Z"})
 
     def parse(session_id):
         parses.append(session_id)

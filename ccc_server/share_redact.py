@@ -400,12 +400,13 @@ _CRED_LABEL_RE = re.compile(
     r"[*_`'\"\s]{0,6}(?:[:=|>\u2192\u2013\u2014]|->|-(?=\s)|"
     r"\b(?:is|was|are|were|be)\b)"
     r"|(?<![a-z0-9])keys?[*_`'\"\s]{0,6}[:=]"
-    r"|(?<![\w/.\-])p[ \t]*[:=](?=[ \t])"
+    r"|(?<![\w/.\-])p[ \t]*:(?=[ \t])"
     # "The key is to retry" stays: only a short value that ends the line goes.
-    r"|\b(?:the|my|our|your)[ \t]+key[ \t]+(?:is|was)(?=(?:[ \t]+\S+){1,3}[ \t]*$)"
+    r"|\b(?:the|my|our|your)[ \t]+key[ \t]+(?:is|was)(?![ \t]+(?:to|that|not|how|in|a|an|the)\b)"
+    r"(?=(?:[ \t]+\S+){1,3}[ \t]*$)"
 )
 _BARE_TOKEN_RE = re.compile(
-    r"(?i)(?<![a-z0-9])(?:tokens?|secret|creds?|pwd|pw)[ \t]+(?!(?:" + _TALK_WORDS
+    r"(?i)(?<![a-z0-9])(?:tokens?|secret|creds?|pwd|pw|p/w)[ \t]+(?!(?:" + _TALK_WORDS
     + r"|budget|budgets|burn|cost|costs|count|counts|economy|efficiency|limit|limits|"
     r"spend|usage|use|waste|window|windows|manager|managers|store|stores|scanner|"
     r"scanning|rotation|sauce|key|keys|name|names|file|files|ref|refs|value|values)\b)"
@@ -437,7 +438,7 @@ _VALUE_FIRST_RE = re.compile(
 _CRED_HINTS = (
     "pass", "secret", "token", "cred", "otp", "cv", "pw", "psw", "p4s", "p@s", "pin",
     "key", "authorization", "code", "2fa", "mfa", "zip", "7z", "redis", "mysqldump",
-    "wifi", "wi-fi", "wi fi", "safe word", "safeword", "p:", "p=", "p =", "p :", "p/w",
+    "wifi", "wi-fi", "wi fi", "safe word", "safeword", "p:", "p :", "p/w",
     "pasw", "pssw", "log in", "log-in", "login", "sign in", "sign-in", "signin", " /",
     # Other languages, in ASCII. The rest are checked whenever text is not ASCII.
     "kennwort", "contras", "clave", "senha", "wachtwoord", "losenord", "adgangskode",
@@ -448,7 +449,7 @@ _NOTHING_LEFT_RE = re.compile(r"[^\w\ue000]*$")
 # is:", "password for the router:", "api key below".
 _LABEL_TAIL_RE = re.compile(
     r"(?i)(?:[^\n:]{0,80}:|[^\n]{0,80}\b(?:is|was|are|were|below|here|follows|"
-    r"(?:been[ \t]+)?(?:set|changed|reset|updated)))[^\w\ue000]*$"
+    r"been[ \t]+(?:set|changed|reset|updated)))[^\w\ue000]*$"
 )
 # A PIN can be split ("pin 4 8 2 1"), so every digit after the word goes. The
 # verb is the exception: "pin the version to 3.2".

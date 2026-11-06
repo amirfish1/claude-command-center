@@ -103,7 +103,7 @@ def test_short_commands_are_read_from_detail():
         {"kind": "tool_use", "name": "Bash", "id": "1", "detail": "cd /x && pytest tests/a.py"},
         {"kind": "tool_use", "name": "Bash", "id": "2", "detail": "git -C /x commit -m 'y'"},
         {"kind": "tool_use", "name": "Read", "id": "3", "detail": "git commit pytest"},
-    ]}]
+    ]}, {"type": "user_text", "entrypoint": "cli", "text": "go"}]
     replay = export(events)
     assert (replay["stats"]["test_runs"], replay["stats"]["commits"]) == (1, 1)
     labels = [t["label"] for t in replay["steps"][0]["tools"]]
@@ -433,6 +433,6 @@ def test_survivors_lists_readable_capitalized_words_and_numbers():
 
 
 def test_export_payload_carries_survivors():
-    events = [{"type": "user", "text": "Meet Globexia on Tuesday"}]
+    events = [{"type": "user_text", "entrypoint": "cli", "text": "Meet Globexia on Tuesday"}]
     replay, _ = share_run.build_replay(events)
     assert isinstance(share_run.survivors(replay), list)
