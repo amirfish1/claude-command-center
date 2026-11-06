@@ -4142,6 +4142,18 @@
     color: var(--accent, #4c8bf5);
   }
   .peer-sender-mode { opacity: 0.65; font-size: 10px; }
+  /* Narrow screens: a 999px pill with nowrap-less flex children collapsed into
+     a tall blob of one-word-per-line text. Let the chip wrap as a normal
+     inline-block row of labels and keep its type small regardless of the
+     bubble's font theme. */
+  .peer-sender {
+    display: inline-flex; flex-wrap: wrap; max-width: 100%; box-sizing: border-box;
+    border-radius: 10px; font-style: normal; font-size: 11px; line-height: 16px;
+    column-gap: 6px;
+  }
+  .peer-sender > * { white-space: nowrap; font-size: inherit; font-style: normal; }
+  .peer-sender-mode { font-size: 10px; }
+  .peer-sender-name { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .event.user_text.peer-message .user-msg { border-left: 2px solid color-mix(in srgb, var(--accent, #4c8bf5) 45%, transparent); padding-left: 8px; }
   /* Cross-session (UDS peer) delivery gets its own green tint so it reads
      distinctly from a normal chat turn -- e.g. the WatchTower reconciler's

@@ -1,0 +1,1 @@
+- Peer-attribution chips ("claimed via ccc-inject → ccc-uds · reply route available") no longer balloon into a tall one-word-per-line blob on phone-width screens; they wrap as compact labels.
