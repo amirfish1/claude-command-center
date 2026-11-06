@@ -2472,6 +2472,35 @@ def test_live_activity_cache_covers_dashboard_poll_interval(monkeypatch):
     assert calls == [1000.0], "5s dashboard polls should reuse the live snapshot"
 
 
+def test_live_status_reads_share_one_background_build(monkeypatch):
+    """CCC-319: however many polls arrive during a stalled build, they share
+    one all-sessions build and none of them waits it out."""
+    release = threading.Event()
+    calls = []
+
+    def build_uncached(detail=None):
+        calls.append(1)
+        release.wait(5)
+        return {"sid-1": {"state": "working"}}
+
+    monkeypatch.setattr(server, "_live_activity_snapshot", {
+        "ts": time.time() - 60.0, "data": {"sid-0": {"state": "idle"}}})
+    monkeypatch.setattr(server, "_live_activity_refresh", {"done": None})
+    monkeypatch.setattr(server, "_LIVE_ACTIVITY_VIEW_WAIT_S", 0.01)
+    monkeypatch.setattr(server, "_record_live_build_ms", lambda ms: None)
+    monkeypatch.setattr(server, "record_event", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_build_live_sessions_activity_uncached", build_uncached)
+
+    try:
+        for _ in range(20):
+            data, status = server.live_sessions_activity_for_view()
+            assert "sid-0" in data and status["refreshing"] is True
+    finally:
+        release.set()
+    assert server._live_activity_refresh["done"].wait(5)
+    assert len(calls) == 1
+
+
 def test_throughput_startup_prewarm_defaults_off(monkeypatch):
     """Throughput prewarm parses a large history cache; it must not run during
     normal daemon startup unless the user explicitly opts in."""

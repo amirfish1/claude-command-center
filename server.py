@@ -11503,6 +11503,21 @@ def _live_activity_entry_for_session(session_id):
 _LIVE_ACTIVITY_SNAPSHOT_TTL = 10.0
 _live_activity_snapshot = {"ts": 0.0, "data": None}
 _live_activity_snapshot_lock = threading.Lock()
+# The sidebar poll never waits out a slow build (CCC-319): 112 builds a day ran
+# >=9s (worst 153s), nearly all waiting on the GIL or the host rather than
+# computing. It waits this long for the refresh, which covers the usual
+# ~30ms build, then shows the last saved status and picks up the new one on its
+# next poll. Callers that decide on the result (session state, census) keep
+# blocking for a fresh build.
+_LIVE_ACTIVITY_VIEW_WAIT_S = 0.25
+_live_activity_refresh = {"done": None}
+_live_activity_refresh_guard = threading.Lock()
+_LIVE_ACTIVITY_REFRESH_THREAD = "ccc-live-activity-refresh"
+# The saved copy covers the cold build after a restart. Older than the max age
+# it says little about what is running now, so a long-stopped server ignores it.
+_LIVE_ACTIVITY_SAVE_MIN_S = 30.0
+_LIVE_ACTIVITY_SAVED_MAX_AGE_S = 600.0
+_live_activity_saved = {"enabled": False, "at": 0.0}
 
 # ── CCC self-health metrics ─────────────────────────────────────────────────
 # Three cheap, in-process signals surfaced in the dashboard's bottom-left bar so
@@ -13261,12 +13276,113 @@ def build_live_sessions_activity():
         _record_live_build_ms(_build_ms)
         try:
             _detail.update(cpu_ms=int(round(_cpu_ms)), rows=len(data or {}))
+            if threading.current_thread().name == _LIVE_ACTIVITY_REFRESH_THREAD:
+                _detail["background"] = True
             record_event("live_build", _build_ms, detail=_detail)
         except Exception:
             pass
         snap["data"] = data
         snap["ts"] = time.time()
+        snap["saved_at"] = None
+        _save_live_activity_snapshot(data, snap["ts"])
         return data
+
+
+def _live_activity_saved_path():
+    return COMMAND_CENTER_STATE_DIR / "live-activity-snapshot.json"
+
+
+def _save_live_activity_snapshot(data, ts):
+    """Keep a throttled copy for the next boot. Only the dashboard process
+    enables this (see _load_saved_live_activity); the worker imports this
+    module too and must not overwrite the copy with its own view."""
+    saved = _live_activity_saved
+    if not saved["enabled"] or ts - saved["at"] < _LIVE_ACTIVITY_SAVE_MIN_S:
+        return
+    saved["at"] = ts
+    try:
+        _write_json_atomic(_live_activity_saved_path(),
+                           {"version": 1, "saved_at": ts, "sessions": data})
+    except Exception:
+        pass
+
+
+def _load_saved_live_activity():
+    """Dashboard boot: seed the snapshot from the saved copy, so the first
+    polls show the last known status instead of waiting for a cold build
+    (up to 150s under load). ts stays 0, so it never counts as fresh: the
+    first read starts a refresh and blocking callers build their own."""
+    _live_activity_saved["enabled"] = True
+    try:
+        saved = json.loads(_live_activity_saved_path().read_text(encoding="utf-8"))
+        saved_at = float(saved["saved_at"])
+        sessions = saved["sessions"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    age = time.time() - saved_at
+    if not isinstance(sessions, dict) or not 0 <= age <= _LIVE_ACTIVITY_SAVED_MAX_AGE_S:
+        return False
+    snap = _live_activity_snapshot
+    with _live_activity_snapshot_lock:
+        if snap["data"] is None:
+            snap.update(ts=0.0, data=sessions, saved_at=saved_at)
+    return True
+
+
+def _kick_live_activity_refresh():
+    """Start the single background refresh, or join the one in flight. Returns
+    the Event set when it ends. A read holds no lock while it runs, so a stall
+    delays the new status but no longer holds up the poll."""
+    with _live_activity_refresh_guard:
+        done = _live_activity_refresh["done"]
+        if done is not None and not done.is_set():
+            return done
+        done = threading.Event()
+        _live_activity_refresh["done"] = done
+
+    def run():
+        try:
+            build_live_sessions_activity()
+        except Exception as exc:
+            print(f"[live-activity] background refresh failed: {exc!r}", flush=True)
+        finally:
+            done.set()
+
+    try:
+        threading.Thread(target=run, name=_LIVE_ACTIVITY_REFRESH_THREAD,
+                         daemon=True).start()
+    except RuntimeError:
+        done.set()
+    return done
+
+
+def live_sessions_activity_for_view():
+    """(sessions, status) for the sidebar poll: the last saved status at once,
+    refreshed in the background. Blocks only when nothing is saved yet.
+
+    status says what the caller got: source is "fresh" (at most one TTL old),
+    "stale" (last build, refresh still running) or "saved" (from before this
+    boot); age_s is the status age; refreshing is true while a newer build
+    runs."""
+    snap = _live_activity_snapshot
+    if snap["data"] is None:
+        data = build_live_sessions_activity()
+        return data, {"source": "fresh", "age_s": 0.0, "refreshing": False}
+    done = None
+    if time.time() - snap["ts"] >= _LIVE_ACTIVITY_SNAPSHOT_TTL:
+        done = _kick_live_activity_refresh()
+        done.wait(_LIVE_ACTIVITY_VIEW_WAIT_S)
+    data, saved_at = snap["data"], snap.get("saved_at")
+    age = max(0.0, time.time() - (saved_at or snap["ts"]))
+    if saved_at:
+        source = "saved"
+    else:
+        source = "fresh" if age < _LIVE_ACTIVITY_SNAPSHOT_TTL else "stale"
+    return data, {
+        "source": source,
+        "age_s": round(age, 1),
+        "refreshing": done is not None and not done.is_set(),
+    }
 
 
 def _build_live_sessions_activity_uncached(detail=None):
@@ -31567,7 +31683,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             last_kill = (qs.get("last_kill", [""])[0] or "").strip()
             last_prewarm = (qs.get("last_prewarm", [""])[0] or "").strip()
-            payload = {"sessions": build_live_sessions_activity()}
+            _read_t0 = time.perf_counter()
+            _sessions, _live_status = live_sessions_activity_for_view()
+            payload = {"sessions": _sessions, "live_status": _live_status}
             try:
                 payload["kill_events"] = _drain_new_kill_events(last_kill)
             except Exception:
@@ -31590,6 +31708,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 payload["recent_spawns"] = []
             self.send_json(payload)
+            record_diag("live_read", (time.perf_counter() - _read_t0) * 1000.0,
+                        detail=_live_status)
         elif path == "/api/interrupt-asks":
             # Cheap standalone poll for the interrupt-approval banner: one
             # small JSON file read, no session scan. The banner must work
@@ -46616,6 +46736,8 @@ def main():
     # and hold the Python GIL long enough to make the whole app feel stuck.
     if _env_truthy("CCC_WARM_CACHE_ON_STARTUP"):
         threading.Thread(target=_warm_cache, daemon=True).start()
+    if not os.environ.get("CCC_EPHEMERAL"):
+        _load_saved_live_activity()
     # CCC-142: the ACP registry load (counts every ACP transcript's lines,
     # ~135MB here) runs once per process under _ACP_LOCK. Left to the first
     # caller it landed on a request thread (live_build ~30s after a restart).
