@@ -46315,6 +46315,15 @@ if "ccc_server.config_consent" in sys.modules:
 else:
     from ccc_server import config_consent
 
+def _exit_if_port_in_use(exc, port):
+    """One clear line instead of a bind traceback when the port is taken."""
+    if getattr(exc, "errno", None) == errno.EADDRINUSE:
+        print(f"Error: port {port} is already in use. If CCC holds it, use "
+              f"`ccc restart`; otherwise start on a free port, e.g. "
+              f"PORT={port + 1} ./run.sh", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     # State files, logs and transcripts hold secrets: create everything owner-only.
     os.umask(0o077)
@@ -46542,6 +46551,7 @@ def main():
                     print(f"⏳ Address {bind_host} not available yet (waiting for network/tailscale to assign IP, retry {bind_attempts}/{max_bind_attempts})...")
                 time.sleep(1)
             else:
+                _exit_if_port_in_use(exc, port)
                 raise
 
     if bind_attempts > 0 and network_info["trust_tailnet"]:

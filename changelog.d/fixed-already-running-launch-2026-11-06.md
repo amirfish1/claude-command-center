@@ -1,0 +1,1 @@
+- Launching CCC when it is already running prints one clear line at a terminal instead of a bind traceback.
