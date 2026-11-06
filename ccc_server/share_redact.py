@@ -401,8 +401,11 @@ _CRED_LABEL_RE = re.compile(
     r"\b(?:is|was|are|were|be)\b)"
     r"|(?<![a-z0-9])keys?[*_`'\"\s]{0,6}[:=]"
     r"|(?<![\w/.\-])p[ \t]*:(?=[ \t])"
+    # "p = 0.05" is maths, but not straight after a user name.
+    r"|(?<![\w/.\-])u(?:ser(?:name)?)?[ \t]*[:=][ \t]*\S+[ \t,;]+p[ \t]*="
     # "The key is to retry" stays: only a short value that ends the line goes.
-    r"|\b(?:the|my|our|your)[ \t]+key[ \t]+(?:is|was)(?![ \t]+(?:to|that|not|how|in|a|an|the)\b)"
+    r"|\b(?:the|my|our|your)[ \t]+key[ \t]+(?:is|was)"
+    r"(?:[ \t]*:|(?![ \t]+(?:to|that|not|how|in|a|an|the)\b))"
     r"(?=(?:[ \t]+\S+){1,3}[ \t]*$)"
 )
 _BARE_TOKEN_RE = re.compile(
@@ -438,7 +441,7 @@ _VALUE_FIRST_RE = re.compile(
 _CRED_HINTS = (
     "pass", "secret", "token", "cred", "otp", "cv", "pw", "psw", "p4s", "p@s", "pin",
     "key", "authorization", "code", "2fa", "mfa", "zip", "7z", "redis", "mysqldump",
-    "wifi", "wi-fi", "wi fi", "safe word", "safeword", "p:", "p :", "p/w",
+    "wifi", "wi-fi", "wi fi", "safe word", "safeword", "p:", "p :", " p=", " p =", "p/w",
     "pasw", "pssw", "log in", "log-in", "login", "sign in", "sign-in", "signin", " /",
     # Other languages, in ASCII. The rest are checked whenever text is not ASCII.
     "kennwort", "contras", "clave", "senha", "wachtwoord", "losenord", "adgangskode",

@@ -1,0 +1,1 @@
+- Share this run: clicking Steer on another agent's message no longer turns it into your prompt. The message keeps its sender, on queued cards, Steer all and delivered rows, and a steered message with no known sender stays out of the export.

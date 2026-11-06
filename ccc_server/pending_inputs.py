@@ -3374,6 +3374,34 @@ def _consume_pending_input_id(
 _QUEUED_STEER_CONSUMING_VIA = frozenset({"codex-steer", "acp-prompt", "antigravity-ls"})
 
 
+def _steered_queue_origins(session_id, text, ids=(), texts=()):
+    """(visible text, attribution) for each queued row a Steer replaces.
+
+    The attribution is None for a row with no record, or a row the queue no
+    longer holds. A sender header outranks the row's own record.
+    """
+    import sender_envelope as attribution
+    _refresh_queued_view_if_file_changed(session_id)
+    with _core._pending_resume_lock:
+        rows = list(_core._pending_resume_queue.get(session_id) or ())
+    with _core._pending_terminal_input_lock:
+        rows += list(_core._pending_terminal_input_queue.get(session_id) or ())
+    origins = []
+    for index, item in enumerate(texts or [text]):
+        want = ids[index] if index < len(ids) else ""
+        found = [
+            row for row in rows
+            if (str(getattr(row, "pending_id", "") or "") == want if want
+                else _queued_text_key(row) == _queued_text_key(item))
+        ]
+        origins += [
+            (_core._strip_mode3_instruction(_queued_text_key(row)),
+             attribution.from_text(row) or getattr(row, "attr", None))
+            for row in found
+        ] or [(item, None)]
+    return origins
+
+
 def _finalize_queued_steer_batch_result(session_id, texts, result, ids=None):
     """Commit a Steer-all: withdraw every queued copy the one prompt carried.
 

@@ -60,11 +60,14 @@ counts as yours.
 - **Sessions from before this was added:** on Claude Code, a dashboard message is
   matched to its transcript row by time instead, within 30 seconds of the send. The
   first prompt of an older session is never matched this way, so it stays out, and
-  the replay may start with a reply.
-- **Sent by another agent or a script:** left out, even if you asked for it.
+  the replay may start with a reply. A send with two possible rows matches neither.
+- **Sent by another agent or a script:** left out, even if you asked for it. Clicking
+  Steer on such a message doesn't change that: it keeps its sender, and if CCC can't
+  tell who wrote a steered message, it stays out too.
 
 The fingerprint shows the words match something sent from the dashboard form. It is
-not a signature: a program on your machine could imitate that form on purpose.
+not a signature: a program on your machine could imitate that form on purpose. If you
+paste someone else's words into the composer, they count as yours.
 
 Some sessions can't be exported at all, and you get an error instead of a file:
 

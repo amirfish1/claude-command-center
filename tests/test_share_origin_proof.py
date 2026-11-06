@@ -228,8 +228,13 @@ def test_old_send_does_not_reach_past_the_window():
 
 
 def test_old_send_proves_one_row():
-    rows = [sdk("first", 1), sdk("mine", 2, seconds=2), sdk("not mine", 3, seconds=3)]
+    rows = [sdk("first", 1), sdk("mine", 2, seconds=2), sdk("not mine", 3, seconds=59)]
     assert prompts(rows, sends=[(EPOCH + 1, "")]) == ["mine"]
+
+
+def test_old_send_with_two_candidates_proves_neither():
+    rows = [sdk("first", 1), sdk("mine", 2, seconds=2), sdk("not mine", 3, seconds=3)]
+    assert prompts(rows, sends=[(EPOCH + 1, "")]) == []
 
 
 def test_a_new_send_does_not_use_the_time_join():

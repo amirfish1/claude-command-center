@@ -11152,6 +11152,7 @@
       // durable transcript event that dedupes it away.
       if (row) {
         row.classList.remove('steering-optimistic');
+        if (data.steer_kept_sender) row.dataset.steerKeptSender = '1';
         if (row._pendingRef) markPendingSendDelivered(row._pendingRef, data);
         else settleSteeredServerCard(row);
       }
@@ -11211,7 +11212,7 @@
     try {
       const data = await postInjectInput(sid, text, 'steer', isPending
         ? { replaceQueued: true, userInitiated: true, replaceQueuedIds: [queuedRowDeliveryId(row)] }
-        : { userInitiated: true });
+        : { userInitiated: true, steerExisting: true, steerOriginMsgId: btn.dataset.steerOriginMsgId || '' });
       if (data && data.queue_pump_started) {
         showOpToast('Turn ended; sending the oldest queued message now.');
         setTimeout(refreshConversationList, 500);
@@ -19964,7 +19965,7 @@
     return html;
   }
 
-  function userMessageSteerHtml(text, notification, compactCardHtml) {
+  function userMessageSteerHtml(text, notification, compactCardHtml, ev) {
     const isCodex = currentSession && currentSession.source === 'codex';
     // Render the button for every devin-cli user message like codex does —
     // capability is a live signal (devinTurnSteerable/syncUserMessageSteerButtons
@@ -19979,7 +19980,9 @@
       ? 'Steer ' + engine + ' with this message'
       : 'No running ' + engine + ' turn can be steered from CCC; use Send to resume or follow up';
     const inactiveAttrs = steerable ? '' : ' hidden disabled aria-hidden="true"';
+    const originId = (ev && ((ev.attribution && ev.attribution.message_id) || (ev.peer && ev.peer.msg_id))) || '';
     return '<button type="button" class="user-message-steer" data-steer-user-message'
+      + (originId ? ' data-steer-origin-msg-id="' + escapeAttr(originId) + '"' : '')
       + inactiveAttrs + ' title="' + escapeAttr(title)
       + '" aria-label="Steer ' + escapeAttr(engine) + ' with this message">Steer</button>';
   }
@@ -39305,6 +39308,12 @@
     if (opts && opts.userInitiated === true) {
       payload.source = 'composer';
       payload.composer_form = 'ccc-composer-v1';
+    }
+    // Steering a delivered row re-sends words already in the transcript. Say so:
+    // the server must not record them as newly typed (Share trusts that record).
+    if (opts && opts.steerExisting) {
+      payload.steer_existing = true;
+      if (opts.steerOriginMsgId) payload.steer_origin_msg_id = opts.steerOriginMsgId;
     }
     if (opts && opts.replaceQueued) payload.replace_queued = true;
     if (opts && Array.isArray(opts.replaceQueuedTexts) && opts.replaceQueuedTexts.length) {
@@ -66830,19 +66839,23 @@
     // A steered card that had no local pending echo behind it stays in the
     // transcript as `delivered` until the engine writes its own durable copy of
     // the same text. Retire it exactly then, so the message never blinks out of
-    // the conversation and never shows twice.
+    // the conversation and never shows twice. Only a card the server says kept
+    // its sender has a peer row for its durable copy; a peer repeating the words
+    // of your message must not retire your card.
     const settledSteerRows = Array.from(
       $view.querySelectorAll('.event.user_text[data-steer-settled]'));
     if (settledSteerRows.length) {
-      const durableNow = Array.from($view.querySelectorAll(
+      const durableAll = Array.from($view.querySelectorAll(
         '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)'
-        + ':not(.provisional):not(.peer-message):not(.steering-optimistic)'
+        + ':not(.provisional):not(.steering-optimistic)'
       ));
+      const durableNow = durableAll.filter(el => !el.classList.contains('peer-message'));
       settledSteerRows.forEach(el => {
         const msg = el.querySelector('.user-msg');
         const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
         const queuedAt = Number(el.dataset.tsEpoch || 0);
-        if (takeQueuedSendAcknowledgement(durableNow, text, queuedAt)) el.remove();
+        const proof = el.dataset.steerKeptSender ? durableAll : durableNow;
+        if (takeQueuedSendAcknowledgement(proof, text, queuedAt)) el.remove();
       });
     }
     if (replaceServerCandidates && tray) {
@@ -71031,7 +71044,7 @@
             _compactRunAnchorTo(div);
           }
         }
-        const userSteerHtml = userMessageSteerHtml(cleanedText, notification, compactCardHtml);
+        const userSteerHtml = userMessageSteerHtml(cleanedText, notification, compactCardHtml, ev);
         if (userSteerHtml) div.classList.add('has-user-steer');
         // data-raw-text preserves the original prose so _dynAskApply can pin
         // the same wording in the "Earlier ask" sticky — reading textContent

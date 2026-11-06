@@ -356,7 +356,8 @@ def header(attr):
 
 
 def carry(text, attr, *, app):
-    if not enabled(app) or re.match(r'^\s*/', str(text)):
+    # A header would stop a command from running. A path is not a command.
+    if not enabled(app) or re.match(r'^\s*/[A-Za-z][\w:-]*(?:\s|$)', str(text)):
         return str(text)
     text = strip_header(text)
     attr = validate(attr)
@@ -515,6 +516,35 @@ def human_sends(session_id, months):
         except OSError:
             continue
     return sorted(found.values())
+
+
+def _typed_on_dashboard(text, attr, recipient):
+    if attr:
+        return attr['author'].get('kind') == 'human' and attr['evidence'].get('source') == 'dashboard'
+    # Rows that crossed to the worker lose their record, not the journal's.
+    months = [p.stem for p in (_ccc_state() / 'attribution').glob('????-??.jsonl')]
+    digest = prompt_digest(text)
+    return any(sent == digest for _at, sent in human_sends(recipient, months))
+
+
+def steer_attr(recipient, text, origins):
+    """Attribution for a Steer click, which re-sends messages that already exist.
+
+    `origins` is (text, attr) per message, attr None where CCC holds no record.
+    The click is not typing: only words the dashboard form sent stay a dashboard
+    send. One other sender keeps their record, so the row keeps its header.
+    Anything else goes out unattributed, which also carries a header, so Share
+    leaves it out. Never `dashboard_human(recipient)`: an empty digest is a legacy
+    send, and those feed the time join.
+    """
+    origins = list(origins)
+    if origins and all(_typed_on_dashboard(t, a, recipient) for t, a in origins):
+        return dashboard_human(recipient, text)
+    first = origins[0][1] if origins else None
+    if first and first['author'].get('kind') != 'human' and all(
+            a and a['author'] == first['author'] for _t, a in origins):
+        return copy.deepcopy(first)
+    return make(recipient, evidence={'source': 'dashboard_steer'})
 
 
 def request_attr(payload, recipient, *, browser_composer=False, typed_text=None):

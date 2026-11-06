@@ -108,6 +108,12 @@ test('peer and optimistic-steer rows cannot retire a settled server steer card',
   }finally{await page.close();}
  }
 });
+test('a steered card that kept its sender retires against its peer row',async()=>{
+ const page=await fixture();try{
+  const connected=await page.evaluate(()=>{const now=Date.now();const settled=makeRow('same steer','durable',now-5000);settled.dataset.steerSettled='1';settled.dataset.steerKeptSender='1';settled.classList.add('send-delivered');const proof=makeRow('same steer','durable',now);proof.classList.add('peer-message');sync();return settled.isConnected;});
+  assert.equal(connected,false);
+ }finally{await page.close();}
+});
 test('older identical history cannot acknowledge a newly steered server card',async()=>{
  const page=await fixture();try{
   const out=await page.evaluate(()=>{

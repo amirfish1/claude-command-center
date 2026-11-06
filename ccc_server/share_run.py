@@ -340,7 +340,7 @@ def _is_clean_row(event: dict) -> bool:
     """
     if any(event.get(k) for k in (
         "bookkeeping", "is_sidechain", "skill", "peer", "pending", "queued_from",
-        "subtype", "actor", "handoff", "delegated_from_thread", "queued_meta",
+        "subtype", "actor", "handoff", "delegated_from_thread", "queued_meta", "not_typed",
     )):
         return False
     if event.get("origin_kind") not in (None, "", "human", "user"):
@@ -369,7 +369,7 @@ def _is_typed_prompt(event: dict, proven=(), terminal=False) -> bool:
     """
     if not _is_clean_row(event):
         return False
-    if event.get("line") in proven:
+    if event.get("line") is not None and event.get("line") in proven:
         return True
     if "source_platform" in event:
         return event["source_platform"] == _HERMES_TYPED_SOURCE
@@ -384,7 +384,7 @@ def _is_typed_prompt(event: dict, proven=(), terminal=False) -> bool:
 def _proven_rows(events, sends) -> set:
     """Lines of the transcript rows that match a dashboard send, one row per send."""
     users = [e for e in events or () if e.get("type") == "user_text"]
-    rows = [e for e in users if _is_clean_row(e)]
+    rows = [e for e in users if _is_clean_row(e) and e.get("line") is not None]
     digests = Counter(digest for _at, digest in sends or () if digest)
     proven = set()
     for row in rows:
@@ -405,8 +405,9 @@ def _proven_rows(events, sends) -> set:
             if ts is not None and line not in proven
             and -_LEGACY_JOIN_BEFORE_S <= ts - at <= _LEGACY_JOIN_AFTER_S
         ]
-        if near:
-            proven.add(min(near, key=lambda item: abs(item[0]))[1])
+        # Two candidates means the time can't say which one was typed.
+        if len(near) == 1:
+            proven.add(near[0][1])
     return proven
 
 

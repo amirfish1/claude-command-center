@@ -28840,6 +28840,14 @@ def _skill_body_event(ev, line_num, ts):
     }
 
 
+# Claude Code's own marks for a row the owner did not type, even one with a
+# human origin: a relayed person, or a message handed over from elsewhere.
+_NOT_TYPED_MARKS = (
+    "verifiedSlackHumanTurn", "projectsUserTurn", "emailSenderTurn",
+    "textNotTyped", "handedOff", "queueTranscriptOnly",
+)
+
+
 def _stamp_row_origin(row, ev):
     """Say how a user row arrived, whichever branch below built it."""
     turn_origin = "scheduled" if ev.get("wakeupSource") else ev.get("turnOrigin")
@@ -28847,6 +28855,8 @@ def _stamp_row_origin(row, ev):
         row["turn_origin"] = turn_origin
     # A queued message keeps its own marks inside the attachment.
     attachment = ev.get("attachment") if isinstance(ev.get("attachment"), dict) else {}
+    if any(ev.get(mark) or attachment.get(mark) for mark in _NOT_TYPED_MARKS):
+        row["not_typed"] = True
     origin = ev.get("origin") or attachment.get("origin")
     if isinstance(origin, dict) and origin.get("kind"):
         row["origin_kind"] = str(origin["kind"])
@@ -42566,6 +42576,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     ):
                         text = _mode3_prompt(text)
                 held_queued = 0
+                steer_kept_sender = False
                 try:
                     inject_options = {
                         "wt_origin": (str(payload.get("origin") or "").lower() == "wt"),
@@ -42611,6 +42622,18 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             payload, continuation_origin, browser_composer=browser_composer,
                             typed_text=queued_text if browser_composer else None,
                         )
+                        if browser_composer and (replace_queued or payload.get("steer_existing")):
+                            origin_id = str(payload.get("steer_origin_msg_id") or "")
+                            inject_options["attr"] = _attribution.steer_attr(
+                                continuation_origin, queued_text,
+                                _steered_queue_origins(
+                                    sid, queued_text, replace_queued_ids, replace_queued_texts,
+                                ) if replace_queued else [(
+                                    queued_text,
+                                    _attribution.lookup(message_id=origin_id) if origin_id else None,
+                                )],
+                            )
+                            steer_kept_sender = inject_options["attr"]["author"]["kind"] != "human"
                     except ValueError as exc:
                         self.send_json({"ok": False, "error": str(exc)}, 400)
                         return
@@ -42664,6 +42687,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     result = {"ok": False, "error": str(e) or "internal error"}
                 if held_queued:
                     result = dict(result, held_queued=held_queued)
+                if steer_kept_sender:
+                    # The transcript copy will be a peer row, not a user row.
+                    result = dict(result, steer_kept_sender=True)
                 if replace_queued_texts:
                     result = _finalize_queued_steer_batch_result(
                         sid, replace_queued_texts, result, ids=replace_queued_ids,
