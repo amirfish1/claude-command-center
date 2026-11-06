@@ -1,0 +1,1 @@
+- The dashboard no longer pauses every request for up to several seconds while it loads a refreshed session list. The rebuild result now arrives in small pieces.
