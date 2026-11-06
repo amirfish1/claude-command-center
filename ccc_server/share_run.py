@@ -28,9 +28,10 @@ import subprocess
 import threading
 import time
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import sender_envelope as attribution
 from ccc_server import paths as _paths
 from ccc_server import runaway
 from ccc_server.share_redact import RedactionError, Redactor
@@ -46,6 +47,20 @@ MAX_FOLDERS = 200
 MAX_GIT_FOLDERS = 8
 MAX_LIST_ITEMS = 1000
 MAX_LIST_ITEM_CHARS = 400
+MAX_MONTHS = 24
+
+# A Hermes row proves itself only from the Desktop app. Every other source is a
+# gateway chat, cron or a script: `cli` covers `hermes -z` runs that forward chat
+# messages to a worker profile, so it needs a dashboard send to back each row.
+_HERMES_TYPED_SOURCE = "desktop"
+_HERMES_SCRIPTED_SOURCE = "cli"
+_HERMES_TYPED_KINDS = (None, "", "steer")
+# A dashboard send recorded before digests existed joins its transcript row by
+# time. Measured delay: p99 11 s, max 22 s.
+_LEGACY_JOIN_BEFORE_S = 2
+_LEGACY_JOIN_AFTER_S = 30
+_CHANNEL_ROW_RE = re.compile(r"\s*<channel\s[^>]*\bsource=")
+_RELAY_ROW_RE = re.compile(r"(?m)^\[[^\]\n]{1,80}\] New message\(s\) from ")
 
 _IDENTITY_TTL = 300
 _STATS_TTL = 300
@@ -91,6 +106,8 @@ _MACHINE_ROW_PREFIXES = (
     "[request interrupted",
     "[sender:",
     "[message attribution",
+    "[from ",
+    "[sent from a remote client",
 )
 _IDE_REQUEST_RE = re.compile(r"(?im)^#+ *My request for [^\n]*\n")
 _MODEL_DATE_RE = re.compile(r"-(?:\d{8}|\d{4}-\d{2}-\d{2})$")
@@ -113,6 +130,10 @@ _identity_lock = threading.Lock()
 _identity_cache = {}
 _stats_lock = threading.Lock()
 _stats_cache = {}
+
+
+class ChatBridgeSession(RedactionError):
+    """The session holds messages CCC cannot prove the user wrote."""
 
 
 def _bounded(items: list) -> list:
@@ -220,8 +241,11 @@ def machine_identity(cwds=()) -> dict:
 def _user_hide_list() -> list:
     try:
         lines = _hide_file().read_text("utf-8").splitlines()
-    except OSError:
+    except FileNotFoundError:
         return []
+    except (OSError, UnicodeError) as exc:
+        # Words the user asked to hide must not be dropped quietly.
+        raise RedactionError(f"the hide list could not be read: {type(exc).__name__}") from exc
     items = [line.strip() for line in lines]
     return _bounded([i for i in items if i and not i.startswith("#")])
 
@@ -302,17 +326,19 @@ def _safe_model(value) -> str:
     return model if _MODEL_RE.match(model) else ""
 
 
-def _is_typed_prompt(event: dict) -> bool:
-    """True only for text the user typed: not harness, skill or peer rows.
+def _is_clean_row(event: dict) -> bool:
+    """False for rows that are not a person's text: harness, skill, peer rows.
 
     A subtype marks a row someone else wrote, such as a bridged chat message.
     """
     if any(event.get(k) for k in (
         "bookkeeping", "is_sidechain", "skill", "peer", "pending", "queued_from",
-        "subtype", "actor", "handoff",
+        "subtype", "actor", "handoff", "delegated_from_thread",
     )):
         return False
-    if event.get("turn_origin") not in (None, "", runaway.HUMAN):
+    if event.get("origin_kind") not in (None, "", "human", "user"):
+        return False
+    if event.get("hermes_kind") not in _HERMES_TYPED_KINDS:
         return False
     author = (event.get("attribution") or {}).get("author") or {}
     if author and author.get("kind") not in ("human", "user"):
@@ -320,15 +346,108 @@ def _is_typed_prompt(event: dict) -> bool:
     text = str(event.get("text") or "")
     if runaway.text_trigger(text) != runaway.HUMAN:
         return False
+    # Hermes writes its own notes as user rows, all in square brackets.
+    if "source_platform" in event and text.lstrip().startswith("["):
+        return False
     return not text.lstrip().casefold().startswith(_MACHINE_ROW_PREFIXES)
 
 
+def _is_typed_prompt(event: dict, proven=()) -> bool:
+    """True only for text the user typed.
+
+    `proven` holds the lines a dashboard send vouches for. Without one, the row
+    must carry no mark of arriving another way: `sdk` is every row sent through
+    the SDK path, dispatched prompts included.
+    """
+    if not _is_clean_row(event):
+        return False
+    if event.get("line") in proven:
+        return True
+    if event.get("source_platform", _HERMES_TYPED_SOURCE) != _HERMES_TYPED_SOURCE:
+        return False
+    return event.get("turn_origin") in (None, "", runaway.HUMAN)
+
+
+def _proven_rows(events, sends) -> set:
+    """Lines of the transcript rows that match a dashboard send, one row per send."""
+    users = [e for e in events or () if e.get("type") == "user_text"]
+    rows = [
+        e for e in users
+        if _is_clean_row(e) and (
+            e.get("turn_origin") == "sdk"
+            or e.get("source_platform", _HERMES_TYPED_SOURCE) != _HERMES_TYPED_SOURCE
+        )
+    ]
+    digests = Counter(digest for _at, digest in sends or () if digest)
+    proven = set()
+    for row in rows:
+        digest = attribution.prompt_digest(row.get("text"))
+        if digests[digest] > 0:
+            digests[digest] -= 1
+            proven.add(row.get("line"))
+    # The first row is excluded here: that is where a dispatched prompt lands.
+    legacy = [
+        (_parse_ts(e.get("ts")), e.get("line")) for e in rows
+        if e.get("turn_origin") == "sdk" and e is not users[0] and e.get("line") not in proven
+    ]
+    for at, digest in sends or ():
+        if digest:
+            continue
+        near = [
+            (ts - at, line) for ts, line in legacy
+            if ts is not None and line not in proven
+            and -_LEGACY_JOIN_BEFORE_S <= ts - at <= _LEGACY_JOIN_AFTER_S
+        ]
+        if near:
+            proven.add(min(near, key=lambda item: abs(item[0]))[1])
+    return proven
+
+
+def _check_origin(events, engine: str, proven) -> None:
+    """Refuse a session holding chat messages, or one nobody can vouch for.
+
+    Dropping the rows would not be enough: the replies answer those people,
+    and quote them.
+    """
+    hermes = str(engine or "").lower() == "hermes"
+    scripted = vouched = False
+    for event in events or ():
+        kind = event.get("type")
+        if kind not in ("user_text", "assistant"):
+            continue
+        text = str(event.get("text") or "")
+        if kind == "user_text" and (
+            event.get("origin_kind") == "channel" or _CHANNEL_ROW_RE.match(text)
+            or _RELAY_ROW_RE.search(text[:600])
+        ):
+            raise ChatBridgeSession("chat bridge message")
+        if "source_platform" not in event:
+            if hermes and not event.get("subtype"):
+                raise ChatBridgeSession("Hermes row with no source")
+            continue
+        source = event.get("source_platform")
+        if source == _HERMES_SCRIPTED_SOURCE:
+            scripted = True
+        elif source != _HERMES_TYPED_SOURCE:
+            raise ChatBridgeSession(f"Hermes source: {source or 'unknown'}")
+        if kind != "user_text" or source == _HERMES_TYPED_SOURCE or not _is_clean_row(event):
+            continue
+        if event.get("line") not in proven:
+            raise ChatBridgeSession("Hermes prompt with no dashboard send")
+        vouched = True
+    if scripted and not vouched:
+        raise ChatBridgeSession("Hermes script run")
+
+
 def _typed_text(event: dict) -> str:
-    """The prompt without the open tabs and selection an IDE sends with it."""
+    """The prompt without the open tabs and selection an IDE sends with it.
+
+    The real request is the last marker: a selection can hold the same line.
+    """
     text = str(event.get("text") or "")
     if text.lstrip().startswith("# Context from my IDE setup"):
-        request = _IDE_REQUEST_RE.search(text)
-        return text[request.end():] if request else ""
+        requests = list(_IDE_REQUEST_RE.finditer(text))
+        return text[requests[-1].end():] if requests else ""
     return text
 
 
@@ -338,7 +457,11 @@ def _is_agent_reply(event: dict) -> bool:
     """
     if any(event.get(k) for k in ("is_sidechain", "subagent_report", "subtype", "actor")):
         return False
-    return not str(event.get("message_id") or "").startswith("local-cmd-")
+    # Aider and the Antigravity CLI log are whole console captures, so they
+    # hold tool output as well as the reply.
+    return not str(event.get("message_id") or "").startswith(
+        ("local-cmd-", "aider-", "antigravity-cli-")
+    )
 
 
 def _public_model(model: str, redactor: Redactor) -> str:
@@ -361,9 +484,14 @@ def _public_engine(engine, redactor: Redactor) -> str:
     return "Coding agent" if redactor.is_hidden(label) else label
 
 
-def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title="") -> tuple:
-    """Return (replay, redactor). Raises RedactionError on a verify failure."""
+def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title="", sends=()) -> tuple:
+    """Return (replay, redactor). Raises RedactionError on a verify failure.
+
+    `sends` is `sender_envelope.human_sends` for this session.
+    """
     identity = identity or {}
+    proven = _proven_rows(events, sends)
+    _check_origin(events, engine, proven)
     redactor = Redactor(
         identity=list(identity.get("people") or ()),
         phrases=list(identity.get("projects") or ()),
@@ -396,7 +524,7 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
         at = int(ts - first_ts) if ts is not None and first_ts is not None else None
         kind = event.get("type")
         if kind == "user_text":
-            if not _is_typed_prompt(event):
+            if not _is_typed_prompt(event, proven):
                 continue
             text = redactor.text(_typed_text(event), MAX_PROMPT_CHARS)
             if not text:
@@ -733,6 +861,18 @@ def survivors(replay: dict) -> list:
     return [{"word": w, "count": n} for w, n in ranked[:_SURVIVOR_CAP]]
 
 
+def _months_of(events) -> list:
+    """'YYYY-MM' for each UTC month a session spans, newest last."""
+    stamps = [t for t in (_parse_ts(e.get("ts")) for e in events) if t is not None]
+    if not stamps:
+        return []
+    first = datetime.fromtimestamp(min(stamps), timezone.utc)
+    last = datetime.fromtimestamp(max(stamps), timezone.utc)
+    start = first.year * 12 + first.month - 1
+    end = last.year * 12 + last.month - 1
+    return [f"{m // 12:04d}-{m % 12 + 1:02d}" for m in range(max(start, end - MAX_MONTHS + 1), end + 1)]
+
+
 def export_conversation(conversation_id, *, parse, transcript_path, engine="",
                         hide=(), keep=(), title="", cwd="") -> tuple:
     """(payload, status) for GET /api/conversations/<id>/share.
@@ -751,7 +891,15 @@ def export_conversation(conversation_id, *, parse, transcript_path, engine="",
         replay, _redactor = build_replay(
             events, engine=engine or parsed.get("engine") or "", identity=identity,
             hide=hide, keep=keep, title=title,
+            sends=attribution.human_sends(conversation_id, _months_of(events)),
         )
+    except ChatBridgeSession as exc:
+        return {
+            "ok": False,
+            "error": "This session can't be shared: CCC can't prove you wrote its messages. "
+                     "Chat bridge, scheduled and scripted sessions stay private.",
+            "detail": str(exc),
+        }, 422
     except RedactionError as exc:
         return {
             "ok": False,

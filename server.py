@@ -29064,6 +29064,9 @@ def _parse_conversation_event_unattributed(ev, line_num):
                 out_ev["turn_origin"] = ev.get("turnOrigin")
             if ev.get("wakeupSource"):
                 out_ev["turn_origin"] = "scheduled"
+            origin = ev.get("origin")
+            if isinstance(origin, dict) and origin.get("kind"):
+                out_ev["origin_kind"] = str(origin["kind"])
             from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
             if is_compaction_bookkeeping(ev):
                 out_ev["bookkeeping"] = True
@@ -34723,6 +34726,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _is_dashboard_composer(self, payload):
+        """True for a send from the dashboard's own composer form."""
+        return (payload.get("composer_form") == "ccc-composer-v1"
+                and bool(self.headers.get("Origin"))
+                and (self.headers.get("X-CCC-Automated") or "").strip().lower() != "true")
+
+    def _note_typed_spawn(self, payload, result):
+        """Record a first prompt typed in the dashboard, so Share can prove it."""
+        sid = result.get("session_id")
+        if sid and self._is_dashboard_composer(payload):
+            typed = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
+            _attribution.journal(_attribution.dashboard_human(sid, typed), app="ccc", event="spawn")
+
     def _extract_spawned_via(self):
         """Detect how a spawn request arrived at CCC (cli, ui-automated, ui, or api)."""
         ua = (self.headers.get("User-Agent") or "").strip()
@@ -39463,6 +39479,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                         if spawn_runtime:
                             result["runtime"] = spawn_runtime
                             # Worker-routed spawns stamp marker+registry inside
@@ -39639,6 +39656,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     # Resolver-side failures (binary not found, CCC_CODEX_BIN
                     # misconfigured) carry a stable `"code": "codex_unavailable"`
                     # so the frontend can render an install hint without
@@ -39711,6 +39729,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("gemini_unavailable", "gemini_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -39781,6 +39800,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("cursor_unavailable", "cursor_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -39851,6 +39871,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("antigravity_unavailable", "antigravity_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -39921,6 +39942,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("kilo_unavailable", "kilo_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -39995,6 +40017,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                         if _oc_runtime:
                             result["runtime"] = _oc_runtime
                             _sid = result.get("session_id")
@@ -40052,6 +40075,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("kimi_spawn_failed", "not_installed"):
                         self.send_json(result, 503)
                     else:
@@ -40093,6 +40117,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("grok_spawn_failed", "not_installed"):
                         self.send_json(result, 503)
                     else:
@@ -40163,6 +40188,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("hermes_unavailable", "hermes_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -40183,6 +40209,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not text:
                 self.send_json({"ok": False, "error": "missing text"})
             else:
+                if self._is_dashboard_composer(payload):
+                    # The placeholder card's send: same proof as /api/inject-input.
+                    entry = next((s for s in _spawned_sessions if s.get("pid") == pid), {})
+                    if entry.get("session_id"):
+                        _attribution.journal(
+                            _attribution.dashboard_human(entry["session_id"], text),
+                            app="ccc", event="inject",
+                        )
                 routed = _control_plane_engine_call(
                     "claude", "inject_pid", {"pid": pid, "text": text},
                     idempotency_key=payload.get("idempotency_key"),
@@ -42552,14 +42586,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         str(payload.get("source") or "").strip()
                         or _inject_source_for_request(announced_from, inject_options["wt_origin"])
                     )
-                    browser_composer = (
-                        source == "composer" and payload.get("composer_form") == "ccc-composer-v1"
-                        and bool(self.headers.get("Origin"))
-                    )
+                    browser_composer = source == "composer" and self._is_dashboard_composer(payload)
                     if source == "composer" and not browser_composer:
                         source = "api"
                     try:
-                        inject_options["attr"] = _attribution.request_attr(payload, continuation_origin, browser_composer=browser_composer)
+                        inject_options["attr"] = _attribution.request_attr(
+                            payload, continuation_origin, browser_composer=browser_composer,
+                            typed_text=queued_text if browser_composer else None,
+                        )
                     except ValueError as exc:
                         self.send_json({"ok": False, "error": str(exc)}, 400)
                         return
@@ -47337,7 +47371,9 @@ def _imessage_relay_fetch_new_messages(since_unix: int):
 def _imessage_relay_inject(text: str) -> None:
     """Inject text into the relay session via the local CCC inject-input API."""
     try:
-        payload = json.dumps({"session_id": _IMESSAGE_RELAY_SESSION_ID, "text": text}).encode()
+        payload = json.dumps({
+            "session_id": _IMESSAGE_RELAY_SESSION_ID, "text": text, "source": "imessage-relay",
+        }).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{PORT}/api/inject-input",
             data=payload,

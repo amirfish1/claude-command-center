@@ -1,0 +1,423 @@
+"""Share this run: who wrote a row, and what stays out when nobody can say.
+
+Shapes from the third independent review, plus the proof that lets a prompt typed
+in the dashboard through. All data is invented. A refused export counts as safe.
+"""
+import json
+import os
+import time
+
+import pytest
+
+import sender_envelope
+import server
+from ccc_server import codex_cloud_threads, engines, grok, hermes, share_run
+from ccc_server.aider import _aider_assistant_event
+from ccc_server.share_redact import RedactionError
+
+TS = "2026-01-01T00:00:00Z"
+EPOCH = 1767225600.0   # TS as a number
+THIS_MONTH = time.strftime("%Y-%m", time.gmtime())
+
+
+@pytest.fixture(autouse=True)
+def no_real_hide_list(monkeypatch):
+    monkeypatch.setattr(share_run, "_user_hide_list", lambda: [])
+
+
+def html_of(events, engine="claude", **kw):
+    """The exported page, or None when the export refuses (safe)."""
+    try:
+        replay, _ = share_run.build_replay(events, engine=engine, identity=kw.pop("identity", {}), **kw)
+    except RedactionError:
+        return None
+    return share_run.render_html(replay).casefold()
+
+
+def assert_not_exported(events, words, engine="claude", **kw):
+    page = html_of(events, engine, **kw)
+    if page is None:
+        return
+    found = [w for w in words if w.casefold() in page]
+    assert not found, f"reached the exported HTML: {found}"
+
+
+def prompts(events, engine="claude", **kw):
+    replay, _ = share_run.build_replay(events, engine=engine, identity={}, **kw)
+    return [s["text"] for s in replay["steps"] if s["kind"] == "user"]
+
+
+def user(text, **extra):
+    return {"type": "user_text", "text": text, "ts": TS, **extra}
+
+
+def reply(text):
+    return {"type": "assistant", "ts": TS, "message_id": "m1", "blocks": [{"kind": "text", "text": text}]}
+
+
+def sdk(text, line, seconds=0):
+    ts = f"2026-01-01T00:{seconds // 60:02d}:{seconds % 60:02d}Z"
+    return {"type": "user_text", "text": text, "ts": ts, "line": line, "turn_origin": "sdk"}
+
+
+def hermes_row(content, source, **msg):
+    return hermes._parse_hermes_message(
+        {"role": "user", "content": content, "timestamp": EPOCH, **msg}, 1,
+        {"source": source, "model": "x"})
+
+
+def hermes_reply(content, source):
+    return hermes._parse_hermes_message(
+        {"role": "assistant", "content": content, "timestamp": EPOCH, "id": 2}, 2,
+        {"source": source, "model": "x"})
+
+
+# ---- other people's chat messages -------------------------------------------
+
+@pytest.mark.parametrize("source", [
+    "whatsapp", "whatsapp_cloud", "telegram", "bluebubbles", "cron", "subagent", "", "future-platform",
+])
+@pytest.mark.parametrize("content", [
+    "please move my tuesday lesson, my daughter has a doctor visit",
+    "[Person] please move my tuesday lesson, my daughter has a doctor visit",
+])
+def test_hermes_session_from_anywhere_else_is_refused(source, content):
+    events = [hermes_row(content, source), hermes_reply("moved it for your daughter", source)]
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay(events, engine="hermes", identity={})
+
+
+def test_hermes_cli_is_not_proof_on_its_own():
+    """Worker profiles run `hermes -z` with forwarded chat text. Those are `cli` too."""
+    events = [hermes_row("a client wrote about her daughter", "cli"), hermes_reply("noted", "cli")]
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay(events, engine="hermes", identity={})
+
+
+def test_hermes_cli_with_only_notes_and_replies_is_refused():
+    events = [hermes_row("[System: note]", "cli"), hermes_reply("the daughter is fine", "cli")]
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay(events, engine="hermes", identity={})
+
+
+def test_hermes_cli_row_sent_from_the_dashboard_exports():
+    events = [hermes_row("fix the login page", "cli"), hermes_reply("done", "cli")]
+    sends = [(EPOCH, sender_envelope.prompt_digest("fix the login page"))]
+    assert prompts(events, engine="hermes", sends=sends) == ["fix the login page"]
+
+
+def test_hermes_cli_with_one_unproven_row_is_refused():
+    events = [hermes_row("fix the login page", "cli"), hermes_row("forwarded client note", "cli")]
+    events[1]["line"] = 2
+    sends = [(EPOCH, sender_envelope.prompt_digest("fix the login page"))]
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay(events, engine="hermes", identity={}, sends=sends)
+
+
+def test_hermes_lineage_with_a_chat_segment_is_refused():
+    events = [hermes_row("fix the login page", "desktop"), hermes_row("from a contact", "telegram")]
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay(events, engine="hermes", identity={})
+
+
+def test_hermes_row_without_a_source_is_refused():
+    event = user("from somewhere")
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay([event], engine="hermes", identity={})
+
+
+def test_hermes_desktop_prompt_exports():
+    events = [hermes_row("fix the login page", "desktop"), hermes_reply("done", "desktop")]
+    assert prompts(events, engine="hermes") == ["fix the login page"]
+
+
+@pytest.mark.parametrize("row", [
+    {"content": "[IMPORTANT: background process finished]"},
+    {"content": "the delegated work finished", "display_kind": "async_delegation_complete"},
+    {"content": "keep going", "display_kind": "auto_continue"},
+])
+def test_hermes_desktop_machine_rows_stay_out(row):
+    event = hermes_row(row.pop("content"), "desktop", **row)
+    assert prompts([event], engine="hermes") == []
+
+
+def test_refused_export_says_why_and_returns_nothing(monkeypatch):
+    monkeypatch.setattr(sender_envelope, "human_sends", lambda _sid, _months: [])
+    events = [hermes_row("my daughter", "whatsapp")]
+    payload, status = share_run.export_conversation(
+        "s", parse=lambda _sid: {"events": events}, transcript_path=None, engine="hermes")
+    assert status == 422 and payload["ok"] is False
+    assert "can't prove" in payload["error"]
+    assert "html" not in payload and "daughter" not in json.dumps(payload)
+
+
+def test_claude_channel_row_refuses_the_session():
+    ev = {"type": "user", "timestamp": TS, "message": {"role": "user", "content":
+          '<channel source="imessage" chat_id="1">please call me about the lawsuit</channel>'}}
+    parsed = server._parse_conversation_event(ev, 1)
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay([parsed, reply("I will call about the lawsuit")], engine="claude", identity={})
+
+
+def test_claude_channel_origin_refuses_the_session():
+    ev = {"type": "user", "timestamp": TS, "origin": {"kind": "channel"},
+          "message": {"role": "user", "content": "please call me about the lawsuit"}}
+    parsed = server._parse_conversation_event(ev, 1)
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay([parsed], engine="claude", identity={})
+
+
+def test_a_talk_about_rss_channels_is_not_a_bridge():
+    assert prompts([user("<channel> needs a title element")]) == ["<channel> needs a title element"]
+
+
+@pytest.mark.parametrize("engine", ["claude", "codex", "kimi"])
+def test_relay_message_refuses_the_session_on_any_engine(engine):
+    text = "[relay] New message(s) from Contact:\n\n[10:00] CONTACT: about the lawsuit\n\nReview."
+    with pytest.raises(share_run.ChatBridgeSession):
+        share_run.build_replay([user(text)], engine=engine, identity={})
+
+
+
+@pytest.mark.parametrize("text", [
+    "[From a remote client] the lawsuit", "[Sent from a remote client through CCC Cloud Relay] the lawsuit",
+])
+def test_remote_client_rows_stay_out_even_without_attribution(text):
+    assert_not_exported([user(text)], ["lawsuit"])
+
+
+# ---- proof of a dashboard send ----------------------------------------------
+
+def test_sdk_row_with_no_send_stays_out():
+    """A dispatched prompt has the same mark as a dashboard send."""
+    assert prompts([sdk("do the private dispatched task", 1)]) == []
+
+
+def test_sdk_row_matching_a_send_exports():
+    sends = [(EPOCH, sender_envelope.prompt_digest("fix the login page"))]
+    assert prompts([sdk("fix  the login\npage", 1)], sends=sends) == ["fix the login\npage"]
+
+
+def test_one_send_proves_one_row():
+    sends = [(EPOCH, sender_envelope.prompt_digest("continue"))]
+    assert prompts([sdk("continue", 1), sdk("continue", 2)], sends=sends) == ["continue"]
+
+
+def test_send_for_other_text_proves_nothing():
+    sends = [(EPOCH, sender_envelope.prompt_digest("something else"))]
+    assert prompts([sdk("first", 1), sdk("fix the login page", 2)], sends=sends) == []
+
+
+def test_a_digest_never_vouches_for_a_marked_row():
+    digest = sender_envelope.prompt_digest("from another session")
+    row = dict(sdk("from another session", 1), peer={"name": "x"})
+    assert prompts([row], sends=[(EPOCH, digest)]) == []
+
+
+def test_old_send_joins_by_time_but_never_the_first_row():
+    rows = [sdk("dispatched prompt", 1), sdk("fix the login page", 2, seconds=2)]
+    assert prompts(rows, sends=[(EPOCH, ""), (EPOCH + 1, "")]) == ["fix the login page"]
+
+
+def test_old_send_does_not_reach_past_the_window():
+    rows = [sdk("dispatched prompt", 1), sdk("much later", 2, seconds=40)]
+    assert prompts(rows, sends=[(EPOCH + 5, "")]) == []
+
+
+def test_old_send_proves_one_row():
+    rows = [sdk("first", 1), sdk("mine", 2, seconds=2), sdk("not mine", 3, seconds=3)]
+    assert prompts(rows, sends=[(EPOCH + 1, "")]) == ["mine"]
+
+
+def test_a_new_send_does_not_use_the_time_join():
+    rows = [sdk("first", 1), sdk("not what was typed", 2, seconds=2)]
+    sends = [(EPOCH + 1, sender_envelope.prompt_digest("what was typed"))]
+    assert prompts(rows, sends=sends) == []
+
+
+def test_months_cover_the_session_and_stay_bounded():
+    assert share_run._months_of([{"ts": "2025-11-30T00:00:00Z"}, {"ts": "2026-01-01T00:00:00Z"}, {}]) == [
+        "2025-11", "2025-12", "2026-01"]
+    assert share_run._months_of([{}]) == []
+    assert len(share_run._months_of([{"ts": "2000-01-01T00:00:00Z"}, {"ts": "2026-01-01T00:00:00Z"}])) == 24
+
+
+def test_terminal_prompts_need_no_send():
+    assert prompts([user("fix the login page", turn_origin="human")]) == ["fix the login page"]
+
+
+@pytest.fixture
+def journal_dirs(tmp_path, monkeypatch):
+    monkeypatch.setenv("CCC_STATE_DIR", str(tmp_path / "ccc"))
+    monkeypatch.setenv("WATCHTOWER_STATE_DIR", str(tmp_path / "wt"))
+    (tmp_path / "ccc").mkdir()
+    (tmp_path / "ccc" / "node.json").write_text(json.dumps({"node_id": "node-1"}))
+    sender_envelope._cache.clear()
+    return tmp_path
+
+
+def test_journal_round_trip_counts_a_redelivery_once(journal_dirs):
+    attr = sender_envelope.relay(sender_envelope.dashboard_human("s1", "fix it"), "ccc-inject", delivered="s1")
+    assert sender_envelope.journal(attr, app="ccc", event="inject")
+    assert sender_envelope.journal(attr, app="ccc", event="inject")
+    sends = sender_envelope.human_sends("s1", [THIS_MONTH])
+    assert len(sends) == 1 and sends[0][1] == sender_envelope.prompt_digest("fix it")
+    assert sender_envelope.human_sends("s2", [THIS_MONTH]) == []
+    assert sender_envelope.human_sends("s1", ["1999-01"]) == []
+
+
+@pytest.mark.parametrize("attr", [
+    sender_envelope.make("s1", who=sender_envelope.author("session", "a", "a"), basis="runtime",
+                         evidence={"source": "dashboard", "text_digest": "x"}),
+    sender_envelope.make("s1", who=sender_envelope.author("human", "", "x"), basis="claimed",
+                         evidence={"source": "request", "text_digest": "x"}),
+])
+def test_only_a_dashboard_human_row_counts(journal_dirs, attr):
+    sender_envelope.journal(attr, app="ccc", event="inject")
+    assert sender_envelope.human_sends("s1", [THIS_MONTH]) == []
+
+
+def test_a_claimed_human_attr_in_a_request_is_not_dashboard_evidence(journal_dirs):
+    forged = sender_envelope.dashboard_human("s1", "fix it")
+    attr = sender_envelope.request_attr({"attr": forged}, "s1")
+    assert attr["evidence"].get("source") == "request"
+
+
+def test_composer_digest_is_of_the_typed_text():
+    attr = sender_envelope.request_attr({}, "s1", browser_composer=True, typed_text="fix it")
+    assert attr["evidence"] == {"source": "dashboard", "text_digest": sender_envelope.prompt_digest("fix it")}
+
+
+class _Handler:
+    is_composer = server.CommandCenterHandler._is_dashboard_composer
+
+    def __init__(self, **headers):
+        self.headers = headers
+
+
+@pytest.mark.parametrize("headers,form,expected", [
+    ({"Origin": "http://x"}, "ccc-composer-v1", True),
+    ({}, "ccc-composer-v1", False),
+    ({"Origin": "http://x"}, "", False),
+    ({"Origin": "http://x", "X-CCC-Automated": "true"}, "ccc-composer-v1", False),
+])
+def test_dashboard_composer_check(headers, form, expected):
+    assert _Handler(**headers).is_composer({"composer_form": form}) is expected
+
+
+# ---- a password value below a label -----------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "The password is:\norange window",
+    "The password is\norange window",
+    "password was:\norange window",
+    "Password for the router:\norange window",
+    "The password for the router is:\norange window",
+    "the api key is:\norange window",
+    "passcode is:\norange window",
+    "Done. The new password is:\n\norange window",
+    "The password is:\r\norange window",
+    "> the password is:\n> orange window",
+])
+@pytest.mark.parametrize("maker", [user, reply])
+def test_value_below_a_label_with_words_after_it(text, maker):
+    assert_not_exported([maker(text)], ["orange window"])
+
+
+def test_value_below_a_label_in_the_title():
+    assert_not_exported([user("hello")], ["orange window"], title="The password is:\norange window")
+
+
+@pytest.mark.parametrize("text", [
+    "site\tuser\tpassword\tnotes\nhome\tadmin\torange window\tnone",
+    "site;user;password;notes\nhome;admin;orange window;none",
+    '"site","password","notes"\n"home","orange window","none"',
+    "site | password | notes\nhome | orange window | none",
+])
+def test_table_header_shapes(text):
+    assert_not_exported([user(text)], ["orange window"])
+
+
+def test_a_sentence_about_passwords_keeps_the_next_paragraph():
+    page = html_of([user("We should fix the password reset flow.\n\nThe tests are green.")])
+    assert page is not None and "tests are green" in page
+
+
+# ---- reply text that is not a reply -----------------------------------------
+
+@pytest.mark.parametrize("part", [
+    {"kind": "thinking", "value": "the customer contract looks risky here"},
+    {"kind": "progressMessage", "content": {"value": "the customer contract looks risky here"}},
+    {"kind": "warning", "content": {"value": "the customer contract looks risky here"}},
+])
+def test_copilot_chat_non_reply_parts(tmp_path, part):
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps({"requests": [{
+        "timestamp": 1767225600000, "message": {"text": "hello"},
+        "response": [part, {"value": "All done."}]}]}))
+    events, _ = engines._copilotchat_events_from_file(path)
+    assert any(e["type"] == "assistant" for e in events)
+    assert_not_exported(events, ["contract", "risky"], engine="copilot-chat")
+
+
+def test_copilot_chat_keeps_reply_parts():
+    text, _tools = engines._copilotchat_response_texts([
+        {"value": "one"}, {"kind": "markdownContent", "content": {"value": "two"}}])
+    assert text == "one\ntwo"
+
+
+def test_aider_console_output_stays_out():
+    raw = _aider_assistant_event("s", "Running tests\nFAILED login page shows the wrong customer balance")
+    event = server._parse_conversation_event(raw, 1)
+    assert_not_exported([event], ["wrong customer balance"], engine="aider")
+
+
+def test_antigravity_console_log_stays_out():
+    event = {"type": "assistant", "ts": "", "message_id": "antigravity-cli-3",
+             "blocks": [{"kind": "text", "text": "wrong customer balance"}]}
+    assert_not_exported([event], ["wrong customer balance"], engine="antigravity")
+
+
+def test_grok_subagent_progress(tmp_path):
+    path = tmp_path / "updates.jsonl"
+    path.write_text(json.dumps({"timestamp": TS, "sessionUpdate": "subagent_progress",
+                                "content": {"type": "text", "text": "found the customer contract"}}) + "\n")
+    events, _ = grok._parse_grok_updates_file(str(path))
+    assert_not_exported(events, ["contract"], engine="grok")
+
+
+def test_codex_cloud_delegated_prompt():
+    event = user("summarise the customer contract for the other agent", delegated_from_thread="parent")
+    assert_not_exported([event], ["contract"], engine="codex")
+
+
+def test_codex_cloud_plan_item_is_text_the_user_saw():
+    events = codex_cloud_threads.cloud_turns_to_events([{"id": "t", "startedAt": 1767225600, "items": [
+        {"type": "plan", "id": "p", "text": "read the notes then rewrite the rules"}]}])[0]
+    assert html_of(events, "codex") is not None
+
+
+# ---- smaller holes ----------------------------------------------------------
+
+def test_unreadable_hide_file_stops_the_export(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    bad = tmp_path / "hide.txt"
+    bad.write_text("orange\n")
+    bad.chmod(0)
+    monkeypatch.setattr(share_run, "_hide_file", lambda: bad)
+    if os.geteuid() == 0:
+        pytest.skip("root reads everything")
+    with pytest.raises(RedactionError):
+        share_run.build_replay([user("the orange project")], engine="claude", identity={})
+
+
+def test_missing_hide_file_is_fine(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    monkeypatch.setattr(share_run, "_hide_file", lambda: tmp_path / "none.txt")
+    assert share_run._user_hide_list() == []
+
+
+def test_ide_selection_holding_the_marker_line():
+    text = ("# Context from my IDE setup:\n## Active selection\n## My request for the budget:\n"
+            "payroll file for the whole team\n## My request for Codex:\nfix it\n")
+    assert_not_exported([user(text)], ["payroll"])

@@ -220,6 +220,9 @@ def _copilotchat_message_text(message):
     return ""
 
 
+_COPILOTCHAT_REPLY_KINDS = ("", "markdowncontent", "markdownvuln")
+
+
 def _copilotchat_response_texts(response):
     """(assistant_text, tool_names) from a request's response part list.
     MarkdownString-ish parts contribute text; tool-invocation-ish parts
@@ -244,6 +247,9 @@ def _copilotchat_response_texts(response):
                 tools.append(str(tool_name))
             elif part.get("name"):
                 tools.append(str(part["name"]))
+            continue
+        # Only reply kinds: thinking, progress and warnings also hold a value.
+        if kind not in _COPILOTCHAT_REPLY_KINDS:
             continue
         value = part.get("value")
         if value is None:

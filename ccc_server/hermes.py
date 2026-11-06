@@ -2063,11 +2063,18 @@ def _parse_hermes_message(msg, line_num, session_row=None):
     role = str(msg.get("role") or "").lower()
     ts = _hermes_iso(msg.get("timestamp") or msg.get("created_at"))
     text = _hermes_visible_text(msg.get("content"))
+    # Where the row came from. The same database holds gateway chats, cron and
+    # worker runs, and nothing else on a row tells them apart.
+    source = str((session_row or {}).get("source") or "")
     if role in ("user", "human"):
         if not text:
             text = _hermes_raw_content_text(msg.get("content"))
         if text:
-            return {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": []}
+            event = {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": [],
+                     "source_platform": source}
+            if msg.get("display_kind"):
+                event["hermes_kind"] = str(msg["display_kind"])
+            return event
         return None
     if role == "assistant":
         blocks = []
@@ -2103,6 +2110,7 @@ def _parse_hermes_message(msg, line_num, session_row=None):
                 "type": "assistant",
                 "message_id": f"hermes-{msg.get('id') or line_num}",
                 "blocks": blocks,
+                "source_platform": source,
             }
             model = (session_row or {}).get("model")
             if model:

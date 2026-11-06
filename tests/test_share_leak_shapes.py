@@ -327,7 +327,8 @@ def test_leak_s1_hermes_private_planning():
     events = [{"ts": TS, "type": "assistant", "subtype": "hermes_pending_planning",
                "source_platform": "whatsapp", "text": "plan about the orange lawsuit",
                "blocks": [{"kind": "text", "text": "plan about the orange lawsuit"}]}]
-    assert "lawsuit" not in page_text(replay_of(events, engine="hermes"))
+    with pytest.raises(share_run.ChatBridgeSession):
+        replay_of(events, engine="hermes")
 
 
 # ---------------------------------------------------------------------------

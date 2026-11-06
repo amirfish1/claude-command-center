@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import copy
 import contextvars
+import hashlib
 try:
     import fcntl
 except ImportError:  # Windows: append remains available without flock.
@@ -410,6 +411,12 @@ def _journal_add(entry, line, nodes):
         for key in ids:
             if key:
                 entry['aliases'][str(key).removeprefix('⟨wt:').removesuffix('⟩')] = a['message_id']
+        evidence = a['evidence']
+        if a['author']['kind'] == 'human' and evidence.get('source') == 'dashboard':
+            target = (a.get('delivered_recipient') or a['intended_recipient']).get('id')
+            sends = entry['human'].setdefault(str(target or ''), {})
+            sends[a['message_id']] = (float(a.get('created_at') or row.get('at') or 0),
+                                      str(evidence.get('text_digest') or ''))
     except (ValueError, TypeError, KeyError):
         pass
 
@@ -427,7 +434,7 @@ def _journal_index(path, nodes):
         if entry and entry['signature'] == signature:
             return entry
         if not entry or st.st_ino != entry['signature'][0] or st.st_size <= entry['offset']:
-            entry = dict(signature=signature, offset=0, aliases={}, snapshots={})
+            entry = dict(signature=signature, offset=0, aliases={}, snapshots={}, human={})
         with path.open('rb') as f:
             f.seek(entry['offset'])
             blob = f.read()
@@ -471,7 +478,46 @@ def lookup(*, message_id='', transport_id='', text='', recipient=''):
     return None
 
 
-def request_attr(payload, recipient, *, browser_composer=False):
+def prompt_digest(text):
+    """Stable id for typed text. Only the digest is kept, never the words."""
+    flat = ' '.join(str(text or '').split())
+    return hashlib.sha256(flat.encode('utf-8', 'surrogatepass')).hexdigest()[:32]
+
+
+def dashboard_human(recipient, text=None):
+    """A send from the dashboard composer, with a digest of the typed text.
+
+    The human row carries no header into the transcript, so the digest is what
+    later ties a transcript row to this send (see `human_sends`).
+    """
+    evidence = {'source': 'dashboard'}
+    if text is not None:
+        evidence['text_digest'] = prompt_digest(text)
+    return make(recipient, who=author('human', '', 'You (dashboard)'), basis='claimed', evidence=evidence)
+
+
+def human_sends(session_id, months):
+    """[(at, digest)] for each dashboard send to this session, oldest first.
+
+    `months` ('YYYY-MM') are the journal segments the session spans, so the cost
+    follows the session and not the journal's age. One entry per message, however
+    many times it was re-delivered. Sends made before digests were recorded have
+    an empty digest.
+    """
+    ccc_id = _read(_ccc_state() / 'node.json').get('node_id')
+    wt_id = _read(_wt_state() / 'node.json').get('node_id')
+    nodes = [ccc_id or wt_id or ''] + ([wt_id] if wt_id else [])
+    found = {}
+    for month in months:
+        try:
+            path = _ccc_state() / 'attribution' / (month + '.jsonl')
+            found.update(_journal_index(path, nodes)['human'].get(str(session_id), {}))
+        except OSError:
+            continue
+    return sorted(found.values())
+
+
+def request_attr(payload, recipient, *, browser_composer=False, typed_text=None):
     """HTTP claims never become runtime evidence just by naming a source."""
     incoming = payload.get('attr')
     if incoming is not None:
@@ -483,7 +529,7 @@ def request_attr(payload, recipient, *, browser_composer=False):
         attr['evidence'] = {'source': 'request', 'remote_node': attr['author'].get('node', '')}
         return attr
     if browser_composer:
-        return make(recipient, who=author('human', '', 'You (dashboard)'), basis='claimed', evidence={'source': 'dashboard'})
+        return dashboard_human(recipient, typed_text)
     sender = next((payload.get(k) for k in ('peer_sender_sid', 'sender_session_id', 'from_session_id', 'sender_id', 'announced_from') if payload.get(k)), '')
     if sender:
         return make(recipient, who=author('session', sender, sender), basis='claimed', evidence={'source': 'request'})

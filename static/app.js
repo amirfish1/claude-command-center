@@ -22881,7 +22881,8 @@
     // Mirror the existing new-session flow: engine + model + effort, with the
     // server falling back to the persisted spawn defaults for anything
     // omitted (server.py _spawn_request_engine_and_model).
-    const body = { prompt: prompt, engine: engine };
+    // composer_form: the person typed this prompt (Share this run relies on it).
+    const body = { prompt: prompt, engine: engine, composer_form: 'ccc-composer-v1' };
     const model = _simpleModelForEngine(engine);
     if (model) body.model = model;
     if (_simpleComposer.effort && _simpleEffortsForEngine(engine).length) {
@@ -81865,6 +81866,7 @@
           worktree: useWorktree,
         });
         body.idempotency_key = durableActionId('spawn');
+        body.composer_form = 'ccc-composer-v1';
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -82410,7 +82412,7 @@
           res = await fetch('/api/sessions/spawned/' + currentSession.spawnPid + '/inject', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({ text, composer_form: 'ccc-composer-v1' }),
           });
         } else {
           const payload = {
@@ -92930,6 +92932,7 @@
       }), Object.assign({
         timeline_t0_epoch_ms: spawnAskedAt,
         idempotency_key: durableActionId('spawn'),
+        composer_form: 'ccc-composer-v1',
       }, Number.isFinite(autoCompactK) && autoCompactK > 0 ? { auto_compact_k: autoCompactK } : {}));
       if (engine === 'claude') abortBackgroundApiReadsForSpawn();
       // A prewarm reservation boots with paid env - a $0 spawn must not claim it.

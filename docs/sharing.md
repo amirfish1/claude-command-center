@@ -33,10 +33,36 @@ read them before you post them.
 
 | Kept | Left out |
 |------|----------|
-| Text you typed and the agent's replies, redacted | Tool output, tool arguments, local command output, and messages other people sent through a chat bridge |
+| Text you typed and the agent's replies, redacted | Tool output, tool arguments, local command output, and console logs (Aider and the Antigravity CLI export no replies, because their reply is one capture of everything printed) |
 | Tool names and the program a command ran (`pytest`, `git commit`) | Thinking, sub-agent turns and reports, private planning, bookkeeping, IDE selections, hook output, skill text, messages from other sessions, queued messages |
 | Counts: tool calls, files edited, test runs, commits | Timestamps and the session id |
 | Elapsed time | |
+
+## Whose words count as yours
+
+A prompt appears only if CCC can show you wrote it. If it can't, the prompt stays out.
+
+- **Typed in a terminal:** the transcript marks these as yours.
+- **Typed in the dashboard:** the transcript can't tell these from a prompt another
+  agent dispatched, so CCC records a fingerprint of the text when you send it (not
+  the text itself) and the row must match it. The composer, reply chips, and the new
+  session box all count. Prompts that a button writes for you, such as starting a
+  session from an issue, do not.
+- **Sessions from before this was added:** a dashboard message is matched to its
+  transcript row by time instead, within 30 seconds of the send. The first prompt of
+  an older session is never matched this way, so it stays out, and the replay may
+  start with a reply.
+- **Sent by another agent or a script:** left out, even if you asked for it.
+
+Some sessions can't be exported at all, and you get an error instead of a file:
+
+- Any session holding a chat bridge message, such as Telegram, WhatsApp or iMessage,
+  on any engine. Leaving those messages out would not be enough, because the replies
+  answer those people and quote them.
+- Hermes sessions from anywhere but the Hermes desktop app, including cron runs.
+  `hermes` command line sessions export only if every prompt was sent from the CCC
+  dashboard: a script can forward someone else's message into one, and nothing in the
+  session shows the difference.
 
 ## How redaction works
 
@@ -46,8 +72,9 @@ Redaction is always on and there is no switch to turn it off.
   with placeholders such as `[secret]` and `[path]`.
 - **Passwords:** everything after the word `password`, `passphrase`, `passcode` or
   `api key` on that line is hidden, and the words before `is my password` too. If the
-  word ends the line or sits in a table or CSV header, the whole block below it goes,
-  up to the next blank line. So does whatever follows a label such as `secret:` or
+  word ends the line, sits in a table or CSV header, or the line ends in a colon or a
+  word like `is` or `below` (`The password for the router is:`), the whole block below
+  it goes, up to the next blank line. So does whatever follows a label such as `secret:` or
   `token =`, and any word joined to digits, such as `Welcome123` or `Welcome.123`,
   unless it is a known term like `sha256`. A line that only talks about passwords,
   such as `fix the password reset flow`, loses its ending. That is deliberate: no

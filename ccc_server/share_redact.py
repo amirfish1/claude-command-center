@@ -416,7 +416,7 @@ _LABEL_LINE_RE = re.compile(
 )
 # A rule under a heading or table header carries no value: keep looking below it.
 _RULE_LINE_RE = re.compile(r"^[\s|:+=\-_*~#]*$")
-_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$|^[\w .\-]+(?:,[\w .\-]+)+$")
+_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$|^[\w .\-\"']+(?:[,;\t|][\w .\-\"']+)+\r?$")
 # The value comes first: "orange window is my password", "use X as the pin".
 _VALUE_FIRST_RE = re.compile(
     r"(?i)\b(?:is|was|are|were|as)[ \t]+(?:(?:my|the|our|your|his|her|their|a|an|new|old|"
@@ -434,6 +434,11 @@ _CRED_HINTS = (
     "salasana", "haslo", "heslo", "parola", "sifre",
 )
 _NOTHING_LEFT_RE = re.compile(r"[^\w\ue000]*$")
+# Words after a label that still leave the value on the next line: "password
+# is:", "password for the router:", "api key below".
+_LABEL_TAIL_RE = re.compile(
+    r"(?i)(?:[^\n:]{0,80}:|[^\n]{0,80}\b(?:is|was|are|were|below|here|follows))[^\w\ue000]*$"
+)
 # A PIN can be split ("pin 4 8 2 1"), so every digit after the word goes. The
 # verb is the exception: "pin the version to 3.2".
 _PIN_NOUN = (
@@ -1031,7 +1036,8 @@ class Redactor:
                     block, started = True, False
                 continue
             end = min(ends)
-            if _TABLE_ROW_RE.match(line) or _NOTHING_LEFT_RE.fullmatch(line, end):
+            if (_TABLE_ROW_RE.match(line) or _NOTHING_LEFT_RE.fullmatch(line, end)
+                    or _LABEL_TAIL_RE.fullmatch(line, end)):
                 block, started = True, False
             if not _NOTHING_LEFT_RE.fullmatch(line, end):
                 rest = line[end:]

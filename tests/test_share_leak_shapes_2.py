@@ -214,7 +214,8 @@ def test_leak_m6_other_persons_whatsapp_message(server_module):
     line = json.dumps({"event": "upsert", "chatId": "c1@g.us", "fromMe": False, "senderId": "x",
                        "time": 1767225600, "body": "my lawyer called about the lawsuit"})
     event = hermes._hermes_parse_bridge_line(line, 1)
-    assert "lawsuit" not in page_text(replay_of([event], engine="hermes"))
+    with pytest.raises(share_run.ChatBridgeSession):
+        replay_of([event], engine="hermes")
 
 
 def test_leak_m6_pending_request_from_another_person():
@@ -222,7 +223,8 @@ def test_leak_m6_pending_request_from_another_person():
     event = {"ts": TS, "type": "user_text", "subtype": "hermes_pending_request",
              "source_platform": "whatsapp", "sender_name": "x",
              "text": "my lawyer called about the lawsuit"}
-    assert "lawsuit" not in page_text(replay_of([event], engine="hermes"))
+    with pytest.raises(share_run.ChatBridgeSession):
+        replay_of([event], engine="hermes")
 
 
 # ---------------------------------------------------------------------------
