@@ -41219,6 +41219,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             action = 'record' if path.endswith('/answers') else path.rsplit('/', 1)[1]
             result, status = answer_payload(action, self.rfile.read(length))
             self.send_json(result, status)
+        elif path == "/api/decision-inbox/close":
+            from ccc_server.decision_answer_api import MAX_BODY_BYTES
+            from ccc_server.decision_close import close_payload
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                length = 0
+            if not 0 < length <= MAX_BODY_BYTES:
+                self.close_connection = True
+                self.send_json({'ok': False, 'error': 'body_too_large'}, 413)
+                return
+            result, status = close_payload(self.rfile.read(length))
+            self.send_json(result, status)
         elif path == "/api/sessions/old-recaps":
             from ccc_server.session_rechecks import observe
             try:

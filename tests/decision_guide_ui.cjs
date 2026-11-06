@@ -36,7 +36,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       try {
         if (req.method() === 'POST') {
           assert.equal(url.origin,origin);
-          assert.match(url.pathname,/^\/api\/decision-inbox\/answers(?:\/(send|reconcile))?$/);
+          assert.match(url.pathname,/^\/api\/decision-inbox\/(?:answers(?:\/(send|reconcile))?|close)$/);
           posts.push({url:url.pathname, body:JSON.parse(req.postData())});
           return await handler(req);
         }
@@ -93,6 +93,63 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       model.answers_enabled=true; await refresh();
       assert.match(await page.$eval('#guidance',el=>el.textContent),/originating session/); assert.equal(posts.length,0);
       assert.equal(await page.$eval('#answerFields',el=>el.getBoundingClientRect().height),0);
+    });
+    const closed = (req,changes={}) => req.respond({status:200,contentType:'application/json',body:JSON.stringify({ok:true,request_id:id,origin_id:'TASK-1',adapter:'watchtower-block',state:'closed',scope:'source',work_completed:false,...changes})});
+    const closeable = model => { model.requests[0].can_close = true; };
+    await fixture('close needs confirmation, then closes the exact question and shows undo',async ({page,model,posts,refresh,click,wait,idle,selected,setHandler})=>{
+      assert.equal(await page.$eval('#close',el=>el.hidden),true);
+      closeable(model); await refresh();
+      assert.equal(await page.$eval('#close',el=>el.hidden),false);
+      await click('Close…');
+      assert.match(await page.$eval('#closeText',el=>el.textContent),/Close TASK-1 as no longer relevant\? The WatchTower ticket closes and no more work happens\./);
+      assert.equal(await page.evaluate(()=>document.activeElement.id),'closeKeep');
+      assert.equal(posts.length,0);
+      await page.screenshot({path:path.join(screenshots,'guide-close-confirm.png'),fullPage:true});
+      await click('Keep it');
+      assert.equal(await page.$eval('#closeConfirm',el=>el.hidden),true); assert.equal(posts.length,0); assert.equal(await selected(),id);
+      setHandler(async req=>{
+        const stored=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('ccc:decision-guide:v1')));
+        assert.equal(stored.closes[id].idempotency_key,JSON.parse(req.postData()).idempotency_key);
+        return closed(req);
+      });
+      await click('Close…'); await click('Yes, close ticket'); await wait('To undo, run: wt reopen TASK-1'); await idle();
+      assert.equal(posts.length,1); assert.equal(posts[0].url,'/api/decision-inbox/close');
+      assert.deepEqual(Object.keys(posts[0].body).sort(),['expected_revision','idempotency_key','request_id']);
+      assert.equal(posts[0].body.expected_revision,4); assert.equal(await selected(),secondId);
+      await refresh();
+      assert.equal(await page.$$eval('#items button',nodes=>nodes.length),1);
+    });
+    await fixture('a question that changes during confirmation closes nothing',async ({page,model,posts,refresh,click,wait})=>{
+      closeable(model); await refresh(); await click('Close…');
+      model.requests[0]={...model.requests[0],revision:5,body:'A different question'}; await refresh();
+      await wait('This question changed, so nothing was closed.');
+      assert.equal(await page.$eval('#closeConfirm',el=>el.hidden),true); assert.equal(posts.length,0);
+    });
+    await fixture('source conflict keeps the question and says nothing closed',async ({page,model,posts,refresh,click,wait,idle,selected,setHandler})=>{
+      closeable(model); await refresh();
+      setHandler(req=>req.respond({status:409,contentType:'application/json',body:'{"ok":false,"error":"conflict"}'}));
+      await click('Close…'); await click('Yes, close ticket'); await wait('Nothing was closed: this question changed'); await idle();
+      assert.equal(await selected(),id); assert.equal(posts.length,1);
+      assert.deepEqual(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('ccc:decision-guide:v1')).closes),{});
+    });
+    await fixture('lost response retries the same close after reload',async ({page,model,posts,refresh,load,click,wait,idle,selected,setHandler})=>{
+      closeable(model); await refresh();
+      setHandler(req=>req.abort('failed'));
+      await click('Close…'); await click('Yes, close ticket'); await wait('Close not confirmed.'); await idle();
+      assert.equal(await selected(),id);
+      await load(); await wait('Check close');
+      assert.equal(await page.$eval('#close',el=>el.hidden),true);
+      model.requests[0]={...model.requests[0],status:'withdrawn'}; await refresh();
+      assert.equal(await selected(),id);
+      setHandler(closed); await click('Check close'); await wait('To undo, run: wt reopen TASK-1'); await idle();
+      assert.equal(posts.length,2); assert.deepEqual(posts[1].body,posts[0].body);
+    });
+    await fixture('session question is only hidden here',async ({page,model,refresh,click,wait,idle,setHandler})=>{
+      model.requests[0]={...base,adapter:'session-question',reply_supported:true,session_id:id,can_close:true}; await refresh();
+      await click('Hide…');
+      assert.match(await page.$eval('#closeText',el=>el.textContent),/hidden in CCC only/);
+      setHandler(req=>closed(req,{adapter:'session-question',scope:'ccc'}));
+      await click('Yes, hide it'); await wait('Hidden here only.'); await idle();
     });
     await fixture('accepted receipt advances and retains exact transcript',async ({page,posts,click,wait,idle,selected,reply,setHandler,model,refresh,load})=>{
       setHandler(async req=>{

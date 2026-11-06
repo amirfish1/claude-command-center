@@ -6,8 +6,8 @@
   const states = ['pending', 'sending', 'unknown', 'accepted', 'rejected'];
   const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
   const revision = value => Number.isSafeInteger(value) && value > 0;
-  let state = {entries:{}, drafts:{}, seen:[], snapshots:{}, selected:null};
-  let storageReady = true, rows = [], model = null, loading = false, loaded = false, readError = '', active = null;
+  let state = {entries:{}, drafts:{}, seen:[], snapshots:{}, selected:null, closes:{}, closed:{}};
+  let storageReady = true, rows = [], model = null, loading = false, loaded = false, readError = '', active = null, confirming = null;
   const notices = new Map();
   function validAnswer(answer) {
     return answer && uuid(answer.answer_id) && states.includes(answer.state) && typeof answer.text === 'string' && revision(answer.expected_revision);
@@ -26,7 +26,10 @@
       for (const [id, draft] of Object.entries(parsed.drafts)) {
         if (!uuid(id) || typeof draft.text !== 'string' || !revision(draft.revision) || typeof draft.body !== 'string') throw Error('Invalid saved draft');
       }
-      state = parsed;
+      for (const [id, close] of Object.entries(parsed.closes || {})) {
+        if (!uuid(id) || close.request_id !== id || !uuid(close.idempotency_key) || !revision(close.expected_revision)) throw Error('Invalid saved close');
+      }
+      state = {...state, ...parsed};
     }
   } catch (_) { storageReady = false; }
   function persist() {
@@ -48,7 +51,7 @@
   }
   const time = new Intl.DateTimeFormat('en-US', {timeZone:'America/Los_Angeles', year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', timeZoneName:'short'});
   function current() { return rows.find(row => row.request_id === state.selected) || state.snapshots[state.selected]; }
-  function openRows() { return rows.filter(row => row.status === 'open' && row.kind === 'question'
+  function openRows() { return rows.filter(row => row.status === 'open' && row.kind === 'question' && !state.closed[row.request_id]
     && state.entries[row.request_id]?.saved?.state !== 'accepted' && row.answer?.state !== 'accepted'); }
   function supported(row) { return row?.adapter === 'watchtower-block' || (row?.adapter === 'session-question' && row.reply_supported === true); }
   function currentSource(row) { return row?.source_current === true || model?.source_current === true; }
@@ -72,6 +75,13 @@
     if (!row || !supported(row) || row.kind !== 'question' || row.delivery_owner === 'routine') return row?.answer_unavailable_reason || 'This source does not support sending the saved answer here.';
     return '';
   }
+  const definiteRefusals = ['conflict', 'answer_in_progress', 'routine_owned', 'not_found', 'unsupported', 'invalid_request', 'answers_disabled'];
+  function closeGate(row) {
+    if (!storageReady || !model || readError || !row || row.can_close !== true || state.closed[row.request_id] || state.closes[row.request_id]) return 'unavailable';
+    if (state.entries[row.request_id] || !rows.some(r => r.request_id === row.request_id) || row.status !== 'open') return 'unavailable';
+    return uuid(row.request_id) && revision(row.revision) ? '' : 'unavailable';
+  }
+  function closesTicket(row) { return row?.adapter === 'watchtower-block'; }
   function revealCurrent() {
     $('current').scrollIntoView({block:'start', behavior:'auto'});
   }
@@ -133,6 +143,7 @@
     }
     if (row.episode_provenance) card.append(el('p', 'Episode initialized at this time; historical block time is unknown.', 'meta'));
     card.append(el('div', row.body, 'raw'));
+    if (state.closed[row.request_id]) card.append(el('p', state.closed[row.request_id], 'receipt accepted'));
     if (entry) {
       const reply = el('div', '', 'reply'); reply.append(el('span', 'Your answer', 'speaker'), el('span', entry.payload.text)); card.append(reply);
       card.append(el('p', status(entry), 'receipt ' + (entry.saved?.state || '')));
@@ -145,6 +156,11 @@
   function render() {
     const focused = document.activeElement === $('answer'), selection = [$('answer').selectionStart, $('answer').selectionEnd];
     const row = current(), id = row?.request_id, entry = state.entries[id], draft = state.drafts[id];
+    if (confirming && (confirming.id !== id || closeGate(row) || confirming.revision !== row.revision)) {
+      // The confirmation named one exact question; never carry it to another.
+      if (confirming.id === id) notices.set(id, 'This question changed, so nothing was closed. Review it before closing.');
+      confirming = null;
+    }
     $('composer').setAttribute('aria-busy', String(active !== null));
     $('refresh').disabled = loading;
     const verified = model?.source_current === true && !readError && Number.isSafeInteger(model.needs_answer_count) && model.needs_answer_count >= 0;
@@ -184,7 +200,7 @@
     $('answer').disabled = !row || !!entry || !!reason || active !== null;
     $('send').disabled = !row || !!entry || !!reason || !!changed || !draft?.text.trim() || active !== null;
     $('skip').disabled = active !== null || !row || openRows().length === 0;
-    $('guidance').textContent = active === id ? status(entry) : reason || (entry ? status(entry) : changed ? 'The question changed while you were drafting. Review the current question before rebinding your retained draft.' : 'Send answer records this exact text, then sends that frozen answer. No automatic retries.');
+    $('guidance').textContent = active === id ? (entry ? status(entry) : 'Closing…') : reason || (entry ? status(entry) : changed ? 'The question changed while you were drafting. Review the current question before rebinding your retained draft.' : 'Send answer records this exact text, then sends that frozen answer. No automatic retries.');
     if (draft && changed && !entry) {
       const previous = el('details',''); previous.append(el('summary','Question this draft was written for'),el('div',draft.body,'raw')); $('current').append(previous);
       recovery('Use draft for current question', () => {
@@ -195,6 +211,17 @@
     if (entry && !entry.saved) recovery('Retry saving same answer', () => act('record', id), !!reason);
     if (entry?.saved?.state === 'pending') recovery('Send saved answer', () => act('send', id), !!reason);
     if (entry?.saved && ['unknown','sending'].includes(entry.saved.state)) recovery('Check delivery', () => act('reconcile', id), !storageReady || model?.answers_enabled !== true);
+    if (state.closes[id]) recovery('Check close', () => closeAct(id));
+    const closeBlocked = !!closeGate(row);
+    $('close').hidden = closeBlocked || !!confirming;
+    $('close').disabled = active !== null;
+    $('close').textContent = closesTicket(row) ? 'Close…' : 'Hide…';
+    $('closeConfirm').hidden = !confirming;
+    if (confirming) {
+      $('closeText').textContent = closesTicket(row) ? `Close ${row.origin_id} as no longer relevant? The WatchTower ticket closes and no more work happens.` : 'Hide this question here? It is hidden in CCC only; its session keeps the question and nothing is sent.';
+      $('closeYes').textContent = closesTicket(row) ? 'Yes, close ticket' : 'Yes, hide it';
+      $('closeYes').disabled = $('closeKeep').disabled = active !== null;
+    }
     if (notices.has(id)) $('current').append(el('p', notices.get(id), 'warning'));
     if (focused && !$('answer').disabled) { $('answer').focus({preventScroll:true}); $('answer').setSelectionRange(...selection); }
   }
@@ -254,6 +281,38 @@
       notices.set(id, (phase === 'record' ? 'Save not confirmed. Retry saving the same answer; do not create a new payload. ' : 'Delivery not confirmed. Use Check delivery; do not resend. ') + error.message);
     } finally { active = null; render(); if (advanced) revealCurrent(); }
   }
+  async function closeAct(id) {
+    if (active) return;
+    let close = state.closes[id];
+    if (!close) {
+      const row = current();
+      if (!confirming || confirming.id !== id || closeGate(row)) return;
+      close = {request_id:id, expected_revision:confirming.revision, idempotency_key:newKey()};
+      state.closes[id] = close; state.snapshots[id] = {...row};
+    }
+    // The key is durable BEFORE the request, so a lost response replays it.
+    if (!persist()) { delete state.closes[id]; confirming = null; notices.set(id, 'Recovery storage unavailable. Nothing was closed.'); render(); return; }
+    active = id; confirming = null; notices.delete(id); render();
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 70000);
+    let advanced = false;
+    try {
+      const response = await fetch('/api/decision-inbox/close', {method:'POST', headers:{'Content-Type':'application/json'}, signal:controller.signal, body:JSON.stringify(close)});
+      const data = await response.json();
+      if (definiteRefusals.includes(data.error)) {
+        delete state.closes[id]; persist();
+        notices.set(id, data.error === 'answer_in_progress' ? 'Nothing was closed: an answer to this question is saved or on its way.' : data.error === 'conflict' ? 'Nothing was closed: this question changed or already ended at the source.' : 'Nothing was closed: this source cannot close the question here.');
+      } else if (data.ok === true && data.state === 'closed' && data.request_id === id) {
+        const ref = data.origin_id || id;
+        state.closed[id] = data.scope === 'source' ? `Closed ${ref}. No more work will happen. To undo, run: wt reopen ${ref}` : 'Hidden here only. The originating session still has this question.';
+        delete state.closes[id]; delete state.drafts[id];
+        if (!state.seen.includes(id)) state.seen.push(id);
+        persist();
+        if (state.selected === id) { next(false); advanced = true; }
+      } else throw Error('The source did not confirm it');
+    } catch (error) {
+      notices.set(id, 'Close not confirmed. Use Check close; it repeats this same close and cannot close anything else.');
+    } finally { clearTimeout(timer); active = null; render(); if (advanced) { revealCurrent(); refresh(); } }
+  }
   async function refresh() {
     if (loading) return;
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 30000);
@@ -269,7 +328,7 @@
       // Confirmed answers belong in history. Keep drafts and uncertain deliveries
       // selected for recovery; a disappearing question is not an answer receipt.
       if (entry?.saved?.state === 'accepted'
-          || (!entry && !state.drafts[state.selected] && (!selected || selected.status !== 'open'))) {
+          || (!entry && !state.closes[state.selected] && !state.drafts[state.selected] && (!selected || selected.status !== 'open'))) {
         next(entry?.saved?.state === 'accepted');
       } else if (!state.selected) {
         const first = openRows().find(r => state.entries[r.request_id]?.saved?.state !== 'accepted');
@@ -293,6 +352,12 @@
   };
   $('composer').onsubmit = event => { event.preventDefault(); if (!$('send').disabled) act('record', state.selected, true); };
   $('skip').onclick = () => next(); $('refresh').onclick = refresh;
+  $('close').onclick = () => {
+    const row = current(); if (active || closeGate(row)) return;
+    confirming = {id:row.request_id, revision:row.revision}; notices.delete(row.request_id); render(); $('closeKeep').focus({preventScroll:true});
+  };
+  $('closeKeep').onclick = () => { confirming = null; render(); };
+  $('closeYes').onclick = () => { if (confirming) closeAct(confirming.id); };
   function refreshVisible() {
     if (document.hidden || active !== null) return;
     // A retained sidebar iframe is still a visible document while its frame is

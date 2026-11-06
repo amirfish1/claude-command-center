@@ -25,9 +25,13 @@
       </div>
       <p id="guidance" class="meta">Checking source before answering.</p>
       <div id="recovery" class="actions"></div>
-      <div class="actions"><button id="send" class="primary" type="submit" hidden disabled>Send answer</button><button id="skip" type="button" disabled>Skip / next</button></div>
+      <div id="closeConfirm" class="close-confirm" role="group" aria-labelledby="closeText" hidden>
+        <p id="closeText"></p>
+        <div class="actions"><button id="closeYes" class="danger" type="button"></button><button id="closeKeep" type="button">Keep it</button></div>
+      </div>
+      <div class="actions"><button id="send" class="primary" type="submit" hidden disabled>Send answer</button><button id="skip" type="button" disabled>Skip / next</button><button id="close" type="button" hidden>Close…</button></div>
     </form>
-    <p class="meta footnote">Skipping only defers a question here. Source acceptance confirms delivery, not completion of the work.</p>
+    <p class="meta footnote">Skipping only defers a question here. Closing asks you to confirm first. Source acceptance confirms delivery, not completion of the work.</p>
   </main>
 </body>
 </html>

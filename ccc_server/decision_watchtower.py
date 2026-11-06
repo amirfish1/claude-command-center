@@ -82,3 +82,47 @@ class WatchTowerAnswers:
         if code == 1 and isinstance(payload, dict) and payload.get('error') == 'not_found':
             return dict(status='not_found', authoritative=True, answer_id=row['answer_id'])
         return self._receipt(row, payload) if code == 0 else dict(status='unknown')
+
+
+class WatchTowerCloses:
+    """Close the exact observed owner question; no worker is woken."""
+
+    def __init__(self, executable, *, runner=None):
+        self.executable = executable
+        self.runner = runner or subprocess.run
+
+    @staticmethod
+    def _request(record, key, reason):
+        snapshot = record['content'].get('source_snapshot')
+        if (record.get('adapter') != 'watchtower-block' or not isinstance(snapshot, dict)
+                or not snapshot.get('blocked_at') or not snapshot.get('store_id')
+                or snapshot.get('wait_kind') != 'owner'
+                or 'block_question' not in snapshot or 'wait' not in snapshot):
+            raise ValueError('Exact owner question source snapshot required')
+        return dict(idempotency_key=key, reason=reason, by='owner',
+                    expected_blocked_at=snapshot['blocked_at'],
+                    expected_block_question=snapshot['block_question'],
+                    expected_wait_kind=snapshot['wait_kind'], expected_wait=snapshot['wait'],
+                    expected_store_id=snapshot['store_id'])
+
+    def close(self, record, key, reason):
+        request = self._request(record, key, reason)
+        ref = record['origin_id']
+        result = self.runner([self.executable, 'close-conditional', ref, '--request-json',
+                              json.dumps(request, sort_keys=True)],
+                             capture_output=True, text=True, timeout=60)
+        try:
+            payload = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            payload = None
+        if result.returncode == 2:
+            if isinstance(payload, dict) and payload.get('error') in ('conflict', 'invalid_request', 'unsupported'):
+                return dict(status='rejected', reason=payload['error'])
+            if payload is None:
+                # Argument parsing failed: this wt predates the command.
+                return dict(status='rejected', reason='unsupported')
+        if (result.returncode == 0 and isinstance(payload, dict) and payload.get('version') == 1
+                and payload.get('accepted') is True and payload.get('ref') == ref
+                and payload.get('idempotency_key') == key and payload.get('request') == request):
+            return dict(status='accepted', source_receipt=payload)
+        return dict(status='unknown')

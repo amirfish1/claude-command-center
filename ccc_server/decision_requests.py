@@ -9,7 +9,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ccc_server.decision_registry import DecisionRegistry
+from ccc_server.decision_registry import CLOSED_PREFIX, DecisionRegistry
 
 
 def read_requests(database, *, answers_enabled=False, source_current=False):
@@ -55,6 +55,8 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
                 observed_at = content.get('created_at') or ''
             else:
                 continue  # Reviews/providers need their own complete source contract.
+            if CLOSED_PREFIX + record['request_id'] in metadata:
+                record['status'] = 'closed'  # The owner ended it; refreshes must not revive it.
             needs_answer = (question and record['status'] == 'open'
                             and (record['answer_state'] == 'none' or record['delivery_state'] == 'rejected'))
             delivery_owner = metadata.get('delivery_owner:' + record['request_id'])
@@ -66,6 +68,8 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
             can_answer = bool(answers_enabled and current_source and needs_answer
                               and (record['adapter'] == 'watchtower-block' or promoted)
                               and delivery_owner in (None, 'ccc-outbox'))
+            can_close = bool(answers_enabled and current_source and needs_answer
+                             and delivery_owner in (None, 'ccc-outbox'))
             if not answers_enabled:
                 unavailable_reason = 'Source answers are not enabled in this phase.'
             elif delivery_owner == 'routine':
@@ -87,7 +91,7 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
                 answer_state=record['answer_state'], delivery_state=record['delivery_state'],
                 delivery_owner=delivery_owner, answer=answers.get(record['request_id']),
                 source_current=bool(current_source), reply_supported=bool(not session_source or promoted),
-                needs_answer=needs_answer, observed_at=observed_at, can_answer=can_answer,
+                needs_answer=needs_answer, observed_at=observed_at, can_answer=can_answer, can_close=can_close,
                 answer_unavailable_reason=unavailable_reason))
         return result
     finally:

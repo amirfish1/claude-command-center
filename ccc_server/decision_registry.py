@@ -21,6 +21,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
+CLOSED_PREFIX = 'closed:'
+
+
 def _json(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False)
 
@@ -257,6 +260,46 @@ class DecisionRegistry:
                 "SELECT * FROM requests ORDER BY adapter, origin_id, generation")]
         finally:
             db.close()
+
+    def _metadata(self, key):
+        db = sqlite3.connect(str(self.db_path), timeout=self.timeout)
+        try:
+            row = db.execute('SELECT value FROM metadata WHERE key=?', (key,)).fetchone()
+            return row[0] if row else None
+        finally:
+            db.close()
+
+    def get_request(self, request_id):
+        db = sqlite3.connect(str(self.db_path), timeout=self.timeout)
+        db.row_factory = sqlite3.Row
+        try:
+            row = db.execute('SELECT * FROM requests WHERE request_id=?', (request_id,)).fetchone()
+            return self._record(row) if row else None
+        finally:
+            db.close()
+
+    def delivery_owner(self, request_id):
+        return self._metadata('delivery_owner:' + request_id)
+
+    def closed_marker(self, request_id):
+        value = self._metadata(CLOSED_PREFIX + request_id)
+        return json.loads(value) if value else None
+
+    def mark_closed(self, request_id, marker, *, expected_revision=None):
+        """Record an owner close. It outlives source refreshes because a request
+        id is one generation, and a new generation is a new question.
+
+        With expected_revision this only closes that exact open row, and
+        returns False otherwise.
+        """
+        with self._transaction() as db:
+            if expected_revision is not None and not db.execute(
+                    "SELECT 1 FROM requests WHERE request_id=? AND revision=? AND status='open'",
+                    (request_id, expected_revision)).fetchone():
+                return False
+            db.execute('INSERT OR IGNORE INTO metadata VALUES (?,?)',
+                       (CLOSED_PREFIX + request_id, _json(marker)))
+        return True
 
     def source_scope(self, adapter):
         db = sqlite3.connect(str(self.db_path), timeout=self.timeout)
