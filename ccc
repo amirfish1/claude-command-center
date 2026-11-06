@@ -36,6 +36,9 @@ command, without opening the dashboard:
     ccc brief <session>                         # where a session left off + how to resume it
     ccc where <session|query>                   # plain-language status + human checklist + continue
 
+    ccc share <session>                         # redacted replay page + card, saved locally
+    ccc share --stats                           # this week's totals as a card, saved locally
+
     ccc consent                                 # what CCC may write into your agent config
     ccc consent show <item>                     # exact diff for one item
     ccc consent approve <item...|all>           # or: decline / revoke <item...|all>
@@ -856,6 +859,63 @@ def _brief_link_text(link):
     title = f' "{link["title"]}"' if link.get("title") else ""
     also = f" (also on {', '.join(link['also_on'])})" if link.get("also_on") else ""
     return f"{tag}{sid}{title}{also}"
+
+
+def _share_targets(out, files):
+    """Map export files to paths; ``--out x.html`` names them, others are dirs."""
+    stem, ext = os.path.splitext(out)
+    if ext.lower() in (".html", ".svg"):
+        return {stem + os.path.splitext(name)[1]: body for name, body in files.items()}
+    return {os.path.join(out, name): body for name, body in files.items()}
+
+
+def cmd_share(args):
+    """Save a redacted replay or stats card. Nothing leaves this machine."""
+    base = _resolve_server(args.server)
+    if not base:
+        print(f"ccc: no server found — is CCC running? (looked for --server, $CCC_SERVER, {PORT_FILE})",
+              file=sys.stderr)
+        return 1
+    out_dir = os.path.expanduser(args.out)
+    try:
+        if args.stats:
+            payload = _get_json(base, f"/api/share/stats?days={args.days}", timeout=30)
+            if payload.get("pending"):
+                print("ccc share: the numbers are still being counted; try again in a minute", file=sys.stderr)
+                return 1
+            files = {"my-agent-week.svg": payload["svg"]}
+        else:
+            if not args.target:
+                print("ccc share: name a session, or use --stats", file=sys.stderr)
+                return 2
+            sid, err = _resolve_target(base, args.target)
+            if err:
+                print(f"ccc share: {err}", file=sys.stderr)
+                return 1
+            query = urllib.parse.urlencode({"hide": ",".join(args.hide), "keep": ",".join(args.keep)})
+            payload = _get_json(base, f"/api/conversations/{urllib.parse.quote(sid, safe='')}/share?{query}", timeout=120)
+            if not payload.get("ok"):
+                print(f"ccc share: {payload.get('error') or 'export failed'}", file=sys.stderr)
+                return 1
+            files = {"agent-run-replay.html": payload["html"], "agent-run.svg": payload["svg"]}
+            print(payload["hidden_summary"])
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read().decode("utf-8")).get("error")
+        except (ValueError, AttributeError):
+            detail = None
+        print(f"ccc share: {detail or f'export failed (HTTP {e.code})'}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        return 1
+    for path, body in _share_targets(out_dir, files).items():
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        print(path)
+    print("Saved locally. Read it before you share it; nothing was uploaded.")
+    return 0
 
 
 def cmd_brief(args):
@@ -2910,6 +2970,19 @@ def main(argv=None):
     p.add_argument("--scope", choices=("all", "local"), default="all",
                    help="all (default): also ask paired CCC machines; local: this machine only")
     p.set_defaults(func=cmd_history)
+
+    p = sub.add_parser(
+        "share",
+        help="save a redacted replay of a session, or a stats card; nothing is uploaded",
+        description="Writes a redacted replay page and card image to --out. Redaction is always on.",
+    )
+    p.add_argument("target", nargs="?", help="session id, prefix or name")
+    p.add_argument("--stats", action="store_true", help="save the totals-only stats card instead")
+    p.add_argument("--days", type=int, choices=(7, 30), default=7, help="stats card period")
+    p.add_argument("--hide", action="append", default=[], help="extra word or phrase to mask (repeatable)")
+    p.add_argument("--keep", action="append", default=[], help="word the redactor over-masked (repeatable)")
+    p.add_argument("--out", default=".", help="directory, or a .html/.svg file name (default: current directory)")
+    p.set_defaults(func=cmd_share)
 
     p = sub.add_parser("question", help="explicit session question lifecycle (JSON output)")
     qsub = p.add_subparsers(dest="question_command", required=True)

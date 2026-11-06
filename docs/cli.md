@@ -22,6 +22,9 @@ ccc send queue-drain "also update the changelog"   # fire-and-forget
 ccc send <session-id> "stop, wrong branch" --steer # interrupt the turn
 ccc ask queue-drain "what's your status?"          # block for the reply
 
+ccc share <session>       # redacted replay page and image, saved locally
+ccc share --stats         # this week's stats card; see docs/sharing.md
+
 ccc spawn --continue-from <old session> "keep going"       # new session, not a cold resume
 ccc send <old session> "keep going" --new-if-large-and-stale # spawns a continuation only when warranted
 ```

@@ -5507,6 +5507,78 @@ def test_attribution_journal_append_does_not_reread_the_month(monkeypatch, tmp_p
     assert len(rows) == 1
 
 
+def test_share_stats_card_reuses_caches_and_never_walks_sessions(monkeypatch):
+    """The nudge reads this on page load, so it must stay O(1) in sessions."""
+    from ccc_server import share_run
+
+    share_run._stats_cache.clear()
+    calls = {"throughput": 0, "productivity": 0}
+
+    def throughput():
+        calls["throughput"] += 1
+        return {"ok": True, "pending": False, "agents": {"7": 3, "30": 3}, "daily": []}, 200
+
+    def productivity():
+        calls["productivity"] += 1
+        return {"daily": []}, 200
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("stats card walked the filesystem or forked")
+
+    monkeypatch.setattr(Path, "glob", forbidden)
+    monkeypatch.setattr(Path, "rglob", forbidden)
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    monkeypatch.setattr(os, "walk", forbidden)
+    monkeypatch.setattr(os, "scandir", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    for _ in range(50):
+        share_run.stats_card(throughput=throughput, productivity=productivity)
+    assert calls == {"throughput": 1, "productivity": 1}, "warm stats card re-read its sources"
+
+
+def test_share_export_reads_one_session_and_forks_git_once(monkeypatch):
+    """Export cost follows one session, never the whole session store."""
+    from ccc_server import share_run
+
+    share_run._identity_cache.clear()
+    forks = []
+    real_run = subprocess.run
+
+    def counting_run(*args, **kwargs):
+        forks.append(args)
+        return real_run(*args, **kwargs)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("export walked beyond its own session")
+
+    monkeypatch.setattr(subprocess, "run", counting_run)
+    monkeypatch.setattr(Path, "glob", forbidden)
+    monkeypatch.setattr(Path, "rglob", forbidden)
+    monkeypatch.setattr(os, "walk", forbidden)
+    parses = []
+    events = [
+        {"type": "assistant", "ts": "2026-11-05T10:00:00Z", "blocks": [
+            {"kind": "text", "text": "Checked the handler and it works."},
+            {"kind": "tool_use", "name": "Bash", "id": str(i), "command": "pytest"},
+        ]}
+        for i in range(5000)
+    ]
+
+    def parse(session_id):
+        parses.append(session_id)
+        return {"events": events}
+
+    started = time.monotonic()
+    for _ in range(3):
+        payload, status = share_run.export_conversation(
+            "s", parse=parse, transcript_path="", engine="claude",
+        )
+        assert status == 200 and payload["ok"]
+    assert len(parses) == 3
+    assert len(forks) == 1, "identity lookup must be cached, not forked per export or event"
+    assert time.monotonic() - started < 6.0
+
+
 def _small_archive_watch_env(monkeypatch, tmp_path):
     project = tmp_path / "projects" / "-code-app"
     project.mkdir(parents=True)

@@ -3180,14 +3180,20 @@ _THROUGHPUT_SHARE_JOB = {"thread": None}
 def _throughput_share_aggregate(turns_by_engine, now=None):
     """Totals-only daily buckets from {engine: [turn, ...]}.
 
-    Pure function: the only per-turn fields read are numeric usage fields and
-    the end timestamp, so nothing identifying can reach the output.
+    Pure function: the per-turn fields read are numeric usage fields, the end
+    timestamp and the session id. Ids are only counted (``agents``: distinct
+    sessions per window), so nothing identifying can reach the output.
     """
     now = time.time() if now is None else now
     start_day = (datetime.fromtimestamp(now).astimezone()
                  - timedelta(days=_THROUGHPUT_SHARE_DAYS - 1)).strftime("%Y-%m-%d")
     days = {}
     engines_seen = set()
+    today = datetime.fromtimestamp(now).astimezone()
+    agent_windows = {
+        window: ((today - timedelta(days=window - 1)).strftime("%Y-%m-%d"), set())
+        for window in (7, 30)
+    }
     for engine, turns in turns_by_engine.items():
         for t in turns:
             t_end = _stats_parse_ts(t.get("t_end"))
@@ -3196,6 +3202,11 @@ def _throughput_share_aggregate(turns_by_engine, now=None):
             day = t_end.strftime("%Y-%m-%d")
             if day < start_day:
                 continue
+            sid = t.get("session_id")
+            if sid:
+                for window_start, agent_ids in agent_windows.values():
+                    if day >= window_start:
+                        agent_ids.add(sid)
             row = days.get(day)
             if row is None:
                 row = days[day] = {
@@ -3226,6 +3237,7 @@ def _throughput_share_aggregate(turns_by_engine, now=None):
         "days": _THROUGHPUT_SHARE_DAYS,
         "generated_at": now,
         "engines": sorted(engines_seen),
+        "agents": {str(w): len(ids) for w, (_start, ids) in agent_windows.items()},
         "daily": daily,
     }
 

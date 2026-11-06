@@ -156,6 +156,7 @@
   })();
 </script>
 <link rel="stylesheet" href="/static/credential-broker.css">
+<link rel="stylesheet" href="/static/share-run.css">
 <link rel="stylesheet" href="/static/queue-policy.css">
 <link rel="stylesheet" href="/static/voice-setup.css">
 <link rel="stylesheet" href="/static/engine-connection.css">
@@ -1240,6 +1241,7 @@
             <button type="button" class="mobile-actions-item" data-simple-action="font-plus" role="menuitem" aria-label="Bigger text" title="Bigger text">A+</button>
           </div>
           <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem" data-simple-only><span aria-hidden="true">&#9998;&nbsp;</span>Rename task</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="share-run" role="menuitem" hidden><span aria-hidden="true">&#8599;&nbsp;</span>Share this run</button>
           <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem" data-simple-only><span aria-hidden="true">&#128193;&nbsp;</span>Move to project</button>
           <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem" data-simple-only><span aria-hidden="true">&#129302;&nbsp;</span>Change assistant/model</button>
           <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem" data-simple-only><span aria-hidden="true">&#8505;&nbsp;</span>Open technical details</button>
@@ -1313,6 +1315,7 @@
               <button type="button" class="conv-pane-more-item" data-simple-action="archive" role="menuitem" hidden>&#128230; Archive</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="unarchive" role="menuitem" hidden>&#8617; Unarchive</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="untrash" role="menuitem" hidden>&#8617; Untrash</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="share-run" role="menuitem" title="Make a redacted replay of this session. Stays on this machine." hidden>&#8599; Share this run</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="idea-IDEAS" role="menuitem" hidden>&#128161; Move to Features</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="idea-SMALL-BUGS" role="menuitem" hidden>&#128027; Move to Small bugs</button>
               <div data-role="menu-session-info" hidden>
@@ -5303,5 +5306,6 @@
   </button>
 </div>
 <script src="/static/credential-broker.js" defer></script>
+<script src="/static/share-run.js" defer></script>
 </body>
 </html>

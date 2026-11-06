@@ -1,0 +1,1 @@
+- Share this run now hides hosts made of ordinary words and written-out dates with a year, and lists every capitalized word and number still readable beside the preview so you can click to hide them.
