@@ -271,6 +271,14 @@ backends it can use. [Comparisons and scope](docs/features.md#how-it-compares).
 
 <sub>A real share card from one of the maintainer's machines. Yours comes from the throughput page: totals only, no prompts, code, or project names.</sub>
 
+### Share a run
+
+![A redacted run card: the prompt with names replaced by placeholders, plus elapsed time, tool calls, files edited and test runs](docs/images/share-run-example.png)
+
+<sub>Demo data. Open a session's menu and pick **Share this run**, or use `ccc share <session>`. You get a redacted replay page or image as a file; nothing is uploaded. [What is kept and hidden](docs/sharing.md).</sub>
+
+Built something with it? [![Built with CCC](static/built-with-ccc.svg)](docs/sharing.md#the-badge)
+
 ## Recent
 
 v5.43: A shared Decisions inbox with visible source coverage and opt-in answer controls; clearer Active, Needs you, and Finished session groups; consolidated Connections, voice setup, health checks, and customization review. Mobile navigation now reaches the same apps as desktop.
@@ -285,6 +293,7 @@ Choose **Watch > Releases** on GitHub for update notifications.
 - [Full feature guide](docs/features.md) · [Free models](docs/free-models.md) · [Phone access](docs/phone-access.md) · [Realtime voice](docs/realtime-voice.md)
 - [Codex workspace](docs/codex-workspace.md): shared transcripts, live turns, desktop-owned tasks
 - [Bring your own key (BYOK) and Vault](docs/byok-and-vault.md) · [other secrets](docs/byok-and-vault.md#vault-any-other-secret) · [credential requests](docs/credential-broker.md) when an agent needs a password, token or one-time code
+- [Share a run](docs/sharing.md): redacted replay pages, stats cards and the README badge
 - [Decision Inbox](docs/decision-inbox.md): choose the next step for stalled work
 - [Throughput usage database](docs/usage-db.md) and cost comparisons
 - Orchestration: [CLI](docs/cli.md) · [spawn, send, and ask APIs](docs/orchestration.md) · [12-skill pack](skills/README.md). Usage integrations read `GET /api/usage/current`
