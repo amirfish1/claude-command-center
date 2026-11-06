@@ -18336,8 +18336,12 @@
   }
   function syncRowQuickActions(sid) {
     const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
-    document.querySelectorAll(selector).forEach(row => {
-      const rect = row.getBoundingClientRect();
+    // Measure every row before the loop writes: a read after each row's write
+    // forced a layout per row, ~1s of a busy open (CCC-143).
+    const rows = Array.from(document.querySelectorAll(selector));
+    const rects = rows.map(row => row.getBoundingClientRect());
+    rows.forEach((row, rowIndex) => {
+      const rect = rects[rowIndex];
       if (rect.width && rect.height && rect.bottom > 0 && rect.top < innerHeight
           && !_rowQuickActionSending.has(row.dataset.sessionId) && _rowInvestigationChecksInFlight < 4) {
         const base = _ultraFreshRow(row.dataset.sessionId);
@@ -60586,6 +60590,9 @@
   // Longer than this and the network usually wins anyway; a slow disk must
   // never delay the fresh render.
   const CONV_CACHE_READ_BUDGET_MS = 250;
+  // Most reopens get the fresh tail this soon after the click; painting the
+  // saved copy first then only doubles the render (CCC-143).
+  const CONV_CACHE_PAINT_HOLD_MS = 150;
   // conv_open's `ms` stops when the render call returns, before the observers
   // and the frame it triggers, so a page frozen after the render read as fast
   // (CCC-143). paint_ms is click -> first frame after it; a hidden tab paints
@@ -61481,6 +61488,14 @@
           _netP.then(() => null, () => null),
           new Promise(r => setTimeout(() => r(null), CONV_CACHE_READ_BUDGET_MS)),
         ]);
+        const _pvHold = _perfConvOpen
+          ? CONV_CACHE_PAINT_HOLD_MS - (performance.now() - _perfConvOpen.t0) : 0;
+        if (cached && !_netDone && _pvHold > 0) {
+          await Promise.race([
+            _netP.then(() => null, () => null),
+            new Promise(r => setTimeout(r, _pvHold)),
+          ]);
+        }
         const _pv = paneByPaneId(fetchPaneId);
         if (cached && !_netDone && convLastLine === 0 && _pv && _pv.conversationId === id
             && Array.isArray(cached.events) && cached.events.length) {
