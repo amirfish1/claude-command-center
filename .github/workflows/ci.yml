@@ -39,7 +39,7 @@ jobs:
   py-compile:
     name: py-compile (${{ matrix.python }})
     # Linux only: macOS minutes bill 10x and compileall is OS-independent (OPS-1349).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # ubuntu-latest has no Python 3.9
     strategy:
       fail-fast: false
       matrix:
@@ -133,7 +133,7 @@ jobs:
   python39-smoke:
     name: python 3.9 import + boot
     # ubuntu, not macos: 10x billing multiplier (OPS-1349); macOS is covered by macapp-install-smoke.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # ubuntu-latest has no Python 3.9
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

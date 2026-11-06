@@ -28,6 +28,12 @@ dump_failure_logs() {
 cleanup() {
   if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
     kill -TERM "$APP_PID" 2>/dev/null || true
+    # A stuck app must not spend the job's timeout after the real failure.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$APP_PID" 2>/dev/null || break
+      sleep 1
+    done
+    kill -KILL "$APP_PID" 2>/dev/null || true
     wait "$APP_PID" 2>/dev/null || true
   fi
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
