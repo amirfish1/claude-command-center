@@ -25,7 +25,7 @@ function harness({continuous = false, pref = ''} = {}) {
     const _ttsBindChunkCompletion=(u,cb)=>{done=cb;};
     const fgGot={createUrl:()=> 'fg',voice:'Kokoro: af_nova',blob:{},done:Promise.resolve()};
     const _ttsFetchNeural=(text,voice,prio)=>{fetches.push([text,voice,prio]);return Promise.resolve(fgGot);};
-    const _ttsContinuousOk=()=>${continuous};
+    const _ttsContinuousOk=()=>${continuous}, _ttsCanStream=()=>false, _ttsEventLagMs=()=>0;
     const cancelAnimationFrame=()=>{}, requestAnimationFrame=()=>1;
     function Audio(){
       this.duration=Infinity;this.currentTime=0;this.paused=true;
@@ -70,4 +70,12 @@ test('bridge is off for continuous (iPhone) reads and when opted out', () => {
   assert.equal(harness({pref: '0'}).run("_ttsMacBridgeOk([{},{}])"), false);
   assert.equal(harness().run("_ttsMacBridgeOk([{}])"), false);
   assert.equal(harness().run("_ttsMacBridgeOk([{},{}])"), true);
+});
+
+test('bridge makes clip 1 in the voice prepare-ahead chose for the message', async () => {
+  const h = harness();
+  h.run("_ttsHeadCache.set('head',{voice:'Kokoro: bf_alice',p:new Promise(()=>{})})");
+  h.run('_ttsSpeakNextChunk()');
+  await h.flush();
+  assert.deepEqual(JSON.parse(h.run('JSON.stringify(fetches)')), [['rest', 'Kokoro: bf_alice', 'fg']]);
 });

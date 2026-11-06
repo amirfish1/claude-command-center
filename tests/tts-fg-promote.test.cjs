@@ -18,7 +18,7 @@ function harness(entry) {
     const setTtsButtonsState=()=>{}, setTtsButtonsBusy=()=>{}, ttsButtons=()=>[];
     const fgGot={createUrl:()=> 'fg',voice:'Kokoro: af_nova',blob:{},done:Promise.resolve()};
     const _ttsFetchNeural=(text,voice,prio)=>{fetches.push([voice,prio]);return Promise.resolve(fgGot);};
-    const _ttsContinuousOk=()=>false;
+    const _ttsContinuousOk=()=>false, _ttsCanStream=()=>false, _ttsEventLagMs=()=>0;
     const cancelAnimationFrame=()=>{};
     function Audio(){
       this.duration=Infinity;this.currentTime=0;this.paused=true;

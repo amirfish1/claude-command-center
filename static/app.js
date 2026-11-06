@@ -15732,8 +15732,10 @@
     let finished = false, failed = null;
     const clip = { blob: null, done, createUrl: () => {
       if (clip.blob) return URL.createObjectURL(clip.blob);
+      return _ttsStreamUrl(new Response(clip.body()));
+    }, body: () => {
       let listener;
-      const body = new ReadableStream({
+      return new ReadableStream({
         start(controller) {
           for (const chunk of chunks) controller.enqueue(chunk);
           if (failed) { controller.error(failed); return; }
@@ -15743,7 +15745,6 @@
         },
         cancel() { listeners.delete(listener); },
       });
-      return _ttsStreamUrl(new Response(body));
     } };
     (async () => {
       try {
@@ -15772,7 +15773,7 @@
   }
   // Resolves a replayable clip (or a complete blob on non-streaming browsers).
   // prio 'bg' = prepare-ahead: the local voice makes 'fg' (a read being heard) first.
-  function _ttsFetchNeural(text, voice, prio, debugJob) {
+  function _ttsFetchNeural(text, voice, prio, debugJob, signal) {
     const job = debugJob || _ttsDebugJob(text, 'processing', null);
     job.status = 'processing';
     _ttsScheduleCacheDebug();
@@ -15809,6 +15810,7 @@
       // Always the streamed mp3: a browser without MediaSource reads it as one
       // blob, and the server keeps the finished clip for a continuous read.
       body: JSON.stringify({ text, voice: voice || '', stream: true, prio: prio === 'bg' ? 'bg' : 'fg' }),
+      signal,
     }).then(async (res) => {
       if (!res.ok) throw res.status;
       const v = res.headers.get('X-CCC-Voice') || '';
@@ -16002,7 +16004,7 @@
         const now = Date.now();
         stopHighlight();
         trackWord();
-        _ttsPerfStart(state, { engine: 'neural', voice: state.geminiVoice || voice });
+        _ttsPerfStart(state, { engine: 'neural', voice: state.geminiVoice || voice, lagMs: _ttsEventLagMs(audio) });
         if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms (continuous)'); state.t0 = 0; }
         if (waitFrom) {
           _ttsPerfSilence(state, now - waitFrom, 'stall');
@@ -16070,6 +16072,7 @@
       });
       playStream();
     };
+    const sessionT0 = performance.now();
     fetch('/api/free-runtime/tts-session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -16077,12 +16080,14 @@
     }).then(r => r.ok ? r.json() : Promise.reject(r.status)).then((j) => {
       if (stale()) { cancelSession(j && j.id); return; }
       sid = j.id;
+      if (state.perf) state.perf.sessionMs = Math.round(performance.now() - sessionT0);
       _ttsLog('CONT', 'stream ' + clips.length + ' clips from clip ' + from + (hit ? ' (head prepared)' : ''));
       start();
     }).catch((status) => toClips('session ' + status));
   }
   function _ttsSpeakChunkNeural(state, chunk) {
     if (_ttsContinuousOk(state)) { _ttsSpeakContinuous(state); return; }
+    if (_ttsChainOk(state)) { _ttsSpeakChain(state); return; }
     const token = ++_ttsNeuralToken;
     _ttsUtterance = { neural: true };   // keeps the "is a read active" checks true
     const stale = () => token !== _ttsNeuralToken || _ttsChunkState !== state;
@@ -16100,56 +16105,7 @@
       _ttsUtterance = null;
       _ttsSpeakNextChunk();
     };
-    state.prefetch = state.prefetch || {};
-    const ensure = (i) => {
-      const c = state.chunks[i];
-      if (!c || state.prefetch[i]) return;
-      const hit = _ttsHeadCache.get(c.text);
-      let p;
-      if (hit && (!state.geminiVoice || hit.voice === state.geminiVoice)) {
-        // Prepare-ahead makes clips at bg priority, behind every other
-        // message being prepared. A clip the listener now waits on is asked
-        // for again at fg; the voice server shares made pieces, so the bg
-        // request does not repeat the work (CCC-144: cold clicks waited 5-12s
-        // on a bg head).
-        p = !hit.bg || hit.ready ? hit.p : hit.p.then((got) => {
-          if (hit.ready) return got;
-          try { return _ttsFetchNeural(c.text, got.voice, 'fg').catch(() => got); } catch (_) { return got; }
-        });
-        // Prepared blobs remain reusable after playback, seeks and rate changes.
-        try {
-          if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
-            at: Date.now(),
-            text: 'clip ' + i + ' PREPARED ' + (hit.ready ? 'ready' : 'making'),
-            anomaly: !hit.ready,
-            title: 'speaker clip ' + i + ' reused from the prepare-ahead cache (' + (hit.ready ? 'fully made' : 'still generating') + ' at click)',
-          });
-        } catch (_) {}
-      } else {
-        p = _ttsFetchNeural(c.text, state.geminiVoice, 'fg');
-        p.catch(() => {});
-      }
-      state.prefetch[i] = p;
-      // Keep the paint through the handoff from prepare-ahead to playback,
-      // and include clips generated during a read, until they are released.
-      state.debugCache = state.debugCache || new Map();
-      const debugEntry = { debugReady: !!(hit && p === hit.p && hit.debugReady) };
-      state.debugCache.set(c.text, debugEntry);
-      _ttsScheduleCacheDebug();
-      p.then(g => g.done).then(() => {
-        debugEntry.debugReady = true;
-        _ttsScheduleCacheDebug();
-      }).catch(() => {
-        state.debugCache.delete(c.text);
-        _ttsScheduleCacheDebug();
-      });
-      // Once this clip is fully made, the bar's cached end moves past it.
-      p.then((g) => g.done).then(() => {
-        if (_ttsChunkState !== state) return;
-        state.cachedTo = Math.max(state.cachedTo || 0, c.start + c.text.length);
-        _ttsSetPlay();
-      }).catch(() => {});
-    };
+    const ensure = (i) => _ttsEnsureClip(state, i);
     const idx = state.index;
     ensure(idx);
     state.prefetch[idx].then((got) => {
@@ -16276,8 +16232,9 @@
         stopHighlight();
         trackWord();
         _ttsLog('PLAY', 'clip ' + idx + ' (' + chunk.text.length + ' chars)');
-        _ttsPerfStart(state, { engine: 'neural', voice: got.voice });
-        if (state.perf && state.perf.gapT0) { _ttsPerfSilence(state, performance.now() - state.perf.gapT0, 'gap'); state.perf.gapT0 = 0; }
+        const lagMs = _ttsEventLagMs(audio);
+        _ttsPerfStart(state, { engine: 'neural', voice: got.voice, lagMs });
+        if (state.perf && state.perf.gapT0) { _ttsPerfSilence(state, Math.max(0, performance.now() - state.perf.gapT0 - lagMs), 'gap'); state.perf.gapT0 = 0; }
         if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms'); state.t0 = 0; }
         else if (state.gapFrom) { const g = now - state.gapFrom; if (g > 300) _ttsLog('GAP', g + 'ms before clip ' + idx + ' (' + chunk.text.length + ' chars)'); }
         state.gapFrom = 0;
@@ -16297,22 +16254,324 @@
       audio.play().catch((error) => {
         if (stale()) return;
         _ttsLog('ERROR', 'clip ' + idx + ' play rejected: ' + (error?.name || 'unknown'));
-        if (error?.name === 'NotAllowedError') {
-          // Keep the selected ready clip. The next tap can grant permission;
-          // do not silently switch voices or discard its position.
-          _ttsPaused = true;
-          setTtsButtonsBusy(false);
-          if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'paused');
-          ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === state.paneId) btn.classList.add('paused'); });
-          showOpToast('Tap the speaker to resume audio.', 'info');
-          return;
-        }
+        if (error?.name === 'NotAllowedError') { _ttsPlayBlocked(state); return; }
         stopHighlight();
         clearTtsHighlight();
         clearTtsCaption();
         releaseDebug(); fallBack(0);
       });
     }, (status) => { if (!stale()) fallBack(_ttsCoolMs(status)); });
+  }
+
+  // Asks for clip i of a read once; the promise waits in state.prefetch[i].
+  function _ttsEnsureClip(state, i) {
+    state.prefetch = state.prefetch || {};
+    const c = state.chunks[i];
+    if (!c || state.prefetch[i]) return;
+    const hit = _ttsHeadCache.get(c.text);
+    let p;
+    if (hit && (!state.geminiVoice || hit.voice === state.geminiVoice)) {
+      // Prepare-ahead makes clips at bg priority, behind every other
+      // message being prepared. A clip the listener now waits on is asked
+      // for again at fg; the voice server shares made pieces, so the bg
+      // request does not repeat the work (CCC-144: cold clicks waited 5-12s
+      // on a bg head).
+      p = !hit.bg || hit.ready ? hit.p : hit.p.then((got) => {
+        if (hit.ready) return got;
+        try { return _ttsFetchNeural(c.text, got.voice, 'fg', null, state.abort?.signal).catch(() => got); } catch (_) { return got; }
+      });
+      // Prepared blobs remain reusable after playback, seeks and rate changes.
+      try {
+        if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
+          at: Date.now(),
+          text: 'clip ' + i + ' PREPARED ' + (hit.ready ? 'ready' : 'making'),
+          anomaly: !hit.ready,
+          title: 'speaker clip ' + i + ' reused from the prepare-ahead cache (' + (hit.ready ? 'fully made' : 'still generating') + ' at click)',
+        });
+      } catch (_) {}
+    } else {
+      p = _ttsFetchNeural(c.text, state.geminiVoice, 'fg', null, state.abort?.signal);
+      p.catch(() => {});
+    }
+    state.prefetch[i] = p;
+    // Keep the paint through the handoff from prepare-ahead to playback,
+    // and include clips generated during a read, until they are released.
+    state.debugCache = state.debugCache || new Map();
+    const debugEntry = { debugReady: !!(hit && p === hit.p && hit.debugReady) };
+    state.debugCache.set(c.text, debugEntry);
+    _ttsScheduleCacheDebug();
+    p.then(g => g.done).then(() => {
+      debugEntry.debugReady = true;
+      _ttsScheduleCacheDebug();
+    }).catch(() => {
+      state.debugCache.delete(c.text);
+      _ttsScheduleCacheDebug();
+    });
+    // Once this clip is fully made, the bar's cached end moves past it.
+    p.then((g) => g.done).then(() => {
+      if (_ttsChunkState !== state) return;
+      state.cachedTo = Math.max(state.cachedTo || 0, c.start + c.text.length);
+      _ttsSetPlay();
+    }).catch(() => {});
+  }
+  // The browser refused to start audio: keep the position for the next tap.
+  function _ttsPlayBlocked(state) {
+    _ttsPaused = true;
+    setTtsButtonsBusy(false);
+    if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'paused');
+    ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === state.paneId) btn.classList.add('paused'); });
+    showOpToast('Tap the speaker to resume audio.', 'info');
+  }
+  // Chained read (CCC-144): the page's main thread blocks for 0.2-1 s at a
+  // time, and a per-clip player can only start the next clip when `ended`
+  // reaches it, so those blocks became 0.5-1.9 s silences before clips made 10 s
+  // earlier. Here every clip is appended to ONE MediaSource ahead of the
+  // listener, and the media pipeline crosses clip boundaries with no JS.
+  // localStorage ccc-tts-chain = '0' turns it off.
+  const _TTS_CHAIN_AHEAD_S = 40;   // audio kept ready; a stopped read wastes no more
+  let _ttsChainBroken = false;     // this browser can't chain: stop trying
+  function _ttsChainOk(state) {
+    let pref = '';
+    try { pref = localStorage.getItem('ccc-tts-chain') || ''; } catch (_) {}
+    // A seek into a clip needs that clip's exact position: the per-clip player
+    // lands it, and the chain resumes from the next clip.
+    return pref !== '0' && !_ttsChainBroken && !state.noChain && state.seekTarget == null
+      && state.chunks.length - state.index > 1 && _ttsCanStream();
+  }
+  function _ttsSpeakChain(state) {
+    const token = ++_ttsNeuralToken;
+    _ttsUtterance = { neural: true };
+    const stale = () => token !== _ttsNeuralToken || _ttsChunkState !== state;
+    const from = state.index;
+    const clips = state.chunks.slice(from);
+    if (state.perf) state.perf.mode = 'chain';
+    const source = new MediaSource();
+    const url = URL.createObjectURL(source);
+    const marks = [0];   // stream second where each clip starts
+    let buffer = null, failedAt = null, model = '', wordFrame = null, lastWord = -1, heard = -1, openTimer = null;
+    const stopHighlight = () => {
+      if (wordFrame != null) cancelAnimationFrame(wordFrame);
+      wordFrame = null;
+    };
+    const release = () => {
+      stopHighlight();
+      clearTimeout(openTimer);
+      URL.revokeObjectURL(url);
+    };
+    const audio = _ttsAudio || (_ttsAudio = new Audio());
+    // Per-clip playback from the clip being heard.
+    const toClips = (why, broken) => {
+      if (stale()) return;
+      _ttsLog('CHAIN', 'per-clip from clip ' + state.index + ': ' + why);
+      if (broken) _ttsChainBroken = true;
+      if (state.perf) state.perf.mode = 'chain-fallback';
+      _ttsNeuralToken += 1;
+      release();
+      try { audio.pause(); } catch (_) {}
+      _ttsNeural = null;
+      _ttsUtterance = null;
+      _ttsSetStreaming(false);
+      state.noChain = true;
+      _ttsSpeakNextChunk();
+    };
+    const bufferedEnd = () => {
+      const b = buffer && buffer.buffered;
+      return b && b.length ? b.end(b.length - 1) : 0;
+    };
+    const append = (data) => new Promise((resolve, reject) => {
+      const settle = (fn) => () => {
+        buffer.removeEventListener('updateend', onEnd);
+        buffer.removeEventListener('error', onError);
+        fn();
+      };
+      const onEnd = settle(resolve);
+      const onError = settle(() => reject(new Error('append failed')));
+      buffer.addEventListener('updateend', onEnd);
+      buffer.addEventListener('error', onError);
+      try { buffer.appendBuffer(data); } catch (error) { onError(); }
+    });
+    const feedClip = async (got) => {
+      if (got.blob) { await append(await got.blob.arrayBuffer()); return; }
+      const reader = got.body().getReader();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        if (stale()) { reader.cancel().catch(() => {}); return; }
+        await append(value);
+      }
+    };
+    const feed = async () => {
+      for (let j = 0; j < clips.length; j++) {
+        while (!stale() && bufferedEnd() - audio.currentTime > _TTS_CHAIN_AHEAD_S) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        if (stale()) return;
+        _ttsEnsureClip(state, from + j);
+        try {
+          const got = await state.prefetch[from + j];
+          if (stale()) return;
+          delete state.prefetch[from + j];
+          // Only a streamed clip is known to be mp3 this stream can carry.
+          if (!got.body) throw new Error('not a stream');
+          if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
+          if (got.model) model = got.model;
+          await feedClip(got);
+        } catch (_) {
+          if (stale()) return;
+          delete state.prefetch[from + j];
+          failedAt = j;
+          break;
+        }
+        if (stale()) return;
+        marks.push(bufferedEnd());
+      }
+      _ttsSetStreaming(false);
+      // Nothing to hear: go straight to the per-clip path. Otherwise it takes
+      // over at `ended`, after the audio already made.
+      if (failedAt === 0) { toClips('clip ' + from + ' unavailable'); return; }
+      try { source.endOfStream(); } catch (_) {}
+    };
+    // Stream time -> (clip, time inside it, its length or NaN while being made).
+    const clipAt = (t) => {
+      let j = 0;
+      while (j + 1 < marks.length && marks[j + 1] <= t) j += 1;
+      j = Math.min(j, clips.length - 1);
+      return { j, local: Math.max(0, t - marks[j]), dur: j + 1 < marks.length ? marks[j + 1] - marks[j] : NaN };
+    };
+    const updateWord = () => {
+      if (stale()) return;
+      const at = clipAt(audio.currentTime);
+      const chunk = clips[at.j];
+      if (at.j !== heard) {
+        if (heard >= 0) state.debugCache?.delete(clips[heard].text);
+        heard = at.j;
+        state.index = from + at.j;
+        _ttsScheduleCacheDebug();
+        _ttsLog('PLAY', 'clip ' + state.index + ' (' + chunk.text.length + ' chars, chained)');
+      }
+      const word = _ttsWordAtProgress(chunk.text, at.local, at.dur);
+      if (!word || chunk.start + word.start === lastWord) return;
+      lastWord = chunk.start + word.start;
+      _ttsLastCharIndex = lastWord;
+      _ttsSetPlay();
+      highlightTtsWord(_ttsLastCharIndex, word.length);
+      updateTtsCaption(_ttsLastCharIndex, word.length, _ttsBoundUtteranceText);
+    };
+    const trackWord = () => {
+      wordFrame = null;
+      if (stale() || audio.paused || audio.ended) return;
+      updateWord();
+      wordFrame = requestAnimationFrame(trackWord);
+    };
+    source.addEventListener('sourceopen', () => {
+      clearTimeout(openTimer);
+      if (stale()) return;
+      try {
+        buffer = source.addSourceBuffer('audio/mpeg');
+        buffer.mode = 'sequence';   // each clip's timestamps follow the last
+      } catch (_) { toClips('no source buffer', true); return; }
+      feed();
+    }, { once: true });
+    audio.onended = audio.onerror = audio.onplay = audio.ontimeupdate = null;
+    audio.onplaying = audio.onwaiting = audio.onpause = null;
+    audio.onprogress = audio.onloadedmetadata = audio.ondurationchange = audio.oncanplay = null;
+    audio.src = url;
+    audio.playbackRate = _ttsRate;
+    openTimer = setTimeout(() => { if (!buffer) toClips('source never opened', true); }, 4000);
+    _ttsSetStreaming(true);
+    const player = { audio, token, stopHighlight, chain: true };
+    player.cancel = () => {
+      release();
+      try { audio.removeAttribute('src'); audio.load(); } catch (_) {}
+    };
+    // Seek inside audio already made; otherwise restart at the target's clip.
+    player.seek = (target) => {
+      const k = clips.findIndex(c => target < c.start + c.text.length);
+      if (k >= 0 && k < marks.length) {
+        const c = clips[k], into = target - c.start;
+        // A clip still arriving has no length yet: use the speech-rate estimate.
+        const t = marks[k] + (k + 1 < marks.length
+          ? into / Math.max(1, c.text.length) * (marks[k + 1] - marks[k]) : into / 15);
+        if (t < bufferedEnd()) {
+          audio.currentTime = t;
+          _ttsLastCharIndex = target;
+          return;
+        }
+      }
+      _ttsEngineCancel();
+      _ttsUtterance = null;
+      state.index = from + Math.max(0, k);
+      state.seekTarget = k >= 0 && target > clips[k].start ? target : null;
+      _ttsSpeakNextChunk();
+    };
+    _ttsNeural = player;
+    audio.ontimeupdate = () => { if (!audio.paused && !audio.ended) updateWord(); };
+    audio.onpause = stopHighlight;
+    audio.onplay = () => {
+      if (stale()) return;
+      setTtsButtonsState(true, false, state.paneId);
+      setTtsButtonsBusy(false);
+      const voice = state.geminiVoice || 'Kokoro';
+      ttsButtons().forEach(btn => {
+        if (ttsButtonPaneId(btn) === _ttsActivePaneId) {
+          btn.classList.remove('paused');
+          btn.title = 'Pause reading (free voice: ' + voice + ')';
+        }
+      });
+      _ttsShowVoice(voice + (model ? ' · ' + model : ''));
+    };
+    let waitFrom = 0;
+    audio.onplaying = () => {
+      if (stale()) return;
+      const now = Date.now();
+      stopHighlight();
+      trackWord();
+      const lagMs = _ttsEventLagMs(audio);
+      if (!waitFrom) {
+        _ttsPerfStart(state, { engine: 'neural', voice: state.geminiVoice, lagMs });
+        if (state.perf && state.perf.gapT0) {
+          _ttsPerfSilence(state, Math.max(0, performance.now() - state.perf.gapT0 - lagMs), 'gap');
+          state.perf.gapT0 = 0;
+        }
+        if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms (chained)'); state.t0 = 0; }
+        state.gapFrom = 0;
+        return;
+      }
+      _ttsPerfSilence(state, now - waitFrom, 'stall');
+      _ttsLog('STALL', (now - waitFrom) + 'ms in chained read at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate);
+      waitFrom = 0;
+    };
+    audio.onwaiting = () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); };
+    audio.onended = () => {
+      if (stale()) return;
+      if (failedAt != null) {
+        state.index = from + failedAt;
+        toClips('clip ' + state.index + ' failed');
+        return;
+      }
+      release();
+      clearTtsHighlight();
+      clearTtsCaption();
+      _ttsSetStreaming(false);
+      _ttsLog('ENDED', 'chained read, ' + clips.length + ' clips');
+      _ttsNeural = null;
+      _ttsUtterance = null;
+      state.index = state.chunks.length;
+      _ttsSpeakNextChunk();
+    };
+    audio.onerror = () => {
+      if (stale()) return;
+      _ttsLog('ERROR', 'chained media error ' + (audio.error?.code || 'unknown'));
+      state.index = from + clipAt(audio.currentTime || 0).j;
+      toClips('media error', true);
+    };
+    if (_ttsPaused) return;
+    audio.play().catch((error) => {
+      if (stale()) return;
+      _ttsLog('ERROR', 'chained play rejected: ' + (error?.name || 'unknown'));
+      if (error?.name === 'NotAllowedError') { _ttsPlayBlocked(state); return; }
+      toClips('play rejected');
+    });
   }
 
   // One-time iOS-Safari engine prime (CCC-31). Must run inside a user gesture.
@@ -16584,13 +16843,32 @@
     const p = state && state.perf;
     if (!p || p.started) return;
     p.started = true;
-    const end = performance.now();
+    // The page learns of first sound only when its main thread is free, so
+    // take the sound's own start from the audio clock (how.lagMs).
+    const seen = performance.now();
+    const end = Math.max(p.t0, seen - (how.lagMs || 0));
     _perfEvent('tts_start', _perfActiveElapsed(p.t0, end), { detail: {
       engine: how.engine, voice: how.voice || '', cache: p.cache, head: p.head,
       chars: p.chars, clips: p.clips, target: p.target, rate: _ttsRate,
       wall_ms: Math.round(end - p.t0), mode: p.mode || 'clips', cue: !!p.cue,
-      bridge: !!p.bridge,
+      bridge: !!p.bridge, event_lag_ms: Math.round(seen - end),
+      longtask_ms: _perfLongTaskMs(p.t0, seen), client: _ttsClientTag(),
+      session_ms: p.sessionMs,
     } });
+  }
+  // Time the audio has already been sounding when its `playing` event reaches
+  // the page. The event waits behind any long main-thread task.
+  function _ttsEventLagMs(audio) {
+    const lag = (Number(audio.currentTime) || 0) / Math.max(0.1, Number(audio.playbackRate) || 1) * 1000;
+    return lag > 0 ? lag : 0;
+  }
+  // Coarse browser family, so a gate breach can be split by client.
+  function _ttsClientTag() {
+    const ua = navigator.userAgent || '';
+    if (/iPhone|iPad/.test(ua)) return 'ios';
+    if (/Firefox\//.test(ua)) return 'firefox';
+    if (/Chrome\//.test(ua)) return 'chromium';
+    return /Safari\//.test(ua) ? 'safari' : 'webkit-app';
   }
   function _ttsPerfSilence(state, ms, kind) {
     const p = state && state.perf;
@@ -16602,21 +16880,22 @@
     const p = state && state.perf;
     if (!p || p.flushed) return;
     p.flushed = true;
-    // A continuous read has no clip gaps: a smooth multi-clip one still
+    // A single-stream read has no clip gaps: a smooth multi-clip one still
     // reports its 0 ms, or the gate would only ever see the stalled reads.
-    const smoothContinuous = p.mode === 'continuous' && p.started && p.clips > 1;
-    if (!p.gaps && !p.stalls && !smoothContinuous) return;
+    const smoothStream = (p.mode === 'continuous' || p.mode === 'chain') && p.started && p.clips > 1;
+    if (!p.gaps && !p.stalls && !smoothStream) return;
     _perfEvent('tts_gap', Math.max(p.maxGap, p.maxStall), { detail: {
       max_gap_ms: Math.round(p.maxGap), gaps: p.gaps,
       max_stall_ms: Math.round(p.maxStall), stalls: p.stalls,
       voice: state.geminiVoice || '', cache: p.cache, chars: p.chars,
       clips: p.clips, played: state.index, target: p.target, rate: _ttsRate,
-      mode: p.mode || 'clips', bridge: !!p.bridge,
+      mode: p.mode || 'clips', bridge: !!p.bridge, client: _ttsClientTag(),
     } });
   }
   // A read paused and left (tab closed, reload) still reports its gaps.
   window.addEventListener('pagehide', () => { try { _ttsPerfFlush(_ttsPerfState); } catch (_) {} });
 
+  let _ttsFgAbort = null;   // cancels the foreground clips of the current read
   function _ttsStartChunkedSpeech(text, paneId, baseOffset, pauseOnStart) {
     let chunks = _chunkTtsText(text, TTS_CHUNK_MAX_CHARS, baseOffset);
     if (!chunks.length) return false;
@@ -16679,6 +16958,13 @@
       }
     }
     _ttsPerfTarget = '';
+    // A new read frees the voice server: the old read's unfinished foreground
+    // clips would otherwise keep generating and starve this one (CCC-144). A
+    // restart (rate step, skip) keeps them, it needs the same clips.
+    if (_ttsFresh || !_ttsFgAbort) {
+      try { _ttsFgAbort?.abort(); } catch (_) {}
+      _ttsFgAbort = new AbortController();
+    }
     _ttsChunkState = {
       chunks,
       neuralOk: _ttsHeadReady,
@@ -16690,6 +16976,7 @@
       t0: Date.now(),
       perf,
       macBridge,
+      abort: _ttsFgAbort,
     };
     _ttsPerfState = perf ? _ttsChunkState : null;
     _ttsSpeakNextChunk();
@@ -16710,11 +16997,15 @@
     state.prefetch = state.prefetch || {};
     state.debugCache = state.debugCache || new Map();
     if (!c || state.prefetch[1]) return;
-    const voice = state.geminiVoice || (state.paneId ? ttsVoiceForPane(state.paneId) : '');
+    // Prepare-ahead already chose this message's voice. Another one here would
+    // leave its clips unused and make this clip from nothing.
+    const prepared = _ttsHeadCache.get(state.chunks[0].text);
+    const voice = state.geminiVoice || (prepared && prepared.voice)
+      || (state.paneId ? ttsVoiceForPane(state.paneId) : '');
     const hit = _ttsHeadCache.get(c.text);
     let p;
     if (hit && hit.ready && (!voice || hit.voice === voice)) p = hit.p;
-    else p = _ttsFetchNeural(c.text, voice, 'fg');
+    else p = _ttsFetchNeural(c.text, voice, 'fg', null, state.abort?.signal);
     p.catch(() => {});
     state.prefetch[1] = p;
   }
@@ -17315,7 +17606,7 @@
     if (!st || st.neuralOk === false) return false;
     const k = st.chunks.findIndex(c => target < c.start + c.text.length);
     if (k < st.index || k < 0) return false;
-    if (k === st.index && _ttsNeural?.audio) {
+    if ((k === st.index || _ttsNeural?.chain) && _ttsNeural?.audio) {
       _ttsNeural.seek(target);
       return true;
     }
