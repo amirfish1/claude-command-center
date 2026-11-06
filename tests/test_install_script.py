@@ -573,8 +573,8 @@ class TailnetInstallTests(unittest.TestCase):
             env = os.environ.copy()
             env["HOME"] = fake_home
             info_json = json.dumps({
-                "ip": "100.108.91.118",
-                "ips": ["100.108.91.118"],
+                "ip": "100.64.12.34",
+                "ips": ["100.64.12.34"],
                 "dns": "hermes-vps.tail1234.ts.net",
             })
             bash_program = (
@@ -592,12 +592,12 @@ class TailnetInstallTests(unittest.TestCase):
             net_json_path = Path(fake_home) / ".claude" / "command-center" / "network.json"
             self.assertTrue(net_json_path.exists())
             data = json.loads(net_json_path.read_text())
-            self.assertEqual(data.get("bind_host"), "100.108.91.118")
+            self.assertEqual(data.get("bind_host"), "100.64.12.34")
             self.assertTrue(data.get("trust_tailnet"))
             origins = data.get("allowed_origins", [])
             self.assertIn("http://hermes-vps.tail1234.ts.net:8090", origins)
             self.assertIn("https://hermes-vps.tail1234.ts.net:8090", origins)
-            self.assertIn("http://100.108.91.118:8090", origins)
+            self.assertIn("http://100.64.12.34:8090", origins)
 
     def test_apply_tailnet_network_config_preserves_existing_origins(self):
         import json
@@ -614,8 +614,8 @@ class TailnetInstallTests(unittest.TestCase):
             env = os.environ.copy()
             env["HOME"] = fake_home
             info_json = json.dumps({
-                "ip": "100.108.91.118",
-                "ips": ["100.108.91.118"],
+                "ip": "100.64.12.34",
+                "ips": ["100.64.12.34"],
                 "dns": "hermes-vps.tail1234.ts.net",
             })
             bash_program = (
@@ -631,7 +631,7 @@ class TailnetInstallTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
             data = json.loads(net_json_path.read_text())
-            self.assertEqual(data.get("bind_host"), "100.108.91.118")
+            self.assertEqual(data.get("bind_host"), "100.64.12.34")
             self.assertTrue(data.get("trust_tailnet"))
             origins = data.get("allowed_origins", [])
             self.assertIn("http://existing-origin:8090", origins)
