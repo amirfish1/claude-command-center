@@ -96784,7 +96784,7 @@
         const parent = node.parentElement;
         if (!parent) continue;
         if (parent.closest(
-          '#chatFindModal, script, style, textarea, input, select, button, .conv-input-bar,'
+          '#chatFindModal, script, style, textarea, input, select, button:not(.qtag-chip), .conv-input-bar,'
           + ' [hidden], [aria-hidden="true"]'
         )) continue;
         const hay = node.nodeValue || '';
