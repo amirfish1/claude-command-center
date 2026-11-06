@@ -430,7 +430,9 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
 # scripts/perf_gate.py --kind can read them, but stay out of _VALID_KINDS:
 # no breach verdict, no summary row, no self-filed ticket, no [PERF] line
 # (the list is polled every few seconds per tab).
-_DIAG_KINDS = ("list_server", "archive_rebuild")
+# live_read (CCC-319) is the wait the sidebar's live-status poll really sees,
+# now that live_build can run in the background behind a saved status.
+_DIAG_KINDS = ("list_server", "archive_rebuild", "live_read")
 
 
 def record_diag(kind, ms, detail=None):
