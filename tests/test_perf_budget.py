@@ -5482,3 +5482,25 @@ def test_question_tags_sources_walk_is_memoised_between_scans(tmp_path, monkeypa
     assert len(walks) == 1
     qt._sources(use_memo=False)
     assert len(walks) == 2
+
+
+# ── Attribution journal on the conversation-open path (CCC-143) ──────────────
+
+def test_attribution_journal_append_does_not_reread_the_month(monkeypatch, tmp_path):
+    """A compact sender header sends every open through this index, and every
+    send appends a row, so a full re-read cost ~1s of CPU per open."""
+    import sender_envelope as envelope
+    monkeypatch.setenv("WATCHTOWER_STATE_DIR", str(tmp_path / "wt"))
+    monkeypatch.setenv("CCC_STATE_DIR", str(tmp_path / "ccc"))
+    monkeypatch.setenv("WT_ATTRIBUTION_EMIT", "1")
+    monkeypatch.setattr(envelope, "_cache", {})
+    for i in range(50):
+        assert envelope.journal(envelope.make("r", basis="runtime"), app="wt", transport_id=f"t{i}")
+    assert envelope.lookup(transport_id="t0")
+    rows = []
+    real = envelope._journal_add
+    monkeypatch.setattr(envelope, "_journal_add",
+                        lambda entry, line, nodes: (rows.append(line), real(entry, line, nodes))[1])
+    assert envelope.journal(envelope.make("r", basis="runtime"), app="wt", transport_id="t-new")
+    assert envelope.lookup(transport_id="t-new")
+    assert len(rows) == 1

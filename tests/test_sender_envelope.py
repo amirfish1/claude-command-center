@@ -200,3 +200,51 @@ def test_late_receipt_keeps_complete_transport_snapshot():
         assert found['relay'][-1]['via'] == 'wt-uds'
         assert found['relay'][-1]['attested_mode'] == 'bypass'
         assert found['delivered_recipient']['id'] == 'recipient'
+
+
+def _journal_rows(app='wt'):
+    return sorted((Path(os.environ['WATCHTOWER_STATE_DIR' if app == 'wt' else 'CCC_STATE_DIR']) / 'attribution').glob('*.jsonl'))
+
+
+def test_lookup_reads_only_rows_appended_since_the_last_lookup(monkeypatch):
+    first = envelope.make('recipient', basis='runtime')
+    assert envelope.journal(first, app='wt', transport_id='t-first')
+    assert envelope.lookup(transport_id='t-first')['message_id'] == first['message_id']
+    seen = []
+    real = envelope._journal_add
+    monkeypatch.setattr(envelope, '_journal_add', lambda entry, line, nodes: (seen.append(line), real(entry, line, nodes)))
+    second = envelope.make('recipient', basis='runtime')
+    assert envelope.journal(second, app='wt', transport_id='t-second')
+    assert envelope.lookup(transport_id='t-second')['message_id'] == second['message_id']
+    assert envelope.lookup(transport_id='t-first')['message_id'] == first['message_id']
+    assert len(seen) == 1
+
+
+def test_lookup_waits_for_a_row_still_being_written():
+    a = envelope.make('recipient', basis='runtime')
+    assert envelope.journal(a, app='wt', transport_id='t-whole')
+    path = _journal_rows()[0]
+    row = path.read_text()
+    b = dict(json.loads(row), attr=envelope.make('recipient', basis='runtime'), transport_id='t-split')
+    line = json.dumps(b, ensure_ascii=True) + '\n'
+    with path.open('a') as f:
+        f.write(line[:40])
+    assert envelope.lookup(transport_id='t-split') is None
+    with path.open('a') as f:
+        f.write(line[40:])
+    assert envelope.lookup(transport_id='t-split')['message_id'] == b['attr']['message_id']
+    assert envelope.lookup(transport_id='t-whole')['message_id'] == a['message_id']
+
+
+def test_lookup_rebuilds_a_journal_that_was_rewritten():
+    gone = envelope.make('recipient', basis='runtime')
+    kept = envelope.make('recipient', basis='runtime')
+    assert envelope.journal(gone, app='wt', transport_id='t-gone')
+    assert envelope.journal(kept, app='wt', transport_id='t-kept')
+    assert envelope.lookup(transport_id='t-gone')
+    path = _journal_rows()[0]
+    replacement = path.with_suffix('.new')
+    replacement.write_text(path.read_text().splitlines(True)[1])
+    replacement.replace(path)
+    assert envelope.lookup(transport_id='t-gone') is None
+    assert envelope.lookup(transport_id='t-kept')['message_id'] == kept['message_id']

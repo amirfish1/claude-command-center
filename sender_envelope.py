@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import sys
 import subprocess
+import threading
 import time
 import uuid
 
@@ -34,6 +35,7 @@ KINDS = ('session', 'service', 'human', 'unknown')
 _INHERITED = (ENV, 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'WT_SESSION_ID',
               'WT_WORKER', 'WT_WORKER_ID', 'WT_PARENT_SESSION_ID')
 _cache = {}
+_cache_lock = threading.Lock()
 _warned = set()
 _current = contextvars.ContextVar("message_attribution", default=None)
 
@@ -124,9 +126,13 @@ def service(ident, recipient='', name=''):
 
 
 def validate(value):
-    if not isinstance(value, dict) or value.get('v') != 1:
+    return _validated(copy.deepcopy(value))
+
+
+def _validated(out):
+    """Check and trim a record this call owns (no defensive copy)."""
+    if not isinstance(out, dict) or out.get('v') != 1:
         raise ValueError('unsupported attribution envelope version')
-    out = copy.deepcopy(value)
     if not isinstance(out.get('author'), dict) or out['author'].get('kind') not in KINDS:
         raise ValueError('invalid attribution author')
     if out.get('basis') not in BASES:
@@ -386,6 +392,55 @@ def journal(attr, *, app, event='send', **details):
         return False
 
 
+def _journal_add(entry, line, nodes):
+    try:
+        row = json.loads(line)
+        a = _validated(row['attr'])
+        if row.get('node') not in nodes:
+            return
+        # Receipts can carry an earlier snapshot than the adapter that
+        # delivered them. Keep every alias, while resolving all of them to the
+        # fullest locally recorded relay chain.
+        snapshots = entry['snapshots']
+        previous = snapshots.get(a['message_id'])
+        if previous is None or len(a.get('relay', [])) >= len(previous.get('relay', [])):
+            snapshots[a['message_id']] = a
+        ids = [a['message_id']] + list(a.get('transport_ids', []))
+        ids += [row.get(k) for k in ('transport_id', 'nonce', 'receipt_id', 'delivery_id')]
+        for key in ids:
+            if key:
+                entry['aliases'][str(key).removeprefix('⟨wt:').removesuffix('⟩')] = a['message_id']
+    except (ValueError, TypeError, KeyError):
+        pass
+
+
+def _journal_index(path, nodes):
+    """Index for one journal, reading only what was appended since last time.
+
+    Every send appends a row, so re-reading the month on each change put
+    O(messages this month) on the conversation-open path (CCC-143).
+    """
+    with _cache_lock:
+        st = path.stat()
+        signature = (st.st_ino, st.st_mtime_ns, st.st_size)
+        entry = _cache.get(str(path))
+        if entry and entry['signature'] == signature:
+            return entry
+        if not entry or st.st_ino != entry['signature'][0] or st.st_size <= entry['offset']:
+            entry = dict(signature=signature, offset=0, aliases={}, snapshots={})
+        with path.open('rb') as f:
+            f.seek(entry['offset'])
+            blob = f.read()
+        # A writer may be mid-line; that row is read once it is complete.
+        end = blob.rfind(b'\n') + 1
+        for line in blob[:end].splitlines():
+            _journal_add(entry, line, nodes)
+        entry['offset'] += end
+        entry['signature'] = signature
+        _cache[str(path)] = entry
+        return entry
+
+
 def lookup(*, message_id='', transport_id='', text='', recipient=''):
     """Index same-node journals; never create or mutate the other app's files."""
     embedded = from_text(text)
@@ -399,36 +454,9 @@ def lookup(*, message_id='', transport_id='', text='', recipient=''):
     for base in (_wt_state(), _ccc_state()):
         for path in sorted((base / 'attribution').glob('*.jsonl'), reverse=True):
             try:
-                st = path.stat()
-                signature = (st.st_mtime_ns, st.st_size)
-                cached = _cache.get(str(path))
-                if not cached or cached[0] != signature:
-                    index = {}
-                    snapshots = {}
-                    for line in path.read_text().splitlines():
-                        try:
-                            row = json.loads(line)
-                            a = validate(row['attr'])
-                            if row.get('node') not in [node] + aliases:
-                                continue
-                            previous = snapshots.get(a['message_id'])
-                            if previous is None or len(a.get('relay', [])) >= len(previous.get('relay', [])):
-                                snapshots[a['message_id']] = a
-                            ids = [a['message_id']] + list(a.get('transport_ids', []))
-                            ids += [row.get(k) for k in ('transport_id', 'nonce', 'receipt_id', 'delivery_id')]
-                            for key in ids:
-                                if key:
-                                    index[str(key).removeprefix('⟨wt:').removesuffix('⟩')] = a
-                        except (ValueError, TypeError, KeyError):
-                            continue
-                    # Receipts can carry an earlier snapshot than the adapter
-                    # that delivered them. Keep every alias, while resolving
-                    # all of them to the fullest locally recorded relay chain.
-                    index = {key: snapshots[a['message_id']] for key, a in index.items()}
-                    _cache[str(path)] = (signature, index)
-                index = _cache[str(path)][1]
+                entry = _journal_index(path, [node] + aliases)
                 for key in keys:
-                    a = index.get(key)
+                    a = entry['snapshots'].get(entry['aliases'].get(key))
                     if a:
                         destinations = (a.get('intended_recipient') or {}, a.get('delivered_recipient') or {})
                         if recipient and not any(d.get('id') == recipient for d in destinations):

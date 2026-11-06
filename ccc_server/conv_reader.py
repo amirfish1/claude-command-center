@@ -493,6 +493,13 @@ def serve(path, parent_pid, port=None, dashboard_port=None):
     path = Path(path)
     sys.path.insert(0, str(PROJECT_ROOT))
     import server as server_mod  # noqa: E402  (heavy; child only)
+    # The first compact sender header would otherwise index the journals inside
+    # someone's open; the previous child still answers while this runs.
+    try:
+        import sender_envelope
+        sender_envelope.lookup(message_id="conv-reader-warm")
+    except Exception:
+        pass
     if port:
         _serve_http(server_mod, port, dashboard_port)
     try:
