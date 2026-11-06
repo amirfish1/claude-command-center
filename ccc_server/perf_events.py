@@ -432,7 +432,7 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
 # (the list is polled every few seconds per tab).
 # live_read (CCC-319) is the wait the sidebar's live-status poll really sees,
 # now that live_build can run in the background behind a saved status.
-_DIAG_KINDS = ("list_server", "archive_rebuild", "live_read")
+_DIAG_KINDS = ("list_server", "archive_rebuild", "live_read", "gc_pause")
 
 
 def record_diag(kind, ms, detail=None):

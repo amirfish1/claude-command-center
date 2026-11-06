@@ -23,6 +23,7 @@ import ast
 import base64
 import traceback
 import fcntl
+import gc
 import gzip
 import html
 import hashlib
@@ -18462,6 +18463,26 @@ except ValueError:
 _ARCHIVE_REFRESH_WATCHDOG_S = _ARCHIVE_REFRESH_WORKER_TIMEOUT + 60.0
 
 
+# A full garbage collection walks the whole heap with the GIL held, so every
+# request stops for it. Record the long ones next to the list timings.
+_GC_PAUSE_RECORD_MS = 50.0
+
+
+def _install_gc_pause_diag():
+    started = {}
+
+    def on_gc(phase, info):
+        if phase == "start":
+            started["t"] = time.perf_counter()
+            return
+        ms = (time.perf_counter() - started.get("t", time.perf_counter())) * 1000.0
+        if ms >= _GC_PAUSE_RECORD_MS:
+            record_diag("gc_pause", ms, {"generation": info.get("generation"),
+                                         "collected": info.get("collected")})
+
+    gc.callbacks.append(on_gc)
+
+
 def _archive_refresh_worker_main(encoded_options, output_path):
     """Build one archive snapshot in a short-lived, low-priority process."""
     try:
@@ -18506,12 +18527,50 @@ def _archive_refresh_worker_main(encoded_options, output_path):
     except Exception as exc:
         result = {"ok": False, "error": str(exc)}
     try:
-        with open(output_path, "w", encoding="utf-8") as output_file:
-            json.dump(result, output_file, separators=(",", ":"))
+        _write_archive_refresh_result(output_path, result)
     except OSError as exc:
         print(f"archive refresh worker could not write its result: {exc}", file=sys.stderr)
         return 1
     return 0 if result.get("ok") else 1
+
+
+# One json.loads of the whole 48MB result held the GIL for 0.5-4s, every ~47s,
+# and every dashboard request stopped for it (CCC-142). The GIL can only change
+# hands between calls, so the rows travel as one small JSON array per line:
+# each decode holds it for about 2ms. Rows share a line so each decode still
+# reuses key strings, which per-row decoding would duplicate across 14k rows.
+_ARCHIVE_RESULT_ROWS_PER_LINE = 64
+
+
+def _write_archive_refresh_result(output_path, result):
+    """Line 1 is the result without its rows, then the rows in small chunks."""
+    rows = result.get("rows")
+    header = {k: v for k, v in result.items() if k != "rows"}
+    if isinstance(rows, list):
+        header["row_count"] = len(rows)
+    with open(output_path, "w", encoding="utf-8") as output_file:
+        output_file.write(json.dumps(header, separators=(",", ":")) + "\n")
+        for start in range(0, len(rows or ()), _ARCHIVE_RESULT_ROWS_PER_LINE):
+            chunk = rows[start:start + _ARCHIVE_RESULT_ROWS_PER_LINE]
+            output_file.write(json.dumps(chunk, separators=(",", ":")) + "\n")
+
+
+def _read_archive_refresh_result(output_path):
+    """Returns (result, bytes read). Raises ValueError on a truncated result."""
+    with open(output_path, "r", encoding="utf-8") as result_file:
+        header_line = result_file.readline()
+        size = len(header_line)
+        result = json.loads(header_line)
+        if "row_count" not in result:
+            return result, size
+        rows = []
+        for line in result_file:
+            size += len(line)
+            rows.extend(json.loads(line))
+    if len(rows) != result.pop("row_count"):
+        raise ValueError("archive refresh result is truncated")
+    result["rows"] = rows
+    return result, size
 
 
 def _archive_compute_rows_detached(key, cache_options, serve_generation):
@@ -18574,11 +18633,8 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         _rt1 = time.perf_counter()
         _rphase["worker_ms"] = round((_rt1 - _rt0) * 1000.0 - _rphase["lock_wait_ms"], 1)
         try:
-            _rtext = Path(output_name).read_text(encoding="utf-8")
-            _rphase["result_bytes"] = len(_rtext)
-            result = json.loads(_rtext)
-            del _rtext
-        except (OSError, json.JSONDecodeError) as exc:
+            result, _rphase["result_bytes"] = _read_archive_refresh_result(output_name)
+        except (OSError, ValueError) as exc:
             detail = (completed.stderr or completed.stdout or "").strip()[-500:]
             raise RuntimeError(
                 f"archive refresh worker produced no result: {exc}; {detail}"
@@ -46738,6 +46794,7 @@ def main():
         threading.Thread(target=_warm_cache, daemon=True).start()
     if not os.environ.get("CCC_EPHEMERAL"):
         _load_saved_live_activity()
+        _install_gc_pause_diag()
     # CCC-142: the ACP registry load (counts every ACP transcript's lines,
     # ~135MB here) runs once per process under _ACP_LOCK. Left to the first
     # caller it landed on a request thread (live_build ~30s after a restart).
