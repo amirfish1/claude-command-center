@@ -28983,6 +28983,8 @@ def _parse_conversation_event_unattributed(ev, line_num):
             # Preview placeholder "[image]" shouldn't leak into the rendered message.
             display_text = "" if (text == "[image]" and images) else text
             out_ev = {"line": line_num, "ts": ts, "type": "user_text", "text": display_text, "images": images}
+            if ev.get("isSidechain"):
+                out_ev["is_sidechain"] = True
             from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
             if is_compaction_bookkeeping(ev):
                 out_ev["bookkeeping"] = True

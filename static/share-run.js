@@ -12,7 +12,8 @@
   const NUDGE_DELAY_MS = 20000;
   const MIN_NUDGE_AGENTS = 3;
   const SAFETY_NOTE = 'Built on this machine. Nothing is uploaded: you get a file and decide where it goes. '
-    + 'Redaction hides names it does not recognize, but a private name that is also a plain word can survive, so read the preview first.';
+    + 'Redaction hides names and secrets it recognizes, but plain English stays readable: a private name that is also a plain word, or a sensitive sentence, can survive. Read the preview first.';
+  const STALE_NOTE = 'Press Apply to update the preview. Saving is off until the preview matches these boxes.';
 
   let overlay = null;
   let current = { sid: '', tab: 'run', exported: null, stats: null, days: 7 };
@@ -108,24 +109,44 @@
     const savePage = el('button', { type: 'button', class: 'sr-btn sr-btn-primary', disabled: true, text: 'Save page' });
     const saveImage = el('button', { type: 'button', class: 'sr-btn', disabled: true, text: 'Save image' });
     const apply = el('button', { type: 'button', class: 'sr-btn', text: 'Apply' });
+    const stale = el('p', { class: 'sr-note sr-error', hidden: true, text: STALE_NOTE });
+    const boxes = { hide, keep, title };
+    const formValues = () => ({ hide: hide.value, keep: keep.value, title: title.value });
+    let applied = null;
+    let latestLoad = 0;
+    // What is saved must be what the boxes say, so an export built from older
+    // box values can never be saved.
+    const isCurrent = () => !!current.exported && !!applied
+      && Object.keys(boxes).every(name => applied[name] === boxes[name].value);
+    function syncSave() {
+      const ready = isCurrent();
+      savePage.disabled = saveImage.disabled = !ready;
+      stale.hidden = ready || !current.exported;
+    }
     savePage.addEventListener('click', () => {
+      if (!isCurrent()) return;
       saveBlob(new Blob([current.exported.html], { type: 'text/html' }), 'agent-run-replay.html');
     });
     saveImage.addEventListener('click', () => {
+      if (!isCurrent()) return;
       savePng(current.exported.svg, 'agent-run.png').catch(() => { summary.textContent = 'The image could not be built.'; });
     });
     async function load() {
+      const thisLoad = ++latestLoad;
+      const requested = formValues();
       current.exported = null;
-      savePage.disabled = saveImage.disabled = true;
+      applied = null;
+      syncSave();
       preview.replaceChildren(el('div', { class: 'sr-empty', text: 'Redacting…' }));
       summary.textContent = '';
       summary.classList.remove('sr-error');
       let data;
       try {
-        data = await fetchRun(current.sid, { hide: hide.value, keep: keep.value, title: title.value });
+        data = await fetchRun(current.sid, requested);
       } catch (_) {
         data = { ok: false, error: 'Could not reach the dashboard.' };
       }
+      if (thisLoad !== latestLoad) return;
       if (!data.ok) {
         summary.textContent = data.error || 'Nothing could be exported.';
         summary.classList.add('sr-error');
@@ -133,13 +154,22 @@
         return;
       }
       current.exported = data;
+      applied = requested;
       const frame = el('iframe', { sandbox: 'allow-scripts', title: 'Redacted replay preview' });
       frame.srcdoc = data.html;
       preview.replaceChildren(frame);
       summary.textContent = data.hidden_summary;
-      savePage.disabled = saveImage.disabled = false;
+      syncSave();
     }
     apply.addEventListener('click', load);
+    Object.values(boxes).forEach(box => {
+      box.addEventListener('input', syncSave);
+      box.addEventListener('keydown', ev => {
+        if (ev.key !== 'Enter') return;
+        ev.preventDefault();
+        load();
+      });
+    });
     body.append(preview, el('div', { class: 'sr-side' },
       el('p', { class: 'sr-note', text: 'Redaction is always on. Tool output, tool arguments and timestamps are left out.' }),
       summary,
@@ -147,6 +177,7 @@
       el('label', { text: 'Keep these words' }, keep),
       el('label', { text: 'Title' }, title),
       el('div', { class: 'sr-row' }, apply),
+      stale,
       el('div', { class: 'sr-row' }, savePage, saveImage),
       el('p', { class: 'sr-note', text: SAFETY_NOTE })));
     load();

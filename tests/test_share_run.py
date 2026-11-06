@@ -359,12 +359,59 @@ def test_ui_only_talks_to_its_own_dashboard():
     assert not re.search(r"sendBeacon|XMLHttpRequest|WebSocket|/api/throughput/share|workers\.dev", source)
 
 
-def test_nudge_harness():
+@pytest.mark.parametrize("harness", ["share_run_nudge_harness.cjs", "share_run_dialog_harness.cjs"])
+def test_browser_harness(harness):
     node = shutil.which("node")
     if not node:
         pytest.skip("node not installed")
     result = subprocess.run(
-        [node, "tests/share_run_nudge_harness.cjs"], cwd=ROOT,
+        [node, f"tests/{harness}"], cwd=ROOT,
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("event", [
+    {"type": "user_text", "text": "<ide_opened_file>secretword</ide_opened_file>"},
+    {"type": "user_text", "text": "<user-prompt-submit-hook>secretword</user-prompt-submit-hook>"},
+    {"type": "user_text", "text": "<some-future-wrapper>secretword</some-future-wrapper>"},
+    {"type": "user_text", "text": "Base directory for this skill: x\n\nsecretword"},
+    {"type": "user_text", "text": "secretword", "is_sidechain": True},
+])
+def test_only_typed_text_exports_as_a_prompt(event):
+    replay, _ = share_run.build_replay(
+        [event, {"type": "user_text", "text": "kept prompt"}],
+        engine="claude", identity={"people": [], "projects": []},
+    )
+    assert [s["text"] for s in replay["steps"]] == ["kept prompt"]
+
+
+def test_parser_marks_sidechain_user_rows():
+    import server
+
+    event = {"type": "user", "timestamp": "2026-11-05T10:00:00Z", "isSidechain": True,
+             "message": {"role": "user", "content": "sub-agent prompt"}}
+    assert server._parse_conversation_event(event, 1)["is_sidechain"] is True
+
+
+@pytest.mark.parametrize("model,hide,shown", [
+    ("claude-opus-5-5", [], "claude-opus-5-5"),
+    ("claude-acmecorp-ft", [], "claude"),
+    ("claude-opus-5-5", ["opus"], ""),
+    ("claude-opus-5-5", ["claude"], ""),
+])
+def test_model_name_clears_the_hide_list(model, hide, shown):
+    events = [{"type": "user_text", "text": "hello"},
+              {"type": "assistant", "model": model, "blocks": [{"kind": "text", "text": "ok"}]}]
+    replay, _ = share_run.build_replay(
+        events, engine="claude", identity={"people": [], "projects": []}, hide=hide,
+    )
+    assert replay["model"] == shown
+
+
+def test_hidden_engine_name_falls_back_to_a_generic_label():
+    replay, _ = share_run.build_replay(
+        [{"type": "user_text", "text": "hello"}], engine="claude",
+        identity={"people": [], "projects": []}, hide=["claude"],
+    )
+    assert replay["engine"] == "Coding agent"

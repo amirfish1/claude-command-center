@@ -283,3 +283,119 @@ def test_bare_scheme_in_prose_is_masked_not_refused():
     masked = redactor.text("Links that start with `http://` are rejected.")
     assert "://" not in masked
     redactor.verify([masked])
+
+
+@pytest.mark.parametrize("text,leak", [
+    ("mysql -u root --password Welcome123", "Welcome123"),
+    ("mysql -u root -p 1234 orders", "1234"),
+    ("sshpass -p sunshine ssh box", "sunshine"),
+    ("curl -u admin:sunshine", "sunshine"),
+    ("the password for prod is sunshine", "sunshine"),
+    ("use sunshine as the password", "sunshine"),
+    ("sunshine is the wifi password", "sunshine"),
+    ("wifi password sunshine", "sunshine"),
+    ("login: admin / sunshine", "sunshine"),
+    ("ADMIN_PW=sunshine", "sunshine"),
+    ("export WEBHOOK_SIGNING=table-window-paper", "window"),
+    ('the password is "table window paper"', "window"),
+    ("the password is table window paper", "window"),
+    ("password: table window paper", "window"),
+    ("密码：sunshine", "sunshine"),
+    ("пароль: sunshine", "sunshine"),
+    ("Passwort ist sunshine", "sunshine"),
+    ("Welcome123", "Welcome"),
+    ("Welcome-123", "Welcome"),
+])
+def test_values_after_password_labels_are_masked(text, leak):
+    assert leak not in redact(text)
+
+
+@pytest.mark.parametrize("text", [
+    "ssh -p 22 box and docker run -p 8080:80 nginx",
+    "mkdir -p src",
+    "status code 404 and exit code 127",
+    "Fix the password field and the password reset flow",
+    "the token count is 1200",
+    "pin the version to 3.2",
+    "use sha256 and python3 with utf8 on h264, S3, K8s and OAuth2",
+    "NODE_ENV=production PORT=8080 DEBUG=true",
+    "1,000,000 rows and 12:30:45",
+])
+def test_ordinary_text_near_those_labels_survives(text):
+    assert redact(text) == text
+
+
+SEED = "legal winner thank year wave sausage worth useful legal winner thank yellow"
+
+
+@pytest.mark.parametrize("text", [
+    SEED,
+    SEED.title(),
+    "seed phrase: " + SEED,
+    ", ".join(SEED.split()),
+    "\n".join(f"{i}. {w}" for i, w in enumerate(SEED.split(), 1)),
+    "the recovery words are zebra tulip quartz ember nickel lantern",
+])
+def test_seed_phrases_are_masked_whole(text):
+    out = redact(text).casefold()
+    assert not any(w in out.split() for w in ("winner", "sausage", "tulip", "lantern"))
+
+
+def test_plain_sentences_are_not_seed_phrases():
+    text = "Fix the login bug and add a regression test for the new page"
+    assert redact(text) == text
+
+
+@pytest.mark.parametrize("text", [
+    "4242,4242,4242,4242", "4242_4242_4242_4242", "4242\n4242\n4242\n4242",
+    "4242:4242:4242:4242", "415_555_0134", "415\n555\n0134",
+])
+def test_grouped_numbers_are_masked(text):
+    assert redact(text) == "[number]"
+
+
+@pytest.mark.parametrize("text,leak", [
+    ("the pin code 4821 opens it", "4821"),
+    ("cvv 381", "381"),
+    ("otp: 552913", "552913"),
+])
+def test_digits_after_pin_labels_are_masked(text, leak):
+    assert leak not in redact(text)
+
+
+@pytest.mark.parametrize("term", ["HP", "3M", "Bo", "Ops", "Home", "Mac", "Dev", "X"])
+def test_user_hide_terms_always_apply_and_pass_the_final_check(term):
+    redactor = Redactor(hide=[term])
+    out = redactor.text(f"ask {term} and {term.lower()} about it")
+    assert term not in out.replace("[name", "")
+    redactor.verify([out])
+
+
+def test_machine_identity_still_ignores_generic_names():
+    assert "home" in Redactor(identity=["home"]).text("go home now")
+
+
+@pytest.mark.parametrize("term", ["name", "word", "secret", "code", "lines", "1", "0", "12"])
+def test_hiding_a_placeholder_word_cannot_break_placeholders(term):
+    redactor = Redactor(hide=[term])
+    out = redactor.text("ask zorblax, password: abc, and /tmp/x/y\n```\nx\ny\n```\n")
+    assert "" not in out and "" not in out
+    redactor.verify([out])
+
+
+@pytest.mark.parametrize("text", [
+    "the password is Welcome123",
+    "password: sunshine",
+    "Welcome123",
+    SEED,
+    "4242,4242,4242,4242",
+])
+def test_final_check_refuses_what_the_mask_would_have_caught(text):
+    with pytest.raises(RedactionError):
+        Redactor().verify([text])
+
+
+def test_final_check_accepts_measurements():
+    text = "took 500ms on a 250MB file, the 4th run, 12px wider"
+    assert redact(text) == text
+    Redactor().verify([text])
