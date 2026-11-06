@@ -29663,6 +29663,7 @@ _BACKGROUND_API_READ_PATHS = frozenset({
     "/api/jobs",
     "/api/throughput/daily",
     "/api/throughput/share",
+    "/api/share/stats",
     "/api/titler-turns",
     "/api/background-runs",
     "/api/vercel-deploy",
@@ -31489,6 +31490,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload, status = _throughput_share_payload()
             self.send_json(payload, status)
             return
+        elif path == "/api/share/stats":
+            # Numbers-only card from caches the dashboard already keeps.
+            from ccc_server import share_run
+            qs = urllib.parse.parse_qs(parsed.query)
+            payload, status = share_run.stats_card(
+                throughput=_throughput_share_payload,
+                productivity=lambda: _productivity_payload(weeks=8),
+                days=30 if qs.get("days", ["7"])[0] == "30" else 7,
+            )
+            self.send_json(payload, status)
+            return
         elif path == "/api/throughput/daily":
             # Daily throughput digest (sessions, tokens by model, top lanes,
             # queue-ticket counts). ?date=YYYY-MM-DD | today | yesterday.
@@ -32268,6 +32280,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             repo_path = (qs.get("repo_path", [""])[0] or "").strip() or None
             transcript_path = conversation_transcript_path(conv_id, repo_path=repo_path)
             self.send_json({"transcript_path": transcript_path})
+        elif re.match(r"^/api/conversations/[^/]+/share$", path):
+            # Local, redacted replay of one session. Builds it and hands it
+            # back to the browser; nothing is uploaded.
+            from ccc_server import share_run
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            qs = urllib.parse.parse_qs(parsed.query)
+            payload, status = share_run.export_conversation(
+                conv_id,
+                parse=parse_conversation,
+                transcript_path=conversation_transcript_path(conv_id),
+                engine=_detect_session_engine(conv_id),
+                hide=share_run.parse_list(qs.get("hide", [""])[0]),
+                keep=share_run.parse_list(qs.get("keep", [""])[0]),
+                title=(qs.get("title", [""])[0] or "")[:200],
+            )
+            self.send_json(payload, status)
         elif path == "/api/sessions/ultra-fresh":
             from ccc_server.ultra_fresh import stream
             stream(self, urllib.parse.parse_qs(parsed.query))
