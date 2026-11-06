@@ -44860,11 +44860,16 @@
       return _allTabNaturalLane(c);
     };
     const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
+    // Sessions only get tickets when started from the UI, so someone who runs
+    // `claude` in a terminal would otherwise see "All 0" and find their work
+    // under Other. Past this size the user has a ticket habit and All is the
+    // curated list; below it, All has to mean all.
+    const _ticketlessRowsInAll = _ideaTicketsOn && _allTabCodingConvs.length <= 50;
     const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
     const _allTabOtherConvs = _allTabConvs.filter(c => {
       const lane = _allTabLaneFor(c);
-      return lane === 'messages' || lane === 'other' || (_ideaTicketsOn && lane === 'coding');
+      return lane === 'messages' || lane === 'other' || (_ideaTicketsOn && !_ticketlessRowsInAll && lane === 'coding');
     });
     // One row per ticket, represented by its most recent session. Liveness
     // arrives separately from archive rows: using it to pick a representative
@@ -44875,7 +44880,8 @@
       // CCC-285: 'alltickets' is Features + Small bugs in one list.
       const laneOf = c => {
         const l = _allTabLaneFor(c);
-        return lane === 'alltickets' && (l === 'ideas' || l === 'smallbugs') ? 'alltickets' : l;
+        return lane === 'alltickets' && (l === 'ideas' || l === 'smallbugs' || (l === 'coding' && _ticketlessRowsInAll))
+          ? 'alltickets' : l;
       };
       const inWindow = c => !!_qActive || _archiveWindowAllowsRow(c, _ipWindowCutoff);
       const byRecency = (x, y) => (
@@ -44890,14 +44896,16 @@
       const members = new Map();
       candidates.forEach(c => {
         if (laneOf(c) !== lane || !inWindow(c)) return;
-        const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
+        const ticket = c.idea_ticket || {};
+        const ref = ticket.ref || (ticket.pending && 'pending:' + _allTabSessionId(c))
+          || (lane === 'alltickets' && 'session:' + _allTabSessionId(c));
         if (!ref) return;
-        if (bucket === 'active' && (c.archived || c.trashed || c.idea_ticket.closed)) return;
-        const _handedOff = !c.archived && !c.trashed && !c.idea_ticket.closed
-          && ['running', 'waiting'].includes((c.idea_ticket.handoff || {}).state);
+        if (bucket === 'active' && (c.archived || c.trashed || ticket.closed)) return;
+        const _handedOff = !c.archived && !c.trashed && !ticket.closed
+          && ['running', 'waiting'].includes((ticket.handoff || {}).state);
         if (bucket === 'handoff' && !_handedOff) return;
         if (bucket === 'archived' && (activeRefs.has(ref)
-          || (!c.archived && !c.idea_ticket.closed))) return;
+          || (!c.archived && !ticket.closed))) return;
         if (bucket === 'trash' && !c.trashed) return;
         if (!members.has(ref)) members.set(ref, []);
         members.get(ref).push(c);
@@ -45717,7 +45725,7 @@
     // messages + group chats -- since Coding/Workers sessions now live
     // exclusively under their own top-level tabs. Hidden entirely when empty.
     const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length
-      + (_ideaTicketsOn ? _allTabCodingConvs.length : 0);
+      + (_ideaTicketsOn && !_ticketlessRowsInAll ? _allTabCodingConvs.length : 0);
     const _otherTabDef = ['archived', 'Other', _otherTabCount];
     const _tabDefs = _ideaTicketsOn
       ? [
