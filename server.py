@@ -18490,6 +18490,10 @@ def _install_gc_pause_diag():
 # refcount. Only frozen cycles need a real pass, which runs on a slow timer.
 _GC_FREEZE_EVERY_S = 15.0
 _GC_FULL_PASS_EVERY_S = 1800.0
+# With the old heap frozen, the default threshold still ran a ~170ms oldest
+# generation pass every 8s over the newest objects. Most of them die by
+# refcount, so counting 10000 allocations before a pass loses little.
+_GC_GEN0_THRESHOLD = 10000
 
 
 def _gc_freeze_tick(now, next_full_pass):
@@ -18506,6 +18510,7 @@ def _gc_freeze_tick(now, next_full_pass):
 def _start_gc_freeze_thread():
     if os.environ.get("CCC_GC_FREEZE", "1") == "0":
         return
+    gc.set_threshold(_GC_GEN0_THRESHOLD, *gc.get_threshold()[1:])
 
     def loop():
         next_full_pass = time.monotonic() + _GC_FULL_PASS_EVERY_S

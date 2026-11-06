@@ -51,6 +51,17 @@ def test_full_pass_reclaims_frozen_cycles():
     assert gc.get_freeze_count() > 0
 
 
+def test_start_raises_the_youngest_threshold(monkeypatch):
+    before = gc.get_threshold()
+    monkeypatch.setattr(server.threading, "Thread", lambda *a, **k: type(
+        "T", (), {"start": lambda self: None})())
+    try:
+        server._start_gc_freeze_thread()
+        assert gc.get_threshold() == (server._GC_GEN0_THRESHOLD, *before[1:])
+    finally:
+        gc.set_threshold(*before)
+
+
 def test_can_be_turned_off(monkeypatch):
     monkeypatch.setenv("CCC_GC_FREEZE", "0")
     started = []
