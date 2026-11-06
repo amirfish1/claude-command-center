@@ -1,0 +1,37 @@
+/* Demo-only chrome. The app's own CSS is untouched; this adds the ribbon and
+   hides controls that need a real machine behind them. */
+:root { --try-demo-h: 38px; }
+html, body { height: calc(100dvh - var(--try-demo-h)) !important; }
+body { margin-top: var(--try-demo-h) !important; }
+#tryDemoRibbon {
+  position: fixed; inset: 0 0 auto 0; height: var(--try-demo-h); z-index: 2147483000;
+  display: flex; align-items: center; gap: 14px; padding: 0 14px; box-sizing: border-box;
+  background: #1f2430; color: #e6edf3; border-bottom: 1px solid #d97757;
+  font: 13px/1.3 -apple-system, BlinkMacSystemFont, Inter, "Segoe UI", sans-serif; white-space: nowrap;
+}
+#tryDemoRibbon .tag { font-weight: 700; color: #d97757; letter-spacing: .04em; }
+#tryDemoRibbon .hint { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#tryDemoRibbon .stats { color: #9fb0c3; font-variant-numeric: tabular-nums; }
+#tryDemoRibbon .stats b { color: #e6edf3; }
+#tryDemoRibbon .stats .needs b { color: #f0b429; }
+#tryDemoRibbon a {
+  flex: none; color: #111; background: #d97757; border-radius: 6px; padding: 4px 10px;
+  font-weight: 600; text-decoration: none;
+}
+#tryDemoToast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 2147483000; max-width: min(520px, 92vw);
+  background: #1f2430; color: #e6edf3; border: 1px solid #d97757; border-radius: 8px; padding: 10px 14px;
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, Inter, "Segoe UI", sans-serif; box-shadow: 0 10px 30px rgba(0,0,0,.45);
+}
+#tryDemoToast[hidden] { display: none; }
+
+/* These need a machine, a queue or account data the demo does not invent. */
+#cccSavingsTicker, #shareCccBtn, #cccVersionLabel, .speaker-tools, .conv-scroll-speak-btn,
+[data-conv-tab="workers"], [data-conv-tab="jobs"], [data-conv-tab="decisions"], [data-conv-tab="decisions2"] { display: none !important; }
+
+.ccc-side-nav { top: var(--try-demo-h) !important; }
+
+@media (max-width: 720px) {
+  #tryDemoRibbon { gap: 8px; padding: 0 8px; font-size: 12px; }
+  #tryDemoRibbon .stats { display: none; }
+}
