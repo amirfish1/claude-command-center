@@ -394,3 +394,90 @@ test("stats falls back to the current ISO week for geo when the previous week is
   assert.deepEqual(payload.geo_week.countries, []);
   assert.deepEqual(payload.geo_week.regions, []);
 });
+
+function statsEnv({ failReads = false } = {}) {
+  const store = new Map();
+  const counts = { prepares: 0 };
+  const stmt = {
+    bind: () => stmt,
+    first: async () => {
+      if (failReads) throw new Error("D1_ERROR: exceeded free tier daily row read limit");
+      return {};
+    },
+    all: async () => {
+      if (failReads) throw new Error("D1_ERROR: exceeded free tier daily row read limit");
+      return { results: [] };
+    },
+  };
+  return {
+    store,
+    counts,
+    env: {
+      DB: { prepare() { counts.prepares += 1; return stmt; } },
+      STATS_CACHE: {
+        get: async (key) => store.get(key) ?? null,
+        put: async (key, value) => { store.set(key, value); },
+      },
+    },
+  };
+}
+
+const statsRequest = () => new Request("https://example.test/v1/stats");
+
+test("stats scans D1 once an hour, not once per caller", async () => {
+  const { env, counts } = statsEnv();
+  const first = await worker.fetch(statsRequest(), env);
+  assert.equal(first.status, 200);
+  const scanned = counts.prepares;
+  assert.ok(scanned > 0);
+  const second = await worker.fetch(statsRequest(), env);
+  assert.equal(second.status, 200);
+  assert.equal(counts.prepares, scanned);
+  assert.deepEqual(await second.json(), await first.json());
+});
+
+test("stats rescans once the cached copy is over an hour old", async () => {
+  const { env, store, counts } = statsEnv();
+  await worker.fetch(statsRequest(), env);
+  const scanned = counts.prepares;
+  const entry = JSON.parse(store.get("stats:v1"));
+  entry.computed_at -= 3601 * 1000;
+  store.set("stats:v1", JSON.stringify(entry));
+  await worker.fetch(statsRequest(), env);
+  assert.equal(counts.prepares, scanned * 2);
+});
+
+test("stats serves the last good numbers, labelled, while D1 refuses reads", async () => {
+  const computedAt = Date.parse("2026-11-06T11:00:00Z");
+  const { env, store } = statsEnv({ failReads: true });
+  store.set("stats:v1", JSON.stringify({
+    computed_at: computedAt,
+    body: JSON.stringify({ totals: { weekly_active_installs: 36 } }),
+  }));
+  const response = await worker.fetch(statsRequest(), env);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.totals.weekly_active_installs, 36);
+  assert.equal(body.stale, true);
+  assert.equal(body.stale_since, "2026-11-06T11:00:00.000Z");
+});
+
+test("stats still reports a failure when D1 refuses and nothing is cached", async () => {
+  const { env } = statsEnv({ failReads: true });
+  const response = await worker.fetch(statsRequest(), env);
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: "query failed" });
+});
+
+test("stats never caches a failure", async () => {
+  const { env, store } = statsEnv({ failReads: true });
+  await worker.fetch(statsRequest(), env);
+  assert.equal(store.size, 0);
+});
+
+test("stats works with no cache bound", async () => {
+  const { env } = statsEnv();
+  delete env.STATS_CACHE;
+  const response = await worker.fetch(statsRequest(), env);
+  assert.equal(response.status, 200);
+});

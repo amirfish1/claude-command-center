@@ -167,6 +167,10 @@ because the beacon carries no identity to withdraw consent for.
 existing ones are never renamed or removed. Beyond the existing totals and
 30/90-day daily buckets, it now includes:
 
+- Answers are computed at most once an hour and kept in KV, so numbers can be
+  up to an hour old. If D1 refuses reads and an older copy exists, the response
+  is that copy with `stale: true` and `stale_since` (ISO time it was computed).
+
 - `totals.weekly_active_installs` / `totals.weekly_active_installs_all` —
   count of beacons with `first_this_week = 1` since the current ISO week's
   Monday (UTC), without and with the maintainer's own machine.
