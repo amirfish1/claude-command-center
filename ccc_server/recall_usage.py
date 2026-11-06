@@ -108,6 +108,10 @@ def _get_claude_credentials():
         try:
             with open(cred_file, "r") as f:
                 data = json.load(f)
+                # Claude Code nests the login under "claudeAiOauth" on Linux/Windows.
+                nested = data.get("claudeAiOauth")
+                if isinstance(nested, dict):
+                    data = {**data, **nested}
                 token = data.get("oauthToken") or data.get("accessToken") or data.get("token")
                 if token:
                     return {"oauth_token": token}
