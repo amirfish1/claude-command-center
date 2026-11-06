@@ -492,7 +492,7 @@ def shipped_all(topic: str, local_shipped) -> dict:
 
 
 # Continuation resolution is one more routed hop with the same ssh tail as
-# recall: 1.5 s missed 2 of 5 live hermes-gcp briefs (MEMORY-16 verify).
+# recall: 1.5 s missed 2 of 5 live VM briefs (MEMORY-16 verify).
 _RESOLVE_DEADLINE_S = PEER_DEADLINE_S
 
 

@@ -3,7 +3,7 @@
 """Extracted from server.py (originally lines 34332-35851).
 
 Part of the server.py decomposition; see
-CCC-private-docs/plans/server-py-decomposition.md. Names still living
+the private plans repo (server-py-decomposition). Names still living
 in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations

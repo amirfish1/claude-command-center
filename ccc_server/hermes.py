@@ -3,7 +3,7 @@
 """Extracted from server.py (originally lines 37378-39574).
 
 Part of the server.py decomposition; see
-CCC-private-docs/plans/server-py-decomposition.md. Names still living
+the private plans repo (server-py-decomposition). Names still living
 in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from ccc_server.history_search import extract_history_terms, _is_explicit_histor
 # Hermes full-text hits surface alongside the claude-index results.
 # ---------------------------------------------------------------------------
 
-# Profile workers (e.g. the "chuckrealtor" / Becky agent that actually writes
+# Profile workers (e.g. an "example-worker" agent that actually writes
 # code) run under their OWN state.db at ~/.hermes/profiles/<name>/state.db,
 # not the main gateway DB. Those are the sessions that do the real work, so
 # CCC ingests every profile DB alongside the gateway one.
@@ -64,7 +64,7 @@ def _hermes_db_path():
 def _hermes_profile_for_db(db):
     """Profile name for a DB path, or "" for the main gateway DB.
 
-    ~/.hermes/profiles/chuckrealtor/state.db -> "chuckrealtor"."""
+    ~/.hermes/profiles/example-worker/state.db -> "example-worker"."""
     try:
         db = Path(db)
         main = Path(_core.HERMES_STATE_DB).expanduser()
@@ -2027,7 +2027,7 @@ def find_hermes_conversations(
                 "hermes_continued_from": parent_id,
                 "hermes_child_session_ids": children_by_parent.get(sid, []),
                 "hermes_is_parent": sid in parent_ids,
-                # "" for the main gateway DB; profile name (e.g. "chuckrealtor")
+                # "" for the main gateway DB; profile name (e.g. "example-worker")
                 # for a worker session living in a profile's own state.db.
                 "hermes_profile": profile,
             })

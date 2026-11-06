@@ -12,13 +12,13 @@ Running CCC on its default port 8090 caused port collisions and routed requests 
 
 - **Hermes agent gateway owns port 8090** as the primary host agent gateway.
 - **Claude Command Center owns port 8091** durably on the hermes host.
-- `bym-studio-digest`'s `DECISION_INBOX_URL` points to `http://127.0.0.1:8091/api/decision-inbox`.
+- a sibling service's `DECISION_INBOX_URL` points to `http://127.0.0.1:8091/api/decision-inbox`.
 
 ## Systemd Units: `/etc/systemd/system/` Convention
 
 Previously, CCC on hermes was run under user systemd (`~/.config/systemd/user/ccc.service`), which was invisible to root administration sessions (`systemctl status` / `systemctl list-units`), had no memory bounds, and left port 8091 undocumented.
 
-Following the convention established by `bym-dev.service` and `bym-digest-*`:
+Following the convention established by the host's other long-running units:
 1. **System units in `/etc/systemd/system/`**:
    - `ccc.service`
    - `ccc-worker.service`
@@ -36,7 +36,7 @@ On the hermes VM (as root or with sudo):
 
 ```bash
 # Install and start services:
-cd /home/hermes/Apps/claude-command-center
+cd ~/Apps/claude-command-center
 ./systemd/install.sh
 
 # Check status:

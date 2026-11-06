@@ -76,7 +76,7 @@ def _cache_dir() -> str:
 def _referenced_doc_paths(one_brief: dict, repo_root: str) -> list[str]:
     """Runbook/design-doc-shaped paths mentioned in a brief's own text
     (last asks, last reply, files touched) that actually exist on disk --
-    e.g. the "apps/bookyourmat/docs/runbooks/google-ads-relaunch-build.md"
+    e.g. the "apps/shop/docs/runbooks/ads-relaunch-build.md"
     a session's closing summary points a human at."""
     text = " ".join([
         one_brief.get("last_assistant_reply") or "",

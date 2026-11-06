@@ -104,7 +104,7 @@
   // recommendation. Lift that structure out so a human can scan it (CCC-64).
   // Returns HTML, or null when the text has no inline options to lift.
   // Labels may be "(a)", "(A)", "(1)" or carry a short note such as
-  // "(A, recommended)" (STRAMP-215); the note is shown bold after the key.
+  // "(A, recommended)" (a real ticket); the note is shown bold after the key.
   function renderDense(text) {
     var flat = String(text || '').replace(/\s+/g, ' ').trim();
     var marks = [];

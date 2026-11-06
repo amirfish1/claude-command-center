@@ -294,8 +294,7 @@ after a customer reply, and lands in Closed after Resolve.
 
 ## Hard-won details (from the reference implementation)
 
-These came out of running this widget in production at
-[BookYourMat](https://bookyourmat.com); steal them:
+These came out of running this widget on a production site; steal them:
 
 - **`msBeforeCapture` on the last tap is gold.** "User tapped *Save* 4.2s
   before reporting" usually *is* the repro.

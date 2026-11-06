@@ -1,6 +1,6 @@
 """Map a live CODEX_CONVERSATIONS snapshot into rollout-shaped transcript events.
 
-Slice 1 of the codex-single-renderer-merge plan (CCC-private-docs). Pure
+Slice 1 of the codex-single-renderer-merge plan (private plans repo). Pure
 functions: turn a `CodexConversationStore.snapshot(thread_id)` reading (the
 native app-server's own turns/items, plan, diff) into the same event dicts
 `ccc_server/codex_parse.py` produces for rollout rows, so the shared

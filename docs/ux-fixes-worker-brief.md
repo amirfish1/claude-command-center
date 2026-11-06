@@ -25,7 +25,7 @@ thing that differs per project is **which repo the session runs in** and
   `claude-command-center` → `CCC`. So you do not "create" a queue; annotating
   a project's pages files tickets into it. (Note: as of 2026-08-21, this
   basename routing has no special-case alias table — a repo like
-  `bookyourmat` or `BYM+Finie` routes by its literal basename unless its
+  `acme-web` or `Acme+Web` routes by its literal basename unless its
   `repo_path` is registered in `queue-config.json` or the caller passes an
   explicit `project=`.)
 

@@ -5,8 +5,8 @@
 A per-call SSH peer request pays ~90 ms for the ssh session and ~270 ms to
 start python3 + urllib on the peer, on top of the peer's own handler time.
 Measured 2026-10-29, memory_recall, 20 samples per run, p50: Mac ->
-hermes-gcp cold (no mux) 1168-2256 ms, warm mux 505-1234 ms, this pipe
-284-328 ms; hermes-gcp -> Mac cold 1086 ms, warm 263-561 ms, pipe 162 ms.
+VM cold (no mux) 1168-2256 ms, warm mux 505-1234 ms, this pipe
+284-328 ms; VM -> Mac cold 1086 ms, warm 263-561 ms, pipe 162 ms.
 The S5 gate was a warm p50 above 800 ms, so this module keeps one
 long-lived `ssh <peer> python3 -u -c <server>` process per peer and sends
 memory route requests over it as NDJSON.

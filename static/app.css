@@ -9201,7 +9201,7 @@
     border: 1px solid rgba(45, 212, 191, 0.25);
   }
   /* Profile-worker chip — a session from a profile's own state.db
-     (e.g. the chuckrealtor "Becky" worker), not a plain gateway chat. */
+     (e.g. an "example-worker" agent), not a plain gateway chat. */
   .conv-signal.hermes-profile {
     background: rgba(245, 158, 11, 0.14);
     color: #fbbf24;

@@ -14,7 +14,7 @@ Repo lives at `github.com/amirfish1/claude-command-center`. Every commit, commen
 
 This checkout is public. Keep non-public plans, specs, product-story source,
 backlog notes, and agent working documents in the separate private
-`CCC-private-docs` repository. Do not recreate `docs/superpowers/`, commit
+plans repository. Do not recreate `docs/superpowers/`, commit
 private-document copies here, or add a private-repository submodule or
 symlink. Publish only explicitly reviewed, public-safe exports.
 

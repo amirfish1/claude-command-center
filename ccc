@@ -846,7 +846,7 @@ def cmd_recall(args):
 
 def _brief_link_text(link):
     """One continuation edge from `ccc brief` (multi-machine S6), e.g.
-    `[hermes-gcp] 2938bb2e "memory wave 3 lead"`; a local edge has no tag."""
+    `[build-box] 2938bb2e "memory wave 3 lead"`; a local edge has no tag."""
     sid = str(link.get("session_id") or "")
     if link.get("ambiguous"):
         return f"{sid} (on several machines: {', '.join(link.get('candidates') or [])})"
@@ -3095,7 +3095,7 @@ def main(argv=None):
     )
     jp.add_argument("--host", required=True, choices=("hermes", "laptop"))
     jp.add_argument("--repo", required=True,
-                    help="repo path or folder name (hermes: /home/hermes/Apps/<folder>)")
+                    help="repo path or folder name (hermes: <apps dir>/<folder>)")
     jp.add_argument("--what", required=True, help="what the job should do, in plain English")
     jp.add_argument("--when", required=True, help='when it runs, e.g. "hourly", "daily 7am"')
     jp.add_argument("--name", help="kebab-case job name (default: the agent picks one)")

@@ -9,7 +9,7 @@ parses. Stage 2 makes ONE headless cheap-model CLI call (Antigravity `agy`
 print mode first, Claude Code haiku fallback) whose answer cites sessions as
 [[session:ID]] markers the UI renders as clickable chips.
 
-Design rules (spec: CCC-private-docs/specs/2026-08-30-ask-tab-design.md):
+Design rules (spec: the private plans repo):
 - Stateless server: follow-up context is client-resent history, capped here.
 - The model proposes, never invents: citations are validated against the hit
   set; status/branch facts travel in the prompt from CCC's own metadata.
