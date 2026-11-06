@@ -136,6 +136,8 @@ from ccc_server import media_preview as _media_preview
 from ccc_server import cpu_accounting as _cpu_accounting
 from ccc_server import conv_reader as _conv_reader
 from ccc_server import swr_cache as _swr
+from ccc_server import memory_release as _memory_release
+from ccc_server.bounded_cache import ByteBudgetCache
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
@@ -12375,15 +12377,36 @@ _SYS_ONESHOT_RE = re.compile(
     r"next\s+build|vite\s+build|npm\s+(?:test|run\s+(?:build|test|lint|typecheck)))(?:\s|$)"
 )
 _SYS_WRAPPER_BASES = frozenset(("npm", "npx", "sh", "dash", "pnpm", "yarn"))
+# CCC itself, from any install. A second dashboard on the same machine used to
+# offer to kill the first one, and a worker's tree holds every running session.
+_SYS_CCC_PROCESS_RE = re.compile(
+    r"(?:^|[\s/])(?:ccc_worker\.py|local_tts_server\.py)(?:\s|$)"
+    r"|\bccc_server\.(?:bg_helper|conv_reader)\b"
+    r"|claude-command-center/server\.py(?:\s|$)"
+    r"|server\.py\s+--archive-refresh-worker\b"
+)
+# Software people keep open all day. Holding gigabytes for an hour is normal
+# for these, not a leak, so the memory rule leaves them out.
+_SYS_USER_APP_RE = re.compile(
+    r"\.app/|/Applications/|\s--type=|/snap/|/opt/google/"
+    r"|(?:^|/)(?:firefox|chrome|chromium|brave|slack|discord|code|cursor|electron|java)(?:\s|$)",
+    re.IGNORECASE,
+)
+_SYS_SESSION_BASES = frozenset(("claude", "codex"))
+
+
+def _sys_cmd_base(cmd):
+    parts = cmd.split(None, 1)
+    return parts[0].rsplit("/", 1)[-1] if parts else ""
 
 
 def _sys_anomaly_protected(row, my_pids):
     if row["pid"] <= 1 or row["pid"] in my_pids:
         return True
-    base = row["cmd"].split(None, 1)[0].rsplit("/", 1)[-1]
+    base = _sys_cmd_base(row["cmd"])
     if base in _PROC_KNOWN_DAEMON_BASES or base in ("claude", "codex", "systemd", "sshd"):
         return True
-    return False
+    return bool(_SYS_CCC_PROCESS_RE.search(row["cmd"]))
 
 
 def _sys_anomaly_tree(root, by_pid, children):
@@ -12422,12 +12445,19 @@ def _sys_anomalies(rows, total_mb=None):
         if r["etime_min"] >= _SYS_ANOMALY_RUNAWAY_MIN and _SYS_ONESHOT_RE.search(r["cmd"]):
             kind = "runaway"
             reason = "one-shot tool still running after %s" % _sys_fmt_age(r["etime_min"])
-        elif r["rss_mb"] >= mem_floor and r["etime_min"] >= _SYS_ANOMALY_MEM_MIN_AGE:
+        elif (r["rss_mb"] >= mem_floor and r["etime_min"] >= _SYS_ANOMALY_MEM_MIN_AGE
+              and not _SYS_USER_APP_RE.search(r["cmd"])):
             kind = "memory"
             reason = "holding %.1f GB of RAM for %s" % (r["rss_mb"] / 1024.0, _sys_fmt_age(r["etime_min"]))
         if not kind:
             continue
         tree = _sys_anomaly_tree(r, by_pid, children)
+        # Being large is no reason to offer a kill that takes agent sessions
+        # down with it.
+        if kind == "memory" and any(
+            p in by_pid and _sys_cmd_base(by_pid[p]["cmd"]) in _SYS_SESSION_BASES for p in tree
+        ):
+            continue
         # A wrapper (npm exec / sh -c) can also match the one-shot regex; only
         # report the deepest process so one leak is one anomaly.
         if any(c in by_pid and _SYS_ONESHOT_RE.search(by_pid[c]["cmd"]) and kind == "runaway"
@@ -16675,9 +16705,20 @@ _archive_serve_version = 0       # monotonic per store; tags prebuilt response b
 # or (version, overlay content hash) when ACP/Devin overlay rows were
 # appended — _archive_list_body_ver — so a snapshot swap or any overlay
 # content change always misses and rebuilds.
-_ARCHIVE_LIST_BODY_CACHE = {}  # (cache_key, window, from_cache) -> {"ver", "raw", "gzip", "etag"}
-_ARCHIVE_LIST_BODY_LOCK = threading.Lock()
+def _cache_budget_bytes(env_name, default_mb):
+    try:
+        return max(1, int(float(os.environ.get(env_name, default_mb)) * 1024 * 1024))
+    except ValueError:
+        return default_mb * 1024 * 1024
+
+
+# Version is in the key, so every snapshot adds entries and 96 stale copies of a
+# 13 MB body stayed resident. The byte budget evicts those first (LRU).
 _ARCHIVE_LIST_BODY_CACHE_MAX = 96
+_ARCHIVE_LIST_BODY_CACHE_BYTES = _cache_budget_bytes("CCC_LIST_BODY_CACHE_MB", 64)
+_ARCHIVE_LIST_BODY_CACHE = ByteBudgetCache(  # body key -> {"ver", "raw", "gzip", "etag"}
+    _ARCHIVE_LIST_BODY_CACHE_BYTES, _ARCHIVE_LIST_BODY_CACHE_MAX)
+_ARCHIVE_LIST_BODY_LOCK = threading.Lock()
 _ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body builds
 
 
@@ -16726,14 +16767,12 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
             )
             if snap_ver:
                 with _ARCHIVE_LIST_BODY_LOCK:
-                    if len(_ARCHIVE_LIST_BODY_CACHE) >= _ARCHIVE_LIST_BODY_CACHE_MAX:
-                        _ARCHIVE_LIST_BODY_CACHE.clear()
-                    _ARCHIVE_LIST_BODY_CACHE[body_key] = {
+                    _ARCHIVE_LIST_BODY_CACHE.put(body_key, {
                         "ver": snap_ver,
                         "raw": raw,
                         "gzip": gzip_body,
                         "etag": etag_val,
-                    }
+                    }, len(raw) + len(gzip_body or b""))
                 _ARCHIVE_LIST_BUILT.add((cache_key, window))
                 _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val)
     finally:
@@ -18671,6 +18710,43 @@ def _read_archive_refresh_result(output_path):
     return result, size
 
 
+# A dashboard stopped mid-refresh never reaches the unlink below, and /dev/shm
+# is RAM: on one host 53 of these held about 500 MB until the next reboot.
+_ARCHIVE_REFRESH_RESULT_PREFIX = "ccc-archive-refresh-"
+_ARCHIVE_REFRESH_RESULT_MAX_AGE_S = 3600.0
+
+
+def _archive_refresh_result_dir():
+    if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK):
+        return "/dev/shm"
+    return None
+
+
+def _sweep_stale_archive_refresh_results(root=None, now=None):
+    """Delete refresh results no running worker can still own. The age limit is
+    far past the worker timeout, so a second CCC's live file is left alone."""
+    root = root or _archive_refresh_result_dir() or tempfile.gettempdir()
+    cutoff = (now if now is not None else time.time()) - max(
+        _ARCHIVE_REFRESH_RESULT_MAX_AGE_S, _ARCHIVE_REFRESH_WATCHDOG_S * 2)
+    removed = 0
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if not (entry.name.startswith(_ARCHIVE_REFRESH_RESULT_PREFIX)
+                        and entry.name.endswith(".json")):
+                    continue
+                try:
+                    st = entry.stat(follow_symlinks=False)
+                    if st.st_uid == os.getuid() and st.st_mtime < cutoff:
+                        os.unlink(entry.path)
+                        removed += 1
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return removed
+
+
 def _archive_compute_rows_detached(key, cache_options, serve_generation):
     """Run GIL-heavy archive parsing outside the dashboard server process.
 
@@ -18678,9 +18754,8 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
     exit instead of permanently raising the daemon's RSS. The parent only
     decodes the completed row snapshot and publishes it atomically.
     """
-    _shm_dir = "/dev/shm" if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK) else None
     output_fd, output_name = tempfile.mkstemp(
-        prefix="ccc-archive-refresh-", suffix=".json", dir=_shm_dir,
+        prefix=_ARCHIVE_REFRESH_RESULT_PREFIX, suffix=".json", dir=_archive_refresh_result_dir(),
     )
     os.close(output_fd)
     encoded_options = base64.urlsafe_b64encode(
@@ -18692,8 +18767,7 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
     # cache consumed by future workers and server restarts.
     env["CCC_ARCHIVE_SERVE_TTL_SEC"] = "0"
     command = [
-        sys.executable,
-        str(Path(__file__).resolve()),
+        *_server_launch_argv(),
         "--archive-refresh-worker",
         encoded_options,
         output_name,
@@ -22290,7 +22364,7 @@ def _schedule_restart(delay=0.5):
             _quiesce_http_for_restart()
         except Exception:
             pass
-        os.execvp(sys.executable, [sys.executable, str(Path(__file__).resolve())])
+        os.execvp(sys.executable, _server_launch_argv())
     t = threading.Timer(delay, _go)
     t.daemon = True
     t.start()
@@ -26235,9 +26309,20 @@ def _registry_only_conversation_stub(conversation_id, after_line=0):
 # turns the click→render path on already-opened convs from ~170 ms (full
 # parse of a ~750 KB JSONL) into a hash-table lookup. Bounded so a long
 # session of clicking around different convs doesn't grow unbounded.
-_CONV_PARSE_CACHE = {}
-_CONV_PARSE_CACHE_LOCK = threading.Lock()
 _CONV_PARSE_CACHE_MAX = 512
+_CONV_PARSE_CACHE_BYTES = _cache_budget_bytes("CCC_CONV_PARSE_CACHE_MB", 64)
+_CONV_PARSE_CACHE = ByteBudgetCache(_CONV_PARSE_CACHE_BYTES, _CONV_PARSE_CACHE_MAX)
+_CONV_PARSE_CACHE_LOCK = threading.Lock()
+# Parsed events cost more than the JSONL they came from. Sizing every entry by
+# walking it would cost more than the parse saved, so estimate from the counts.
+_CONV_PARSE_BYTES_PER_EVENT = 2048
+_CONV_PARSE_BYTES_PER_SOURCE_BYTE = 2
+
+
+def _conv_parse_result_weight(result, source_stat):
+    size = source_stat[1] if len(source_stat) > 1 and isinstance(source_stat[1], int) else 0
+    return max(len(result.get("events") or ()) * _CONV_PARSE_BYTES_PER_EVENT,
+               size * _CONV_PARSE_BYTES_PER_SOURCE_BYTE)
 
 
 _CONV_PATH_CACHE = {}
@@ -27100,15 +27185,7 @@ def _conv_parse_cache_put(conversation_id, after_line, repo_path, result):
         return
     key = (conversation_id, int(after_line), mtime)
     with _CONV_PARSE_CACHE_LOCK:
-        if len(_CONV_PARSE_CACHE) >= _CONV_PARSE_CACHE_MAX:
-            # Drop the oldest entry — Python 3.7+ dicts preserve insertion
-            # order, so popping the first key is FIFO eviction. Fine for
-            # this use case; recency-weighting isn't worth the bookkeeping.
-            try:
-                _CONV_PARSE_CACHE.pop(next(iter(_CONV_PARSE_CACHE)))
-            except StopIteration:
-                pass
-        _CONV_PARSE_CACHE[key] = result
+        _CONV_PARSE_CACHE.put(key, result, _conv_parse_result_weight(result, mtime))
 
 
 # Pre-serialized response bytes for /api/conversations/<id>?after=N. The
@@ -27117,9 +27194,10 @@ def _conv_parse_cache_put(conversation_id, after_line, repo_path, result):
 # conversation the user already opened once becomes a sub-5 ms socket
 # write. Keys are (sid, after_line, jsonl_mtime); values are {"raw": bytes,
 # "gzip": bytes|None}. Bounded so memory doesn't blow up.
-_CONV_BYTES_CACHE = {}
-_CONV_BYTES_CACHE_LOCK = threading.Lock()
 _CONV_BYTES_CACHE_MAX = 512
+_CONV_BYTES_CACHE_BYTES = _cache_budget_bytes("CCC_CONV_BYTES_CACHE_MB", 64)
+_CONV_BYTES_CACHE = ByteBudgetCache(_CONV_BYTES_CACHE_BYTES, _CONV_BYTES_CACHE_MAX)
+_CONV_BYTES_CACHE_LOCK = threading.Lock()
 
 
 def _session_has_pending_input(session_id):
@@ -27222,12 +27300,7 @@ def _conv_response_bytes_put(conversation_id, after_line, raw, gz, window=None):
         return
     key = (conversation_id, int(after_line), mtime, window, fp)
     with _CONV_BYTES_CACHE_LOCK:
-        if len(_CONV_BYTES_CACHE) >= _CONV_BYTES_CACHE_MAX:
-            try:
-                _CONV_BYTES_CACHE.pop(next(iter(_CONV_BYTES_CACHE)))
-            except StopIteration:
-                pass
-        _CONV_BYTES_CACHE[key] = {"raw": raw, "gzip": gz}
+        _CONV_BYTES_CACHE.put(key, {"raw": raw, "gzip": gz}, len(raw) + len(gz or b""))
 
 
 
@@ -46678,6 +46751,7 @@ def main():
     # (Phone access points `tailscale serve` at it) must see `--port`.
     globals()["PORT"] = port
     _raise_open_file_limit()
+    _memory_release.start()
     migrate_state_dir()
     _seed_model_policy_once()
     _install_python_stack_dump_handler()
@@ -46823,6 +46897,7 @@ def main():
         # parent dir's slug, same as before this fix.
         pass
     _gc_scratch_jsonls()
+    _sweep_stale_archive_refresh_results()
     # SECURITY: bind to 127.0.0.1 by default. The whole trust model is
     # "implicit because it's local"; binding to all interfaces (the old
     # `("", PORT)`) exposed every endpoint — including subprocess-spawning
@@ -47269,7 +47344,14 @@ def _chuck_imessage_poller() -> None:
         time.sleep(_CHUCK_POLL_INTERVAL)
 
 
-if __name__ == "__main__":
+def _server_launch_argv():
+    """argv that starts this file via ccc_server/boot.py, which runs it from
+    cached bytecode instead of compiling it into this process's heap."""
+    here = Path(__file__).resolve()
+    return [sys.executable, str(here.parent / "ccc_server" / "boot.py"), str(here)]
+
+
+def _script_main():
     # Running server.py as a script is always the dashboard, never the
     # worker (the worker imports this module). CCC_WORKER_PROCESS leaks in
     # when the dashboard is (re)started from inside a session the worker
@@ -47289,3 +47371,7 @@ if __name__ == "__main__":
             raise SystemExit(2)
         raise SystemExit(_archive_refresh_worker_main(sys.argv[2], sys.argv[3]))
     main()
+
+
+if __name__ == "__main__":
+    _script_main()

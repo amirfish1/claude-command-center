@@ -29,7 +29,7 @@ def test_projection_isolates_flat_and_nested_containers():
 def test_concurrent_polls_of_one_snapshot_build_the_body_once(monkeypatch, tmp_path):
     server = importlib.import_module('server')
     monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
-    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', {})
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 26, 96))
     monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_BUILD_LOCKS', {})
     monkeypatch.setattr(
         server, '_archive_list_source_rows_cached',
@@ -125,7 +125,7 @@ def test_delta_list_sends_only_changed_rows(monkeypatch):
     server = importlib.import_module('server')
     key = server._archive_response_cache_key()
     monkeypatch.setattr(server, '_archive_serve_cache', {})
-    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', {})
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 26, 96))
     monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_BUILD_LOCKS', {})
     gen = server._archive_serve_generation
     now = time.time()

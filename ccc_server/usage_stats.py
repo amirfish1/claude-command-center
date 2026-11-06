@@ -12,10 +12,12 @@ import json
 import os
 import sqlite3
 import stat
+import sys
 import threading
 import time
 import uuid
 
+from ccc_server.bounded_cache import ByteBudgetCache
 from ccc_server import core as _core
 from ccc_server import share_savings
 
@@ -1324,7 +1326,24 @@ def _throughput_session_hints(session_id):
 # Entries are loaded LAZILY — only when that specific transcript is requested,
 # not all at once at startup. This avoids the 81MB-parsed-on-boot problem the
 # prior flat-file approach had. SQLite is stdlib; no extra deps.
-_THROUGHPUT_TURN_CACHE = {}        # str(path) -> {"mtime", "size", "turns"}
+# str(path) -> {"mtime", "size", "turns"}. Byte-bounded: the SQLite layer below
+# holds every transcript's turns, so an evicted entry costs one row read rather
+# than a re-parse, and this copy must not grow with the number of sessions.
+_THROUGHPUT_TURN_CACHE = ByteBudgetCache(
+    max(1, int(os.environ.get("CCC_THROUGHPUT_CACHE_MB") or 64)) << 20, 100_000)
+
+
+def _throughput_turns_weight(turns):
+    """Resident bytes of a turn list, from its first turn. Within a few percent
+    of a full walk on real transcripts, without the walk."""
+    if not turns:
+        return 0
+    first = turns[0]
+    return len(turns) * (sys.getsizeof(first) + sum(sys.getsizeof(v) for v in first.values()))
+
+
+def _throughput_cache_put(key, entry):
+    _THROUGHPUT_TURN_CACHE.put(key, entry, _throughput_turns_weight(entry["turns"]))
 _THROUGHPUT_CACHE_LOCK = threading.Lock()
 _THROUGHPUT_AGG_CACHE = {}         # cache_key -> {"ts": float, "payload": dict, "status": int}
 _THROUGHPUT_AGG_CACHE_TTL = 300    # seconds
@@ -1992,7 +2011,7 @@ def _throughput_file_turns(path, extract_fn, progress=None):
     disk_turns = _throughput_disk_get(key, mtime, size)
     if disk_turns is not None and current_usage_schema(disk_turns):
         with _THROUGHPUT_CACHE_LOCK:
-            _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": disk_turns, "usage_schema": 3}
+            _throughput_cache_put(key, {"mtime": mtime, "size": size, "turns": disk_turns, "usage_schema": 3})
         if progress:
             progress("cache_hit")
         return disk_turns
@@ -2002,7 +2021,7 @@ def _throughput_file_turns(path, extract_fn, progress=None):
     if progress:
         progress("parsed")
     with _THROUGHPUT_CACHE_LOCK:
-        _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": turns, "usage_schema": 3}
+        _throughput_cache_put(key, {"mtime": mtime, "size": size, "turns": turns, "usage_schema": 3})
     _throughput_disk_put(key, mtime, size, turns)
     return turns
 
@@ -2611,9 +2630,9 @@ def _throughput_week_rankings(force_refresh=False):
             disk_turns = _throughput_disk_get(key, mtime, size)
             if disk_turns is not None:
                 with _THROUGHPUT_CACHE_LOCK:
-                    _THROUGHPUT_TURN_CACHE[key] = {
+                    _throughput_cache_put(key, {
                         "mtime": mtime, "size": size, "turns": disk_turns
-                    }
+                    })
                 full_turns = disk_turns
 
         if full_turns is None:

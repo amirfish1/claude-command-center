@@ -36,7 +36,7 @@ def test_cached_list_refreshes_when_parent_is_discovered(monkeypatch, tmp_path):
     from ccc_server.session_graph import _SessionGraph
     graph = _SessionGraph(tmp_path / 'graph.json')
     monkeypatch.setattr(server, '_session_graph', graph)
-    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', {})
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 26, 96))
     monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path / 'list-bodies')
     monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_STATE', {'saved': {}, 'warming': set()})
     monkeypatch.setattr(server, '_archive_list_source_rows_cached', lambda *a, **kw: ([{'session_id': 'child', 'parent_session_id': ''}], True, 7))

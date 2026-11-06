@@ -84,7 +84,7 @@ def main(argv=None):
         os.environ.pop(key, None)
     if not _ensure_watchtower():
         return 1
-    command = [sys.executable, str(ROOT / "server.py")]
+    command = [sys.executable, str(ROOT / "ccc_server" / "boot.py"), str(ROOT / "server.py")]
     if args.port is not None:
         command.extend(["--port", str(args.port)])
     if args.host is not None:

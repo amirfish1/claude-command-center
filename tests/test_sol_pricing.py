@@ -20,7 +20,7 @@ def test_sol_known_rate_prices_uncached_cached_and_output_tokens():
 def test_sol_old_unpriced_disk_cache_reparsed(tmp_path, monkeypatch):
     rollout = tmp_path / "rollout.jsonl"
     rollout.write_text("{}\n")
-    monkeypatch.setattr(usage, "_THROUGHPUT_TURN_CACHE", {})
+    monkeypatch.setattr(usage, "_THROUGHPUT_TURN_CACHE", usage.ByteBudgetCache(1 << 26, 96))
     monkeypatch.setattr(usage, "_throughput_disk_get", lambda *args: [
         {"engine": "codex", "codex_usage_schema": 3, "cost_available": False}
     ])

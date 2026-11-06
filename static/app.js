@@ -849,6 +849,7 @@
     const ov = document.createElement('div');
     ov.id = 'cccAnomalyPrompt';
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    const allMemory = anoms.every(function (a) { return a.kind === 'memory'; });
     let rows = '';
     anoms.forEach(function (a, i) {
       rows += '<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--border)">' +
@@ -858,8 +859,10 @@
         '<code style="font-size:11px;opacity:.7;word-break:break-all">' + esc(a.cmd.slice(0, 160)) + '</code></span></label>';
     });
     ov.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:18px 20px;max-width:560px;width:calc(100% - 40px);max-height:80vh;overflow:auto;box-shadow:0 8px 32px rgba(0,0,0,.5);color:var(--text);font-size:13px">' +
-      '<div style="font-size:15px;font-weight:600;margin-bottom:6px">Runaway process detected</div>' +
-      '<div style="opacity:.8;margin-bottom:8px">This looks leaked or hung and is eating memory. Kill it? Nothing is killed unless you confirm.</div>' + rows +
+      '<div style="font-size:15px;font-weight:600;margin-bottom:6px">' + (allMemory ? 'Large process' : 'Runaway process detected') + '</div>' +
+      '<div style="opacity:.8;margin-bottom:8px">' + (allMemory
+        ? 'This has held a lot of memory for over an hour. That may be normal for it. Nothing is killed unless you confirm.'
+        : 'This looks leaked or hung and is eating memory. Kill it? Nothing is killed unless you confirm.') + '</div>' + rows +
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">' +
       '<button type="button" class="sh-btn" data-act="later">' + (manual ? 'Cancel' : 'Not now') + '</button>' +
       '<button type="button" class="sh-btn sh-btn-danger" data-act="kill">Kill selected</button></div></div>';
@@ -892,8 +895,10 @@
         .then(function (d) {
           if (!d || !Array.isArray(d.anomalies)) return;
           const snoozed = _anomalySnoozed(), now = Date.now();
+          // Only a stuck one-shot tool interrupts anyone. A large process is
+          // not proof of a leak, so those stay in the Health panel.
           const fresh = d.anomalies.filter(function (a) {
-            return !(snoozed[a.key] && now - snoozed[a.key] < ANOMALY_SNOOZE_MS);
+            return a.kind === 'runaway' && !(snoozed[a.key] && now - snoozed[a.key] < ANOMALY_SNOOZE_MS);
           });
           if (fresh.length) _showAnomalyPrompt(fresh, false);
         })

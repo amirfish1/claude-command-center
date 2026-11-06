@@ -492,6 +492,8 @@ def serve(path, parent_pid, port=None, dashboard_port=None):
     os.umask(0o077)
     path = Path(path)
     sys.path.insert(0, str(PROJECT_ROOT))
+    from ccc_server import memory_release
+    memory_release.start()
     import server as server_mod  # noqa: E402  (heavy; child only)
     # The first compact sender header would otherwise index the journals inside
     # someone's open; the previous child still answers while this runs.

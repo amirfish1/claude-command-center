@@ -15,7 +15,7 @@ def srv(monkeypatch, tmp_path):
     monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
     monkeypatch.setattr(server, '_ARCHIVE_LIST_BUILT', set())
     monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_STATE', {'saved': {}, 'warming': set()})
-    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', {})
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 26, 96))
     monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_BUILD_LOCKS', {})
     monkeypatch.setattr(server, '_SERVER_START_TS', time.time())
     return server

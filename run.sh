@@ -1210,4 +1210,4 @@ except Exception:
     ;;
 esac
 
-exec "$PYTHON" "$HERE/server.py"
+exec "$PYTHON" "$HERE/ccc_server/boot.py" "$HERE/server.py"

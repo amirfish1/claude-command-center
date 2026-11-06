@@ -366,7 +366,7 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
 
 def test_archive_list_http_route_projects_cached_rows(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_ARCHIVE_LIST_DISK_DIR", tmp_path)
-    monkeypatch.setattr(server, "_ARCHIVE_LIST_BODY_CACHE", {})
+    monkeypatch.setattr(server, "_ARCHIVE_LIST_BODY_CACHE", server.ByteBudgetCache(1 << 26, 96))
     monkeypatch.setattr(
         server,
         "_archive_list_source_rows_cached",
