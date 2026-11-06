@@ -60,6 +60,8 @@ class AttentionTest(unittest.TestCase):
 
 class AutopilotTest(unittest.TestCase):
     def setUp(self):
+        it._closed_sync.update(at=float("inf"), running=False)  # own tests cover it
+        self.addCleanup(it._closed_sync.update, at=0.0, running=False)
         self.tmp = tempfile.TemporaryDirectory()
         root = pathlib.Path(self.tmp.name)
         self.calls, self.injects, self.archived = [], [], []
