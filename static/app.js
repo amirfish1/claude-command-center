@@ -21991,8 +21991,8 @@
   // patching as the sidebar's archive/trash buttons, without needing the row
   // in the DOM (archived rows often aren't rendered; on phones the list is
   // off-canvas while a conversation is open).
-  async function _setOpenSessionLifecycle(kind) {
-    const row = _openConversationRow();
+  async function _setOpenSessionLifecycle(kind, targetRow) {
+    const row = targetRow || _openConversationRow();
     if (!row) { showOpToast('No open task', 'error'); return; }
     const convId = row.id;
     const sessionId = row.session_id || row.id;
@@ -22032,13 +22032,25 @@
           && (currentConversation === convId || currentConversation === sessionId)) {
         returnToConversationList();
       }
-      showOpToast(kind === 'untrash' ? 'Untrashed to Archived'
+      if (kind === 'archive' && data.archived) _showArchivedUndoToast(row);
+      else showOpToast(kind === 'untrash' ? 'Untrashed to Archived'
         : (data.archived ? 'Archived' : 'Restored to Active'));
     } catch (err) {
       applyPatch(new Set([sessionId]), prior);
       const label = kind === 'untrash' ? 'Untrash' : (kind === 'archive' ? 'Archive' : 'Unarchive');
       showOpToast(label + ' failed (' + err.message + ')', 'error');
     }
+  }
+
+  // A misclick on Archive must be one click to recover. The server restores
+  // the whole conversation group from any one member.
+  function _showArchivedUndoToast(row) {
+    const title = String(row.display_name || row.first_message || 'session').slice(0, 60);
+    showOpToast('Archived ' + escapeHtml(title), 'success', {
+      label: 'Undo',
+      ttlMs: 8000,
+      onClick: () => _setOpenSessionLifecycle('unarchive', row),
+    });
   }
 
   // Show only the lifecycle/queue items that apply to the open session.
@@ -37186,7 +37198,7 @@
     document.body.appendChild(toast);
     // Errors and warnings linger 15s, info 10s (time to read + copy); success stays 3s.
     // Hover pauses the timer, and the \u00d7 dismisses instantly.
-    arm(kind === 'error' || kind === 'warning' ? 15000 : (kind === 'info' ? 10000 : 3000));
+    arm((action && action.ttlMs) || (kind === 'error' || kind === 'warning' ? 15000 : (kind === 'info' ? 10000 : 3000)));
   }
 
   // Soft-block dialog: "CCC detected a terminal running on this session.
@@ -47709,6 +47721,9 @@
             selectConversation(nextSelectId);
           }
           if (!data.archived) showOpToast('Restored to Active');
+          else if (c && !(convId || '').startsWith('xrepo-issue-') && !(convId || '').startsWith('backlog-issue-')) {
+            _showArchivedUndoToast(c);
+          }
         } catch (err) {
           if (nextArchived) {
             for (const [row, prior] of priorStates) Object.assign(row, prior);
