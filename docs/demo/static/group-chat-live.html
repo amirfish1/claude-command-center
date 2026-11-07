@@ -1,0 +1,1318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='14' fill='%230d1117'/><text x='32' y='48' text-anchor='middle' font-family='-apple-system,Helvetica,Arial,sans-serif' font-size='44' font-weight='700' fill='%23d97757'>⌘</text></svg>">
+<meta name="theme-color" content="#0d1117">
+<title>CCC — Group Chat Live</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface-2: #1c2129;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-muted: #8b949e;
+    --accent: #6e8caf;
+    --green: #3fb950;
+    --orange: #d29922;
+    --purple: #bc8cff;
+    --red: #f85149;
+    --cyan: #39d2c0;
+    --gold: #e3b341;
+    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg); color: var(--text);
+    height: 100vh; overflow: hidden;
+    display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Top bar ── */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    flex-shrink: 0; gap: 12px;
+  }
+  .topbar h1 {
+    font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .topbar h1 .icon { font-size: 18px; }
+  .topbar-actions { display: flex; gap: 8px; align-items: center; }
+  .btn {
+    padding: 6px 14px; border-radius: 6px;
+    font-size: 12px; font-weight: 500;
+    border: 1px solid var(--border); background: var(--surface-2);
+    color: var(--text); cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    font-family: var(--font-ui);
+  }
+  .btn:hover { background: var(--border); }
+  .btn-primary {
+    background: var(--accent); border-color: var(--accent);
+    color: #fff;
+  }
+  .btn-primary:hover { opacity: 0.85; }
+  .btn-sm { padding: 4px 10px; font-size: 11px; }
+  .refresh-indicator {
+    font-size: 11px; color: var(--text-muted);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .refresh-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+    transition: opacity 0.3s;
+  }
+  .refresh-dot.fetching { animation: pulse 0.6s ease-in-out; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; } 50% { opacity: 0.3; }
+  }
+
+  /* ── Main layout ── */
+  .main {
+    display: flex; flex: 1; overflow: hidden;
+  }
+
+  /* ── Chat list sidebar ── */
+  .chat-list {
+    width: 320px; min-width: 240px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    overflow: hidden; flex-shrink: 0;
+  }
+  .chat-list-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-muted);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .chat-list-header .count {
+    background: var(--border); color: var(--text-muted);
+    padding: 1px 7px; border-radius: 10px; font-size: 10px;
+  }
+  .chat-list-scroll {
+    flex: 1; overflow-y: auto;
+  }
+  .chat-list-scroll::-webkit-scrollbar { width: 6px; }
+  .chat-list-scroll::-webkit-scrollbar-thumb {
+    background: var(--border); border-radius: 3px;
+  }
+  .chat-item {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer; transition: background 0.12s;
+    position: relative;
+  }
+  .chat-item:hover { background: var(--surface-2); }
+  .chat-item.active {
+    background: rgba(110, 140, 175, 0.1);
+    border-left: 3px solid var(--accent);
+    padding-left: 13px;
+  }
+  .chat-item-topic {
+    font-size: 13px; font-weight: 500;
+    margin-bottom: 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .chat-item-meta {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: var(--text-muted);
+  }
+  .status-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  }
+  .status-dot.active { background: var(--green); }
+  .status-dot.closed { background: var(--text-muted); }
+  .status-dot.paused { background: var(--orange); }
+  .status-dot.archived { background: var(--border); }
+
+  .participant-pills {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    margin-top: 6px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 10px;
+    font-size: 10px; font-weight: 500;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .pill .dot {
+    width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+  }
+  .pill.engine-claude { background: rgba(57, 210, 192, 0.12); color: var(--cyan); border-color: rgba(57, 210, 192, 0.25); }
+  .pill.engine-claude .dot { background: var(--cyan); }
+  .pill.engine-codex { background: rgba(63, 185, 80, 0.12); color: var(--green); border-color: rgba(63, 185, 80, 0.25); }
+  .pill.engine-codex .dot { background: var(--green); }
+  .pill.engine-kilo { background: rgba(188, 140, 255, 0.12); color: var(--purple); border-color: rgba(188, 140, 255, 0.25); }
+  .pill.engine-kilo .dot { background: var(--purple); }
+  .pill.engine-devin { background: rgba(139, 92, 246, 0.12); color: #a78bfa; border-color: rgba(139, 92, 246, 0.25); }
+  .pill.engine-devin .dot { background: #a78bfa; }
+  .pill.engine-cursor { background: rgba(210, 153, 34, 0.12); color: var(--orange); border-color: rgba(210, 153, 34, 0.25); }
+  .pill.engine-cursor .dot { background: var(--orange); }
+  .pill.engine-antigravity { background: rgba(227, 179, 65, 0.12); color: var(--gold); border-color: rgba(227, 179, 65, 0.25); }
+  .pill.engine-antigravity .dot { background: var(--gold); }
+  .pill.engine-human { background: rgba(139, 148, 158, 0.12); color: var(--text-muted); border-color: rgba(139, 148, 158, 0.25); }
+  .pill.engine-human .dot { background: var(--text-muted); }
+
+  .pill.is-live::after {
+    content: ''; width: 5px; height: 5px;
+    border-radius: 50%; background: var(--green);
+    animation: pulse 2s infinite;
+  }
+
+  /* ── Chat view (main pane) ── */
+  .chat-view {
+    flex: 1; display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .chat-view-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .chat-view-header h2 {
+    font-size: 15px; font-weight: 600; margin-bottom: 4px;
+  }
+  .chat-view-header .meta {
+    font-size: 11px; color: var(--text-muted);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .chat-view-header .meta .sep { opacity: 0.3; }
+
+  .chat-messages {
+    flex: 1; overflow-y: auto; padding: 16px 20px;
+  }
+  .chat-messages::-webkit-scrollbar { width: 6px; }
+  .chat-messages::-webkit-scrollbar-thumb {
+    background: var(--border); border-radius: 3px;
+  }
+
+  /* Message bubbles */
+  .msg-group {
+    margin-bottom: 16px;
+    display: flex; flex-direction: column;
+  }
+  .msg-group.human { align-items: flex-end; }
+  .msg-group.assistant { align-items: flex-start; }
+  .msg-group.system { align-items: center; }
+
+  .msg-header {
+    font-size: 10px; font-weight: 600;
+    color: var(--text-muted); margin-bottom: 4px;
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 4px;
+  }
+  .msg-header .engine-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  }
+  .msg-bubble {
+    max-width: 85%; padding: 10px 14px;
+    border-radius: 12px; font-size: 13px; line-height: 1.55;
+    word-break: break-word;
+    position: relative;
+  }
+  .msg-group.human .msg-bubble {
+    background: rgba(110, 140, 175, 0.15);
+    border: 1px solid rgba(110, 140, 175, 0.2);
+    border-bottom-right-radius: 4px;
+  }
+  .msg-group.assistant .msg-bubble {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
+  }
+  .msg-group.system .msg-bubble {
+    background: transparent;
+    border: 1px dashed var(--border);
+    color: var(--text-muted);
+    font-size: 12px; font-style: italic;
+    max-width: 90%; text-align: center;
+    padding: 8px 16px;
+  }
+  .msg-bubble p { margin-bottom: 6px; }
+  .msg-bubble p:last-child { margin-bottom: 0; }
+  .msg-bubble code {
+    background: rgba(110, 140, 175, 0.1);
+    padding: 1px 5px; border-radius: 3px;
+    font-size: 12px;
+  }
+  .msg-bubble pre {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px; margin: 6px 0;
+    overflow-x: auto; font-size: 12px;
+  }
+  .msg-bubble pre code {
+    background: none; padding: 0;
+  }
+  .msg-bubble strong { font-weight: 600; }
+  .msg-bubble em { font-style: italic; color: var(--text-muted); }
+  .msg-bubble ul, .msg-bubble ol {
+    margin: 4px 0 4px 18px;
+  }
+  .msg-bubble hr {
+    border: none; border-top: 1px solid var(--border);
+    margin: 8px 0;
+  }
+  .msg-bubble blockquote {
+    border-left: 3px solid var(--border);
+    padding-left: 10px; margin: 6px 0;
+    color: var(--text-muted);
+  }
+
+  .msg-action-badge {
+    display: inline-block; font-size: 13px;
+    margin-right: 4px;
+  }
+  .msg-time {
+    font-size: 10px; color: var(--text-muted);
+    margin-top: 4px; padding: 0 4px;
+  }
+  .msg-group.human .msg-time { text-align: right; }
+
+  /* ── Add participant (CCC-103) ── */
+  .add-part-pill { cursor: pointer; border-style: dashed; opacity: 0.75; }
+  .add-part-pill:hover { opacity: 1; border-color: var(--accent); color: var(--accent); }
+  .add-part-pop {
+    position: fixed; top: 110px; left: 50%; transform: translateX(-50%);
+    z-index: 1000; width: min(420px, 90vw);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    padding: 10px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .add-part-search {
+    width: 100%; padding: 7px 10px; border-radius: 6px;
+    border: 1px solid var(--accent); background: var(--bg);
+    color: var(--text); font-size: 13px; outline: none; box-sizing: border-box;
+  }
+  .add-part-list { max-height: 40vh; overflow-y: auto; }
+  .add-part-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 9px; border-radius: 6px; cursor: pointer; font-size: 12.5px;
+  }
+  .add-part-row:hover { background: rgba(88,166,255,0.12); }
+  .add-part-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .add-part-repo { font-size: 10.5px; color: var(--text-muted); }
+
+  /* ── Post input ── */
+  .chat-input-bar {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    display: flex; gap: 8px; flex-shrink: 0;
+  }
+  .chat-input-bar textarea {
+    flex: 1; resize: none;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px;
+    color: var(--text); font-size: 13px;
+    font-family: var(--font-ui);
+    min-height: 40px; max-height: 120px;
+    outline: none;
+  }
+  .chat-input-bar textarea:focus { border-color: var(--accent); }
+  .chat-input-bar textarea::placeholder { color: var(--text-muted); }
+  .chat-input-bar .btn { align-self: flex-end; }
+
+  /* ── Empty state ── */
+  .empty-state {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    color: var(--text-muted); gap: 12px;
+  }
+  .empty-state .icon { font-size: 40px; opacity: 0.4; }
+  .empty-state p { font-size: 13px; }
+
+  /* ── Create modal ── */
+  .modal-backdrop {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 24px;
+    width: 460px; max-width: 90vw;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  .modal h3 {
+    font-size: 15px; font-weight: 600; margin-bottom: 16px;
+  }
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block; font-size: 12px; font-weight: 500;
+    color: var(--text-muted); margin-bottom: 5px;
+  }
+  .field input, .field textarea {
+    width: 100%;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px;
+    color: var(--text); font-size: 13px;
+    font-family: var(--font-ui); outline: none;
+  }
+  .field input:focus, .field textarea:focus { border-color: var(--accent); }
+	  .field textarea { resize: vertical; min-height: 60px; }
+	  .field .hint {
+	    font-size: 11px; color: var(--text-muted); margin-top: 4px;
+	  }
+	  .session-picker-search { margin-bottom: 8px; }
+	  .session-picker-list {
+	    max-height: 190px; overflow-y: auto;
+	    border: 1px solid var(--border); border-radius: 6px;
+	    background: var(--bg);
+	  }
+	  .session-picker-row {
+	    width: 100%; display: flex; align-items: flex-start; gap: 8px;
+	    padding: 8px 10px; border: 0; border-bottom: 1px solid var(--border);
+	    background: transparent; color: var(--text); text-align: left;
+	    cursor: pointer; font: inherit;
+	  }
+	  .session-picker-row:last-child { border-bottom: 0; }
+	  .session-picker-row:hover { background: var(--surface-2); }
+	  .session-picker-row.selected { background: rgba(110, 140, 175, 0.14); }
+	  .session-picker-row input { margin-top: 2px; pointer-events: none; }
+	  .session-picker-main { min-width: 0; flex: 1; }
+	  .session-picker-title {
+	    font-size: 12px; font-weight: 500;
+	    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+	  }
+	  .session-picker-meta {
+	    font-size: 10px; color: var(--text-muted);
+	    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+	    margin-top: 2px;
+	  }
+	  .session-picker-selected {
+	    display: flex; flex-wrap: wrap; gap: 4px;
+	    min-height: 20px; margin: 6px 0;
+	  }
+	  .session-picker-status {
+	    font-size: 11px; color: var(--text-muted); margin-top: 6px;
+	  }
+	  .modal-actions {
+	    display: flex; gap: 8px; justify-content: flex-end;
+	    margin-top: 18px;
+	  }
+
+  /* ── Nudge badge ── */
+  .nudge-btn {
+    font-size: 10px; padding: 2px 8px;
+    border-radius: 4px; background: var(--surface-2);
+    border: 1px solid var(--border); color: var(--text-muted);
+    cursor: pointer; font-family: var(--font-ui);
+  }
+  .nudge-btn:hover { background: var(--border); color: var(--text); }
+
+  /* ── Waiting indicator ── */
+  .waiting-indicator {
+    font-size: 11px; color: var(--text-muted);
+    display: flex; align-items: center; gap: 4px;
+    margin-top: 6px; padding: 0 4px;
+  }
+  .typing-dots { display: flex; gap: 3px; }
+  .typing-dots span {
+    width: 4px; height: 4px; border-radius: 50%;
+    background: var(--text-muted);
+    animation: dotBounce 1.4s infinite ease-in-out;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes dotBounce {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+  }
+
+  .no-chats {
+    padding: 24px 16px; text-align: center;
+    color: var(--text-muted); font-size: 12px;
+  }
+
+  /* ── Error banner ── */
+  .error-banner {
+    padding: 8px 16px; background: rgba(248, 81, 73, 0.1);
+    border-bottom: 1px solid rgba(248, 81, 73, 0.25);
+    color: var(--red); font-size: 12px;
+    display: none; align-items: center; gap: 8px;
+  }
+  .error-banner.visible { display: flex; }
+  .error-banner .dismiss {
+    margin-left: auto; cursor: pointer;
+    background: none; border: none;
+    color: var(--red); font-size: 14px;
+    font-family: var(--font-ui);
+  }
+</style>
+</head>
+<body>
+
+<!-- Error banner -->
+<div class="error-banner" id="errorBanner">
+  <span>&#9888; <span id="errorText"></span></span>
+  <button class="dismiss" onclick="hideError()">&times;</button>
+</div>
+
+<!-- Top bar -->
+<div class="topbar">
+  <h1><span class="icon">&#x1F4AC;</span> Group Chat Live</h1>
+  <div class="topbar-actions">
+    <div class="refresh-indicator">
+      <span class="refresh-dot" id="refreshDot"></span>
+      <span id="refreshLabel">Live</span>
+    </div>
+    <button class="btn btn-primary" onclick="openCreateModal()">+ New Chat</button>
+    <button class="btn btn-sm" onclick="refreshAll()">&#x21BB; Refresh</button>
+  </div>
+</div>
+
+<!-- Main layout -->
+<div class="main">
+  <!-- Chat list sidebar -->
+  <div class="chat-list">
+    <div class="chat-list-header">
+      <span>Conversations</span>
+      <span class="count" id="chatCount">0</span>
+    </div>
+    <div class="chat-list-scroll" id="chatListScroll">
+      <div class="no-chats" id="noChats">No group chats yet</div>
+    </div>
+  </div>
+
+  <!-- Chat view -->
+  <div class="chat-view" id="chatView">
+    <div class="empty-state" id="emptyState">
+      <div class="icon">&#x1F4AC;</div>
+      <p>Select a group chat to view the conversation</p>
+      <button class="btn btn-primary" onclick="openCreateModal()">+ Create New Chat</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create modal -->
+<div class="modal-backdrop" id="createModal">
+  <div class="modal">
+    <h3>&#x1F4AC; New Group Chat</h3>
+    <div class="field">
+      <label for="chatTopic">Topic</label>
+      <input type="text" id="chatTopic" placeholder="What should the agents discuss?">
+    </div>
+	    <div class="field">
+	      <label for="sessionPickerSearch">Participants</label>
+	      <input type="text" id="sessionPickerSearch" class="session-picker-search" placeholder="Search sessions by title, id, engine, repo...">
+	      <div class="session-picker-selected" id="sessionPickerSelected"></div>
+	      <div class="session-picker-list" id="sessionPickerList">
+	        <div class="no-chats">Loading sessions...</div>
+	      </div>
+	      <div class="session-picker-status" id="sessionPickerStatus"></div>
+	    </div>
+	    <div class="field">
+	      <label for="chatSessionIds">Manual session IDs <span style="font-weight:400;color:var(--text-muted)">(optional fallback)</span></label>
+	      <textarea id="chatSessionIds" placeholder="a1b2c3d4-e5f6-...&#10;f6e5d4c3-b2a1-..." rows="3"></textarea>
+	      <div class="hint">Optional. Leave picker and manual IDs empty to create a solo room you can drag sessions into later.</div>
+	    </div>
+    <div class="field">
+      <label>
+        <input type="checkbox" id="chatIncludeHuman" checked> Include human participant
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeCreateModal()">Cancel</button>
+      <button class="btn btn-primary" id="createBtn" onclick="createChat()">Create Chat</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  /* ── State ── */
+  var chats = [];
+  var selectedChatId = null;
+  var selectedChatPath = null;
+	  var pollTimer = null;
+	  var chatContentCache = {};
+	  var lastChatListFetch = 0;
+	  var POLL_INTERVAL = 5000;
+	  var BASE = window.location.origin;
+	  var pickerSessions = [];
+	  var pickerLoaded = false;
+	  var pickerLoading = false;
+	  var selectedPickerSessions = {};
+
+  /* ── Engine badge colors ── */
+  var ENGINE_COLORS = {
+    claude:      { cls: 'engine-claude',      label: 'Claude', color: '#39d2c0' },
+    codex:       { cls: 'engine-codex',       label: 'Codex',  color: '#3fb950' },
+    kilo:        { cls: 'engine-kilo',        label: 'Kilo',   color: '#bc8cff' },
+    devin:       { cls: 'engine-devin',       label: 'Devin',  color: '#8b5cf6' },
+    cursor:      { cls: 'engine-cursor',      label: 'Cursor', color: '#d29922' },
+    antigravity: { cls: 'engine-antigravity', label: 'AG',     color: '#e3b341' },
+    gemini:      { cls: 'engine-antigravity', label: 'Gemini', color: '#e3b341' },
+    human:       { cls: 'engine-human',       label: 'Human',  color: '#8b949e' },
+    github:      { cls: 'engine-codex',       label: 'GH',     color: '#3fb950' }
+  };
+
+  function getEngine(name) {
+    if (!name) return 'claude';
+    var low = name.toLowerCase();
+    if (low === 'human') return 'human';
+    if (low.indexOf('codex') >= 0 || low.indexOf('openai') >= 0) return 'codex';
+    if (low.indexOf('kilo') >= 0) return 'kilo';
+    if (low.indexOf('devin') >= 0) return 'devin';
+    if (low.indexOf('cursor') >= 0) return 'cursor';
+    if (low.indexOf('antigravity') >= 0 || low.indexOf('gemini') >= 0 || low.indexOf('agy') >= 0) return 'antigravity';
+    return 'claude';
+  }
+
+  function engineInfo(name) {
+    return ENGINE_COLORS[getEngine(name)] || ENGINE_COLORS.claude;
+  }
+
+  /* getEngine() only ever guesses, by substring-matching whatever nickname the
+     participant happens to carry. When the server tells us the real engine,
+     use it: an exact key first, then the substring guess for colour with the
+     real engine name as the label, so an unmapped engine is never mislabelled
+     "Claude". */
+  function engineInfoFor(engine, fallbackName) {
+    var key = String(engine || '').trim().toLowerCase();
+    if (!key) return engineInfo(fallbackName);
+    if (ENGINE_COLORS[key]) return ENGINE_COLORS[key];
+    var guess = ENGINE_COLORS[getEngine(key)] || ENGINE_COLORS.claude;
+    return { cls: guess.cls, label: key, color: guess.color };
+  }
+
+  /* ── DOM refs ── */
+  var chatListScroll = document.getElementById('chatListScroll');
+  var chatCount = document.getElementById('chatCount');
+  var noChats = document.getElementById('noChats');
+  var chatView = document.getElementById('chatView');
+  var emptyState = document.getElementById('emptyState');
+	  var refreshDot = document.getElementById('refreshDot');
+	  var refreshLabel = document.getElementById('refreshLabel');
+	  var errorBanner = document.getElementById('errorBanner');
+	  var errorText = document.getElementById('errorText');
+	  var sessionPickerSearch = document.getElementById('sessionPickerSearch');
+	  var sessionPickerList = document.getElementById('sessionPickerList');
+	  var sessionPickerSelected = document.getElementById('sessionPickerSelected');
+	  var sessionPickerStatus = document.getElementById('sessionPickerStatus');
+
+  /* ── Error handling ── */
+  function showError(msg) {
+    errorText.textContent = msg;
+    errorBanner.classList.add('visible');
+  }
+  window.hideError = function() {
+    errorBanner.classList.remove('visible');
+  };
+
+  /* ── Fetch helpers ── */
+	  function api(path, opts) {
+	    var url = BASE + path;
+	    return fetch(url, opts).then(function(resp) {
+	      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+	      return resp.json();
+	    });
+	  }
+
+	  /* ── Session picker ── */
+	  function sessionIdForRow(row) {
+	    return String(row.session_id || row.id || '').trim();
+	  }
+
+	  function sessionTitle(row) {
+	    return String(row.display_name || row.name || row.title || row.first_message || row.summary || sessionIdForRow(row)).trim();
+	  }
+
+	  function sessionEngine(row) {
+	    return String(row.engine || row.source || '').trim() || 'claude';
+	  }
+
+	  /* Engine · model · effort, in one line, skipping whatever is unset.
+	     Rows that predate the reasoning_effort field just render shorter. */
+	  function routingSummary(engineLabel, model, effort) {
+	    return [engineLabel, String(model || '').trim(), String(effort || '').trim()]
+	      .filter(function(part) { return !!part; })
+	      .join(' · ');
+	  }
+
+	  function normalizeSessionRows(data) {
+	    var raw = [];
+	    if (Array.isArray(data)) raw = data;
+	    else if (data && Array.isArray(data.sessions)) raw = data.sessions;
+	    else if (data && Array.isArray(data.conversations)) raw = data.conversations;
+	    var seen = {};
+	    var out = [];
+	    raw.forEach(function(row) {
+	      if (!row || row.type === 'group_chat' || row.source === 'group_chat' || row.kind === 'group_chat') return;
+	      var sid = sessionIdForRow(row);
+	      if (!sid || seen[sid]) return;
+	      seen[sid] = true;
+	      out.push({
+	        id: sid,
+	        title: sessionTitle(row),
+	        engine: sessionEngine(row),
+	        model: String(row.model || '').trim(),
+	        effort: String(row.reasoning_effort || '').trim(),
+	        repo: String(row.repo_name || row.folder_label || row.project || row.repo_path || row.cwd || '').trim(),
+	        raw: row
+	      });
+	    });
+	    return out;
+	  }
+
+	  function setPickerStatus(text) {
+	    if (sessionPickerStatus) sessionPickerStatus.textContent = text || '';
+	  }
+
+	  function loadSessionPicker() {
+	    if (pickerLoaded || pickerLoading) return;
+	    pickerLoading = true;
+	    setPickerStatus('Loading sessions...');
+	    api('/api/conversations/all?include_prs=0&resolve_prs=0&resolve_effective=0&resolve_worktrees=0')
+	      .then(function(data) {
+	        pickerSessions = normalizeSessionRows(data);
+	        pickerLoaded = true;
+	        setPickerStatus(pickerSessions.length ? pickerSessions.length + ' sessions available' : 'No sessions found; paste IDs below or create an empty room.');
+	      })
+	      .catch(function() {
+	        setPickerStatus('Could not load sessions; paste IDs below or create an empty room.');
+	      })
+	      .then(function() {
+	        pickerLoading = false;
+	        renderSessionPicker();
+	      });
+	  }
+
+	  function renderSelectedPickerPills() {
+	    if (!sessionPickerSelected) return;
+	    var rows = Object.keys(selectedPickerSessions).map(function(sid) { return selectedPickerSessions[sid]; });
+	    if (!rows.length) {
+	      sessionPickerSelected.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">No sessions selected</span>';
+	      return;
+	    }
+	    sessionPickerSelected.innerHTML = rows.map(function(row) {
+	      var eng = engineInfo(row.engine || row.title);
+	      return '<span class="pill ' + eng.cls + '" title="' + escAttr(routingSummary(eng.label, row.model, row.effort)) + '"><span class="dot"></span>' + escHtml(row.title || row.id.substring(0, 8)) + '</span>';
+	    }).join('');
+	  }
+
+	  function renderSessionPicker() {
+	    renderSelectedPickerPills();
+	    if (!sessionPickerList) return;
+	    var query = sessionPickerSearch ? sessionPickerSearch.value.trim().toLowerCase() : '';
+	    if (pickerLoading && !pickerSessions.length) {
+	      sessionPickerList.innerHTML = '<div class="no-chats">Loading sessions...</div>';
+	      return;
+	    }
+	    var rows = pickerSessions.filter(function(row) {
+	      if (!query) return true;
+	      return (row.title + ' ' + row.id + ' ' + row.engine + ' ' + row.model + ' ' + row.effort + ' ' + row.repo).toLowerCase().indexOf(query) >= 0;
+	    }).slice(0, 80);
+	    if (!rows.length) {
+	      sessionPickerList.innerHTML = '<div class="no-chats">No matching sessions</div>';
+	      return;
+	    }
+	    sessionPickerList.innerHTML = rows.map(function(row) {
+	      var selected = !!selectedPickerSessions[row.id];
+	      var eng = engineInfo(row.engine || row.title);
+	      return '<button type="button" class="session-picker-row' + (selected ? ' selected' : '') + '" data-sid="' + escAttr(row.id) + '">' +
+	        '<input type="checkbox"' + (selected ? ' checked' : '') + ' aria-hidden="true">' +
+	        '<span class="session-picker-main">' +
+	          '<span class="session-picker-title">' + escHtml(row.title) + '</span>' +
+	          '<span class="session-picker-meta">' + escHtml(routingSummary(eng.label, row.model, row.effort) + ' · ' + row.id.substring(0, 8) + (row.repo ? ' · ' + row.repo : '')) + '</span>' +
+	        '</span>' +
+	      '</button>';
+	    }).join('');
+	  }
+
+	  if (sessionPickerSearch) {
+	    sessionPickerSearch.addEventListener('input', renderSessionPicker);
+	  }
+	  if (sessionPickerList) {
+	    sessionPickerList.addEventListener('click', function(e) {
+	      var rowEl = e.target.closest && e.target.closest('.session-picker-row');
+	      if (!rowEl) return;
+	      var sid = rowEl.dataset.sid;
+	      var row = pickerSessions.find(function(item) { return item.id === sid; });
+	      if (!row) return;
+	      if (selectedPickerSessions[sid]) delete selectedPickerSessions[sid];
+	      else selectedPickerSessions[sid] = row;
+	      renderSessionPicker();
+	    });
+	  }
+
+	  /* ── Chat list ── */
+  function fetchChats() {
+    return api('/api/group-chats/active').then(function(data) {
+      if (!data.ok) throw new Error(data.error || 'API error');
+      chats = data.chats || [];
+      hideError();
+    }).catch(function() {
+      return api('/api/group-chats/archived').then(function(data) {
+        if (data.ok) {
+          chats = data.chats || [];
+          hideError();
+        } else {
+          showError('Cannot reach CCC API. Is the server running?');
+        }
+      }).catch(function() {
+        showError('Cannot reach CCC API at ' + BASE + '. Is the server running?');
+      });
+    }).then(function() {
+      renderChatList();
+      lastChatListFetch = Date.now();
+    });
+  }
+
+  function renderChatList() {
+    chatCount.textContent = chats.length;
+    if (chats.length === 0) {
+      noChats.style.display = 'block';
+      var items = chatListScroll.querySelectorAll('.chat-item');
+      for (var i = 0; i < items.length; i++) items[i].remove();
+      return;
+    }
+    noChats.style.display = 'none';
+
+    var fragment = document.createDocumentFragment();
+    chats.forEach(function(chat) {
+      var el = document.createElement('div');
+      el.className = 'chat-item' + (chat.id === selectedChatId ? ' active' : '');
+      el.dataset.id = chat.id;
+      el.dataset.path = chat.path;
+
+      var topic = chat.topic || 'Untitled';
+      var status = chat.status || 'closed';
+      var msgCount = chat.message_count || 0;
+      var participants = chat.session_ids || [];
+      var nameMap = chat.name_map || {};
+
+      var pills = '<span class="pill engine-human"><span class="dot"></span>Human</span>';
+      participants.forEach(function(sid) {
+        var displayName = nameMap[sid] || sid.substring(0, 8);
+        var eng = engineInfo(displayName);
+        var pm = (chat.participant_meta || {})[sid] || {};
+        var isLive = pm.is_live ? ' is-live' : '';
+        pills += '<span class="pill ' + eng.cls + isLive + '"><span class="dot"></span>' + escHtml(displayName) + '</span>';
+      });
+
+      var ago = timeAgo(chat.last_mtime || chat.last_activity);
+
+      el.innerHTML =
+        '<div class="chat-item-topic">' + escHtml(topic) + '</div>' +
+        '<div class="chat-item-meta">' +
+          '<span class="status-dot ' + status + '"></span>' +
+          '<span>' + status + '</span>' +
+          '<span>&middot;</span>' +
+          '<span>' + msgCount + ' msgs</span>' +
+          '<span>&middot;</span>' +
+          '<span>' + ago + '</span>' +
+        '</div>' +
+        (pills ? '<div class="participant-pills">' + pills + '</div>' : '');
+
+      el.addEventListener('click', function() { selectChat(chat); });
+      fragment.appendChild(el);
+    });
+
+    var existing = chatListScroll.querySelectorAll('.chat-item');
+    for (var i = 0; i < existing.length; i++) existing[i].remove();
+    chatListScroll.appendChild(fragment);
+  }
+
+  /* ── Select and load chat ── */
+  function selectChat(chat) {
+    selectedChatId = chat.id;
+    selectedChatPath = chat.path;
+    chatListScroll.querySelectorAll('.chat-item').forEach(function(el) {
+      el.classList.toggle('active', el.dataset.id === chat.id);
+    });
+    return loadChatContent(chat);
+  }
+
+  function loadChatContent(chat) {
+    var params = new URLSearchParams({ id: chat.id });
+    return api('/api/group-chat/read?' + params.toString()).then(function(data) {
+      if (!data.ok) throw new Error(data.error || 'Read failed');
+      // Unchanged content → no DOM rebuild at all. Most polls hit this,
+      // so typing and scrolling are simply never disturbed (CCC-103).
+      var prev = chatContentCache[chat.id];
+      var sig = JSON.stringify([data.content, data.status, data.session_ids,
+        data.participant_live_count, data.waiting]);
+      var prevSig = prev && prev._sig;
+      data._sig = sig;
+      chatContentCache[chat.id] = data;
+      if (prevSig === sig && document.getElementById('postInput')) return;
+      renderChatView(chat, data);
+    }).catch(function(e) {
+      chatView.innerHTML = '<div class="empty-state"><div class="icon">&#x26A0;&#xFE0F;</div><p>Failed to load chat: ' + escHtml(e.message) + '</p></div>';
+    });
+  }
+
+  function renderChatView(chat, data) {
+    // CCC-103: the periodic refresh rebuilds this pane's innerHTML, which
+    // used to steal focus mid-typing and yank the scroll back to the
+    // bottom. Capture composer + scroll state first, restore after.
+    var prevInput = document.getElementById('postInput');
+    var keep = {
+      text: prevInput ? prevInput.value : '',
+      focused: prevInput && document.activeElement === prevInput,
+      selStart: prevInput ? prevInput.selectionStart : 0,
+      selEnd: prevInput ? prevInput.selectionEnd : 0,
+    };
+    var prevMsgs = document.getElementById('chatMessages');
+    var wasAtBottom = true;
+    var prevScrollTop = 0;
+    if (prevMsgs) {
+      prevScrollTop = prevMsgs.scrollTop;
+      wasAtBottom = (prevMsgs.scrollHeight - prevMsgs.scrollTop - prevMsgs.clientHeight) < 80;
+    }
+    var topic = data.topic || chat.topic || 'Untitled';
+    var status = data.status || chat.status || 'unknown';
+    var participantCount = data.participant_count || (chat.session_ids || []).length;
+    var liveCount = data.participant_live_count || 0;
+    var nameMap = data.name_map || {};
+    var sessionIds = data.session_ids || [];
+    var participantMeta = data.participant_meta || {};
+    var waiting = data.waiting || {};
+
+    // Engine · model · effort per participant, keyed both ways so the message
+    // headers below can resolve an author back to its routing without a
+    // second pass over participant_meta.
+    var routingByName = {};
+    var routingByHash = {};
+
+    var participantBar = '';
+    sessionIds.forEach(function(sid) {
+      var displayName = nameMap[sid] || sid.substring(0, 8);
+      var pm = participantMeta[sid] || {};
+      var eng = engineInfoFor(pm.engine, displayName);
+      var summary = routingSummary(eng.label, pm.model, pm.reasoning_effort);
+      routingByName[displayName.toLowerCase()] = { eng: eng, summary: summary };
+      routingByHash[sid.substring(0, 8)] = { eng: eng, summary: summary };
+      var isLive = pm.is_live ? ' is-live' : '';
+      participantBar += '<span class="pill ' + eng.cls + isLive + '" title="' + escAttr(summary) + '"><span class="dot"></span>' + escHtml(displayName) + '</span>';
+    });
+    // ＋ participant chip (CCC-103): opens a search-and-add popover.
+    participantBar += '<span class="pill add-part-pill" onclick="openAddParticipant()" title="Add a participant session">＋</span>';
+    currentChatSessionIds = sessionIds.slice();
+
+    var waitingHtml = '';
+    if (waiting.waiting_on_hashes && waiting.waiting_on_hashes.length > 0) {
+      var waitingNames = waiting.waiting_on_hashes.map(function(h) {
+        var keys = Object.keys(nameMap);
+        for (var i = 0; i < keys.length; i++) {
+          if (keys[i].indexOf(h) === 0) return nameMap[keys[i]] || h;
+        }
+        return h;
+      });
+      waitingHtml = '<div class="waiting-indicator">' +
+        '<div class="typing-dots"><span></span><span></span><span></span></div>' +
+        'Waiting on: ' + waitingNames.map(function(n) { return escHtml(n); }).join(', ') +
+      '</div>';
+    }
+
+    var messages = parseChatMessages(data.content || '');
+
+    var messagesHtml = '';
+    messages.forEach(function(msg) {
+      var isHuman = msg.author.toLowerCase() === 'human';
+      var isSystem = msg.isSystem;
+      var routing = isHuman ? null : (routingByHash[msg.hash] || routingByName[msg.author.toLowerCase()] || null);
+      var eng = isSystem ? null : (routing ? routing.eng : engineInfo(msg.author));
+      var groupClass = isSystem ? 'system' : (isHuman ? 'human' : 'assistant');
+
+      var headerHtml = '';
+      if (!isSystem) {
+        var dotColor = eng ? eng.color : '#8b949e';
+        var authorLabel = msg.hash ? msg.hash + ': ' + msg.author : msg.author;
+        var authorTitle = routing ? routing.summary : '';
+        headerHtml = '<div class="msg-header">' +
+          '<span class="engine-dot" style="background:' + dotColor + '"></span>' +
+          '<span' + (authorTitle ? ' title="' + escAttr(authorTitle) + '"' : '') + '>' + escHtml(authorLabel) + '</span>' +
+          (msg.action ? '<span class="msg-action-badge">' + msg.action + '</span>' : '') +
+        '</div>';
+      }
+
+      var bubbleContent = '<div class="msg-bubble">' + renderMarkdown(msg.body) + '</div>';
+      var timeHtml = msg.timestamp ? '<div class="msg-time">' + escHtml(msg.timestamp) + '</div>' : '';
+
+      messagesHtml += '<div class="msg-group ' + groupClass + '">' +
+        headerHtml + bubbleContent + timeHtml +
+      '</div>';
+    });
+
+    chatView.innerHTML =
+      '<div class="chat-view-header">' +
+        '<h2>' + escHtml(topic) + '</h2>' +
+        '<div class="meta">' +
+          '<span class="status-dot ' + status + '"></span>' +
+          '<span>' + status + '</span>' +
+          '<span class="sep">&middot;</span>' +
+          '<span>' + participantCount + ' participant' + (participantCount !== 1 ? 's' : '') + '</span>' +
+          (liveCount > 0 ? '<span class="sep">&middot;</span><span style="color:var(--green)">' + liveCount + ' live</span>' : '') +
+          (data.mode ? '<span class="sep">&middot;</span><span>mode: ' + escHtml(data.mode) + '</span>' : '') +
+          '<span class="sep">&middot;</span>' +
+          '<button class="nudge-btn" onclick="nudgeChat(\'' + escAttr(chat.id) + '\')">Nudge</button>' +
+        '</div>' +
+        '<div class="participant-pills" style="margin-top:8px">' + participantBar + '</div>' +
+        waitingHtml +
+      '</div>' +
+      '<div class="chat-messages" id="chatMessages">' +
+        (messagesHtml || '<div class="no-chats">No messages yet</div>') +
+      '</div>' +
+      '<div class="chat-input-bar">' +
+        '<textarea id="postInput" placeholder="Type a message as Human..." rows="2" onkeydown="handlePostKey(event)"></textarea>' +
+        '<button class="btn btn-primary" onclick="postMessage()">Send</button>' +
+      '</div>';
+
+    var msgsEl = document.getElementById('chatMessages');
+    if (msgsEl) {
+      // Stick to bottom only if the reader was already there; otherwise
+      // put them back exactly where they were scrolled to.
+      msgsEl.scrollTop = wasAtBottom ? msgsEl.scrollHeight : prevScrollTop;
+    }
+    var newInput = document.getElementById('postInput');
+    if (newInput && keep.text) newInput.value = keep.text;
+    if (newInput && keep.focused) {
+      newInput.focus();
+      try { newInput.setSelectionRange(keep.selStart, keep.selEnd); } catch (_) {}
+    }
+  }
+
+  /* ── Parse chat markdown into structured messages ── */
+  function parseChatMessages(content) {
+    if (!content) return [];
+    var messages = [];
+    var lines = content.split('\n');
+    var current = null;
+    var inHeader = true;
+
+    var headerPat = /^##\s+(.+?)\s*—\s*(?:(?:([0-9a-fA-F]{8})[:\s]+)?(.+?))?\s*(💬|📝|✅|❌|▶|🏁|👋)?\s*$/;
+    var systemPat = /^>\s*_(.+?)\s*—\s*(system:.+?)_\s*$/;
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+
+      if (inHeader) {
+        if (line.indexOf('# Group Chat') === 0 || line.indexOf('**') === 0) continue;
+        if (line.trim() === '') { inHeader = false; continue; }
+        if (line.indexOf('---') === 0) { inHeader = false; continue; }
+        if (headerPat.test(line) || systemPat.test(line)) {
+          inHeader = false;
+        } else {
+          continue;
+        }
+      }
+
+      var sysMatch = systemPat.exec(line);
+      if (sysMatch) {
+        if (current) messages.push(current);
+        messages.push({
+          isSystem: true, author: 'system',
+          timestamp: sysMatch[1].trim(),
+          body: sysMatch[2].trim(),
+          action: '', hash: ''
+        });
+        current = null;
+        continue;
+      }
+
+      var msgMatch = headerPat.exec(line);
+      if (msgMatch) {
+        if (current) messages.push(current);
+        var timestamp = msgMatch[1].trim();
+        var hash = msgMatch[2] || '';
+        var author = (msgMatch[3] || 'unknown').trim();
+        var action = msgMatch[4] || '';
+        if (action && author.indexOf(action) === author.length - action.length) {
+          author = author.substring(0, author.length - action.length).trim();
+        }
+        if (author.toLowerCase() === 'human') author = 'Human';
+        current = {
+          isSystem: false, author: author,
+          timestamp: timestamp, body: '',
+          action: action, hash: hash
+        };
+        continue;
+      }
+
+      if (line.trim() === '---') {
+        if (current) { messages.push(current); current = null; }
+        continue;
+      }
+
+      if (current) {
+        current.body += (current.body ? '\n' : '') + line;
+      }
+    }
+    if (current) messages.push(current);
+    return messages;
+  }
+
+  /* ── Simple markdown renderer ── */
+  function renderMarkdown(text) {
+    if (!text) return '';
+    var html = escHtml(text);
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" style="color:var(--accent)">$1</a>');
+    html = html.replace(/^&gt;\s?(.+)$/gm, '<blockquote>$1</blockquote>');
+    html = html.replace(/^---+$/gm, '<hr>');
+    html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    html = html.replace(/\n\n+/g, '</p><p>');
+    html = html.replace(/\n/g, '<br>');
+    html = '<p>' + html + '</p>';
+    html = html.replace(/<p>\s*<\/p>/g, '');
+    return html;
+  }
+
+  /* ── Post message ── */
+  window.handlePostKey = function(e) {
+    if (e && (e.isComposing || e.keyCode === 229)) return;
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      postMessage();
+    }
+  };
+
+  window.postMessage = function() {
+    var input = document.getElementById('postInput');
+    if (!input) return;
+    var text = input.value.trim();
+    if (!text || !selectedChatId) return;
+    input.value = '';
+    api('/api/group-chat/post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: selectedChatId, text: text })
+    }).then(function(resp) {
+      if (!resp.ok) throw new Error(resp.error || 'Post failed');
+      var chat = chats.find(function(c) { return c.id === selectedChatId; });
+      if (chat) return loadChatContent(chat);
+    }).catch(function(e) {
+      showError('Failed to post: ' + e.message);
+    });
+  };
+
+  /* ── Nudge ── */
+  window.nudgeChat = function(chatId) {
+    api('/api/group-chat/nudge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: chatId })
+    }).then(function(resp) {
+      if (!resp.ok) throw new Error(resp.error || 'Nudge failed');
+    }).catch(function(e) {
+      showError('Nudge failed: ' + e.message);
+    });
+  };
+
+	  /* ── Create modal ── */
+	  window.openCreateModal = function() {
+	    document.getElementById('createModal').classList.add('open');
+	    document.getElementById('chatTopic').focus();
+	    loadSessionPicker();
+	    renderSessionPicker();
+	  };
+	  window.closeCreateModal = function() {
+	    document.getElementById('createModal').classList.remove('open');
+	    document.getElementById('chatTopic').value = '';
+	    document.getElementById('chatSessionIds').value = '';
+	    document.getElementById('chatIncludeHuman').checked = true;
+	    selectedPickerSessions = {};
+	    if (sessionPickerSearch) sessionPickerSearch.value = '';
+	    renderSessionPicker();
+	  };
+
+  window.createChat = function() {
+    var topic = document.getElementById('chatTopic').value.trim();
+    if (!topic) { showError('Topic is required'); return; }
+
+	    var sessionIdsRaw = document.getElementById('chatSessionIds').value.trim();
+	    var manualSessionIds = sessionIdsRaw
+	      ? sessionIdsRaw.split(/[\n,]+/).map(function(s) { return s.trim(); }).filter(Boolean)
+	      : [];
+	    var sessionIdMap = {};
+	    var sessionsMetaMap = {};
+	    Object.keys(selectedPickerSessions).forEach(function(sid) {
+	      var row = selectedPickerSessions[sid];
+	      sessionIdMap[sid] = true;
+	      sessionsMetaMap[sid] = {
+	        session_id: sid,
+	        display_name: row.title || sid.substring(0, 8),
+	        engine: row.engine || ''
+	      };
+	    });
+	    manualSessionIds.forEach(function(sid) {
+	      sessionIdMap[sid] = true;
+	      if (!sessionsMetaMap[sid]) {
+	        sessionsMetaMap[sid] = { session_id: sid, display_name: sid.substring(0, 8) };
+	      }
+	    });
+	    var sessionIds = Object.keys(sessionIdMap);
+	    var includeHuman = document.getElementById('chatIncludeHuman').checked;
+
+    var btn = document.getElementById('createBtn');
+    btn.disabled = true;
+    btn.textContent = 'Creating...';
+
+    var payload = {
+      topic: topic,
+      session_ids: sessionIds,
+      include_human: includeHuman
+	    };
+	    if (sessionIds.length > 0) {
+	      payload.sessions_meta = sessionIds.map(function(sid) { return sessionsMetaMap[sid]; });
+	    }
+
+    api('/api/group-chat/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function(resp) {
+      if (!resp.ok) throw new Error(resp.error || 'Create failed');
+      closeCreateModal();
+      hideError();
+      return fetchChats().then(function() {
+        if (resp.id || resp.uuid) {
+          var newId = resp.id || resp.uuid;
+          var newChat = chats.find(function(c) { return c.id === newId; });
+          if (newChat) selectChat(newChat);
+        }
+      });
+    }).catch(function(e) {
+      showError('Failed to create chat: ' + e.message);
+    }).then(function() {
+      btn.disabled = false;
+      btn.textContent = 'Create Chat';
+    });
+  };
+
+  /* ── Add participant (CCC-103) ── */
+  var currentChatSessionIds = [];
+  window.openAddParticipant = function() {
+    var old = document.getElementById('addPartPop');
+    if (old) { old.remove(); return; }
+    var pop = document.createElement('div');
+    pop.id = 'addPartPop';
+    pop.className = 'add-part-pop';
+    pop.innerHTML =
+      '<input type="text" class="add-part-search" placeholder="Search sessions… then click to add">' +
+      '<div class="add-part-list"><div class="no-chats">Loading sessions…</div></div>';
+    document.body.appendChild(pop);
+    var search = pop.querySelector('.add-part-search');
+    var list = pop.querySelector('.add-part-list');
+    var close = function() { pop.remove(); document.removeEventListener('click', onDoc, true); };
+    var onDoc = function(e) { if (!pop.contains(e.target) && !e.target.closest('.add-part-pill')) close(); };
+    document.addEventListener('click', onDoc, true);
+    var paint = function() {
+      var q = (search.value || '').toLowerCase();
+      var inChat = {};
+      currentChatSessionIds.forEach(function(s) { inChat[s] = true; });
+      var rows = pickerSessions
+        .filter(function(r) { return !inChat[r.id]; })
+        .filter(function(r) { return !q || (r.title + ' ' + r.repo + ' ' + r.id).toLowerCase().indexOf(q) !== -1; })
+        .slice(0, q ? 25 : 10);
+      list.innerHTML = rows.map(function(r) {
+        return '<div class="add-part-row" data-sid="' + escHtml(r.id) + '">' +
+          '<span class="add-part-name">' + escHtml(r.title || r.id.substring(0, 8)) + '</span>' +
+          (r.repo ? '<span class="add-part-repo">' + escHtml(r.repo) + '</span>' : '') +
+        '</div>';
+      }).join('') || '<div class="no-chats">No matching sessions</div>';
+    };
+    list.addEventListener('click', function(e) {
+      var row = e.target.closest('[data-sid]');
+      if (!row || !selectedChatId) return;
+      var sid = row.getAttribute('data-sid');
+      api('/api/group-chat/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: selectedChatId, session_id: sid }) })
+        .then(function(d) {
+          if (!d.ok) throw new Error(d.error || 'add failed');
+          close();
+          refreshAll();
+        })
+        .catch(function(err) { list.innerHTML = '<div class="no-chats">Add failed: ' + escHtml(err.message) + '</div>'; });
+    });
+    search.addEventListener('input', paint);
+    if (!pickerLoaded) {
+      loadSessionPicker();
+      var wait = setInterval(function() {
+        if (pickerLoaded) { clearInterval(wait); paint(); }
+      }, 250);
+      setTimeout(function() { clearInterval(wait); }, 8000);
+    } else {
+      paint();
+    }
+    search.focus();
+  };
+
+  /* ── Polling ── */
+  window.refreshAll = function() {
+    refreshDot.classList.add('fetching');
+    refreshLabel.textContent = 'Refreshing...';
+    fetchChats().then(function() {
+      if (selectedChatId) {
+        var chat = chats.find(function(c) { return c.id === selectedChatId; });
+        if (chat) return loadChatContent(chat);
+      }
+    }).then(function() {
+      refreshDot.classList.remove('fetching');
+      refreshLabel.textContent = 'Live';
+    });
+  };
+
+  function startPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(refreshAll, POLL_INTERVAL);
+  }
+
+  /* ── Utilities ── */
+  function escHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function escAttr(s) {
+    return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+  function timeAgo(ts) {
+    if (!ts) return '';
+    var now = Date.now() / 1000;
+    var diff = now - ts;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  }
+
+  /* ── Modal keyboard ── */
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeCreateModal();
+  });
+  document.getElementById('createModal').addEventListener('click', function(e) {
+    if (e.target === document.getElementById('createModal')) closeCreateModal();
+  });
+
+  /* ── Init ── */
+  fetchChats().then(function() {
+    // Default focus: open the first chat so the window is immediately useful.
+    if (!selectedChatId && chats.length) selectChat(chats[0]);
+    startPolling();
+  });
+
+})();
+</script>
+</body>
+</html>

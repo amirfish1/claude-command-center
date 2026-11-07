@@ -1,9 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Claude Command Center">
-  <!-- Maskable icon: full-bleed background so platforms can crop to any
-       shape (circle, squircle, rounded rect) without cutting into the glyph.
-       The ⌘ is shrunk into the inner 80% safe zone (≈51px inset). -->
-  <rect width="512" height="512" fill="#0d1117"/>
-  <text x="256" y="340" text-anchor="middle"
-        font-family="-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif"
-        font-size="240" font-weight="700" fill="#d97757">⌘</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Command Center for Claude, Codex, Antigravity">
+  <!-- Maskable: full-bleed background; triangle shrunk into the inner 80%
+       safe zone so circle/squircle cropping never clips the glyph. -->
+  <defs>
+    <radialGradient id="bgM" cx="50%" cy="55%" r="70%">
+      <stop offset="0%" stop-color="#1e2632"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </radialGradient>
+    <radialGradient id="nodeM">
+      <stop offset="0%" stop-color="#ffd1a6"/>
+      <stop offset="55%" stop-color="#e07655"/>
+      <stop offset="100%" stop-color="#a04830"/>
+    </radialGradient>
+    <radialGradient id="centerGlowM">
+      <stop offset="0%" stop-color="#ffe2b8" stop-opacity="0.9"/>
+      <stop offset="35%" stop-color="#ff8855" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#ff5530" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bgM)"/>
+  <circle cx="256" cy="288" r="140" fill="url(#centerGlowM)"/>
+  <g stroke="#e07655" stroke-width="6" stroke-linecap="round" opacity="0.95" fill="none">
+    <line x1="256" y1="178" x2="158" y2="358"/>
+    <line x1="158" y1="358" x2="354" y2="358"/>
+    <line x1="354" y1="358" x2="256" y2="178"/>
+  </g>
+  <circle cx="256" cy="178" r="24" fill="url(#nodeM)"/>
+  <circle cx="158" cy="358" r="24" fill="url(#nodeM)"/>
+  <circle cx="354" cy="358" r="24" fill="url(#nodeM)"/>
+  <circle cx="256" cy="288" r="16" fill="#ffe2b8"/>
 </svg>

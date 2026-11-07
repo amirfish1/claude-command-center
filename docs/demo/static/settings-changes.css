@@ -1,0 +1,15 @@
+#settingsChanges { margin:24px 0; padding-bottom:20px; border-bottom:1px solid var(--border); }
+#settingsChanges h3 { font-size:18px; margin:0 0 12px; }
+#settingsChanges h4 { font-size:15px; margin:24px 0 8px; }
+#settingsChanges ul { margin:0; padding:0; list-style:none; }
+#settingsChanges li { padding:16px 0; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+#settingsChanges li>div { display:flex; flex-wrap:wrap; gap:8px 16px; justify-content:space-between; }
+#settingsChanges dl { display:grid; grid-template-columns:150px minmax(0,1fr); gap:8px 16px; }
+#settingsChanges dt { font-weight:500; } #settingsChanges dd { margin:0; }
+#settingsChanges summary { cursor:pointer; padding:12px 0; }
+#settingsChanges button { white-space:normal; }
+.settings-changes-return { margin:8px; }
+#settingsChanges :is(button,summary):focus-visible,.settings-changes-return:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+@media(max-width:600px) { #settingsChanges dl { grid-template-columns:1fr; gap:4px; } #settingsChanges dd { margin-bottom:8px; } #settingsChanges button,#settingsChanges summary,.settings-changes-return { min-height:44px; box-sizing:border-box; } }
+
+@media(max-width:1200px) { [data-context-preferences] button.settings-changes-return { min-height:44px; max-width:calc(100% - 16px); box-sizing:border-box; white-space:normal; } }

@@ -1,0 +1,20 @@
+.settings-operational-resets { margin-block: 16px; padding: 12px; border: 1px solid var(--border, #444); border-radius: 8px; min-width: 0; }
+.settings-operational-resets summary { cursor: pointer; padding-block: 8px; }
+.settings-reset-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-block: 10px; }
+.settings-reset-actions label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+#settingsResetFields { border: 0; padding: 0; margin: 12px 0; min-width: 0; }
+#settingsOperationalResets .settings-reset-field { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; cursor: pointer; }
+#settingsOperationalResets .settings-reset-field input { flex: 0 0 auto; margin-top: 4px; }
+.settings-reset-field span { min-width: 0; overflow-wrap: anywhere; }
+.settings-reset-field span > * { display: block; }
+.settings-reset-field small { opacity: .8; margin-top: 3px; }
+#settingsResetPreview { border-top: 1px solid var(--border, #444); margin-top: 12px; padding-top: 10px; overflow-wrap: anywhere; }
+#settingsResetStatus, #settingsResetCoverage, #settingsResetRefreshError { overflow-wrap: anywhere; }
+#settingsResetRefreshError { color: var(--danger, #e78a8a); }
+@media (max-width: 600px) {
+  .settings-operational-resets button, .settings-operational-resets select, .settings-operational-resets summary { min-height: 44px; max-width: 100%; }
+  #settingsOperationalResets .settings-reset-field { min-height: 44px; }
+  #settingsOperationalResets .settings-reset-field input { width: 24px; height: 24px; }
+}
+
+#settingsOperationalResets button, #settingsOperationalResets select { min-height: 44px; }

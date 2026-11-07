@@ -71,14 +71,18 @@ class TestDemoBundle(unittest.TestCase):
                     f"missing fixture: docs/demo/api/{rel}",
                 )
 
-    def test_demo_index_sets_flag_before_app_js(self):
+    def test_demo_index_loads_fake_backend_before_app_js(self):
+        """docs/demo is the built try-it demo (scripts/build_demo.py): the
+        in-browser fake backend must load before app.js so no /api call
+        ever reaches a real server."""
         html = (DEMO_DIR / "index.html").read_text(encoding="utf-8")
-        self.assertIn("__CCC_DEMO__", html,
-                      "demo flag not set in docs/demo/index.html")
-        flag_idx = html.index("window.__CCC_DEMO__ = true")
-        app_idx = html.index("./static/app.js")
-        self.assertLess(flag_idx, app_idx,
-                        "demo flag must be set before app.js loads")
+        self.assertIn("demo/backend.js", html,
+                      "fake backend not loaded in docs/demo/index.html")
+        self.assertLess(html.index("demo/backend.js"),
+                        html.index("static/app.js"),
+                        "fake backend must load before app.js")
+        for rel in ("backend.js", "dataset.js", "panels.js", "tour.js"):
+            self.assertTrue((DEMO_DIR / "demo" / rel).is_file(), rel)
 
     def test_demo_wrapper_in_app_js_is_isolated_behind_flag(self):
         """The fetch wrapper must be a no-op when the flag isn't set,

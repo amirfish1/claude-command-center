@@ -1,0 +1,22 @@
+.conv-old-recap {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text, #c9d1d9);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.conv-old-recap > summary {
+  cursor: pointer;
+  width: fit-content;
+  padding: 3px 0;
+  color: var(--text, #c9d1d9);
+}
+.conv-old-recap > summary:focus-visible {
+  outline: 2px solid var(--accent, #86b7ed);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+.conv-old-recap-body { padding: 6px 0 2px; max-width: 65ch; }
+.conv-old-recap-body > div + div { margin-top: 5px; }
+.conv-old-recap-note { margin: 8px 0 0; font-size: 11px; }

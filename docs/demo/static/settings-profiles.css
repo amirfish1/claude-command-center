@@ -1,0 +1,16 @@
+#settingsHostProfiles {font-size:13px;line-height:1.5;margin:24px 0;padding-bottom:20px;border-bottom:1px solid var(--border)}
+#settingsHostProfiles>summary {font-size:18px;font-weight:600;padding:12px 0;cursor:pointer}
+#settingsHostProfiles fieldset {min-width:0;border:1px solid var(--border);margin:16px 0;padding:12px}
+#settingsHostProfileExportFields,#settingsHostProfileImportFields {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 16px}
+.settings-host-profile-choice {display:flex;align-items:flex-start;gap:8px;padding:8px 0;overflow-wrap:anywhere;cursor:pointer}
+.settings-host-profile-choice>span {min-width:0}.settings-host-profile-choice span span {display:block;margin-top:4px}
+.settings-host-profile-choice input {margin-top:4px;flex-shrink:0;accent-color:var(--accent)}
+#settingsHostProfiles textarea {display:block;width:100%;box-sizing:border-box;margin:8px 0;resize:vertical;font:12px/1.5 var(--font-mono,monospace);background:var(--surface);color:var(--text);border:1px solid var(--border);padding:10px;border-radius:6px}
+#settingsHostProfiles button {white-space:normal;margin:8px 8px 8px 0}
+#settingsHostProfiles ul {list-style:none;padding:0}#settingsHostProfiles li {padding:16px 0;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
+#settingsHostProfiles dl {display:grid;grid-template-columns:160px minmax(0,1fr);gap:8px 16px}#settingsHostProfiles dd {margin:0}
+#settingsHostProfiles h4 {font-size:15px;margin:20px 0 12px}#settingsHostProfiles summary {cursor:pointer;padding:12px 0}
+#settingsHostProfiles :is(button,input,textarea,summary):focus-visible {outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:600px){#settingsHostProfileExportFields,#settingsHostProfileImportFields {grid-template-columns:1fr}#settingsHostProfiles dl {grid-template-columns:1fr;gap:4px}#settingsHostProfiles dd {margin-bottom:8px}#settingsHostProfiles button,#settingsHostProfiles summary,.settings-host-profile-choice {min-height:44px;box-sizing:border-box}}
+
+@media(max-width:600px) { #settingsPane #settingsHostProfiles input[type="file"] {min-height:44px;max-width:100%;box-sizing:border-box} #settingsHostProfileFile::file-selector-button {min-height:44px} }
