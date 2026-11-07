@@ -25329,6 +25329,17 @@ def _notification_is_blocking(notif):
     """
     if not notif:
         return False
+    # A killed PermissionRequest hook cannot remove its own badge. Once its
+    # owner exits there is no prompt to answer through that hook.
+    if notif.get("source") == "permission-request":
+        pid = notif.get("pid")
+        if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            except OSError:
+                pass  # Permission errors do not establish that it exited.
     msg = str(notif.get("message") or "").lower()
     if "waiting for your input" in msg or "waiting for input" in msg:
         return False
