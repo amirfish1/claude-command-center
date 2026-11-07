@@ -3,7 +3,7 @@
   'use strict';
   const views = [
     {tab:'decisions', hostId:'sidebarDecisionHost', frameId:'cccDecisionTabFrame', title:'Decisions', url:'/decision-inbox.html'},
-    {tab:'decisions2', hostId:'sidebarDecisionGuideHost', frameId:'cccDecisionGuideFrame', title:'Decisions 2', url:'/decision-guide.html'}
+    {tab:'decisions2', hostId:'sidebarDecisionGuideHost', frameId:'cccDecisionGuideFrame', title:'Decisions', url:'/decision-guide.html'}
   ];
   let count = null;
   const style = document.createElement('style');

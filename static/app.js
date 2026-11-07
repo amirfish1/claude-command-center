@@ -2417,6 +2417,7 @@
   // set — the wrapper rewrites only `/api/...` URLs, so real-mode behavior is
   // untouched. Set the flag inline in docs/demo/index.html BEFORE this script
   // loads, or pass ?demo=1.
+  window.cccDecisionTabKey = () => (window.__CCC_DEMO__ === true || document.querySelector('script[src$="demo/backend.js"]')) ? 'decisions' : 'decisions2';
   (function installDemoMode() {
     const params = new URLSearchParams(window.location.search || '');
     const fromFlag = window.__CCC_DEMO__ === true;
@@ -22034,7 +22035,7 @@
       // reachable — no remapping of stored tabs the bottom nav doesn't
       // cover (All / Other / Active).
       activeNavKey = _coreApp === 'queues' ? 'q2'
-        : ({ workers: 'workers', queues: 'queues', jobs: 'jobs', decisions: 'decisions', smallbugs: 'smallbugs',
+        : ({ workers: 'workers', queues: 'queues', jobs: 'jobs', decisions: 'decisions', decisions2: 'decisions', smallbugs: 'smallbugs',
             alltickets: 'alltickets', archived: 'archived', ideas: 'coding', coding: 'coding' })[tab] || '';
     }
     if (!isSimpleMode() && document.body.classList.contains('mobile-ask-open')) activeNavKey = 'ask';
@@ -45868,7 +45869,8 @@
         ['jobs', 'Jobs', _jobsTabCount()],
         ...(_otherTabCount > 0 ? [_otherTabDef] : []),
       ];
-    _tabDefs.splice(_tabDefs.findIndex(tab => tab[0] === 'jobs') + 1, 0, ['decisions', 'Decisions', 0], ['decisions2', 'Decisions 2', 0]);
+    // One owner queue. The hosted demo has no guide page, so it keeps the older view.
+    _tabDefs.splice(_tabDefs.findIndex(tab => tab[0] === 'jobs') + 1, 0, [window.cccDecisionTabKey(), 'Decisions', 0]);
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
         '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '"'
@@ -95911,7 +95913,7 @@
     return ff('idea_tickets');
   }
   function normalizeSidebarTabKey(t) {
-    if (t === 'decisions' || t === 'decisions2') return t;
+    if (t === 'decisions' || t === 'decisions2') return window.cccDecisionTabKey();
     if (ideaTicketsOn()) {
       return (t === 'alltickets' || t === 'ideas' || t === 'smallbugs' || t === 'issues' || t === 'queues' || t === 'archived' || t === 'workers' || t === 'jobs') ? t : 'alltickets';
     }

@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Decisions 2 · Guided queue</title>
+  <title>Decisions · Guided queue</title>
   <link rel="stylesheet" href="/static/decision-guide.css">
   <script src="/static/decision-guide.js" defer></script>
 </head>
 <body>
   <main class="guide">
-    <header><div><h1>Decisions 2</h1><p class="subtitle">Guided queue · no AI</p></div><button id="refresh" type="button" hidden>Try again</button></header>
+    <header><div><h1>Decisions</h1><p class="subtitle">Guided queue · no AI</p></div><button id="refresh" type="button" hidden>Try again</button></header>
     <p id="coverage" class="meta" role="status">Checking source coverage…</p>
     <p id="intro">Loading open questions…</p>
     <details id="queue"><summary>Browse open questions <span id="queueCount"></span></summary><nav id="items" aria-label="Open questions"></nav></details>
@@ -31,7 +31,7 @@
       </div>
       <div class="actions"><button id="send" class="primary" type="submit" hidden disabled>Send answer</button><button id="skip" type="button" disabled>Skip / next</button><button id="close" type="button" hidden>Close…</button></div>
     </form>
-    <p class="meta footnote">Skipping only defers a question here. Closing asks you to confirm first. Source acceptance confirms delivery, not completion of the work.</p>
+    <p class="meta footnote">Skipping only defers a question here. Closing asks you to confirm first. Source acceptance confirms delivery, not completion of the work. <a href="/decision-inbox.html">History and reports</a></p>
   </main>
 </body>
 </html>

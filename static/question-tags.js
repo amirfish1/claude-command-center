@@ -3,9 +3,9 @@
  * explanation) without scrolling up.
  * Backed by GET /api/question-tags (ccc_server/question_tags.py).
  *
- * The floating pill is NOT a tag counter. Its number is the Decisions 2 count
+ * The floating pill is NOT a tag counter. Its number is the Decisions count
  * (needs_answer_count from GET /api/decision-inbox/requests, the same field that
- * badges the tab), and clicking it opens Decisions 2: the one queue the owner
+ * badges the tab), and clicking it opens Decisions: the one queue the owner
  * works through. Tags found in transcripts are history (see classify()).
  *
  * A question a ticket blocked on goes by that ticket instead: its chip shows
@@ -33,7 +33,7 @@
   var POLL_MS = 60000;
   var index = { byN: {}, list: [], scanning: false, at: 0 };
   var loadGeneration = 0;
-  // The owner queue (Decisions 2). count stays null until a verified read, and
+  // The owner queue (Decisions). count stays null until a verified read, and
   // keeps its last verified value while a refresh is in flight or unverified.
   var queue = { count: null, rows: [], at: 0 };
   var queueGeneration = 0;
@@ -77,7 +77,7 @@
 
   // Where one transcript tag stands relative to the owner queue:
   //   answered  settled
-  //   queue     in Decisions 2 (counted by the pill)
+  //   queue     in Decisions (counted by the pill)
   //   ticket    tied to an open ticket that is not an owner wait
   //   recent    asked in the last 48h, never reached the queue (may be live)
   //   history   older and unresolved; nothing tracks it as a to-do
@@ -95,7 +95,7 @@
     return out;
   }
 
-  // The pill's number: Decisions 2's, nothing else.
+  // The pill's number: Decisions's, nothing else.
   function pillCount() { return queue.count; }
 
   function loadQueue() {
@@ -430,9 +430,9 @@
       var where = classify(q, queueKeys(queue.rows));
       body = '<div class="qtag-meta">' + ({
         answered: '<span class="qtag-st qtag-st-done">answered</span>',
-        queue: '<span class="qtag-st qtag-st-open">waiting on you · in Decisions 2</span>',
+        queue: '<span class="qtag-st qtag-st-open">waiting on you · in Decisions</span>',
         ticket: '<span class="qtag-st">tied to an open ticket, not waiting on you</span>',
-        recent: '<span class="qtag-st qtag-st-open">asked recently · not in Decisions 2</span>',
+        recent: '<span class="qtag-st qtag-st-open">asked recently · not in Decisions</span>',
         history: '<span class="qtag-st">old history · not a to-do</span>',
       })[where]
         + ' first asked ' + esc(fmtTs(q.first.ts)) + ' · ' + q.mentions.length + ' reminder' + (q.mentions.length === 1 ? '' : 's') + '</div>'
@@ -444,7 +444,7 @@
           + '<textarea id="qtagAns" class="qtag-ans" rows="3" placeholder="Type your answer, then choose Send answer or Add to composer."></textarea>'
           + '<div class="qtag-actions"><button type="button" class="qtag-btn qtag-primary" data-qsend="' + q.n + '">Send answer</button>'
           + '<button type="button" class="qtag-btn" data-qadd="' + q.n + '">Add to composer</button>')
-        + (where === 'queue' ? '<button type="button" class="qtag-btn" data-qqueue="1">Open Decisions 2</button>' : '')
+        + (where === 'queue' ? '<button type="button" class="qtag-btn" data-qqueue="1">Open Decisions</button>' : '')
         + '<button type="button" class="qtag-btn" data-qjump="' + q.n + '">Jump to original</button>'
         + '<button type="button" class="qtag-btn" data-qlist="1">Question history</button>'
         + '</div><div class="qtag-added" aria-live="polite"></div>';
@@ -510,17 +510,17 @@
     var count = pillCount();
     s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>Question history</strong>'
       + '<button type="button" class="qtag-close" aria-label="Close">×</button></div>'
-      + '<p class="qtag-intro">Your to-do list is <strong>Decisions 2</strong>'
+      + '<p class="qtag-intro">Your to-do list is <strong>Decisions</strong>'
       + (count === null ? '.' : ': ' + (count ? count + ' need' + (count === 1 ? 's' : '') + ' you' : 'nothing needs you') + '.')
       + ' This page is only a record of questions found in session transcripts.</p>'
-      + '<button type="button" class="qtag-btn qtag-primary" data-qqueue="1">Open Decisions 2</button>'
+      + '<button type="button" class="qtag-btn qtag-primary" data-qqueue="1">Open Decisions</button>'
       + '<button type="button" class="qtag-btn qtag-pill-toggle" data-qpill-toggle style="margin-top:8px">' + (pillHidden ? 'Show floating question button' : 'Hide floating question button') + '</button>'
-      + (live.length ? '<h4 class="qtag-h">Asked in a session, not in Decisions 2 (' + live.length + ')</h4>'
+      + (live.length ? '<h4 class="qtag-h">Asked in a session, not in Decisions (' + live.length + ')</h4>'
         + '<p class="qtag-note">Recent questions, or ones tied to an open ticket that is not waiting on you. Not counted in the number.</p>'
         + '<ul class="qtag-list">' + live.map(historyRow).join('') + '</ul>' : '')
       + (old.length ? '<details class="qtag-old"><summary>Older tagged questions (' + old.length + ') — history, not a to-do list</summary>'
         + '<ul class="qtag-list">' + old.map(historyRow).join('') + '</ul></details>' : '')
-      + (!live.length && !old.length ? '<p class="qtag-empty">' + (index.scanning ? 'Building the question index (first run only)…' : 'No unresolved tagged questions outside Decisions 2.') + '</p>' : '')
+      + (!live.length && !old.length ? '<p class="qtag-empty">' + (index.scanning ? 'Building the question index (first run only)…' : 'No unresolved tagged questions outside Decisions.') + '</p>' : '')
       + '</div>';
     s.hidden = false;
   }
@@ -584,14 +584,14 @@
     pill.hidden = !known || n === 0 || pillHidden;
     var label = (known ? n : 0) + ' need' + (n === 1 ? 's' : '') + ' you';
     pill.textContent = '? ' + (known ? n : '');
-    pill.title = label + ' in Decisions 2 — click to answer; drag to move; hold for options';
+    pill.title = label + ' in Decisions — click to answer; drag to move; hold for options';
     pill.setAttribute('aria-label', pill.title);
     positionPill();
     // Menu copies (phones fold the pill into the ⋮ menus) and the count
     // badge on those menus' buttons.
     document.querySelectorAll('[data-qtag-menu]').forEach(function (el) {
       el.hidden = !known || n === 0;
-      el.textContent = 'Decisions 2 (' + (known ? n : 0) + ')';
+      el.textContent = 'Decisions (' + (known ? n : 0) + ')';
     });
     document.querySelectorAll('[data-qtag-badge]').forEach(function (el) {
       el.setAttribute('data-qtag-count', known && n ? String(n) : '');
@@ -667,7 +667,7 @@
     chipify(document.body);
     load(true);
     loadQueue();
-    // Decisions 2 reports its own count the moment it changes (an answer, a
+    // Decisions reports its own count the moment it changes (an answer, a
     // close); take it so the pill never lags the tab badge, then confirm.
     window.addEventListener('ccc:decision-count', function (ev) {
       var c = ev.detail && ev.detail.count;

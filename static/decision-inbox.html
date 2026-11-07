@@ -173,9 +173,9 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Decisions</h1>
+    <h1>Decision history and reports</h1>
   </header>
-  <p class="sub">Owner questions, reports, and the actions they need.</p>
+  <p class="sub"><a id="backToQueue" href="/decision-guide.html" hidden>Back to Decisions</a> Past answers, older reports, and monitoring. Questions that need you are in Decisions.</p>
   <section id="requestsSection" aria-labelledby="requestsHeading">
     <h2 id="requestsHeading">Owner questions <span id="requestCount"></span></h2>
     <p id="requestsStatus" role="status">Checking the local queue source…</p>
@@ -202,7 +202,7 @@
   </section>
   <div class="toolbar" role="search" aria-label="Browse decisions">
     <label class="search">Search decisions<input id="search" type="search" placeholder="Question number, ticket, title or context"></label>
-    <label>Status<select id="statusFilter"><option value="open">Needs decision</option><option value="closed">History</option><option value="monitoring">Monitoring</option><option value="all">All items</option></select></label>
+    <label>Status<select id="statusFilter"><option value="open">Open reports</option><option value="closed">History</option><option value="monitoring">Monitoring</option><option value="all">All items</option></select></label>
     <label>Source<select id="sourceFilter"><option value="all">All sources</option></select></label>
     <label>Sort<select id="sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="updated">Recently updated</option></select></label>
   </div>
@@ -217,7 +217,8 @@
 <script>
 (function () {
   "use strict";
-  var state = { cards: [], governor: [], queueRepos: {}, busy: {}, page: 0, expanded: new Set() };
+  if (location.pathname === "/decision-inbox.html") document.getElementById("backToQueue").hidden = false;
+var state = { cards: [], governor: [], queueRepos: {}, busy: {}, page: 0, expanded: new Set() };
   var legacyById = {};
   var $ = function (id) { return document.getElementById(id); };
 

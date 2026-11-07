@@ -23004,10 +23004,10 @@ def _resolve_apps(include_disabled=False):
     # Decision Inbox: the hourly stalled-work scanner + token governor
     # (ccc_server/decision_inbox.py). Ships with the repo but is not core
     # navigation, so it can be switched off from the Applications page.
-    apps.append({"id": "decision-inbox", "label": "Decisions",
+    apps.append({"id": "decision-inbox", "label": "Decision history",
                  "icon": "\N{BALLOT BOX WITH CHECK}", "url": "/decision-inbox.html",
                  "builtin": False})
-    apps.append({"id": "decision-guide", "label": "Decisions 2",
+    apps.append({"id": "decision-guide", "label": "Decisions",
                  "icon": "\N{SPEECH BALLOON}", "url": "/decision-guide.html",
                  "builtin": False})
     # Spawn Ledger reads a grade ledger written by an external tool; list it
