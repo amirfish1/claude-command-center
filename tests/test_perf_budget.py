@@ -12,6 +12,7 @@ These tests assert *how much work* happens, not just that the output is right:
 If one fails, a hot path lost its gating or caching — don't relax the bound,
 restore the gate. See CLAUDE.md "Performance gates".
 """
+import inspect
 import importlib
 import importlib.util
 import concurrent.futures
@@ -365,7 +366,7 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
 
 def test_archive_list_http_route_projects_cached_rows(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "_ARCHIVE_LIST_DISK_DIR", tmp_path)
-    monkeypatch.setattr(server, "_ARCHIVE_LIST_BODY_CACHE", {})
+    monkeypatch.setattr(server, "_ARCHIVE_LIST_BODY_CACHE", server.ByteBudgetCache(1 << 26, 96))
     monkeypatch.setattr(
         server,
         "_archive_list_source_rows_cached",
@@ -495,7 +496,7 @@ def big_projects(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "HERMES_GATEWAY_SESSIONS", hermes_home / "sessions" / "sessions.json")
     monkeypatch.setattr(server, "HERMES_WHATSAPP_DIR", hermes_home / "whatsapp")
     monkeypatch.setattr(server, "HERMES_WHATSAPP_BRIDGE_LOG", hermes_home / "whatsapp" / "bridge.log")
-    monkeypatch.setattr(server, "HERMES_CHUCK_PENDING_DIR", hermes_home / "whatsapp" / "chuck_realtor_pending")
+    monkeypatch.setattr(server, "HERMES_PENDING_DIR", hermes_home / "whatsapp" / "pending")
     monkeypatch.setattr(server, "HERMES_PROFILES_DIR", hermes_home / "profiles")
     # Devin CLI reads its sessions DB via CCC_DEVIN_DB (env override, checked
     # fresh per call) rather than a server-module global, so it isn't covered
@@ -1134,8 +1135,8 @@ def test_ux_fixes_health_no_all_sessions_or_subprocess(monkeypatch):
     items = (
         [_item(i, "CCC", "open") for i in range(1, 15)]
         + [_item(100, "CCC", "in_progress", claimed_by=sid_a)]
-        + [_item(i, "BYM", "closed", claimed_by=sid_b) for i in range(200, 260)]
-        + [_item(300, "BYM", "open")]
+        + [_item(i, "HARBOR", "closed", claimed_by=sid_b) for i in range(200, 260)]
+        + [_item(300, "HARBOR", "open")]
     )
     monkeypatch.setattr(server._q, "list_items", lambda *a, **k: list(items))
 
@@ -1147,7 +1148,7 @@ def test_ux_fixes_health_no_all_sessions_or_subprocess(monkeypatch):
     health = server.compute_ux_fixes_health()
 
     projects = {p["project"] for p in health}
-    assert {"CCC", "BYM"} <= projects, f"expected CCC+BYM in health, got {projects}"
+    assert {"CCC", "HARBOR"} <= projects, f"expected CCC+HARBOR in health, got {projects}"
     # One liveness probe per project-with-open-tickets (2), not per ticket (~75).
     assert len(live_calls) <= 4, (
         f"_archive_session_is_live called {len(live_calls)}x — health is probing "
@@ -2470,6 +2471,35 @@ def test_live_activity_cache_covers_dashboard_poll_interval(monkeypatch):
 
     assert first == second == {"sid-1": {"state": "working"}}
     assert calls == [1000.0], "5s dashboard polls should reuse the live snapshot"
+
+
+def test_live_status_reads_share_one_background_build(monkeypatch):
+    """CCC-319: however many polls arrive during a stalled build, they share
+    one all-sessions build and none of them waits it out."""
+    release = threading.Event()
+    calls = []
+
+    def build_uncached(detail=None):
+        calls.append(1)
+        release.wait(5)
+        return {"sid-1": {"state": "working"}}
+
+    monkeypatch.setattr(server, "_live_activity_snapshot", {
+        "ts": time.time() - 60.0, "data": {"sid-0": {"state": "idle"}}})
+    monkeypatch.setattr(server, "_live_activity_refresh", {"done": None})
+    monkeypatch.setattr(server, "_LIVE_ACTIVITY_VIEW_WAIT_S", 0.01)
+    monkeypatch.setattr(server, "_record_live_build_ms", lambda ms: None)
+    monkeypatch.setattr(server, "record_event", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_build_live_sessions_activity_uncached", build_uncached)
+
+    try:
+        for _ in range(20):
+            data, status = server.live_sessions_activity_for_view()
+            assert "sid-0" in data and status["refreshing"] is True
+    finally:
+        release.set()
+    assert server._live_activity_refresh["done"].wait(5)
+    assert len(calls) == 1
 
 
 def test_throughput_startup_prewarm_defaults_off(monkeypatch):
@@ -5273,7 +5303,7 @@ def test_runaway_scan_opens_only_changed_active_transcripts(tmp_path, monkeypatc
     active = projects / "active-0001-aaaa.jsonl"
     active.write_text(rec * 50)
     kw = dict(projects_root=tmp_path / "projects", codex_root=tmp_path / "no-codex",
-              state_file=tmp_path / "scan.json")
+              kimi_root=tmp_path / "no-kimi", state_file=tmp_path / "scan.json")
 
     opened = []
     real_open = builtins.open
@@ -5453,3 +5483,215 @@ def test_question_tags_sources_walk_is_memoised_between_scans(tmp_path, monkeypa
     assert len(walks) == 1
     qt._sources(use_memo=False)
     assert len(walks) == 2
+
+
+def test_question_ticket_links_fold_once_per_ticket_refresh():
+    """The index is polled per client; thousands of tickets must not be
+    re-folded on each poll, only when a refresh hands over a new list."""
+    from ccc_server import question_tags as qt
+
+    class Counted(list):
+        reads = 0
+
+        def __iter__(self):
+            type(self).reads += 1
+            return super().__iter__()
+
+    rows = [{"ref": "OPS-1", "needs_input": True, "status": "open",
+             "block_question": "[Q7:publish] OK?"}]
+    items, refreshed = Counted(rows), Counted(rows)
+    for _ in range(10):
+        qt.apply_tickets([{"n": 7, "answered": False}], items)
+    assert Counted.reads == 1
+    qt.apply_tickets([{"n": 7, "answered": False}], refreshed)
+    assert Counted.reads == 2
+
+
+# ── Attribution journal on the conversation-open path (CCC-143) ──────────────
+
+def test_attribution_journal_append_does_not_reread_the_month(monkeypatch, tmp_path):
+    """A compact sender header sends every open through this index, and every
+    send appends a row, so a full re-read cost ~1s of CPU per open."""
+    import sender_envelope as envelope
+    monkeypatch.setenv("WATCHTOWER_STATE_DIR", str(tmp_path / "wt"))
+    monkeypatch.setenv("CCC_STATE_DIR", str(tmp_path / "ccc"))
+    monkeypatch.setenv("WT_ATTRIBUTION_EMIT", "1")
+    monkeypatch.setattr(envelope, "_cache", {})
+    for i in range(50):
+        assert envelope.journal(envelope.make("r", basis="runtime"), app="wt", transport_id=f"t{i}")
+    assert envelope.lookup(transport_id="t0")
+    rows = []
+    real = envelope._journal_add
+    monkeypatch.setattr(envelope, "_journal_add",
+                        lambda entry, line, nodes: (rows.append(line), real(entry, line, nodes))[1])
+    assert envelope.journal(envelope.make("r", basis="runtime"), app="wt", transport_id="t-new")
+    assert envelope.lookup(transport_id="t-new")
+    assert len(rows) == 1
+
+
+def test_share_stats_card_reuses_caches_and_never_walks_sessions(monkeypatch):
+    """The nudge reads this on page load, so it must stay O(1) in sessions."""
+    from ccc_server import share_run
+
+    share_run._stats_cache.clear()
+    calls = {"throughput": 0, "productivity": 0}
+
+    def throughput():
+        calls["throughput"] += 1
+        return {"ok": True, "pending": False, "agents": {"7": 3, "30": 3}, "daily": []}, 200
+
+    def productivity():
+        calls["productivity"] += 1
+        return {"daily": []}, 200
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("stats card walked the filesystem or forked")
+
+    monkeypatch.setattr(Path, "glob", forbidden)
+    monkeypatch.setattr(Path, "rglob", forbidden)
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    monkeypatch.setattr(os, "walk", forbidden)
+    monkeypatch.setattr(os, "scandir", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    for _ in range(50):
+        share_run.stats_card(throughput=throughput, productivity=productivity)
+    assert calls == {"throughput": 1, "productivity": 1}, "warm stats card re-read its sources"
+
+
+def test_share_export_reads_one_session_and_forks_git_once(monkeypatch):
+    """Export cost follows one session, never the whole session store."""
+    from ccc_server import share_run
+
+    share_run._identity_cache.clear()
+    forks = []
+    real_run = subprocess.run
+
+    def counting_run(*args, **kwargs):
+        forks.append(args)
+        return real_run(*args, **kwargs)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("export walked beyond its own session")
+
+    monkeypatch.setattr(subprocess, "run", counting_run)
+    monkeypatch.setattr(Path, "glob", forbidden)
+    monkeypatch.setattr(Path, "rglob", forbidden)
+    monkeypatch.setattr(os, "walk", forbidden)
+    parses = []
+    events = [
+        {"type": "assistant", "ts": "2026-11-05T10:00:00Z", "blocks": [
+            {"kind": "text", "text": "Checked the handler and it works."},
+            {"kind": "tool_use", "name": "Bash", "id": str(i), "command": "pytest"},
+        ]}
+        for i in range(5000)
+    ]
+    events.append({"type": "user_text", "entrypoint": "cli", "text": "go",
+                   "ts": "2026-11-05T10:00:00Z"})
+
+    def parse(session_id):
+        parses.append(session_id)
+        return {"events": events}
+
+    started = time.monotonic()
+    for _ in range(3):
+        payload, status = share_run.export_conversation(
+            "s", parse=parse, transcript_path="", engine="claude",
+        )
+        assert status == 200 and payload["ok"]
+    assert len(parses) == 3
+    assert len(forks) == 1, "identity lookup must be cached, not forked per export or event"
+    assert time.monotonic() - started < 6.0
+
+
+def _small_archive_watch_env(monkeypatch, tmp_path):
+    project = tmp_path / "projects" / "-code-app"
+    project.mkdir(parents=True)
+    monkeypatch.setattr(server, "PROJECTS_ROOT", tmp_path / "projects")
+    monkeypatch.setattr(server, "_ARCHIVE_REFRESH_GATE_BYPASS_UNTIL", [0.0])
+    invalidated = []
+    monkeypatch.setattr(
+        server, "_invalidate_dashboard",
+        lambda resource, **kw: invalidated.append((resource, kw.get("reason"))),
+    )
+    return project, invalidated
+
+
+def test_small_archive_watch_announces_only_new_transcripts(
+    isolated_archive_cache, monkeypatch, tmp_path,
+):
+    """A session started in a terminal has no spawn to announce it; on a new
+    install the file appearing is the only signal the board gets."""
+    project, invalidated = _small_archive_watch_env(monkeypatch, tmp_path)
+    first = project / "a.jsonl"
+    first.write_text("{}\n")
+    baseline = server._small_archive_transcripts()
+
+    first.write_text("{}\n{}\n")  # an append is not a new session
+    assert server._dashboard_small_archive_watch_tick(baseline) == baseline
+    assert invalidated == []
+
+    (project / "b.jsonl").write_text("{}\n")
+    nxt = server._dashboard_small_archive_watch_tick(baseline)
+    assert len(nxt) == 2
+    assert invalidated == [("archive", "new-transcript")]
+
+
+def test_new_transcript_passes_the_load_gate_once(
+    isolated_archive_cache, monkeypatch, tmp_path,
+):
+    """Saturation must not hide the session the user just started, but the
+    pass is time-boxed so ordinary polls stay gated."""
+    project, _invalidated = _small_archive_watch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_machine_load", lambda: (13.0, 8))
+    now = time.time()
+    assert server._archive_refresh_load_blocked(now) is True
+
+    (project / "b.jsonl").write_text("{}\n")
+    server._dashboard_small_archive_watch_tick(set())
+    assert server._archive_refresh_load_blocked(time.time()) is False
+    later = time.time() + server._ARCHIVE_NEW_TRANSCRIPT_GATE_GRACE_S + 1
+    assert server._archive_refresh_load_blocked(later) is True
+
+
+def test_small_archive_watch_counts_sessions_from_before_the_page():
+    """A transcript written before the first subscriber must still refresh a
+    snapshot built earlier, or the list stays empty on a saturated box."""
+    source = inspect.getsource(server._dashboard_event_watch_loop)
+    assert "previous_transcripts = set()" in source
+    assert "previous_transcripts = _small_archive_transcripts()" not in source
+
+
+def test_small_archive_watch_retires_past_its_limit(
+    isolated_archive_cache, monkeypatch, tmp_path,
+):
+    """An established archive must never pay for this walk: it stops at the
+    limit and the loop drops the watch."""
+    project, invalidated = _small_archive_watch_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "_SMALL_ARCHIVE_TRANSCRIPT_LIMIT", 2)
+    for i in range(3):
+        (project / f"{i}.jsonl").write_text("{}\n")
+    assert server._small_archive_transcripts() is None
+    assert server._dashboard_small_archive_watch_tick(set()) is None
+    assert invalidated == []
+
+
+def test_refresh_that_changes_row_count_tells_dashboards(
+    isolated_archive_cache, monkeypatch, tmp_path,
+):
+    _project, invalidated = _small_archive_watch_env(monkeypatch, tmp_path)
+    assert server._archive_serve_cache_store(
+        _ALL_KEY, [{"session_id": "a"}], server._archive_serve_generation)
+    monkeypatch.setattr(
+        server, "_archive_compute_rows_detached",
+        lambda *a: ([{"session_id": "a"}, {"session_id": "b"}], False),
+    )
+    server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, 0, 1.0)
+    assert invalidated == [("archive", "refresh-row-count")]
+
+    invalidated.clear()
+    monkeypatch.setattr(
+        server, "_archive_compute_rows_detached",
+        lambda *a: ([{"session_id": "a"}], False),
+    )
+    server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, 0, 1.0)
+    assert invalidated == []

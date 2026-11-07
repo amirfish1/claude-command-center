@@ -22,6 +22,9 @@ ccc send queue-drain "also update the changelog"   # fire-and-forget
 ccc send <session-id> "stop, wrong branch" --steer # interrupt the turn
 ccc ask queue-drain "what's your status?"          # block for the reply
 
+ccc share <session>       # redacted replay page and image, saved locally
+ccc share --stats         # this week's stats card; see docs/sharing.md
+
 ccc spawn --continue-from <old session> "keep going"       # new session, not a cold resume
 ccc send <old session> "keep going" --new-if-large-and-stale # spawns a continuation only when warranted
 ```
@@ -34,6 +37,14 @@ not a bare port. Override it with `--server` or `$CCC_SERVER`.
 The installer links the repo-root script to `~/.local/bin/ccc`. From a checkout
 you can run `./ccc`. With no known subcommand, it launches through `run.sh`,
 the same behavior as the Homebrew launcher.
+
+## Get a reminder
+
+`ccc remind` sets one local notification for 9am tomorrow saying what your
+Claude sessions did since now, such as how many ended on a question for you. It
+fires once and does not repeat. `ccc remind status` shows it; `ccc remind off`
+cancels it. CCC has to be running then, and the computer needs desktop
+notifications (`notify-send` on Linux).
 
 ## Choose a session or model
 

@@ -137,7 +137,7 @@ def _recall_via_reader(query: str, limit: int) -> dict | None:
     """MEMORY-20: run the query in the conv-reader child, off the dashboard's
     GIL. Recall is ~60 SQLite calls and each gives the GIL back, so with any
     other dashboard thread busy every call waits a switch interval: 71 ms
-    alone became 0.5-2.5 s on hermes-gcp's live server. The dashboard still
+    alone became 0.5-2.5 s on a busy live server. The dashboard still
     owns the index sync (the TTL kicks below are cheap and hand the corpus
     walk to the bg helper) and the `indexing` flag; None = run in-process."""
     from ccc_server import conv_reader as _reader

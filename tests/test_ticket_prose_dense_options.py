@@ -1,7 +1,7 @@
 """ticket-prose.js lifts inline options out of a dense `wt block --question`.
 
 Workers write options as "(a)", "(A)", "(1)" or "(A, recommended)"; all of
-them must become a scannable list, not one wall of text (STRAMP-215).
+them must become a scannable list, not one wall of text (a real ticket).
 """
 import json
 import pathlib

@@ -16,7 +16,7 @@ def test_hook_success_attachment_surfaces_stdout_and_event():
             "toolUseID": "ba37710a-5e72-404f-8d75-7d2d45a094b1",
             "hookEvent": "SessionStart",
             "content": "[SessionHook] A recent checkpoint is available",
-            "stdout": "[SessionHook] A recent checkpoint is available (prior work on chuck-realtor-web · branch main) at /path/to/checkpoint.md. Load it only if it matches what you are working on now.\n",
+            "stdout": "[SessionHook] A recent checkpoint is available (prior work on heron-web · branch main) at /path/to/checkpoint.md. Load it only if it matches what you are working on now.\n",
             "stderr": "",
             "exitCode": 0,
             "durationMs": 360,

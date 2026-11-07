@@ -18,8 +18,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from ccc_server import local_overrides as _local_overrides
+
 HOSTS = ("hermes", "laptop")
-HERMES_APPS_DIR = "/home/hermes/Apps"
 _FOLDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _MAX_TEXT = 4000
@@ -49,12 +50,18 @@ def _resolve_laptop_repo(repo, known_paths):
     return None, f"repo is not a known repo on this laptop: {repo}"
 
 
+def _hermes_apps_dir():
+    """Checkout folder on the always-on host: local-overrides.json, else ~/Apps."""
+    return _local_overrides.remote_apps_dir() or os.path.expanduser("~/Apps")
+
+
 def _resolve_hermes_repo(repo, known_paths):
-    """A /home/hermes/Apps/<x> path. A bare folder name, or a known laptop
-    repo path, maps to the checkout of the same folder name on the VM."""
+    """A <apps dir>/<x> path. A bare folder name, or a known laptop repo path,
+    maps to the checkout of the same folder name on the VM."""
+    apps_dir = _hermes_apps_dir()
     folder = ""
-    if repo.startswith(HERMES_APPS_DIR + "/"):
-        folder = repo[len(HERMES_APPS_DIR) + 1:].rstrip("/")
+    if repo.startswith(apps_dir + "/"):
+        folder = repo[len(apps_dir) + 1:].rstrip("/")
     elif "/" not in repo and not repo.startswith("~"):
         folder = repo
     else:
@@ -65,9 +72,9 @@ def _resolve_hermes_repo(repo, known_paths):
         if cand and cand in [str(p) for p in known_paths if p]:
             folder = os.path.basename(cand.rstrip("/"))
     if not folder or not _FOLDER_RE.match(folder) or folder in (".", ".."):
-        return None, (f"hermes repo must be a folder name or a {HERMES_APPS_DIR}/<folder> path, "
+        return None, (f"hermes repo must be a folder name or a {apps_dir}/<folder> path, "
                       f"got {repo!r}")
-    return f"{HERMES_APPS_DIR}/{folder}", None
+    return f"{apps_dir}/{folder}", None
 
 
 def validate_job_add(payload, known_paths):
@@ -75,7 +82,7 @@ def validate_job_add(payload, known_paths):
 
     fields: {host, repo, repo_input, what, when, name, model, engine, effort}.
     For laptop jobs ``repo`` is the resolved local path; for hermes jobs it is
-    the /home/hermes/Apps/<folder> path on the VM.
+    the <apps dir>/<folder> path on the VM.
     """
     if not isinstance(payload, dict):
         return None, "body must be a JSON object"

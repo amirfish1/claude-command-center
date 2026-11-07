@@ -1,0 +1,10 @@
+#settingsTaskResults {border-bottom:1px solid var(--border);padding:8px 0 18px;margin-bottom:18px;min-width:0}
+#settingsTaskResults[hidden] {display:none!important}
+#settingsTaskResults h3 {margin:0 0 8px;font-size:15px}
+#settingsTaskResults p {font-size:12px;color:var(--text-muted);line-height:1.5;overflow-wrap:anywhere}
+#settingsTaskResults ul {list-style:none;padding:0;margin:12px 0 0;display:grid;gap:12px}
+#settingsTaskResults li {min-width:0;padding:10px;border:1px solid var(--border);border-radius:8px}
+#settingsTaskResults button,.settings-task-back {white-space:normal;max-width:100%;overflow-wrap:anywhere;text-align:left}
+.settings-task-queues {display:flex;flex-wrap:wrap;gap:8px;max-height:260px;overflow:auto;padding:4px}
+.settings-task-back {margin:8px 0;flex-basis:100%}
+@media(max-width:1200px){#settingsTaskResults button,.settings-task-back,#settingsModal .settings-task-back,[data-context-preferences] .settings-task-back {min-height:44px}}

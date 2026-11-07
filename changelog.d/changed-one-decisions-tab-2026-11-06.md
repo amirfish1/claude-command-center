@@ -1,0 +1,1 @@
+- Merged the two Decisions tabs into one: the guided queue is now Decisions, and past answers and older reports moved behind its History and reports link.

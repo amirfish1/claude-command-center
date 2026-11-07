@@ -63,3 +63,18 @@ custom helpers concurrently if they remove locks or reset malformed state:
 CCC preserves custom behavior, so its safety guarantees apply to the bundled
 helper only. Sharing state over network filesystems depends on their atomic
 mkdir/replace semantics; separate machines are not assigned disjoint ranges.
+
+## Questions on a ticket
+
+When a WatchTower ticket blocks on a tagged question, the ticket is what you
+see. Its chip shows the ticket reference, or "open question" right after that
+reference, and opens the ticket in CCC. The Q number stays searchable and in
+the chip's tooltip. **Needs you** gains **Talk to worker**, which opens the
+worker's session with the cursor in the composer and sends nothing.
+
+The ticket decides whether the question is open: it stays open while the ticket
+is blocked on it, however the chat mentions the tag. Answer in the ticket's
+**Your Decision** box, or with a reply chip such as **Approve plan**: while the
+ticket waits, a chip answers the ticket instead of sending a chat message, which
+would leave it blocked. Other questions keep the chat-based rule, where an owner
+reply with the tag or an agent's `[Q<n>] answered` closes them.

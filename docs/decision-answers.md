@@ -200,3 +200,14 @@ require their own durable deduplication keyed by answer UUID.
 An installation with persisted answer policy keeps the historical replay fence
 even when new replies are disabled. Disabling delivery does not reactivate old
 report options.
+
+## Closing a question
+
+`POST /api/decision-inbox/close` takes `request_id`, `expected_revision` and
+`idempotency_key`, under the same opt-in as answers. A WatchTower question closes
+through `wt close-conditional`, which refuses anything but the exact question
+the owner saw, closes the ticket as Declined and wakes no worker. Undo it with
+`wt reopen <ref>`. A session question has no source close, so it is hidden in CCC
+only. A response with `state: "unknown"` means the outcome is not confirmed:
+retry with the same key, which replays the source receipt. Rows report
+`can_close`; a saved or accepted answer blocks closing until it is rejected.

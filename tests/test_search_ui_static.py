@@ -6,6 +6,25 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class TestSearchUiStatic(unittest.TestCase):
+    def test_conversation_search_remembers_last_ten_queries(self):
+        """Search should offer the last ten committed conversation queries."""
+        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+
+        search_input = index_html.split('id="convSearch"', 1)[1].split('>', 1)[0]
+        self.assertNotIn('list=', search_input)
+        self.assertIn("$convSearch.removeAttribute('list')", app_js)
+        self.assertIn('<datalist id="convSearchHistoryList"></datalist>', index_html)
+        self.assertIn("const CONV_SEARCH_HISTORY_KEY = 'ccc-conv-search-history';", app_js)
+        self.assertIn("function readConversationSearchHistory()", app_js)
+        self.assertIn("function renderConversationSearchHistoryOptions()", app_js)
+        self.assertIn("function rememberConversationSearchQuery(query)", app_js)
+        self.assertIn("return deduped.slice(0, 10);", app_js)
+        self.assertIn("option.value = item;", app_js)
+        self.assertIn("renderConversationSearchHistoryOptions();", app_js)
+        self.assertIn("rememberConversationSearchQuery($convSearch.value);", app_js)
+        self.assertIn("$convSearch.addEventListener('change', () => rememberConversationSearchQuery($convSearch.value));", app_js)
+
     def test_history_drawer_labels_each_result_with_its_retrieval_source(self):
         html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
 

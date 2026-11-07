@@ -7,6 +7,65 @@ def ev(role, ts, text, uuid):
     return {"role": role, "ts": ts, "text": text, "uuid": uuid, "sid": "s1"}
 
 
+def ticket(ref="OPS-1", question="[Q7:publish] OK to publish?", **fields):
+    item = {"ref": ref, "title": "Publish", "status": "in_progress", "needs_input": True,
+            "block_question": question, "blocked_at": "2026-01-01T00:00:01Z",
+            "claimed_session_id": "worker", "history": []}
+    item.update(fields)
+    return item
+
+
+def question(n=7, answered=False):
+    return {"n": n, "tag": f"[Q{n}:publish]", "answered": answered,
+            "answered_by": "owner" if answered else ""}
+
+
+class TicketLinkTest(unittest.TestCase):
+    def test_blocked_ticket_keeps_its_question_open_after_a_chat_mention(self):
+        q = question(answered=True)
+        qt.apply_tickets([q], [ticket()])
+        self.assertFalse(q["answered"])
+        self.assertEqual(q["ticket"], {"ref": "OPS-1", "title": "Publish", "open": True,
+                                       "session_id": "worker"})
+
+    def test_unblocked_ticket_answers_its_past_question(self):
+        q = question()
+        past = ticket(needs_input=False, block_question="", history=[
+            {"event": "block", "at": "2026-01-01T00:00:01Z", "question": "[Q7:publish] OK?"}])
+        qt.apply_tickets([q], [past])
+        self.assertTrue(q["answered"])
+        self.assertEqual(q["answered_by"], "ticket")
+        self.assertFalse(q["ticket"]["open"])
+
+    def test_closed_ticket_is_not_waiting_even_with_a_stale_flag(self):
+        q = question()
+        qt.apply_tickets([q], [ticket(status="closed")])
+        self.assertNotIn("ticket", q)
+        self.assertFalse(q["answered"])
+
+    def test_a_question_only_mentioned_by_a_ticket_stays_unlinked(self):
+        q = question()
+        qt.apply_tickets([q], [ticket(question="[Q9:other] Same call as [Q7:publish]?")])
+        self.assertNotIn("ticket", q)
+
+    def test_untagged_questions_keep_the_transcript_verdict(self):
+        q = question(n=8, answered=True)
+        qt.apply_tickets([q], [ticket()])
+        self.assertTrue(q["answered"])
+        self.assertEqual(q["answered_by"], "owner")
+
+    def test_waiting_ticket_wins_when_a_question_spans_tickets(self):
+        past = ticket("OPS-2", needs_input=False, block_question="", history=[
+            {"event": "block", "at": "2026-02-01T00:00:00Z", "question": "[Q7:publish] OK?"}])
+        for items in ([past, ticket()], [ticket(), past]):
+            self.assertEqual(qt.ticket_links(list(items))[7]["ref"], "OPS-1")
+
+    def test_parked_session_is_the_one_to_talk_to(self):
+        link = qt.ticket_links([ticket(status="blocked", claimed_session_id=None,
+                                       parked={"session_id": "parked"})])[7]
+        self.assertEqual(link["session_id"], "parked")
+
+
 class BuildIndexTest(unittest.TestCase):
     def test_bundled_guidance_is_neither_a_question_nor_an_answer(self):
         from ccc_server.question_defaults import guidance

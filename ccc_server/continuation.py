@@ -205,7 +205,7 @@ def rebind_chain_to(old_sid, new_sid):
 
 def spawn_continuation(query, prompt="", model=None, effort=None, report_to=None,
                         dry_run=False, rebind_chain=True, name=None,
-                        task_key="", dedupe=False):
+                        task_key="", dedupe=False, engine=None):
     """Continue a session; honor the same explicit dedupe contract as spawn.
 
     Unkeyed requests still create independent sessions. A task key denotes
@@ -219,7 +219,8 @@ def spawn_continuation(query, prompt="", model=None, effort=None, report_to=None
     meta = {"task_key": task_key, "prompt_hash": prompt_hash,
             "task_summary": " ".join(prompt.split())[:200]}
     kwargs = dict(prompt=prompt, model=model, effort=effort, report_to=report_to,
-                  dry_run=dry_run, rebind_chain=rebind_chain, name=name, _context=ctx)
+                  dry_run=dry_run, rebind_chain=rebind_chain, name=name, _context=ctx,
+                  engine=engine)
     if dry_run or not (task_key or dedupe):
         return _spawn_continuation(query, **kwargs)
     scope = str(ctx["cwd"] or "")
@@ -271,15 +272,18 @@ def spawn_continuation(query, prompt="", model=None, effort=None, report_to=None
 
 
 def _spawn_continuation(query, prompt="", model=None, effort=None, report_to=None,
-                         dry_run=False, rebind_chain=True, name=None, _context=None):
+                         dry_run=False, rebind_chain=True, name=None, _context=None,
+                         engine=None):
     """Resolve `query` to its latest successor, spawn a fresh session that
     continues it, and (unless `dry_run`) rebind the old chain's report routes
     to the new session. `model`/`effort`/`report_to` override the old
-    session's own values when given."""
+    session's own values when given. `engine` moves the work to another
+    engine, which never inherits the old engine's model or effort."""
     ctx = _context if _context is not None else session_context(query)
     if ctx is None:
         return {"ok": False, "error": f"no session found for {query!r}"}
-    engine = ctx["engine"]
+    source_engine = ctx["engine"]
+    engine = engine or source_engine
     if engine not in _SUPPORTED_ENGINES:
         return {
             "ok": False,
@@ -287,8 +291,9 @@ def _spawn_continuation(query, prompt="", model=None, effort=None, report_to=Non
             "supported_engines": list(_SUPPORTED_ENGINES),
         }
     full_prompt = build_continuation_prompt(prompt, ctx)
-    final_model = model if model is not None else ctx["model"]
-    final_effort = effort if effort is not None else ctx["effort"]
+    same_engine = engine == source_engine
+    final_model = model if model is not None else (ctx["model"] if same_engine else None)
+    final_effort = effort if effort is not None else (ctx["effort"] if same_engine else None)
     final_report_to = report_to if report_to is not None else ctx["report_to"]
     name = str(name or "").strip() or ("Continue " + (ctx["title"] or ctx["latest"]))[:60]
 

@@ -75,7 +75,7 @@
     const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
     return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
   }
-  function supported(row) { return row?.adapter === 'watchtower-block' || (row?.adapter === 'session-question' && row.reply_supported === true); }
+  function supported(row) { return row?.adapter === 'watchtower-block' || row?.adapter === 'watchtower-github' || (row?.adapter === 'session-question' && row.reply_supported === true); }
   function currentSource(row) { return row?.source_current === true || sourceCurrent; }
   function startNewAnswer(row) {
     const id = row.request_id, saved = answerFor(row);
@@ -232,7 +232,8 @@
     selected.slice(page * limit, (page + 1) * limit).forEach(row => {
       const tr = document.createElement('tr'); tr.dataset.requestId = row.request_id;
       const question = document.createElement('td'), state = document.createElement('td');
-      if (row.adapter === 'watchtower-block') {
+      const onTicket = row.adapter === 'watchtower-block' || row.adapter === 'watchtower-github';
+      if (onTicket) {
         const origin = text('a', row.origin_id, 'request-origin');
         origin.href = '/?ticket=' + encodeURIComponent(row.origin_id);
         origin.target = '_top'; origin.title = 'Open ticket ' + row.origin_id;
@@ -248,14 +249,14 @@
       }
       question.append(text('strong', row.title), text('div', row.body, 'request-body'));
       const aliases = (row.aliases || []).filter(alias => /^\[Q\d+:|^D-\d+$/.test(alias));
-      const references = row.adapter === 'watchtower-block' ? aliases : [row.origin_id, ...aliases];
+      const references = onTicket ? aliases : [row.origin_id, ...aliases];
       if (references.length) question.append(text('span', references.join(' · '), 'request-meta'));
       const identity = text('a', 'Request ' + row.request_id.slice(0, 8), 'request-meta');
       identity.href = '#request-' + row.request_id; identity.title = row.request_id;
       tr.id = 'request-' + row.request_id; question.append(identity);
       const saved = answerFor(row);
       state.append(text('span', saved ? ({pending:'Answer saved; delivery pending', sending:'Checking answer delivery', unknown:'Answer delivery unknown', accepted:row.adapter === 'session-question' ? (saved.session_consumed ? 'Answer received by session' : 'Answer saved for session; awaiting receipt') : 'Answer accepted by source', rejected:'Answer rejected by source'})[saved.state] : stateLabel(row), 'request-state'));
-      state.append(text('span', row.adapter === 'session-question' ? 'Promoted from a session' : 'Local queue owner wait', 'request-meta'));
+      state.append(text('span', row.adapter === 'session-question' ? 'Promoted from a session' : row.adapter === 'watchtower-github' ? 'GitHub queue owner wait' : 'Local queue owner wait', 'request-meta'));
       const date = new Date(row.observed_at);
       if (Number.isFinite(date.getTime())) {
         const stamp = text('time', time.format(date), 'request-meta'); stamp.dateTime = row.observed_at;

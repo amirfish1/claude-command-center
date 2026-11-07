@@ -494,6 +494,8 @@ def main(argv=None):
         response = ControlPlaneClient(path=args.socket).request("health")
         print(json.dumps(response, indent=2, sort_keys=True))
         return 0 if response.get("ok") else 1
+    from ccc_server import memory_release
+    memory_release.start()
     serve(args.socket)
     return 0
 

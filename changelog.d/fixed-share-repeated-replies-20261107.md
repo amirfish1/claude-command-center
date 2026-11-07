@@ -1,0 +1,1 @@
+- Avoid repeatedly processing identical safe replies when exporting long session replays, while preserving redaction counts and final verification.

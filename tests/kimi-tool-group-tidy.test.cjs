@@ -8,7 +8,7 @@ const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
 const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
-const slice = app.slice(app.indexOf('  function _kimiRegroupTools('),
+const slice = app.slice(app.indexOf('  function _kimiFlushRegroups('),
   app.indexOf('  // kimi-web parity (messagesToTurns flushGroup)'));
 const imageSlice = app.slice(app.indexOf('  function _toolResultImageKey('),
   app.indexOf('  // `codex_request` pending event:'));
@@ -107,6 +107,34 @@ test('tool images share a gallery across five tools, but stop at assistant text'
     assert.equal(out.expanded, true);
     assert.equal(out.afterText, 2);
     assert.deepEqual(out.finalKeys, ['5:0', '10:0', '20:0', '30:0']);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('a first render regroups each turn once, after its events are in place', async () => {
+  // CCC-143: regrouping per event re-read layout and rebuilt every group.
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<div class="conversations-view"><div class="kimi-turn">
+      ${row('call_a', 'Bash')}${row('call_b', 'Bash')}
+    </div></div>`);
+    await page.evaluate(code => {
+      (0, eval)('const _KIMI_GLYPHS = new Proxy({}, { get: () => "" });'
+        + 'const escapeAttr = s => String(s).replace(/"/g, "&quot;");'
+        + code + '\nwindow.regroup = _kimiRegroupTools; window.flush = _kimiFlushRegroups;');
+    }, slice);
+    const out = await page.evaluate(() => {
+      const turn = document.querySelector('.kimi-turn');
+      regroup.batch = new Set();
+      regroup(turn);
+      regroup(turn);
+      const during = turn.querySelectorAll('.kimi-tool-group').length;
+      flush();
+      return { during, after: turn.querySelectorAll('.kimi-tool-group').length, batch: regroup.batch };
+    });
+    assert.deepEqual(out, { during: 0, after: 1, batch: null });
   } finally {
     await browser.close();
   }

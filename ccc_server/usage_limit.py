@@ -1,7 +1,7 @@
 """Extracted from server.py (originally lines 41720-44651).
 
 Part of the server.py decomposition; see
-CCC-private-docs/plans/server-py-decomposition.md. Names still living
+the private plans repo (server-py-decomposition). Names still living
 in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ import uuid
 from ccc_server import core as _core
 from ccc_server.paths import _is_pid_alive
 from ccc_server import limit_events as _limit_events
+from ccc_server import codex_account_failover as _codex_account_failover
 
 # Usage-limit auto-resume (CCC-863)
 #
@@ -624,6 +625,8 @@ def _detect_codex_usage_limit_stop(session_id, path):
     Unix epoch. When both primary/secondary are null (seen for a
     credits-exhausted account on this machine, no window to read), fall
     back to detected_at + 5h, flagged estimated."""
+    # Rides this cached, changed-rollouts-only pass; acting happens after it.
+    _codex_account_failover.note(session_id, path)
     return _limit_events.codex_stop(session_id, path)  # a completed turn with real output supersedes any stop
 
 
@@ -861,6 +864,10 @@ def _usage_limit_scan_once(now=None):
         except Exception:
             pass
     _limit_events.flush()
+    try:
+        _codex_account_failover.run_pending(now)
+    except Exception as exc:
+        _core._log_activity("codex-account-failover", "PASS-FAILED", repr(exc))
 
 
 _USAGE_LIMIT_WATCHER_LOCK = threading.Lock()

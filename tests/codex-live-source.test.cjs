@@ -1,5 +1,5 @@
 // Slices 1-6 of the Codex single-renderer merge (see
-// CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md). Slices
+// the private plans repo, codex-single-renderer-merge). Slices
 // 1-3 built the server action, the data mapper, and the provisional-event
 // upsert/renderer plumbing in app.js; Slice 4 wired them together behind an
 // off-by-default flag; Slice 5 flipped the flag's default to on; Slice 6

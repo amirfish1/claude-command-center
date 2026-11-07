@@ -10,7 +10,7 @@ function localSearch(q) {
   const start = source.indexOf('  function filterConversations(q) {');
   const end = source.indexOf('\n  }\n', start) + 4;
   return vm.runInNewContext(source.slice(start, end) + '\nfilterConversations(query);', {
-    query: q, conversationsData: rows, _bridgeSearchNeedle: () => '', recencyCutoffSec: () => 50,
+    query: q, conversationsData: rows, _bridgeSearchNeedle: () => '', _uuidSearchNeedle: () => null, recencyCutoffSec: () => 50,
     _archivedBacklogIds: new Set(), currentConversation: '', showRecentOnly: true, window: {},
     rowMatchesEffortQuery: () => false, _prioritizeNameMatches: identity,
     _prioritizeSessionIdMatches: identity, applyConvSort: identity, _decorateWithHistoryMatches: identity,

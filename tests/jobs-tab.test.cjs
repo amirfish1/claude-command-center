@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../static/jobs-tab.js'), 'utf8');
-async function mount(jobs, {offline = false, fail = false} = {}) {
+async function mount(jobs, {offline = false, fail = false, label = ''} = {}) {
   const handlers = {};
   const host = {innerHTML: '', scrollTop: 0, firstChild: null, querySelectorAll: () => [],
     addEventListener: (name, cb) => { handlers[name] = cb; }};
@@ -12,7 +12,7 @@ async function mount(jobs, {offline = false, fail = false} = {}) {
   const window = {};
   vm.runInNewContext(source, {document, window, localStorage: {getItem: () => null, setItem: () => {}},
     setTimeout: () => {}, setInterval: () => {}, Date, Intl,
-    fetch: async () => { if (fail) throw Error('offline'); return {ok:true,json:async()=>({ok:true,local_host:'hermes',hosts:{hermes:{status:offline?'offline':'online'}},jobs})}; }});
+    fetch: async () => { if (fail) throw Error('offline'); return {ok:true,json:async()=>({ok:true,local_host:'hermes',hosts:{hermes:{status:offline?'offline':'online',label}},jobs})}; }});
   window.CCCJobsTab.mount();
   await new Promise(resolve => setImmediate(resolve));
   return {host, click(attr, value='') { handlers.click({target:{closest: sel => sel === '[' + attr + ']' ? {getAttribute:()=>value} : null}}); },
@@ -45,4 +45,10 @@ test('cached, estimated, and overdue timestamps never imply fresh certainty',asy
 test('feed failure offers recovery and untrusted names are escaped',async()=>{
  const fail=await mount([],{fail:true});assert.match(fail.host.innerHTML,/Try again/);
  const ui=await mount([job('<script>alert(1)</script>')]);assert.doesNotMatch(ui.host.innerHTML,/<script>/);assert.match(ui.host.innerHTML,/&lt;script&gt;/);
+});
+test('host label comes from the name the host reported',async()=>{
+  const named=await mount([job('a')],{label:'build-box'});
+  assert.match(named.host.innerHTML,/<option value="hermes"[^>]*>build-box<\/option>/);
+  const unnamed=await mount([job('a')]);
+  assert.match(unnamed.host.innerHTML,/<option value="hermes"[^>]*>Server<\/option>/);
 });

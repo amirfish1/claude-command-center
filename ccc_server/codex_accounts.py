@@ -17,6 +17,7 @@ import time
 _LOCK = threading.RLock()
 _NEGATIVE = {}
 _PROCESSES = {}
+_CATALOGS = {}
 
 
 def _root():
@@ -31,6 +32,9 @@ def _db():
     con.row_factory = sqlite3.Row
     con.execute('CREATE TABLE IF NOT EXISTS accounts (key TEXT PRIMARY KEY, home TEXT UNIQUE, label TEXT)')
     con.execute('CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, account_key TEXT NOT NULL)')
+    # Threads moved back to the machine login. Their old home still indexes
+    # them, so without this the discovery in session_account would rebind them.
+    con.execute('CREATE TABLE IF NOT EXISTS released (id TEXT PRIMARY KEY)')
     return con
 
 
@@ -93,13 +97,84 @@ def bind(sid, account):
     _NEGATIVE.pop(sid, None)
 
 
+def rebind(sid, account):
+    """Move a thread between accounts; None means the machine login.
+
+    Only for a thread with no turn running: its next turn starts in the new
+    account's process, and a rollout has one writer at a time.
+    """
+    with _db() as con:
+        con.execute('DELETE FROM threads WHERE id=?', (sid,))
+        if account:
+            con.execute('DELETE FROM released WHERE id=?', (sid,))
+            con.execute('INSERT INTO threads VALUES (?, ?)', (sid, account['key']))
+        else:
+            con.execute('INSERT OR IGNORE INTO released VALUES (?)', (sid,))
+    _NEGATIVE.pop(sid, None)
+
+
+def home_models(home):
+    """Model slugs the home's plan offers, or None when it has no catalog."""
+    path = Path(home) / 'models_cache.json'
+    try:
+        stat = path.stat()
+        signature = (stat.st_mtime_ns, stat.st_size)
+        cached = _CATALOGS.get(str(path))
+        if cached and cached[0] == signature:
+            return cached[1]
+        rows = json.loads(path.read_text()).get('models')
+        slugs = frozenset(row['slug'] for row in rows if isinstance(row, dict) and row.get('slug'))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+    _CATALOGS[str(path)] = (signature, slugs)
+    return slugs
+
+
+def homes_serving(model, exclude=None):
+    """Connected homes whose catalog lists `model`, machine login first."""
+    default = default_home()
+    connected = {default}
+    connected.update(Path(row['codex_home']).expanduser().resolve() for row in configured() if row.get('codex_home'))
+    connected.discard(Path(exclude).resolve() if exclude else None)
+    ordered = sorted(connected, key=lambda home: (home != default, str(home)))
+    return [home for home in ordered if model in (home_models(home) or ())]
+
+
+def movable_homes(model, current):
+    """Homes that offer `model` and can resume threads of `current`.
+
+    A thread lives in its rollout, so a home with its own sessions directory
+    has nothing to resume.
+    """
+    sessions = (Path(current) / 'sessions').resolve()
+    return [home for home in homes_serving(model, exclude=current) if (home / 'sessions').resolve() == sessions]
+
+
+def account_for_home(home):
+    """The routing account for a home; the machine login needs none."""
+    home = Path(home).expanduser().resolve()
+    if home == default_home():
+        return None
+    label = next((r['account'] for r in configured() if Path(r['codex_home']).expanduser().resolve() == home), 'Codex account')
+    return _register(home, label)
+
+
+def label_for_home(home):
+    home = Path(home).expanduser().resolve()
+    return next((r['account'] for r in configured() if Path(r['codex_home']).expanduser().resolve() == home),
+                'the machine login')
+
+
 def session_account(sid):
     if not isinstance(sid, str) or not sid:
         return None
     with _db() as con:
         row = con.execute('SELECT a.* FROM accounts a JOIN threads t ON t.account_key=a.key WHERE t.id=?', (sid,)).fetchone()
+        released = None if row else con.execute('SELECT 1 FROM released WHERE id=?', (sid,)).fetchone()
     if row:
         return dict(row)
+    if released:
+        return None
     if time.monotonic() - _NEGATIVE.get(sid, -100) < 10:
         return None
     # Native agent children and threads created through the capabilities UI
@@ -218,6 +293,54 @@ def requires_isolation(operation, args):
     return bool(session_account(sid))
 
 
+def _moved_for_send(sid, account):
+    """Move a bound session whose saved model its account no longer offers.
+
+    Its worker validates against that account's catalog, so the send is
+    rejected before any turn starts and no rollout records the failure.
+    """
+    from ccc_server import core
+    model = (core._get_session_override(sid) or {}).get('model')
+    offered = home_models(account['home'])
+    if not model or offered is None or model in offered:
+        return account
+    serving = movable_homes(model, account['home'])
+    status = query_account(account, 'active', {'session_id': sid}) if serving else {}
+    if not status.get('ok') or status.get('active'):
+        return account
+    target = account_for_home(serving[0])
+    rebind(sid, target)
+    core._log_activity('codex-account-failover', 'MOVED-ON-SEND',
+                       f'session={sid} model={model} moved_to={label_for_home(serving[0])}')
+    return target
+
+
+def _spawn_model(args):
+    from ccc_server import core
+    try:
+        return (core._spawn_model_for_engine('codex', args.get('model'))
+                or core._spawn_fallback_model_for_engine('codex') or '')
+    except Exception:
+        return str(args.get('model') or '')
+
+
+def _serving(account, args):
+    """Keep the choice unless its catalog proves it cannot run the model.
+
+    A saved default outlives the plan behind it: a lapsed subscription still
+    logs in, then refuses every turn. An unreadable catalog proves nothing, so
+    it keeps the choice, and with no other account the refusal reaches the
+    failover in codex_account_failover.
+    """
+    home = account['home'] if account else default_home()
+    model = _spawn_model(args)
+    offered = home_models(home)
+    if not model or offered is None or model in offered:
+        return account
+    serving = homes_serving(model, exclude=home)
+    return account_for_home(serving[0]) if serving else account
+
+
 def spawn_account(args):
     selected = args.get('codex_account_id')
     if selected == '__current__':
@@ -227,8 +350,8 @@ def spawn_account(args):
         if not row:
             raise ValueError('That Codex account is no longer connected')
         home = Path(row['codex_home']).expanduser().resolve()
-        return _register(home, row['account']) if home != default_home() else None
-    return session_account(args.get('parent_session_id'))
+        return _serving(_register(home, row['account']) if home != default_home() else None, args)
+    return _serving(session_account(args.get('parent_session_id')), args)
 
 
 def dedupe_matches(args, sid):
@@ -244,6 +367,8 @@ def route(operation, args):
     try:
         sid = request_session_id(operation, args)
         account = spawn_account(args) if operation == 'spawn' else session_account(sid)
+        if account and operation in ('resume', 'inject'):
+            account = _moved_for_send(sid, account)
         if not account:
             return None
         forwarded = {k: v for k, v in args.items() if k != 'codex_account_id'}
@@ -275,5 +400,10 @@ def extra_states():
         client = _client(account, start=False)
         if client:
             reply = client.request('engine.query', {'engine': 'codex', 'operation': 'thread_states', 'args': {}})
-            result.update(reply.get('states') or {})
+            # A thread moved away stays loaded here, idle, and must not mask
+            # its live state on the account that now runs it.
+            with _db() as con:
+                moved = {row['id'] for row in con.execute(
+                    'SELECT id FROM threads WHERE account_key<>? UNION SELECT id FROM released', (account['key'],))}
+            result.update({sid: state for sid, state in (reply.get('states') or {}).items() if sid not in moved})
     return result

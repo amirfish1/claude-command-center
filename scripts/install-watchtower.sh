@@ -321,13 +321,13 @@ wt_warn_if_wt_not_on_path() {
   fi
   local bindir
   bindir="$("$WT_PYTHON" -c 'import sysconfig; print(sysconfig.get_path("scripts", scheme="posix_user"))' 2>/dev/null || true)"
-  wt_say "NOTE: the wt command is not on your PATH."
+  wt_say "optional: the wt queue command is not on your PATH."
   if [ -n "$bindir" ] && [ -x "$bindir/wt" ]; then
     # SC2016: the literal $PATH belongs in the advice we print, not expanded here.
     # shellcheck disable=SC2016
     wt_say "  add it with:  export PATH=\"$bindir:\$PATH\""
   fi
-  wt_say "  CCC works without it, but the queue CLI surfaces stay hidden."
+  wt_say "  CCC works fine without it; you only need it for the wt queue commands."
 }
 
 # `wt start` writes and loads the LaunchAgent on first run, and is a no-op when
@@ -498,7 +498,7 @@ ccc_install_watchtower() {
     if wt_pip_install -e "$source_dir" && wt_finish "$source_dir"; then
       return 0
     fi
-    wt_say "editable install from $source_dir failed; activating the stdlib-only source directly"
+    wt_say "pip could not install it, so WatchTower will run straight from its source; nothing you need to do"
     if wt_activate_source_tree "$source_dir" && wt_finish "$source_dir (source path)"; then
       return 0
     fi

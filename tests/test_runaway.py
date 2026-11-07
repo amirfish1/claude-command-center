@@ -463,3 +463,27 @@ def test_prompt_quoting_completed_report_is_not_progress():
         "type": "message", "role": "user", "content": [{"text":
             "[sender: verifier (session)]\n" + completed_report()}]}})
     assert not st["turn"]["productive"]
+
+
+def test_mostly_productive_streak_with_idle_tail_is_not_stagnant():
+    # CCC-264: 24 productive of 39 turns, 7 trailing no-ops was a false positive.
+    st = runaway._new_state()
+    sk = st["streak"]
+    sk.update(turns=39, productive=24, stagnant=7, cost=runaway.MIN_COST,
+              first=NOW - 7 * 3600)
+    st["last_ts"] = NOW
+    assert runaway.evaluate(st, NOW) == (False, [])
+
+
+def test_flag_history_is_logged_once_per_streak(env):
+    tmp, projects, _, kw = env
+    path = projects / "p" / "dddddddd-4444.jsonl"
+    write(path, claude_turn("human", "watch the deploy", NOW - 6 * 3600, "h0")
+          + timer_loop(NOW - 5 * 3600, 8, tools=[("ScheduleWakeup", {"noop": True})]))
+    runaway.scan(now=NOW, **kw)
+    runaway.scan(now=NOW + 60, **kw)  # same streak: no duplicate row
+    rows = [json.loads(l) for l in (tmp / "runaway-flags.jsonl").read_text().splitlines()]
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["session_id"] == "dddddddd-4444" and r["reasons"] == ["stagnant"]
+    assert r["flagged_at"] == NOW and r["auto_turns"] == 8 and r["cost_tokens"] > 0

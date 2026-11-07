@@ -2075,6 +2075,46 @@ def _plain_snippets(conn: sqlite3.Connection, sids: list[str]) -> dict[str, str]
     return out
 
 
+def session_id_hits(query: str, limit: int = 20) -> list[dict]:
+    """Sessions whose id contains ``query``: 4+ hex chars, dashes optional, any
+    position. Prefix matches first, then newest. A short fragment can match
+    several sessions, so this returns the newest few rather than refusing.
+    Hex-only, so the LIKE pattern has no wildcards to escape."""
+    compact = (query or "").strip().lower().replace("-", "")
+    if len(compact) < 4 or not re.fullmatch(r"[0-9a-f]+", compact):
+        return []
+    try:
+        rows = _get_connection().execute(
+            "SELECT sid, path, cwd, engine, mtime FROM file_cache "
+            "WHERE indexed = 1 AND REPLACE(lower(sid), '-', '') LIKE ? "
+            "ORDER BY instr(REPLACE(lower(sid), '-', ''), ?) = 1 DESC, mtime DESC "
+            "LIMIT ?",
+            (f"%{compact}%", compact, limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    out = []
+    for sid, path, cwd, engine, mtime in rows:
+        mtime = mtime or 0.0
+        out.append({
+            "uuid": f"id:{sid}",
+            "session_id": sid,
+            "type": engine or "",
+            "cwd": cwd or "",
+            "git_branch": "",
+            "timestamp": (
+                datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+                if mtime else ""
+            ),
+            "ts_unix": mtime,
+            "snippet": sid,
+            "score": 0.0,
+            "_source": "id",
+            "transcript_path": path or "",
+        })
+    return out
+
+
 def search_sessions_enriched(
     query: str,
     limit: int = 20,

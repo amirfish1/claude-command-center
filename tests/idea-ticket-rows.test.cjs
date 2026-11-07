@@ -227,3 +227,22 @@ test('Auto supports every engine while retaining cancellation controls', () => {
   }
   assert.match(ctx.control({engine: 'devin', idea_ticket: {handoff: {state: 'waiting'}}}, true), /data-role="handoff-takeback"/);
 });
+
+function allTabRows(rows, ticketlessInAll) {
+  const ctx = {
+    _allTabConvs: rows, _allTabTrashConvs: [], _qActive: '', _ticketlessRowsInAll: ticketlessInAll,
+    ARCHIVE_WINDOW_KEY: 'ccc-archive-window',
+    localStorage: {getItem: () => 'all'},
+    _allTabSessionId: r => r.session_id || '',
+    _allTabLaneFor: r => r.idea_ticket ? 'ideas' : 'coding',
+    continuationParentId: () => '',
+  };
+  vm.runInNewContext(source, ctx);
+  return Array.from(ctx.ticketRows('alltickets'), r => r.session_id);
+}
+
+test('a small board lists terminal sessions on All, an established one stays curated', () => {
+  const rows = [row('ticketed', 'EXAMPLE-1', 20), {session_id: 'terminal', modified: 30}];
+  assert.deepEqual(allTabRows(rows, true), ['terminal', 'ticketed']);
+  assert.deepEqual(allTabRows(rows, false), ['ticketed']);
+});

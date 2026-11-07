@@ -1001,12 +1001,21 @@ unset link_ccc_cli_script
 
 # Another program on $PORT used to surface as a bind traceback, after the
 # worker below had already started. Check first and say it in one line.
-# Only a non-CCC owner stops us; a CCC already on the port keeps the
-# server's own duplicate-instance handling.
-if [ -f "$HERE/scripts/port_preflight.py" ] \
-  && [ "$("$PYTHON" "$HERE/scripts/port_preflight.py" "$PORT" --host "${CCC_BIND_HOST:-}" 2>/dev/null || true)" = "busy" ]; then
-  echo "Error: port $PORT is in use by another program. Start CCC on a free port, e.g. PORT=$((PORT + 1)) ./run.sh" >&2
-  exit 1
+# A CCC already on the port is what a person at a terminal wanted, so say so
+# and stop before the worker block. A service manager has no terminal and
+# keeps the server's own handling: exiting 0 there would read as a clean stop
+# while a restart is still handing the port over.
+if [ -f "$HERE/scripts/port_preflight.py" ]; then
+  port_state="$("$PYTHON" "$HERE/scripts/port_preflight.py" "$PORT" --host "${CCC_BIND_HOST:-}" 2>/dev/null || true)"
+  if [ "$port_state" = "busy" ]; then
+    echo "Error: port $PORT is in use by another program. Start CCC on a free port, e.g. PORT=$((PORT + 1)) ./run.sh" >&2
+    exit 1
+  fi
+  if [ "$port_state" = "ccc" ] && [ -t 1 ]; then
+    echo "CCC is already running at http://localhost:$PORT (use \`ccc restart\` to restart it)"
+    exit 0
+  fi
+  unset port_state
 fi
 
 # Foreground installs do not have launchd/systemd to start the independent
@@ -1201,4 +1210,4 @@ except Exception:
     ;;
 esac
 
-exec "$PYTHON" "$HERE/server.py"
+exec "$PYTHON" "$HERE/ccc_server/boot.py" "$HERE/server.py"

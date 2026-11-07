@@ -42,7 +42,7 @@ class TestEmbedHostOriginTrusted(unittest.TestCase):
             "https://box.tail1a2b.ts.net",        # itself
             "http://127.0.0.1:8090",              # a local dashboard
             "http://localhost:8090",
-            "http://100.108.91.118:8090",         # tailnet address
+            "http://100.64.12.34:8090",         # tailnet address
             "https://mac.tail1a2b.ts.net",        # same tailnet
             "https://evil.tail9999.ts.net",       # another tailnet
             "https://ts.net.evil.com",
@@ -53,7 +53,7 @@ class TestEmbedHostOriginTrusted(unittest.TestCase):
         ])
         self.assertEqual([k for k, v in got.items() if v], [
             "https://box.tail1a2b.ts.net", "http://127.0.0.1:8090", "http://localhost:8090",
-            "http://100.108.91.118:8090", "https://mac.tail1a2b.ts.net"])
+            "http://100.64.12.34:8090", "https://mac.tail1a2b.ts.net"])
 
     def test_non_tailnet_host_trusts_no_ts_net_origin(self):
         got = self._run("http://127.0.0.1:8091", ["https://mac.tail1a2b.ts.net"])

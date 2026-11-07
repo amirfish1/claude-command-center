@@ -3,7 +3,7 @@
 """Extracted from server.py (originally lines 39977-40557).
 
 Part of the server.py decomposition; see
-CCC-private-docs/plans/server-py-decomposition.md. Names still living
+the private plans repo (server-py-decomposition). Names still living
 in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
@@ -571,10 +571,13 @@ def _parse_copilot_conversation(session_id, after_line=0):
                     if not text:
                         continue
                     line += 1
+                    block = {"kind": "text", "text": text}
+                    if etype not in ("assistant", "assistant.message", "assistant_message"):
+                        block["not_reply"] = True   # reasoning, system, subagent
                     events.append({
                         "line": line, "ts": ts, "type": "assistant",
                         "message_id": f"copilot-{line}",
-                        "blocks": [{"kind": "text", "text": text}],
+                        "blocks": [block],
                     })
                 # Anything else (session.start, checkpoints, metrics, unknown
                 # future types) carries no transcript text — skip, never crash.

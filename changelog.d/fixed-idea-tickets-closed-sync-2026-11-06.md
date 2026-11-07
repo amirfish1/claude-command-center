@@ -1,0 +1,1 @@
+- Idea tickets closed directly in WatchTower now show as closed in CCC, and the recent-session backfill no longer files worker continuation sessions as ideas.

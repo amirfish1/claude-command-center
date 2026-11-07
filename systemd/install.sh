@@ -14,8 +14,11 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 # 2. Copy systemd unit files into /etc/systemd/system/
-cp "$HERE/systemd/ccc-worker.service" "/etc/systemd/system/ccc-worker.service"
-cp "$HERE/systemd/ccc.service" "/etc/systemd/system/ccc.service"
+# The units are templates: __CCC_HOME__ becomes the service user's home.
+CCC_HOME="$(getent passwd hermes | cut -d: -f6)"
+[ -n "$CCC_HOME" ] || { echo "install.sh: no home directory for user hermes" >&2; exit 1; }
+sed "s|__CCC_HOME__|$CCC_HOME|g" "$HERE/systemd/ccc-worker.service" > "/etc/systemd/system/ccc-worker.service"
+sed "s|__CCC_HOME__|$CCC_HOME|g" "$HERE/systemd/ccc.service" > "/etc/systemd/system/ccc.service"
 echo "installed ccc-worker.service and ccc.service to /etc/systemd/system/"
 
 # 3. Reload systemd daemon

@@ -1,7 +1,7 @@
 """Coverage for the linked-conversation queue-context provider plumbing.
 
 The /api/queue/context endpoint resolves a ticket's linked conversation (e.g.
-the Becky thread a digest ticket describes) by matching user-configured
+the Wren thread a digest ticket describes) by matching user-configured
 extract regexes against the ticket body and running the configured command.
 """
 
@@ -50,15 +50,15 @@ class TestQueueContextLookup(unittest.TestCase):
         }
 
     def test_unconfigured_queue_reports_configured_false(self):
-        item = {"project": "BECKY", "text": "anything"}
+        item = {"project": "WREN", "text": "anything"}
         out = server._queue_context_lookup(item)
         self.assertTrue(out["ok"])
         self.assertFalse(out["configured"])
         self.assertFalse(out["found"])
 
     def test_no_key_in_body_reports_found_false(self):
-        self._write_cfg({"BECKY": [self._echo_provider({"ok": True})]})
-        item = {"project": "BECKY", "text": "no conversation key here"}
+        self._write_cfg({"WREN": [self._echo_provider({"ok": True})]})
+        item = {"project": "WREN", "text": "no conversation key here"}
         out = server._queue_context_lookup(item)
         self.assertTrue(out["ok"])
         self.assertTrue(out["configured"])
@@ -67,9 +67,9 @@ class TestQueueContextLookup(unittest.TestCase):
     def test_key_in_github_body_resolves_transcript(self):
         transcript = {"ok": True, "kind": "owner",
                       "turns": [{"role": "owner", "text": "hi", "at": "2026-08-30T00:00:00Z"}]}
-        self._write_cfg({"BECKY": [self._echo_provider(transcript)]})
+        self._write_cfg({"WREN": [self._echo_provider(transcript)]})
         key = "owner:52af855b-1bfd-4006-ab46-e5e7ed720ab8"
-        item = {"project": "BECKY", "text": "truncated…",
+        item = {"project": "WREN", "text": "truncated…",
                 "_github_body": "## Backend pointers\n- conversationKey: " + key}
         out = server._queue_context_lookup(item)
         self.assertTrue(out["ok"])
@@ -78,11 +78,11 @@ class TestQueueContextLookup(unittest.TestCase):
         self.assertEqual(out["transcript"]["turns"][0]["text"], "hi")
 
     def test_provider_failure_reports_found_with_error(self):
-        self._write_cfg({"BECKY": [{
+        self._write_cfg({"WREN": [{
             "extract": r"(owner:[0-9a-f-]{36})",
             "command": [sys.executable, "-c", "print('not json')"],
         }]})
-        item = {"project": "BECKY",
+        item = {"project": "WREN",
                 "text": "conversationKey: owner:52af855b-1bfd-4006-ab46-e5e7ed720ab8"}
         out = server._queue_context_lookup(item)
         self.assertFalse(out["ok"])
@@ -92,7 +92,7 @@ class TestQueueContextLookup(unittest.TestCase):
     def test_result_is_cached_per_key(self):
         transcript = {"ok": True, "turns": []}
         marker = pathlib.Path(self._tmp.name) / "runs"
-        self._write_cfg({"BECKY": [{
+        self._write_cfg({"WREN": [{
             "extract": r"(owner:[0-9a-f-]{36})",
             "command": [
                 sys.executable, "-c",
@@ -102,7 +102,7 @@ class TestQueueContextLookup(unittest.TestCase):
             ],
             "cache_s": 300,
         }]})
-        item = {"project": "BECKY",
+        item = {"project": "WREN",
                 "text": "owner:52af855b-1bfd-4006-ab46-e5e7ed720ab8"}
         first = server._queue_context_lookup(item)
         second = server._queue_context_lookup(item)

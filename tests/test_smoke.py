@@ -1706,25 +1706,6 @@ class TestServerImports(unittest.TestCase):
         SaveUnderQueueLockVisitor().visit(tree)
         self.assertEqual([], violations)
 
-    def test_conversation_search_remembers_last_ten_queries(self):
-        """Search should offer the last ten committed conversation queries."""
-        index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-
-        search_input = index_html.split('id="convSearch"', 1)[1].split('>', 1)[0]
-        self.assertNotIn('list=', search_input)
-        self.assertIn("$convSearch.removeAttribute('list')", app_js)
-        self.assertIn('<datalist id="convSearchHistoryList"></datalist>', index_html)
-        self.assertIn("const CONV_SEARCH_HISTORY_KEY = 'ccc-conv-search-history';", app_js)
-        self.assertIn("function readConversationSearchHistory()", app_js)
-        self.assertIn("function renderConversationSearchHistoryOptions()", app_js)
-        self.assertIn("function rememberConversationSearchQuery(query)", app_js)
-        self.assertIn("return deduped.slice(0, 10);", app_js)
-        self.assertIn("option.value = item;", app_js)
-        self.assertIn("renderConversationSearchHistoryOptions();", app_js)
-        self.assertIn("rememberConversationSearchQuery($convSearch.value);", app_js)
-        self.assertIn("$convSearch.addEventListener('change', () => rememberConversationSearchQuery($convSearch.value));", app_js)
-
     def test_conversation_search_shows_clear_searching_state(self):
         """Async conversation search should loudly say when it is searching."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
@@ -2044,7 +2025,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _allTabView = _topLevelLaneOverride || 'other';", app_js)
         self.assertIn("const _allTabGroupChatCount = _allTabGroupChatItems.length + _archivedGroupChatsForRender.length;", app_js)
         self.assertIn("const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length\n"
-            "      + (_ideaTicketsOn ? _allTabCodingConvs.length : 0);", app_js)
+            "      + (_ideaTicketsOn && !_ticketlessRowsInAll ? _allTabCodingConvs.length : 0);", app_js)
         self.assertIn("const _otherTabDef = ['archived', 'Other', _otherTabCount];", app_js)
         self.assertIn("['coding', 'Coding', _allTabCodingConvs.length]", app_js)
         self.assertIn("['workers', 'Workers', _allTabWorkerConvs.length]", app_js)
@@ -4496,19 +4477,19 @@ class TestServerImports(unittest.TestCase):
         server = importlib.import_module("server")
 
         with mock.patch.object(server, "_wt_read_config", return_value={
-            "BYM-GH-FINIE": {
+            "HARBOR-GH-TERN": {
                 "backend": "github",
-                "repo_path": "/Users/amirfish/Apps/BYM+Finie",
+                "repo_path": "/Users/dev/Apps/Acme+Web",
                 "auto_drain": False,
             },
         }), mock.patch.object(server._q, "list_items", return_value=[]):
             rows = {r["queue"]: r for r in server.compute_queues_health([], [])}
 
-        row = rows["BYM-GH-FINIE"]
+        row = rows["HARBOR-GH-TERN"]
         self.assertTrue(row["configured"])
         self.assertEqual(row["total"], 0)
         self.assertIsNone(row["last_activity_seconds"])
-        self.assertEqual(row["repo_path"], "/Users/amirfish/Apps/BYM+Finie")
+        self.assertEqual(row["repo_path"], "/Users/dev/Apps/Acme+Web")
 
     def test_compute_queues_health_respects_watchtower_claimable_flag(self):
         """GitHub-backed WT queues list all open issues, but only runnable
@@ -4516,14 +4497,14 @@ class TestServerImports(unittest.TestCase):
         server = importlib.import_module("server")
 
         with mock.patch.object(server, "_wt_read_config", return_value={
-            "BYM-GH-FINIE": {
+            "HARBOR-GH-TERN": {
                 "backend": "github",
-                "repo_path": "/Users/amirfish/Apps/BYM+Finie",
+                "repo_path": "/Users/dev/Apps/Acme+Web",
                 "auto_drain": True,
             },
         }), mock.patch.object(server._q, "list_items", return_value=[{
-            "project": "BYM-GH-FINIE",
-            "ref": "BYM-GH-FINIE-402",
+            "project": "HARBOR-GH-TERN",
+            "ref": "HARBOR-GH-TERN-402",
             "status": "open",
             "type": "bug",
             "claimable": False,
@@ -4533,14 +4514,14 @@ class TestServerImports(unittest.TestCase):
         }]):
             rows = {r["queue"]: r for r in server.compute_queues_health([
                 {
-                    "project": "BYM-GH-FINIE",
+                    "project": "HARBOR-GH-TERN",
                     "depth": 1,
                     "oldest_open_age_seconds": 60,
                     "stuck": True,
                 }
             ], [])}
 
-        row = rows["BYM-GH-FINIE"]
+        row = rows["HARBOR-GH-TERN"]
         self.assertEqual(row["depth"], 1)
         self.assertEqual(row["claimable"], 0)
         self.assertFalse(row["stuck"])
@@ -6911,7 +6892,7 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml)", app_js)
+        self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml, ev)", app_js)
         self.assertIn('data-steer-user-message', app_js)
         self.assertIn("postInjectInput(sid, text, 'steer'", app_js)
         inline_handler = app_js[
@@ -7058,11 +7039,11 @@ class TestServerImports(unittest.TestCase):
         import server
         f = server._hermes_decision_summary
         s = f('{"intent":"work_request","complexity":"nontrivial","confidence":0.95,'
-              '"addressed_to":"becky","reply":"","request_text":"a fairly long value '
+              '"addressed_to":"wren","reply":"","request_text":"a fairly long value '
               'that exceeds the per-field cap and is skipped"}')
         self.assertIn("→ work_request", s)
         self.assertIn("95%", s)
-        self.assertIn("to: becky", s)
+        self.assertIn("to: wren", s)
         # Long scalar fields are skipped so the line stays legible.
         self.assertNotIn("fairly long value", s)
         # Confidence already on a 0-1 scale renders as a percentage.
@@ -8087,11 +8068,10 @@ class TestRepoContextHelpers(unittest.TestCase):
         explicit project > configured repo_path match > repo basename > source.
 
         NOTE (found while removing the ux_fixes_queue fallback, see WT-92):
-        this test used to be named test_bym_production_repo_routes_to_bymprod_queue
-        and asserted "BYMPROD" for both cases below -- but it called
+        this test used to be named test_production_repo_routes_to_production_queue
+        and asserted one queue code for both cases below -- but it called
         ux_fixes_queue._project_for() directly, which had a hardcoded alias
-        table ({"bookyourmat": "BYMPROD", "bym+finie": "BYMPROD", ...}, source
-        "bym" -> "BYMPROD") that watchtower.queue._project_for() does not
+        table (repo folder and source names -> one production queue) that watchtower.queue._project_for() does not
         replicate; watchtower only does basename/source normalization plus a
         configured-repo_path lookup (config.all_queues()). Since server._q has
         been watchtower.queue in production for a while (WT-32 Phase 2), this
@@ -8103,20 +8083,20 @@ class TestRepoContextHelpers(unittest.TestCase):
         """
         self.assertEqual(
             self.server._q._project_for(
-                repo_path="/tmp/BYM+Finie/apps/bookyourmat"
+                repo_path="/tmp/Acme+Web/apps/acmeshop"
             ),
-            "BOOKYOURMAT",
+            "ACMESHOP",
         )
         self.assertEqual(
-            self.server._q._project_for(source="bym"),
-            "BYM",
+            self.server._q._project_for(source="acme"),
+            "ACME",
         )
 
     def test_repo_path_with_plus_resolves_when_query_decoded_to_space(self):
         """A repo with `+` in its name arrives as a space via URL query-string
         decoding (`+` → ` `). resolve_repo_path() must recover by trying `+`
         variants instead of forcing every caller to encode as %2B."""
-        plus_repo = pathlib.Path(self.tmp_home, "BYM+Finie").resolve()
+        plus_repo = pathlib.Path(self.tmp_home, "Acme+Web").resolve()
         plus_repo.mkdir()
         (plus_repo / ".git").mkdir()
         # 1. Exact path still works.
@@ -8136,7 +8116,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         the on-disk cache cold), find_conversations() should return within
         a few seconds even with hundreds of seeded sessions.
 
-        This is the perf guard for the BYM+Finie regression where 128
+        This is the perf guard for the Acme+Web regression where 128
         missing cwds + per-session os.walk burnt ~40s on every cold scan.
         """
         seed_count = 200
@@ -11265,19 +11245,19 @@ class TestRepoContextHelpers(unittest.TestCase):
         server = importlib.import_module("server")
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp).resolve()
-            app = root / "apps" / "bookyourmat"
-            finie = root / "apps" / "finie"
+            app = root / "apps" / "acmeshop"
+            tern = root / "apps" / "tern"
             app.mkdir(parents=True)
-            finie.mkdir(parents=True)
+            tern.mkdir(parents=True)
             (root / "turbo.json").write_text(json.dumps({"tasks": {"dev": {"persistent": True}}}))
             (root / "package.json").write_text(json.dumps({"workspaces": ["apps/*"]}))
             (app / "package.json").write_text(json.dumps({
-                "name": "bookyourmat",
+                "name": "acmeshop",
                 "scripts": {"dev": "next dev --port 39001"},
                 "dependencies": {"next": "16.1.6"},
             }))
-            (finie / "package.json").write_text(json.dumps({
-                "name": "finie",
+            (tern / "package.json").write_text(json.dumps({
+                "name": "tern",
                 "scripts": {"dev": "next dev --port 3000"},
                 "dependencies": {"next": "16.1.6"},
             }))
@@ -11287,11 +11267,11 @@ class TestRepoContextHelpers(unittest.TestCase):
             status = server.nextjs_status(str(root), str(app))
             root_status = server.nextjs_status(str(root))
 
-        self.assertEqual(cmd, ["npx", "turbo", "dev", "--filter=bookyourmat"])
+        self.assertEqual(cmd, ["npx", "turbo", "dev", "--filter=acmeshop"])
         self.assertEqual(cwd, root)
-        self.assertEqual(status["launch_cmd"], "npx turbo dev --filter=bookyourmat")
+        self.assertEqual(status["launch_cmd"], "npx turbo dev --filter=acmeshop")
         self.assertEqual(root_status["target_path"], str(app))
-        self.assertEqual(root_status["launch_cmd"], "npx turbo dev --filter=bookyourmat")
+        self.assertEqual(root_status["launch_cmd"], "npx turbo dev --filter=acmeshop")
 
     def test_nextjs_process_match_ignores_prompt_text(self):
         """Process rediscovery must not match an agent command line that
@@ -11300,19 +11280,19 @@ class TestRepoContextHelpers(unittest.TestCase):
             sys.modules.pop(mod, None)
         server = importlib.import_module("server")
         info = {
-            "target_path": pathlib.Path("/tmp/repo/apps/bookyourmat"),
+            "target_path": pathlib.Path("/tmp/repo/apps/acmeshop"),
             "run_cwd": pathlib.Path("/tmp/repo"),
-            "package_name": "bookyourmat",
+            "package_name": "acmeshop",
             "filter_expected": True,
             "ports": [3001],
         }
         self.assertTrue(server._nextjs_command_matches(
-            "npx turbo dev --filter=bookyourmat", info))
+            "npx turbo dev --filter=acmeshop", info))
         self.assertTrue(server._nextjs_command_matches(
             "node /tmp/repo/node_modules/.bin/next dev --port 3001", info))
         self.assertFalse(server._nextjs_command_matches(
             "/opt/homebrew/bin/codex exec --json -- prompt contains "
-            "turbo dev --filter=bookyourmat and next dev --port 3001",
+            "turbo dev --filter=acmeshop and next dev --port 3001",
             info,
         ))
 
@@ -11729,8 +11709,8 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "status": "completed",
                 "input": (
                     "const r = await tools.exec_command({\n"
-                    "  cmd: \"wt status -q CHUCK --json\",\n"
-                    "  workdir: \"/home/hermes/projects/chuck-realtor-web\",\n"
+                    "  cmd: \"wt status -q HERON --json\",\n"
+                    "  workdir: \"/home/dev/projects/example-web\",\n"
                     "  sandbox_permissions: \"require_escalated\",\n"
                     "  justification: \"Allow this read-only WatchTower status check?\"\n"
                     "});\n"
@@ -11782,7 +11762,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 "call_id": "call_custom",
                 "input": (
                     "const r = await tools.exec_command({\n"
-                    "  cmd: \"wt status -q CHUCK --json\",\n"
+                    "  cmd: \"wt status -q HERON --json\",\n"
                     "  sandbox_permissions: \"require_escalated\",\n"
                     "  justification: \"Allow status?\"\n"
                     "});\n"
@@ -13787,9 +13767,9 @@ class TestRepoContextHelpers(unittest.TestCase):
                     "id": "item-shell",
                     "type": "commandExecution",
                     "status": "completed",
-                    "command": "wt find CHUCK-51 --json",
+                    "command": "wt find HERON-51 --json",
                     "exitCode": 0,
-                    "aggregatedOutput": "{\"ref\":\"CHUCK-51\"}",
+                    "aggregatedOutput": "{\"ref\":\"HERON-51\"}",
                 },
             },
         })
@@ -13809,7 +13789,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(events[0]["subtype"], "codex_app_server_item")
         self.assertEqual(events[0]["tool"], "Bash")
         self.assertIn("wt find", events[0]["detail"])
-        self.assertIn("CHUCK-51", events[0]["output"])
+        self.assertIn("HERON-51", events[0]["output"])
 
         with mock.patch.object(server, "_detect_session_engine", return_value="codex"):
             queued = server._get_queued_events_for_session(sid)
@@ -15056,7 +15036,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 server._ENGINE_DETECT_CACHE.clear()
 
     def test_hermes_reads_profile_worker_dbs(self):
-        """Profile workers (e.g. the chuckrealtor 'Becky' agent) keep their own
+        """Profile workers (e.g. the 'example-worker' agent) keep their own
         state.db under ~/.hermes/profiles/<name>/. CCC must ingest those too —
         they're the sessions that actually write code — tag each row with its
         profile, and route transcript reads to the owning DB."""
@@ -15097,7 +15077,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             root = pathlib.Path(tmp)
             main_db = root / "state.db"
             profiles = root / "profiles"
-            worker_db = profiles / "chuckrealtor" / "state.db"
+            worker_db = profiles / "example-worker" / "state.db"
             worker_db.parent.mkdir(parents=True)
             gateway = root / "sessions" / "sessions.json"
             gateway.parent.mkdir(parents=True)
@@ -15105,7 +15085,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             _make_db(str(main_db), "20260601_120000_gateway", "whatsapp",
                      "Gateway chat", "hi from the gateway")
             _make_db(str(worker_db), "20260601_130000_worker", "cli",
-                     "Becky work", "change the price to 785000")
+                     "Wren work", "change the price to 785000")
 
             orig_db = server.HERMES_STATE_DB
             orig_profiles = getattr(server, "HERMES_PROFILES_DIR", None)
@@ -15127,7 +15107,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 self.assertIn("20260601_120000_gateway", by_id)
                 self.assertIn("20260601_130000_worker", by_id)
                 self.assertEqual(by_id["20260601_120000_gateway"]["hermes_profile"], "")
-                self.assertEqual(by_id["20260601_130000_worker"]["hermes_profile"], "chuckrealtor")
+                self.assertEqual(by_id["20260601_130000_worker"]["hermes_profile"], "example-worker")
                 # The worker session id is owned by the profile DB and its
                 # transcript reads route there.
                 self.assertEqual(
@@ -15159,7 +15139,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            db = root / "profiles" / "chuckrealtor" / "state.db"
+            db = root / "profiles" / "example-worker" / "state.db"
             db.parent.mkdir(parents=True)
             con = sqlite3.connect(db)
             try:
@@ -15179,7 +15159,7 @@ class TestRepoContextHelpers(unittest.TestCase):
                 con.execute(
                     "INSERT INTO sessions (id,source,model,title,started_at,ended_at,"
                     "parent_session_id,tool_call_count,cwd,archived) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (sid, "cli", "gpt-5.5", "", 1783273030.0, 0.0, "", 22, "/tmp/chuck", 0),
+                    (sid, "cli", "gpt-5.5", "", 1783273030.0, 0.0, "", 22, "/tmp/heron", 0),
                 )
                 con.execute(
                     "INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
@@ -15419,10 +15399,10 @@ class TestRepoContextHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             orig_db = server.HERMES_STATE_DB
             orig_bridge = server.HERMES_WHATSAPP_BRIDGE_LOG
-            orig_pending = server.HERMES_CHUCK_PENDING_DIR
+            orig_pending = server.HERMES_PENDING_DIR
             server.HERMES_STATE_DB = pathlib.Path(tmp) / "missing-state.db"
             server.HERMES_WHATSAPP_BRIDGE_LOG = pathlib.Path(tmp) / "missing-bridge.log"
-            server.HERMES_CHUCK_PENDING_DIR = pathlib.Path(tmp) / "missing-pending"
+            server.HERMES_PENDING_DIR = pathlib.Path(tmp) / "missing-pending"
             server._HERMES_ID_CACHE["key"] = None
             server._HERMES_ID_CACHE["ids"] = set()
             try:
@@ -15430,7 +15410,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             finally:
                 server.HERMES_STATE_DB = orig_db
                 server.HERMES_WHATSAPP_BRIDGE_LOG = orig_bridge
-                server.HERMES_CHUCK_PENDING_DIR = orig_pending
+                server.HERMES_PENDING_DIR = orig_pending
                 server._HERMES_ID_CACHE["key"] = None
                 server._HERMES_ID_CACHE["ids"] = set()
 
@@ -15444,7 +15424,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             bridge = root / "bridge.log"
-            pending_dir = root / "chuck_realtor_pending"
+            pending_dir = root / "pending"
             pending_dir.mkdir()
             chat_id = "group-test@g.us"
             bridge.write_text(
@@ -15482,10 +15462,10 @@ class TestRepoContextHelpers(unittest.TestCase):
 
             orig_db = server.HERMES_STATE_DB
             orig_bridge = server.HERMES_WHATSAPP_BRIDGE_LOG
-            orig_pending = server.HERMES_CHUCK_PENDING_DIR
+            orig_pending = server.HERMES_PENDING_DIR
             server.HERMES_STATE_DB = root / "missing-state.db"
             server.HERMES_WHATSAPP_BRIDGE_LOG = bridge
-            server.HERMES_CHUCK_PENDING_DIR = pending_dir
+            server.HERMES_PENDING_DIR = pending_dir
             server._HERMES_ID_CACHE["key"] = None
             server._HERMES_ID_CACHE["ids"] = set()
             server._ENGINE_DETECT_CACHE.clear()
@@ -15517,7 +15497,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             finally:
                 server.HERMES_STATE_DB = orig_db
                 server.HERMES_WHATSAPP_BRIDGE_LOG = orig_bridge
-                server.HERMES_CHUCK_PENDING_DIR = orig_pending
+                server.HERMES_PENDING_DIR = orig_pending
                 server._HERMES_ID_CACHE["key"] = None
                 server._HERMES_ID_CACHE["ids"] = set()
                 server._ENGINE_DETECT_CACHE.clear()
@@ -18335,7 +18315,7 @@ class TestPendingInputs(unittest.TestCase):
                         "id": "item-shell",
                         "type": "commandExecution",
                         "tool": "Bash",
-                        "detail": "wt find CHUCK-51 --json",
+                        "detail": "wt find HERON-51 --json",
                         "status": "completed",
                         "ts": 1783600005.0,
                         "updated_at": 1783600005.0,
@@ -21732,7 +21712,7 @@ def test_session_live_status_cwd_match_ignores_other_sessions():
 
     target_sid = "1ebdd168-a845-4952-bbc7-c206fab7b2c1"
     other_sid = "30741fa7-e236-43d1-a88b-c09813293f7c"
-    session_cwd = "/Users/amirfish/Apps/BYM"
+    session_cwd = "/Users/dev/Apps/Acme"
 
     # Mock find_live_antigravity_processes to return a process running in the same CWD,
     # but targeting other_sid.

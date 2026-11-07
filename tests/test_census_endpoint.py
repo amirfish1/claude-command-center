@@ -79,7 +79,7 @@ class TestBuildSessionCensus(unittest.TestCase):
             {"sid-rowless": _live_entry(sidecar_ts=now - 3)},
             {"sid-rowless": {
                 "name": "wt worker", "engine": "grok", "model": "grok-4.1",
-                "effort": "med", "repo_path": "/x/BYM", "parent_session_id": None,
+                "effort": "med", "repo_path": "/x/HARBOR", "parent_session_id": None,
                 "has_conversation_row": False,
             }},
         )
@@ -659,7 +659,7 @@ class TestCensusCodexPoolIdentity(unittest.TestCase):
         server._codex_fetch_threads = lambda limit=None: [{
             "id": "pool-1", "title": "  Fix\n the flaky test  ",
             "model": "gpt-5.6-terra", "reasoning_effort": "xhigh",
-            "cwd": "/x/BYM", "updated_at": 1788286000,
+            "cwd": "/x/HARBOR", "updated_at": 1788286000,
         }]
         out = server._census_identity_map()
         row = out["pool-1"]
@@ -667,7 +667,7 @@ class TestCensusCodexPoolIdentity(unittest.TestCase):
         self.assertEqual(row["name"], "Fix the flaky test")
         self.assertEqual(row["model"], "gpt-5.6-terra")
         self.assertEqual(row["effort"], "xhigh")
-        self.assertEqual(row["repo_path"], "/x/BYM")
+        self.assertEqual(row["repo_path"], "/x/HARBOR")
         # Live-row identity only — never leaks into the ended-merge.
         self.assertFalse(row["has_conversation_row"])
 
@@ -675,7 +675,7 @@ class TestCensusCodexPoolIdentity(unittest.TestCase):
         server._load_spawn_registry = lambda: [{
             "session_id": "pool-1", "engine": "codex", "name": "spawned-name"}]
         server._codex_fetch_threads = lambda limit=None: [{
-            "id": "pool-1", "title": "sqlite-name", "cwd": "/x/BYM"}]
+            "id": "pool-1", "title": "sqlite-name", "cwd": "/x/HARBOR"}]
         self.assertEqual(server._census_identity_map()["pool-1"]["name"], "spawned-name")
 
     def test_dashboard_title_priority_and_continuation_inheritance(self):

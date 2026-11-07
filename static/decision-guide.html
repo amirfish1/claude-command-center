@@ -3,17 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Decisions 2 · Guided queue</title>
+  <title>Decisions · Guided queue</title>
   <link rel="stylesheet" href="/static/decision-guide.css">
+  <script src="/static/decision-weight.js" defer></script>
   <script src="/static/decision-guide.js" defer></script>
 </head>
 <body>
   <main class="guide">
-    <header><div><h1>Decisions 2</h1><p class="subtitle">Guided queue · no AI</p></div><button id="refresh" type="button">Check source</button></header>
-    <p id="coverage" class="meta" role="status">Checking source coverage…</p>
+    <header><h1>Decisions</h1><button id="refresh" type="button" hidden>Try again</button></header>
     <p id="intro">Loading open questions…</p>
-    <details id="queue"><summary>Browse open questions <span id="queueCount"></span></summary><nav id="items" aria-label="Open questions"></nav></details>
-    <section id="issues" aria-label="Questions without stable source identities"></section>
     <section role="log" aria-label="Question and answer history" aria-live="polite" aria-relevant="additions text" tabindex="0">
       <div id="transcript"></div>
       <section id="current" aria-label="Current question"></section>
@@ -25,9 +23,15 @@
       </div>
       <p id="guidance" class="meta">Checking source before answering.</p>
       <div id="recovery" class="actions"></div>
-      <div class="actions"><button id="send" class="primary" type="submit" hidden disabled>Send answer</button><button id="skip" type="button" disabled>Skip / next</button></div>
+      <div id="closeConfirm" class="close-confirm" role="group" aria-labelledby="closeText" hidden>
+        <p id="closeText"></p>
+        <div class="actions"><button id="closeYes" class="danger" type="button"></button><button id="closeKeep" type="button">Keep it</button></div>
+      </div>
+      <div class="actions"><button id="send" class="primary" type="submit" hidden disabled>Send answer</button><button id="skip" type="button" disabled>Skip / next</button><button id="close" type="button" hidden>Close…</button></div>
     </form>
-    <p class="meta footnote">Skipping only defers a question here. Source acceptance confirms delivery, not completion of the work.</p>
+    <section id="issues" aria-label="Questions without stable source identities"></section>
+    <p id="coverage" class="meta" role="status">Checking source coverage…</p>
+    <p class="meta footnote">Skip moves to the next question. Closing asks you to confirm first. Source acceptance confirms delivery, not completion of the work. <a href="/decision-inbox.html">History and reports</a></p>
   </main>
 </body>
 </html>

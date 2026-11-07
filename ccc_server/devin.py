@@ -480,7 +480,7 @@ def _devin_cloud_repo_folder(s, title, first_message, repo_name_map, pinned=None
                     break
 
         if not matched_path:
-            # Prefix match: title words like "STRAMP" can map to "stramp-platform".
+            # Prefix match: title words like "ACME" can map to "acme-platform".
             words = re.findall(r"[a-z0-9]+(?:[._+\-][a-z0-9]+)*", text)
             for word in words:
                 if len(word) < 3:

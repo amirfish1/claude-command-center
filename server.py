@@ -23,6 +23,7 @@ import ast
 import base64
 import traceback
 import fcntl
+import gc
 import gzip
 import html
 import hashlib
@@ -122,6 +123,7 @@ import ccc_peer_uds
 # Pure/stdlib, no imports from server.py -- mirrors ccc_peer_uds.py's split
 # between wire-format helpers (here) and registry/routing (server.py below).
 import ccc_peer_inbound
+from ccc_server import local_overrides as _local_overrides
 from ccc_server import test_isolation_active, register as _ccc_core_register
 # Rebindable report_to routes (CCC-1202). Imported as a namespace, not
 # adopted, so its short function names don't land on server globals.
@@ -134,6 +136,8 @@ from ccc_server import media_preview as _media_preview
 from ccc_server import cpu_accounting as _cpu_accounting
 from ccc_server import conv_reader as _conv_reader
 from ccc_server import swr_cache as _swr
+from ccc_server import memory_release as _memory_release
+from ccc_server.bounded_cache import ByteBudgetCache
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
@@ -323,6 +327,51 @@ def _dashboard_session_watch_tick(previous):
     return current
 
 
+# A new install has a handful of transcripts, and a `claude` run in a terminal
+# has no CCC spawn to announce it. Without this watch that session waits out
+# the 5-minute serve TTL plus the 5-minute recovery poll, so someone trying CCC
+# for the first time sees nothing happen. New files only (appends don't count),
+# and the walk stops at the limit: past it the watch retires itself, because
+# an established archive has no first impression to protect and must not pay
+# for a transcript walk every few seconds.
+_SMALL_ARCHIVE_TRANSCRIPT_LIMIT = 50
+_SMALL_ARCHIVE_WATCH_INTERVAL_S = 5.0
+_ARCHIVE_NEW_TRANSCRIPT_GATE_GRACE_S = 30.0
+_ARCHIVE_REFRESH_GATE_BYPASS_UNTIL = [0.0]
+
+
+def _small_archive_transcripts():
+    """Claude transcript paths, or None once there are more than the limit."""
+    found = set()
+    for directory in _archive_canonical_project_dirs(PROJECTS_ROOT):
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.name.endswith(".jsonl"):
+                        found.add(entry.path)
+                        if len(found) > _SMALL_ARCHIVE_TRANSCRIPT_LIMIT:
+                            return None
+        except OSError:
+            continue
+    return found
+
+
+def _dashboard_small_archive_watch_tick(previous):
+    """Return the next baseline; None retires the watch for this loop."""
+    current = _small_archive_transcripts()
+    if current is None:
+        return None
+    if current - previous:
+        # This is one event, not a poll, so it may pass the load gate once:
+        # the worker is cheap at this size and the row is what the user is
+        # waiting to see.
+        _ARCHIVE_REFRESH_GATE_BYPASS_UNTIL[0] = (
+            time.time() + _ARCHIVE_NEW_TRANSCRIPT_GATE_GRACE_S)
+        _restamp_archive_serve_cache_after_mutation()
+        _invalidate_dashboard("archive", reason="new-transcript")
+    return current
+
+
 def _dashboard_event_watch_loop():
     global _dashboard_event_watch_thread
     try:
@@ -338,6 +387,12 @@ def _dashboard_event_watch_loop():
     # response and this watcher baseline. The client coalesces this with any
     # in-flight base load and guarantees one post-baseline snapshot.
     _invalidate_dashboard("archive", reason="subscriber-baseline")
+    # Start from nothing, so everything on disk counts as new once. A session
+    # written before this page opened would otherwise sit in the baseline
+    # behind an older snapshot: an empty list for the serve TTL, or for as long
+    # as the load gate stays shut. The first tick retires this on a big archive.
+    previous_transcripts = set()
+    next_transcript_check = 0.0
     try:
         while True:
             with _dashboard_event_watch_lock:
@@ -346,6 +401,12 @@ def _dashboard_event_watch_loop():
             time.sleep(1.0)
             previous_queue = _dashboard_queue_watch_tick(previous_queue)
             previous_sessions = _dashboard_session_watch_tick(previous_sessions)
+            if previous_transcripts is not None and time.time() >= next_transcript_check:
+                next_transcript_check = time.time() + _SMALL_ARCHIVE_WATCH_INTERVAL_S
+                try:
+                    previous_transcripts = _dashboard_small_archive_watch_tick(previous_transcripts)
+                except Exception:
+                    pass
     finally:
         try:
             gh_queue_watch_exit()
@@ -1931,7 +1992,7 @@ def _wt_queue_brief_parse(raw):
             })
     next_steps = [str(s) for s in _l(obj.get("next_steps"))]
     # Models overshoot the headline budget despite instructions; a hard slice
-    # at 120 cut mid-word ("...Becky memor"). Break at a word boundary instead.
+    # at 120 cut mid-word ("...worker memor"). Break at a word boundary instead.
     headline = _s(obj.get("headline"))
     if len(headline) > 120:
         headline = headline[:120].rsplit(" ", 1)[0].rstrip(",;:-") + "…"
@@ -3319,6 +3380,24 @@ def _wt_list_items_snapshot_only():
     return _wt_snapshot_file_memo["items"]
 
 
+_wt_items_refresh_lock = threading.Lock()
+
+
+def _wt_list_items_for_requests():
+    """Cached tickets for a request path: never waits on GitHub. An expired
+    list is served as-is while one background refresh replaces it."""
+    with _wt_items_memo_lock:
+        fresh = time.time() - _wt_items_memo["at"] < _WT_ITEMS_SNAPSHOT_TTL_S
+    if not fresh and _wt_items_refresh_lock.acquire(blocking=False):
+        def refresh():
+            try:
+                _wt_list_items_display_cached()
+            finally:
+                _wt_items_refresh_lock.release()
+        threading.Thread(target=refresh, daemon=True, name="wt-items-refresh").start()
+    return _wt_list_items_snapshot_only()
+
+
 def _apply_watchtower_worker_display_names(rows):
     """Layer WT ticket names onto live WT worker session rows.
 
@@ -3859,8 +3938,8 @@ def _uxq_not_found_error(ref):
 
 # --- Queue context providers (linked-conversation preview) -------------------
 # Optional, user-local config mapping a queue name (or "*") to providers that
-# resolve a ticket's linked conversation — e.g. the Becky owner/client thread
-# a digest ticket describes. Each provider:
+# resolve a ticket's linked conversation — e.g. the owner/client thread a
+# digest ticket describes. Each provider:
 #   {"extract": "<regex, first capture group = conversation key>",
 #    "command": ["argv", "…", "{key}"],   # {key} substituted, stdout = JSON
 #    "cwd": "/abs/path",                   # optional
@@ -7253,7 +7332,7 @@ def _encode_project_slug(path):
     naming subdirs under ~/.claude/projects/.
 
     Claude Code 2.x replaces every non-alphanumeric character with '-'
-    (so '/foo/.claude/BYM+Finie' becomes '-foo--claude-BYM-Finie').
+    (so '/foo/.claude/Acme+Web' becomes '-foo--claude-Acme-Web').
     Older claude-code versions only replaced '/', which is why some
     legacy project dirs still contain '+', '.', etc.
 
@@ -7297,9 +7376,9 @@ def _slug_to_label(slug: str) -> str:
     """Strip the home-directory prefix and common top-level dirs from a raw
     project slug so the display label is just the project name.
 
-    e.g.  '-Users-amirfish-Apps-amirfish-com'  →  'amirfish-com'
-          '-Users-amirfish-dev-my-finance-app'  →  'my-finance-app'
-          '-Users-amirfish-agent-workshop'       →  'agent-workshop'
+    e.g.  '-Users-alex-Apps-example-com'    →  'example-com'
+          '-Users-alex-dev-my-finance-app'  →  'my-finance-app'
+          '-Users-alex-agent-workshop'      →  'agent-workshop'
     """
     import os as _os
     home_prefix = "-" + _os.path.expanduser("~").lstrip("/").replace("/", "-") + "-"
@@ -11503,6 +11582,21 @@ def _live_activity_entry_for_session(session_id):
 _LIVE_ACTIVITY_SNAPSHOT_TTL = 10.0
 _live_activity_snapshot = {"ts": 0.0, "data": None}
 _live_activity_snapshot_lock = threading.Lock()
+# The sidebar poll never waits out a slow build (CCC-319): 112 builds a day ran
+# >=9s (worst 153s), nearly all waiting on the GIL or the host rather than
+# computing. It waits this long for the refresh, which covers the usual
+# ~30ms build, then shows the last saved status and picks up the new one on its
+# next poll. Callers that decide on the result (session state, census) keep
+# blocking for a fresh build.
+_LIVE_ACTIVITY_VIEW_WAIT_S = 0.25
+_live_activity_refresh = {"done": None}
+_live_activity_refresh_guard = threading.Lock()
+_LIVE_ACTIVITY_REFRESH_THREAD = "ccc-live-activity-refresh"
+# The saved copy covers the cold build after a restart. Older than the max age
+# it says little about what is running now, so a long-stopped server ignores it.
+_LIVE_ACTIVITY_SAVE_MIN_S = 30.0
+_LIVE_ACTIVITY_SAVED_MAX_AGE_S = 600.0
+_live_activity_saved = {"enabled": False, "at": 0.0}
 
 # ── CCC self-health metrics ─────────────────────────────────────────────────
 # Three cheap, in-process signals surfaced in the dashboard's bottom-left bar so
@@ -12301,15 +12395,36 @@ _SYS_ONESHOT_RE = re.compile(
     r"next\s+build|vite\s+build|npm\s+(?:test|run\s+(?:build|test|lint|typecheck)))(?:\s|$)"
 )
 _SYS_WRAPPER_BASES = frozenset(("npm", "npx", "sh", "dash", "pnpm", "yarn"))
+# CCC itself, from any install. A second dashboard on the same machine used to
+# offer to kill the first one, and a worker's tree holds every running session.
+_SYS_CCC_PROCESS_RE = re.compile(
+    r"(?:^|[\s/])(?:ccc_worker\.py|local_tts_server\.py)(?:\s|$)"
+    r"|\bccc_server\.(?:bg_helper|conv_reader)\b"
+    r"|claude-command-center/server\.py(?:\s|$)"
+    r"|server\.py\s+--archive-refresh-worker\b"
+)
+# Software people keep open all day. Holding gigabytes for an hour is normal
+# for these, not a leak, so the memory rule leaves them out.
+_SYS_USER_APP_RE = re.compile(
+    r"\.app/|/Applications/|\s--type=|/snap/|/opt/google/"
+    r"|(?:^|/)(?:firefox|chrome|chromium|brave|slack|discord|code|cursor|electron|java)(?:\s|$)",
+    re.IGNORECASE,
+)
+_SYS_SESSION_BASES = frozenset(("claude", "codex"))
+
+
+def _sys_cmd_base(cmd):
+    parts = cmd.split(None, 1)
+    return parts[0].rsplit("/", 1)[-1] if parts else ""
 
 
 def _sys_anomaly_protected(row, my_pids):
     if row["pid"] <= 1 or row["pid"] in my_pids:
         return True
-    base = row["cmd"].split(None, 1)[0].rsplit("/", 1)[-1]
+    base = _sys_cmd_base(row["cmd"])
     if base in _PROC_KNOWN_DAEMON_BASES or base in ("claude", "codex", "systemd", "sshd"):
         return True
-    return False
+    return bool(_SYS_CCC_PROCESS_RE.search(row["cmd"]))
 
 
 def _sys_anomaly_tree(root, by_pid, children):
@@ -12348,12 +12463,19 @@ def _sys_anomalies(rows, total_mb=None):
         if r["etime_min"] >= _SYS_ANOMALY_RUNAWAY_MIN and _SYS_ONESHOT_RE.search(r["cmd"]):
             kind = "runaway"
             reason = "one-shot tool still running after %s" % _sys_fmt_age(r["etime_min"])
-        elif r["rss_mb"] >= mem_floor and r["etime_min"] >= _SYS_ANOMALY_MEM_MIN_AGE:
+        elif (r["rss_mb"] >= mem_floor and r["etime_min"] >= _SYS_ANOMALY_MEM_MIN_AGE
+              and not _SYS_USER_APP_RE.search(r["cmd"])):
             kind = "memory"
             reason = "holding %.1f GB of RAM for %s" % (r["rss_mb"] / 1024.0, _sys_fmt_age(r["etime_min"]))
         if not kind:
             continue
         tree = _sys_anomaly_tree(r, by_pid, children)
+        # Being large is no reason to offer a kill that takes agent sessions
+        # down with it.
+        if kind == "memory" and any(
+            p in by_pid and _sys_cmd_base(by_pid[p]["cmd"]) in _SYS_SESSION_BASES for p in tree
+        ):
+            continue
         # A wrapper (npm exec / sh -c) can also match the one-shot regex; only
         # report the deepest process so one leak is one anomaly.
         if any(c in by_pid and _SYS_ONESHOT_RE.search(by_pid[c]["cmd"]) and kind == "runaway"
@@ -13261,12 +13383,113 @@ def build_live_sessions_activity():
         _record_live_build_ms(_build_ms)
         try:
             _detail.update(cpu_ms=int(round(_cpu_ms)), rows=len(data or {}))
+            if threading.current_thread().name == _LIVE_ACTIVITY_REFRESH_THREAD:
+                _detail["background"] = True
             record_event("live_build", _build_ms, detail=_detail)
         except Exception:
             pass
         snap["data"] = data
         snap["ts"] = time.time()
+        snap["saved_at"] = None
+        _save_live_activity_snapshot(data, snap["ts"])
         return data
+
+
+def _live_activity_saved_path():
+    return COMMAND_CENTER_STATE_DIR / "live-activity-snapshot.json"
+
+
+def _save_live_activity_snapshot(data, ts):
+    """Keep a throttled copy for the next boot. Only the dashboard process
+    enables this (see _load_saved_live_activity); the worker imports this
+    module too and must not overwrite the copy with its own view."""
+    saved = _live_activity_saved
+    if not saved["enabled"] or ts - saved["at"] < _LIVE_ACTIVITY_SAVE_MIN_S:
+        return
+    saved["at"] = ts
+    try:
+        _write_json_atomic(_live_activity_saved_path(),
+                           {"version": 1, "saved_at": ts, "sessions": data})
+    except Exception:
+        pass
+
+
+def _load_saved_live_activity():
+    """Dashboard boot: seed the snapshot from the saved copy, so the first
+    polls show the last known status instead of waiting for a cold build
+    (up to 150s under load). ts stays 0, so it never counts as fresh: the
+    first read starts a refresh and blocking callers build their own."""
+    _live_activity_saved["enabled"] = True
+    try:
+        saved = json.loads(_live_activity_saved_path().read_text(encoding="utf-8"))
+        saved_at = float(saved["saved_at"])
+        sessions = saved["sessions"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    age = time.time() - saved_at
+    if not isinstance(sessions, dict) or not 0 <= age <= _LIVE_ACTIVITY_SAVED_MAX_AGE_S:
+        return False
+    snap = _live_activity_snapshot
+    with _live_activity_snapshot_lock:
+        if snap["data"] is None:
+            snap.update(ts=0.0, data=sessions, saved_at=saved_at)
+    return True
+
+
+def _kick_live_activity_refresh():
+    """Start the single background refresh, or join the one in flight. Returns
+    the Event set when it ends. A read holds no lock while it runs, so a stall
+    delays the new status but no longer holds up the poll."""
+    with _live_activity_refresh_guard:
+        done = _live_activity_refresh["done"]
+        if done is not None and not done.is_set():
+            return done
+        done = threading.Event()
+        _live_activity_refresh["done"] = done
+
+    def run():
+        try:
+            build_live_sessions_activity()
+        except Exception as exc:
+            print(f"[live-activity] background refresh failed: {exc!r}", flush=True)
+        finally:
+            done.set()
+
+    try:
+        threading.Thread(target=run, name=_LIVE_ACTIVITY_REFRESH_THREAD,
+                         daemon=True).start()
+    except RuntimeError:
+        done.set()
+    return done
+
+
+def live_sessions_activity_for_view():
+    """(sessions, status) for the sidebar poll: the last saved status at once,
+    refreshed in the background. Blocks only when nothing is saved yet.
+
+    status says what the caller got: source is "fresh" (at most one TTL old),
+    "stale" (last build, refresh still running) or "saved" (from before this
+    boot); age_s is the status age; refreshing is true while a newer build
+    runs."""
+    snap = _live_activity_snapshot
+    if snap["data"] is None:
+        data = build_live_sessions_activity()
+        return data, {"source": "fresh", "age_s": 0.0, "refreshing": False}
+    done = None
+    if time.time() - snap["ts"] >= _LIVE_ACTIVITY_SNAPSHOT_TTL:
+        done = _kick_live_activity_refresh()
+        done.wait(_LIVE_ACTIVITY_VIEW_WAIT_S)
+    data, saved_at = snap["data"], snap.get("saved_at")
+    age = max(0.0, time.time() - (saved_at or snap["ts"]))
+    if saved_at:
+        source = "saved"
+    else:
+        source = "fresh" if age < _LIVE_ACTIVITY_SNAPSHOT_TTL else "stale"
+    return data, {
+        "source": source,
+        "age_s": round(age, 1),
+        "refreshing": done is not None and not done.is_set(),
+    }
 
 
 def _build_live_sessions_activity_uncached(detail=None):
@@ -16500,9 +16723,20 @@ _archive_serve_version = 0       # monotonic per store; tags prebuilt response b
 # or (version, overlay content hash) when ACP/Devin overlay rows were
 # appended — _archive_list_body_ver — so a snapshot swap or any overlay
 # content change always misses and rebuilds.
-_ARCHIVE_LIST_BODY_CACHE = {}  # (cache_key, window, from_cache) -> {"ver", "raw", "gzip", "etag"}
-_ARCHIVE_LIST_BODY_LOCK = threading.Lock()
+def _cache_budget_bytes(env_name, default_mb):
+    try:
+        return max(1, int(float(os.environ.get(env_name, default_mb)) * 1024 * 1024))
+    except ValueError:
+        return default_mb * 1024 * 1024
+
+
+# Version is in the key, so every snapshot adds entries and 96 stale copies of a
+# 13 MB body stayed resident. The byte budget evicts those first (LRU).
 _ARCHIVE_LIST_BODY_CACHE_MAX = 96
+_ARCHIVE_LIST_BODY_CACHE_BYTES = _cache_budget_bytes("CCC_LIST_BODY_CACHE_MB", 64)
+_ARCHIVE_LIST_BODY_CACHE = ByteBudgetCache(  # body key -> {"ver", "raw", "gzip", "etag"}
+    _ARCHIVE_LIST_BODY_CACHE_BYTES, _ARCHIVE_LIST_BODY_CACHE_MAX)
+_ARCHIVE_LIST_BODY_LOCK = threading.Lock()
 _ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body builds
 
 
@@ -16551,14 +16785,12 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
             )
             if snap_ver:
                 with _ARCHIVE_LIST_BODY_LOCK:
-                    if len(_ARCHIVE_LIST_BODY_CACHE) >= _ARCHIVE_LIST_BODY_CACHE_MAX:
-                        _ARCHIVE_LIST_BODY_CACHE.clear()
-                    _ARCHIVE_LIST_BODY_CACHE[body_key] = {
+                    _ARCHIVE_LIST_BODY_CACHE.put(body_key, {
                         "ver": snap_ver,
                         "raw": raw,
                         "gzip": gzip_body,
                         "etag": etag_val,
-                    }
+                    }, len(raw) + len(gzip_body or b""))
                 _ARCHIVE_LIST_BUILT.add((cache_key, window))
                 _archive_list_disk_save(cache_key, window, raw, gzip_body, etag_val)
     finally:
@@ -16737,6 +16969,8 @@ def _archive_refresh_load_blocked(now):
     """True when spawning the detached archive refresh would feed a saturated
     machine. Any probe failure means "not blocked" — a broken load check must
     never freeze refresh spawning or the request path."""
+    if now < _ARCHIVE_REFRESH_GATE_BYPASS_UNTIL[0]:
+        return False
     try:
         load1, ncpu = _machine_load()
         if float(load1) < _ARCHIVE_REFRESH_GATE_LOAD_PER_CPU * float(ncpu):
@@ -18346,6 +18580,64 @@ except ValueError:
 _ARCHIVE_REFRESH_WATCHDOG_S = _ARCHIVE_REFRESH_WORKER_TIMEOUT + 60.0
 
 
+# A full garbage collection walks the whole heap with the GIL held, so every
+# request stops for it. Record the long ones next to the list timings.
+_GC_PAUSE_RECORD_MS = 50.0
+
+
+def _install_gc_pause_diag():
+    started = {}
+
+    def on_gc(phase, info):
+        if phase == "start":
+            started["t"] = time.perf_counter()
+            return
+        ms = (time.perf_counter() - started.get("t", time.perf_counter())) * 1000.0
+        if ms >= _GC_PAUSE_RECORD_MS:
+            record_diag("gc_pause", ms, {"generation": info.get("generation"),
+                                         "collected": info.get("collected")})
+
+    gc.callbacks.append(on_gc)
+
+
+# Measured on the live dashboard: full collections took ~1.2s, up to a few a
+# minute, and matched the >=1s stalls of every request (CCC-142). Nearly all
+# of that heap is long-lived cache that never forms cycles. freeze() takes it
+# out of later passes in constant time, and frozen objects are still freed by
+# refcount. Only frozen cycles need a real pass, which runs on a slow timer.
+_GC_FREEZE_EVERY_S = 15.0
+_GC_FULL_PASS_EVERY_S = 1800.0
+# With the old heap frozen, the default threshold still ran a ~170ms oldest
+# generation pass every 8s over the newest objects. Most of them die by
+# refcount, so counting 10000 allocations before a pass loses little.
+_GC_GEN0_THRESHOLD = 10000
+
+
+def _gc_freeze_tick(now, next_full_pass):
+    """Returns when the next full pass is due."""
+    if now < next_full_pass:
+        gc.freeze()
+        return next_full_pass
+    gc.unfreeze()
+    gc.collect()
+    gc.freeze()
+    return now + _GC_FULL_PASS_EVERY_S
+
+
+def _start_gc_freeze_thread():
+    if os.environ.get("CCC_GC_FREEZE", "1") == "0":
+        return
+    gc.set_threshold(_GC_GEN0_THRESHOLD, *gc.get_threshold()[1:])
+
+    def loop():
+        next_full_pass = time.monotonic() + _GC_FULL_PASS_EVERY_S
+        while True:
+            next_full_pass = _gc_freeze_tick(time.monotonic(), next_full_pass)
+            time.sleep(_GC_FREEZE_EVERY_S)
+
+    threading.Thread(target=loop, name="ccc-gc-freeze", daemon=True).start()
+
+
 def _archive_refresh_worker_main(encoded_options, output_path):
     """Build one archive snapshot in a short-lived, low-priority process."""
     try:
@@ -18390,12 +18682,87 @@ def _archive_refresh_worker_main(encoded_options, output_path):
     except Exception as exc:
         result = {"ok": False, "error": str(exc)}
     try:
-        with open(output_path, "w", encoding="utf-8") as output_file:
-            json.dump(result, output_file, separators=(",", ":"))
+        _write_archive_refresh_result(output_path, result)
     except OSError as exc:
         print(f"archive refresh worker could not write its result: {exc}", file=sys.stderr)
         return 1
     return 0 if result.get("ok") else 1
+
+
+# One json.loads of the whole 48MB result held the GIL for 0.5-4s, every ~47s,
+# and every dashboard request stopped for it (CCC-142). The GIL can only change
+# hands between calls, so the rows travel as one small JSON array per line:
+# each decode holds it for about 2ms. Rows share a line so each decode still
+# reuses key strings, which per-row decoding would duplicate across 14k rows.
+_ARCHIVE_RESULT_ROWS_PER_LINE = 64
+
+
+def _write_archive_refresh_result(output_path, result):
+    """Line 1 is the result without its rows, then the rows in small chunks."""
+    rows = result.get("rows")
+    header = {k: v for k, v in result.items() if k != "rows"}
+    if isinstance(rows, list):
+        header["row_count"] = len(rows)
+    with open(output_path, "w", encoding="utf-8") as output_file:
+        output_file.write(json.dumps(header, separators=(",", ":")) + "\n")
+        for start in range(0, len(rows or ()), _ARCHIVE_RESULT_ROWS_PER_LINE):
+            chunk = rows[start:start + _ARCHIVE_RESULT_ROWS_PER_LINE]
+            output_file.write(json.dumps(chunk, separators=(",", ":")) + "\n")
+
+
+def _read_archive_refresh_result(output_path):
+    """Returns (result, bytes read). Raises ValueError on a truncated result."""
+    with open(output_path, "r", encoding="utf-8") as result_file:
+        header_line = result_file.readline()
+        size = len(header_line)
+        result = json.loads(header_line)
+        if "row_count" not in result:
+            return result, size
+        rows = []
+        for line in result_file:
+            size += len(line)
+            rows.extend(json.loads(line))
+    if len(rows) != result.pop("row_count"):
+        raise ValueError("archive refresh result is truncated")
+    result["rows"] = rows
+    return result, size
+
+
+# A dashboard stopped mid-refresh never reaches the unlink below, and /dev/shm
+# is RAM: on one host 53 of these held about 500 MB until the next reboot.
+_ARCHIVE_REFRESH_RESULT_PREFIX = "ccc-archive-refresh-"
+_ARCHIVE_REFRESH_RESULT_MAX_AGE_S = 3600.0
+
+
+def _archive_refresh_result_dir():
+    if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK):
+        return "/dev/shm"
+    return None
+
+
+def _sweep_stale_archive_refresh_results(root=None, now=None):
+    """Delete refresh results no running worker can still own. The age limit is
+    far past the worker timeout, so a second CCC's live file is left alone."""
+    root = root or _archive_refresh_result_dir() or tempfile.gettempdir()
+    cutoff = (now if now is not None else time.time()) - max(
+        _ARCHIVE_REFRESH_RESULT_MAX_AGE_S, _ARCHIVE_REFRESH_WATCHDOG_S * 2)
+    removed = 0
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if not (entry.name.startswith(_ARCHIVE_REFRESH_RESULT_PREFIX)
+                        and entry.name.endswith(".json")):
+                    continue
+                try:
+                    st = entry.stat(follow_symlinks=False)
+                    if st.st_uid == os.getuid() and st.st_mtime < cutoff:
+                        os.unlink(entry.path)
+                        removed += 1
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return removed
 
 
 def _archive_compute_rows_detached(key, cache_options, serve_generation):
@@ -18405,9 +18772,8 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
     exit instead of permanently raising the daemon's RSS. The parent only
     decodes the completed row snapshot and publishes it atomically.
     """
-    _shm_dir = "/dev/shm" if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK) else None
     output_fd, output_name = tempfile.mkstemp(
-        prefix="ccc-archive-refresh-", suffix=".json", dir=_shm_dir,
+        prefix=_ARCHIVE_REFRESH_RESULT_PREFIX, suffix=".json", dir=_archive_refresh_result_dir(),
     )
     os.close(output_fd)
     encoded_options = base64.urlsafe_b64encode(
@@ -18419,8 +18785,7 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
     # cache consumed by future workers and server restarts.
     env["CCC_ARCHIVE_SERVE_TTL_SEC"] = "0"
     command = [
-        sys.executable,
-        str(Path(__file__).resolve()),
+        *_server_launch_argv(),
         "--archive-refresh-worker",
         encoded_options,
         output_name,
@@ -18458,11 +18823,8 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         _rt1 = time.perf_counter()
         _rphase["worker_ms"] = round((_rt1 - _rt0) * 1000.0 - _rphase["lock_wait_ms"], 1)
         try:
-            _rtext = Path(output_name).read_text(encoding="utf-8")
-            _rphase["result_bytes"] = len(_rtext)
-            result = json.loads(_rtext)
-            del _rtext
-        except (OSError, json.JSONDecodeError) as exc:
+            result, _rphase["result_bytes"] = _read_archive_refresh_result(output_name)
+        except (OSError, ValueError) as exc:
             detail = (completed.stderr or completed.stdout or "").strip()[-500:]
             raise RuntimeError(
                 f"archive refresh worker produced no result: {exc}; {detail}"
@@ -18495,8 +18857,14 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
 
 def _archive_serve_refresh(key, cache_options, serve_generation, started_at):
     global _archive_serve_refreshing
+    with _archive_serve_lock:
+        rows_before = len((_archive_serve_cache.get(key) or {}).get("rows") or [])
     try:
-        _archive_compute_rows_detached(key, cache_options, serve_generation)
+        rows, _from_cache = _archive_compute_rows_detached(key, cache_options, serve_generation)
+        # A client that asked before this finished holds the old list, and an
+        # idle dashboard on the event stream won't ask again for minutes.
+        if len(rows) != rows_before:
+            _invalidate_dashboard("archive", reason="refresh-row-count")
     except Exception as e:
         print(f"  [archive-serve] background refresh failed: {e}")
     finally:
@@ -18905,10 +19273,8 @@ def _rehydrate_archive_cached_rows(rows):
             # How this session's spawn request arrived (cli/ui/ui-automated/
             # api), tagged onto the registry entry at spawn time (CCC-1026
             # follow-up) or inferred from launch metadata.
-            row["spawned_via"] = _infer_session_spawned_via(
-                row, sid=sid,
-                markers=spawn_markers, spawn_registry_by_sid=spawn_registry_by_sid,
-            )
+            # (Inferred after continued_from_session_id below: a continuation
+            # reads "resumed", not "terminal".)
             # Continuation lineage specifically (F2 "Continue in a new
             # session" / usage-limit auto-resume): the origin marker only
             # appears in continuation prompts, never in subagent spawns, so
@@ -18925,6 +19291,10 @@ def _rehydrate_archive_cached_rows(rows):
                     row.get("jsonl_path")
                 )
             row["continued_from_session_id"] = continued_from
+            row["spawned_via"] = _infer_session_spawned_via(
+                row, sid=sid,
+                markers=spawn_markers, spawn_registry_by_sid=spawn_registry_by_sid,
+            )
             idea_ticket = idea_tickets_by_sid.get(sid)
             if idea_ticket:
                 row["idea_ticket"] = idea_ticket
@@ -21614,7 +21984,7 @@ def enqueue_annotation_ux_fixes_queue(
     # number and a second session can see. Never interrupts anyone.
     meta = meta if isinstance(meta, dict) else {}
     # Only default repo_path to the CCC repo for CCC-origin captures. A product
-    # source (e.g. "bym") that omits repo_path must NOT be clobbered to CCC_ROOT,
+    # source (e.g. "acme") that omits repo_path must NOT be clobbered to CCC_ROOT,
     # or repo-path-wins project routing misfiles the item as CCC.
     _src = str(meta.get("source") or "ccc").lower()
     _repo_path = str(meta.get("repo_path") or "")
@@ -22014,7 +22384,7 @@ def _schedule_restart(delay=0.5):
             _quiesce_http_for_restart()
         except Exception:
             pass
-        os.execvp(sys.executable, [sys.executable, str(Path(__file__).resolve())])
+        os.execvp(sys.executable, _server_launch_argv())
     t = threading.Timer(delay, _go)
     t.daemon = True
     t.start()
@@ -22631,13 +23001,9 @@ def _resolve_apps(include_disabled=False):
         apps.append({"id": "morning", "label": "Morning",
                      "icon": "\N{BLACK SUN WITH RAYS}", "url": "/morning",
                      "builtin": True})
-    # Decision Inbox: the hourly stalled-work scanner + token governor
-    # (ccc_server/decision_inbox.py). Ships with the repo but is not core
-    # navigation, so it can be switched off from the Applications page.
-    apps.append({"id": "decision-inbox", "label": "Decisions",
-                 "icon": "\N{BALLOT BOX WITH CHECK}", "url": "/decision-inbox.html",
-                 "builtin": False})
-    apps.append({"id": "decision-guide", "label": "Decisions 2",
+    # History and reports remain linked from the guided queue, rather than
+    # appearing as a second Decisions application in desktop/mobile navigation.
+    apps.append({"id": "decision-guide", "label": "Decisions",
                  "icon": "\N{SPEECH BALLOON}", "url": "/decision-guide.html",
                  "builtin": False})
     # Spawn Ledger reads a grade ledger written by an external tool; list it
@@ -24959,6 +25325,17 @@ def _notification_is_blocking(notif):
     """
     if not notif:
         return False
+    # A killed PermissionRequest hook cannot remove its own badge. Once its
+    # owner exits there is no prompt to answer through that hook.
+    if notif.get("source") == "permission-request":
+        pid = notif.get("pid")
+        if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            except OSError:
+                pass  # Permission errors do not establish that it exited.
     msg = str(notif.get("message") or "").lower()
     if "waiting for your input" in msg or "waiting for input" in msg:
         return False
@@ -25959,9 +26336,20 @@ def _registry_only_conversation_stub(conversation_id, after_line=0):
 # turns the click→render path on already-opened convs from ~170 ms (full
 # parse of a ~750 KB JSONL) into a hash-table lookup. Bounded so a long
 # session of clicking around different convs doesn't grow unbounded.
-_CONV_PARSE_CACHE = {}
-_CONV_PARSE_CACHE_LOCK = threading.Lock()
 _CONV_PARSE_CACHE_MAX = 512
+_CONV_PARSE_CACHE_BYTES = _cache_budget_bytes("CCC_CONV_PARSE_CACHE_MB", 64)
+_CONV_PARSE_CACHE = ByteBudgetCache(_CONV_PARSE_CACHE_BYTES, _CONV_PARSE_CACHE_MAX)
+_CONV_PARSE_CACHE_LOCK = threading.Lock()
+# Parsed events cost more than the JSONL they came from. Sizing every entry by
+# walking it would cost more than the parse saved, so estimate from the counts.
+_CONV_PARSE_BYTES_PER_EVENT = 2048
+_CONV_PARSE_BYTES_PER_SOURCE_BYTE = 2
+
+
+def _conv_parse_result_weight(result, source_stat):
+    size = source_stat[1] if len(source_stat) > 1 and isinstance(source_stat[1], int) else 0
+    return max(len(result.get("events") or ()) * _CONV_PARSE_BYTES_PER_EVENT,
+               size * _CONV_PARSE_BYTES_PER_SOURCE_BYTE)
 
 
 _CONV_PATH_CACHE = {}
@@ -26824,15 +27212,7 @@ def _conv_parse_cache_put(conversation_id, after_line, repo_path, result):
         return
     key = (conversation_id, int(after_line), mtime)
     with _CONV_PARSE_CACHE_LOCK:
-        if len(_CONV_PARSE_CACHE) >= _CONV_PARSE_CACHE_MAX:
-            # Drop the oldest entry — Python 3.7+ dicts preserve insertion
-            # order, so popping the first key is FIFO eviction. Fine for
-            # this use case; recency-weighting isn't worth the bookkeeping.
-            try:
-                _CONV_PARSE_CACHE.pop(next(iter(_CONV_PARSE_CACHE)))
-            except StopIteration:
-                pass
-        _CONV_PARSE_CACHE[key] = result
+        _CONV_PARSE_CACHE.put(key, result, _conv_parse_result_weight(result, mtime))
 
 
 # Pre-serialized response bytes for /api/conversations/<id>?after=N. The
@@ -26841,9 +27221,10 @@ def _conv_parse_cache_put(conversation_id, after_line, repo_path, result):
 # conversation the user already opened once becomes a sub-5 ms socket
 # write. Keys are (sid, after_line, jsonl_mtime); values are {"raw": bytes,
 # "gzip": bytes|None}. Bounded so memory doesn't blow up.
-_CONV_BYTES_CACHE = {}
-_CONV_BYTES_CACHE_LOCK = threading.Lock()
 _CONV_BYTES_CACHE_MAX = 512
+_CONV_BYTES_CACHE_BYTES = _cache_budget_bytes("CCC_CONV_BYTES_CACHE_MB", 64)
+_CONV_BYTES_CACHE = ByteBudgetCache(_CONV_BYTES_CACHE_BYTES, _CONV_BYTES_CACHE_MAX)
+_CONV_BYTES_CACHE_LOCK = threading.Lock()
 
 
 def _session_has_pending_input(session_id):
@@ -26946,12 +27327,7 @@ def _conv_response_bytes_put(conversation_id, after_line, raw, gz, window=None):
         return
     key = (conversation_id, int(after_line), mtime, window, fp)
     with _CONV_BYTES_CACHE_LOCK:
-        if len(_CONV_BYTES_CACHE) >= _CONV_BYTES_CACHE_MAX:
-            try:
-                _CONV_BYTES_CACHE.pop(next(iter(_CONV_BYTES_CACHE)))
-            except StopIteration:
-                pass
-        _CONV_BYTES_CACHE[key] = {"raw": raw, "gzip": gz}
+        _CONV_BYTES_CACHE.put(key, {"raw": raw, "gzip": gz}, len(raw) + len(gz or b""))
 
 
 
@@ -28491,8 +28867,36 @@ def _skill_body_event(ev, line_num, ts):
     }
 
 
+# Claude Code's own marks for a row the owner did not type, even one with a
+# human origin: a relayed person, or a message handed over from elsewhere.
+_NOT_TYPED_MARKS = (
+    "verifiedSlackHumanTurn", "projectsUserTurn", "emailSenderTurn",
+    "textNotTyped", "handedOff", "queueTranscriptOnly",
+)
+
+
+def _stamp_row_origin(row, ev):
+    """Say how a user row arrived, whichever branch below built it."""
+    turn_origin = "scheduled" if ev.get("wakeupSource") else ev.get("turnOrigin")
+    if turn_origin:
+        row["turn_origin"] = turn_origin
+    # A queued message keeps its own marks inside the attachment.
+    attachment = ev.get("attachment") if isinstance(ev.get("attachment"), dict) else {}
+    if any(ev.get(mark) or attachment.get(mark) for mark in _NOT_TYPED_MARKS):
+        row["not_typed"] = True
+    origin = ev.get("origin") or attachment.get("origin")
+    if isinstance(origin, dict) and origin.get("kind"):
+        row["origin_kind"] = str(origin["kind"])
+    if attachment.get("isMeta"):
+        row["queued_meta"] = True
+    if ev.get("entrypoint"):
+        row["entrypoint"] = str(ev["entrypoint"])
+
+
 def _parse_conversation_event(ev, line_num):
     parsed = _parse_conversation_event_unattributed(ev, line_num)
+    if isinstance(parsed, dict) and parsed.get("type") == "user_text":
+        _stamp_row_origin(parsed, ev)
     return _attribution.decorate_event(parsed, ev.get("origin"))
 
 
@@ -28664,6 +29068,12 @@ def _parse_conversation_event_unattributed(ev, line_num):
                 "peer": _peer_block_from_origin(origin),
             }
         if ev.get("isMeta"):
+            # A chat platform's message stays out of the conversation pane like
+            # other meta rows, but Share has to know the session holds one.
+            meta_origin = ev.get("origin")
+            if isinstance(meta_origin, dict) and meta_origin.get("kind") in ("channel", "slack-ping"):
+                return {"line": line_num, "ts": ts, "type": "chat_bridge_row",
+                        "origin_kind": str(meta_origin["kind"])}
             # A loaded skill's body (the rules the Skill tool pulled in) is
             # written as an isMeta user row. The model read it and acted on
             # it, so hiding it leaves the operator seeing only "Launching
@@ -28709,6 +29119,8 @@ def _parse_conversation_event_unattributed(ev, line_num):
             # Preview placeholder "[image]" shouldn't leak into the rendered message.
             display_text = "" if (text == "[image]" and images) else text
             out_ev = {"line": line_num, "ts": ts, "type": "user_text", "text": display_text, "images": images}
+            if ev.get("isSidechain"):
+                out_ev["is_sidechain"] = True
             from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
             if is_compaction_bookkeeping(ev):
                 out_ev["bookkeeping"] = True
@@ -29135,9 +29547,10 @@ HERMES_WHATSAPP_BRIDGE_LOG = Path(
     os.environ.get("CCC_HERMES_WHATSAPP_BRIDGE_LOG")
     or (HERMES_WHATSAPP_DIR / "bridge.log")
 ).expanduser()
-HERMES_CHUCK_PENDING_DIR = Path(
-    os.environ.get("CCC_HERMES_CHUCK_PENDING_DIR")
-    or (HERMES_WHATSAPP_DIR / "chuck_realtor_pending")
+HERMES_PENDING_DIR = Path(
+    os.environ.get("CCC_HERMES_PENDING_DIR")
+    or _local_overrides.hermes_pending_dir()
+    or (HERMES_WHATSAPP_DIR / "pending")
 ).expanduser()
 HERMES_PROFILES_DIR = Path(
     os.environ.get("CCC_HERMES_PROFILES_DIR")
@@ -29453,6 +29866,7 @@ _BACKGROUND_API_READ_PATHS = frozenset({
     "/api/jobs",
     "/api/throughput/daily",
     "/api/throughput/share",
+    "/api/share/stats",
     "/api/titler-turns",
     "/api/background-runs",
     "/api/vercel-deploy",
@@ -29932,6 +30346,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(get_app_config())
         elif path == "/api/onboarding/status":
             self.send_json(_get_onboarding_status())
+        elif path == "/api/return-reminder":
+            from ccc_server import return_reminder
+            self.send_json(return_reminder.status())
         elif path == "/api/onboarding/moment-zero":
             # Moment Zero shell: "is this a fresh install?" — answers whether
             # any agent session history exists, so the overlay knows whether
@@ -30491,7 +30908,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 fresh_s=10.0, max_stale_s=300.0))
         elif path == "/api/question-tags":
             from ccc_server import question_tags as _question_tags
-            self.send_json(_question_tags.payload())
+            self.send_json(_question_tags.payload(tickets=_wt_list_items_for_requests()))
         elif path in ("/api/sessions/spawned", "/api/spawned"):
             qs = urllib.parse.parse_qs(parsed.query)
             rows = list_spawned_sessions()
@@ -30941,7 +31358,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(result, status)
         elif path == "/api/decision-inbox/requests":
             from ccc_server.decision_requests import requests_payload
-            result = requests_payload()
+            result = requests_payload(tickets=_wt_list_items_for_requests())
             self.send_json(result, 200 if result.get('ok') else 503)
         elif path == "/api/decision-inbox/legacy-reconciliation":
             from ccc_server.decision_legacy_http import reconciliation_payload
@@ -31279,6 +31696,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             payload, status = _throughput_share_payload()
             self.send_json(payload, status)
             return
+        elif path == "/api/share/stats":
+            # Numbers-only card from caches the dashboard already keeps.
+            from ccc_server import share_run
+            qs = urllib.parse.parse_qs(parsed.query)
+            payload, status = share_run.stats_card(
+                throughput=_throughput_share_payload,
+                productivity=lambda: _productivity_payload(weeks=8),
+                days=30 if qs.get("days", ["7"])[0] == "30" else 7,
+            )
+            self.send_json(payload, status)
+            return
         elif path == "/api/throughput/daily":
             # Daily throughput digest (sessions, tokens by model, top lanes,
             # queue-ticket counts). ?date=YYYY-MM-DD | today | yesterday.
@@ -31567,7 +31995,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             last_kill = (qs.get("last_kill", [""])[0] or "").strip()
             last_prewarm = (qs.get("last_prewarm", [""])[0] or "").strip()
-            payload = {"sessions": build_live_sessions_activity()}
+            _read_t0 = time.perf_counter()
+            _sessions, _live_status = live_sessions_activity_for_view()
+            payload = {"sessions": _sessions, "live_status": _live_status}
             try:
                 payload["kill_events"] = _drain_new_kill_events(last_kill)
             except Exception:
@@ -31590,6 +32020,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 payload["recent_spawns"] = []
             self.send_json(payload)
+            record_diag("live_read", (time.perf_counter() - _read_t0) * 1000.0,
+                        detail=_live_status)
         elif path == "/api/interrupt-asks":
             # Cheap standalone poll for the interrupt-approval banner: one
             # small JSON file read, no session scan. The banner must work
@@ -32054,6 +32486,30 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             repo_path = (qs.get("repo_path", [""])[0] or "").strip() or None
             transcript_path = conversation_transcript_path(conv_id, repo_path=repo_path)
             self.send_json({"transcript_path": transcript_path})
+        elif re.match(r"^/api/conversations/[^/]+/share$", path):
+            # Local, redacted replay of one session. Builds it and hands it
+            # back to the browser; nothing is uploaded.
+            from ccc_server import share_run
+            from ccc_server.kilo import _kilo_session_cwd
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                hide = share_run.parse_list(qs.get("hide", [""])[0])
+                keep = share_run.parse_list(qs.get("keep", [""])[0])
+            except share_run.RedactionError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+                return
+            payload, status = share_run.export_conversation(
+                conv_id,
+                parse=parse_conversation,
+                transcript_path=conversation_transcript_path(conv_id),
+                engine=_detect_session_engine(conv_id),
+                hide=hide,
+                keep=keep,
+                title=(qs.get("title", [""])[0] or "")[:200],
+                cwd=find_session_cwd(conv_id) or _kilo_session_cwd(conv_id) or "",
+            )
+            self.send_json(payload, status)
         elif path == "/api/sessions/ultra-fresh":
             from ccc_server.ultra_fresh import stream
             stream(self, urllib.parse.parse_qs(parsed.query))
@@ -33057,7 +33513,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 limit_raw = (qs.get("limit", ["20"])[0] or "20").strip()
                 days_raw = (qs.get("days", ["2"])[0] or "2").strip()
                 self.send_json(search_recent_sessions(
-                    q, days=days_raw, limit=limit_raw, cwd_like=cwd_like,
+                    q, days=days_raw, limit=limit_raw, cwd_like=cwd_like, match_ids=True,
                 ))
         elif path == "/api/history/status":
             # Lay-of-the-land for the topbar pill: is the index file there,
@@ -34324,6 +34780,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _is_dashboard_composer(self, payload):
+        """True for a send from the dashboard's own composer form."""
+        return (payload.get("composer_form") == "ccc-composer-v1"
+                and bool(self.headers.get("Origin"))
+                and (self.headers.get("X-CCC-Automated") or "").strip().lower() != "true")
+
+    def _note_typed_spawn(self, payload, result):
+        """Record a first prompt typed in the dashboard, so Share can prove it."""
+        sid = result.get("session_id")
+        if sid and self._is_dashboard_composer(payload):
+            typed = _decode_over_url_encoded_text(payload.get("prompt") or "").strip()
+            _attribution.journal(_attribution.dashboard_human(sid, typed), app="ccc", event="spawn")
+
     def _extract_spawned_via(self):
         """Detect how a spawn request arrived at CCC (cli, ui-automated, ui, or api)."""
         ua = (self.headers.get("User-Agent") or "").strip()
@@ -35432,6 +35901,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(res, 200 if res.get("ok") else 400)
             else:
                 self.send_json({"ok": False, "error": "unknown action"}, 404)
+            return
+        if path == "/api/return-reminder":
+            # {"armed": false} cancels; anything else arms the one reminder.
+            if phone_access.is_remote_request(self.client_address[0], self.headers):
+                self.send_json({"ok": False, "error": "reminders are local-only"}, 403)
+                return
+            try:
+                from ccc_server import return_reminder
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                armed = not isinstance(payload, dict) or payload.get("armed") is not False
+                self.send_json(return_reminder.arm() if armed else return_reminder.cancel())
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
             return
         if path == "/api/onboarding/first-task":
             if phone_access.is_remote_request(self.client_address[0], self.headers):
@@ -39049,6 +39533,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                         if spawn_runtime:
                             result["runtime"] = spawn_runtime
                             # Worker-routed spawns stamp marker+registry inside
@@ -39225,6 +39710,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     # Resolver-side failures (binary not found, CCC_CODEX_BIN
                     # misconfigured) carry a stable `"code": "codex_unavailable"`
                     # so the frontend can render an install hint without
@@ -39297,6 +39783,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("gemini_unavailable", "gemini_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -39367,6 +39854,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("cursor_unavailable", "cursor_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -39437,6 +39925,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("antigravity_unavailable", "antigravity_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -39507,6 +39996,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("kilo_unavailable", "kilo_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -39581,6 +40071,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                         if _oc_runtime:
                             result["runtime"] = _oc_runtime
                             _sid = result.get("session_id")
@@ -39638,6 +40129,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("kimi_spawn_failed", "not_installed"):
                         self.send_json(result, 503)
                     else:
@@ -39679,6 +40171,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("grok_spawn_failed", "not_installed"):
                         self.send_json(result, 503)
                     else:
@@ -39749,6 +40242,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             session_id=result.get("session_id"),
                             via=spawned_via,
                         )
+                        self._note_typed_spawn(payload, result)
                     if result.get("code") in ("hermes_unavailable", "hermes_launch_failed"):
                         self.send_json(result, 503)
                     else:
@@ -39769,6 +40263,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if not text:
                 self.send_json({"ok": False, "error": "missing text"})
             else:
+                if self._is_dashboard_composer(payload):
+                    # The placeholder card's send: same proof as /api/inject-input.
+                    entry = next((s for s in _spawned_sessions if s.get("pid") == pid), {})
+                    if entry.get("session_id"):
+                        _attribution.journal(
+                            _attribution.dashboard_human(entry["session_id"], text),
+                            app="ccc", event="inject",
+                        )
                 routed = _control_plane_engine_call(
                     "claude", "inject_pid", {"pid": pid, "text": text},
                     idempotency_key=payload.get("idempotency_key"),
@@ -40284,6 +40786,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 and _archive_deferred.is_busy(sid)
             )
             deferred = None
+            # Archiving a parent takes its spawned children with it (same unit
+            # Trash already cascades). Looked up outside the lock: it reads the
+            # spawn registry / transcripts. Unarchive restores only `sid`.
+            child_sids = []
+            if has_process and (
+                desired is True
+                or (not isinstance(desired, bool)
+                    and sid not in _load_archived_conversations())
+            ):
+                try:
+                    child_sids = [
+                        d for d in _find_descendant_sessions(sid)
+                        if d and d != sid and not d.startswith(("backlog-", "pkood-"))
+                    ]
+                except Exception:
+                    child_sids = []
             try:
                 # Keep retirement ordered with the state transition. If Move
                 # to Active races this request, it must run after the kill so
@@ -40294,7 +40812,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         else sid not in _load_archived_conversations()
                     )
                     changed, unchanged, _, _ = _set_conversations_archived(
-                        [sid], now_archived, source="manual",
+                        [sid, *(child_sids if now_archived else [])],
+                        now_archived, source="manual",
                     )
                     group = changed + unchanged
                     # Archiving retires the session — drop any stale Notification-hook
@@ -41008,7 +41527,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({'ok': False, 'error': 'body_too_large'}, 413)
                 return
             action = 'record' if path.endswith('/answers') else path.rsplit('/', 1)[1]
-            result, status = answer_payload(action, self.rfile.read(length))
+            result, status = answer_payload(action, self.rfile.read(length),
+                                            github_tickets=_wt_list_items_for_requests)
+            if result.get('state') == 'accepted' and result.get('origin_id'):
+                # The ticket cache lags GitHub; it must not re-show what was just answered.
+                with _wt_items_memo_lock:
+                    _wt_items_memo["at"] = 0
+                    if _wt_items_memo["items"] is not None:
+                        _wt_items_memo["items"] = [
+                            {**item, "needs_input": False} if item.get("ref") == result["origin_id"] else item
+                            for item in _wt_items_memo["items"]]
+            self.send_json(result, status)
+        elif path == "/api/decision-inbox/close":
+            from ccc_server.decision_answer_api import MAX_BODY_BYTES
+            from ccc_server.decision_close import close_payload
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                length = 0
+            if not 0 < length <= MAX_BODY_BYTES:
+                self.close_connection = True
+                self.send_json({'ok': False, 'error': 'body_too_large'}, 413)
+                return
+            result, status = close_payload(self.rfile.read(length))
             self.send_json(result, status)
         elif path == "/api/sessions/old-recaps":
             from ccc_server.session_rechecks import observe
@@ -42088,6 +42629,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     ):
                         text = _mode3_prompt(text)
                 held_queued = 0
+                steer_kept_sender = False
                 try:
                     inject_options = {
                         "wt_origin": (str(payload.get("origin") or "").lower() == "wt"),
@@ -42125,14 +42667,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         str(payload.get("source") or "").strip()
                         or _inject_source_for_request(announced_from, inject_options["wt_origin"])
                     )
-                    browser_composer = (
-                        source == "composer" and payload.get("composer_form") == "ccc-composer-v1"
-                        and bool(self.headers.get("Origin"))
-                    )
+                    browser_composer = source == "composer" and self._is_dashboard_composer(payload)
                     if source == "composer" and not browser_composer:
                         source = "api"
                     try:
-                        inject_options["attr"] = _attribution.request_attr(payload, continuation_origin, browser_composer=browser_composer)
+                        inject_options["attr"] = _attribution.request_attr(
+                            payload, continuation_origin, browser_composer=browser_composer,
+                            typed_text=queued_text if browser_composer else None,
+                        )
+                        if browser_composer and (replace_queued or payload.get("steer_existing")):
+                            origin_id = str(payload.get("steer_origin_msg_id") or "")
+                            inject_options["attr"] = _attribution.steer_attr(
+                                continuation_origin, queued_text,
+                                _steered_queue_origins(
+                                    sid, queued_text, replace_queued_ids, replace_queued_texts,
+                                ) if replace_queued else [(
+                                    queued_text,
+                                    _attribution.lookup(message_id=origin_id) if origin_id else None,
+                                )],
+                            )
+                            steer_kept_sender = inject_options["attr"]["author"]["kind"] != "human"
                     except ValueError as exc:
                         self.send_json({"ok": False, "error": str(exc)}, 400)
                         return
@@ -42186,6 +42740,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     result = {"ok": False, "error": str(e) or "internal error"}
                 if held_queued:
                     result = dict(result, held_queued=held_queued)
+                if steer_kept_sender:
+                    # The transcript copy will be a peer row, not a user row.
+                    result = dict(result, steer_kept_sender=True)
                 if replace_queued_texts:
                     result = _finalize_queued_steer_batch_result(
                         sid, replace_queued_texts, result, ids=replace_queued_ids,
@@ -44099,8 +44656,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # that accidentally put sensitive data in a path or query string.
         if getattr(self, "path", "").startswith("/api/secrets/"):
             return
-        # Quieter logging — only errors
-        if args and "404" in str(args[0]):
+        # Quieter logging — only errors. args[0] is the whole request line, so
+        # test the status, or an id holding "404" would log every request.
+        if any(str(arg) == "404" for arg in args[:2]):
+            if "/share?" in getattr(self, "path", ""):
+                # The query is the user's list of words to hide.
+                args = (re.sub(r"\?\S*", "", str(args[0])),) + args[1:]
             super().log_message(format, *args)
 
 
@@ -45134,6 +45695,7 @@ def get_app_config():
     config = {
         "app_name": "Command Center for Claude, Codex, and Anti-Gravity",
         "title_strip": TITLE_STRIP_PREFIXES,
+        "repo_project_map": _local_overrides.repo_project_map(),
         "repo": "",
         "vercel_enabled": bool(_VERCEL_PROJECT_ENV),
         "vercel_project": _VERCEL_PROJECT_ENV,
@@ -45619,18 +46181,18 @@ def build_memory_doctor():
     else:
         model_dir = index.get("embed_model_dir") or {}
         if not index.get("ollama_reachable"):
-            warnings.append("Ollama unreachable — semantic search is running FTS-only")
+            warnings.append("Ollama unreachable — semantic search is running FTS-only (optional; keyword search still works)")
         elif index.get("embed_model_present") is False:
             warnings.append(f"Ollama is up but {_session_fts.EMB_MODEL!r} is not pulled")
         if model_dir.get("reachable") is False:
             warnings.append(
                 f"embedding model directory unreachable: {model_dir.get('path')} "
-                "(unmounted share? see OPS-1251)"
+                "(is the drive or share unmounted?)"
             )
         elif model_dir.get("on_volumes"):
             warnings.append(
                 f"embedding model directory is on a mounted volume ({model_dir.get('resolved')}) "
-                "— an unmount silently breaks embeddings (OPS-1251)"
+                "— an unmount silently breaks embeddings"
             )
         sdoc_rows = index.get("sdoc_rows") or 0
         semb_sids = index.get("semb_sids") or 0
@@ -46315,6 +46877,15 @@ if "ccc_server.config_consent" in sys.modules:
 else:
     from ccc_server import config_consent
 
+def _exit_if_port_in_use(exc, port):
+    """One clear line instead of a bind traceback when the port is taken."""
+    if getattr(exc, "errno", None) == errno.EADDRINUSE:
+        print(f"Error: port {port} is already in use. If CCC holds it, use "
+              f"`ccc restart`; otherwise start on a free port, e.g. "
+              f"PORT={port + 1} ./run.sh", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     # State files, logs and transcripts hold secrets: create everything owner-only.
     os.umask(0o077)
@@ -46357,6 +46928,7 @@ def main():
     # (Phone access points `tailscale serve` at it) must see `--port`.
     globals()["PORT"] = port
     _raise_open_file_limit()
+    _memory_release.start()
     migrate_state_dir()
     _seed_model_policy_once()
     _install_python_stack_dump_handler()
@@ -46502,6 +47074,7 @@ def main():
         # parent dir's slug, same as before this fix.
         pass
     _gc_scratch_jsonls()
+    _sweep_stale_archive_refresh_results()
     # SECURITY: bind to 127.0.0.1 by default. The whole trust model is
     # "implicit because it's local"; binding to all interfaces (the old
     # `("", PORT)`) exposed every endpoint — including subprocess-spawning
@@ -46542,6 +47115,7 @@ def main():
                     print(f"⏳ Address {bind_host} not available yet (waiting for network/tailscale to assign IP, retry {bind_attempts}/{max_bind_attempts})...")
                 time.sleep(1)
             else:
+                _exit_if_port_in_use(exc, port)
                 raise
 
     if bind_attempts > 0 and network_info["trust_tailnet"]:
@@ -46606,6 +47180,10 @@ def main():
     # and hold the Python GIL long enough to make the whole app feel stuck.
     if _env_truthy("CCC_WARM_CACHE_ON_STARTUP"):
         threading.Thread(target=_warm_cache, daemon=True).start()
+    if not os.environ.get("CCC_EPHEMERAL"):
+        _load_saved_live_activity()
+        _install_gc_pause_diag()
+        _start_gc_freeze_thread()
     # CCC-142: the ACP registry load (counts every ACP transcript's lines,
     # ~135MB here) runs once per process under _ACP_LOCK. Left to the first
     # caller it landed on a request thread (live_build ~30s after a restart).
@@ -46684,7 +47262,7 @@ def main():
     # iMessage relay: when ~/.claude/command-center/imessage-relay.json names
     # a contact and a session, polls chat.db every 2 minutes and injects that
     # contact's new messages into the session. No config, no polling.
-    threading.Thread(target=_chuck_imessage_poller, daemon=True).start()
+    threading.Thread(target=_imessage_relay_poller, daemon=True).start()
     # Keep installed harnesses and Anthropic's exact model catalog current.
     # The first pass waits out the boot burst (CCC_BOOT_WARM_DELAY_S); failures
     # are recorded for Settings and never delay server startup or requests.
@@ -46808,23 +47386,27 @@ def main():
         server.server_close()
 
 
-# ── Chuck iMessage Poller ─────────────────────────────────────────────────────
+# ── iMessage relay poller ─────────────────────────────────────────────────────
 # The contact and target session are personal, so they live in a local file,
-# never in the source: {"phone": "+1...", "session_id": "<uuid>"}.
-_CHUCK_CONFIG_FILE = Path.home() / ".claude" / "command-center" / "imessage-relay.json"
-_CHUCK_PHONE = ""
-_CHUCK_SESSION_ID = ""
-_CHUCK_LAST_SEEN_FILE = Path("/tmp/chuck-loop-last-seen.txt")
+# never in the source: {"phone": "+1...", "session_id": "<uuid>"}. Optional
+# "label" names the contact in injected text; "tag" prefixes the injected text.
+_IMESSAGE_RELAY_CONFIG_FILE = Path.home() / ".claude" / "command-center" / "imessage-relay.json"
+_IMESSAGE_RELAY_PHONE = ""
+_IMESSAGE_RELAY_SESSION_ID = ""
+_IMESSAGE_RELAY_LABEL = "Contact"
+_IMESSAGE_RELAY_TAG = "imessage-relay"
+_IMESSAGE_RELAY_LAST_SEEN_FILE = Path("/tmp/ccc-imessage-relay-last-seen.txt")
 _IMESSAGE_DB = Path.home() / "Library" / "Messages" / "chat.db"
-_CHUCK_POLL_INTERVAL = 120  # seconds
+_IMESSAGE_RELAY_POLL_INTERVAL = 120  # seconds
 _APPLE_EPOCH_OFFSET = 978307200  # seconds between Unix epoch and Apple epoch (2001-01-01)
 
 
-def _chuck_load_config() -> bool:
+def _imessage_relay_load_config() -> bool:
     """Load the relay contact and session; False when unconfigured."""
-    global _CHUCK_PHONE, _CHUCK_SESSION_ID
+    global _IMESSAGE_RELAY_PHONE, _IMESSAGE_RELAY_SESSION_ID
+    global _IMESSAGE_RELAY_LABEL, _IMESSAGE_RELAY_TAG
     try:
-        cfg = json.loads(_CHUCK_CONFIG_FILE.read_text())
+        cfg = json.loads(_IMESSAGE_RELAY_CONFIG_FILE.read_text())
     except Exception:
         return False
     if not isinstance(cfg, dict):
@@ -46833,25 +47415,27 @@ def _chuck_load_config() -> bool:
     session_id = str(cfg.get("session_id") or "").strip()
     if not phone or not session_id:
         return False
-    _CHUCK_PHONE, _CHUCK_SESSION_ID = phone, session_id
+    _IMESSAGE_RELAY_PHONE, _IMESSAGE_RELAY_SESSION_ID = phone, session_id
+    _IMESSAGE_RELAY_LABEL = str(cfg.get("label") or "").strip() or "Contact"
+    _IMESSAGE_RELAY_TAG = str(cfg.get("tag") or "").strip() or "imessage-relay"
     return True
 
 
-def _chuck_read_last_seen() -> int:
+def _imessage_relay_read_last_seen() -> int:
     try:
-        return int(_CHUCK_LAST_SEEN_FILE.read_text().strip())
+        return int(_IMESSAGE_RELAY_LAST_SEEN_FILE.read_text().strip())
     except Exception:
         return int(time.time()) - 3600
 
 
-def _chuck_write_last_seen(ts: int) -> None:
+def _imessage_relay_write_last_seen(ts: int) -> None:
     try:
-        _CHUCK_LAST_SEEN_FILE.write_text(str(ts))
+        _IMESSAGE_RELAY_LAST_SEEN_FILE.write_text(str(ts))
     except Exception:
         pass
 
 
-def _chuck_fetch_new_messages(since_unix: int):
+def _imessage_relay_fetch_new_messages(since_unix: int):
     """Return list of (unix_ts, is_from_me, text) tuples newer than since_unix."""
     if not _IMESSAGE_DB.exists():
         return []
@@ -46871,7 +47455,7 @@ def _chuck_fetch_new_messages(since_unix: int):
               AND m.text IS NOT NULL
             ORDER BY m.date ASC
             """,
-            (_APPLE_EPOCH_OFFSET, _CHUCK_PHONE, apple_ns),
+            (_APPLE_EPOCH_OFFSET, _IMESSAGE_RELAY_PHONE, apple_ns),
         )
         rows = cur.fetchall()
         conn.close()
@@ -46880,10 +47464,12 @@ def _chuck_fetch_new_messages(since_unix: int):
         return []
 
 
-def _chuck_inject(text: str) -> None:
-    """Inject text into the CHUCK session via the local CCC inject-input API."""
+def _imessage_relay_inject(text: str) -> None:
+    """Inject text into the relay session via the local CCC inject-input API."""
     try:
-        payload = json.dumps({"session_id": _CHUCK_SESSION_ID, "text": text}).encode()
+        payload = json.dumps({
+            "session_id": _IMESSAGE_RELAY_SESSION_ID, "text": text, "source": "imessage-relay",
+        }).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{PORT}/api/inject-input",
             data=payload,
@@ -46895,7 +47481,7 @@ def _chuck_inject(text: str) -> None:
         pass
 
 
-def _chuck_is_quiet_hours() -> bool:
+def _imessage_relay_is_quiet_hours() -> bool:
     """Return True between 10pm and 7am US/Eastern."""
     try:
         import subprocess as _sp
@@ -46911,39 +47497,46 @@ def _chuck_is_quiet_hours() -> bool:
         return False
 
 
-def _chuck_imessage_poller() -> None:
-    """Background daemon thread: poll chat.db, inject new Chuck messages into CHUCK session."""
-    if not _chuck_load_config():
+def _imessage_relay_poller() -> None:
+    """Background daemon thread: poll chat.db, inject the contact's new messages into the session."""
+    if not _imessage_relay_load_config():
         return
     # Stagger startup so the server is fully bound before first inject attempt.
     time.sleep(15)
     while True:
         try:
-            if not _chuck_is_quiet_hours():
-                last_seen = _chuck_read_last_seen()
-                rows = _chuck_fetch_new_messages(last_seen)
+            if not _imessage_relay_is_quiet_hours():
+                last_seen = _imessage_relay_read_last_seen()
+                rows = _imessage_relay_fetch_new_messages(last_seen)
                 if rows:
-                    chuck_msgs = [(ts, txt) for ts, is_from_me, txt in rows if not is_from_me]
-                    if chuck_msgs:
+                    incoming = [(ts, txt) for ts, is_from_me, txt in rows if not is_from_me]
+                    if incoming:
                         lines = []
-                        for ts, txt in chuck_msgs:
+                        for ts, txt in incoming:
                             dt = datetime.fromtimestamp(ts).strftime("%H:%M")
-                            lines.append(f"[{dt}] CHUCK: {txt}")
+                            lines.append(f"[{dt}] {_IMESSAGE_RELAY_LABEL.upper()}: {txt}")
                         inject_text = (
-                            "[chuck-loop] New message(s) from Chuck:\n\n"
+                            f"[{_IMESSAGE_RELAY_TAG}] New message(s) from {_IMESSAGE_RELAY_LABEL}:\n\n"
                             + "\n".join(lines)
                             + "\n\nReview and decide how to proceed per the loop rules."
                         )
-                        _chuck_inject(inject_text)
+                        _imessage_relay_inject(inject_text)
                     # Bump last-seen to the newest message timestamp regardless of direction.
                     newest_ts = max(ts for ts, _, _ in rows)
-                    _chuck_write_last_seen(newest_ts + 1)
+                    _imessage_relay_write_last_seen(newest_ts + 1)
         except Exception:
             pass
-        time.sleep(_CHUCK_POLL_INTERVAL)
+        time.sleep(_IMESSAGE_RELAY_POLL_INTERVAL)
 
 
-if __name__ == "__main__":
+def _server_launch_argv():
+    """argv that starts this file via ccc_server/boot.py, which runs it from
+    cached bytecode instead of compiling it into this process's heap."""
+    here = Path(__file__).resolve()
+    return [sys.executable, str(here.parent / "ccc_server" / "boot.py"), str(here)]
+
+
+def _script_main():
     # Running server.py as a script is always the dashboard, never the
     # worker (the worker imports this module). CCC_WORKER_PROCESS leaks in
     # when the dashboard is (re)started from inside a session the worker
@@ -46963,3 +47556,7 @@ if __name__ == "__main__":
             raise SystemExit(2)
         raise SystemExit(_archive_refresh_worker_main(sys.argv[2], sys.argv[3]))
     main()
+
+
+if __name__ == "__main__":
+    _script_main()

@@ -1,0 +1,5 @@
+.choice-eligibility { margin-top: 8px; max-width: 65ch; font-size: 12px; line-height: 1.5; color: var(--text-secondary, #aaa); white-space: normal; overflow-wrap: anywhere; }
+.choice-eligibility summary { cursor: pointer; min-height: 24px; }
+.choice-eligibility p { margin: 6px 0 10px; }
+.choice-eligibility button { max-width: 100%; white-space: normal; }
+@media (max-width: 700px) { .choice-eligibility summary, .choice-eligibility button, #choiceEligibilityReturn { min-height: 44px; } }

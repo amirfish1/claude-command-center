@@ -1,0 +1,1 @@
+- Decisions 2 can now close a question. A WatchTower question closes its ticket with no more work, only if it is still the exact question you saw; a session question is hidden in CCC only. Both ask you to confirm first, and a closed ticket shows the `wt reopen` command to undo it.

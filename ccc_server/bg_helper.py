@@ -333,6 +333,8 @@ def serve(path, parent_pid):
     os.umask(0o077)
     path = Path(path)
     sys.path.insert(0, str(PROJECT_ROOT))
+    from ccc_server import memory_release
+    memory_release.start()
     import server as server_mod  # noqa: E402  (heavy; child only)
     child = _Child(server_mod)
     threading.Thread(target=child.gh_reaper, name="bg-helper-gh-reaper",

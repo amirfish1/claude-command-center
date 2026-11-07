@@ -66,7 +66,7 @@ def test_model_switch_prices_each_segment_at_its_own_rate(tmp_path, monkeypatch)
 def test_old_codex_turn_cache_reparses_once_then_reuses_memory(tmp_path, monkeypatch):
     import ccc_server.usage_stats as stats
     rollout=tmp_path/'rollout.jsonl';rollout.write_text('{}\n')
-    monkeypatch.setattr(stats,'_THROUGHPUT_TURN_CACHE',{})
+    monkeypatch.setattr(stats,'_THROUGHPUT_TURN_CACHE',stats.ByteBudgetCache(1 << 26, 96))
     monkeypatch.setattr(stats,'_throughput_disk_get',lambda *args:[{'engine':'codex','cost_usd':99}])
     monkeypatch.setattr(stats,'_throughput_disk_put',lambda *args:None)
     calls=[]

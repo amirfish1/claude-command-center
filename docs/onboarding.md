@@ -2,8 +2,8 @@
 
 The first time CCC opens on a fresh install, it doesn't drop you on an
 empty board. A short welcome flow walks you from "I just installed this"
-to watching a coding agent finish a real task. About five minutes, no
-terminal knowledge required.
+to watching a coding agent finish a real task. About ten minutes on a
+computer with nothing installed, no terminal knowledge required.
 
 You'll see:
 
@@ -32,6 +32,24 @@ The wizard opens automatically when you have no agent sessions yet,
 the normal case on a brand-new install. If you already have sessions it
 stays out of your way. You can open it again any time from **Settings**,
 or directly at `http://127.0.0.1:8090/?onboarding=1`.
+
+If Claude Code is already installed but has no sessions yet, the welcome
+skips the free-model setup and offers to run the first task on your own
+Claude account, which only touches `~/CCC-Playground`. **Set up free models
+instead** takes the full route below.
+
+## The next day
+
+Your sessions stay on the board, and anything you run with `claude` joins them.
+CCC does not message you on its own. The last screen of the first task offers
+**Remind me tomorrow morning what my sessions did**; `ccc remind` does the same
+from a terminal. You get one local notification at 9am, such as *"Since
+yesterday: 5 Claude sessions in 2 projects. 1 ended on a question for you."*
+It fires once and does not repeat. `ccc remind off` cancels it. CCC has to be
+running at that time, so install the background service if you want it.
+
+If you started CCC in a terminal window, it stops when that window closes. Run
+`ccc` to start it again.
 
 ## The setup steps
 

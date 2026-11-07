@@ -62,6 +62,7 @@ CODEX_ROOT = _rr.CODEX_ROOT
 STATE_DIR = _rr.STATE_DIR
 SCAN_STATE_FILE = STATE_DIR / "runaway-scan.json"
 LEASES_FILE = STATE_DIR / "runaway-leases.json"
+FLAG_LOG_FILE = STATE_DIR / "runaway-flags.jsonl"  # append-only flag history for threshold tuning
 KIMI_ROOT = Path(os.path.expanduser(os.environ.get("KIMI_CODE_HOME", "").strip() or "~/.kimi-code")) / "sessions"
 DEVIN_SESSION_PREFIX = "devincli-"  # CCC's id for a raw Devin CLI session id
 
@@ -76,6 +77,10 @@ PRUNE_AFTER_S = 7 * 86400
 MIN_AUTO_TURNS = 6
 MIN_AUTO_SPAN_S = 2 * 3600
 STAGNANT_TURNS = 5
+# A session whose streak was mostly productive is not a stagnant loop, however
+# its last turns went (CCC-264: 24 of 39 turns productive, 7 trailing no-ops,
+# owner leased it as a false positive).
+MAX_PRODUCTIVE_SHARE = 0.5
 # Cost-weighted tokens (fresh input + 1.25x cache write + 0.1x cache read +
 # 5x output): roughly what a turn bills, unlike raw totals that cache reads
 # dominate. The floor keeps cheap pings ("reply RECEIVED") from flagging.
@@ -899,7 +904,8 @@ def evaluate(st, now):
         return False, reasons
     if sk["turns"] < MIN_AUTO_TURNS or span < MIN_AUTO_SPAN_S or sk["cost"] < MIN_COST:
         return False, reasons
-    if sk["stagnant"] >= STAGNANT_TURNS:
+    if (sk["stagnant"] >= STAGNANT_TURNS
+            and sk["productive"] < MAX_PRODUCTIVE_SHARE * sk["turns"]):
         reasons.append("stagnant")
     if sk["cost"] >= OVER_BUDGET:
         reasons.append("over_budget")
@@ -937,11 +943,47 @@ def _write_json(path, data):
     _rr._write_json(path, data)
 
 
+def _log_new_flags(flag_log, entries, now):
+    """Append each newly flagged session to the JSONL history, once per
+    (session, autonomous streak). The live set only keeps current flags, so
+    this is the only record to tune thresholds from. Best effort."""
+    if not entries:
+        return
+    try:
+        seen = set()
+        try:
+            with open(flag_log, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    seen.add((row.get("session_id"), row.get("auto_since")))
+        except OSError:
+            pass
+        rows = []
+        for e in entries:
+            key = (e["session_id"], e["auto_since"])
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append({"flagged_at": now, **{k: e[k] for k in (
+                "session_id", "engine", "cwd", "title", "reasons", "auto_turns", "auto_since",
+                "auto_hours", "stagnant_turns", "productive_turns", "noop_turns", "cost_tokens",
+                "triggers", "last_human_at", "last_activity")}})
+        if rows:
+            os.makedirs(os.path.dirname(flag_log), exist_ok=True)
+            with open(flag_log, "a", encoding="utf-8") as f:
+                f.write("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+    except OSError:
+        pass
+
+
 _FEEDERS = {"claude": feed_claude, "codex": feed_codex, "kimi": feed_kimi}
 
 
 def scan(now=None, projects_root=None, codex_root=None, state_file=None, debug=False,
-         kimi_root=None, devin_dbs=None, hermes_dbs=None):
+         kimi_root=None, devin_dbs=None, hermes_dbs=None, flag_log=None):
     """Incrementally re-read active transcripts; return flagged entries."""
     now = time.time() if now is None else now
     projects_root = PROJECTS_ROOT if projects_root is None else projects_root
@@ -949,6 +991,9 @@ def scan(now=None, projects_root=None, codex_root=None, state_file=None, debug=F
     kimi_root = KIMI_ROOT if kimi_root is None else kimi_root
     devin_dbs = _default_devin_dbs() if devin_dbs is None else devin_dbs
     hermes_dbs = _default_hermes_dbs() if hermes_dbs is None else hermes_dbs
+    if flag_log is None:
+        flag_log = (FLAG_LOG_FILE if state_file is None
+                    else Path(state_file).with_name("runaway-flags.jsonl"))
     state_file = SCAN_STATE_FILE if state_file is None else state_file
     states = _read_json(state_file, {})
     if not isinstance(states, dict):
@@ -988,6 +1033,7 @@ def scan(now=None, projects_root=None, codex_root=None, state_file=None, debug=F
     states = {p: s for p, s in states.items()
               if isinstance(s, dict) and now - (s.get("seen") or 0) < PRUNE_AFTER_S}
     _write_json(state_file, states)
+    _log_new_flags(flag_log, flagged, now)
     flagged.sort(key=lambda e: -e["cost_tokens"])
     watch.sort(key=lambda e: -e["cost_tokens"])
     return flagged, watch

@@ -63,7 +63,7 @@ class LauncherTests(unittest.TestCase):
             self.assertEqual(os.environ["HOME"], str(ROOT / "test-home"))
         install.assert_not_called()
         self.execute.assert_called_once_with(sys.executable, [
-            sys.executable, str(ROOT / "server.py"),
+            sys.executable, str(ROOT / "ccc_server" / "boot.py"), str(ROOT / "server.py"),
             "--port", "9204", "--host", "127.0.0.1",
         ])
         self.assertEqual(Path.cwd(), cwd)
@@ -71,7 +71,7 @@ class LauncherTests(unittest.TestCase):
     def test_default_launch_leaves_server_env_defaults_intact(self):
         launcher.main([])
         self.execute.assert_called_once_with(
-            sys.executable, [sys.executable, str(ROOT / "server.py")],
+            sys.executable, [sys.executable, str(ROOT / "ccc_server" / "boot.py"), str(ROOT / "server.py")],
         )
 
     def test_bootstrap_reprobes_in_fresh_interpreter(self):

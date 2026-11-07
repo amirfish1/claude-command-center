@@ -50,6 +50,7 @@ except ImportError:  # Windows: in-process lock only
     fcntl = None
 
 from ccc_server import core as _core
+from ccc_server import local_overrides as _local_overrides
 
 FLAG = "idea_tickets"
 STATE_FILE_NAME = "idea-tickets.json"
@@ -619,6 +620,19 @@ def _attach_or_file_safe(sid, continued_from="", parent="", text=""):
             _inflight.discard(sid)
 
 
+# Backfill walks every recent session, so it meets queue workers too. Their
+# continuations are machine work, not operator ideas. A UI continuation the
+# owner started isn't a backfill entry, so it is never judged by this.
+_WORKER_PROMPT_PREFIXES = ("you continue the work of session ",
+                           "you are continuing a task from an earlier ")
+
+
+def _worker_session(via, text):
+    via = str(via or "").lower()
+    return ("watchtower" in via or "worker" in via
+            or str(text or "").lstrip().lower().startswith(_WORKER_PROMPT_PREFIXES))
+
+
 def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint="",
                    text_hint=""):
     """Give ``sid`` its ticket: inherit from a continuation origin or parent,
@@ -652,6 +666,13 @@ def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint
         return {"ok": True, "known": True}
 
     text = _opening_text(sid, jsonl) or str(text_hint or "")
+    if (state["pending"].get(sid) or {}).get("backfill") and _worker_session(via, text):
+        def _skip_worker(d):
+            d["pending"].pop(sid, None)
+            if sid not in d["sessions"]:
+                d["sessions"][sid] = {"skip": "worker session", "at": int(time.time())}
+        _mutate(_skip_worker)
+        return {"ok": True, "skipped": True}
     if not _claim(sid):
         return {"ok": True, "known": True}
     label = (classify_fn or classify)(text)
@@ -1079,6 +1100,8 @@ AUTOPILOT_QUIET_S = 120
 AUTOPILOT_MAX_AGE_S = 2 * 86400
 AUTOPILOT_MAX_PER_CALL = 3
 HANDOFF_WATCH_EVERY_S = 60
+CLOSED_SYNC_EVERY_S = 300
+CLOSED_SYNC_MAX_PER_PASS = 50
 HANDOFF_STALL_S = 20 * 60
 HANDOFF_MAX_NUDGES = 3
 HANDOFF_QUEUE = "SMALL-BUGS"
@@ -1087,26 +1110,33 @@ _ACTIVE_HANDOFF = ("running", "blocked", "waiting")
 _NONE_STEP_RE = re.compile(
     r"^(?:none|nothing|no action(?: is)?(?: needed| required)?|n/?a|not applicable)?"
     r"\s*[.!]?\s*(?:[—–(:-].*)?$", re.I | re.S)
-_OWNER_RE = re.compile(
-    r"\bowner\s*[:=]\s*(agent|user|external|amir|human)\b"
-    r"|^\s*\(?(agent|user|external|amir|human)\)?\s*[:\u2014\u2013-]", re.I)
+_OWNER_WORDS = ("agent", "user", "external", "owner", "human")
 _BUSY_STATES = ("working", "running", "thinking", "tool")
 _watch = {"at": 0.0, "running": False}
+_closed_sync = {"at": 0.0, "running": False}
 
 
 def _is_none(text):
     return bool(_NONE_STEP_RE.match(str(text or "").strip()))
 
 
+def _owner_re(names):
+    words = "|".join(map(re.escape, (*_OWNER_WORDS, *names)))
+    return re.compile(
+        rf"\bowner\s*[:=]\s*({words})\b"
+        rf"|^\s*\(?({words})\)?\s*[:\u2014\u2013-]", re.I)
+
+
 def _action_owner(action):
     """'agent' | 'user' | 'external' for a remaining action ('' unknown)."""
     if not isinstance(action, dict):
         return ""
+    names = _local_overrides.owner_names()
     owner = str(action.get("owner") or "").strip().lower()
     if not owner:
-        m = _OWNER_RE.search(str(action.get("text") or ""))
+        m = _owner_re(names).search(str(action.get("text") or ""))
         owner = (m.group(1) or m.group(2)).lower() if m else ""
-    return {"amir": "user", "human": "user"}.get(owner, owner)
+    return "user" if owner in ("owner", "human", *names) else owner
 
 
 def attention(session_state):
@@ -1202,7 +1232,10 @@ def autopilot_rows(rows, *, now=None):
     """List-build entry point: close+archive done tickets, hand off agent
     tails, and tick the handoff watchdog. Cheap dict work per row; wt calls
     and injects run on daemon threads, at most AUTOPILOT_MAX_PER_CALL."""
-    if not _enabled() or not _autopilot_allowed():
+    if not _enabled():
+        return 0
+    _tick_closed_sync(time.time() if now is None else now)
+    if not _autopilot_allowed():
         return 0
     from . import takeover_bridge
     # WatchTower supervises unfinished work (handoffs) on its own clock, but
@@ -1251,6 +1284,60 @@ def autopilot_rows(rows, *, now=None):
     if not done_only:
         _tick_watchdog(views, data, now)
     return started
+
+
+def _tick_closed_sync(now):
+    """Throttled: a direct ``wt close`` never tells CCC, so a ticket closed
+    that way would read as open here forever. One ``wt ls`` per queue per
+    pass, on a daemon thread; never a wt call on the list path itself."""
+    if _closed_sync["running"] or now - _closed_sync["at"] < CLOSED_SYNC_EVERY_S:
+        return
+    _closed_sync.update(running=True, at=now)
+    threading.Thread(target=_closed_sync_safe, daemon=True).start()
+
+
+def _closed_sync_safe():
+    try:
+        sync_closed_tickets()
+    except Exception as exc:
+        _core._log_activity("idea", "IDEA_TICKET_ERR", f"closed sync {exc}")
+    finally:
+        _closed_sync["running"] = False
+
+
+def sync_closed_tickets():
+    """Mark tickets WatchTower closed behind CCC's back; returns the count.
+    Absence from a queue's active list is only a hint (a ticket can move
+    queues), so each candidate is confirmed by ref before it flips."""
+    by_queue = {}
+    for ref, ticket in load_state()["tickets"].items():
+        if not ticket.get("closed") and ticket.get("queue"):
+            by_queue.setdefault(ticket["queue"], []).append(ref)
+    closed = []
+    for queue, refs in by_queue.items():
+        rc, out = _wt(["ls", "-q", queue, "--status", "active",
+                       "--limit", "1000", "--json"], timeout=20)
+        try:
+            rows = json.loads(out) if rc == 0 else None
+        except (TypeError, ValueError):
+            rows = None
+        if not isinstance(rows, list):
+            continue  # queue unreadable: unknown is not closed
+        active = {str(r.get("ref")) for r in rows if isinstance(r, dict)}
+        for ref in refs:
+            if ref in active or len(closed) >= CLOSED_SYNC_MAX_PER_PASS:
+                continue
+            if (_find(ref) or {}).get("status") == "closed":
+                closed.append(ref)
+    if closed:
+        def _record(d):
+            for ref in closed:
+                if ref in d["tickets"]:
+                    d["tickets"][ref]["closed"] = True
+        _mutate(_record)
+        _restamp_rows()
+        _core._log_activity("idea", "IDEA_TICKET_SYNC", f"closed {' '.join(closed)}")
+    return len(closed)
 
 
 def _mark_autopilot(ref, mtime, **extra):

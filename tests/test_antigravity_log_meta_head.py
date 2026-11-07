@@ -20,7 +20,7 @@ import server  # noqa: E402
 HEAD = (
     'I0902 16:24:55.686016 1 server.go:289] Creating CLI server backend\n'
     'I0902 16:24:55.689758 1 manager.go:401] Initializing CLI store manager '
-    'for workspace /Users/amirfish/Apps/BYM\n'
+    'for workspace /Users/dev/Apps/Acme\n'
     'I0902 16:24:56.985617 1 model_config_manager.go:311] Propagating selected '
     'model override to backend: label="Gemini 3.8 Flash (High)"\n'
     'I0902 16:24:58.882654 1 server.go:1142] Created conversation '
@@ -43,7 +43,7 @@ class AntigravityLogMetaHeadTest(unittest.TestCase):
             path = self._write(tmp, 10)
             meta = server._antigravity_cli_log_meta(str(path))
             self.assertEqual(meta["session_id"], "3443e3e2-744d-41a0-bc10-574764139191")
-            self.assertEqual(meta["cwd"], "/Users/amirfish/Apps/BYM")
+            self.assertEqual(meta["cwd"], "/Users/dev/Apps/Acme")
             self.assertEqual(meta["model"], "Gemini 3.8 Flash (High)")
 
     def test_meta_found_when_header_scrolled_out_of_tail_window(self):
@@ -57,7 +57,7 @@ class AntigravityLogMetaHeadTest(unittest.TestCase):
             )
             meta = server._antigravity_cli_log_meta(str(path))
             self.assertEqual(meta["session_id"], "3443e3e2-744d-41a0-bc10-574764139191")
-            self.assertEqual(meta["cwd"], "/Users/amirfish/Apps/BYM")
+            self.assertEqual(meta["cwd"], "/Users/dev/Apps/Acme")
             self.assertEqual(meta["model"], "Gemini 3.8 Flash (High)")
 
 

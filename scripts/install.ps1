@@ -178,8 +178,9 @@ Install-Watchtower -Python $python
 $env:PORT = [string]$Port
 $dashboardUrl = "http://localhost:$Port"
 
-# First-time installs land on the guided setup tour (/?onboarding=1); anyone
-# who already finished onboarding gets the dashboard itself. Mirrors
+# Someone with no agent history lands on the guided setup tour
+# (/?onboarding=1); anyone who already finished onboarding, or who already has
+# Claude Code or Codex sessions, gets the dashboard itself. Mirrors
 # dashboard_open_url() in scripts/install.sh.
 $openUrl = $dashboardUrl
 $onboardingFile = Join-Path $env:USERPROFILE ".claude\command-center\onboarding.json"
@@ -188,7 +189,13 @@ try {
     if (Test-Path -LiteralPath $onboardingFile) {
         $onboarded = [bool]((Get-Content -LiteralPath $onboardingFile -Raw | ConvertFrom-Json).completed)
     }
-    if (-not $onboarded) { $openUrl = "$dashboardUrl/?onboarding=1" }
+    $claudeProjects = Join-Path $env:USERPROFILE ".claude\projects"
+    $codexSessions = Join-Path $env:USERPROFILE ".codex\sessions"
+    $hasHistory = [bool](Get-ChildItem -LiteralPath $claudeProjects -Filter *.jsonl -File -Recurse -Depth 1 -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if (-not $hasHistory) {
+        $hasHistory = [bool](Get-ChildItem -LiteralPath $codexSessions -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
+    }
+    if (-not $onboarded -and -not $hasHistory) { $openUrl = "$dashboardUrl/?onboarding=1" }
 } catch {
     $openUrl = "$dashboardUrl/?onboarding=1"
 }

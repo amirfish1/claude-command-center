@@ -156,6 +156,7 @@
   })();
 </script>
 <link rel="stylesheet" href="/static/credential-broker.css">
+<link rel="stylesheet" href="/static/share-run.css">
 <link rel="stylesheet" href="/static/queue-policy.css">
 <link rel="stylesheet" href="/static/voice-setup.css">
 <link rel="stylesheet" href="/static/engine-connection.css">
@@ -540,7 +541,8 @@
           }
         } catch (_) {}
         // Floating voice call button on mobile view. Persisted as
-        // `ccc-voice-mobile-btn` ('0' = hidden, '1'/unset = shown).
+        // `ccc-voice-mobile-btn` ('0' = hidden). The <body> starts with
+        // voice-call-btn-off, so it stays hidden until deliberately enabled.
         try {
           if (localStorage.getItem('ccc-voice-mobile-btn') === '0') {
             document.body.classList.add('hide-voice-mobile-btn');
@@ -1239,6 +1241,7 @@
             <button type="button" class="mobile-actions-item" data-simple-action="font-plus" role="menuitem" aria-label="Bigger text" title="Bigger text">A+</button>
           </div>
           <button type="button" class="mobile-actions-item" data-simple-action="rename" role="menuitem" data-simple-only><span aria-hidden="true">&#9998;&nbsp;</span>Rename task</button>
+          <button type="button" class="mobile-actions-item" data-simple-action="share-run" role="menuitem" hidden><span aria-hidden="true">&#8599;&nbsp;</span>Share this run</button>
           <button type="button" class="mobile-actions-item" data-simple-action="move-to-project" role="menuitem" data-simple-only><span aria-hidden="true">&#128193;&nbsp;</span>Move to project</button>
           <button type="button" class="mobile-actions-item" data-simple-action="change-model" role="menuitem" data-simple-only><span aria-hidden="true">&#129302;&nbsp;</span>Change assistant/model</button>
           <button type="button" class="mobile-actions-item" data-simple-action="technical-details" role="menuitem" data-simple-only><span aria-hidden="true">&#8505;&nbsp;</span>Open technical details</button>
@@ -1312,6 +1315,7 @@
               <button type="button" class="conv-pane-more-item" data-simple-action="archive" role="menuitem" hidden>&#128230; Archive</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="unarchive" role="menuitem" hidden>&#8617; Unarchive</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="untrash" role="menuitem" hidden>&#8617; Untrash</button>
+              <button type="button" class="conv-pane-more-item" data-simple-action="share-run" role="menuitem" title="Make a redacted replay of this session. Stays on this machine." hidden>&#8599; Share this run</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="idea-IDEAS" role="menuitem" hidden>&#128161; Move to Features</button>
               <button type="button" class="conv-pane-more-item" data-simple-action="idea-SMALL-BUGS" role="menuitem" hidden>&#128027; Move to Small bugs</button>
               <div data-role="menu-session-info" hidden>
@@ -1384,7 +1388,7 @@
           <span class="conv-presentation-zero-cost" data-role="presentation-cost" title="Present is local; Mode 3 asks the working agent to author slides">0 extra tokens</span>
         </div>
         <div class="conversations-view" id="conversationsView">
-          <div class="empty-state" style="height:auto;padding:40px;">Select a session from the sidebar</div>
+          <div class="empty-state" style="height:auto;padding:40px;">Pick a session on the left, or press New session to start one</div>
         </div>
         <!-- CCC-1033: last-write timestamp for the open conversation, centered
              below the transcript. Populated + ticked by _updateLastWrittenLine()
@@ -1402,7 +1406,7 @@
           <span id="codexAccountRow" class="codex-account-row" hidden>
             <label for="codexAccountSelect">Account</label>
             <select id="codexAccountSelect" aria-label="Codex account for new session" title="This account stays attached to the new session and its replies">
-              <option value="__current__">Codex · current account</option>
+              <option value="__current__">Codex (Primary) · current account</option>
             </select>
             <a href="/view/allowances" target="_blank" rel="noopener">Allowances</a>
           </span>
@@ -2933,10 +2937,10 @@
             <div class="settings-row" data-keywords="voice call mobile phone icon button hide remove show">
               <div class="settings-row-main">
                 <div class="settings-row-label">Show voice call button on mobile</div>
-                <div class="settings-row-desc">Show the floating "CALL" button on mobile view to start or return to voice sessions.</div>
+                <div class="settings-row-desc">Off by default. Show the floating "CALL" button on mobile view to start or return to voice sessions; an active call always shows it.</div>
               </div>
               <div class="settings-row-control">
-                <button type="button" class="settings-toggle is-on" id="settingsVoiceMobileToggle" data-voice-mobile-toggle role="switch" aria-checked="true" aria-label="Show voice call button on mobile">
+                <button type="button" class="settings-toggle" id="settingsVoiceMobileToggle" data-voice-mobile-toggle role="switch" aria-checked="false" aria-label="Show voice call button on mobile">
                   <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
                 </button>
               </div>
@@ -4982,6 +4986,16 @@
     if (last && (Date.now() - last) < RENAG_AFTER_MS) return;
   } catch (_) {}
 
+  // Not on the very first load: someone who just installed has not seen the
+  // board yet, so asking them to install it again is noise.
+  try {
+    const FIRST_SEEN_KEY = 'ccc-pwa-first-seen';
+    if (!localStorage.getItem(FIRST_SEEN_KEY)) {
+      localStorage.setItem(FIRST_SEEN_KEY, String(Date.now()));
+      return;
+    }
+  } catch (_) {}
+
   // Platform sniff — only used to pick the right copy. Browsers don't all
   // expose the same install affordance, so we tailor the instructions:
   //   • iOS Safari   → Share sheet → Add to Home Screen
@@ -5292,5 +5306,6 @@
   </button>
 </div>
 <script src="/static/credential-broker.js" defer></script>
+<script src="/static/share-run.js" defer></script>
 </body>
 </html>

@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import copy
 import contextvars
+import hashlib
 try:
     import fcntl
 except ImportError:  # Windows: append remains available without flock.
@@ -18,6 +19,7 @@ from pathlib import Path
 import re
 import sys
 import subprocess
+import threading
 import time
 import uuid
 
@@ -34,6 +36,7 @@ KINDS = ('session', 'service', 'human', 'unknown')
 _INHERITED = (ENV, 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'WT_SESSION_ID',
               'WT_WORKER', 'WT_WORKER_ID', 'WT_PARENT_SESSION_ID')
 _cache = {}
+_cache_lock = threading.Lock()
 _warned = set()
 _current = contextvars.ContextVar("message_attribution", default=None)
 
@@ -124,9 +127,13 @@ def service(ident, recipient='', name=''):
 
 
 def validate(value):
-    if not isinstance(value, dict) or value.get('v') != 1:
+    return _validated(copy.deepcopy(value))
+
+
+def _validated(out):
+    """Check and trim a record this call owns (no defensive copy)."""
+    if not isinstance(out, dict) or out.get('v') != 1:
         raise ValueError('unsupported attribution envelope version')
-    out = copy.deepcopy(value)
     if not isinstance(out.get('author'), dict) or out['author'].get('kind') not in KINDS:
         raise ValueError('invalid attribution author')
     if out.get('basis') not in BASES:
@@ -349,7 +356,8 @@ def header(attr):
 
 
 def carry(text, attr, *, app):
-    if not enabled(app) or re.match(r'^\s*/', str(text)):
+    # A header would stop a command from running. A path is not a command.
+    if not enabled(app) or re.match(r'^\s*/[A-Za-z][\w:-]*(?:\s|$)', str(text)):
         return str(text)
     text = strip_header(text)
     attr = validate(attr)
@@ -386,6 +394,61 @@ def journal(attr, *, app, event='send', **details):
         return False
 
 
+def _journal_add(entry, line, nodes):
+    try:
+        row = json.loads(line)
+        a = _validated(row['attr'])
+        if row.get('node') not in nodes:
+            return
+        # Receipts can carry an earlier snapshot than the adapter that
+        # delivered them. Keep every alias, while resolving all of them to the
+        # fullest locally recorded relay chain.
+        snapshots = entry['snapshots']
+        previous = snapshots.get(a['message_id'])
+        if previous is None or len(a.get('relay', [])) >= len(previous.get('relay', [])):
+            snapshots[a['message_id']] = a
+        ids = [a['message_id']] + list(a.get('transport_ids', []))
+        ids += [row.get(k) for k in ('transport_id', 'nonce', 'receipt_id', 'delivery_id')]
+        for key in ids:
+            if key:
+                entry['aliases'][str(key).removeprefix('⟨wt:').removesuffix('⟩')] = a['message_id']
+        evidence = a['evidence']
+        if a['author']['kind'] == 'human' and evidence.get('source') == 'dashboard':
+            target = (a.get('delivered_recipient') or a['intended_recipient']).get('id')
+            sends = entry['human'].setdefault(str(target or ''), {})
+            sends[a['message_id']] = (float(a.get('created_at') or row.get('at') or 0),
+                                      str(evidence.get('text_digest') or ''))
+    except (ValueError, TypeError, KeyError, AttributeError):
+        pass
+
+
+def _journal_index(path, nodes):
+    """Index for one journal, reading only what was appended since last time.
+
+    Every send appends a row, so re-reading the month on each change put
+    O(messages this month) on the conversation-open path (CCC-143).
+    """
+    with _cache_lock:
+        st = path.stat()
+        signature = (st.st_ino, st.st_mtime_ns, st.st_size)
+        entry = _cache.get(str(path))
+        if entry and entry['signature'] == signature:
+            return entry
+        if not entry or st.st_ino != entry['signature'][0] or st.st_size <= entry['offset']:
+            entry = dict(signature=signature, offset=0, aliases={}, snapshots={}, human={})
+        with path.open('rb') as f:
+            f.seek(entry['offset'])
+            blob = f.read()
+        # A writer may be mid-line; that row is read once it is complete.
+        end = blob.rfind(b'\n') + 1
+        for line in blob[:end].splitlines():
+            _journal_add(entry, line, nodes)
+        entry['offset'] += end
+        entry['signature'] = signature
+        _cache[str(path)] = entry
+        return entry
+
+
 def lookup(*, message_id='', transport_id='', text='', recipient=''):
     """Index same-node journals; never create or mutate the other app's files."""
     embedded = from_text(text)
@@ -399,36 +462,9 @@ def lookup(*, message_id='', transport_id='', text='', recipient=''):
     for base in (_wt_state(), _ccc_state()):
         for path in sorted((base / 'attribution').glob('*.jsonl'), reverse=True):
             try:
-                st = path.stat()
-                signature = (st.st_mtime_ns, st.st_size)
-                cached = _cache.get(str(path))
-                if not cached or cached[0] != signature:
-                    index = {}
-                    snapshots = {}
-                    for line in path.read_text().splitlines():
-                        try:
-                            row = json.loads(line)
-                            a = validate(row['attr'])
-                            if row.get('node') not in [node] + aliases:
-                                continue
-                            previous = snapshots.get(a['message_id'])
-                            if previous is None or len(a.get('relay', [])) >= len(previous.get('relay', [])):
-                                snapshots[a['message_id']] = a
-                            ids = [a['message_id']] + list(a.get('transport_ids', []))
-                            ids += [row.get(k) for k in ('transport_id', 'nonce', 'receipt_id', 'delivery_id')]
-                            for key in ids:
-                                if key:
-                                    index[str(key).removeprefix('⟨wt:').removesuffix('⟩')] = a
-                        except (ValueError, TypeError, KeyError):
-                            continue
-                    # Receipts can carry an earlier snapshot than the adapter
-                    # that delivered them. Keep every alias, while resolving
-                    # all of them to the fullest locally recorded relay chain.
-                    index = {key: snapshots[a['message_id']] for key, a in index.items()}
-                    _cache[str(path)] = (signature, index)
-                index = _cache[str(path)][1]
+                entry = _journal_index(path, [node] + aliases)
                 for key in keys:
-                    a = index.get(key)
+                    a = entry['snapshots'].get(entry['aliases'].get(key))
                     if a:
                         destinations = (a.get('intended_recipient') or {}, a.get('delivered_recipient') or {})
                         if recipient and not any(d.get('id') == recipient for d in destinations):
@@ -443,7 +479,75 @@ def lookup(*, message_id='', transport_id='', text='', recipient=''):
     return None
 
 
-def request_attr(payload, recipient, *, browser_composer=False):
+def prompt_digest(text):
+    """Stable id for typed text. Only the digest is kept, never the words."""
+    flat = ' '.join(str(text or '').split())
+    return hashlib.sha256(flat.encode('utf-8', 'surrogatepass')).hexdigest()[:32]
+
+
+def dashboard_human(recipient, text=None):
+    """A send from the dashboard composer, with a digest of the typed text.
+
+    The human row carries no header into the transcript, so the digest is what
+    later ties a transcript row to this send (see `human_sends`).
+    """
+    evidence = {'source': 'dashboard'}
+    if text is not None:
+        evidence['text_digest'] = prompt_digest(text)
+    return make(recipient, who=author('human', '', 'You (dashboard)'), basis='claimed', evidence=evidence)
+
+
+def human_sends(session_id, months):
+    """[(at, digest)] for each dashboard send to this session, oldest first.
+
+    `months` ('YYYY-MM') are the journal segments the session spans, so the cost
+    follows the session and not the journal's age. One entry per message, however
+    many times it was re-delivered. Sends made before digests were recorded have
+    an empty digest.
+    """
+    ccc_id = _read(_ccc_state() / 'node.json').get('node_id')
+    wt_id = _read(_wt_state() / 'node.json').get('node_id')
+    nodes = [ccc_id or wt_id or ''] + ([wt_id] if wt_id else [])
+    found = {}
+    for month in months:
+        try:
+            path = _ccc_state() / 'attribution' / (month + '.jsonl')
+            found.update(_journal_index(path, nodes)['human'].get(str(session_id), {}))
+        except OSError:
+            continue
+    return sorted(found.values())
+
+
+def _typed_on_dashboard(text, attr, recipient):
+    if attr:
+        return attr['author'].get('kind') == 'human' and attr['evidence'].get('source') == 'dashboard'
+    # Rows that crossed to the worker lose their record, not the journal's.
+    months = [p.stem for p in (_ccc_state() / 'attribution').glob('????-??.jsonl')]
+    digest = prompt_digest(text)
+    return any(sent == digest for _at, sent in human_sends(recipient, months))
+
+
+def steer_attr(recipient, text, origins):
+    """Attribution for a Steer click, which re-sends messages that already exist.
+
+    `origins` is (text, attr) per message, attr None where CCC holds no record.
+    The click is not typing: only words the dashboard form sent stay a dashboard
+    send. One other sender keeps their record, so the row keeps its header.
+    Anything else goes out unattributed, which also carries a header, so Share
+    leaves it out. Never `dashboard_human(recipient)`: an empty digest is a legacy
+    send, and those feed the time join.
+    """
+    origins = list(origins)
+    if origins and all(_typed_on_dashboard(t, a, recipient) for t, a in origins):
+        return dashboard_human(recipient, text)
+    first = origins[0][1] if origins else None
+    if first and first['author'].get('kind') != 'human' and all(
+            a and a['author'] == first['author'] for _t, a in origins):
+        return copy.deepcopy(first)
+    return make(recipient, evidence={'source': 'dashboard_steer'})
+
+
+def request_attr(payload, recipient, *, browser_composer=False, typed_text=None):
     """HTTP claims never become runtime evidence just by naming a source."""
     incoming = payload.get('attr')
     if incoming is not None:
@@ -455,7 +559,7 @@ def request_attr(payload, recipient, *, browser_composer=False):
         attr['evidence'] = {'source': 'request', 'remote_node': attr['author'].get('node', '')}
         return attr
     if browser_composer:
-        return make(recipient, who=author('human', '', 'You (dashboard)'), basis='claimed', evidence={'source': 'dashboard'})
+        return dashboard_human(recipient, typed_text)
     sender = next((payload.get(k) for k in ('peer_sender_sid', 'sender_session_id', 'from_session_id', 'sender_id', 'announced_from') if payload.get(k)), '')
     if sender:
         return make(recipient, who=author('session', sender, sender), basis='claimed', evidence={'source': 'request'})

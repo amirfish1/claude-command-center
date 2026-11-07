@@ -51,33 +51,33 @@
     {
       id: 'posthog-watcher', name: 'PostHog session watcher', cat: 'sources', letter: 'P',
       desc: 'Watches product sessions, files deduped issues.',
-      anchor: '~/Apps/stramp-posthog-watch',
+      anchor: 'your PostHog watcher repo',
       pattern: 'PostHog sessions → deduped GitHub issues on a schedule.',
-      files: { what: 'deduped session issues', label: 'watchtower:STRAMP' },
+      files: { what: 'deduped session issues', label: 'watchtower:PRODUCT' },
       config: [{ key: 'cadence', label: 'Cadence', ph: '*/15 * * * *' },
                { key: 'max_per_run', label: 'Max issues / run', type: 'number', ph: '5' }]
     },
     {
       id: 'auditor-sweep', name: 'Conversation auditor sweep', cat: 'sources', letter: 'A',
       desc: 'Grades quiet conversations on a cron; files the failures.',
-      anchor: 'BYM scripts/becky-auditor (15-min Vercel cron)',
+      anchor: 'your auditor script (15-min cron)',
       pattern: 'Every quiet conversation gets graded; went_bad / stuck_loop become issues.',
-      files: { what: 'graded failures', label: 'watchtower:BECKY' },
+      files: { what: 'graded failures', label: 'watchtower:AGENT' },
       config: [{ key: 'cadence', label: 'Cadence', ph: '*/15 * * * *' },
                { key: 'grader', label: 'Grader model', ph: 'claude-sonnet-5' }]
     },
     {
       id: 'ops-digest', name: 'Studio ops digest', cat: 'sources', letter: 'D',
       desc: 'Scheduled ops rollup; each finding filed once.',
-      anchor: '~/Apps/bym-studio-digest (twice daily)',
+      anchor: 'your digest repo (twice daily)',
       pattern: 'Rollup runs twice a day; digest-finding-id markers dedupe filings.',
-      files: { what: 'digest findings', label: 'watchtower:BYMOPS' },
+      files: { what: 'digest findings', label: 'watchtower:OPS' },
       config: [{ key: 'cadence', label: 'Cadence', ph: '0 7,19 * * *' }]
     },
     {
       id: 'email-parsers', name: 'Email payment parser', cat: 'sources', letter: '@',
       desc: 'Payment emails become payment events.',
-      anchor: 'BYM packages/email-parsers',
+      anchor: 'your email parser package',
       pattern: 'Gmail / Venmo / PayPal emails parsed into payment events.',
       files: { what: 'payment events', label: 'payments' },
       config: [{ key: 'mailbox', label: 'Mailbox', ph: 'payments@studio.com' }]
@@ -85,7 +85,7 @@
     {
       id: 'sms-webhook', name: 'Inbound SMS/WhatsApp', cat: 'sources', letter: 'S',
       desc: 'Inbound texts become conversation tickets.',
-      anchor: 'BYM Twilio webhook routes',
+      anchor: 'your Twilio webhook routes',
       pattern: 'Twilio inbound webhook → normalized message → ticket.',
       files: { what: 'inbound messages' },
       config: [{ key: 'endpoint', label: 'Webhook path', ph: '/api/webhooks/twilio' }]
@@ -93,7 +93,7 @@
     {
       id: 'booking-webhooks', name: 'Calendly/Stripe webhooks', cat: 'sources', letter: 'W',
       desc: 'Booking + payment events, pushed as they happen.',
-      anchor: 'BYM webhook routes',
+      anchor: 'your webhook routes',
       pattern: 'Calendly invitee + Stripe payment webhooks → events.',
       files: { what: 'booking/payment events' },
       config: [{ key: 'endpoint', label: 'Webhook path', ph: '/api/webhooks/...' }]
@@ -119,7 +119,7 @@
     {
       id: 'planner', name: 'Planner', cat: 'workers', letter: 'P',
       desc: 'Design-only worker queue. Deliverable is a spec.',
-      anchor: 'BECKY-DESIGN queue',
+      anchor: 'a *-DESIGN planning queue',
       pattern: 'Opus worker forbidden from implementing; the design ends at a wt block human gate.',
       files: { what: 'design specs' },
       consumes: 'build requests',
@@ -137,7 +137,7 @@
     {
       id: 'executor-quick', name: 'Quick fixer', cat: 'workers', letter: 'F',
       desc: 'Tactical claim-based worker for bugs and small fixes.',
-      anchor: 'BECKY queue',
+      anchor: 'an executor queue',
       pattern: 'Sonnet/flash worker draining a bug queue ticket by ticket.',
       files: { what: 'fixes' },
       consumes: 'bug tickets',
@@ -146,7 +146,7 @@
     {
       id: 'executor-product', name: 'Product builder', cat: 'workers', letter: 'B',
       desc: 'Feature-build worker for designed, spec\u2019d work.',
-      anchor: 'BYMPROD queue',
+      anchor: 'a production fix queue',
       pattern: 'Opus worker building features from approved specs.',
       files: { what: 'features' },
       consumes: 'approved specs',
@@ -173,7 +173,7 @@
     {
       id: 'replay-simulator', name: 'Replay simulator', cat: 'workers', letter: 'R',
       desc: 'Replays the real engine before anyone claims "fixed".',
-      anchor: 'becky-replay toolkits',
+      anchor: 'replay toolkits',
       pattern: 'The actual decision engine replays the failing conversation against the fix.',
       files: { what: 'replay receipts' },
       consumes: 'fix candidates',
@@ -182,7 +182,7 @@
     {
       id: 'db-investigator', name: 'Data/DB investigator', cat: 'workers', letter: '?',
       desc: 'Read-only database truth-finding.',
-      anchor: 'read-only psql probe pattern (BECKY playbook)',
+      anchor: 'read-only psql probe pattern',
       pattern: 'Read-only probes answer "what does the data actually say" — never writes.',
       files: { what: 'findings' },
       consumes: 'data questions',
@@ -234,7 +234,7 @@
     {
       id: 'senior-reviewer', name: 'Senior reviewer', cat: 'gates', letter: 'S',
       desc: 'An LLM reviews the queues themselves, 4× a day.',
-      anchor: 'bym-studio-digest src/senior-review.mjs',
+      anchor: 'your digest senior-review step',
       pattern: 'A senior pass over queue health; systemic problems escalate instead of festering.',
       files: { what: 'review findings' },
       consumes: 'queue state',
@@ -255,27 +255,27 @@
       id: 'github-issue', name: 'GitHub issue', cat: 'sinks', letter: 'G',
       desc: 'The ticket itself; its label is its queue membership.',
       anchor: 'watchtower:<QUEUE> label convention',
-      pattern: 'An issue labeled watchtower:BECKY IS a BECKY ticket — the label is the queue.',
+      pattern: 'An issue labeled watchtower:FOO IS a FOO ticket — the label is the queue.',
       consumes: 'filings'
     },
     {
       id: 'email-digest', name: 'Email digest', cat: 'sinks', letter: 'M',
       desc: 'A human-readable rollup in the inbox.',
-      anchor: 'Resend sender (bym-studio-digest)',
+      anchor: 'Resend sender',
       pattern: 'The day\u2019s findings as one skimmable email, sent via Resend.',
       consumes: 'findings'
     },
     {
       id: 'sms-notify', name: 'SMS/WhatsApp notify', cat: 'sinks', letter: 'N',
       desc: 'A text when something needs eyes now.',
-      anchor: 'BYM notification_logs',
+      anchor: 'your notification log',
       pattern: 'Non-blocking notify; failures logged, never fatal to the pipeline.',
       consumes: 'alerts'
     },
     {
       id: 'status-page', name: 'Dashboard / status page', cat: 'sinks', letter: 'D',
       desc: 'Live pipeline health on a page, shareable redacted.',
-      anchor: '/superadmin/becky/pipeline + /becky-status',
+      anchor: 'your admin status pages',
       pattern: 'Both drain hosts heartbeat every 5 min; a stale heartbeat reads red on purpose.',
       consumes: 'heartbeats'
     },

@@ -1,0 +1,1 @@
+- Orchestration now defaults to an agent you have installed, so a Claude-only machine no longer sees a Codex model as its executor.

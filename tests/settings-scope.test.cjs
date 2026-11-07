@@ -72,3 +72,23 @@ test('late debug row-style palette uses reader guidance without expanding its co
   assert.deepEqual(result.audit,[]);
   assert.deepEqual(await page.evaluate(()=>window.__forbidden),[]);
 });
+
+test('a large transcript render never searches for Settings controls',async t=>{
+  // CCC-143: per-record subtree searches here froze the page ~10s per open.
+  const page=await open(t);
+  const result=await page.evaluate(async()=>{
+    const view=document.createElement('div');view.className='conversations-view';document.body.append(view);
+    await new Promise(r=>setTimeout(r));
+    const real=Element.prototype.querySelector;let searches=0;
+    Element.prototype.querySelector=function(...args){searches++;return real.apply(this,args);};
+    for(let i=0;i<500;i++){const turn=document.createElement('div');view.append(turn);for(let j=0;j<4;j++)turn.append(document.createElement('p'));}
+    await new Promise(r=>setTimeout(r));
+    const during=searches;
+    const late=document.createElement('button');late.id='fontPlus';document.body.append(late);
+    await new Promise(r=>setTimeout(r));
+    Element.prototype.querySelector=real;view.remove();
+    return {during,annotated:late.hasAttribute('aria-describedby')};
+  });
+  assert.equal(result.during,0);
+  assert.equal(result.annotated,true);
+});

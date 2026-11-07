@@ -986,9 +986,9 @@
   <section id="install">
     <div class="wrap">
       <div class="section-eyebrow fade-target">Get it</div>
-      <h2 class="fade-target">Start free in five minutes.</h2>
+      <h2 class="fade-target">Start free.</h2>
       <p class="section-lede fade-target">
-        macOS, Linux, or Windows with Python 3. First run walks you through engines and free-model keys and runs your first task on a $0 model. Add Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, Devin, or GitHub CLI and the matching surfaces light up.
+        macOS, Linux, or Windows with Python 3.9+. Already use Claude Code? Your sessions are on the board when it opens. New to coding agents? First run walks you through engines and free-model keys and runs your first task on a $0 model. Add Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, Devin, or GitHub CLI and the matching surfaces light up.
       </p>
 
       <div class="install-grid stagger-grid">
@@ -1001,12 +1001,11 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.ps1 | iex
 
 <span class="comment"># macOS / Linux: launch later</span>
-ccc start
-open http://localhost:8090
+ccc start                           <span class="comment"># then open http://localhost:8090</span>
 
 <span class="comment"># Windows PowerShell: launch later</span>
 .\run.ps1</pre>
-          <p class="req">Asks before adding two hooks to <code>~/.claude/settings.json</code> so every Claude Code session writes the sidecar state CCC reads. Idempotent.</p>
+          <p class="req">Asks before adding its hooks to <code>~/.claude/settings.json</code> so every Claude Code session writes the sidecar state CCC reads. Idempotent.</p>
         </div>
 
         <div class="install-block">

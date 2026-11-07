@@ -3,7 +3,7 @@
 """Extracted from server.py (originally lines 37378-39574).
 
 Part of the server.py decomposition; see
-CCC-private-docs/plans/server-py-decomposition.md. Names still living
+the private plans repo (server-py-decomposition). Names still living
 in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from ccc_server.history_search import extract_history_terms, _is_explicit_histor
 # Hermes full-text hits surface alongside the claude-index results.
 # ---------------------------------------------------------------------------
 
-# Profile workers (e.g. the "chuckrealtor" / Becky agent that actually writes
+# Profile workers (e.g. an "example-worker" agent that actually writes
 # code) run under their OWN state.db at ~/.hermes/profiles/<name>/state.db,
 # not the main gateway DB. Those are the sessions that do the real work, so
 # CCC ingests every profile DB alongside the gateway one.
@@ -64,7 +64,7 @@ def _hermes_db_path():
 def _hermes_profile_for_db(db):
     """Profile name for a DB path, or "" for the main gateway DB.
 
-    ~/.hermes/profiles/chuckrealtor/state.db -> "chuckrealtor"."""
+    ~/.hermes/profiles/example-worker/state.db -> "example-worker"."""
     try:
         db = Path(db)
         main = Path(_core.HERMES_STATE_DB).expanduser()
@@ -137,7 +137,7 @@ def _hermes_file_key(paths):
 
 def _hermes_pending_paths():
     try:
-        pdir = Path(_core.HERMES_CHUCK_PENDING_DIR).expanduser()
+        pdir = Path(_core.HERMES_PENDING_DIR).expanduser()
         if not pdir.is_dir():
             return []
         return [
@@ -979,7 +979,7 @@ def _hermes_raw_content_text(value):
     """Last-resort render of a message's *own* content when the whitelist
     extraction in _hermes_visible_text yields nothing.
 
-    JSON-mode turns (e.g. the chuck-router classifier) store the model's reply
+    JSON-mode turns (e.g. a router classifier) store the model's reply
     as a bare object like {"intent": "work_request", ...} — it carries none of
     the whitelisted text keys, so _hermes_visible_text returns "" and the whole
     turn was being dropped, leaving only the user prompts (the "sparse fragment"
@@ -1004,10 +1004,10 @@ def _hermes_decision_summary(value):
     """Compact one-liner for a structured (JSON-object) assistant reply.
 
     Router/classifier turns answer with a bare object like
-    {"intent": "work_request", "confidence": 0.95, "addressed_to": "becky"} —
+    {"intent": "work_request", "confidence": 0.95, "addressed_to": "agent"} —
     readable, but you have to parse the JSON in your head. Distil the headline
     decision, a confidence %, a recipient, and a couple of other short scalar
-    fields into "-> work_request - 95% - to: becky" so the gist is legible
+    fields into "-> work_request - 95% - to: agent" so the gist is legible
     above the raw JSON. Returns "" when there's nothing scalar worth showing.
     """
     obj = _hermes_jsonish(value)
@@ -2027,7 +2027,7 @@ def find_hermes_conversations(
                 "hermes_continued_from": parent_id,
                 "hermes_child_session_ids": children_by_parent.get(sid, []),
                 "hermes_is_parent": sid in parent_ids,
-                # "" for the main gateway DB; profile name (e.g. "chuckrealtor")
+                # "" for the main gateway DB; profile name (e.g. "example-worker")
                 # for a worker session living in a profile's own state.db.
                 "hermes_profile": profile,
             })
@@ -2063,11 +2063,18 @@ def _parse_hermes_message(msg, line_num, session_row=None):
     role = str(msg.get("role") or "").lower()
     ts = _hermes_iso(msg.get("timestamp") or msg.get("created_at"))
     text = _hermes_visible_text(msg.get("content"))
+    # Where the row came from. The same database holds gateway chats, cron and
+    # worker runs, and nothing else on a row tells them apart.
+    source = str((session_row or {}).get("source") or "")
     if role in ("user", "human"):
         if not text:
             text = _hermes_raw_content_text(msg.get("content"))
         if text:
-            return {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": []}
+            event = {"line": line_num, "ts": ts, "type": "user_text", "text": text, "images": [],
+                     "source_platform": source}
+            if msg.get("display_kind"):
+                event["hermes_kind"] = str(msg["display_kind"])
+            return event
         return None
     if role == "assistant":
         blocks = []
@@ -2103,6 +2110,7 @@ def _parse_hermes_message(msg, line_num, session_row=None):
                 "type": "assistant",
                 "message_id": f"hermes-{msg.get('id') or line_num}",
                 "blocks": blocks,
+                "source_platform": source,
             }
             model = (session_row or {}).get("model")
             if model:

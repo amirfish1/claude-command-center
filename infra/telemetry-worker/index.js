@@ -285,17 +285,68 @@ function suppressSmallBuckets(rows, keys, countKey, minCount) {
   return kept;
 }
 
+// /v1/stats scans the event tables with about 15 queries, and D1's free
+// plan stops all reads for the day after 5M rows. Cache-Control alone does
+// not protect it: nothing caches a Worker response on its way out, and the
+// Cache API has no effect on *.workers.dev. So the last good body lives in
+// KV, which also keeps answering while D1 is refusing reads.
+const STATS_CACHE_KEY = "stats:v1";
+const STATS_CACHE_SECONDS = 3600;
+
+async function readStatsCache(env) {
+  if (!env.STATS_CACHE) return null;
+  try {
+    const entry = JSON.parse(await env.STATS_CACHE.get(STATS_CACHE_KEY));
+    return entry && typeof entry.body === "string" ? entry : null;
+  } catch {
+    return null;
+  }
+}
+
+function statsCacheResponse(body) {
+  return new Response(body, { status: 200, headers: STATS_HEADERS });
+}
+
+async function handleCachedStats(request, env) {
+  const cached = await readStatsCache(env);
+  const now = Date.now();
+  if (cached && now - cached.computed_at < STATS_CACHE_SECONDS * 1000) {
+    return statsCacheResponse(cached.body);
+  }
+  const fresh = await handleStats(request, env);
+  if (fresh.ok) {
+    if (env.STATS_CACHE) {
+      const body = await fresh.clone().text();
+      try {
+        await env.STATS_CACHE.put(STATS_CACHE_KEY, JSON.stringify({ computed_at: now, body }));
+      } catch {
+        // A failed cache write costs one more scan, never the answer.
+      }
+    }
+    return fresh;
+  }
+  if (!cached) return fresh;
+  // Label old numbers so a reader can't mistake them for today's.
+  return statsCacheResponse(JSON.stringify({
+    ...JSON.parse(cached.body),
+    stale: true,
+    stale_since: new Date(cached.computed_at).toISOString(),
+  }));
+}
+
+const STATS_HEADERS = {
+  "Content-Type": "application/json; charset=utf-8",
+  "Cache-Control": "public, max-age=300",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET",
+};
+
 // Public read-only stats endpoint. Returns aggregates only — never
-// per-install rows, never raw timestamps. Cached at the edge for 5
-// minutes so the docs/stats/ page can be hammered without hitting D1.
+// per-install rows, never raw timestamps. Always called through
+// handleCachedStats.
 // CORS allows GET from any origin so ccc.amirfish.ai/stats can fetch.
 async function handleStats(_request, env) {
-  const headers = {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "public, max-age=300",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET",
-  };
+  const headers = STATS_HEADERS;
   // Test/fixture install ids never count as installs.
   const REAL = "install_id NOT LIKE '00000000%' AND install_id NOT LIKE '11111111%' " +
     "AND install_id NOT LIKE '22222222%' AND install_id NOT LIKE '33333333%'";
@@ -482,7 +533,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/v1/stats") {
-      return handleStats(request, env);
+      return handleCachedStats(request, env);
     }
     if (request.method !== "POST") {
       return new Response("method not allowed", { status: 405 });

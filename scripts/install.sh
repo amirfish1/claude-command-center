@@ -251,16 +251,26 @@ clone_into_install_dir() {
 # Launch + open browser
 # ---------------------------------------------------------------------------
 
-# The URL the browser opens once the port answers. First-time installs land
-# on the guided setup tour (/?onboarding=1); anyone who already finished
-# onboarding gets the dashboard itself. The check reads the same
-# onboarding.json the dashboard writes, so re-running this installer after a
-# finished setup does not replay the tour, while an interrupted setup picks
-# up where it left off.
+# Same signal as ccc_server/moment_zero.py: this person already runs an agent.
+has_agent_history() {
+  [ -n "$(find "$HOME/.claude/projects" -mindepth 2 -maxdepth 2 -name '*.jsonl' -print -quit 2>/dev/null)" ] && return 0
+  [ -n "$(find "$HOME/.codex/sessions" -type f -print -quit 2>/dev/null)" ]
+}
+
+# The URL the browser opens once the port answers. Someone with no agent
+# history lands on the guided setup tour (/?onboarding=1). Anyone who already
+# finished onboarding, or who already has Claude Code or Codex sessions, gets
+# the dashboard itself: their own sessions on the board are the first thing
+# worth seeing, and the tour's free-model setup is not for them. The check
+# reads the same onboarding.json the dashboard writes, so re-running this
+# installer after a finished setup does not replay the tour, while an
+# interrupted setup picks up where it left off.
 dashboard_open_url() {
   local base="${1:-$DASHBOARD_URL}"
   local state="$HOME/.claude/command-center/onboarding.json"
   if [ -f "$state" ] && grep -Eq '"completed"[[:space:]]*:[[:space:]]*true' "$state" 2>/dev/null; then
+    printf '%s' "$base"
+  elif has_agent_history; then
     printf '%s' "$base"
   else
     printf '%s/?onboarding=1' "$base"
@@ -280,7 +290,7 @@ open_when_ready() {
   (
     for _ in $(seq 1 60); do
       if (echo > "/dev/tcp/${check_host}/${PORT}") >/dev/null 2>&1; then
-        if command -v open >/dev/null 2>&1; then
+        if [ "$(uname -s)" = "Darwin" ]; then
           open "$url" >/dev/null 2>&1 || true
         elif command -v xdg-open >/dev/null 2>&1; then
           xdg-open "$url" >/dev/null 2>&1 || true
@@ -511,6 +521,54 @@ pick_port() {
   export PORT
 }
 
+can_open_browser() {
+  # Over SSH, `open` and xdg-open act on the far machine's screen, if any.
+  [ -z "${SSH_CONNECTION:-}" ] || return 1
+  # `open` means something else on Linux (the kbd package's openvt alias).
+  [ "$(uname -s)" = "Darwin" ] && return 0
+  command -v xdg-open >/dev/null 2>&1 || return 1
+  # xdg-open exists on plenty of servers; without a display it opens nothing.
+  [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]
+}
+
+# The last thing printed before the server takes over, so it has to say where
+# to go and what to do there. Print the URL the browser would have opened: on a
+# headless box the person copies this line, and the plain dashboard URL loses
+# the setup tour.
+print_dashboard_notes() {
+  local url="$1"
+  if [ -n "${TAILNET_URL:-}" ]; then
+    note "dashboard (tailnet): $TAILNET_URL"
+    note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
+  elif can_open_browser; then
+    note "your browser will open in a moment: $url"
+  else
+    note "open this in your browser: $url"
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+      note "over SSH? run this on your own computer first: ssh -L ${PORT}:127.0.0.1:${PORT} <this-machine>"
+    fi
+  fi
+  if has_agent_history; then
+    note "next: your past sessions are on the board; anything you run with claude shows up there too"
+  else
+    case "$url" in
+      *\?onboarding=1) note "next: the setup tour gets a first task running" ;;
+      *) note "next: run claude in any project and it shows up on the board" ;;
+    esac
+  fi
+  note "want a nudge tomorrow morning? run: $(ccc_command) remind"
+}
+
+# The installer links ccc into ~/.local/bin, which a stock macOS shell does not
+# have on PATH, so print a command that works when pasted.
+ccc_command() {
+  if command -v ccc >/dev/null 2>&1; then
+    printf 'ccc'
+  else
+    printf '%s' "$HOME/.local/bin/ccc"
+  fi
+}
+
 launch_server() {
   if is_app_install; then
     cd "$INSTALL_DIR"
@@ -535,12 +593,8 @@ launch_server() {
   pick_port
   configure_tailnet "$PORT" "$@"
 
-  local url open_hint
+  local url
   url="$(dashboard_open_url "$DASHBOARD_URL")"
-  case "$url" in
-    *\?onboarding=1) open_hint="your browser will open a short setup tour in a moment" ;;
-    *)             open_hint="your browser will open the dashboard in a moment" ;;
-  esac
 
   if ask_install_service; then
     note "setting CCC up as a background service"
@@ -549,25 +603,13 @@ launch_server() {
     if ./run.sh --install-service; then
       printf '\n'
       ok "CCC is installed and running in the background"
-      note "$open_hint"
-      if [ -n "${TAILNET_URL:-}" ]; then
-        note "dashboard (tailnet): $TAILNET_URL"
-        note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
-      else
-        note "dashboard: $DASHBOARD_URL"
-      fi
+      print_dashboard_notes "$url"
       exit 0
     fi
     if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active --quiet ccc.service 2>/dev/null; then
       printf '\n'
       ok "CCC is running in the background (it was slow to start)"
-      note "$open_hint"
-      if [ -n "${TAILNET_URL:-}" ]; then
-        note "dashboard (tailnet): $TAILNET_URL"
-        note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
-      else
-        note "dashboard: $DASHBOARD_URL"
-      fi
+      print_dashboard_notes "$url"
       exit 0
     fi
     if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
@@ -577,13 +619,7 @@ launch_server() {
       if launchctl print "$service_target" >/dev/null 2>&1 || launchctl list 2>/dev/null | grep -qF "$service_label"; then
         printf '\n'
         ok "CCC is running in the background (it was slow to start)"
-        note "$open_hint"
-        if [ -n "${TAILNET_URL:-}" ]; then
-          note "dashboard (tailnet): $TAILNET_URL"
-          note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
-        else
-          note "dashboard: $DASHBOARD_URL"
-        fi
+        print_dashboard_notes "$url"
         exit 0
       fi
     fi
@@ -593,14 +629,9 @@ launch_server() {
   else
     note "starting CCC in this window on port $PORT"
     note "keep this window open; stop CCC with Ctrl+C"
-    note "tip: ./run.sh --install-service keeps CCC running in the background"
-    note "$open_hint"
-    if [ -n "${TAILNET_URL:-}" ]; then
-      note "dashboard (tailnet): $TAILNET_URL"
-      note "dashboard (ip)     : http://${TAILNET_IP}:${PORT}"
-    else
-      note "dashboard: $DASHBOARD_URL"
-    fi
+    note "CCC stops when this window closes; start it again any time with: $(ccc_command)"
+    note "tip: $INSTALL_DIR/run.sh --install-service keeps CCC running in the background"
+    print_dashboard_notes "$url"
     open_when_ready "$url" "${TAILNET_IP:-127.0.0.1}"
     cd "$INSTALL_DIR"
     exec ./run.sh

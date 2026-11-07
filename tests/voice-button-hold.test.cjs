@@ -39,6 +39,9 @@ test('Call button hold hides persistently without calling; tap and drag remain d
       const r = el.getBoundingClientRect(); return {x: r.x + r.width / 2, y: r.y + r.height / 2};
     });
     await boot();
+    assert.equal(await page.$eval('#voiceMobileBtn', el => getComputedStyle(el).display), 'none', 'hidden by default');
+    await page.click('#settingsVoiceMobileToggle');
+    assert.equal(await page.evaluate(() => localStorage.getItem('ccc-voice-call-button')), '1');
     let c = await buttonCenter();
     await page.touchscreen.tap(c.x, c.y);
     assert.equal(await page.evaluate(() => window.calls), 1, 'ordinary tap calls');

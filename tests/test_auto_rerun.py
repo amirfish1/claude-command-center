@@ -15,7 +15,7 @@ from ccc_server import auto_rerun as ar
 from ccc_server import wake_guard as wg
 
 NOW = 1_000_000.0
-RULE = {"name": "steward", "cwd": "/w/bym", "title_prefix": "# BYM outreach steward",
+RULE = {"name": "steward", "cwd": "/w/harbor", "title_prefix": "# HARBOR outreach steward",
         "command": ["systemctl", "--user", "start", "--no-block", "steward.service"]}
 
 
@@ -26,7 +26,7 @@ def cfg(tmp_path, monkeypatch):
     return str(tmp_path / "auto-rerun.json")
 
 
-def _death(tmp_path, sid="s-dead-0001", cwd="/w/bym", title="# BYM outreach steward You are", size=10):
+def _death(tmp_path, sid="s-dead-0001", cwd="/w/harbor", title="# HARBOR outreach steward You are", size=10):
     t = tmp_path / (sid + ".jsonl")
     t.write_text(json.dumps({"type": "user", "message": {"content": "go"}}) + "\n")
     return {"session_id": sid, "cwd": cwd, "title": title, "size": size, "path": str(t),

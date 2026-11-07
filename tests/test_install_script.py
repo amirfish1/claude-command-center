@@ -102,6 +102,35 @@ class TestInstallScript(unittest.TestCase):
             f"unexpected shebang: {first_line!r}",
         )
 
+    def test_linux_open_is_not_a_browser(self):
+        """`open` on Linux can be the kbd package's openvt alias."""
+        result = _run_install_script_function(
+            'uname() { echo Linux; }; open() { :; }; '
+            'unset DISPLAY WAYLAND_DISPLAY SSH_CONNECTION; '
+            'PATH=/nonexistent can_open_browser && echo yes || echo no',
+        )
+        self.assertEqual(result.stdout.strip(), "no", result.stderr)
+
+    def test_no_browser_promise_over_ssh(self):
+        result = _run_install_script_function(
+            'uname() { echo Darwin; }; can_open_browser && echo yes || echo no',
+            env_extra={"SSH_CONNECTION": "10.0.0.1 1 10.0.0.2 22"},
+        )
+        self.assertEqual(result.stdout.strip(), "no", result.stderr)
+
+    def test_mac_desktop_opens_a_browser(self):
+        result = _run_install_script_function(
+            'uname() { echo Darwin; }; unset SSH_CONNECTION; '
+            'can_open_browser && echo yes || echo no',
+        )
+        self.assertEqual(result.stdout.strip(), "yes", result.stderr)
+
+    def test_reminder_command_works_when_pasted(self):
+        result = _run_install_script_function(
+            'PATH=/usr/bin:/bin; HOME=/h; ccc_command',
+        )
+        self.assertEqual(result.stdout, "/h/.local/bin/ccc", result.stderr)
+
     def test_python_gate_accepts_39_and_honors_override(self):
         script = Path(INSTALL_SCRIPT).read_text(encoding="utf-8")
 
@@ -544,8 +573,8 @@ class TailnetInstallTests(unittest.TestCase):
             env = os.environ.copy()
             env["HOME"] = fake_home
             info_json = json.dumps({
-                "ip": "100.108.91.118",
-                "ips": ["100.108.91.118"],
+                "ip": "100.64.12.34",
+                "ips": ["100.64.12.34"],
                 "dns": "hermes-vps.tail1234.ts.net",
             })
             bash_program = (
@@ -563,12 +592,12 @@ class TailnetInstallTests(unittest.TestCase):
             net_json_path = Path(fake_home) / ".claude" / "command-center" / "network.json"
             self.assertTrue(net_json_path.exists())
             data = json.loads(net_json_path.read_text())
-            self.assertEqual(data.get("bind_host"), "100.108.91.118")
+            self.assertEqual(data.get("bind_host"), "100.64.12.34")
             self.assertTrue(data.get("trust_tailnet"))
             origins = data.get("allowed_origins", [])
             self.assertIn("http://hermes-vps.tail1234.ts.net:8090", origins)
             self.assertIn("https://hermes-vps.tail1234.ts.net:8090", origins)
-            self.assertIn("http://100.108.91.118:8090", origins)
+            self.assertIn("http://100.64.12.34:8090", origins)
 
     def test_apply_tailnet_network_config_preserves_existing_origins(self):
         import json
@@ -585,8 +614,8 @@ class TailnetInstallTests(unittest.TestCase):
             env = os.environ.copy()
             env["HOME"] = fake_home
             info_json = json.dumps({
-                "ip": "100.108.91.118",
-                "ips": ["100.108.91.118"],
+                "ip": "100.64.12.34",
+                "ips": ["100.64.12.34"],
                 "dns": "hermes-vps.tail1234.ts.net",
             })
             bash_program = (
@@ -602,7 +631,7 @@ class TailnetInstallTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
             data = json.loads(net_json_path.read_text())
-            self.assertEqual(data.get("bind_host"), "100.108.91.118")
+            self.assertEqual(data.get("bind_host"), "100.64.12.34")
             self.assertTrue(data.get("trust_tailnet"))
             origins = data.get("allowed_origins", [])
             self.assertIn("http://existing-origin:8090", origins)

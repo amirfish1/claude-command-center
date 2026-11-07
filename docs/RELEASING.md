@@ -67,22 +67,22 @@ the release, and leave the `[Unreleased]` header empty.
 Post directly, don't just hand text to the maintainer:
 
 - **"CCC Updates" WhatsApp group** — the maintainer's FishClaw WhatsApp
-  bridge lives on the Hermes VM at loopback `:3000` (`ssh hermes-gcp`).
+  bridge lives on the Hermes VM at loopback `:3000` (`ssh <bridge-host>`).
   **Always post with a screenshot of the new functionality** — reuse the
   release hero (`docs/images/ccc-vX-Y-Z-hero.png` from `scripts/story-capture`)
   or capture a feature-specific shot if one screen tells the story better.
   ```bash
   # image posts go through /send-media; filePath resolves on the VM, so scp first
-  scp docs/images/ccc-vX-Y-Z-hero.png hermes-gcp:/tmp/ccc-vX-Y-Z-hero.png
-  ssh hermes-gcp 'curl -s -X POST http://127.0.0.1:3000/send-media \
+  scp docs/images/ccc-vX-Y-Z-hero.png <bridge-host>:/tmp/ccc-vX-Y-Z-hero.png
+  ssh <bridge-host> 'curl -s -X POST http://127.0.0.1:3000/send-media \
     -H "Content-Type: application/json" \
     -d "{\"chatId\":\"<group-jid>@g.us\",\"filePath\":\"/tmp/ccc-vX-Y-Z-hero.png\",\"mediaType\":\"image\",\"caption\":\"<blurb>\"}"'
   ```
   Plain text uses the same shape against `/send` (`{chatId, message}`).
   To resolve the group JID: after the bridge account is added to the group,
   any inbound message lands in the bridge log as `"chatId":"<digits>@g.us"`
-  (`/home/hermes/.hermes/whatsapp/bridge.log` on the VM). When the release is
-  cut *on* hermes-gcp this all runs locally — no ssh hop.
+  (`~/.hermes/whatsapp/bridge.log` on the VM). When the release is
+  cut *on* the bridge host this all runs locally — no ssh hop.
 - **Blurb style** — short, casual, top 3 features + link. WhatsApp uses
   single-asterisk `*bold*` (not markdown `**`). The GH release URL
   (`releases/tag/vX.Y.Z`) is the link to share.

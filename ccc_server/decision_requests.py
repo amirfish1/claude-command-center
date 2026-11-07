@@ -5,11 +5,16 @@ registry itself uses a single read-only transaction. Unavailable coverage keeps
 the last observed questions visible and never becomes a verified empty inbox.
 """
 import json
+import re
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ccc_server.decision_registry import DecisionRegistry
+from ccc_server.decision_coverage import wait_kind
+from ccc_server.decision_registry import CLOSED_PREFIX, DecisionRegistry
+
+_LEADING_TAG = re.compile(r'\s*(\[Q\d+:[a-z0-9-]+\])')
 
 
 def read_requests(database, *, answers_enabled=False, source_current=False):
@@ -55,6 +60,8 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
                 observed_at = content.get('created_at') or ''
             else:
                 continue  # Reviews/providers need their own complete source contract.
+            if CLOSED_PREFIX + record['request_id'] in metadata:
+                record['status'] = 'closed'  # The owner ended it; refreshes must not revive it.
             needs_answer = (question and record['status'] == 'open'
                             and (record['answer_state'] == 'none' or record['delivery_state'] == 'rejected'))
             delivery_owner = metadata.get('delivery_owner:' + record['request_id'])
@@ -66,6 +73,8 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
             can_answer = bool(answers_enabled and current_source and needs_answer
                               and (record['adapter'] == 'watchtower-block' or promoted)
                               and delivery_owner in (None, 'ccc-outbox'))
+            can_close = bool(answers_enabled and current_source and needs_answer
+                             and delivery_owner in (None, 'ccc-outbox'))
             if not answers_enabled:
                 unavailable_reason = 'Source answers are not enabled in this phase.'
             elif delivery_owner == 'routine':
@@ -87,14 +96,40 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
                 answer_state=record['answer_state'], delivery_state=record['delivery_state'],
                 delivery_owner=delivery_owner, answer=answers.get(record['request_id']),
                 source_current=bool(current_source), reply_supported=bool(not session_source or promoted),
-                needs_answer=needs_answer, observed_at=observed_at, can_answer=can_answer,
+                needs_answer=needs_answer, observed_at=observed_at, can_answer=can_answer, can_close=can_close,
                 answer_unavailable_reason=unavailable_reason))
         return result
     finally:
         connection.close()
 
 
-def requests_payload(*, state_root=None, source_loader=None):
+def github_requests(tickets, *, answers_enabled=False):
+    """Owner waits on GitHub-backed tickets, which the local export can't see.
+
+    Read-through only: they never enter the registry and have no conditional
+    answer contract. decision_github_answers rechecks the ticket, then answers it.
+    """
+    rows = []
+    for item in tickets or []:
+        ref, body = item.get('ref'), str(item.get('block_question') or '').strip()
+        if (not str(item.get('id') or '').startswith('github:') or not ref or not body
+                or wait_kind(item) != 'owner'):
+            continue
+        blocked_at = str(item.get('blocked_at') or '')
+        tag = _LEADING_TAG.match(body)
+        rows.append(dict(
+            request_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f'ccc-github-wait:{ref}:{blocked_at}')),
+            revision=1, adapter='watchtower-github', origin_id=ref, generation=blocked_at,
+            title=item.get('title') or ref, body=body, aliases=[tag.group(1)] if tag else [],
+            kind='question', status='open', session_id=None, episode_provenance=None,
+            answer_state='none', delivery_state='none', delivery_owner=None, answer=None,
+            source_current=True, reply_supported=True, needs_answer=True, observed_at=blocked_at,
+            can_answer=bool(answers_enabled), can_close=False,
+            answer_unavailable_reason='' if answers_enabled else 'Source answers are not enabled in this phase.'))
+    return rows
+
+
+def requests_payload(*, state_root=None, source_loader=None, tickets=None):
     from ccc_server import decision_inbox
     from ccc_server.decision_sources import owner_source_payload
     root = Path(state_root) if state_root else decision_inbox._state_root()
@@ -110,6 +145,8 @@ def requests_payload(*, state_root=None, source_loader=None):
         return dict(ok=False, requests=None, needs_answer_count=None, source=source,
                     error='Cannot read saved requests. Retry the source check.', llm_used=False,
                     answers_enabled=enabled)
+    rows += github_requests(tickets, answers_enabled=enabled)
+    rows.sort(key=lambda r: (r['adapter'].startswith('watchtower'), r['origin_id']))
     issues = [dict(origin_id=r.get('origin_id'), title=r.get('title'), body=r.get('body'),
                    reason='Source question has no stable episode; it has not been imported.')
               for r in (refreshed.get('requests') or []) if not r.get('generation')]
@@ -118,6 +155,7 @@ def requests_payload(*, state_root=None, source_loader=None):
                 coverage_issues=issues,
                 checked_at=datetime.now(timezone.utc).isoformat(),
                 error=refreshed.get('error') if not current else None,
-                limitations=['Coverage: local file-backed owner waits and explicitly promoted session questions.',
+                limitations=['Coverage: local file-backed owner waits, explicitly promoted session questions and GitHub-backed owner waits.',
+                             'GitHub-backed questions come from the ticket cache; an answer rechecks the live ticket first.',
                              'Ordinary interactive questions stay in their sessions.',
-                             'Reviews, remote queues and untyped reports have separate lifecycles.'])
+                             'Reviews, other remote queues and untyped reports have separate lifecycles.'])

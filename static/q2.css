@@ -1903,6 +1903,10 @@ h1.q2-detail-title[data-q2-title-open]:hover { background: var(--bg-hover, rgba(
   :root { --q2-queues-w: 200px; --q2-tickets-w: 360px; }
 }
 
+/* Standalone/phone: keep the topbar clear of the iOS status bar (the page
+   opts into viewport-fit=cover). The dashboard frame handles it itself. */
+html:not(.ccc-framed) .q2-topbar { padding-top: env(safe-area-inset-top, 0px); }
+
 /* Phones keep Q2's master/detail relationship without squeezing three desktop
    panes into one viewport. Only the active pane is shown; queue and ticket
    choices drill forward, while the explicit Back buttons return one level. */

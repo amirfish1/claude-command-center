@@ -21,6 +21,7 @@ import os
 import platform
 import plistlib
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -39,6 +40,7 @@ _MARK = "@@CCCJOB:"
 # Runs on the Hermes VM. One ssh, all units. Kept POSIX-ish (bash on Ubuntu).
 REMOTE_SCRIPT = r"""
 export LC_ALL=C SYSTEMD_COLORS=0 TZ=UTC
+echo "@@CCCJOB:HOSTNAME $(hostname -s 2>/dev/null || hostname)"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 # probe <systemctl-scope-flag> <journalctl-scope-flag> <timer-name> <tag-prefix> <history-grep>
 probe() {
@@ -144,7 +146,7 @@ def _authored(lines):
 
 
 # A job's own log() helper often stamps each line, so `CCC_OUTCOME:` may sit
-# behind an ISO timestamp (bym-ship: "2026-09-30T14:27:37Z CCC_OUTCOME: ...").
+# behind an ISO timestamp (a release job: "2026-09-30T14:27:37Z CCC_OUTCOME: ...").
 _OUTCOME_RE = re.compile(
     r"^(?:\[?\d{4}-\d\d-\d\d[T ][\d:.]+(?:Z|[+-]\d\d:?\d\d)?\]?\s+)?CCC_OUTCOME:\s*(.*)$")
 
@@ -557,6 +559,23 @@ def parse_hermes_output(text, now=None):
     return jobs
 
 
+def parse_reported_hostname(text):
+    """The name the collected host reported for itself, or ""."""
+    prefix = _MARK + "HOSTNAME "
+    for ln in text.splitlines():
+        if ln.startswith(prefix):
+            return ln[len(prefix):].strip()
+    return ""
+
+
+def _local_hostname():
+    """This machine's short name, without a domain or the mDNS .local suffix."""
+    try:
+        return socket.gethostname().split(".", 1)[0]
+    except OSError:
+        return ""
+
+
 def collect_hermes(timeout_s=SSH_CONNECT_TIMEOUT_S):
     """One local Linux subprocess or SSH round-trip. Returns (jobs, error)."""
     try:
@@ -569,6 +588,10 @@ def collect_hermes(timeout_s=SSH_CONNECT_TIMEOUT_S):
         return None, str(e)
     if res.returncode != 0 or (_MARK + "END") not in res.stdout:
         return None, (res.stderr.strip() or f"ssh exited with code {res.returncode}")[:300]
+    name = parse_reported_hostname(res.stdout)
+    if name:
+        with _LOCK:
+            _STATE["hermes"]["name"] = name
     return parse_hermes_output(res.stdout), None
 
 
@@ -1023,8 +1046,11 @@ def build_payload(now=None):
         h = dict(_STATE["hermes"])
         lp = dict(_STATE["laptop"])
     h_online = h["at"] is not None and h["error"] is None
+    on_linux = platform.system() == "Linux"
     hosts = {
         "hermes": {
+            # The UI's host label. Empty until the host has reported its name.
+            "label": h.get("name") or (_local_hostname() if on_linux else ""),
             "status": "online" if h_online else ("offline" if h["at"] is not None else "loading"),
             "error": h["error"],
             "collected_at": _iso(h["ok_at"]),
@@ -1033,6 +1059,7 @@ def build_payload(now=None):
             "jobs_count": len(h["jobs"]),
         },
         "laptop": {
+            "label": "" if on_linux else _local_hostname(),
             "status": "online", "error": None,
             "collected_at": _iso(lp["at"]),
             "age_s": round(now - lp["at"]) if lp["at"] else None,
@@ -1046,7 +1073,7 @@ def build_payload(now=None):
         "hosts": hosts,
         # Which of the two hosts is THIS machine: on Linux the systemd timers
         # are local and there is no launchd, so the UI hides the Laptop view.
-        "local_host": "hermes" if platform.system() == "Linux" else "laptop",
+        "local_host": "hermes" if on_linux else "laptop",
         "jobs": jobs,
         "summary": {
             "total": len(jobs),

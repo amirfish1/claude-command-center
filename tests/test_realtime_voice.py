@@ -806,19 +806,19 @@ def _stub_feed(monkeypatch, jobs, host=None):
 
 def test_ccc_jobs_explains_why_a_release_is_not_out(monkeypatch):
     _stub_feed(monkeypatch, [
-        _job("bym-ship", "ok", outcome="PR #2371 held for a risky migration batch (needs Amir).",
+        _job("harbor-ship", "ok", outcome="PR #2371 held for a risky migration batch (needs Amir).",
              tickets=[{"ref": "PR #2371", "url": "https://example.test/pull/2371"}]),
-        _job("bym-digest-send", "failed", exit_code=1, outcome="sqlite3.OperationalError"),
+        _job("harbor-digest-send", "failed", exit_code=1, outcome="sqlite3.OperationalError"),
         _job("other", "ok"),
     ])
     vs = object.__new__(rv.VoiceSession)
-    out = vs._tool_jobs({"query": "bym ship"})
-    assert "bym-ship" in out and "bym-digest-send" not in out
+    out = vs._tool_jobs({"query": "harbor ship"})
+    assert "harbor-ship" in out and "harbor-digest-send" not in out
     assert "held for a risky migration batch" in out
     assert "on schedule: last ran 60m ago" in out and "collected" in out
     assert "https://example.test/pull/2371" in out
     bad = vs._tool_jobs({"problems_only": True})
-    assert "bym-digest-send" in bad and "FAILED with exit code 1" in bad and "bym-ship" not in bad
+    assert "harbor-digest-send" in bad and "FAILED with exit code 1" in bad and "harbor-ship" not in bad
     assert "No scheduled jobs matching 'nope'" in vs._tool_jobs({"query": "nope"})
 
 

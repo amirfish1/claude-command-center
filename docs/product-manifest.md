@@ -25,7 +25,7 @@ the watcher catches that.
 
 | # | Feature | What it does | Status |
 |---|---------|--------------|--------|
-| 1 | Task queue | One namespaced store of tickets per project (CCC/BYM/OPS/…), backend-agnostic API | ✅ Built |
+| 1 | Task queue | One namespaced store of tickets per project (CCC/WT/OPS/…), backend-agnostic API | ✅ Built |
 | 2 | Autonomous workers | A `/goal` session drains one project's queue: claim → fix → verify → commit → next | ✅ Built |
 | 3 | Queue-health watcher | Candidacy-gated scan: open tickets + no progress = STUCK (trusts queue, not agent) | ✅ Built |
 | 4 | Health API | `GET /api/ux-fixes/health` — per-project depth, oldest-open age, fixer liveness, stuck flag | ✅ Built |
@@ -40,7 +40,7 @@ the watcher catches that.
 | 18 | Queue registry API | First-class create/configure a queue (name, backend, drain policy, owner) instead of implicit create-on-first-write — the enabler for #12 and the "anyone declares a queue" platform move | ⬜ Planned |
 | 19 | Dedup / merge pass | Append-only enqueue + post-hoc dedup: cheap exact-key pre-filter, then a semantic merge+rank agent pass before drain. Pre-enqueue dedup is a TOCTOU race under concurrency, so dedup is never the poster's job for correctness | ⬜ Planned |
 | 20 | Start-a-worker primitive | `wt spawn-worker -q <queue>` (+ API + STUCK-badge button): spawn worker(s) bound to a queue when none exists. The action half of the loop (detect → nudge-if-idle → **start-if-none** → drain → wait). Today only detect+nudge exist, so "stuck with zero workers" rots | ⬜ Planned |
-| 21 | Auto-drain queue policy | Per-queue `auto_drain` flag; the daemon ensures one worker when an auto-drain queue has depth>0 and no live worker. enqueue STAYS pure (no spawn side-effects — it's called by automation/agents); prioritization backlogs (BYMPROD) opt out | ⬜ Planned |
+| 21 | Auto-drain queue policy | Per-queue `auto_drain` flag; the daemon ensures one worker when an auto-drain queue has depth>0 and no live worker. enqueue STAYS pure (no spawn side-effects — it's called by automation/agents); prioritization backlogs (HARBORPROD) opt out | ⬜ Planned |
 | 22 | Resolution records on close | A close carries HOW it was fixed: summary + caveats + follow-ups + couldn't-fix. Turns each close into an audit record (trust the queue, not the agent's bare "done"); dashboard shows closed tickets with it; follow-ups/unresolved can auto-file as new tickets so nothing falls through | 🟡 In progress |
 | 13 | Cross-project mobile pane | All queues at a glance from your phone; pings only on STUCK | ⬜ Planned |
 | 14 | Spawn-and-reply API | Call a worker as a function: sync `await` + async webhook round-trip | ⬜ Planned |

@@ -2719,57 +2719,10 @@
     max-height: 70vh !important;
   }
 
-  /* Minimized composer (mobile tri-state 3rd step): pins the textarea to
-     the same 24px it already renders at in the empty "regular" state (see
-     min-height: 24px above and the mobile font-size/line-height combo) so
-     minimize reads as "back to the smallest the composer ever gets", not an
-     arbitrary shrink. overflow-y stays auto so multi-line text scrolls
-     inside the fixed box instead of growing it. */
-  .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
-    max-height: 24px !important;
-    overflow-y: auto !important;
-  }
-  /* Minimize collapses the whole composer area, not just the textarea: the
-     stale-session rail/panel (children of the bar) and the Goal pill (a
-     sibling before the bar, reached via the shared .conv-pane parent). */
-  .conv-input-bar.is-composer-minimized .f2c-rail,
-  .conv-input-bar.is-composer-minimized .f2c-panel {
-    display: none !important;
-  }
-  .conv-pane.is-composer-minimized > .conv-goal-strip {
-    display: none !important;
-  }
-  /* Minimize also merges the textarea row and the button row into one line
-     — "as short as it gets" means one row, not two. */
-  .conv-input-bar.visible.is-composer-minimized {
-    flex-direction: row;
-    align-items: center;
-  }
-  .conv-input-bar.is-composer-minimized > .conv-input-row-top {
-    order: 0;
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-  .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
-    order: 1;
-    width: auto;
-    flex: 0 0 auto;
-    margin-top: 0;
-  }
-  .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
-    padding-right: 4px;
-  }
-
   /* Editing the folder path on a phone: hide the composer and model strip so
      the folder row and its suggestions have the room above the keyboard. */
   .conv-pane.is-cwd-editing > .conv-input-bar,
   .conv-pane.is-cwd-editing > .conv-model-picker-strip { display: none !important; }
-
-  /* Minimized new-session composer is one row: the engine/model/effort
-     selects (full-width on phones) would squeeze the textarea to a sliver.
-     The model chips above still choose the model. */
-  .conv-input-bar.is-composer-minimized .conv-input-selectors { display: none !important; }
-  .conv-input-bar.is-composer-minimized .conv-input-row-bottom { flex-wrap: nowrap; }
 
   /* Context ring (kimi-web ContextRing parity) inside the usage pill. */
   .ctx-ring { vertical-align: -2.5px; margin-right: 4px; }
@@ -4189,6 +4142,18 @@
     color: var(--accent, #4c8bf5);
   }
   .peer-sender-mode { opacity: 0.65; font-size: 10px; }
+  /* Narrow screens: a 999px pill with nowrap-less flex children collapsed into
+     a tall blob of one-word-per-line text. Let the chip wrap as a normal
+     inline-block row of labels and keep its type small regardless of the
+     bubble's font theme. */
+  .peer-sender {
+    display: inline-flex; flex-wrap: wrap; max-width: 100%; box-sizing: border-box;
+    border-radius: 10px; font-style: normal; font-size: 11px; line-height: 16px;
+    column-gap: 6px;
+  }
+  .peer-sender > * { white-space: nowrap; font-size: inherit; font-style: normal; }
+  .peer-sender-mode { font-size: 10px; }
+  .peer-sender-name { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .event.user_text.peer-message .user-msg { border-left: 2px solid color-mix(in srgb, var(--accent, #4c8bf5) 45%, transparent); padding-left: 8px; }
   /* Cross-session (UDS peer) delivery gets its own green tint so it reads
      distinctly from a normal chat turn -- e.g. the WatchTower reconciler's
@@ -9248,7 +9213,7 @@
     border: 1px solid rgba(45, 212, 191, 0.25);
   }
   /* Profile-worker chip — a session from a profile's own state.db
-     (e.g. the chuckrealtor "Becky" worker), not a plain gateway chat. */
+     (e.g. an "example-worker" agent), not a plain gateway chat. */
   .conv-signal.hermes-profile {
     background: rgba(245, 158, 11, 0.14);
     color: #fbbf24;
@@ -13290,7 +13255,7 @@
   .voice-button-options[hidden] { display: none; }
   .voice-button-options .upd-btn { width: 100%; min-height: 44px; }
   .voice-button-options p { margin: 8px 0 0; font-size: 12px; line-height: 1.5; }
-  body.hide-voice-mobile-btn .voice-mobile-btn { display: none !important; }
+  body.hide-voice-mobile-btn .voice-mobile-btn:not(.live) { display: none !important; }
   @media (max-width: 1200px) {
     .voice-mobile-btn {
       position: fixed; right: max(16px, env(safe-area-inset-right, 0px));
@@ -13308,7 +13273,7 @@
     .voice-mobile-btn.live { background: #1a6330; }
     .voice-mobile-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
     body.voice-panel-open .voice-mobile-btn,
-    body.hide-voice-mobile-btn .voice-mobile-btn { display: none !important; }
+    body.hide-voice-mobile-btn .voice-mobile-btn:not(.live) { display: none !important; }
     .voice-panel {
       right: max(12px, env(safe-area-inset-right, 0px));
       bottom: calc(16px + env(safe-area-inset-bottom, 0px));
@@ -16603,6 +16568,31 @@
      reads brighter, glyph steps back (CCC-1242). */
   .fq-working-row .fq-working-id { color: #c9d1d9; font-weight: 600; }
   .fq-working-row.is-mobile .fq-working-engine { opacity: .7; transform: scale(.85); transform-origin: left center; }
+  /* The Workers lane can open before the Queues panel. Its phone layout
+     must not depend on that panel's measured .fq-mobile state. */
+  @media (max-width: 700px) {
+    .fq-working-head { flex-wrap: wrap; row-gap: 4px; }
+    .fq-working-summary { flex: 1 0 100%; padding-left: 15px; color: #8b949e; }
+    .fq-working-strip .fq-working-row.is-mobile {
+      display: grid; grid-template-columns: minmax(0, 1fr) 6px;
+      gap: 5px 8px; padding: 10px; min-height: 44px;
+    }
+    .fq-working-row.is-mobile .fq-working-lead {
+      grid-column: 1; flex-direction: row; align-items: center; gap: 8px;
+      min-width: 0;
+    }
+    .fq-working-row.is-mobile .fq-working-id {
+      flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis;
+    }
+    .fq-working-row.is-mobile .fq-working-body { grid-column: 1 / -1; gap: 5px; }
+    .fq-working-row.is-mobile .fq-working-title { font-size: 13px; line-height: 1.4; }
+    .fq-working-row.is-mobile .fq-working-meta {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      color: #8b949e; line-height: 1.5;
+    }
+    .fq-working-row.is-mobile .fq-working-chips { margin-left: 0; flex-wrap: wrap; }
+    .fq-working-row.is-mobile > .fq-working-dot { grid-column: 2; grid-row: 1; }
+  }
   .fq-working-role {
     font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px; line-height: 1;
     padding: 2px 4px; border-radius: 3px; white-space: nowrap; flex: 0 0 auto;
@@ -32074,24 +32064,6 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
    mic, ⚡, Send) is grouped at the right. `display: contents` flattens the
    button cluster so they all share the one row. */
 @media (max-width: 1200px) {
-  /* Even minimized, typing gets its own row. Playback controls can fill a
-     phone's entire width; sharing their row collapses the input to a sliver. */
-  .conv-input-bar.visible.is-composer-minimized {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .conv-input-bar.is-composer-minimized > .conv-input-row-top,
-  .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
-    flex: 0 0 auto;
-    width: 100%;
-  }
-  .conv-input-bar.is-composer-minimized > .conv-input-row-bottom {
-    flex-wrap: wrap;
-  }
-  .conv-input-bar.is-composer-minimized .conv-input-row-top textarea {
-    min-height: 44px;
-    max-height: 44px !important;
-  }
   .conv-input-bar .conv-input-row-top textarea {
     min-width: 0;
     width: 100%;
@@ -33228,10 +33200,13 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 /* A decision gets one chip per option on its own line under the choice (CCC-276). */
 #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action-slot.is-decision) { flex-wrap: wrap; }
 #convList#convList .conv-item .conv-outcome:has(.conv-quick-action-slot.is-decision) .conv-outcome-step { flex-basis: 100%; }
+/* The beside-the-title column is too narrow for option chips and they broke
+   one letter per line; a decision takes its own full-width line instead. */
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action-slot.is-decision) { flex: 1 1 100%; order: 5; }
 /* The chips share their line with the row speaker instead of filling it
    and pushing the speaker onto a line of its own (CCC-281). */
 .conv-quick-action-slot.is-decision { flex: 1 1 0; min-width: 0; flex-wrap: wrap; gap: 6px; }
-.conv-quick-action-slot.is-decision .conv-quick-action { max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+.conv-quick-action-slot.is-decision .conv-quick-action { max-width: 100%; overflow-wrap: break-word; white-space: normal; }
 .conv-row-read {
   display: inline-flex; align-items: center; justify-content: center;
   flex: 0 0 auto; min-width: 32px; min-height: 32px; margin-left: 4px;
@@ -33482,6 +33457,16 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* Decisions need the row width even when child summaries share the title
+     line. Flex sizing alone cannot move an item out of a grid column. */
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action-slot.is-decision) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    align-self: start;
+  }
+  #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action-slot.is-decision) .conv-outcome-step {
+    white-space: normal;
   }
   #convList#convList .conv-item.is-current-child-row .conv-main-row.has-inline-step > .conv-meta-col {
     grid-column: 3;
@@ -34364,3 +34349,18 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 #agentsOverview .ao-account:has(.ao-account-picks) { flex-wrap: wrap; row-gap: 4px; padding: 4px 6px; }
 #agentsOverview .ao-account-picks { display: flex; gap: 5px; width: 100%; }
 #agentsOverview .ao-account-picks .ao-account-pick { flex: 1 1 0; margin-left: 0; }
+
+/* Pasted images mentioned by a session's ask: shown under the expanded pane
+   header message and under the rail's description text. */
+.conv-pane-last-user-message .pane-header-images { display: none; }
+.conv-pane-last-user-message.is-expanded .pane-header-images { display: block; margin-top: 6px; }
+.pane-header-images img,
+.status-rail-title-images img,
+.csh-ask-original .user-msg > a > img {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  margin-top: 6px;
+  border-radius: 6px;
+}
+.status-rail-title-images { margin-top: 6px; }

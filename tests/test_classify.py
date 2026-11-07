@@ -1976,7 +1976,7 @@ class TestAntigravityParsing(unittest.TestCase):
                 "[Message] timestamp=2026-05-24T23:54:33Z sender=system "
                 "priority=MESSAGE_PRIORITY_LOW content=[Task "
                 "707a2446-4bcb-4b07-a697-6b8e7411b401/task-241] command: "
-                '"npx turbo build --filter=bookyourmat" finished, exit code: 0. Output:\n'
+                '"npx turbo build --filter=acmeshop" finished, exit code: 0. Output:\n'
                 "Actual tasks: 2 / 2\n"
                 "_\n"
                 "</div>\n"

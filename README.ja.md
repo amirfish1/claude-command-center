@@ -32,6 +32,8 @@ curl でインストール：
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
 ```
 
+すでに Claude Code を使っている場合、過去のセッションは開いた時点でボードに表示され、`claude` で実行したものも自動で追加されます。セッションがまだない場合は、練習用フォルダでの小さな作業を、ご自身の Claude アカウントで実行できます。
+
 Homebrew でインストール：
 
 ```bash

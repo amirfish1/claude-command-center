@@ -88,8 +88,8 @@ test('a lone GC_RELEASED or clipped burst member renders as a plain entry', () =
 });
 
 test('unparseable lines pass through as raw items', () => {
-  const items = bursts.collapse(['', 'bym-gh-fi', undefined]);
-  assert.deepEqual(items.map(i => i.raw), ['', 'bym-gh-fi', 'undefined']);
+  const items = bursts.collapse(['', 'harbor-gh-te', undefined]);
+  assert.deepEqual(items.map(i => i.raw), ['', 'harbor-gh-te', 'undefined']);
 });
 
 test('kv handles bare, quoted, and list values', () => {

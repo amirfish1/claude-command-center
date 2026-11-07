@@ -3,7 +3,7 @@
 """Extracted from server.py (originally lines 40559-41398).
 
 Part of the server.py decomposition; see
-CCC-private-docs/plans/server-py-decomposition.md. Names still living
+the private plans repo (server-py-decomposition). Names still living
 in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
@@ -1785,7 +1785,8 @@ def _parse_grok_updates_file(path):
                         "type": "system", "subtype": "grok_review",
                         "text": f"Diff review requested ({n} file{'s' if n != 1 else ''})",
                     }, ts, pidx)
-                elif "agent" in kind or "assistant" in kind or "message" in kind:
+                elif "subagent" not in kind and (
+                        "agent" in kind or "assistant" in kind or "message" in kind):
                     text = _grok_content_text(ev.get("content")).strip()
                     if not text:
                         continue

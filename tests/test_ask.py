@@ -13,8 +13,8 @@ import server  # binds ccc_server.ask names onto the server module
 
 class ExtractTermsTest(unittest.TestCase):
     def test_drops_stopwords_keeps_topic_words(self):
-        self.assertEqual(server.extract_ask_terms("Where did I work on the BYM ads?"),
-                         ["bym", "ads"])
+        self.assertEqual(server.extract_ask_terms("Where did I work on the HARBOR ads?"),
+                         ["harbor", "ads"])
 
     def test_all_stopwords_falls_back_to_raw_words(self):
         # A pure-stopword question must not return [] (that would skip retrieval
@@ -29,7 +29,7 @@ class ExtractTermsTest(unittest.TestCase):
 class FileQuestionHintTest(unittest.TestCase):
     def test_extension_word_triggers(self):
         self.assertTrue(server.looks_like_file_question(
-            "where did I store the shot 2 BYM .mov"))
+            "where did I store the shot 2 HARBOR .mov"))
 
     def test_generic_file_word_triggers(self):
         self.assertTrue(server.looks_like_file_question("where's that screenshot?"))
@@ -44,15 +44,15 @@ class SearchFilesystemHitsTest(unittest.TestCase):
 
         def runner(argv, **kw):
             calls.append(argv)
-            return _FakeProc(stdout="/Users/x/Desktop/Shot 3 - BYM.mov\n")
+            return _FakeProc(stdout="/Users/x/Desktop/Shot 3 - HARBOR.mov\n")
 
-        paths = server.search_filesystem_hits(["shot", "bym", "mov"], runner=runner)
-        self.assertEqual(paths, ["/Users/x/Desktop/Shot 3 - BYM.mov"])
+        paths = server.search_filesystem_hits(["shot", "harbor", "mov"], runner=runner)
+        self.assertEqual(paths, ["/Users/x/Desktop/Shot 3 - HARBOR.mov"])
         argv = calls[0]
         self.assertEqual(argv[0], "mdfind")
         self.assertIn("-onlyin", argv)
         self.assertIn(
-            "kMDItemFSName == '*shot*'c && kMDItemFSName == '*bym*'c && kMDItemFSName == '*mov*'c",
+            "kMDItemFSName == '*shot*'c && kMDItemFSName == '*harbor*'c && kMDItemFSName == '*mov*'c",
             argv)
 
     def test_no_terms_skips_subprocess(self):
@@ -80,7 +80,7 @@ class SearchFilesystemHitsTest(unittest.TestCase):
 class TriggerQuestionHintTest(unittest.TestCase):
     def test_trigger_word_triggers(self):
         self.assertTrue(server.looks_like_trigger_question(
-            "what triggers my BYM pre-flight check, a GitHub push?"))
+            "what triggers my HARBOR pre-flight check, a GitHub push?"))
 
     def test_cron_word_triggers(self):
         self.assertTrue(server.looks_like_trigger_question("is this a cron job?"))
@@ -123,38 +123,38 @@ class SearchLocalAutomationHitsTest(unittest.TestCase):
         self.addCleanup(self._patch.stop)
 
     def test_finds_plist_by_hyphen_insensitive_subject_match_and_extracts_trigger_keys(self):
-        (self.launch_agents / "com.amirfish.bym-perf-preflight.plist").write_text(
+        (self.launch_agents / "com.example.harbor-perf-preflight.plist").write_text(
             "<plist><dict>\n"
-            "<key>Label</key><string>com.amirfish.bym-perf-preflight</string>\n"
+            "<key>Label</key><string>com.example.harbor-perf-preflight</string>\n"
             "<key>StartInterval</key><integer>3600</integer>\n"
             "</dict></plist>\n")
-        (self.launch_agents / "com.amirfish.unrelated.plist").write_text(
-            "<plist><dict><key>Label</key><string>com.amirfish.unrelated</string></dict></plist>\n")
+        (self.launch_agents / "com.example.unrelated.plist").write_text(
+            "<plist><dict><key>Label</key><string>com.example.unrelated</string></dict></plist>\n")
         terms = server.extract_ask_terms(
-            "what triggers my BYM pre-flight check, a GitHub push?")
+            "what triggers my HARBOR pre-flight check, a GitHub push?")
         hits = server.search_local_automation_hits(terms, repo_roots=[])
         self.assertEqual(len(hits), 1)
-        self.assertIn("bym-perf-preflight.plist", hits[0]["path"])
+        self.assertIn("harbor-perf-preflight.plist", hits[0]["path"])
         self.assertIn("StartInterval", hits[0]["snippet"])
         self.assertIn("3600", hits[0]["snippet"])
 
     def test_no_subject_match_is_empty(self):
-        (self.launch_agents / "com.amirfish.unrelated.plist").write_text(
-            "<plist><dict><key>Label</key><string>com.amirfish.unrelated</string></dict></plist>\n")
-        terms = server.extract_ask_terms("what triggers my BYM pre-flight check?")
+        (self.launch_agents / "com.example.unrelated.plist").write_text(
+            "<plist><dict><key>Label</key><string>com.example.unrelated</string></dict></plist>\n")
+        terms = server.extract_ask_terms("what triggers my HARBOR pre-flight check?")
         self.assertEqual(server.search_local_automation_hits(terms, repo_roots=[]), [])
 
     def test_finds_github_workflow_trigger_block(self):
-        wf = self.repo / ".github" / "workflows" / "bym-deploy.yml"
+        wf = self.repo / ".github" / "workflows" / "harbor-deploy.yml"
         wf.write_text(
-            "name: bym-deploy\n"
+            "name: harbor-deploy\n"
             "on:\n"
             "  push:\n"
             "    branches: [main]\n"
             "jobs:\n"
             "  deploy:\n"
             "    runs-on: ubuntu-latest\n")
-        terms = server.extract_ask_terms("what triggers the bym deploy workflow?")
+        terms = server.extract_ask_terms("what triggers the harbor deploy workflow?")
         hits = server.search_local_automation_hits(terms, repo_roots=[str(self.repo)])
         self.assertEqual(len(hits), 1)
         self.assertEqual(hits[0]["kind"], "GitHub workflow")
@@ -195,7 +195,7 @@ class MergeHitsTest(unittest.TestCase):
         self.assertEqual(len(server.merge_ask_hits(recent, [], cap=5)), 5)
 
     def test_snippet_marks_stripped_and_truncated(self):
-        recent = [{"session_id": "x-1", "snippet": "<mark>bym</mark> " + "a" * 500}]
+        recent = [{"session_id": "x-1", "snippet": "<mark>harbor</mark> " + "a" * 500}]
         hit = server.merge_ask_hits(recent, [])[0]
         self.assertNotIn("<mark>", hit["snippet"])
         self.assertLessEqual(len(hit["snippet"]), 220)
@@ -204,8 +204,8 @@ class MergeHitsTest(unittest.TestCase):
 class EnrichHitsTest(unittest.TestCase):
     def test_titles_status_repo_from_injected_maps(self):
         hits = [{"id": "aaa-1", "cwd": "/Users/x/Apps/myrepo", "ts_unix": 1, "snippet": "", "source": "recent"}]
-        out = server.enrich_ask_hits(hits, titles={"aaa-1": "BYM ads campaign"}, live_ids={"aaa-1"})
-        self.assertEqual(out[0]["title"], "BYM ads campaign")
+        out = server.enrich_ask_hits(hits, titles={"aaa-1": "HARBOR ads campaign"}, live_ids={"aaa-1"})
+        self.assertEqual(out[0]["title"], "HARBOR ads campaign")
         self.assertEqual(out[0]["repo"], "myrepo")
         self.assertEqual(out[0]["status"], "live")
 
@@ -219,7 +219,7 @@ class EnrichHitsTest(unittest.TestCase):
 class PromptTest(unittest.TestCase):
     def test_prompt_contains_citation_rule_hits_and_question(self):
         hits = [{"id": "aaa-1", "cwd": "/r/x", "ts_unix": None, "snippet": "worked on ads",
-                 "source": "recent", "title": "BYM ads", "repo": "x", "status": "idle"}]
+                 "source": "recent", "title": "HARBOR ads", "repo": "x", "status": "idle"}]
         p = server.build_ask_prompt("where are the ads?", [], hits)
         self.assertIn("[[session:aaa-1]]", p)
         self.assertIn("where are the ads?", p)
@@ -243,9 +243,9 @@ class PromptTest(unittest.TestCase):
         self.assertNotIn("File matches", p)
 
     def test_fs_hits_listed_when_present(self):
-        p = server.build_ask_prompt("q", [], [], fs_hits=["/Users/x/Desktop/Shot 3 - BYM.mov"])
+        p = server.build_ask_prompt("q", [], [], fs_hits=["/Users/x/Desktop/Shot 3 - HARBOR.mov"])
         self.assertIn("File matches", p)
-        self.assertIn("/Users/x/Desktop/Shot 3 - BYM.mov", p)
+        self.assertIn("/Users/x/Desktop/Shot 3 - HARBOR.mov", p)
 
     def test_automation_hits_none_omits_section(self):
         p = server.build_ask_prompt("q", [], [], automation_hits=None)
@@ -253,10 +253,10 @@ class PromptTest(unittest.TestCase):
 
     def test_automation_hits_listed_when_present(self):
         p = server.build_ask_prompt("q", [], [], automation_hits=[
-            {"path": "/x/com.amirfish.bym-perf-preflight.plist", "kind": "launchd job",
+            {"path": "/x/com.example.harbor-perf-preflight.plist", "kind": "launchd job",
              "snippet": "StartInterval 3600"}])
         self.assertIn("Automation configs", p)
-        self.assertIn("com.amirfish.bym-perf-preflight.plist", p)
+        self.assertIn("com.example.harbor-perf-preflight.plist", p)
         self.assertIn("StartInterval 3600", p)
 
     def test_automation_hits_empty_says_none_found(self):
@@ -386,14 +386,14 @@ class BuildAskToolPromptTest(unittest.TestCase):
     def test_folds_history_verbatim_for_pronoun_resolution(self):
         prompt = server.build_ask_tool_prompt(
             "What triggers it?",
-            [{"q": "what does bym-perf-preflight do?", "a": "runs container + db checks"}])
+            [{"q": "what does harbor-perf-preflight do?", "a": "runs container + db checks"}])
         self.assertIn("resolve it from the conversation history", prompt)
-        self.assertIn("bym-perf-preflight", prompt)
+        self.assertIn("harbor-perf-preflight", prompt)
         self.assertIn("runs container + db checks", prompt)
 
     def test_lists_repo_roots(self):
-        prompt = server.build_ask_tool_prompt("what triggers it?", [], repo_roots=["/Users/x/Apps/BYM"])
-        self.assertIn("/Users/x/Apps/BYM", prompt)
+        prompt = server.build_ask_tool_prompt("what triggers it?", [], repo_roots=["/Users/x/Apps/HARBOR"])
+        self.assertIn("/Users/x/Apps/HARBOR", prompt)
 
     def test_no_repo_roots_omits_section(self):
         prompt = server.build_ask_tool_prompt("what triggers it?", [])
@@ -482,7 +482,7 @@ class HandleAskTest(unittest.TestCase):
         def _recent(q, days=2, limit=20, cwd_like=None):
             self.recent_calls.append({"days": days, "limit": limit})
             return {"results": [{"session_id": "aaa-1", "cwd": "/r/x",
-                                  "ts_unix": 100, "snippet": "bym ads work"}]}
+                                  "ts_unix": 100, "snippet": "harbor ads work"}]}
 
         def _hist(q, limit=20, cwd_like=None, since=None, semantic=False):
             self.history_calls.append({"since": since})
@@ -493,7 +493,7 @@ class HandleAskTest(unittest.TestCase):
                               lambda: {"available": True, "bin": "/x/claude"}),
             mock.patch.object(server, "search_recent_sessions", _recent),
             mock.patch.object(server, "search_conversation_history", _hist),
-            mock.patch.object(server, "_auto_titled_session_ids", lambda: {"aaa-1": "BYM ads"}),
+            mock.patch.object(server, "_auto_titled_session_ids", lambda: {"aaa-1": "HARBOR ads"}),
             mock.patch.object(server, "_discover_live_session_ids", lambda: set()),
         ]
         for p in patches:
@@ -502,25 +502,25 @@ class HandleAskTest(unittest.TestCase):
 
     def test_happy_path_cites_and_sources(self):
         runner = lambda argv, **kw: _FakeProc(stdout="You did it in [[session:aaa-1]].")
-        body, status = server.handle_assistant_ask({"question": "where bym ads?"}, runner=runner)
+        body, status = server.handle_assistant_ask({"question": "where harbor ads?"}, runner=runner)
         self.assertEqual(status, 200)
         self.assertTrue(body["ok"])
         self.assertIn("[[session:aaa-1]]", body["answer"])
         self.assertEqual(body["sources"][0]["id"], "aaa-1")
-        self.assertEqual(body["sources"][0]["title"], "BYM ads")
-        self.assertEqual(body["sources"][0]["snippet"], "bym ads work")
+        self.assertEqual(body["sources"][0]["title"], "HARBOR ads")
+        self.assertEqual(body["sources"][0]["snippet"], "harbor ads work")
         self.assertEqual(body["engine"], "claude")
         self.assertEqual(body["hit_count"], 1)
 
     def test_range_maps_to_days_and_since(self):
         runner = lambda argv, **kw: _FakeProc(stdout="ok")
-        server.handle_assistant_ask({"question": "bym ads", "range": "24h"}, runner=runner)
+        server.handle_assistant_ask({"question": "harbor ads", "range": "24h"}, runner=runner)
         self.assertEqual(self.recent_calls[-1]["days"], 1)
         self.assertIsNotNone(self.history_calls[-1]["since"])
 
     def test_range_any_means_no_since_and_max_days(self):
         runner = lambda argv, **kw: _FakeProc(stdout="ok")
-        server.handle_assistant_ask({"question": "bym ads", "range": "any"}, runner=runner)
+        server.handle_assistant_ask({"question": "harbor ads", "range": "any"}, runner=runner)
         self.assertEqual(self.recent_calls[-1]["days"], 30)
         self.assertIsNone(self.history_calls[-1]["since"])
 
@@ -529,15 +529,15 @@ class HandleAskTest(unittest.TestCase):
 
         def runner(argv, **kw):
             prompts.append(argv[-1])
-            return _FakeProc(stdout="It's at /Users/x/Desktop/Shot 3 - BYM.mov")
+            return _FakeProc(stdout="It's at /Users/x/Desktop/Shot 3 - HARBOR.mov")
 
         with mock.patch.object(server, "search_filesystem_hits",
-                                lambda terms, **kw: ["/Users/x/Desktop/Shot 3 - BYM.mov"]):
+                                lambda terms, **kw: ["/Users/x/Desktop/Shot 3 - HARBOR.mov"]):
             body, status = server.handle_assistant_ask(
-                {"question": "where did I store the shot 2 BYM .mov"}, runner=runner)
+                {"question": "where did I store the shot 2 HARBOR .mov"}, runner=runner)
         self.assertEqual(status, 200)
         self.assertIn("File matches", prompts[-1])
-        self.assertIn("/Users/x/Desktop/Shot 3 - BYM.mov", prompts[-1])
+        self.assertIn("/Users/x/Desktop/Shot 3 - HARBOR.mov", prompts[-1])
 
     def test_ordinary_question_skips_filesystem_lookup(self):
         called = []
@@ -549,7 +549,7 @@ class HandleAskTest(unittest.TestCase):
 
         with mock.patch.object(server, "search_filesystem_hits",
                                 lambda terms, **kw: called.append(terms) or []):
-            server.handle_assistant_ask({"question": "bym ads"}, runner=runner)
+            server.handle_assistant_ask({"question": "harbor ads"}, runner=runner)
         self.assertFalse(called)
         self.assertNotIn("File matches", prompts[-1])
 
@@ -562,10 +562,10 @@ class HandleAskTest(unittest.TestCase):
 
         with mock.patch.object(server, "search_local_automation_hits",
                                 lambda terms, repo_roots=None, **kw: [
-                                    {"path": "/x/com.amirfish.bym-perf-preflight.plist",
+                                    {"path": "/x/com.example.harbor-perf-preflight.plist",
                                      "kind": "launchd job", "snippet": "StartInterval 3600"}]):
             body, status = server.handle_assistant_ask(
-                {"question": "what triggers my BYM pre-flight check?"}, runner=runner)
+                {"question": "what triggers my HARBOR pre-flight check?"}, runner=runner)
         self.assertEqual(status, 200)
         self.assertIn("Automation configs", prompts[-1])
         self.assertIn("StartInterval 3600", prompts[-1])
@@ -575,7 +575,7 @@ class HandleAskTest(unittest.TestCase):
         runner = lambda argv, **kw: _FakeProc(stdout="ok")
         with mock.patch.object(server, "search_local_automation_hits",
                                 lambda terms, **kw: called.append(terms) or []):
-            server.handle_assistant_ask({"question": "bym ads"}, runner=runner)
+            server.handle_assistant_ask({"question": "harbor ads"}, runner=runner)
         self.assertFalse(called)
 
     def test_trigger_question_empty_automation_escalates_to_tool_access(self):
@@ -589,7 +589,7 @@ class HandleAskTest(unittest.TestCase):
                                 lambda terms, repo_roots=None, **kw: []):
             body, status = server.handle_assistant_ask(
                 {"question": "what triggers it?",
-                 "history": [{"q": "what does bym-perf-preflight do?",
+                 "history": [{"q": "what does harbor-perf-preflight do?",
                               "a": "runs container + db checks"}]},
                 runner=runner)
         self.assertEqual(status, 200)
@@ -613,10 +613,10 @@ class HandleAskTest(unittest.TestCase):
 
         with mock.patch.object(server, "search_local_automation_hits",
                                 lambda terms, repo_roots=None, **kw: [
-                                    {"path": "/x/com.amirfish.bym-perf-preflight.plist",
+                                    {"path": "/x/com.example.harbor-perf-preflight.plist",
                                      "kind": "launchd job", "snippet": "StartInterval 3600"}]):
             body, status = server.handle_assistant_ask(
-                {"question": "what triggers my BYM pre-flight check?"}, runner=runner)
+                {"question": "what triggers my HARBOR pre-flight check?"}, runner=runner)
         self.assertEqual(status, 200)
         self.assertFalse(body["tools_used"])
         self.assertEqual(body["engine"], "claude")
@@ -681,7 +681,7 @@ class HandleAskTest(unittest.TestCase):
         runner = lambda argv, **kw: _FakeProc(stdout="ok")
         with mock.patch.object(server._memory_api, "shipped",
                                 lambda topic: called.append(topic) or {"shipped": False}):
-            server.handle_assistant_ask({"question": "bym ads"}, runner=runner)
+            server.handle_assistant_ask({"question": "harbor ads"}, runner=runner)
         self.assertFalse(called)
 
     def test_tool_escalation_failure_falls_back_to_normal_engine(self):
@@ -757,7 +757,7 @@ class HandleAskTest(unittest.TestCase):
 
     def test_default_range_matches_prior_behavior(self):
         runner = lambda argv, **kw: _FakeProc(stdout="ok")
-        server.handle_assistant_ask({"question": "bym ads"}, runner=runner)
+        server.handle_assistant_ask({"question": "harbor ads"}, runner=runner)
         self.assertEqual(self.recent_calls[-1]["days"], 14)
         self.assertIsNone(self.history_calls[-1]["since"])
 

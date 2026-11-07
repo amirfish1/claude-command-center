@@ -117,7 +117,7 @@ class ReadmeTests(unittest.TestCase):
         text = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertLessEqual(len(text.splitlines()), 350)
         gallery = text.index("## See CCC at work")
-        for item in ("Your coding agents outgrew your terminal.", "scripts/install.sh", "brew install amirfish1/tap/ccc", "## Start free in 5 minutes"):
+        for item in ("Your coding agents outgrew your terminal.", "scripts/install.sh", "brew install amirfish1/tap/ccc", "## Start free"):
             self.assertLess(text.index(item), gallery)
         hero = re.search(r"docs/images/ccc-v[\d-]+-hero\.png", text)
         self.assertIsNotNone(hero)

@@ -1,0 +1,19 @@
+.queue-policy-composer .fq-config-section[hidden],
+.queue-policy-composer .fq-config-field[hidden] { display: none !important; }
+.queue-policy-composer .upd-actions { flex-wrap: wrap; }
+.queue-policy-composer .fq-config-dialog { overflow-wrap: anywhere; }
+.queue-policy-composer .queue-policy-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.queue-policy-composer .queue-policy-source { margin: 6px 0; }
+.queue-policy-composer .queue-policy-preview { border: 1px solid var(--border, #555); padding: 12px; border-radius: 8px; }
+.queue-policy-composer .queue-policy-status { min-height: 2.5em; }
+.queue-policy-composer .settings-launch-fields dd { margin-left: 0; }
+.queue-policy-composer select, .queue-policy-composer input { max-width: 100%; min-width: 0; }
+@media (max-width: 600px) {
+  .queue-policy-composer .fq-config-grid { grid-template-columns: minmax(0, 1fr); }
+  .queue-policy-composer .settings-launch-fields { grid-template-columns: minmax(0, 1fr); }
+  .queue-policy-composer .upd-actions > button { flex: 1 1 40%; white-space: normal; }
+}
+@media (min-width: 601px) {
+  .queue-policy-composer .settings-launch-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .queue-policy-composer .settings-launch-fields > div { display: block; min-width: 0; }
+}

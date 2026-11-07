@@ -61,10 +61,13 @@ Existing stores without a durable ID need WatchTower's metadata-only
 
 ## Shared request view
 
-The Decisions tab in the main session navigation and `/decision-inbox.html`
-share one view. Its Owner questions table reads
+The Decisions tab opens the guided queue at `/decision-guide.html`. Its History
+and reports link opens `/decision-inbox.html`, the older full view. Its Owner
+questions table reads
 `GET /api/decision-inbox/requests`, which refreshes authoritative local coverage
-and reads the saved registry in a read-only transaction. Ordinary session
+and reads the saved registry in a read-only transaction. GitHub-backed owner
+waits are added from the cached ticket list without entering the registry; they
+have no conditional answer contract, so they are answered on the ticket. Ordinary session
 questions remain local; only explicit promotion events enter this table.
 Legacy reports retain their existing references in a separate Reports and
 monitoring section. With canonical answers enabled, ticket-linked and routine

@@ -15,7 +15,7 @@ Repo lives at `github.com/amirfish1/claude-command-center`. Every commit, commen
 
 This checkout is public. Keep non-public plans, specs, product-story source,
 backlog notes, and agent working documents in the separate private
-`CCC-private-docs` repository. Do not recreate `docs/superpowers/`, commit
+plans repository. Do not recreate `docs/superpowers/`, commit
 private-document copies here, or add a private-repository submodule or
 symlink. Publish only explicitly reviewed, public-safe exports.
 
@@ -316,3 +316,13 @@ with `ModuleNotFoundError: watchtower`. Keep the real user site visible:
 `HOME=$scratch PYTHONUSERBASE=$(python3 -m site --user-base) python3 server.py`
 (compute the user base before overriding HOME). Also pick a free port; check
 with `/usr/sbin/lsof -nP -iTCP:<port>` first (OPS-1392/1393).
+
+## Private names
+
+The repo is public, so a name that only means something to one install never
+goes in source. Behaviour that needs one (a repo that maps to a differently
+named queue, a repo alias) reads `local-overrides.json` in the state folder
+through `ccc_server/local_overrides.py`. `scripts/pre-push.sh` runs
+`scripts/check-private-terms.py`, which fails on pushed content that matches a
+list kept outside the repo and skips cleanly when that list is absent. The
+output gives `path:line` and a term number, never the term.

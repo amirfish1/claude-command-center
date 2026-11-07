@@ -1,0 +1,7 @@
+.settings-scope-help {font:12px/1.55 var(--font-ui,system-ui);color:var(--text-muted);margin:8px 0 16px;text-transform:none;letter-spacing:normal;white-space:normal;min-width:0;overflow-wrap:anywhere}
+.settings-scope-help>summary {color:var(--text);cursor:pointer;padding:8px 0;list-style-position:inside}
+.settings-scope-help>div {border-left:2px solid var(--border);padding:0 12px;max-width:76ch}
+.settings-scope-help p {margin:0 0 14px}.settings-scope-help p:last-child {margin-bottom:0}.settings-scope-help strong {color:var(--text);font-weight:600}
+.settings-scope-help>summary:focus-visible {outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:600px){.settings-scope-help>summary {min-height:44px;box-sizing:border-box;display:flex;align-items:center}.settings-scope-help>div {padding:0 8px}}
+.settings-scope-container {flex-basis:100%;grid-column:1 / -1;max-width:100%;min-width:0}

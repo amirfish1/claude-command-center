@@ -1,7 +1,7 @@
 """Extracted from server.py (originally lines 41765-45087).
 
 Part of the server.py decomposition; see
-CCC-private-docs/plans/server-py-decomposition.md. Names still living
+the private plans repo (server-py-decomposition). Names still living
 in server.py are reached via `_core` at call time."""
 
 from __future__ import annotations
@@ -12,10 +12,12 @@ import json
 import os
 import sqlite3
 import stat
+import sys
 import threading
 import time
 import uuid
 
+from ccc_server.bounded_cache import ByteBudgetCache
 from ccc_server import core as _core
 from ccc_server import share_savings
 
@@ -1324,7 +1326,24 @@ def _throughput_session_hints(session_id):
 # Entries are loaded LAZILY — only when that specific transcript is requested,
 # not all at once at startup. This avoids the 81MB-parsed-on-boot problem the
 # prior flat-file approach had. SQLite is stdlib; no extra deps.
-_THROUGHPUT_TURN_CACHE = {}        # str(path) -> {"mtime", "size", "turns"}
+# str(path) -> {"mtime", "size", "turns"}. Byte-bounded: the SQLite layer below
+# holds every transcript's turns, so an evicted entry costs one row read rather
+# than a re-parse, and this copy must not grow with the number of sessions.
+_THROUGHPUT_TURN_CACHE = ByteBudgetCache(
+    max(1, int(os.environ.get("CCC_THROUGHPUT_CACHE_MB") or 64)) << 20, 100_000)
+
+
+def _throughput_turns_weight(turns):
+    """Resident bytes of a turn list, from its first turn. Within a few percent
+    of a full walk on real transcripts, without the walk."""
+    if not turns:
+        return 0
+    first = turns[0]
+    return len(turns) * (sys.getsizeof(first) + sum(sys.getsizeof(v) for v in first.values()))
+
+
+def _throughput_cache_put(key, entry):
+    _THROUGHPUT_TURN_CACHE.put(key, entry, _throughput_turns_weight(entry["turns"]))
 _THROUGHPUT_CACHE_LOCK = threading.Lock()
 _THROUGHPUT_AGG_CACHE = {}         # cache_key -> {"ts": float, "payload": dict, "status": int}
 _THROUGHPUT_AGG_CACHE_TTL = 300    # seconds
@@ -1992,7 +2011,7 @@ def _throughput_file_turns(path, extract_fn, progress=None):
     disk_turns = _throughput_disk_get(key, mtime, size)
     if disk_turns is not None and current_usage_schema(disk_turns):
         with _THROUGHPUT_CACHE_LOCK:
-            _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": disk_turns, "usage_schema": 3}
+            _throughput_cache_put(key, {"mtime": mtime, "size": size, "turns": disk_turns, "usage_schema": 3})
         if progress:
             progress("cache_hit")
         return disk_turns
@@ -2002,7 +2021,7 @@ def _throughput_file_turns(path, extract_fn, progress=None):
     if progress:
         progress("parsed")
     with _THROUGHPUT_CACHE_LOCK:
-        _THROUGHPUT_TURN_CACHE[key] = {"mtime": mtime, "size": size, "turns": turns, "usage_schema": 3}
+        _throughput_cache_put(key, {"mtime": mtime, "size": size, "turns": turns, "usage_schema": 3})
     _throughput_disk_put(key, mtime, size, turns)
     return turns
 
@@ -2611,9 +2630,9 @@ def _throughput_week_rankings(force_refresh=False):
             disk_turns = _throughput_disk_get(key, mtime, size)
             if disk_turns is not None:
                 with _THROUGHPUT_CACHE_LOCK:
-                    _THROUGHPUT_TURN_CACHE[key] = {
+                    _throughput_cache_put(key, {
                         "mtime": mtime, "size": size, "turns": disk_turns
-                    }
+                    })
                 full_turns = disk_turns
 
         if full_turns is None:
@@ -3161,14 +3180,20 @@ _THROUGHPUT_SHARE_JOB = {"thread": None}
 def _throughput_share_aggregate(turns_by_engine, now=None):
     """Totals-only daily buckets from {engine: [turn, ...]}.
 
-    Pure function: the only per-turn fields read are numeric usage fields and
-    the end timestamp, so nothing identifying can reach the output.
+    Pure function: the per-turn fields read are numeric usage fields, the end
+    timestamp and the session id. Ids are only counted (``agents``: distinct
+    sessions per window), so nothing identifying can reach the output.
     """
     now = time.time() if now is None else now
     start_day = (datetime.fromtimestamp(now).astimezone()
                  - timedelta(days=_THROUGHPUT_SHARE_DAYS - 1)).strftime("%Y-%m-%d")
     days = {}
     engines_seen = set()
+    today = datetime.fromtimestamp(now).astimezone()
+    agent_windows = {
+        window: ((today - timedelta(days=window - 1)).strftime("%Y-%m-%d"), set())
+        for window in (7, 30)
+    }
     for engine, turns in turns_by_engine.items():
         for t in turns:
             t_end = _stats_parse_ts(t.get("t_end"))
@@ -3177,6 +3202,11 @@ def _throughput_share_aggregate(turns_by_engine, now=None):
             day = t_end.strftime("%Y-%m-%d")
             if day < start_day:
                 continue
+            sid = t.get("session_id")
+            if sid:
+                for window_start, agent_ids in agent_windows.values():
+                    if day >= window_start:
+                        agent_ids.add(sid)
             row = days.get(day)
             if row is None:
                 row = days[day] = {
@@ -3207,6 +3237,7 @@ def _throughput_share_aggregate(turns_by_engine, now=None):
         "days": _THROUGHPUT_SHARE_DAYS,
         "generated_at": now,
         "engines": sorted(engines_seen),
+        "agents": {str(w): len(ids) for w, (_start, ids) in agent_windows.items()},
         "daily": daily,
     }
 

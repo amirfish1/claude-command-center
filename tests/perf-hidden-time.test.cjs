@@ -130,7 +130,7 @@ test('a heartbeat gap overlapping a closed hidden span merges, not double-counts
 
 test('both metrics report active ms plus wall_ms/hidden_ms detail', () => {
   const arc = app.indexOf("_perfEvent('archive_load'");
-  const conv = app.indexOf("_perfEvent('conv_open'");
+  const conv = app.indexOf('const _perfOpenEvent = {');
   assert.ok(arc > 0 && conv > 0);
   for (const at of [arc, conv]) {
     const body = app.slice(at - 400, at + 700);

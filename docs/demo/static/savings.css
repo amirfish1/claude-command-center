@@ -1,0 +1,248 @@
+/* Savings UI (L13): header ticker, per-session chips, savings panel,
+ * milestone celebration. All selectors are ccc-sav-* namespaced so the file
+ * can load alongside app.css without collisions. */
+
+/* ── Header ticker pill (lives inside #sidebarTopAlerts) ────────────────── */
+.ccc-sav-ticker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: 600 10px/1 var(--font-ui, inherit);
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid rgba(210, 153, 34, 0.45);
+  background: rgba(210, 153, 34, 0.10);
+  color: var(--orange, #d29922);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: none;
+}
+.ccc-sav-ticker:hover { background: rgba(210, 153, 34, 0.18); }
+.ccc-sav-ticker .ccc-sav-ticker-spark { font-size: 9px; }
+.ccc-sav-ticker.is-free {
+  border-color: rgba(63, 185, 80, 0.55);
+  background: rgba(63, 185, 80, 0.10);
+  color: var(--green, #3fb950);
+}
+.ccc-sav-ticker.is-free:hover { background: rgba(63, 185, 80, 0.18); }
+.ccc-sav-ticker.is-bump { animation: ccc-sav-bump 0.7s ease-out; }
+@keyframes ccc-sav-bump {
+  0%   { box-shadow: 0 0 0 0 rgba(210, 153, 34, 0.55); }
+  100% { box-shadow: 0 0 0 9px rgba(210, 153, 34, 0); }
+}
+
+/* ── Per-session chip in the conv row meta column ───────────────────────── */
+.ccc-sav-chip {
+  display: inline-flex;
+  align-items: center;
+  font: 600 9.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 1px 5px;
+  border-radius: 5px;
+  border: 1px solid var(--border, #30363d);
+  color: var(--text-muted, #8b949e);
+  background: transparent;
+  white-space: nowrap;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ccc-sav-chip.is-free {
+  color: var(--orange, #d29922);
+  border-color: rgba(210, 153, 34, 0.5);
+  background: rgba(210, 153, 34, 0.10);
+}
+
+/* ── Savings panel dialog ───────────────────────────────────────────────── */
+.ccc-sav-dialog {
+  width: min(520px, 94vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ccc-sav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.ccc-sav-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 6px 0 10px;
+}
+.ccc-sav-tab {
+  font: 500 11px/1 var(--font-ui, inherit);
+  color: var(--text-muted, #8b949e);
+  background: transparent;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 12px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.ccc-sav-tab:hover { background: var(--surface-2, #21262d); }
+.ccc-sav-tab.is-on {
+  color: var(--accent-contrast, #fff);
+  background: var(--accent, #6e8caf);
+  border-color: var(--accent, #6e8caf);
+}
+.ccc-sav-body { overflow-y: auto; min-height: 0; }
+
+.ccc-sav-hero { text-align: center; padding: 8px 0 14px; }
+.ccc-sav-hero-num {
+  font: 700 44px/1.05 'Space Grotesk', var(--font-ui, inherit);
+  color: var(--orange, #d29922);
+  letter-spacing: -0.02em;
+}
+.ccc-sav-hero-cap {
+  font: 500 13px/1.4 var(--font-ui, inherit);
+  color: var(--text, #c9d1d9);
+  margin-top: 2px;
+}
+.ccc-sav-hero-sub {
+  font: 400 12px/1.5 var(--font-ui, inherit);
+  color: var(--green, #3fb950);
+  margin-top: 4px;
+  min-height: 18px;
+}
+
+.ccc-sav-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.ccc-sav-tile {
+  border: 1px solid var(--border, #30363d);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--surface, #161b22);
+}
+.ccc-sav-tile-val {
+  font: 700 17px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text, #c9d1d9);
+}
+.ccc-sav-tile.is-hero .ccc-sav-tile-val { color: var(--orange, #d29922); }
+.ccc-sav-tile.is-free .ccc-sav-tile-val { color: var(--green, #3fb950); }
+.ccc-sav-tile-label {
+  font: 500 10.5px/1.3 var(--font-ui, inherit);
+  color: var(--text-muted, #8b949e);
+  margin-top: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ccc-sav-tile-sub {
+  font: 400 10.5px/1.3 var(--font-ui, inherit);
+  color: var(--text-muted, #8b949e);
+  margin-top: 2px;
+}
+
+.ccc-sav-miles-wrap { margin-bottom: 6px; }
+.ccc-sav-miles-title {
+  font: 600 11px/1 var(--font-ui, inherit);
+  color: var(--text-muted, #8b949e);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 7px;
+}
+.ccc-sav-mile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font: 400 12px/1.3 var(--font-ui, inherit);
+  color: var(--text-muted, #8b949e);
+}
+.ccc-sav-mile.is-hit { color: var(--text, #c9d1d9); }
+.ccc-sav-mile.is-hit .ccc-sav-mile-mark { color: var(--green, #3fb950); }
+.ccc-sav-mile.is-next { color: var(--text, #c9d1d9); }
+.ccc-sav-mile-mark { width: 14px; text-align: center; flex: 0 0 auto; }
+.ccc-sav-mile-label { flex: 0 1 auto; }
+.ccc-sav-mile-track {
+  flex: 1 1 auto;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-2, #21262d);
+  overflow: hidden;
+  min-width: 40px;
+}
+.ccc-sav-mile-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--orange, #d29922);
+  transition: width 0.8s ease-out;
+}
+.ccc-sav-mile.is-hit .ccc-sav-mile-fill { background: var(--green, #3fb950); }
+.ccc-sav-mile-pct {
+  flex: 0 0 auto;
+  font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--orange, #d29922);
+}
+
+.ccc-sav-empty {
+  padding: 28px 12px;
+  text-align: center;
+  font: 400 13px/1.6 var(--font-ui, inherit);
+  color: var(--text-muted, #8b949e);
+}
+.ccc-sav-body.is-empty .ccc-sav-hero,
+.ccc-sav-body.is-empty .ccc-sav-tiles,
+.ccc-sav-body.is-empty .ccc-sav-miles-wrap { display: none; }
+
+.ccc-sav-foot {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ccc-sav-foot .upd-btn { flex: 1 1 auto; text-align: center; }
+.ccc-sav-tput { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+.ccc-sav-note {
+  margin-top: 10px;
+  font: 400 10.5px/1.4 var(--font-ui, inherit);
+  color: var(--text-muted, #8b949e);
+}
+
+/* ── Milestone celebration card ─────────────────────────────────────────── */
+.ccc-sav-cheer-dialog {
+  width: min(420px, 92vw);
+  text-align: center;
+  padding-top: 22px;
+}
+.ccc-sav-cheer-pop {
+  font-size: 30px;
+  color: var(--orange, #d29922);
+  animation: ccc-sav-pop 0.6s ease-out;
+}
+@keyframes ccc-sav-pop {
+  0%   { transform: scale(0.3); opacity: 0; }
+  70%  { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.ccc-sav-cheer-big {
+  font: 700 38px/1.1 'Space Grotesk', var(--font-ui, inherit);
+  color: var(--orange, #d29922);
+  margin: 8px 0 4px;
+}
+.ccc-sav-cheer-line {
+  font: 600 14px/1.4 var(--font-ui, inherit);
+  color: var(--text, #c9d1d9);
+}
+.ccc-sav-cheer-sub {
+  font: 400 12px/1.5 var(--font-ui, inherit);
+  color: var(--text-muted, #8b949e);
+  margin: 6px 0 16px;
+}
+.ccc-sav-cheer-btns {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+.ccc-sav-cheer-btns .upd-btn { min-width: 130px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ccc-sav-ticker.is-bump,
+  .ccc-sav-cheer-pop { animation: none; }
+  .ccc-sav-mile-fill { transition: none; }
+}

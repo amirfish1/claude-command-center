@@ -81,3 +81,25 @@ def test_unassigned_host_treated_as_free():
 
 def test_bad_usage():
     assert _run("nope").returncode == 2
+
+
+def test_run_sh_stops_at_a_terminal_when_ccc_already_runs():
+    run_sh = (SCRIPT.parent.parent / "run.sh").read_text()
+    guard = run_sh.index('[ "$port_state" = "ccc" ] && [ -t 1 ]')
+    assert "CCC is already running at http://localhost:$PORT" in run_sh
+    # Before the worker block, so a second launch starts no duplicate worker.
+    assert guard < run_sh.index('ccc_worker.py" --health')
+
+
+def test_port_in_use_is_one_line_not_a_traceback(capsys):
+    import errno
+    import pytest
+    import server
+
+    with pytest.raises(SystemExit) as stop:
+        server._exit_if_port_in_use(OSError(errno.EADDRINUSE, "in use"), 8090)
+    assert stop.value.code == 1
+    err = capsys.readouterr().err
+    assert "port 8090 is already in use" in err and "PORT=8091" in err
+    # Any other bind failure stays the caller's to raise.
+    assert server._exit_if_port_in_use(OSError(errno.EACCES, "denied"), 8090) is None

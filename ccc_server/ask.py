@@ -9,7 +9,7 @@ parses. Stage 2 makes ONE headless cheap-model CLI call (Antigravity `agy`
 print mode first, Claude Code haiku fallback) whose answer cites sessions as
 [[session:ID]] markers the UI renders as clickable chips.
 
-Design rules (spec: CCC-private-docs/specs/2026-08-30-ask-tab-design.md):
+Design rules (spec: the private plans repo):
 - Stateless server: follow-up context is client-resent history, capped here.
 - The model proposes, never invents: citations are validated against the hit
   set; status/branch facts travel in the prompt from CCC's own metadata.
@@ -101,7 +101,7 @@ _LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 # The question's own framing words ("what TRIGGERS X", "is it a CRON job")
 # never appear verbatim in a plist/workflow, so using them as match keys
 # only adds noise — every job file that happens to contain "automatic"
-# somewhere matches. Match on the SUBJECT words instead (e.g. "bym",
+# somewhere matches. Match on the SUBJECT words instead (e.g. "acme",
 # "preflight"), which is `terms` minus this vocabulary.
 _ASK_AUTOMATION_STOPWORDS = frozenset(
     "trigger triggers triggered schedule scheduled scheduling cron crontab "

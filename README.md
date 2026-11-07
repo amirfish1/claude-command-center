@@ -4,10 +4,10 @@
 
 **Your coding agents outgrew your terminal.**
 
-CCC is a free, local command center for coding agents. Every Claude Code, Codex,
-Cursor, Grok, Devin and Kimi session lands on one live board. Each row tells you
-what the agent did and what it needs from you, so you answer the one that's
-blocked and leave the rest working. Not affiliated with Anthropic.
+See every coding agent you run on one live board, and answer the one that's stuck without opening the rest.
+Free and local: it reads the Claude Code, Codex, Cursor, Grok, Devin and Kimi sessions you already have, with nothing to wrap or migrate.
+
+Not affiliated with Anthropic.
 
 <table>
 <tr>
@@ -34,6 +34,8 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 ```
 
 <sub>Needs Git and Python 3.9+ (macOS or Linux; [Windows](#running-on-windows)). Opens http://localhost:8090 and asks before installing a background service. Sends one anonymous daily ping; `CCC_TELEMETRY_DISABLED=1` turns it off ([what it sends](docs/telemetry.md)).</sub>
+
+**Already use Claude Code?** Your past sessions are on the board when it opens, and anything you run with `claude` shows up by itself. No sessions yet? It offers one small job in a practice folder, on your own Claude account. Run `ccc remind` for one local notification tomorrow morning saying what your sessions did.
 
 Or `brew install amirfish1/tap/ccc && ccc`, or grab the [macOS DMG](https://github.com/amirfish1/claude-command-center/releases/latest).
 Want to look first? The [live demo](https://ccc.amirfish.ai/demo/) runs in your browser with fake data, no install.
@@ -77,7 +79,7 @@ work ([FSL-1.1-MIT](LICENSE)).
 
 <a href="docs/product-story/assets/video/V-20-limit-hit-16x9.mp4"><img src="docs/product-story/assets/video/V-20-limit-hit-16x9.gif" alt="A Claude session hits its usage limit and CCC keeps all 12 sessions going on a free model through your own router" width="100%" /></a>
 
-## Start free in 5 minutes
+## Start free
 
 New to coding agents? The first-run wizard checks your machine, helps install
 Node, the Claude Code CLI, and a local free-model router, then runs your first
@@ -271,6 +273,14 @@ backends it can use. [Comparisons and scope](docs/features.md#how-it-compares).
 
 <sub>A real share card from one of the maintainer's machines. Yours comes from the throughput page: totals only, no prompts, code, or project names.</sub>
 
+### Share a run
+
+![A redacted run card: the prompt with names replaced by placeholders, plus elapsed time, tool calls, files edited and test runs](docs/images/share-run-example.png)
+
+<sub>Demo data. Open a session's menu and pick **Share this run**, or use `ccc share <session>`. You get a redacted replay page or image as a file; nothing is uploaded. [What is kept and hidden](docs/sharing.md).</sub>
+
+Built something with it? [![Built with CCC](static/built-with-ccc.svg)](docs/sharing.md#the-badge)
+
 ## Recent
 
 v5.43: A shared Decisions inbox with visible source coverage and opt-in answer controls; clearer Active, Needs you, and Finished session groups; consolidated Connections, voice setup, health checks, and customization review. Mobile navigation now reaches the same apps as desktop.
@@ -285,6 +295,7 @@ Choose **Watch > Releases** on GitHub for update notifications.
 - [Full feature guide](docs/features.md) · [Free models](docs/free-models.md) · [Phone access](docs/phone-access.md) · [Realtime voice](docs/realtime-voice.md)
 - [Codex workspace](docs/codex-workspace.md): shared transcripts, live turns, desktop-owned tasks
 - [Bring your own key (BYOK) and Vault](docs/byok-and-vault.md) · [other secrets](docs/byok-and-vault.md#vault-any-other-secret) · [credential requests](docs/credential-broker.md) when an agent needs a password, token or one-time code
+- [Share a run](docs/sharing.md): redacted replay pages, stats cards and the README badge
 - [Decision Inbox](docs/decision-inbox.md): choose the next step for stalled work
 - [Throughput usage database](docs/usage-db.md) and cost comparisons
 - Orchestration: [CLI](docs/cli.md) · [spawn, send, and ask APIs](docs/orchestration.md) · [12-skill pack](skills/README.md). Usage integrations read `GET /api/usage/current`

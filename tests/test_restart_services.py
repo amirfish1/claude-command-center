@@ -362,7 +362,7 @@ class RestartWorkerProcessTests(unittest.TestCase):
         kick = src.index('launchctl kickstart -k "$(worker_service_target)"')
         wait = src.index('"$new_worker_pid" != "${existing_worker_pid:-0}"', kick)
         self.assertLess(kick, wait)
-        self.assertLess(wait, src.index('exec "$PYTHON" "$HERE/server.py"'))
+        self.assertLess(wait, src.index('exec "$PYTHON" "$HERE/ccc_server/boot.py" "$HERE/server.py"'))
 
     def test_stale_but_busy_worker_is_deferred_not_restarted(self):
         server = self.server

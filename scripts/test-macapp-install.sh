@@ -28,6 +28,12 @@ dump_failure_logs() {
 cleanup() {
   if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
     kill -TERM "$APP_PID" 2>/dev/null || true
+    # A stuck app must not spend the job's timeout after the real failure.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$APP_PID" 2>/dev/null || break
+      sleep 1
+    done
+    kill -KILL "$APP_PID" 2>/dev/null || true
     wait "$APP_PID" 2>/dev/null || true
   fi
   if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -86,6 +92,13 @@ if [ ! -x "$EXECUTABLE" ]; then
   echo "test-macapp-install: packaged executable is missing" >&2
   exit 1
 fi
+
+# First launch asks "Keep the CCC server running in the background?" in a
+# modal NSAlert (f31082e7) that blocks the main thread before the installer
+# starts, so an unattended run never serves. Pre-answer "Only While Open"; the
+# assertions below expect the server to stop with the app.
+HOME="$TEST_HOME" CFFIXED_USER_HOME="$TEST_HOME" \
+  defaults write com.github.claude-command-center CCCServerMode app
 
 HOME="$TEST_HOME" \
 CFFIXED_USER_HOME="$TEST_HOME" \

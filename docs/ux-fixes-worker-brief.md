@@ -6,7 +6,7 @@ to drain one project's slice of the shared UX-fixes queue and keep it empty.
 A fixer is not a special CCC mode. It is an ordinary session (Claude or Codex)
 running in a project repo, given a `/goal` that points it at this doc. The only
 thing that differs per project is **which repo the session runs in** and
-**which `PROJECT` code it drains** (`CCC`, `BYMPROD`, `HERMES`, …).
+**which `PROJECT` code it drains** (`CCC`, `ACME`, `HERMES`, …).
 
 > Spawning a fixer: open a session in the target repo and send it the
 > canonical goal at the bottom of this file, with `<PROJECT>` filled in.
@@ -18,14 +18,14 @@ thing that differs per project is **which repo the session runs in** and
   docstring), resolved by `watchtower.queue._resolve_store_path()`
   (override with `$WATCHTOWER_STORE`).
 - **Every project lives in that one store**, namespaced by an item's `project`
-  field. A `BYMPROD` fixer only ever touches `project == "BYMPROD"`; it never sees or
+  field. A `ACME` fixer only ever touches `project == "ACME"`; it never sees or
   edits `CCC` items.
 - Annotations route to a project automatically by repo basename / configured
   repo_path (see `_project_for` in `watchtower/queue.py`) — e.g.
   `claude-command-center` → `CCC`. So you do not "create" a queue; annotating
   a project's pages files tickets into it. (Note: as of 2026-08-21, this
   basename routing has no special-case alias table — a repo like
-  `bookyourmat` or `BYM+Finie` routes by its literal basename unless its
+  `acme-web` or `Acme+Web` routes by its literal basename unless its
   `repo_path` is registered in `queue-config.json` or the caller passes an
   explicit `project=`.)
 
@@ -55,13 +55,13 @@ reachable session id.
 | `q.enqueue(project='<PROJECT>', note=..., text=..., ...)` | File a NEW ticket → returns it (with assigned ref) |
 | `q.list_items(status='open', project='<PROJECT>')` | List open tickets for your project |
 | `q.claim_next(SID, project='<PROJECT>')` | Atomically claim the oldest open item → returns it (or `None`) |
-| `q.update_status(ref, 'in_progress', SID)` | Claim a specific ref (e.g. `'BYM-87'`) |
+| `q.update_status(ref, 'in_progress', SID)` | Claim a specific ref (e.g. `'ACME-87'`) |
 | `q.close(ref, SID)` | Mark a ticket fixed |
 
 ### Filing a ticket (`enqueue`)
 
 A fixer drains; any session can **file**. Pass `project=` explicitly to pick the
-lane (`OPS`, `BYM`, `CCC`, …) — an unknown code like `OPS` is accepted as-is and
+lane (`OPS`, `ACME`, `CCC`, …) — an unknown code like `OPS` is accepted as-is and
 gets its own `OPS-N` ref series. If you omit `project`, it routes by `repo_path`
 basename, then `source`, else `GEN`. `note` (short, ≤4000 chars) or `text`
 (detailed, ≤24000) is required; everything else is optional.
@@ -86,7 +86,7 @@ without colliding with a fixer that is draining the same file.
 
 ### Ticket shape
 
-Each item carries: `ref` (e.g. `BYM-87`), `note` / `text` (the annotation),
+Each item carries: `ref` (e.g. `ACME-87`), `note` / `text` (the annotation),
 `selector` (CSS path to the element), `url`, `screenshot_path`, `repo_path`.
 Open the screenshot and use the selector to locate exactly what the user meant.
 

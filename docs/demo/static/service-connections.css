@@ -1,0 +1,25 @@
+#serviceConnections { font-size:13px; line-height:1.55; }
+.service-connection-help summary { cursor:pointer; }
+#serviceConnections p { max-width: 70ch; line-height: 1.55; }
+.service-connection-add { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:18px 0; }
+.service-connection-add select { max-width:100%; }
+.service-connection-directory .settings-row { align-items:start; }
+.service-connection-directory .byok-profile-row { display:block; padding:12px 0; border-bottom:1px solid var(--border); overflow-wrap:anywhere; }
+.service-provider-account { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:8px; }
+.service-connection-editor { margin:18px 0; border-top:1px solid var(--border); padding-top:14px; }
+.service-connection-editor > summary { cursor:pointer; font-weight:600; padding:8px 0; }
+.service-connections-retired { display:none!important; }
+#serviceConnections button:focus-visible, .service-connection-editor summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+@media(max-width:700px) {
+ #settingsPane #settingsSection-vault input:not([type="checkbox"]):not([type="radio"]),
+ #settingsPane #settingsSection-vault select,
+ #settingsPane #settingsSection-vault button { min-height:44px; }
+ .service-connection-add { align-items:stretch; }
+ .service-connection-add label { width:100%; }
+ .service-connection-add select { width:100%; }
+ .service-connection-directory button, .service-connection-add button,
+ .service-connection-editor button, .service-connection-editor input, .service-connection-editor select { min-height:44px; }
+ .service-connection-directory .vault-entry { flex-wrap:wrap; }
+ .service-connection-directory .vault-entry-main { min-width:0; overflow-wrap:anywhere; }
+ .service-connection-directory .vault-entry-actions { flex-wrap:wrap; }
+}

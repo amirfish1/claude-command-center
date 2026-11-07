@@ -3,7 +3,7 @@ import uuid
 
 from ccc_server.decision_delivery import AnswerOutbox
 from ccc_server.decision_registry import DecisionRegistry
-from ccc_server.decision_requests import read_requests, requests_payload
+from ccc_server.decision_requests import github_requests, read_requests, requests_payload
 from ccc_server.decision_sessions import SessionQuestions
 from ccc_server.decision_sources import apply_owner_export
 from tests.test_decision_sources import receipt, row
@@ -164,6 +164,7 @@ def test_http_read_model_uses_actual_handler_and_preserves_unavailable_semantics
     monkeypatch.setattr(decision_inbox, '_state_root', lambda: tmp_path)
     monkeypatch.setattr(decision_sources, 'owner_source_payload', lambda **kw:
                         dict(ok=False, source=dict(status='unavailable', complete=False)))
+    monkeypatch.setattr(server, '_wt_list_items_for_requests', lambda: [])
 
     class Handler(server.CommandCenterHandler):
         def _check_proxy_secret(self):
@@ -189,3 +190,42 @@ def test_http_read_model_uses_actual_handler_and_preserves_unavailable_semantics
         listener.shutdown()
         listener.server_close()
         thread.join(timeout=5)
+
+
+def _github_ticket(ref='OPS-7', **fields):
+    item = dict(id='github:7', ref=ref, title='Repair', status='in_progress', needs_input=True,
+                block_kind='input', block_question='[Q9:repair] Approve the plan?',
+                blocked_at='2026-01-01T00:00:01Z')
+    item.update(fields)
+    return item
+
+
+def test_github_owner_wait_is_listed_and_answerable_when_answers_are_enabled():
+    (row,) = github_requests([_github_ticket()], answers_enabled=True)
+    assert (row['adapter'], row['origin_id'], row['body']) == (
+        'watchtower-github', 'OPS-7', '[Q9:repair] Approve the plan?')
+    assert row['aliases'] == ['[Q9:repair]']
+    assert row['needs_answer'] is True
+    assert row['can_answer'] is True and row['can_close'] is False
+    assert row['reply_supported'] is True and row['answer_unavailable_reason'] == ''
+    (disabled,) = github_requests([_github_ticket()])
+    assert disabled['can_answer'] is False and disabled['answer_unavailable_reason']
+    assert row['request_id'] == github_requests([_github_ticket()])[0]['request_id']
+    assert row['request_id'] != github_requests([_github_ticket(blocked_at='2026-01-02')])[0]['request_id']
+
+
+def test_only_github_tickets_waiting_on_the_owner_are_listed():
+    assert github_requests(None) == []
+    others = [_github_ticket(id=''), _github_ticket(needs_input=False),
+              _github_ticket(status='closed'), _github_ticket(block_question=''),
+              _github_ticket(block_kind='rationale'), _github_ticket(duplicate_of='OPS-1'),
+              _github_ticket(wait={'on': 'dependency', 'block_at': '2026-01-01T00:00:01Z'})]
+    assert github_requests(others) == []
+
+
+def test_github_waits_count_and_sort_with_local_requests(tmp_path):
+    source = dict(ok=True, source={'status': 'current', 'complete': True, 'authoritative': True})
+    result = requests_payload(state_root=tmp_path, source_loader=lambda **kw: source,
+                              tickets=[_github_ticket('B-1'), _github_ticket('A-1')])
+    assert [r['origin_id'] for r in result['requests']] == ['A-1', 'B-1']
+    assert result['needs_answer_count'] == 2

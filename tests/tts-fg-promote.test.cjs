@@ -18,7 +18,7 @@ function harness(entry) {
     const setTtsButtonsState=()=>{}, setTtsButtonsBusy=()=>{}, ttsButtons=()=>[];
     const fgGot={createUrl:()=> 'fg',voice:'Kokoro: af_nova',blob:{},done:Promise.resolve()};
     const _ttsFetchNeural=(text,voice,prio)=>{fetches.push([voice,prio]);return Promise.resolve(fgGot);};
-    const _ttsContinuousOk=()=>false;
+    const _ttsContinuousOk=()=>false, _ttsCanStream=()=>false, _ttsEventLagMs=()=>0;
     const cancelAnimationFrame=()=>{};
     function Audio(){
       this.duration=Infinity;this.currentTime=0;this.paused=true;
@@ -49,4 +49,21 @@ test('a fully prepared clip plays from cache without a request', async()=>{
   const h=harness({bg:true,ready:true});await h.start();
   assert.equal(h.run('fetches.length'),0);
   assert.equal(h.run('_ttsAudio.src'),'bg');
+});
+
+test('a voice switch cancels the old voice but a plain restart keeps its clips', () => {
+  const context = vm.createContext({});
+  vm.runInContext(`
+    let _ttsBoundUtteranceText='some words to read', _ttsLastCharIndex=0, _ttsPaused=false, _ttsChunkState=null;
+    let _ttsKeepVoice='', _ttsActivePaneId='p1', aborts=0;
+    let _ttsFgAbort={abort(){aborts+=1;}};
+    const _ttsScheduleCacheDebug=()=>{}, _ttsEngineCancel=()=>{}, activePaneId=()=>'p1', _ttsStartChunkedSpeech=()=>{};
+  `, context);
+  const start = source.indexOf('  function _restartTtsAtCurrentPosition(');
+  vm.runInContext(source.slice(start, source.indexOf('  // Mid-read voice switch', start)), context);
+  vm.runInContext('_restartTtsAtCurrentPosition()', context);
+  assert.equal(vm.runInContext('aborts', context), 0);
+  vm.runInContext("_restartTtsAtCurrentPosition('Kokoro: am_puck')", context);
+  assert.equal(vm.runInContext('aborts', context), 1);
+  assert.equal(vm.runInContext('_ttsFgAbort', context), null);
 });

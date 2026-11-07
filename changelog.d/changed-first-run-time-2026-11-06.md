@@ -1,0 +1,1 @@
+- README, website and first-run wizard no longer promise five minutes, and they describe the Claude Code path. Setup on a new computer takes about ten.

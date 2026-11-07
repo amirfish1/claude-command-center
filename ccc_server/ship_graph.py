@@ -38,6 +38,7 @@ from typing import Any
 
 import federation
 from ccc_server import github_quota as _github_quota
+from ccc_server import local_overrides as _local_overrides
 
 _base_search_sessions = None
 
@@ -430,16 +431,6 @@ KNOWN_REPO_ALIASES: dict[str, list[str]] = {
         r"\bclaude command center\b",
         r"\bccc-\d+\b",
     ],
-    "BYM": [
-        r"\bbym\b",
-        r"\bbook[- ]?your[- ]?mat\b",
-        r"\bbook your mat\b",
-        r"\bbecky\b",
-        r"\bbecky[- ]pro\b",
-        r"\bbym-\d+\b",
-        r"\bbecky-\d+\b",
-        r"\bbymops-\d+\b",
-    ],
     "watchtower": [
         r"\bwatchtower\b",
         r"\bwatch[- ]?tower\b",
@@ -447,19 +438,19 @@ KNOWN_REPO_ALIASES: dict[str, list[str]] = {
         r"\bwt-\d+\b",
         r"\bwatchtower-\d+\b",
     ],
-    "chuck-realtor-web": [
-        r"\bchuck\b",
-        r"\bchuck[- ]realtor\b",
-        r"\bchuck[- ]realtor[- ]web\b",
-        r"\bchuckrealtor\b",
-    ],
 }
+
+
+def _all_repo_aliases() -> dict[str, list[str]]:
+    """Built-in aliases plus this install's own (local-overrides.json)."""
+    return {**KNOWN_REPO_ALIASES, **_local_overrides.repo_aliases()}
 
 
 def detect_named_repo(query: str, known_roots: dict[str, str] | None = None) -> tuple[str | None, set[str]]:
     """Detect if a question names a specific repository or alias."""
     q_lower = query.lower()
-    for repo, patterns in KNOWN_REPO_ALIASES.items():
+    aliases = _all_repo_aliases()
+    for repo, patterns in aliases.items():
         for pat in patterns:
             m = re.search(pat, q_lower)
             if m:
@@ -468,7 +459,7 @@ def detect_named_repo(query: str, known_roots: dict[str, str] | None = None) -> 
 
     if known_roots:
         for r_name in known_roots:
-            if r_name in KNOWN_REPO_ALIASES:
+            if r_name in aliases:
                 continue
             if len(r_name) <= 2 or r_name.startswith((".", "_")):
                 continue
@@ -688,7 +679,7 @@ def _init_db(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_edge_dst ON edges(dst);
         -- MEMORY-20: recall maps each commit hit to the sessions that made it.
         -- idx_edge_dst also walks every 'mentioned' edge of a commit (99.9%
-        -- of 7.7M edges on hermes-gcp): ~36 ms per recall; this is ~6k rows.
+        -- of 7.7M edges on a busy host): ~36 ms per recall; this is ~6k rows.
         CREATE INDEX IF NOT EXISTS idx_edge_dst_owner ON edges(dst)
             WHERE kind IN ('made', 'window');
 
@@ -907,7 +898,7 @@ def _sync_git_repos(conn: sqlite3.Connection, roots: dict[str, str], days: float
 
 def _clean_ticket_title(title: str, text: str) -> str:
     t = (title or "").strip()
-    if not t or t.startswith("reporter=") or "Command Center for Claude" in t or "BookYourMat — Studio Scheduling" in t or t == "Flow — CCC":
+    if not t or t.startswith("reporter=") or "Command Center for Claude" in t or t == "Flow — CCC" or any(n in t for n in _local_overrides.ticket_title_noise()):
         lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
         for line in lines:
             if not line.startswith("WAVE ") and not line.startswith("DEPENDS:") and not line.startswith("ENGINE:") and not line.startswith("REVIEW:"):
@@ -1832,7 +1823,8 @@ def _ticket_matches_repo(t_ref: str, repo: str) -> bool:
         return False
     if pfx in ("WT", "WATCHTOWER") and repo != "watchtower":
         return False
-    if pfx in ("BYM", "BECKY", "BYMOPS") and repo not in ("BYM", "becky-pro", "amirfish1__BYM-Finie"):
+    owners = _local_overrides.ticket_prefix_repos().get(pfx)
+    if owners and repo not in owners:
         return False
     return True
 

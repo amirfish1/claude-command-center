@@ -18,7 +18,7 @@
   // Question-tags panel: put text into a session's composer WITHOUT sending, so
   // the owner can stack several answers and submit on their own time. Opens the
   // session first when it is not already in front.
-  window.cccAppendToComposer = function (sid, text) {
+  function withSessionComposer(sid) {
     return new Promise((resolve) => {
       let tries = 0;
       const attempt = () => {
@@ -26,19 +26,31 @@
         try {
           if (window.cccFrontSessionId() === sid) input = composerInputForPane(activePaneId());
         } catch (_) {}
-        if (input) {
-          const cur = input.value || '';
-          input.value = cur.trim() ? cur.replace(/\s+$/, '') + '\n\n' + text : text;
-          moveInputCaretToEnd(input);
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          try { rememberComposerDraftForPane(activePaneId()); } catch (_) {}
-          resolve(true);
-        } else if (++tries > 40) resolve(false);
+        if (input) resolve(input);
+        else if (++tries > 40) resolve(null);
         else setTimeout(attempt, 150);
       };
       try { if (window.cccFrontSessionId() !== sid) selectConversation(sid); } catch (_) {}
       attempt();
     });
+  }
+  window.cccAppendToComposer = async function (sid, text) {
+    const input = await withSessionComposer(sid);
+    if (!input) return false;
+    const cur = input.value || '';
+    input.value = cur.trim() ? cur.replace(/\s+$/, '') + '\n\n' + text : text;
+    moveInputCaretToEnd(input);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    try { rememberComposerDraftForPane(activePaneId()); } catch (_) {}
+    return true;
+  };
+  // Talk to worker: the session in front, cursor in its composer, nothing sent.
+  window.cccFocusComposer = async function (sid) {
+    const input = await withSessionComposer(sid);
+    if (!input) return false;
+    input.focus();
+    moveInputCaretToEnd(input);
+    return true;
   };
   // An explicit Send answer click carries the same human provenance as the composer.
   window.cccSendQuestionAnswer = async function (sid, text) {
@@ -456,6 +468,30 @@
       _ltObs.observe({ entryTypes: ['longtask'] });
     }
   } catch (_) {}
+  // Long Animation Frames name the script behind a block (CCC-343): which
+  // function/invoker ran longest inside a >=200ms frame. Logged as
+  // [LOAF] so the top main-thread sources can be ranked from service logs.
+  try {
+    if (typeof PerformanceObserver === 'function'
+        && (PerformanceObserver.supportedEntryTypes || []).includes('long-animation-frame')) {
+      let _loafLast = 0;
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          if (e.duration < 200) continue;
+          const now = Date.now();
+          if (now - _loafLast < 2000) continue;
+          _loafLast = now;
+          const sc = (e.scripts || []).slice().sort((x, y) => y.duration - x.duration)[0];
+          const src = sc ? ((sc.invoker || sc.sourceFunctionName || sc.type || '?')
+            + ' @' + String(sc.sourceURL || '').split('/').pop() + ':' + (sc.sourceCharPosition || 0)
+            + ' script=' + Math.round(sc.duration) + 'ms') : 'no-script';
+          const render = Math.round(Math.max(0, (e.startTime + e.duration) - (e.renderStart || (e.startTime + e.duration))));
+          _clientLog('[LOAF] ' + Math.round(e.duration) + 'ms ' + src
+            + ' block=' + Math.round(e.blockingDuration || 0) + 'ms render=' + render + 'ms');
+        }
+      }).observe({ type: 'long-animation-frame', buffered: false });
+    }
+  } catch (_) {}
 
   // ── Session-completion sounds ────────────────────────────────────────────
   // Lightweight Web-Audio beeps when the agent finishes a turn or goes idle.
@@ -825,6 +861,7 @@
     const ov = document.createElement('div');
     ov.id = 'cccAnomalyPrompt';
     ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    const allMemory = anoms.every(function (a) { return a.kind === 'memory'; });
     let rows = '';
     anoms.forEach(function (a, i) {
       rows += '<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--border)">' +
@@ -834,8 +871,10 @@
         '<code style="font-size:11px;opacity:.7;word-break:break-all">' + esc(a.cmd.slice(0, 160)) + '</code></span></label>';
     });
     ov.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:18px 20px;max-width:560px;width:calc(100% - 40px);max-height:80vh;overflow:auto;box-shadow:0 8px 32px rgba(0,0,0,.5);color:var(--text);font-size:13px">' +
-      '<div style="font-size:15px;font-weight:600;margin-bottom:6px">Runaway process detected</div>' +
-      '<div style="opacity:.8;margin-bottom:8px">This looks leaked or hung and is eating memory. Kill it? Nothing is killed unless you confirm.</div>' + rows +
+      '<div style="font-size:15px;font-weight:600;margin-bottom:6px">' + (allMemory ? 'Large process' : 'Runaway process detected') + '</div>' +
+      '<div style="opacity:.8;margin-bottom:8px">' + (allMemory
+        ? 'This has held a lot of memory for over an hour. That may be normal for it. Nothing is killed unless you confirm.'
+        : 'This looks leaked or hung and is eating memory. Kill it? Nothing is killed unless you confirm.') + '</div>' + rows +
       '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">' +
       '<button type="button" class="sh-btn" data-act="later">' + (manual ? 'Cancel' : 'Not now') + '</button>' +
       '<button type="button" class="sh-btn sh-btn-danger" data-act="kill">Kill selected</button></div></div>';
@@ -868,8 +907,10 @@
         .then(function (d) {
           if (!d || !Array.isArray(d.anomalies)) return;
           const snoozed = _anomalySnoozed(), now = Date.now();
+          // Only a stuck one-shot tool interrupts anyone. A large process is
+          // not proof of a leak, so those stay in the Health panel.
           const fresh = d.anomalies.filter(function (a) {
-            return !(snoozed[a.key] && now - snoozed[a.key] < ANOMALY_SNOOZE_MS);
+            return a.kind === 'runaway' && !(snoozed[a.key] && now - snoozed[a.key] < ANOMALY_SNOOZE_MS);
           });
           if (fresh.length) _showAnomalyPrompt(fresh, false);
         })
@@ -2376,6 +2417,7 @@
   // set — the wrapper rewrites only `/api/...` URLs, so real-mode behavior is
   // untouched. Set the flag inline in docs/demo/index.html BEFORE this script
   // loads, or pass ?demo=1.
+  window.cccDecisionTabKey = () => (window.__CCC_DEMO__ === true || document.querySelector('script[src$="demo/backend.js"]')) ? 'decisions' : 'decisions2';
   (function installDemoMode() {
     const params = new URLSearchParams(window.location.search || '');
     const fromFlag = window.__CCC_DEMO__ === true;
@@ -3590,13 +3632,23 @@
         && (a.owner === undefined || ['agent', 'user', 'external'].includes(a.owner)));
     const reasons = [];
     if (valid) {
-      if (openTopic) reasons.push('topic goal is not yet met');
-      if (assessment.resolution.score < 0.9) reasons.push('resolution below 0.9');
+      // Mirrors the server (_completion_assessment): pushed work that only
+      // waits on a deploy/release is done; deployment is not part of fixing.
+      const isDeployWait = t => /\b(?:deploy(?:s|ed|ment)?|release|rollout|roll\s+out|ship(?:s|ped)?\s+to\s+prod\w*)\b/i.test(t)
+        && /\b(?:schedul\w*|pending|await\w*|wait\w*|until|after|once|when)\b/i.test(t);
+      const deployWaits = assessment.remaining_actions.filter(a => isDeployWait(a.text));
+      const deployPending = deployWaits.length > 0 && assessment.delivery.applicable !== false
+        && assessment.delivery.score >= 0.5;
+      const otherActions = deployPending ? assessment.remaining_actions.filter(a => !deployWaits.includes(a))
+        : assessment.remaining_actions;
+      const blocking = assessment.caveats.filter(c => c.blocking && !(deployPending && isDeployWait(c.text)));
+      if (openTopic && !deployPending) reasons.push('topic goal is not yet met');
+      if (assessment.resolution.score < (deployPending ? 0.8 : 0.9)) reasons.push('resolution below 0.9');
       if (assessment.verification.score < 0.8) reasons.push('verification below 0.8');
-      if (assessment.delivery.applicable === false || assessment.delivery.score !== 1) reasons.push('delivery incomplete');
+      if (assessment.delivery.applicable === false || assessment.delivery.score < (deployPending ? 0.5 : 1)) reasons.push('delivery incomplete');
       if (assessment.decision_dependency.score !== 0) reasons.push('a user decision remains');
-      if (assessment.caveats.some(c => c.blocking)) reasons.push('a blocking caveat remains');
-      if (assessment.remaining_actions.length) reasons.push('unfinished actions remain');
+      if (blocking.length) reasons.push('a blocking caveat remains');
+      if (otherActions.length) reasons.push('unfinished actions remain');
     }
     return { scope, validScope, openTopic, valid: !!valid, reasons, axes };
   }
@@ -3728,10 +3780,14 @@
     if (planned && typeof planned.text === 'string' && planned.text.trim()) {
       const ownerTag = planned.text.match(/^\s*(?:owner\s*[:=]\s*)?\(?(agent|user|external|amir|human)\)?\s*[:=—–-]\s*/i);
       const owner = String(planned.owner || (ownerTag && ownerTag[1]) || '').trim().toLowerCase();
+      const planText = (ownerTag ? planned.text.slice(ownerTag[0].length) : planned.text).trim();
+      // An agent step that starts with a trigger ("on the first…", "after a
+      // day…") is not being worked now; no agent is busy, so say "Waiting".
+      const eventDriven = /^(?:on|after|once|when|if|upon|next time|the next)\b/i.test(planText);
       if (!['user', 'amir', 'human'].includes(owner)) plan = {
-        label: owner === 'agent' ? 'Waiting for agent' : owner === 'external' ? 'Waiting' : 'Next', kind: 'plan',
-        planOwner: owner,
-        text: (ownerTag ? planned.text.slice(ownerTag[0].length) : planned.text).trim(),
+        label: owner === 'agent' && !eventDriven ? 'Waiting for agent' : (owner === 'agent' || owner === 'external') ? 'Waiting' : 'Next', kind: 'plan',
+        planOwner: owner, eventDriven,
+        text: planText,
       };
     }
     if (working) return Object.assign(base, { label: 'Working', kind: 'working',
@@ -7662,8 +7718,7 @@
           .forEach(p => markPendingSendQueued(p,
             "Queued - this Devin session is open in another client "
             + "(e.g. Devin Desktop); it'll deliver when that client lets go. "
-            + "If nothing else has it open, use Restart session from the "
-            + "⋯ menu."));
+            + "If nothing else has it open, close and reopen the session."));
       }
       // A pending devin-browser sign-in (or other ACP attach failure) gets
       // the same annotation — the backend reason string already says what
@@ -8680,7 +8735,7 @@
 
   function sessionEngineIconHtml(row, options) {
     const opts = options || {};
-    const portrait = _ideaAvatarHtml(row, opts.context === 'pane') || _repoSessionAvatarHtml(row, opts.context === 'pane');
+    const portrait = !opts.compact && (_ideaAvatarHtml(row, opts.context === 'pane') || _repoSessionAvatarHtml(row, opts.context === 'pane'));
     if (portrait) return portrait;
     const sid = row && (row.session_id || row.id);
     const optimistic = !!(sid && typeof sessionIsOptimisticallySending === 'function'
@@ -11124,6 +11179,7 @@
       // durable transcript event that dedupes it away.
       if (row) {
         row.classList.remove('steering-optimistic');
+        if (data.steer_kept_sender) row.dataset.steerKeptSender = '1';
         if (row._pendingRef) markPendingSendDelivered(row._pendingRef, data);
         else settleSteeredServerCard(row);
       }
@@ -11183,7 +11239,7 @@
     try {
       const data = await postInjectInput(sid, text, 'steer', isPending
         ? { replaceQueued: true, userInitiated: true, replaceQueuedIds: [queuedRowDeliveryId(row)] }
-        : { userInitiated: true });
+        : { userInitiated: true, steerExisting: true, steerOriginMsgId: btn.dataset.steerOriginMsgId || '' });
       if (data && data.queue_pump_started) {
         showOpToast('Turn ended; sending the oldest queued message now.');
         setTimeout(refreshConversationList, 500);
@@ -11958,9 +12014,14 @@
     if (sid) {
       const cleared = _recentlyClearedGoals.get(sid);
       if (cleared) {
-        if (objective && objective === cleared.objective && (Date.now() - cleared.at) < 120000) {
+        // CCC-346: the 2-minute window was too short -- Claude rows only
+        // re-derive `goal` on a full archive rescan, which can serve the
+        // pre-clear text well past 2 min, so the banner came back. Keep
+        // suppressing until the server reports a different/empty goal (that
+        // confirms the clear), with a 30-minute backstop.
+        if (objective && objective === cleared.objective && (Date.now() - cleared.at) < 1800000) {
           objective = '';
-        } else if (objective !== cleared.objective) {
+        } else {
           _recentlyClearedGoals.delete(sid);
         }
       }
@@ -15733,8 +15794,10 @@
     let finished = false, failed = null;
     const clip = { blob: null, done, createUrl: () => {
       if (clip.blob) return URL.createObjectURL(clip.blob);
+      return _ttsStreamUrl(new Response(clip.body()));
+    }, body: () => {
       let listener;
-      const body = new ReadableStream({
+      return new ReadableStream({
         start(controller) {
           for (const chunk of chunks) controller.enqueue(chunk);
           if (failed) { controller.error(failed); return; }
@@ -15744,7 +15807,6 @@
         },
         cancel() { listeners.delete(listener); },
       });
-      return _ttsStreamUrl(new Response(body));
     } };
     (async () => {
       try {
@@ -15773,7 +15835,7 @@
   }
   // Resolves a replayable clip (or a complete blob on non-streaming browsers).
   // prio 'bg' = prepare-ahead: the local voice makes 'fg' (a read being heard) first.
-  function _ttsFetchNeural(text, voice, prio, debugJob) {
+  function _ttsFetchNeural(text, voice, prio, debugJob, signal) {
     const job = debugJob || _ttsDebugJob(text, 'processing', null);
     job.status = 'processing';
     _ttsScheduleCacheDebug();
@@ -15810,6 +15872,7 @@
       // Always the streamed mp3: a browser without MediaSource reads it as one
       // blob, and the server keeps the finished clip for a continuous read.
       body: JSON.stringify({ text, voice: voice || '', stream: true, prio: prio === 'bg' ? 'bg' : 'fg' }),
+      signal,
     }).then(async (res) => {
       if (!res.ok) throw res.status;
       const v = res.headers.get('X-CCC-Voice') || '';
@@ -16003,7 +16066,7 @@
         const now = Date.now();
         stopHighlight();
         trackWord();
-        _ttsPerfStart(state, { engine: 'neural', voice: state.geminiVoice || voice });
+        _ttsPerfStart(state, { engine: 'neural', voice: state.geminiVoice || voice, lagMs: _ttsEventLagMs(audio) });
         if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms (continuous)'); state.t0 = 0; }
         if (waitFrom) {
           _ttsPerfSilence(state, now - waitFrom, 'stall');
@@ -16071,6 +16134,7 @@
       });
       playStream();
     };
+    const sessionT0 = performance.now();
     fetch('/api/free-runtime/tts-session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -16078,12 +16142,14 @@
     }).then(r => r.ok ? r.json() : Promise.reject(r.status)).then((j) => {
       if (stale()) { cancelSession(j && j.id); return; }
       sid = j.id;
+      if (state.perf) state.perf.sessionMs = Math.round(performance.now() - sessionT0);
       _ttsLog('CONT', 'stream ' + clips.length + ' clips from clip ' + from + (hit ? ' (head prepared)' : ''));
       start();
     }).catch((status) => toClips('session ' + status));
   }
   function _ttsSpeakChunkNeural(state, chunk) {
     if (_ttsContinuousOk(state)) { _ttsSpeakContinuous(state); return; }
+    if (_ttsChainOk(state)) { _ttsSpeakChain(state); return; }
     const token = ++_ttsNeuralToken;
     _ttsUtterance = { neural: true };   // keeps the "is a read active" checks true
     const stale = () => token !== _ttsNeuralToken || _ttsChunkState !== state;
@@ -16101,56 +16167,7 @@
       _ttsUtterance = null;
       _ttsSpeakNextChunk();
     };
-    state.prefetch = state.prefetch || {};
-    const ensure = (i) => {
-      const c = state.chunks[i];
-      if (!c || state.prefetch[i]) return;
-      const hit = _ttsHeadCache.get(c.text);
-      let p;
-      if (hit && (!state.geminiVoice || hit.voice === state.geminiVoice)) {
-        // Prepare-ahead makes clips at bg priority, behind every other
-        // message being prepared. A clip the listener now waits on is asked
-        // for again at fg; the voice server shares made pieces, so the bg
-        // request does not repeat the work (CCC-144: cold clicks waited 5-12s
-        // on a bg head).
-        p = !hit.bg || hit.ready ? hit.p : hit.p.then((got) => {
-          if (hit.ready) return got;
-          try { return _ttsFetchNeural(c.text, got.voice, 'fg').catch(() => got); } catch (_) { return got; }
-        });
-        // Prepared blobs remain reusable after playback, seeks and rate changes.
-        try {
-          if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
-            at: Date.now(),
-            text: 'clip ' + i + ' PREPARED ' + (hit.ready ? 'ready' : 'making'),
-            anomaly: !hit.ready,
-            title: 'speaker clip ' + i + ' reused from the prepare-ahead cache (' + (hit.ready ? 'fully made' : 'still generating') + ' at click)',
-          });
-        } catch (_) {}
-      } else {
-        p = _ttsFetchNeural(c.text, state.geminiVoice, 'fg');
-        p.catch(() => {});
-      }
-      state.prefetch[i] = p;
-      // Keep the paint through the handoff from prepare-ahead to playback,
-      // and include clips generated during a read, until they are released.
-      state.debugCache = state.debugCache || new Map();
-      const debugEntry = { debugReady: !!(hit && p === hit.p && hit.debugReady) };
-      state.debugCache.set(c.text, debugEntry);
-      _ttsScheduleCacheDebug();
-      p.then(g => g.done).then(() => {
-        debugEntry.debugReady = true;
-        _ttsScheduleCacheDebug();
-      }).catch(() => {
-        state.debugCache.delete(c.text);
-        _ttsScheduleCacheDebug();
-      });
-      // Once this clip is fully made, the bar's cached end moves past it.
-      p.then((g) => g.done).then(() => {
-        if (_ttsChunkState !== state) return;
-        state.cachedTo = Math.max(state.cachedTo || 0, c.start + c.text.length);
-        _ttsSetPlay();
-      }).catch(() => {});
-    };
+    const ensure = (i) => _ttsEnsureClip(state, i);
     const idx = state.index;
     ensure(idx);
     state.prefetch[idx].then((got) => {
@@ -16277,8 +16294,9 @@
         stopHighlight();
         trackWord();
         _ttsLog('PLAY', 'clip ' + idx + ' (' + chunk.text.length + ' chars)');
-        _ttsPerfStart(state, { engine: 'neural', voice: got.voice });
-        if (state.perf && state.perf.gapT0) { _ttsPerfSilence(state, performance.now() - state.perf.gapT0, 'gap'); state.perf.gapT0 = 0; }
+        const lagMs = _ttsEventLagMs(audio);
+        _ttsPerfStart(state, { engine: 'neural', voice: got.voice, lagMs });
+        if (state.perf && state.perf.gapT0) { _ttsPerfSilence(state, Math.max(0, performance.now() - state.perf.gapT0 - lagMs), 'gap'); state.perf.gapT0 = 0; }
         if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms'); state.t0 = 0; }
         else if (state.gapFrom) { const g = now - state.gapFrom; if (g > 300) _ttsLog('GAP', g + 'ms before clip ' + idx + ' (' + chunk.text.length + ' chars)'); }
         state.gapFrom = 0;
@@ -16298,22 +16316,346 @@
       audio.play().catch((error) => {
         if (stale()) return;
         _ttsLog('ERROR', 'clip ' + idx + ' play rejected: ' + (error?.name || 'unknown'));
-        if (error?.name === 'NotAllowedError') {
-          // Keep the selected ready clip. The next tap can grant permission;
-          // do not silently switch voices or discard its position.
-          _ttsPaused = true;
-          setTtsButtonsBusy(false);
-          if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'paused');
-          ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === state.paneId) btn.classList.add('paused'); });
-          showOpToast('Tap the speaker to resume audio.', 'info');
-          return;
-        }
+        if (error?.name === 'NotAllowedError') { _ttsPlayBlocked(state); return; }
         stopHighlight();
         clearTtsHighlight();
         clearTtsCaption();
         releaseDebug(); fallBack(0);
       });
     }, (status) => { if (!stale()) fallBack(_ttsCoolMs(status)); });
+  }
+
+  // Asks for clip i of a read once; the promise waits in state.prefetch[i].
+  function _ttsEnsureClip(state, i) {
+    state.prefetch = state.prefetch || {};
+    const c = state.chunks[i];
+    if (!c || state.prefetch[i]) return;
+    const hit = _ttsHeadCache.get(c.text);
+    let p;
+    if (hit && (!state.geminiVoice || hit.voice === state.geminiVoice)) {
+      // Prepare-ahead makes clips at bg priority, behind every other
+      // message being prepared. A clip the listener now waits on is asked
+      // for again at fg; the voice server shares made pieces, so the bg
+      // request does not repeat the work (CCC-144: cold clicks waited 5-12s
+      // on a bg head).
+      p = !hit.bg || hit.ready ? hit.p : hit.p.then((got) => {
+        if (hit.ready) return got;
+        try { return _ttsFetchNeural(c.text, got.voice, 'fg', null, state.abort?.signal).catch(() => got); } catch (_) { return got; }
+      });
+      // Prepared blobs remain reusable after playback, seeks and rate changes.
+      try {
+        if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
+          at: Date.now(),
+          text: 'clip ' + i + ' PREPARED ' + (hit.ready ? 'ready' : 'making'),
+          anomaly: !hit.ready,
+          title: 'speaker clip ' + i + ' reused from the prepare-ahead cache (' + (hit.ready ? 'fully made' : 'still generating') + ' at click)',
+        });
+      } catch (_) {}
+    } else {
+      p = _ttsFetchNeural(c.text, state.geminiVoice, 'fg', null, state.abort?.signal);
+      p.catch(() => {});
+    }
+    state.prefetch[i] = p;
+    // Keep the paint through the handoff from prepare-ahead to playback,
+    // and include clips generated during a read, until they are released.
+    state.debugCache = state.debugCache || new Map();
+    const debugEntry = { debugReady: !!(hit && p === hit.p && hit.debugReady) };
+    state.debugCache.set(c.text, debugEntry);
+    _ttsScheduleCacheDebug();
+    p.then(g => g.done).then(() => {
+      debugEntry.debugReady = true;
+      _ttsScheduleCacheDebug();
+    }).catch(() => {
+      state.debugCache.delete(c.text);
+      _ttsScheduleCacheDebug();
+    });
+    // Once this clip is fully made, the bar's cached end moves past it.
+    p.then((g) => g.done).then(() => {
+      if (_ttsChunkState !== state) return;
+      state.cachedTo = Math.max(state.cachedTo || 0, c.start + c.text.length);
+      _ttsSetPlay();
+    }).catch(() => {});
+  }
+  // The browser refused to start audio: keep the position for the next tap.
+  function _ttsPlayBlocked(state) {
+    _ttsPaused = true;
+    setTtsButtonsBusy(false);
+    if (_ttsDirectBtn) _setTtsDirectBtnState(_ttsDirectBtn, 'paused');
+    ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === state.paneId) btn.classList.add('paused'); });
+    showOpToast('Tap the speaker to resume audio.', 'info');
+  }
+  // Chained read (CCC-144): the page's main thread blocks for 0.2-1 s at a
+  // time, and a per-clip player can only start the next clip when `ended`
+  // reaches it, so those blocks became 0.5-1.9 s silences before clips made 10 s
+  // earlier. Here every clip is appended to ONE MediaSource ahead of the
+  // listener, and the media pipeline crosses clip boundaries with no JS.
+  // localStorage ccc-tts-chain = '0' turns it off.
+  const _TTS_CHAIN_AHEAD_S = 40;   // audio kept ready; a stopped read wastes no more
+  let _ttsChainBroken = false;     // this browser can't chain: stop trying
+  function _ttsChainOk(state) {
+    let pref = '';
+    try { pref = localStorage.getItem('ccc-tts-chain') || ''; } catch (_) {}
+    // A seek into a clip needs that clip's exact position: the per-clip player
+    // lands it, and the chain resumes from the next clip.
+    return pref !== '0' && !_ttsChainBroken && !state.noChain && state.seekTarget == null
+      && state.chunks.length - state.index > 1 && _ttsCanStream();
+  }
+  function _ttsSpeakChain(state) {
+    const token = ++_ttsNeuralToken;
+    _ttsUtterance = { neural: true };
+    const stale = () => token !== _ttsNeuralToken || _ttsChunkState !== state;
+    const from = state.index;
+    const clips = state.chunks.slice(from);
+    if (state.perf) state.perf.mode = 'chain';
+    const source = new MediaSource();
+    const url = URL.createObjectURL(source);
+    const marks = [0];   // stream second where each clip starts
+    let buffer = null, failedAt = null, model = '', wordFrame = null, lastWord = -1, heard = -1, openTimer = null;
+    const stopHighlight = () => {
+      if (wordFrame != null) cancelAnimationFrame(wordFrame);
+      wordFrame = null;
+    };
+    const release = () => {
+      stopHighlight();
+      clearTimeout(openTimer);
+      URL.revokeObjectURL(url);
+    };
+    const audio = _ttsAudio || (_ttsAudio = new Audio());
+    // Where a first sound's wait goes, for the first playing event's sample.
+    const mark = (name) => {
+      const p = state.perf;
+      if (p && !p.started) (p.split = p.split || {})[name] = Math.round(performance.now() - p.t0);
+    };
+    // Per-clip playback from the clip being heard.
+    const toClips = (why, broken) => {
+      if (stale()) return;
+      _ttsLog('CHAIN', 'per-clip from clip ' + state.index + ': ' + why);
+      if (broken) _ttsChainBroken = true;
+      if (state.perf) state.perf.mode = 'chain-fallback';
+      _ttsNeuralToken += 1;
+      release();
+      try { audio.pause(); } catch (_) {}
+      _ttsNeural = null;
+      _ttsUtterance = null;
+      _ttsSetStreaming(false);
+      state.noChain = true;
+      _ttsSpeakNextChunk();
+    };
+    const bufferedEnd = () => {
+      const b = buffer && buffer.buffered;
+      return b && b.length ? b.end(b.length - 1) : 0;
+    };
+    const append = (data) => new Promise((resolve, reject) => {
+      const settle = (fn) => () => {
+        buffer.removeEventListener('updateend', onEnd);
+        buffer.removeEventListener('error', onError);
+        fn();
+      };
+      const onEnd = settle(resolve);
+      const onError = settle(() => reject(new Error('append failed')));
+      buffer.addEventListener('updateend', onEnd);
+      buffer.addEventListener('error', onError);
+      try { buffer.appendBuffer(data); } catch (error) { onError(); }
+    });
+    const feedClip = async (got) => {
+      if (got.blob) { await append(await got.blob.arrayBuffer()); return; }
+      const reader = got.body().getReader();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) return;
+        if (stale()) { reader.cancel().catch(() => {}); return; }
+        await append(value);
+      }
+    };
+    const feed = async () => {
+      for (let j = 0; j < clips.length; j++) {
+        while (!stale() && bufferedEnd() - audio.currentTime > _TTS_CHAIN_AHEAD_S) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        if (stale()) return;
+        _ttsEnsureClip(state, from + j);
+        try {
+          const got = await state.prefetch[from + j];
+          if (stale()) return;
+          delete state.prefetch[from + j];
+          // Only a streamed clip is known to be mp3 this stream can carry.
+          if (!got.body) throw new Error('not a stream');
+          if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
+          if (got.model) model = got.model;
+          mark('clip_ms');
+          await feedClip(got);
+          mark('fed_ms');
+        } catch (_) {
+          if (stale()) return;
+          delete state.prefetch[from + j];
+          failedAt = j;
+          break;
+        }
+        if (stale()) return;
+        marks.push(bufferedEnd());
+      }
+      _ttsSetStreaming(false);
+      // Nothing to hear: go straight to the per-clip path. Otherwise it takes
+      // over at `ended`, after the audio already made.
+      if (failedAt === 0) { toClips('clip ' + from + ' unavailable'); return; }
+      try { source.endOfStream(); } catch (_) {}
+    };
+    // Stream time -> (clip, time inside it, its length or NaN while being made).
+    const clipAt = (t) => {
+      let j = 0;
+      while (j + 1 < marks.length && marks[j + 1] <= t) j += 1;
+      j = Math.min(j, clips.length - 1);
+      return { j, local: Math.max(0, t - marks[j]), dur: j + 1 < marks.length ? marks[j + 1] - marks[j] : NaN };
+    };
+    const updateWord = () => {
+      if (stale()) return;
+      const at = clipAt(audio.currentTime);
+      const chunk = clips[at.j];
+      if (at.j !== heard) {
+        if (heard >= 0) state.debugCache?.delete(clips[heard].text);
+        heard = at.j;
+        state.index = from + at.j;
+        _ttsScheduleCacheDebug();
+        _ttsLog('PLAY', 'clip ' + state.index + ' (' + chunk.text.length + ' chars, chained)');
+      }
+      const word = _ttsWordAtProgress(chunk.text, at.local, at.dur);
+      if (!word || chunk.start + word.start === lastWord) return;
+      lastWord = chunk.start + word.start;
+      _ttsLastCharIndex = lastWord;
+      _ttsSetPlay();
+      highlightTtsWord(_ttsLastCharIndex, word.length);
+      updateTtsCaption(_ttsLastCharIndex, word.length, _ttsBoundUtteranceText);
+    };
+    const trackWord = () => {
+      wordFrame = null;
+      if (stale() || audio.paused || audio.ended) return;
+      updateWord();
+      wordFrame = requestAnimationFrame(trackWord);
+    };
+    source.addEventListener('sourceopen', () => {
+      clearTimeout(openTimer);
+      if (stale()) return;
+      mark('open_ms');
+      try {
+        buffer = source.addSourceBuffer('audio/mpeg');
+        buffer.mode = 'sequence';   // each clip's timestamps follow the last
+      } catch (_) { toClips('no source buffer', true); return; }
+      feed();
+    }, { once: true });
+    audio.onended = audio.onerror = audio.onplay = audio.ontimeupdate = null;
+    audio.onplaying = audio.onwaiting = audio.onpause = null;
+    audio.onprogress = audio.onloadedmetadata = audio.ondurationchange = audio.oncanplay = null;
+    audio.src = url;
+    audio.playbackRate = _ttsRate;
+    openTimer = setTimeout(() => { if (!buffer) toClips('source never opened', true); }, 4000);
+    _ttsSetStreaming(true);
+    const player = { audio, token, stopHighlight, chain: true };
+    player.cancel = () => {
+      release();
+      try { audio.removeAttribute('src'); audio.load(); } catch (_) {}
+    };
+    // Seek inside audio already made; otherwise restart at the target's clip.
+    player.seek = (target) => {
+      const k = clips.findIndex(c => target < c.start + c.text.length);
+      if (k >= 0 && k < marks.length) {
+        const c = clips[k], into = target - c.start;
+        // A clip still arriving has no length yet: use the speech-rate estimate.
+        const t = marks[k] + (k + 1 < marks.length
+          ? into / Math.max(1, c.text.length) * (marks[k + 1] - marks[k]) : into / 15);
+        if (t < bufferedEnd()) {
+          audio.currentTime = t;
+          _ttsLastCharIndex = target;
+          return;
+        }
+      }
+      _ttsEngineCancel();
+      _ttsUtterance = null;
+      state.index = from + Math.max(0, k);
+      state.seekTarget = k >= 0 && target > clips[k].start ? target : null;
+      _ttsSpeakNextChunk();
+    };
+    _ttsNeural = player;
+    audio.ontimeupdate = () => { if (!audio.paused && !audio.ended) updateWord(); };
+    audio.onpause = stopHighlight;
+    audio.onplay = () => {
+      if (stale()) return;
+      setTtsButtonsState(true, false, state.paneId);
+      setTtsButtonsBusy(false);
+      const voice = state.geminiVoice || 'Kokoro';
+      ttsButtons().forEach(btn => {
+        if (ttsButtonPaneId(btn) === _ttsActivePaneId) {
+          btn.classList.remove('paused');
+          btn.title = 'Pause reading (free voice: ' + voice + ')';
+        }
+      });
+      _ttsShowVoice(voice + (model ? ' · ' + model : ''));
+    };
+    let waitFrom = 0;
+    audio.onplaying = () => {
+      if (stale()) return;
+      const now = Date.now();
+      stopHighlight();
+      trackWord();
+      const lagMs = _ttsEventLagMs(audio);
+      if (!waitFrom) {
+        _ttsPerfStart(state, { engine: 'neural', voice: state.geminiVoice, lagMs });
+        if (state.perf && state.perf.gapT0) {
+          _ttsPerfSilence(state, Math.max(0, performance.now() - state.perf.gapT0 - lagMs), 'gap');
+          state.perf.gapT0 = 0;
+        }
+        if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms (chained)'); state.t0 = 0; }
+        state.gapFrom = 0;
+        return;
+      }
+      _ttsPerfSilence(state, now - waitFrom, 'stall');
+      _ttsLog('STALL', (now - waitFrom) + 'ms in chained read at ' + audio.currentTime.toFixed(1) + 's, rate ' + _ttsRate);
+      waitFrom = 0;
+    };
+    audio.onwaiting = () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); };
+    audio.onended = () => {
+      if (stale()) return;
+      if (failedAt != null) {
+        state.index = from + failedAt;
+        toClips('clip ' + state.index + ' failed');
+        return;
+      }
+      release();
+      clearTtsHighlight();
+      clearTtsCaption();
+      _ttsSetStreaming(false);
+      _ttsLog('ENDED', 'chained read, ' + clips.length + ' clips');
+      _ttsNeural = null;
+      _ttsUtterance = null;
+      state.index = state.chunks.length;
+      _ttsSpeakNextChunk();
+    };
+    audio.onerror = () => {
+      if (stale()) return;
+      _ttsLog('ERROR', 'chained media error ' + (audio.error?.code || 'unknown'));
+      state.index = from + clipAt(audio.currentTime || 0).j;
+      toClips('media error', true);
+    };
+    if (_ttsPaused) return;
+    let retried = false;
+    const playStream = () => audio.play().catch((error) => {
+      if (stale()) return;
+      _ttsLog('ERROR', 'chained play rejected: ' + (error?.name || 'unknown'));
+      if (error?.name === 'NotAllowedError') { _ttsPlayBlocked(state); return; }
+      // AbortError = a pause or load interrupted the pending play. The stream
+      // is still ours, and leaving it cost a 13 s silence (CCC-144).
+      if (error?.name === 'AbortError' && !retried) {
+        retried = true;
+        if (_ttsPaused) return;   // the listener paused; resuming plays it
+        let fired = false;
+        const again = () => { if (fired || stale() || _ttsPaused) return; fired = true; playStream(); };
+        audio.addEventListener('canplay', again, { once: true });
+        setTimeout(again, 1500);
+        return;
+      }
+      toClips('play rejected');
+    });
+    playStream();
+    mark('play_ms');
   }
 
   // One-time iOS-Safari engine prime (CCC-31). Must run inside a user gesture.
@@ -16585,13 +16927,32 @@
     const p = state && state.perf;
     if (!p || p.started) return;
     p.started = true;
-    const end = performance.now();
+    // The page learns of first sound only when its main thread is free, so
+    // take the sound's own start from the audio clock (how.lagMs).
+    const seen = performance.now();
+    const end = Math.max(p.t0, seen - (how.lagMs || 0));
     _perfEvent('tts_start', _perfActiveElapsed(p.t0, end), { detail: {
       engine: how.engine, voice: how.voice || '', cache: p.cache, head: p.head,
       chars: p.chars, clips: p.clips, target: p.target, rate: _ttsRate,
       wall_ms: Math.round(end - p.t0), mode: p.mode || 'clips', cue: !!p.cue,
-      bridge: !!p.bridge,
+      bridge: !!p.bridge, event_lag_ms: Math.round(seen - end),
+      longtask_ms: _perfLongTaskMs(p.t0, seen), client: _ttsClientTag(),
+      session_ms: p.sessionMs, split: p.split,
     } });
+  }
+  // Time the audio has already been sounding when its `playing` event reaches
+  // the page. The event waits behind any long main-thread task.
+  function _ttsEventLagMs(audio) {
+    const lag = (Number(audio.currentTime) || 0) / Math.max(0.1, Number(audio.playbackRate) || 1) * 1000;
+    return lag > 0 ? lag : 0;
+  }
+  // Coarse browser family, so a gate breach can be split by client.
+  function _ttsClientTag() {
+    const ua = navigator.userAgent || '';
+    if (/iPhone|iPad/.test(ua)) return 'ios';
+    if (/Firefox\//.test(ua)) return 'firefox';
+    if (/Chrome\//.test(ua)) return 'chromium';
+    return /Safari\//.test(ua) ? 'safari' : 'webkit-app';
   }
   function _ttsPerfSilence(state, ms, kind) {
     const p = state && state.perf;
@@ -16603,21 +16964,22 @@
     const p = state && state.perf;
     if (!p || p.flushed) return;
     p.flushed = true;
-    // A continuous read has no clip gaps: a smooth multi-clip one still
+    // A single-stream read has no clip gaps: a smooth multi-clip one still
     // reports its 0 ms, or the gate would only ever see the stalled reads.
-    const smoothContinuous = p.mode === 'continuous' && p.started && p.clips > 1;
-    if (!p.gaps && !p.stalls && !smoothContinuous) return;
+    const smoothStream = (p.mode === 'continuous' || p.mode === 'chain') && p.started && p.clips > 1;
+    if (!p.gaps && !p.stalls && !smoothStream) return;
     _perfEvent('tts_gap', Math.max(p.maxGap, p.maxStall), { detail: {
       max_gap_ms: Math.round(p.maxGap), gaps: p.gaps,
       max_stall_ms: Math.round(p.maxStall), stalls: p.stalls,
       voice: state.geminiVoice || '', cache: p.cache, chars: p.chars,
       clips: p.clips, played: state.index, target: p.target, rate: _ttsRate,
-      mode: p.mode || 'clips', bridge: !!p.bridge,
+      mode: p.mode || 'clips', bridge: !!p.bridge, client: _ttsClientTag(),
     } });
   }
   // A read paused and left (tab closed, reload) still reports its gaps.
   window.addEventListener('pagehide', () => { try { _ttsPerfFlush(_ttsPerfState); } catch (_) {} });
 
+  let _ttsFgAbort = null;   // cancels the foreground clips of the current read
   function _ttsStartChunkedSpeech(text, paneId, baseOffset, pauseOnStart) {
     let chunks = _chunkTtsText(text, TTS_CHUNK_MAX_CHARS, baseOffset);
     if (!chunks.length) return false;
@@ -16680,6 +17042,13 @@
       }
     }
     _ttsPerfTarget = '';
+    // A new read frees the voice server: the old read's unfinished foreground
+    // clips would otherwise keep generating and starve this one (CCC-144). A
+    // restart (rate step, skip) keeps them, it needs the same clips.
+    if (_ttsFresh || !_ttsFgAbort) {
+      try { _ttsFgAbort?.abort(); } catch (_) {}
+      _ttsFgAbort = new AbortController();
+    }
     _ttsChunkState = {
       chunks,
       neuralOk: _ttsHeadReady,
@@ -16691,6 +17060,7 @@
       t0: Date.now(),
       perf,
       macBridge,
+      abort: _ttsFgAbort,
     };
     _ttsPerfState = perf ? _ttsChunkState : null;
     _ttsSpeakNextChunk();
@@ -16711,11 +17081,15 @@
     state.prefetch = state.prefetch || {};
     state.debugCache = state.debugCache || new Map();
     if (!c || state.prefetch[1]) return;
-    const voice = state.geminiVoice || (state.paneId ? ttsVoiceForPane(state.paneId) : '');
+    // Prepare-ahead already chose this message's voice. Another one here would
+    // leave its clips unused and make this clip from nothing.
+    const prepared = _ttsHeadCache.get(state.chunks[0].text);
+    const voice = state.geminiVoice || (prepared && prepared.voice)
+      || (state.paneId ? ttsVoiceForPane(state.paneId) : '');
     const hit = _ttsHeadCache.get(c.text);
     let p;
     if (hit && hit.ready && (!voice || hit.voice === voice)) p = hit.p;
-    else p = _ttsFetchNeural(c.text, voice, 'fg');
+    else p = _ttsFetchNeural(c.text, voice, 'fg', null, state.abort?.signal);
     p.catch(() => {});
     state.prefetch[1] = p;
   }
@@ -17248,6 +17622,12 @@
     const rest = _ttsBoundUtteranceText.slice(offset);
     if (!rest.trim()) return false;
     const wasPaused = _ttsPaused;
+    // The old voice's unfinished clips can't be used: stop them competing with
+    // the new voice's first clip (1-2 s stalls while trying voices, CCC-144).
+    if (voice !== undefined) {
+      try { _ttsFgAbort?.abort(); } catch (_) {}
+      _ttsFgAbort = null;
+    }
     _ttsKeepVoice = voice !== undefined ? voice
       : ((_ttsChunkState && _ttsChunkState.geminiVoice) || '');
     _ttsChunkState = null;
@@ -17316,7 +17696,7 @@
     if (!st || st.neuralOk === false) return false;
     const k = st.chunks.findIndex(c => target < c.start + c.text.length);
     if (k < st.index || k < 0) return false;
-    if (k === st.index && _ttsNeural?.audio) {
+    if ((k === st.index || _ttsNeural?.chain) && _ttsNeural?.audio) {
       _ttsNeural.seek(target);
       return true;
     }
@@ -17402,7 +17782,6 @@
       el.style.height = 'auto';
       const mode = (barEl && barEl.dataset.composerMode) || 'regular';
       const max = mode === 'expand' ? Math.round(window.innerHeight * 0.7)
-        : mode === 'minimize' ? 24  // matches the CSS max-height: 24px !important floor
         : 240;  // ~10 rows at our current font/line-height
       el.style.height = Math.min(el.scrollHeight, max) + 'px';
       if (view && view.scrollTop !== viewTop) view.scrollTop = viewTop;
@@ -17515,23 +17894,13 @@
     _autosizeConvInput();
   }
 
-  // Composer sizing (kimi-web maximize parity, extended for mobile).
-  // Desktop: binary regular <-> expand (30-70vh multi-line mode), unchanged.
-  // Mobile (isMobile()): tri-state cycle regular -> expand -> minimize -> regular,
-  // where minimize pins the textarea to its smallest ("regular", empty) height —
-  // see the CSS comment on .is-composer-minimized for why 24px specifically.
+  // Composer sizing (kimi-web maximize parity): regular <-> expand. There is
+  // no minimized state: it once squeezed the input to a sliver on phones.
   function setComposerMode(mode) {
     const bar = $convInputBar;
     if (!bar) return;
     bar.dataset.composerMode = mode === 'regular' ? '' : mode;
     bar.classList.toggle('is-composer-expanded', mode === 'expand');
-    bar.classList.toggle('is-composer-minimized', mode === 'minimize');
-    // Minimize means minimize — also collapse the stale-session rail/panel
-    // (inside the bar) and the Goal pill (a sibling before it, reached via
-    // the shared .conv-pane parent) so the whole composer area shrinks to
-    // just the textarea + icon row, not only the textarea itself.
-    const pane = bar.closest('.conv-pane');
-    if (pane) pane.classList.toggle('is-composer-minimized', mode === 'minimize');
     _autosizeConvInput();
   }
   // Back-compat wrapper — the send/clear hook above calls this by name.
@@ -17706,6 +18075,21 @@
       + encodeURIComponent(path)
       + (sid ? '&session_id=' + encodeURIComponent(sid) : '')
       + '" alt="pasted image" loading="lazy">';
+  }
+  // Thumbnails for every pasted/annotation image path mentioned in `text`
+  // (raw, unescaped). For surfaces that show a clipped or plain-text
+  // description of an ask, where the path itself would otherwise be lost.
+  function pastedImageThumbsHtml(text) {
+    if (!text) return '';
+    const seen = new Set();
+    for (const re of [PASTED_IMG_RE, ANNOTATION_IMG_RE]) {
+      const rx = new RegExp(re.source, 'gi');
+      let m;
+      while ((m = rx.exec(String(text)))) seen.add(m[1]);
+    }
+    if (!seen.size) return '';
+    return Array.from(seen, p => '<a href="/api/pasted-image?path=' + encodeURIComponent(p)
+      + '" target="_blank" rel="noopener">' + pastedImageTag(p) + '</a>').join('');
   }
   function linkifyPastedImages(escapedHtml) {
     if (!escapedHtml) return escapedHtml;
@@ -18348,8 +18732,12 @@
   }
   function syncRowQuickActions(sid) {
     const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
-    document.querySelectorAll(selector).forEach(row => {
-      const rect = row.getBoundingClientRect();
+    // Measure every row before the loop writes: a read after each row's write
+    // forced a layout per row, ~1s of a busy open (CCC-143).
+    const rows = Array.from(document.querySelectorAll(selector));
+    const rects = rows.map(row => row.getBoundingClientRect());
+    rows.forEach((row, rowIndex) => {
+      const rect = rects[rowIndex];
       if (rect.width && rect.height && rect.bottom > 0 && rect.top < innerHeight
           && !_rowQuickActionSending.has(row.dataset.sessionId) && _rowInvestigationChecksInFlight < 4) {
         const base = _ultraFreshRow(row.dataset.sessionId);
@@ -18435,11 +18823,13 @@
           throw new Error('This action changed. Review the updated row before sending.');
         }
       }
-      const data = await postInjectInput(sid, action.reply, 'send', { userInitiated: true });
+      const ticketAnswer = window.cccQuestionTags?.answerTicket(action.reply);
+      if (ticketAnswer) await ticketAnswer;
+      const data = ticketAnswer ? { ok: true } : await postInjectInput(sid, action.reply, 'send', { userInitiated: true });
       if (!data.ok) throw new Error(data.error || 'Send failed');
       accepted = true;
       feedback.state = data.queued ? 'queued' : 'sent';
-      markSessionSending(sid);
+      if (!ticketAnswer) markSessionSending(sid);
       showOpToast((data.queued ? 'Queued: ' : 'Sent: ') + action.label);
       refreshConversationList();
     } catch (error) {
@@ -18618,6 +19008,17 @@
     } else if (act === 'say') {
       const input = composerInputForPane(paneId) || $convInput;
       if (!input) return;
+      const ticketAnswer = window.cccQuestionTags?.answerTicket(value);
+      if (ticketAnswer) {
+        btn.disabled = true;
+        try {
+          showOpToast('Answered ' + await ticketAnswer + ': block cleared', 'success');
+        } catch (error) {
+          btn.disabled = false;
+          showOpToast('Answer failed: ' + String(error.message || error), 'error');
+        }
+        return;
+      }
       const draft = (input.value || '').trim();
       if (draft && draft !== value && !confirm('Replace your draft and send "' + value + '"?')) return;
       input.value = value;
@@ -19652,7 +20053,7 @@
     return html;
   }
 
-  function userMessageSteerHtml(text, notification, compactCardHtml) {
+  function userMessageSteerHtml(text, notification, compactCardHtml, ev) {
     const isCodex = currentSession && currentSession.source === 'codex';
     // Render the button for every devin-cli user message like codex does —
     // capability is a live signal (devinTurnSteerable/syncUserMessageSteerButtons
@@ -19667,7 +20068,9 @@
       ? 'Steer ' + engine + ' with this message'
       : 'No running ' + engine + ' turn can be steered from CCC; use Send to resume or follow up';
     const inactiveAttrs = steerable ? '' : ' hidden disabled aria-hidden="true"';
+    const originId = (ev && ((ev.attribution && ev.attribution.message_id) || (ev.peer && ev.peer.msg_id))) || '';
     return '<button type="button" class="user-message-steer" data-steer-user-message'
+      + (originId ? ' data-steer-origin-msg-id="' + escapeAttr(originId) + '"' : '')
       + inactiveAttrs + ' title="' + escapeAttr(title)
       + '" aria-label="Steer ' + escapeAttr(engine) + ' with this message">Steer</button>';
   }
@@ -20374,6 +20777,9 @@
     ev.preventDefault();
     const ref = link.dataset.watchtowerTicket;
     if (!ref) return;
+    // Stay in CCC: the ticket view leads to the worker's session. A modified
+    // click still reaches the WatchTower page.
+    if (!ev.metaKey && !ev.ctrlKey && !ev.shiftKey && window.cccOpenTicket && window.cccOpenTicket(ref)) return;
     const target = watchtowerTicketUrl(ref, watchtowerServiceUrl);
     const tmp = document.createElement('a');
     tmp.href = target;
@@ -21277,6 +21683,14 @@
     messageEl.textContent = cleaned;
     messageEl.hidden = !cleaned;
     messageEl.title = cleaned;
+    // Images the message pasted: shown only while the header text is expanded.
+    const thumbs = pastedImageThumbsHtml(text);
+    if (thumbs) {
+      const box = document.createElement('span');
+      box.className = 'pane-header-images';
+      box.innerHTML = thumbs;
+      messageEl.appendChild(box);
+    }
     // Same CCC-1172 affordance as the pane title: hover shows the full text,
     // click/Enter toggles .is-expanded inline.
     if (cleaned) {
@@ -21635,7 +22049,7 @@
       // reachable — no remapping of stored tabs the bottom nav doesn't
       // cover (All / Other / Active).
       activeNavKey = _coreApp === 'queues' ? 'q2'
-        : ({ workers: 'workers', queues: 'queues', jobs: 'jobs', decisions: 'decisions', smallbugs: 'smallbugs',
+        : ({ workers: 'workers', queues: 'queues', jobs: 'jobs', decisions: 'decisions', decisions2: 'decisions', smallbugs: 'smallbugs',
             alltickets: 'alltickets', archived: 'archived', ideas: 'coding', coding: 'coding' })[tab] || '';
     }
     if (!isSimpleMode() && document.body.classList.contains('mobile-ask-open')) activeNavKey = 'ask';
@@ -22003,8 +22417,8 @@
   // patching as the sidebar's archive/trash buttons, without needing the row
   // in the DOM (archived rows often aren't rendered; on phones the list is
   // off-canvas while a conversation is open).
-  async function _setOpenSessionLifecycle(kind) {
-    const row = _openConversationRow();
+  async function _setOpenSessionLifecycle(kind, targetRow) {
+    const row = targetRow || _openConversationRow();
     if (!row) { showOpToast('No open task', 'error'); return; }
     const convId = row.id;
     const sessionId = row.session_id || row.id;
@@ -22044,13 +22458,25 @@
           && (currentConversation === convId || currentConversation === sessionId)) {
         returnToConversationList();
       }
-      showOpToast(kind === 'untrash' ? 'Untrashed to Archived'
+      if (kind === 'archive' && data.archived) _showArchivedUndoToast(row);
+      else showOpToast(kind === 'untrash' ? 'Untrashed to Archived'
         : (data.archived ? 'Archived' : 'Restored to Active'));
     } catch (err) {
       applyPatch(new Set([sessionId]), prior);
       const label = kind === 'untrash' ? 'Untrash' : (kind === 'archive' ? 'Archive' : 'Unarchive');
       showOpToast(label + ' failed (' + err.message + ')', 'error');
     }
+  }
+
+  // A misclick on Archive must be one click to recover. The server restores
+  // the whole conversation group from any one member.
+  function _showArchivedUndoToast(row) {
+    const title = String(row.display_name || row.first_message || 'session').slice(0, 60);
+    showOpToast('Archived ' + escapeHtml(title), 'success', {
+      label: 'Undo',
+      ttlMs: 8000,
+      onClick: () => _setOpenSessionLifecycle('unarchive', row),
+    });
   }
 
   // Show only the lifecycle/queue items that apply to the open session.
@@ -22068,6 +22494,7 @@
     const ticketRow = !!(row && ideaTicketsOn() && row.idea_ticket && row.idea_ticket.ref);
     show('unarchive', isSession && !!explicitlyArchived && (!row.trashed || ticketRow));
     show('untrash', isSession && !!row.trashed && !ticketRow);
+    show('share-run', isSession);
     const ideaQueue = row && row.idea_ticket && row.idea_ticket.queue;
     const ideasOn = isSession && ideaTicketsOn();
     show('idea-IDEAS', ideasOn && ideaQueue !== 'IDEAS');
@@ -22556,7 +22983,8 @@
     // Mirror the existing new-session flow: engine + model + effort, with the
     // server falling back to the persisted spawn defaults for anything
     // omitted (server.py _spawn_request_engine_and_model).
-    const body = { prompt: prompt, engine: engine };
+    // composer_form: the person typed this prompt (Share this run relies on it).
+    const body = { prompt: prompt, engine: engine, composer_form: 'ccc-composer-v1' };
     const model = _simpleModelForEngine(engine);
     if (model) body.model = model;
     if (_simpleComposer.effort && _simpleEffortsForEngine(engine).length) {
@@ -25744,8 +26172,8 @@
 
   function normalizePendingPrompt(value) {
     // Punctuation-insensitive: placeholder titles are often the slugged spawn
-    // name ("why https bookyourmat com buy …") while the archive row carries
-    // the raw prompt ("why https://bookyourmat.com/buy/…"). Slug and raw must
+    // name ("why https example com buy …") while the archive row carries
+    // the raw prompt ("why https://example.com/buy/…"). Slug and raw must
     // still fuzzy-match or the placeholder never reconciles and the session
     // shows up twice. Guards that keep this safe live in the caller: a >=24
     // char head match, equal cwd, and a 2-minute recency window.
@@ -37198,7 +37626,7 @@
     document.body.appendChild(toast);
     // Errors and warnings linger 15s, info 10s (time to read + copy); success stays 3s.
     // Hover pauses the timer, and the \u00d7 dismisses instantly.
-    arm(kind === 'error' || kind === 'warning' ? 15000 : (kind === 'info' ? 10000 : 3000));
+    arm((action && action.ttlMs) || (kind === 'error' || kind === 'warning' ? 15000 : (kind === 'info' ? 10000 : 3000)));
   }
 
   // Soft-block dialog: "CCC detected a terminal running on this session.
@@ -38980,6 +39408,12 @@
       payload.source = 'composer';
       payload.composer_form = 'ccc-composer-v1';
     }
+    // Steering a delivered row re-sends words already in the transcript. Say so:
+    // the server must not record them as newly typed (Share trusts that record).
+    if (opts && opts.steerExisting) {
+      payload.steer_existing = true;
+      if (opts.steerOriginMsgId) payload.steer_origin_msg_id = opts.steerOriginMsgId;
+    }
     if (opts && opts.replaceQueued) payload.replace_queued = true;
     if (opts && Array.isArray(opts.replaceQueuedTexts) && opts.replaceQueuedTexts.length) {
       // Steer-all delivers the concatenation, so the server cannot find the
@@ -40261,6 +40695,20 @@
     return { rows: result, omitted: Math.max(0, source.length - result.length) };
   }
 
+  // What an empty list says on a brand-new install: what to do first, in
+  // place of a dead end. Sessions started anywhere appear by themselves.
+  function firstRunEmptyHtml() {
+    return '<div class="empty-state first-run" style="height:auto;padding:28px 20px;font-size:13px;flex-direction:column;gap:10px;align-items:flex-start;color:var(--text-muted);">'
+      + '<div style="font-size:14px;color:var(--text);font-weight:600;">No sessions yet</div>'
+      + '<div style="line-height:1.5;">Run <code style="background:var(--bg);padding:2px 6px;border-radius:3px;color:var(--text);">claude</code> in any project and it shows up here by itself.</div>'
+      + '<div style="line-height:1.5;">Or start one from here:</div>'
+      + '<button type="button" class="settings-action-btn" data-first-run-new-session>New session</button>'
+      + '</div>';
+  }
+  document.addEventListener('click', (e) => {
+    if (e.target?.closest?.('[data-first-run-new-session]')) document.getElementById('sidebarNewBtn')?.click();
+  });
+
   function renderConversationList(convs) {
     if (window.__cccTourActive) return; // FIRST FLIGHT tour owns the list DOM
     convs = filterGhIssues(convs);
@@ -40309,12 +40757,7 @@
     }
     if (!convs.length) {
       _convListRenderSig = null;
-      $convList.innerHTML =
-        '<div class="empty-state first-run" style="height:auto;padding:28px 20px;font-size:13px;flex-direction:column;gap:10px;align-items:flex-start;color:var(--text-muted);">'
-        + '<div style="font-size:14px;color:var(--text);font-weight:600;">No sessions yet</div>'
-        + '<div style="line-height:1.5;">Open a terminal and run <code style="background:var(--bg);padding:2px 6px;border-radius:3px;color:var(--text);">claude</code> to start one - it\'ll show up here automatically.</div>'
-        + '<div style="line-height:1.5;">Or type a prompt in the <strong style="color:var(--text);">New session prompt</strong> field above and click <strong style="color:var(--text);">Run</strong>.</div>'
-        + '</div>';
+      $convList.innerHTML = firstRunEmptyHtml();
       return;
     }
     // Threshold for inserting a date-gap separator between rows. The list
@@ -41181,7 +41624,7 @@
         }
         // Profile-worker chip. Sessions from a profile's own state.db
         // (~/.hermes/profiles/<name>) are the agents that do the real work —
-        // e.g. the "chuckrealtor" worker. Surface the profile so it's clear a
+        // e.g. an "example-worker" agent. Surface the profile so it's clear a
         // row isn't a plain gateway conversation.
         const hermesProfile = String(c.hermes_profile || '').trim();
         if (hermesProfile) {
@@ -43577,6 +44020,25 @@
           if (_subagentRowIsRecentBlocked(c)) rehomedOpenAsks.push(c);
           return false;
         });
+        // A kept child whose parent fell outside this list (older than the
+        // window, or a WT worker filtered from Current sessions) would render
+        // as a loose top-level row with nothing to collapse under. Pull the
+        // parent chain in as anchor rows so the child nests (CCC-352).
+        const keptIds = new Set(keptRows.map(_currentSessionId));
+        const pool = new Map();
+        // Use the unwindowed list: the parent is often older than the In Progress
+        // window, which is exactly when the child is left loose.
+        (_sessionConvs || []).forEach(c => {
+          const id = _currentSessionId(c);
+          if (id) pool.set(id, c);
+        });
+        for (let i = 0; i < keptRows.length; i++) {
+          const pid = _currentSessionParentId(keptRows[i]);
+          const parent = pid && !keptIds.has(pid) ? pool.get(pid) : null;
+          if (!parent || _currentSessionParentId(parent) === _currentSessionId(keptRows[i])) continue;
+          keptIds.add(pid);
+          keptRows.push(parent);
+        }
         return { rows: keptRows, openAsks: rehomedOpenAsks };
       };
       const _curId = _currentSessionId;
@@ -44532,11 +44994,16 @@
       return _allTabNaturalLane(c);
     };
     const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
+    // Sessions only get tickets when started from the UI, so someone who runs
+    // `claude` in a terminal would otherwise see "All 0" and find their work
+    // under Other. Past this size the user has a ticket habit and All is the
+    // curated list; below it, All has to mean all.
+    const _ticketlessRowsInAll = _ideaTicketsOn && _allTabCodingConvs.length <= 50;
     const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
     const _allTabOtherConvs = _allTabConvs.filter(c => {
       const lane = _allTabLaneFor(c);
-      return lane === 'messages' || lane === 'other' || (_ideaTicketsOn && lane === 'coding');
+      return lane === 'messages' || lane === 'other' || (_ideaTicketsOn && !_ticketlessRowsInAll && lane === 'coding');
     });
     // One row per ticket, represented by its most recent session. Liveness
     // arrives separately from archive rows: using it to pick a representative
@@ -44547,7 +45014,8 @@
       // CCC-285: 'alltickets' is Features + Small bugs in one list.
       const laneOf = c => {
         const l = _allTabLaneFor(c);
-        return lane === 'alltickets' && (l === 'ideas' || l === 'smallbugs') ? 'alltickets' : l;
+        return lane === 'alltickets' && (l === 'ideas' || l === 'smallbugs' || (l === 'coding' && _ticketlessRowsInAll))
+          ? 'alltickets' : l;
       };
       const inWindow = c => !!_qActive || _archiveWindowAllowsRow(c, _ipWindowCutoff);
       const byRecency = (x, y) => (
@@ -44562,14 +45030,16 @@
       const members = new Map();
       candidates.forEach(c => {
         if (laneOf(c) !== lane || !inWindow(c)) return;
-        const ref = c.idea_ticket && (c.idea_ticket.ref || (c.idea_ticket.pending && 'pending:' + _allTabSessionId(c)));
+        const ticket = c.idea_ticket || {};
+        const ref = ticket.ref || (ticket.pending && 'pending:' + _allTabSessionId(c))
+          || (lane === 'alltickets' && 'session:' + _allTabSessionId(c));
         if (!ref) return;
-        if (bucket === 'active' && (c.archived || c.trashed || c.idea_ticket.closed)) return;
-        const _handedOff = !c.archived && !c.trashed && !c.idea_ticket.closed
-          && ['running', 'waiting'].includes((c.idea_ticket.handoff || {}).state);
+        if (bucket === 'active' && (c.archived || c.trashed || ticket.closed)) return;
+        const _handedOff = !c.archived && !c.trashed && !ticket.closed
+          && ['running', 'waiting'].includes((ticket.handoff || {}).state);
         if (bucket === 'handoff' && !_handedOff) return;
         if (bucket === 'archived' && (activeRefs.has(ref)
-          || (!c.archived && !c.idea_ticket.closed))) return;
+          || (!c.archived && !ticket.closed))) return;
         if (bucket === 'trash' && !c.trashed) return;
         if (!members.has(ref)) members.set(ref, []);
         members.get(ref).push(c);
@@ -45389,7 +45859,7 @@
     // messages + group chats -- since Coding/Workers sessions now live
     // exclusively under their own top-level tabs. Hidden entirely when empty.
     const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length
-      + (_ideaTicketsOn ? _allTabCodingConvs.length : 0);
+      + (_ideaTicketsOn && !_ticketlessRowsInAll ? _allTabCodingConvs.length : 0);
     const _otherTabDef = ['archived', 'Other', _otherTabCount];
     const _tabDefs = _ideaTicketsOn
       ? [
@@ -45415,7 +45885,8 @@
         ['jobs', 'Jobs', _jobsTabCount()],
         ...(_otherTabCount > 0 ? [_otherTabDef] : []),
       ];
-    _tabDefs.splice(_tabDefs.findIndex(tab => tab[0] === 'jobs') + 1, 0, ['decisions', 'Decisions', 0], ['decisions2', 'Decisions 2', 0]);
+    // One owner queue. The hosted demo has no guide page, so it keeps the older view.
+    _tabDefs.splice(_tabDefs.findIndex(tab => tab[0] === 'jobs') + 1, 0, [window.cccDecisionTabKey(), 'Decisions', 0]);
     const _tabBarHtml = '<div class="conv-tab-bar" data-role="conv-tab-bar">'
       + _tabDefs.map(([k, label, n]) =>
         '<button type="button" class="conv-tab' + (k === _sidebarTab ? ' is-active' : '') + '" data-conv-tab="' + k + '"'
@@ -47721,6 +48192,9 @@
             selectConversation(nextSelectId);
           }
           if (!data.archived) showOpToast('Restored to Active');
+          else if (c && !(convId || '').startsWith('xrepo-issue-') && !(convId || '').startsWith('backlog-issue-')) {
+            _showArchivedUndoToast(c);
+          }
         } catch (err) {
           if (nextArchived) {
             for (const [row, prior] of priorStates) Object.assign(row, prior);
@@ -49527,6 +50001,13 @@
           const restText = row && row.wt_ticket_context_rest;
           if (restText) {
             railTitleRestEl.textContent = restText;
+            const railThumbs = pastedImageThumbsHtml(restText);
+            if (railThumbs) {
+              const box = document.createElement('div');
+              box.className = 'status-rail-title-images';
+              box.innerHTML = railThumbs;
+              railTitleRestEl.appendChild(box);
+            }
             railTitleRestEl.hidden = false;
           } else {
             railTitleRestEl.textContent = '';
@@ -53831,8 +54312,9 @@
   // source normalization plus configured-repo_path matching) -- the old
   // ux_fixes_queue.py fallback (removed WT-92) used to mirror this table
   // server-side too, but watchtower.queue never carried it forward.
+  // Repos of your own go in local-overrides.json; /api/config serves them as
+  // repo_project_map and they win over these built-ins.
   const _REPO_PROJECT_MAP = {
-    'bym+finie': 'BYMPROD', 'bym-finie': 'BYMPROD', 'bookyourmat': 'BYMPROD', 'bymprod': 'BYMPROD',
     'claude-command-center': 'CCC', 'command-center': 'CCC',
     'watchtower': 'WT',
   };
@@ -53894,6 +54376,8 @@
     if (!repoPath) return '';
     const base = String(repoPath).replace(/\/+$/, '').split('/').pop().toLowerCase();
     if (!base) return '';
+    const localMap = (APP_CONFIG && APP_CONFIG.repo_project_map) || {};
+    if (localMap[base]) return localMap[base];
     if (_REPO_PROJECT_MAP[base]) return _REPO_PROJECT_MAP[base];
     // Normalized basename (uppercase, alnum/-/_), mirrors _norm_project.
     return base.toUpperCase().replace(/[^A-Z0-9\-_]/g, '').replace(/^[-_]+|[-_]+$/g, '');
@@ -53932,7 +54416,7 @@
     const fallback = _uxqDominantOpenProject(items);
     return fallback || requested;
   }
-  // Project the open session's Queue should show (e.g. "BYMPROD", "CCC"). A queue
+  // Project the open session's Queue should show (e.g. "ACMEPROD", "CCC"). A queue
   // worker uses its progress record (CCC-99); ANY other session falls back to
   // its repo's project (CCC-175) so a project session shows its tickets instead
   // of the global, CCC-dominated list.
@@ -54290,7 +54774,7 @@
     + '</svg>';
   // Parent resolution: a sub-queue's parent is the LONGEST existing root
   // queue that its name starts with, plus '-'. Do NOT chop the last hyphen
-  // segment — BECKY-CONTEXT-DIET's parent is BECKY, not BECKY-CONTEXT.
+  // segment — ACME-CONTEXT-DIET's parent is ACME, not ACME-CONTEXT.
   // "Root" = a queue whose name is not itself a child (no longer-root prefix).
   function _uxqPickerParentOf(name, rootNames) {
     const n = _uxqProjectKey(name);
@@ -54657,7 +55141,7 @@
     $trig.classList.toggle('is-open', open);
   }
   // Worker/session label prefixed with the machine tag WatchTower stamps on
-  // worker events (by.machine / item.claimed_machine) — "her-bym-a1b2". The
+  // worker events (by.machine / item.claimed_machine) — "srv-acme-a1b2". The
   // tag rides as its own field so claim matching still sees the bare id; a
   // label that already carries it isn't double-prefixed.
   function _uxqWithMachine(worker, machine) {
@@ -54840,7 +55324,7 @@
       // On mobile, tapping the row itself should jump straight to the CCC
       // session instead of silently doing nothing (idle workers have no
       // ticket ref) or opening the ticket picker.
-      if (_uxqPicker.isMobile) {
+      if ($row.classList.contains('is-mobile')) {
         const rowSid = $row.getAttribute('data-uxq-session') || '';
         if (rowSid) {
           if (typeof window.cccOpenSession === 'function') window.cccOpenSession(rowSid);
@@ -54996,7 +55480,7 @@
         engine: w.engine, source: w.engine, model: w.model,
         state: Number.isFinite(idleS) && idleS < 60 ? 'working' : 'idle',
       };
-      const icon = '<span class="fq-working-engine">' + sessionEngineIconHtml(iconRow) + '</span>';
+      const icon = '<span class="fq-working-engine">' + sessionEngineIconHtml(iconRow, { compact: true }) + '</span>';
       const stageRef = stage ? String(w.ref || '').trim() : '';
       const stageItem = stageRef ? items.find(it => it && _uxqItemRef(it) === stageRef) : null;
       // Until the ticket list lands every worker looks claim-less; keep them
@@ -55014,6 +55498,7 @@
         const ownerAsk = !!it.needs_input && (!att || att.owner || att.key === 'gate');
         return {
           ref: cRef,
+          title: String(it.title || it.note || it.text || '').split('\n')[0],
           label: (ownerAsk ? '?' : '#') + short,
           needsInput: ownerAsk,
           tip: cRef + (ownerAsk ? ' needs input: ' : (att ? ' ' + att.label + ': ' : ' also claimed: '))
@@ -55022,7 +55507,7 @@
       });
       const ref = on ? _uxqItemRef(on) : stageRef;
       const title = on ? String(on.note || on.title || on.text || '').split('\n')[0]
-        : (stage || !_uxqItemsLoaded ? 'loading ticket…' : (chips.length ? 'waiting on input' : 'idle'));
+        : (stage || !_uxqItemsLoaded ? 'loading ticket…' : (chips.length ? (chips[0].title || 'waiting on input') : 'idle'));
       // Ticket age from its own claim; a stage session is as old as itself,
       // and without a live claim only the worker's age is left.
       const elapsed = on && !stage ? ageOf(on.claimed_at) : workerAge;
@@ -55068,25 +55553,27 @@
         const workerAgeHtml = r.ref && r.workerAge
           ? '<span class="fq-working-worker-age" title="' + escapeAttr('Worker ' + r.worker + ' running ' + r.workerAge) + '">up ' + escapeHtml(r.workerAge) + '</span>'
           : '';
-        if (_uxqPicker.isMobile) {
+        if (_uxqPicker.isMobile || window.matchMedia('(max-width: 700px)').matches) {
           // Engine icon stacks under the ref so the id column stays narrow,
           // and the hover buttons overlay the title instead of reserving a
           // column of their own (CCC-1242).
-          return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(r.ref) + '" data-uxq-session="' + escapeAttr(r.sid) + '">'
+          const displayRef = r.ref || (r.chips[0] && r.chips[0].ref) || '';
+          const waiting = !r.ref && !r.stage && r.chips.length;
+          return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(displayRef) + '" data-uxq-session="' + escapeAttr(r.sid) + '">'
             + '<span class="fq-working-lead">'
-            + '<span class="fq-working-id">' + escapeHtml(r.ref || '-') + '</span>'
+            + '<span class="fq-working-id">' + escapeHtml(displayRef || '-') + '</span>'
             + r.icon
             + roleHtml
             + '</span>'
             + '<span class="fq-working-body">'
             + '<span class="fq-working-title">' + escapeHtml(r.title) + '</span>'
-            + '<span class="fq-working-meta">' + escapeHtml(r.queue + ' · ' + r.elapsed) + chipsHtml + '</span>'
+            + '<span class="fq-working-meta">' + escapeHtml([waiting ? 'Waiting on input' : '', r.queue, r.elapsed].filter(Boolean).join(' · ')) + chipsHtml + '</span>'
             + '</span>'
             + '<span class="fq-working-actions">'
             + sessBtn
             + killBtn
             + '</span>'
-            + '<span class="fq-working-dot"></span>'
+            + (waiting ? '' : '<span class="fq-working-dot"></span>')
             + '</div>';
         }
         return '<div class="fq-working-row' + (r.ref ? ' has-ref' : '') + '" data-uxq-working-ref="' + escapeAttr(r.ref) + '">'
@@ -55462,7 +55949,7 @@
     return String(item._github_body || item.text || item.note || '');
   }
   // Fetch the transcript a ticket points at (server resolves it via the
-  // user's local queue-context providers, e.g. the Becky conversation a
+  // user's local queue-context providers, e.g. the conversation a
   // digest ticket describes) and reveal the hidden section if one exists.
   async function _uxqLoadLinkedConversation(modal, ref) {
     const sec = modal.querySelector('.uxq-td-conv-sec');
@@ -55733,7 +56220,7 @@
             : '<pre class="uxq-td-prompt">' + escapeHtml(fullBody) + '</pre>')
         + '</div>'
       : '';
-    // Linked conversation (e.g. the Becky owner/client thread a digest ticket
+    // Linked conversation (e.g. the owner/client thread a digest ticket
     // is about) — filled in async by _uxqLoadLinkedConversation after the
     // modal mounts; stays hidden unless the server resolves a transcript.
     const convSecHtml =
@@ -55914,7 +56401,7 @@
           : _propRow('Worker', '<span class="uxq-td-pr-empty">unassigned</span>'))
       + (function () {
           // claimed_session_id is backfilled by the queue reconciler and can
-          // stay empty for a worker-id claim (e.g. "bymprod-cda69c9a") even
+          // stay empty for a worker-id claim (e.g. "acmeprod-cda69c9a") even
           // long after claim — the button then silently vanishes (CCC-937).
           // Fall back to matching claimed_by against a live conversation's
           // _worker_id so the link still resolves; when the conversation
@@ -58426,7 +58913,7 @@
       .map(q => String((q && q.queue) || '').trim()).filter(Boolean)));
   }
   // CCC-163: the panel "+" used to file silently into whatever queue the panel
-  // was scoped to (e.g. BECKY) with no queue shown; it now shows the Queue
+  // was scoped to (e.g. ACME) with no queue shown; it now shows the Queue
   // picker preselected to that scope and files where the user picks.
   async function _addQueueTicket() {
     const scoped = _uxqLastResolvedProject || _uxqWorkerProject();
@@ -60583,6 +61070,19 @@
   // Longer than this and the network usually wins anyway; a slow disk must
   // never delay the fresh render.
   const CONV_CACHE_READ_BUDGET_MS = 250;
+  // Most reopens get the fresh tail this soon after the click; painting the
+  // saved copy first then only doubles the render (CCC-143).
+  const CONV_CACHE_PAINT_HOLD_MS = 150;
+  // conv_open's `ms` stops when the render call returns, before the observers
+  // and the frame it triggers, so a page frozen after the render read as fast
+  // (CCC-143). paint_ms is click -> first frame after it; a hidden tab paints
+  // no frames, so the sample still sends with paint_ms null.
+  function _convOpenAfterPaint(t0, send) {
+    let done = false;
+    const finish = (ms) => { if (!done) { done = true; send(ms); } };
+    requestAnimationFrame(() => setTimeout(() => finish(Math.round(performance.now() - t0)), 0));
+    setTimeout(() => finish(null), 2000);
+  }
   let _convCacheDbP = null;
   function _convCacheDb() {
     if (_convCacheDbP) return _convCacheDbP;
@@ -61468,6 +61968,14 @@
           _netP.then(() => null, () => null),
           new Promise(r => setTimeout(() => r(null), CONV_CACHE_READ_BUDGET_MS)),
         ]);
+        const _pvHold = _perfConvOpen
+          ? CONV_CACHE_PAINT_HOLD_MS - (performance.now() - _perfConvOpen.t0) : 0;
+        if (cached && !_netDone && _pvHold > 0) {
+          await Promise.race([
+            _netP.then(() => null, () => null),
+            new Promise(r => setTimeout(r, _pvHold)),
+          ]);
+        }
         const _pv = paneByPaneId(fetchPaneId);
         if (cached && !_netDone && convLastLine === 0 && _pv && _pv.conversationId === id
             && Array.isArray(cached.events) && cached.events.length) {
@@ -61614,7 +62122,7 @@
               const _perfEnd = performance.now();
               const _perfWall = _perfEnd - _perfConvOpen.t0;
               const _perfActive = _perfActiveElapsed(_perfConvOpen.t0, _perfEnd);
-              _perfEvent('conv_open', _perfActive, {
+              const _perfOpenEvent = {
                 conv_id: id,
                 detail: {
                   events: Array.isArray(data.events) ? data.events.length : 0,
@@ -61629,6 +62137,10 @@
                   // fetch_at < 0 means a hover/restore prefetch started first.
                   ..._convOpenPhases(data, _perfConvOpen.t0, _perfDataAt, _perfRenderAt, _perfEnd, id),
                 },
+              };
+              _convOpenAfterPaint(_perfConvOpen.t0, (paintMs) => {
+                _perfOpenEvent.detail.paint_ms = paintMs;
+                _perfEvent('conv_open', _perfActive, _perfOpenEvent);
               });
               if (typeof window.__cccPerfRow === 'function') {
                 window.__cccPerfRow('open', {
@@ -66456,19 +66968,23 @@
     // A steered card that had no local pending echo behind it stays in the
     // transcript as `delivered` until the engine writes its own durable copy of
     // the same text. Retire it exactly then, so the message never blinks out of
-    // the conversation and never shows twice.
+    // the conversation and never shows twice. Only a card the server says kept
+    // its sender has a peer row for its durable copy; a peer repeating the words
+    // of your message must not retire your card.
     const settledSteerRows = Array.from(
       $view.querySelectorAll('.event.user_text[data-steer-settled]'));
     if (settledSteerRows.length) {
-      const durableNow = Array.from($view.querySelectorAll(
+      const durableAll = Array.from($view.querySelectorAll(
         '.event.user_text:not(.pending):not(.send-queued):not(.send-delivered):not(.not-acknowledged)'
-        + ':not(.provisional):not(.peer-message):not(.steering-optimistic)'
+        + ':not(.provisional):not(.steering-optimistic)'
       ));
+      const durableNow = durableAll.filter(el => !el.classList.contains('peer-message'));
       settledSteerRows.forEach(el => {
         const msg = el.querySelector('.user-msg');
         const text = msg && _normSend(msg.getAttribute('data-raw-text') || msg.textContent);
         const queuedAt = Number(el.dataset.tsEpoch || 0);
-        if (takeQueuedSendAcknowledgement(durableNow, text, queuedAt)) el.remove();
+        const proof = el.dataset.steerKeptSender ? durableAll : durableNow;
+        if (takeQueuedSendAcknowledgement(proof, text, queuedAt)) el.remove();
       });
     }
     if (replaceServerCandidates && tray) {
@@ -68273,7 +68789,7 @@
     return '<div class="stream-block-plan plan-card">' + rows.join('') + '</div>';
   }
 
-  // Codex single-renderer merge, slice 3 (CCC-private-docs plan
+  // Codex single-renderer merge, slice 3 (private plans repo,
   // 2026-09-12-codex-single-renderer-merge.md): the native app-server pane
   // (static/codex-client.js) renders a turn-level diff, generated images and
   // pending approval/question/permission/elicitation requests that the
@@ -68966,7 +69482,16 @@
   // divs (`.kimi-marker`, per-event dedupe anchors) are transparent — they
   // neither join nor break a run. Collapse state survives a regroup via a
   // data flag mirrored onto the rows.
+  // One open appends hundreds of events to a turn. Regrouping after each one
+  // re-read layout and rebuilt every group (CCC-143), so a first render only
+  // records the turns and regroups each once, when its events are all in place.
+  function _kimiFlushRegroups() {
+    const turns = _kimiRegroupTools.batch;
+    _kimiRegroupTools.batch = null;
+    if (turns) for (const turn of turns) if (turn.isConnected) _kimiRegroupTools(turn);
+  }
   function _kimiRegroupTools(turn) {
+    if (_kimiRegroupTools.batch) { _kimiRegroupTools.batch.add(turn); return; }
     const view = turn.closest('.conversations-view');
     const scrollTop = view && view.scrollTop;
     Array.from(turn.querySelectorAll(':scope > .kimi-tool-group')).forEach(g => {
@@ -69455,7 +69980,7 @@
 
   // --- Provisional (live) event upsert/reconcile helpers -------------------
   // Slice 2 of the Codex single-renderer merge (see
-  // CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md). Once
+  // the private plans repo, codex-single-renderer-merge). Once
   // Slice 4 wires up a live app-server data source, provisional events (rows
   // the CLI has already run but the rollout JSONL hasn't caught up to writing
   // yet, ~15s lag) will be upserted by renderConversationEvents's per-event
@@ -69784,6 +70309,9 @@
         + '<pre class="codex-ambient-context__body">' + escapeHtml(String(context.text)) + '</pre>'
         + '</details>';
     }
+    const _ownsRegroupBatch = !!opts.initialLoad && !_kimiRegroupTools.batch;
+    if (_ownsRegroupBatch) _kimiRegroupTools.batch = new Set();
+    try {
     for (const sourceEvent of events) {
       // A transport hop does not make ordinary dashboard input a peer
       // message. Keep its evidence, but use normal input rendering unless
@@ -69842,6 +70370,7 @@
             }));
         if (_queuedDup) continue;
       }
+      if (ev.type === 'chat_bridge_row') continue; // Only Share reads this row.
       const div = document.createElement('div');
       div.className = 'event ' + ev.type + (ev.pending ? ' pending' : '');
       // Fusion (devin-cli) events carry actor 'lead'|'sidekick' — the lane
@@ -70026,6 +70555,7 @@
                       h += '<div class="user-msg" dir="auto">';
                       h += '<span class="ux-ticket-ref">' + escapeHtml(mostRecent.ref) + '</span> ';
                       h += '<span class="ask-first">' + escapeHtml(recentText) + '</span>';
+                      h += pastedImageThumbsHtml(mostRecent.note || mostRecent.title || '');
                       h += '</div>';
                       if (handled.length) {
                         h += '<details class="csh-tickets-handled">';
@@ -70644,7 +71174,7 @@
             _compactRunAnchorTo(div);
           }
         }
-        const userSteerHtml = userMessageSteerHtml(cleanedText, notification, compactCardHtml);
+        const userSteerHtml = userMessageSteerHtml(cleanedText, notification, compactCardHtml, ev);
         if (userSteerHtml) div.classList.add('has-user-steer');
         // data-raw-text preserves the original prose so _dynAskApply can pin
         // the same wording in the "Earlier ask" sticky — reading textContent
@@ -71471,6 +72001,9 @@
         if (ev.type === 'assistant' && !handedOffStreamingBubble) _convLiveRevealNewText(div, paneId, opts);
       }
     }
+    } finally {
+      if (_ownsRegroupBatch) _kimiFlushRegroups();
+    }
     // Batched CCC-500 overflow check: one layout read for all results
     // appended above, then the writes. Reads-then-writes = one recalc.
     if (_overflowChecks.length) {
@@ -71792,8 +72325,11 @@
     for (const c of conversationsData) {
       if (_archivedBacklogIds.has(c.id)) c.archived = true;
     }
+    const idNeedle = q ? _uuidSearchNeedle(q) : null;
     const filtered = conversationsData.filter(c => {
       if (c.pinned && !q) return true;
+      // A session id fragment finds that session past every filter below.
+      if (idNeedle && Number.isFinite(_sessionIdSearchRank(c, idNeedle))) return true;
       // Recent-only filter (last N hours) — applies to everything, backlog included.
       // Backlog items use issue_created_at (falls back to modified).
       // Exempt the conversation the user is actively looking at: resuming a
@@ -71873,6 +72409,7 @@
 
   function _historySourceRank(source) {
     source = String(source || '').toLowerCase();
+    if (source === 'id') return 4;
     if (source === 'recall') return 3;
     if (source === 'semantic') return 2;
     if (source === 'bm25') return 1;
@@ -71965,6 +72502,30 @@
       .filter(c => !!(c.session_id || c.id));
   }
 
+  function _historySyntheticRow(sid, hit) {
+    const titleSrc = _stripHistoryHtml(hit.snippet).trim();
+    return {
+      id: sid,
+      session_id: sid,
+      display_name: titleSrc.slice(0, 80) || ('Session ' + sid.slice(0, 8)),
+      first_message: '',
+      last_prompt: '',
+      branch: '',
+      source: 'history',
+      cwd: hit.cwd || '',
+      session_cwd: hit.cwd || '',
+      modified: _historyTsSeconds(hit.ts),
+      size: 0,
+      archived: false,
+      _historyMatch: true,
+      _historySnippet: hit.snippet,
+      _historySource: hit.source || 'bm25',
+      _historyChainCollapsed: hit.chainCollapsed || 0,
+      _historyChainCollapsedSids: hit.chainCollapsedSids || [],
+      _historyOnly: true,
+    };
+  }
+
   function _decorateWithHistoryMatches(localSorted, qLower) {
     // Empty query or stale state → strip any leftover decorations and bail.
     if (!qLower || _historyState.query !== qLower) {
@@ -72026,27 +72587,7 @@
     const synthetic = [];
     for (const [sid, hit] of map.entries()) {
       if (seen.has(sid)) continue;
-      const titleSrc = _stripHistoryHtml(hit.snippet).trim();
-      synthetic.push({
-        id: sid,
-        session_id: sid,
-        display_name: titleSrc.slice(0, 80) || ('Session ' + sid.slice(0, 8)),
-        first_message: '',
-        last_prompt: '',
-        branch: '',
-        source: 'history',
-        cwd: hit.cwd || '',
-        session_cwd: hit.cwd || '',
-        modified: _historyTsSeconds(hit.ts),
-        size: 0,
-        archived: false,
-        _historyMatch: true,
-        _historySnippet: hit.snippet,
-        _historySource: hit.source || 'bm25',
-        _historyChainCollapsed: hit.chainCollapsed || 0,
-        _historyChainCollapsedSids: hit.chainCollapsedSids || [],
-        _historyOnly: true,
-      });
+      synthetic.push(_historySyntheticRow(sid, hit));
     }
     const syntheticRepo = [];
     for (const row of repoRows) {
@@ -72942,7 +73483,14 @@
   function orchExecutor() {
     let id = '';
     try { id = localStorage.getItem('ccc-orch-executor') || ''; } catch (_) {}
-    return ORCH_EXECUTORS.find(e => e.id === id) || ORCH_EXECUTORS[0];
+    // No saved choice: default to an agent this machine has. Naming one the
+    // user doesn't have is the first thing a Claude-only install reads here.
+    let installed = null;
+    // This pane can render during init, before _emnInstalled's declaration runs.
+    try { installed = _emnInstalled; } catch (_) {}
+    return ORCH_EXECUTORS.find(e => e.id === id)
+      || ORCH_EXECUTORS.find(e => installed && installed[e.engine] === true)
+      || ORCH_EXECUTORS[0];
   }
   function orchSetExecutor(id) {
     // If the composer still holds the previous model's spawn draft (task
@@ -73115,9 +73663,14 @@
     setTimeout(() => btn.classList.remove('is-drafted'), 320);
   }
 
+  let _orchEnginesProbed = false;
   function renderOrchPlaybooks() {
     const host = document.getElementById('orchPlaybooks');
     if (!host) return;
+    if (!_orchEnginesProbed) {
+      _orchEnginesProbed = true;
+      refreshEngineMissingNotice();
+    }
     const ex = orchExecutor();
     const tester = orchTester(ex);
     const critics = orchCritics(ex);
@@ -79707,7 +80260,12 @@
       const extra = [];
       for (const c of byFolder) {
         const sid = c.session_id || c.id;
-        if (!seen.has(sid) && _historyState.map.has(sid)) extra.push(c);
+        if (!seen.has(sid) && _historyState.map.has(sid)) { extra.push(c); seen.add(sid); }
+      }
+      // An id hit is a direct lookup: show it even when the session is not
+      // in the loaded list at all.
+      for (const [sid, hit] of _historyState.map.entries()) {
+        if (hit.source === 'id' && !seen.has(sid)) extra.push(_historySyntheticRow(sid, hit));
       }
       if (extra.length) rows = rows.concat(extra);
     }
@@ -79740,7 +80298,7 @@
       return;
     }
     if (!archiveRows.length && !hasGc && !pendingSpawns.size) {
-      _renderArchiveEmpty('<div class="archive-empty-state">No conversations on disk.</div>');
+      _renderArchiveEmpty(firstRunEmptyHtml());
       return;
     }
     // When the unwindowed set has rows but the time-window filter hid them
@@ -80583,6 +81141,16 @@
     if (engine === 'pkood') return 'pkood';
     return 'Claude';
   }
+  // Codex has a Primary and Secondary account; any engine label that names
+  // Codex says which one (CCC-345). accountId: '' / '__current__' / 'local-codex' = Primary.
+  function spawnEngineLabelWithAccount(engine, accountId) {
+    const base = spawnEngineLabel(engine);
+    if (engine !== 'codex') return base;
+    const id = accountId === undefined
+      ? ((document.getElementById('codexAccountSelect') || {}).value || spawnDefaultsState.codex_account_id || '')
+      : accountId;
+    return base + ' ' + (!id || id === '__current__' || id === 'local-codex' ? '(Primary)' : '(Secondary)');
+  }
   function spawnSourceForEngine(engine) {
     if (engine === 'codex') return 'codex';
     if (engine === 'gemini') return 'gemini';
@@ -80669,9 +81237,9 @@
       if (!data.ok) throw new Error('Accounts unavailable');
       // Until the user picks one, start on the saved default account.
       const selected = select.dataset.userPicked === '1' ? select.value : (spawnDefaultsState.codex_account_id || '__current__');
-      select.replaceChildren(new Option('Codex · current account', '__current__'));
+      select.replaceChildren(new Option('Codex (Primary) · current account', '__current__'));
       for (const account of data.accounts || []) {
-        if (!account.current) select.add(new Option(account.label, account.id));
+        if (!account.current) select.add(new Option('Codex (Secondary) · ' + account.label, account.id));
       }
       if (selected && !Array.from(select.options).some(o => o.value === selected)) {
         select.add(new Option('Selected account unavailable: reconnect in Allowances', selected));
@@ -81452,6 +82020,7 @@
           worktree: useWorktree,
         });
         body.idempotency_key = durableActionId('spawn');
+        body.composer_form = 'ccc-composer-v1';
         const res = await fetch(endpoint, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
@@ -81997,7 +82566,7 @@
           res = await fetch('/api/sessions/spawned/' + currentSession.spawnPid + '/inject', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({ text, composer_form: 'ccc-composer-v1' }),
           });
         } else {
           const payload = {
@@ -87613,7 +88182,7 @@
     }
     const status = document.getElementById('spawnDefaultsWorkerInheritanceStatus');
     if (status) status.textContent = workerInheritanceSaving ? 'Saving worker defaults…' : workerInheritanceError || (inherited
-      ? 'Following new sessions: ' + spawnEngineLabel(spawnDefaultsState.worker_engine) + ' · ' + (spawnDefaultsState.worker_model || 'Engine default model') + ' · ' + (spawnDefaultsState.worker_reasoning_effort || 'Engine default effort') + ' · ' + spawnDefaultsState.worker_auto_compact_k + 'K. Independent worker settings are saved for return.'
+      ? 'Following new sessions: ' + spawnEngineLabelWithAccount(spawnDefaultsState.worker_engine, spawnDefaultsState.worker_codex_account_id || '') + ' · ' + (spawnDefaultsState.worker_model || 'Engine default model') + ' · ' + (spawnDefaultsState.worker_reasoning_effort || 'Engine default effort') + ' · ' + spawnDefaultsState.worker_auto_compact_k + 'K. Independent worker settings are saved for return.'
       : 'Independent worker defaults. Existing settings stay unchanged until you opt in.');
   }
   function compatibleDefaultEffort(engine, value) {
@@ -88718,7 +89287,12 @@
   const $voiceCallBtnToggle = document.getElementById('settingsVoiceCallBtnToggle');
   function voiceApplyCallButtonPref() {
     let on = false;
-    try { on = localStorage.getItem('ccc-voice-call-button') === '1'; } catch (_) {}
+    // Runs before getVoiceMobileBtnPref's key constant is initialised, so it
+    // reads storage directly; the rule must match that function.
+    try {
+      on = localStorage.getItem('ccc-voice-call-button') === '1'
+        && localStorage.getItem('ccc-voice-mobile-btn') !== '0';
+    } catch (_) {}
     document.body.classList.toggle('voice-call-btn-off', !on);
     if ($voiceCallBtnToggle) {
       $voiceCallBtnToggle.classList.toggle('is-on', on);
@@ -88728,8 +89302,7 @@
   }
   if ($voiceCallBtnToggle) $voiceCallBtnToggle.addEventListener('click', () => {
     const on = $voiceCallBtnToggle.getAttribute('aria-checked') !== 'true';
-    try { localStorage.setItem('ccc-voice-call-button', on ? '1' : '0'); } catch (_) {}
-    if (window.cccVoiceSetup?.mounted()) setVoiceMobileBtnPref(on);
+    setVoiceMobileBtnPref(on);
     voiceApplyCallButtonPref();
   });
   voiceApplyCallButtonPref();
@@ -91829,7 +92402,7 @@
     const choices = nsAdvisorChoices();
     const best = choices.find(c => !c.unavailable);
     if (config?.enabled && !nsAdvisor.manual && best) applyNsAdvisorChoice(best);
-    const label = c => spawnEngineLabel(c.engine) + ' · ' + getModelPillLabel(c.engine, c.model, c.effort);
+    const label = c => spawnEngineLabelWithAccount(c.engine) + ' · ' + getModelPillLabel(c.engine, c.model, c.effort);
     const automatic = config?.enabled && !nsAdvisor.manual && !!best;
     const strip = document.getElementById('convModelPickerStrip');
     const overrides = document.getElementById('nsModelOverrides');
@@ -91842,7 +92415,7 @@
     const selected = document.getElementById('nsSelectedModel');
     const held = currentSpawnChoice();
     const selectedLabel = window.CCCFreeRuntime?.runtimeForSpawn?.(held.engine) === 'free'
-      ? 'Free · ' + spawnEngineLabel(held.engine) : label(held);
+      ? 'Free · ' + spawnEngineLabelWithAccount(held.engine) : label(held);
     if (selected) selected.innerHTML = '<span class="ns-selection-mode">' + (automatic ? 'Auto' : nsAdvisor.manual ? 'Custom' : 'Model')
       + '</span><span class="ns-selection-name">' + escapeHtml(selectedLabel) + '</span>';
     host.innerHTML = '<div class="ns-advisor-top"><div class="ns-advisor-depth" role="group" aria-label="Task depth">'
@@ -92329,6 +92902,7 @@
       _emnInstalled = map;
       _emnObservedAt = new Date().toISOString();
       window.cccChoiceEligibility?.refresh();
+      renderOrchPlaybooks();
     } catch (_) { /* keep the last answer; never block the composer on this */ }
     renderEngineMissingNotice();
     renderNsAdvisor();
@@ -92512,6 +93086,7 @@
       }), Object.assign({
         timeline_t0_epoch_ms: spawnAskedAt,
         idempotency_key: durableActionId('spawn'),
+        composer_form: 'ccc-composer-v1',
       }, Number.isFinite(autoCompactK) && autoCompactK > 0 ? { auto_compact_k: autoCompactK } : {}));
       if (engine === 'claude') abortBackgroundApiReadsForSpawn();
       // A prewarm reservation boots with paid env - a $0 spawn must not claim it.
@@ -93201,12 +93776,23 @@
   function getQueueRhsListPref() { return localStorage.getItem('ccc-queue-rhs-list') === 'on'; }
   const VOICE_MOBILE_BTN_STORAGE_KEY = 'ccc-voice-mobile-btn';
   function getVoiceMobileBtnPref() {
-    try { return localStorage.getItem(VOICE_MOBILE_BTN_STORAGE_KEY) !== '0'; }
-    catch (_) { return true; }
+    // Hidden unless deliberately enabled. Two saved keys exist for history;
+    // every control reads this one answer and writes both (setter below), so
+    // no switch can say "on" while the button stays hidden.
+    try {
+      return localStorage.getItem(VOICE_MOBILE_BTN_STORAGE_KEY) !== '0'
+        && localStorage.getItem('ccc-voice-call-button') === '1';
+    } catch (_) { return false; }
   }
 
   function applyVoiceMobileBtn(show) {
     document.body.classList.toggle('hide-voice-mobile-btn', !show);
+    document.body.classList.toggle('voice-call-btn-off', !show);
+    const $callToggle = document.getElementById('settingsVoiceCallBtnToggle');
+    if ($callToggle) {
+      $callToggle.classList.toggle('is-on', show);
+      $callToggle.setAttribute('aria-checked', String(show));
+    }
     const $btn = document.getElementById('voiceMobileBtn');
     if ($btn) {
       if (!show) {
@@ -93234,6 +93820,7 @@
   function setVoiceMobileBtnPref(show) {
     try {
       localStorage.setItem(VOICE_MOBILE_BTN_STORAGE_KEY, show ? '1' : '0');
+      localStorage.setItem('ccc-voice-call-button', show ? '1' : '0');
     } catch (_) {}
     applyVoiceMobileBtn(show);
     window.cccVoiceSetup?.refreshAccess();
@@ -95058,7 +95645,7 @@
     scheduleAgentsOverview();
   }
   mountAgentsOverview();
-  document.getElementById('codexAccountSelect')?.addEventListener('change', event => { event.target.dataset.userPicked = '1'; });
+  document.getElementById('codexAccountSelect')?.addEventListener('change', event => { event.target.dataset.userPicked = '1'; try { renderNsAdvisor(); } catch (_) {} });
 
   function settingsModalFocusables() {
     if (!$settingsModal) return [];
@@ -95345,7 +95932,7 @@
     return ff('idea_tickets');
   }
   function normalizeSidebarTabKey(t) {
-    if (t === 'decisions' || t === 'decisions2') return t;
+    if (t === 'decisions' || t === 'decisions2') return window.cccDecisionTabKey();
     if (ideaTicketsOn()) {
       return (t === 'alltickets' || t === 'ideas' || t === 'smallbugs' || t === 'issues' || t === 'queues' || t === 'archived' || t === 'workers' || t === 'jobs') ? t : 'alltickets';
     }
@@ -95589,7 +96176,7 @@
     if (!wrap) return;
     wrap.hidden = !window.__cccEnginesFirstRun || !_engHubData;
     const summary = document.getElementById('engFirstRunDefaultSummary');
-    if (summary) summary.textContent = spawnEngineLabel(spawnDefaultsState.engine) + ' · '
+    if (summary) summary.textContent = spawnEngineLabelWithAccount(spawnDefaultsState.engine, spawnDefaultsState.codex_account_id || '') + ' · '
       + ((spawnDefaultsState.models || {})[spawnDefaultsState.engine] || 'Engine default model');
   }
   function refreshEnginesFirstRunFoot() {
@@ -96246,7 +96833,7 @@
         const parent = node.parentElement;
         if (!parent) continue;
         if (parent.closest(
-          '#chatFindModal, script, style, textarea, input, select, button, .conv-input-bar,'
+          '#chatFindModal, script, style, textarea, input, select, button:not(.qtag-chip), .conv-input-bar,'
           + ' [hidden], [aria-hidden="true"]'
         )) continue;
         const hay = node.nodeValue || '';

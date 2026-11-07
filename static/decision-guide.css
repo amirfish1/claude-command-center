@@ -46,3 +46,13 @@ a:hover { text-decoration:underline; }
 time { font-variant-numeric:tabular-nums; }
 * { scrollbar-color:#414955 var(--bg); scrollbar-width:thin; }
 @media(max-width:480px) { .guide { padding:20px 16px 32px; } header { align-items:flex-start; } header button { padding:8px 10px; } .question,.history { padding:14px; } }
+.close-confirm { border:1px solid var(--warn); border-radius:8px; padding:10px 12px; margin-top:12px; }
+.close-confirm p { margin:0; }
+button.danger { background:#4d2020; border-color:#7a3232; }
+button.danger:hover:enabled { background:#642929; }
+.weight { margin:8px 0 0; font-size:13px; font-weight:600; }
+.weight-major { color:#f0b35a; }
+.weight-minor { color:var(--mute); }
+.embedded h1 { display:none; }
+.embedded header { margin:0; }
+.embedded #intro { margin-top:0; }

@@ -499,12 +499,12 @@ def test_hidden_and_attachment_paths_are_ignored(rg, tmp_path, monkeypatch):
 
 
 def test_name_rule_skips_paths_stoplist_and_filenames(rg, tmp_path, monkeypatch):
-    _repos(tmp_path, monkeypatch, "bookyourmat", "test", "apps")
+    _repos(tmp_path, monkeypatch, "acmeshop", "test", "apps")
     cands, _ = rg._rg_candidates("")
-    for text in ("read apps/bookyourmat/notes", "run the test suite", "go to the apps",
-                 "open bookyourmat.py", "see bookyourmat/src"):
+    for text in ("read apps/acmeshop/notes", "run the test suite", "go to the apps",
+                 "open acmeshop.py", "see acmeshop/src"):
         assert rg._rg_match_names(text, cands) == [], text
-    assert [p.rsplit("/", 1)[1] for p in rg._rg_match_names("fix bookyourmat checkout", cands)] == ["bookyourmat"]
+    assert [p.rsplit("/", 1)[1] for p in rg._rg_match_names("fix acmeshop checkout", cands)] == ["acmeshop"]
 
 
 def test_acronym_alias_only_when_unique(rg, tmp_path, monkeypatch):

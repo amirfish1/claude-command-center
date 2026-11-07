@@ -1,0 +1,21 @@
+.engine-connection { margin: 0 0 20px; }
+.engine-connection h2, .engine-connection-panel h2 { margin: 0 0 8px; font-size: 20px; }
+.engine-connection p, .engine-connection-panel p { max-width: 72ch; line-height: 1.55; }
+.engine-connection label { display: block; margin: 16px 0 6px; font-weight: 600; }
+#engineConnectionSelect { width: 100%; max-width: 560px; }
+.engine-connection-panel { min-width: 0; padding: 0 16px 16px; }
+.engine-connection-step { padding: 20px 0; border-top: 1px solid var(--border); }
+.engine-connection-step h3 { margin: 0 0 8px; font-size: 15px; }
+.engine-connection-step .settings-action-btn { margin: 4px 8px 4px 0; white-space: normal; }
+.engine-connection-panel .eng-cmd { flex-wrap: wrap; }
+.engine-connection-panel .eng-cmd code { overflow-wrap: anywhere; white-space: pre-wrap; min-width: 0; }
+.engine-connection-details { margin-bottom: 16px; }
+.engine-connection-details summary { cursor: pointer; }
+.engine-connection-panel .eng-links { display: flex; flex-wrap: wrap; gap: 12px; }
+#engineConnectionStatus.is-error, .engine-connection-warning { color: var(--warning, #dca95e); }
+.engine-connection :focus-visible, .engine-connection-panel :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media(max-width:600px) { .engine-connection-panel { padding: 0 0 16px; } .engine-connection-panel .eng-cmd { align-items: stretch; } }
+.engine-connection, .engine-connection-panel { font-size: 13px; line-height: 1.55; }
+.engine-connection-step > summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+[data-engine-connection-mounted] #engFirstRunDefaults { display: none !important; }
+[data-engine-connection-mounted] #engList { border: 0; border-radius: 0; background: transparent; }

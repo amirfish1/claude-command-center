@@ -31,23 +31,27 @@ test('a confirming local render cannot consume archive protection before a delay
 });
 
 function fixture(response) {
-  const row = { id: 'conversation-test', session_id: 'session-test' };
+  const row = { id: 'conversation-test', session_id: 'session-test', display_name: 'Fix <b>voice</b>' };
   const calls = [];
+  const posts = [];
+  const toasts = [];
   const context = {
     currentConversation: row.id,
     _openConversationRow: () => row,
     rowRepoPath: () => '',
     archivePayloadForRow: (_, session_id, archived) => ({ session_id, archived }),
-    ccPostJson: async () => response,
+    ccPostJson: async (url, body) => { posts.push(body); return response; },
     conversationsData: [row], archiveData: [], currentRepoBacklogData: [],
     setOptimisticOverride: () => {},
     returnToConversationList: () => calls.push('list'),
     updateInputBar: () => {}, renderSidebar: () => {}, filterConversations: () => [],
-    $convSearch: { value: '' }, showOpToast: text => calls.push(text),
+    $convSearch: { value: '' },
+    showOpToast: (text, kind, action) => { calls.push(text); toasts.push({ text, action }); },
+    escapeHtml: text => String(text).replace(/</g, '&lt;'),
   };
   vm.createContext(context);
   vm.runInContext(code, context);
-  return { context, calls, row, run: kind => context._setOpenSessionLifecycle(kind) };
+  return { context, calls, posts, toasts, row, run: kind => context._setOpenSessionLifecycle(kind) };
 }
 
 test('archive returns to the list only after successful persistence', async () => {
@@ -62,6 +66,41 @@ test('archive returns to the list only after successful persistence', async () =
   await done;
   assert.equal(f.row.archived, true);
   assert.equal(f.calls[1], 'list');
+});
+
+test('archive offers an 8 second Undo that restores the whole group', async () => {
+  const f = fixture({ ok: true, archived: true, session_ids: ['session-test', 'helper'] });
+  const helper = { id: 'helper', archived: false };
+  f.context.conversationsData.push(helper);
+  await f.run('archive');
+  assert.equal(helper.archived, true);
+  const toast = f.toasts.at(-1);
+  assert.equal(toast.text, 'Archived Fix &lt;b>voice&lt;/b>');
+  assert.equal(toast.action.label, 'Undo');
+  assert.equal(toast.action.ttlMs, 8000);
+  f.context.ccPostJson = async (url, body) => {
+    f.posts.push(body);
+    return { ok: true, archived: false, session_ids: ['session-test', 'helper'] };
+  };
+  f.context._openConversationRow = () => null; // the reader has moved on
+  await toast.action.onClick();
+  assert.deepEqual(f.posts.at(-1), { session_id: 'session-test', archived: false });
+  assert.equal(f.row.archived, false);
+  assert.equal(helper.archived, false);
+  assert.equal(f.calls.at(-1), 'Restored to Active');
+});
+
+test('a failed archive offers no Undo', async () => {
+  const f = fixture({ ok: false, error: 'Network failed' });
+  await f.run('archive');
+  assert.equal(f.toasts.some(t => t.action), false);
+});
+
+test('the sidebar Archive button offers the same Undo, except on issue cards', () => {
+  const at = app.indexOf("if (!data.archived) showOpToast('Restored to Active');");
+  const branch = app.slice(at, app.indexOf('} catch (err)', at));
+  assert.match(branch, /_showArchivedUndoToast\(c\)/);
+  assert.match(branch, /backlog-issue-/);
 });
 
 test('archive failure preserves the open conversation', async () => {

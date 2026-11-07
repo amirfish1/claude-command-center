@@ -36,12 +36,13 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       try {
         if (req.method() === 'POST') {
           assert.equal(url.origin,origin);
-          assert.match(url.pathname,/^\/api\/decision-inbox\/answers(?:\/(send|reconcile))?$/);
+          assert.match(url.pathname,/^\/api\/decision-inbox\/(?:answers(?:\/(send|reconcile))?|close)$/);
           posts.push({url:url.pathname, body:JSON.parse(req.postData())});
           return await handler(req);
         }
         if (['/','/decision-guide.html','/static/decision-guide.html'].includes(url.pathname)) return await req.respond({status:200,contentType:'text/html',body:assets.html});
         if (url.pathname === '/static/decision-guide.js') return await req.respond({status:200,contentType:'application/javascript',body:assets.js});
+        if (url.pathname === '/static/decision-weight.js') return await req.respond({status:200,contentType:'application/javascript',body:fs.readFileSync(path.join(root,'static/decision-weight.js'),'utf8')});
         if (url.pathname === '/static/decision-guide.css') return await req.respond({status:200,contentType:'text/css',body:assets.css});
         if (url.pathname === '/api/decision-inbox/requests') {
           const response = {status:200,contentType:'application/json',body:JSON.stringify(model)};
@@ -52,7 +53,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
     });
     const ready = () => page.waitForFunction(() => !document.querySelector('#refresh').disabled && !document.querySelector('#intro').textContent.startsWith('Loading'));
     const load = async () => { await page.goto(origin+'/static/decision-guide.html'); await ready(); };
-    const refresh = async () => { await page.click('#refresh'); await ready(); };
+    const refresh = async () => { await page.evaluate(()=>document.querySelector('#refresh').click()); await ready(); };
     const click = label => page.evaluate(label => {
       const button = [...document.querySelectorAll('button')].find(b=>b.textContent===label);
       if (!button || button.disabled) throw Error('Button unavailable: '+label);
@@ -64,6 +65,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
     const reply = (req,state='pending',changes={}) => req.respond({status:200,contentType:'application/json',body:JSON.stringify({ok:true,request_id:id,answer_id:answerId,state,answer:{request_id:id,expected_revision:4,text:exact,actor:'owner'},work_completed:false,...changes})});
     try {
       await load();
+      assert.equal(await page.$eval('#refresh',el=>getComputedStyle(el).display),'none');
       await run({page,model,posts,load,refresh,click,wait,idle,selected,reply,setHandler:fn=>{handler=fn;},setReadHandler:fn=>{readHandler=fn;}});
       assert.deepEqual(errors,[]); checks++; console.log('PASS '+name);
     } finally { await page.close(); }
@@ -82,17 +84,72 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       }
       model.answers_enabled=false;
       model.requests[1]={...second,adapter:'session-question',can_answer:false,answer_unavailable_reason:'Reply in the originating session.'};
-      await refresh(); await page.click('#queue summary');
+      await refresh();
       assert.equal(await page.$eval('#answerFields',el=>el.getBoundingClientRect().height),0);
       assert.equal(await page.$eval('#send',el=>el.getBoundingClientRect().height),0);
       assert.equal(await page.$eval('#skip',el=>el.disabled),false);
       await page.screenshot({path:path.join(screenshots,'guide-read-only-390.png'),fullPage:true});
-      assert.equal(await page.$$eval('#items button',nodes=>nodes.length),2);
-      await page.click('#items button:nth-child(2)');
+      await page.click('#skip');
       assert.match(await page.$eval('#guidance',el=>el.textContent),/not enabled/);
       model.answers_enabled=true; await refresh();
       assert.match(await page.$eval('#guidance',el=>el.textContent),/originating session/); assert.equal(posts.length,0);
       assert.equal(await page.$eval('#answerFields',el=>el.getBoundingClientRect().height),0);
+    });
+    const closed = (req,changes={}) => req.respond({status:200,contentType:'application/json',body:JSON.stringify({ok:true,request_id:id,origin_id:'TASK-1',adapter:'watchtower-block',state:'closed',scope:'source',work_completed:false,...changes})});
+    const closeable = model => { model.requests[0].can_close = true; };
+    await fixture('close needs confirmation, then closes the exact question and shows undo',async ({page,model,posts,refresh,click,wait,idle,selected,setHandler})=>{
+      assert.equal(await page.$eval('#close',el=>el.hidden),true);
+      closeable(model); await refresh();
+      assert.equal(await page.$eval('#close',el=>el.hidden),false);
+      await click('Close…');
+      assert.match(await page.$eval('#closeText',el=>el.textContent),/Close TASK-1 as no longer relevant\? The WatchTower ticket closes and no more work happens\./);
+      assert.equal(await page.evaluate(()=>document.activeElement.id),'closeKeep');
+      assert.equal(posts.length,0);
+      await page.screenshot({path:path.join(screenshots,'guide-close-confirm.png'),fullPage:true});
+      await click('Keep it');
+      assert.equal(await page.$eval('#closeConfirm',el=>el.hidden),true); assert.equal(posts.length,0); assert.equal(await selected(),id);
+      setHandler(async req=>{
+        const stored=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('ccc:decision-guide:v1')));
+        assert.equal(stored.closes[id].idempotency_key,JSON.parse(req.postData()).idempotency_key);
+        return closed(req);
+      });
+      await click('Close…'); await click('Yes, close ticket'); await wait('To undo, run: wt reopen TASK-1'); await idle();
+      assert.equal(posts.length,1); assert.equal(posts[0].url,'/api/decision-inbox/close');
+      assert.deepEqual(Object.keys(posts[0].body).sort(),['expected_revision','idempotency_key','request_id']);
+      assert.equal(posts[0].body.expected_revision,4); assert.equal(await selected(),secondId);
+      await refresh();
+    });
+    await fixture('a question that changes during confirmation closes nothing',async ({page,model,posts,refresh,click,wait})=>{
+      closeable(model); await refresh(); await click('Close…');
+      model.requests[0]={...model.requests[0],revision:5,body:'A different question'}; await refresh();
+      await wait('This question changed, so nothing was closed.');
+      assert.equal(await page.$eval('#closeConfirm',el=>el.hidden),true); assert.equal(posts.length,0);
+    });
+    await fixture('source conflict keeps the question and says nothing closed',async ({page,model,posts,refresh,click,wait,idle,selected,setHandler})=>{
+      closeable(model); await refresh();
+      setHandler(req=>req.respond({status:409,contentType:'application/json',body:'{"ok":false,"error":"conflict"}'}));
+      await click('Close…'); await click('Yes, close ticket'); await wait('Nothing was closed: this question changed'); await idle();
+      assert.equal(await selected(),id); assert.equal(posts.length,1);
+      assert.deepEqual(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('ccc:decision-guide:v1')).closes),{});
+    });
+    await fixture('lost response retries the same close after reload',async ({page,model,posts,refresh,load,click,wait,idle,selected,setHandler})=>{
+      closeable(model); await refresh();
+      setHandler(req=>req.abort('failed'));
+      await click('Close…'); await click('Yes, close ticket'); await wait('Close not confirmed.'); await idle();
+      assert.equal(await selected(),id);
+      await load(); await wait('Check close');
+      assert.equal(await page.$eval('#close',el=>el.hidden),true);
+      model.requests[0]={...model.requests[0],status:'withdrawn'}; await refresh();
+      assert.equal(await selected(),id);
+      setHandler(closed); await click('Check close'); await wait('To undo, run: wt reopen TASK-1'); await idle();
+      assert.equal(posts.length,2); assert.deepEqual(posts[1].body,posts[0].body);
+    });
+    await fixture('session question is only hidden here',async ({page,model,refresh,click,wait,idle,setHandler})=>{
+      model.requests[0]={...base,adapter:'session-question',reply_supported:true,session_id:id,can_close:true}; await refresh();
+      await click('Hide…');
+      assert.match(await page.$eval('#closeText',el=>el.textContent),/hidden in CCC only/);
+      setHandler(req=>closed(req,{adapter:'session-question',scope:'ccc'}));
+      await click('Yes, hide it'); await wait('Hidden here only.'); await idle();
     });
     await fixture('accepted receipt advances and retains exact transcript',async ({page,posts,click,wait,idle,selected,reply,setHandler,model,refresh,load})=>{
       setHandler(async req=>{
@@ -111,8 +168,6 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       assert.deepEqual(Object.keys(posts[0].body).sort(),['expected_revision','idempotency_key','request_id','text']);
       assert.equal(posts[0].body.text,exact); assert.equal(posts[0].body.expected_revision,4);
       assert.deepEqual(posts[1].body,{answer_id:answerId});
-      assert.equal(await page.$eval('#transcript .raw',el=>el.textContent),base.body);
-      assert.equal(await page.$eval('#transcript .reply span:last-child',el=>el.textContent),exact);
       await page.screenshot({path:path.join(screenshots,'guide-accepted.png'),fullPage:true});
       model.requests[0].answer=summary('pending'); await refresh(); await load();
       assert.match(await page.$eval('#transcript',el=>el.textContent),/Answer accepted by source/); assert.equal(posts.length,2);
@@ -211,7 +266,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       model.needs_answer_count=5; await refresh();
       const inView=()=>page.$eval('#current h2',el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;});
       for (let n=0;n<4;n++) { await click('Skip / next'); assert.equal(await inView(),true); }
-      assert.equal(await page.$$eval('#transcript article',nodes=>nodes.length),4);
+      assert.equal(await page.$$eval('#transcript article',nodes=>nodes.length),0);
       await page.focus('textarea'); await page.type('textarea','retained draft');
       const before=await page.evaluate(()=>({scroll:scrollY,focus:document.activeElement.id}));
       await page.keyboard.type(' plus text');
@@ -220,7 +275,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       await page.waitForFunction(()=>!document.querySelector('#refresh').disabled);
       assert.deepEqual(await page.evaluate(()=>({scroll:scrollY,focus:document.activeElement.id})),before);
       assert.equal(await page.$eval('textarea',el=>el.value),'retained draft plus text');
-      await page.evaluate(()=>{document.querySelector('#queue').open=true;document.querySelector('#items button').click();});
+      await click('Skip / next');
       assert.equal(await inView(),true); assert.equal(posts.length,0);
       await page.screenshot({path:path.join(screenshots,'guide-next-viewport.png')});
     });
@@ -305,7 +360,8 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
         },modifier),false);
       }
       model.source_current=false; model.needs_answer_count=900;
-      await frame.click('#refresh'); await page.waitForFunction(()=>window.decisionCounts.length===2);
+      await frame.evaluate(()=>document.querySelector('#refresh').click()); await page.waitForFunction(()=>window.decisionCounts.length===2);
+      assert.equal(await frame.$eval('#refresh',el=>getComputedStyle(el).display!=='none'),true);
       assert.deepEqual(await page.evaluate(()=>window.decisionCounts),[2,null]);
       assert.equal(await page.evaluate(()=>window.ticketMessages.length),1); assert.equal(posts.length,0);
     });
@@ -353,7 +409,6 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       await load();
       assert.equal(await selected(),secondId);
       assert.match(await page.$eval('#transcript',el=>el.textContent),/Answer accepted by source/);
-      assert.equal(await page.$$eval('#items button',nodes=>nodes.length),1);
       assert.equal(await page.$eval('#current h2',el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),true);
       await page.screenshot({path:path.join(screenshots,'guide-external-answer.png'),fullPage:true});
       assert.equal(posts.length,0);
@@ -386,7 +441,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       assert.equal(posts.length,0);
     },{before:()=>{
       const native=window.setInterval;
-      window.setInterval=(fn,ms,...args)=>ms===60000?(window.guideRefreshTick=fn,0):native(fn,ms,...args);
+      window.setInterval=(fn,ms,...args)=>ms===30000?(window.guideRefreshTick=fn,0):native(fn,ms,...args);
     }});
     await fixture('returning to the sidebar view refreshes its retained iframe',async ({page,model,posts})=>{
       const tabScript=fs.readFileSync(path.join(root,'static/decision-tab.js'),'utf8');

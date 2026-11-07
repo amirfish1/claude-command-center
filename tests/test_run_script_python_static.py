@@ -10,7 +10,7 @@ def test_run_script_prefers_the_repo_virtualenv_python():
     script = (PROJECT_ROOT / "run.sh").read_text(encoding="utf-8")
 
     assert 'PYTHON="$HERE/.venv/bin/python3"' in script
-    assert 'exec "$PYTHON" "$HERE/server.py"' in script
+    assert 'exec "$PYTHON" "$HERE/ccc_server/boot.py" "$HERE/server.py"' in script
 
 
 def test_run_script_accepts_python39():

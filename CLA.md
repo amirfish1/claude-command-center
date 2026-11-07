@@ -92,5 +92,5 @@ recognize you automatically.
 
 ## Questions
 
-Open an issue or email `amir.fish@gmail.com`. This CLA is intentionally
+Open an issue. This CLA is intentionally
 short — if anything is unclear, ask before signing.

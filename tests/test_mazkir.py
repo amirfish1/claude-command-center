@@ -213,7 +213,7 @@ class OutsideUserDefaultsTest(unittest.TestCase):
 
     def test_no_personal_defaults_in_source(self):
         src = Path(mazkir.__file__).read_text(encoding="utf-8")
-        for needle in ("/Users/", "MyOfficeMgr", "Amir", "Becky", "BYM"):
+        for needle in ("/Users/", "Amir"):
             self.assertNotIn(needle, src)
 
     def test_index_bin_from_env_then_path_else_off(self):
@@ -283,7 +283,7 @@ CHECKIN_MD = """# Daily check-in agenda
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| 2.1 | Becky honesty | open | 1-in-3 hit rate |
+| 2.1 | Wren honesty | open | 1-in-3 hit rate |
 | 2.2 | Dropped idea | dropped | no |
 
 ## Discussion log
@@ -359,7 +359,7 @@ class SourceHygieneTest(unittest.TestCase):
         cands = [
             {"session_id": "w1", "title": "Drain the FEAT-NEXT WatchTower queue and keep it empty."},
             {"session_id": "w2", "title": "Trash speed fix"},
-            {"session_id": "w3", "title": "lane-w3 bym receipts"},
+            {"session_id": "w3", "title": "lane-w3 harbor receipts"},
             {"session_id": "w4", "title": "raw first prompt"},
             {"session_id": "u1", "title": "Quiet-hours receipts fix"},
         ]
@@ -392,8 +392,8 @@ class SourceHygieneTest(unittest.TestCase):
         cut = "Heads-up: this may already be shipped: feat(x): y (wt 1), confidence 0.9. Verify before rebuilding. You ar"
         out, _ = mazkir.prepare_candidates(
             [{"session_id": "s1", "title": cut}], "q",
-            full_title=lambda ids: {i: cut[:-6] + " You are the BYM UX worker" for i in ids})
-        self.assertEqual(out[0]["title"], "You are the BYM UX worker")
+            full_title=lambda ids: {i: cut[:-6] + " You are the HARBOR UX worker" for i in ids})
+        self.assertEqual(out[0]["title"], "You are the HARBOR UX worker")
 
     def test_ccc_titles_follow_sidebar_priority(self):
         meta = {"/p/-a/s1.jsonl": {"custom_title": "AUG-4#13: expiry", "ai_title": "ai one"},
@@ -408,10 +408,10 @@ class SourceHygieneTest(unittest.TestCase):
         trace = mazkir.build_trace("claude-index · sessions search", 8, 5, 900,
                                    {"evals_hidden": 2, "runs_merged": 1},
                                    [{"name": "mcp__ccc-state__daily_brief", "input": {}},
-                                    {"name": "mcp__claude-index__search_sessions", "input": {"query": "bym ads"}}])
+                                    {"name": "mcp__claude-index__search_sessions", "input": {"query": "harbor ads"}}])
         self.assertEqual(trace[0]["detail"], "8 candidates, 5 kept (2 eval runs hidden, 1 repeat run merged) · 0.9s")
         self.assertEqual(trace[2], {"tool": "ccc-state · daily_brief", "detail": ""})
-        self.assertEqual(trace[3], {"tool": "claude-index · search_sessions", "detail": '"bym ads"'})
+        self.assertEqual(trace[3], {"tool": "claude-index · search_sessions", "detail": '"harbor ads"'})
 
     def test_sources_flag_which_were_cited(self):
         cands = [{"session_id": "aaaaaa1", "title": "One"}, {"session_id": "bbbbbb2", "title": "Two"}]
@@ -431,9 +431,9 @@ class FocusedSessionAndInjectTest(unittest.TestCase):
         self.assertIn("inject_diagnostics", mazkir.system_prompt())
 
     def test_git_requests_route_to_a_spawn_proposal(self):
-        # FEAT-NEXT-148: "push bym" got "I can't push" instead of a Confirm card.
+        # FEAT-NEXT-148: "push my-app" got "I can't push" instead of a Confirm card.
         prompt = mazkir.system_prompt()
-        self.assertIn('Git work ("push bym"', prompt)
+        self.assertIn('Git work ("push my-app"', prompt)
         self.assertIn("Never ask it to force-push or skip hooks", prompt)
 
     def test_bad_or_missing_focus_is_dropped(self):

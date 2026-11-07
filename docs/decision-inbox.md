@@ -5,6 +5,8 @@
 Open **Decisions** in the main navigation, app rail or `/decision-inbox.html`.
 The [Owner questions table](decision-coverage.md#shared-request-view) shows
 current local queue owner waits and explicitly promoted session questions.
+GitHub-backed queue questions appear too; they come from the cached ticket list
+and link to the ticket, where you answer them.
 Interactive questions stay in their sessions. Source answers remain disabled
 by default, and incomplete source coverage is shown explicitly. Separately
 [opted-in answer controls](decision-answers.md#dashboard-controls) distinguish
@@ -16,9 +18,9 @@ with a ticket-reference chip: select it to open that ticket's context and
 existing controls, then close the detail view to return to the same questions.
 Links such as `/?ticket=EXAMPLE-1` also open the ticket directly.
 
-## Guided queue experiment
+## Guided queue
 
-**Decisions 2** sits beside Decisions in the normal sidebar. It is a
+**Decisions** in the normal sidebar is the one owner queue. It is a
 programmed question-and-answer flow, with no model calls: it reports the
 verified open-question count and shows the exact source question, ticket link
 and Pacific timestamp. **Skip / next** changes only your place in this view.
@@ -91,8 +93,9 @@ The [shadow coverage report](decision-coverage.md) compares current cached owner
 questions and review gates with retained cards using stable source identities.
 It does not change counts, merge questions or deliver answers.
 
-On mobile, **More → Decisions 2** is the first direct item in both normal and
-Simple mode. The original **Decisions** table remains in the Apps list.
+On mobile, **More → Decisions** is the first direct item in both normal and
+Simple mode. The older table, **Decision history**, remains in the Apps list and
+behind the queue's History and reports link.
 Opening More refreshes the app catalog; an older loaded page needs one reload
 to acquire the shortcut code. The More menu includes the same
 app catalog as the desktop rail. Apps keep the bottom bar visible so you can

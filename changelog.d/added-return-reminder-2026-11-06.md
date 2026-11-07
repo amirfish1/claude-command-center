@@ -1,0 +1,1 @@
+- `ccc remind`, and a button at the end of the first task, set one local notification for tomorrow morning saying what your sessions did. It fires once and does not repeat.

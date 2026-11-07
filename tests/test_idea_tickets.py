@@ -339,6 +339,67 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(it.load_state()["pending"], {})
         self.assertEqual(it.backfill(["a", "b", "c"])["queued"], 0)  # idempotent
 
+    def test_backfill_skips_worker_continuations(self):
+        self.transcripts["w1"] = {"text": "You continue the work of session abc (x)."}
+        self.transcripts["w2"] = {"text": "You are continuing a task from an earlier Claude session."}
+        self.registry["w3"] = {"spawned_via": "watchtower", "cwd": "/tmp"}
+        self.transcripts["w3"] = {"text": "Fix the thing"}
+        self.transcripts["idea"] = {"text": "Add a dark mode toggle"}
+        it.classify = lambda text, **kw: "idea"
+        it.backfill(["w1", "w2", "w3", "idea"])
+        self.assertEqual(sorted(it.idea_ticket_rows_map()), ["idea"])
+        state = it.load_state()
+        self.assertEqual(state["sessions"]["w1"]["skip"], "worker session")
+        self.assertNotIn("w1", state["pending"])
+
+    def test_ui_continuation_still_gets_a_ticket(self):
+        self._ui_session("u1", "You are continuing a task from an earlier Codex session.")
+        res = it.attach_or_file("u1", classify_fn=lambda text: "idea")
+        self.assertTrue(res.get("ref"))
+
+    def _ticket(self, sid="s1"):
+        self._ui_session(sid)
+        it.attach_or_file(sid, classify_fn=lambda text: "idea")
+        return it.idea_ticket_rows_map()[sid]["ref"]
+
+    def _fake_queue(self, active, statuses):
+        def fake(args, cwd=None, timeout=30):
+            self.calls.append(list(args))
+            if args[0] == "ls":
+                return (0, json.dumps([{"ref": r} for r in active])) if active is not None else (1, "")
+            if args[0] == "find":
+                status = statuses.get(args[1])
+                return (0, json.dumps({"status": status})) if status else (1, "")
+            return 0, ""
+        it._wt = fake
+
+    def test_closed_sync_marks_a_ticket_closed_directly_in_watchtower(self):
+        ref = self._ticket()
+        self._fake_queue([], {ref: "closed"})
+        self.assertEqual(it.sync_closed_tickets(), 1)
+        self.assertTrue(it.idea_ticket_rows_map()["s1"]["closed"])
+        self.assertEqual(it.sync_closed_tickets(), 0)  # settled: no second write
+
+    def test_closed_sync_leaves_active_moved_and_unreadable_tickets_alone(self):
+        ref = self._ticket()
+        self._fake_queue([ref], {ref: "closed"})   # still listed active
+        self.assertEqual(it.sync_closed_tickets(), 0)
+        self._fake_queue([], {})                    # moved: its old ref is gone
+        self.assertEqual(it.sync_closed_tickets(), 0)
+        self._fake_queue(None, {ref: "closed"})     # wt ls failed
+        self.assertEqual(it.sync_closed_tickets(), 0)
+        self.assertFalse(it.idea_ticket_rows_map()["s1"]["closed"])
+
+    def test_closed_sync_is_throttled_off_the_list_path(self):
+        ref = self._ticket()
+        self._fake_queue([], {ref: "closed"})
+        it._closed_sync.update(at=0.0, running=False)
+        it._tick_closed_sync(1000.0)
+        self.assertTrue(it.idea_ticket_rows_map()["s1"]["closed"])
+        self.calls.clear()
+        it._tick_closed_sync(1000.0 + it.CLOSED_SYNC_EVERY_S - 1)
+        self.assertEqual(self.calls, [])
+
     def test_backfill_recent_once_tickets_last_two_days_and_runs_once(self):
         it.classify = lambda text: "idea"
         now = it.time.time()
@@ -380,9 +441,9 @@ class IdeaTicketsTest(unittest.TestCase):
                  "auto_titled": True, "first_message": "Can we fix this"}]
         it.sweep_rows(rows)
         self.assertFalse([c for c in self.calls if c[0] == "edit"])  # WT badge name
-        rows[0]["display_name"] = "bym-growth auto-update stall"
+        rows[0]["display_name"] = "harbor-growth auto-update stall"
         it.sweep_rows(rows)
-        self.assertIn(["edit", ref, "--title", "bym-growth auto-update stall"], self.calls)
+        self.assertIn(["edit", ref, "--title", "harbor-growth auto-update stall"], self.calls)
         it.sweep_rows(rows)
         self.assertEqual(len([c for c in self.calls if c[0] == "edit"]), 1)
 

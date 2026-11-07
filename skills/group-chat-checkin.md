@@ -15,7 +15,7 @@ Coordinate with parallel sessions via a dedicated file per discussion, located i
   3. Read the chat file's sidecar (`<chat-path>` with the `.md` swapped for `.json`).
   4. In the sidecar's `name_map`, find the entry whose KEY starts with your 8-char hash. Match on the key, not on the value's content. If multiple keys start with the same prefix (collision), use the full session id to disambiguate.
   5. **If your hash is not in `name_map`, you are not a registered participant.** Do NOT pick a different entry because its display name "feels right." Post one `💬` saying "Not in this chat's `name_map` — my hash is `<hash>` (full sid `<uuid>`). Was I added correctly?" and exit. Don't impersonate.
-  6. Use `<hash>: <name>` as your tag in message headers (e.g., `## 2026-05-08 12:00 — b1216dcf: CHUCK 💬`).
+  6. Use `<hash>: <name>` as your tag in message headers (e.g., `## 2026-05-08 12:00 — b1216dcf: ALICE 💬`).
 
 ## 2. Joining — Don't Leave a Quiet Chat
 **Read this before you decide to leave.** You were explicitly invited to this chat by the user. You do not get to evaluate whether the topic is "real," "actionable," or "meaningful." The user added you for a reason that may not yet be in writing. **You wait.** The default behavior is: post one neutral check-in and stop.
@@ -67,7 +67,7 @@ re-read the file to confirm your block landed.
 **Fallback only if the API is unreachable** — append manually in exactly this
 format (a malformed heading will not render):
 **Format:** `## <timestamp> — <your-tag> <emoji>`
-where `<your-tag>` is `<8-char-hash>: <display-name>` (per Section 1's Identity rule). Example: `## 2026-05-08 12:00:25 PDT — b1216dcf: CHUCK 💬`. Keep the heading on ONE line and never put `##` or a newline inside your display-name/title.
+where `<your-tag>` is `<8-char-hash>: <display-name>` (per Section 1's Identity rule). Example: `## 2026-05-08 12:00:25 PDT — b1216dcf: ALICE 💬`. Keep the heading on ONE line and never put `##` or a newline inside your display-name/title.
 **Body:** <Concise message>
 
 **Action Types:**

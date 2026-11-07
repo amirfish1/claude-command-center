@@ -15,7 +15,7 @@ function harness() {
     const _ttsLog=()=>{}, _ttsShowVoice=()=>{}, _ttsPerfStart=()=>{}, _ttsPerfSilence=()=>{};
     const setTtsButtonsState=()=>{}, setTtsButtonsBusy=()=>{}, ttsButtons=()=>[];
     const _ttsFetchNeural=()=>{fetches++; throw Error('Unnecessary synthesis');};
-    const _ttsContinuousOk=()=>false;
+    const _ttsContinuousOk=()=>false, _ttsCanStream=()=>false, _ttsEventLagMs=()=>0;
     const cancelAnimationFrame=()=>{};
     function Audio(){
       this.duration=Infinity;this.currentTime=0;this.paused=true;

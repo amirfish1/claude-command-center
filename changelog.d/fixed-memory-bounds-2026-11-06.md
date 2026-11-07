@@ -1,0 +1,2 @@
+- Lowered the dashboard's memory use on large session histories: its biggest caches now have byte budgets, its processes hand freed memory back to the system, and leftover refresh files in `/dev/shm` are swept at startup.
+- The dashboard now starts from cached bytecode instead of recompiling `server.py` on every launch, which saves about 100 MB of resident memory per dashboard.

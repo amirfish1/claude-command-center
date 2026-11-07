@@ -1,5 +1,5 @@
 // Slice 3 of the Codex single-renderer merge (see
-// CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md): new
+// the private plans repo, codex-single-renderer-merge): new
 // event-kind renderers, still inert (nothing feeds them live data until
 // Slice 4). Covers:
 //   - `kind:'diff'` turn-level diff block (_turnDiffBlockHtml)

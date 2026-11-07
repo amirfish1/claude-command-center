@@ -1,0 +1,1 @@
+- Decisions 2 can answer GitHub-backed questions directly; the live ticket is rechecked first so a changed question is never answered.

@@ -88,7 +88,7 @@
       if (!/(AM|PM|am|pm|P[SD]?T|E[SD]?T|UTC|GMT|\d:\d{2}:\d{2})/.test(m)) return m;
       return protect('<span class="tp-time">' + m + '</span>');
     });
-    // quoted speech — the load-bearing bits of a Becky ticket. esc() leaves
+    // quoted speech — the load-bearing bits of a support ticket. esc() leaves
     // double quotes alone (text nodes don't need them escaped), so match raw.
     s = s.replace(/"([^"\n]{2,400})"/g, function (_, body) {
       return protect('<span class="tp-quote">&ldquo;' + body + '&rdquo;</span>');
@@ -104,7 +104,7 @@
   // recommendation. Lift that structure out so a human can scan it (CCC-64).
   // Returns HTML, or null when the text has no inline options to lift.
   // Labels may be "(a)", "(A)", "(1)" or carry a short note such as
-  // "(A, recommended)" (STRAMP-215); the note is shown bold after the key.
+  // "(A, recommended)" (a real ticket); the note is shown bold after the key.
   function renderDense(text) {
     var flat = String(text || '').replace(/\s+/g, ' ').trim();
     var marks = [];
@@ -406,7 +406,10 @@
   }
 
   // ------------------------------------------------------------- transcript --
-  var ROLE_LABEL = { client: 'Client', becky: 'Becky', owner: 'Owner', system: 'System', tool: 'Tool' };
+  var ROLE_LABEL = { client: 'Client', agent: 'Agent', owner: 'Owner', system: 'System', tool: 'Tool' };
+  // Conversation providers name their own assistant, so any role that is not
+  // a known person or system speaker is the assistant: it sits on the right.
+  var LEFT_ROLES = { client: 1, owner: 1 };
   function fmtWhen(iso) {
     if (!iso) return '';
     var d = new Date(iso);
@@ -435,7 +438,7 @@
       var t = data.turns[i] || {};
       var role = String(t.role || 'system');
       var label = ROLE_LABEL[role] || role;
-      var side = (role === 'becky') ? 'is-right' : (role === 'system' || role === 'tool') ? 'is-center' : 'is-left';
+      var side = (role === 'system' || role === 'tool') ? 'is-center' : LEFT_ROLES[role] ? 'is-left' : 'is-right';
       var when = fmtWhen(t.at);
       html.push('<div class="tp-msg ' + side + ' is-' + escAttr(role) + '">'
         + '<div class="tp-msg-head"><span class="tp-msg-role">' + esc(label) + '</span>'

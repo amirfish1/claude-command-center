@@ -5,7 +5,7 @@ Claude Code fires the Notification hook (the usual badge source) only when a
 dialog is shown, which never happens in print mode. So the PermissionRequest
 hook raises the badge itself while it parks, and the dashboard's Approve/Deny
 reaches the parked hook through a decision file instead of a macOS keystroke.
-Incident: 2026-11-03, BYM session 06de7070 sat 15 min with no badge.
+Incident: 2026-11-03, HARBOR session 06de7070 sat 15 min with no badge.
 """
 
 import importlib.util

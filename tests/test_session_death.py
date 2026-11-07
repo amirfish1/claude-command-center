@@ -179,8 +179,8 @@ def test_unapproved_popup_stays_silent(env, monkeypatch):
 
 def test_unnamed_session_is_titled_from_its_first_prompt(env, monkeypatch):
     monkeypatch.setattr(notify, "_session_identity", lambda sid: {})
-    env("s1", [_user("# BYM outreach steward\nYou are the steward"), _tool_use()])
+    env("s1", [_user("# HARBOR outreach steward\nYou are the steward"), _tool_use()])
     _tick(None, {"s1": {"state": "working"}}, NOW)
     _tick({"s1": {"state": "working"}}, {}, NOW)
     got = _tick({}, {}, NOW + sd.GRACE_S + 1)
-    assert got[0]["title"].startswith("BYM outreach steward") and "stopped mid-turn" in got[0]["title"]
+    assert got[0]["title"].startswith("HARBOR outreach steward") and "stopped mid-turn" in got[0]["title"]

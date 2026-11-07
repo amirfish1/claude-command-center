@@ -6,7 +6,7 @@ House rules for Claude Code. Long-form rationale, tables, and incident notes:
 ## Public OSS
 Everything ships to github.com/amirfish1/claude-command-center.
 - No internal paths, client names, private URLs, PII, or real-looking secrets (use `sk-ant-test-XXXX`).
-- Private plans/specs/backlog/agent working docs live in the private `CCC-private-docs` repo.
+- Private plans/specs/backlog/agent working docs live in the private plans repo.
   Never recreate `docs/superpowers/`, copy private docs here, or link that repo in.
 - The Morning view (`morning.py`, `morning_store.py`, `static/morning/`) is a gitignored personal plugin; keep it out of README/core.
 

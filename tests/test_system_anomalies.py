@@ -46,6 +46,37 @@ class AnomalyTests(unittest.TestCase):
         out = self.server._sys_anomalies(rows, total_mb=15000)
         self.assertEqual([(a["pid"], a["kind"]) for a in out], [(30, "memory")])
 
+    def test_ccc_processes_are_never_offered_for_kill(self):
+        # A second dashboard on the same machine flagged the first one, and a
+        # worker's tree holds every running session.
+        rows = [
+            row(50, 1, "/usr/bin/python3 /srv/claude-command-center/server.py", rss_mb=8000, etime_min=900),
+            row(51, 50, "/usr/bin/python3 -m ccc_server.bg_helper --sock /x", rss_mb=4000, etime_min=900),
+            row(52, 50, "/usr/bin/python3 -m ccc_server.conv_reader --sock /x", rss_mb=4000, etime_min=900),
+            row(53, 1, "python3 /srv/claude-command-center/ccc_worker.py", rss_mb=4000, etime_min=900),
+            row(54, 1, "/venv/bin/python /srv/x/scripts/local_tts_server.py", rss_mb=4000, etime_min=900),
+            row(55, 50, "python3 /x/server.py --archive-refresh-worker e30 /dev/shm/r", rss_mb=4000, etime_min=90),
+        ]
+        self.assertEqual(self.server._sys_anomalies(rows, total_mb=15000), [])
+
+    def test_everyday_apps_are_not_memory_anomalies(self):
+        rows = [
+            row(60, 1, "/Applications/Google Chrome.app/Contents/Frameworks/Helper --type=renderer",
+                rss_mb=4000, etime_min=900),
+            row(61, 1, "/opt/google/chrome/chrome --type=renderer", rss_mb=4000, etime_min=900),
+            row(62, 1, "/usr/bin/firefox", rss_mb=4000, etime_min=900),
+            row(63, 1, "/usr/bin/some-leaky-tool --x", rss_mb=4000, etime_min=900),
+        ]
+        out = self.server._sys_anomalies(rows, total_mb=15000)
+        self.assertEqual([a["pid"] for a in out], [63])
+
+    def test_memory_anomaly_that_owns_a_session_is_not_offered(self):
+        rows = [
+            row(70, 1, "/usr/bin/some-supervisor", rss_mb=4000, etime_min=900),
+            row(71, 70, "/home/u/.local/bin/claude -p", rss_mb=300, etime_min=900),
+        ]
+        self.assertEqual(self.server._sys_anomalies(rows, total_mb=15000), [])
+
     def test_kill_only_touches_currently_flagged_trees(self):
         rows = [row(40, 1, "node /x/.bin/tsc --noEmit", etime_min=500, rss_mb=3000)]
         srv = self.server

@@ -249,7 +249,7 @@ def test_engine_host_account_shortcut_preserves_delivery_identity(queue_env, mon
     isolated = EngineHost(SimpleNamespace(ledger=None))
     root._module = isolated._module = server
     monkeypatch.delenv("CCC_CODEX_ACCOUNT_KEY", raising=False)
-    monkeypatch.setattr(codex_accounts, "session_account", lambda sid: {"label": "Secondary"})
+    monkeypatch.setattr(codex_accounts, "session_account", lambda sid: {"label": "Secondary", "home": "/nonexistent/codex-secondary"})
     monkeypatch.setattr(server, "resume_session_codex",
         lambda sid, text, **kw: server._queue_codex_resume(sid, text, reason="busy"))
 

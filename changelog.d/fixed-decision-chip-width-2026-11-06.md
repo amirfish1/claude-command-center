@@ -1,0 +1,1 @@
+- Decision choice chips in the session list no longer wrap one letter per line; they get their own full-width line.

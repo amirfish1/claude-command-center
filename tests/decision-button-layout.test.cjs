@@ -38,3 +38,36 @@ test('phone decisions wrap long labels below the prompt beside audio', async () 
     }
   } finally { await browser.close(); }
 });
+
+test('desktop child decisions escape the compact summary column', async () => {
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 900 });
+    for (const width of [300, 460, 780]) {
+      await page.setContent(`<style>${fs.readFileSync('static/app.css', 'utf8')}
+        body { display:block; } #convList { width:${width}px; }
+        </style><div id="convList"><div class="conv-item is-current-child-row"><div class="conv-main-row has-inline-step">
+        <span class="conv-title">Build claim this pending work</span>
+        <div class="conv-outcome is-inline is-next is-next-step">
+          <span class="conv-outcome-step" data-label="Decide">Approve this row, decline this row, or keep it pending.</span>
+          <span class="conv-quick-action-slot is-decision"><button class="conv-quick-action">Approve row</button><button class="conv-quick-action">Decline row</button></span>
+          <button class="conv-row-read" aria-label="Read reply">▶</button>
+        </div><span class="conv-meta-col"></span><span class="conv-pct-badge">14%</span><span class="conv-row-end">8m</span>
+        </div></div></div>`);
+      const layout = await page.evaluate(() => {
+        const rect = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
+        return { title: rect('.conv-title'), outcome: rect('.conv-outcome'), row: rect('.conv-main-row'),
+          buttons: [...document.querySelectorAll('.conv-quick-action')].map(b => b.getBoundingClientRect().toJSON()),
+          speaker: rect('.conv-row-read') };
+      });
+      assert.ok(layout.outcome.top >= layout.title.bottom, 'decision belongs below the child title');
+      assert.ok(layout.outcome.width >= layout.row.width - 1, 'decision uses the full child row');
+      for (const button of layout.buttons) {
+        assert.ok(button.width >= 90 && button.height <= 32, 'short labels stay horizontal');
+        assert.ok(button.right <= layout.row.right + 1, 'choices stay inside the row');
+      }
+      assert.ok(layout.speaker.top < layout.outcome.bottom, 'audio remains in the decision area');
+    }
+  } finally { await browser.close(); }
+});

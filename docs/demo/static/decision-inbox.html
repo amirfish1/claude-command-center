@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<script src="../demo/frame.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decisions</title>
+<script src="app-rail.js" defer></script>
+<script src="decision-requests.js" defer></script>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #151920; --line: #232830; --ink: #e6e9ee; --mute: #8a929e;
+    --dim: #939ca9; --accent: #5ac8fa; --ok: #34c759; --warn: #ffb340; --bad: #ff6b6b;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 var(--font); }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 28px 32px 80px; }
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); margin: 28px 0 10px; }
+  .sub { color: var(--mute); margin: 0 0 18px; }
+  .meta { color: var(--dim); font-size: 12px; margin-left: auto; display: flex; gap: 14px; align-items: center; }
+  button { font: 13px var(--font); border: 1px solid var(--line); background: #1b2029; color: var(--ink);
+           border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.primary { background: #123c50; border-color: #1f5f7a; }
+  button.primary:hover { background: #17506a; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button.ghost { background: transparent; color: var(--mute); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin: 0 0 12px; }
+  .card.closed { opacity: 0.55; }
+  .card .top { display: flex; align-items: flex-start; gap: 10px; }
+  .card .title { font-weight: 600; font-size: 15px; flex: 1; }
+  .card .ctx { color: var(--mute); margin: 6px 0 12px; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--mute); white-space: nowrap; }
+  .tag.board { color: #c9a6ff; border-color: #4b3a72; }
+  .tag.wt, .tag.wt_review { color: #ffd27a; border-color: #6b5320; }
+  .tag.session { color: #7ad0ff; border-color: #24506b; }
+  .tag.governor { color: var(--warn); border-color: #6b4a14; }
+  .tag.external { color: #9fe0b8; border-color: #235c3a; }
+  .tag.sev-warn { color: var(--warn); border-color: #6b4a14; }
+  .tag.sev-critical { color: var(--bad); border-color: #6b2222; }
+  .tag.money { font-weight: 700; }
+  .tag.ref { color: var(--accent); border-color: #1f5f7a; text-decoration: none; }
+  a.tag.ref:hover { border-color: var(--accent); background: #123c50; }
+  .tag.count { color: var(--ink); }
+  .monitoring summary { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+                        color: var(--dim); margin: 28px 0 10px; cursor: pointer; user-select: none; }
+  .monitoring summary:hover { color: var(--mute); }
+  .tag.status { color: var(--ok); border-color: #1e5a30; }
+  .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+  .opt { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; background: #11151b; }
+  .opt.rec { border-color: #1f5f7a; box-shadow: inset 0 0 0 1px #1f5f7a; }
+  .opt .lbl { font-weight: 600; }
+  .opt .rec-pill { font-size: 10.5px; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em; }
+  .opt .det { color: var(--mute); font-size: 13px; flex: 1; }
+  .opt .cost { color: var(--dim); font-size: 12px; }
+  .opt button { align-self: flex-start; margin-top: 4px; }
+  .foot { display: flex; gap: 10px; align-items: center; margin-top: 12px; color: var(--dim); font-size: 12px; }
+  .foot .grow { flex: 1; }
+  .gov { display: grid; gap: 8px; }
+  .gov .row { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid #3b2f14; border-radius: 10px; padding: 10px 14px; }
+  .gov .row .name { font-weight: 600; }
+  .gov .row .det { color: var(--mute); flex: 1; font-size: 13px; }
+  .gov .row .acts { display: flex; gap: 6px; }
+  .empty { color: var(--dim); padding: 22px; border: 1px dashed var(--line); border-radius: 12px; text-align: center; }
+  .result { font-size: 12px; color: var(--ok); }
+  .result.bad { color: var(--bad); }
+  details { color: var(--dim); font-size: 12px; }
+  details pre { white-space: pre-wrap; max-height: 220px; overflow: auto; background: #0b0e12; padding: 8px; border-radius: 8px; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #1b2029; border: 1px solid var(--line);
+           color: var(--ink); padding: 8px 14px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+
+  * { box-sizing: border-box; }
+  :root { color-scheme: dark; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .wrap { max-width: 1240px; }
+  .toolbar { display:flex; gap:12px; flex-wrap:wrap; padding:18px 0; border-block:1px solid var(--line); margin:24px 0 12px; }
+  .toolbar label { display:flex; flex-direction:column; gap:5px; color:var(--mute); font-size:12px; }
+  .toolbar .search { flex:1; min-width:200px; }
+  input, select { font:14px var(--font); color:var(--ink); background:var(--panel); border:1px solid #414955; border-radius:7px; padding:10px; min-height:40px; }
+  .browse-meta, .pager { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0; color:var(--mute); }
+  .pager { justify-content:center; }
+  .decision-row { border-bottom:1px solid var(--line); color:var(--ink); font-size:14px; }
+  .decision-row > summary { display:grid; grid-template-columns:40px 85px minmax(0,1fr) 155px; gap:12px; padding:18px 8px; cursor:pointer; align-items:start; list-style:none; }
+  .decision-row > summary:hover { background:var(--panel); }
+  .decision-row[open] > summary { background:var(--panel); }
+  .row-number, .row-date { color:var(--mute); font-size:12px; font-variant-numeric:tabular-nums; }
+  .row-ref::after { content:""; display:block; width:6px; height:6px; border-right:1px solid currentColor; border-bottom:1px solid currentColor; transform:rotate(-45deg); margin:10px 0 0 3px; }
+  .decision-row[open] .row-ref::after { transform:rotate(45deg); }
+  .row-ref { color:var(--accent); font-size:12px; overflow-wrap:anywhere; }
+  .row-title { overflow-wrap:anywhere; min-width:0; font-weight:600; font-size:15px; }
+  .row-preview { color:var(--mute); display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; margin-top:4px; font-weight:400; font-size:13px; }
+  .row-date { text-align:right; }
+  .row-date span { display:block; }
+  .decision-row .card { border:0; border-radius:0; padding:20px; margin:0 0 12px; }
+  .card .top, .foot { flex-wrap:wrap; }
+  .card .ctx { max-width:75ch; white-space:pre-line; }
+  .timestamps { display:flex; flex-wrap:wrap; gap:8px 24px; color:var(--mute); font-size:12px; margin:12px 0; font-variant-numeric:tabular-nums; }
+  .card.closed { opacity:1; }
+  .freshness { color:var(--mute); font-size:12px; margin-top:8px; }
+  .freshness.bad { color:var(--bad); }
+  .gov-disclosure { margin-top:28px; }
+  .gov-disclosure > summary { cursor:pointer; color:var(--mute); font-size:13px; }
+  .opts { grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr)); }
+  .foot, .ctx, .det { overflow-wrap:anywhere; }
+  .toast { z-index:1000; }
+  .inbox-help { margin-top:16px; font-size:14px; color:var(--mute); }
+  #sweepSummary { font-size:16px; color:var(--ink); text-transform:none; letter-spacing:normal; margin-bottom:8px; }
+  .sweep-table { width:100%; table-layout:fixed; border-collapse:collapse; color:var(--ink); font-size:13px; }
+  .sweep-table th, .sweep-table td { padding:14px 12px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+  .sweep-table th { color:var(--mute); font-size:12px; font-weight:600; }
+  .sweep-table th:first-child { width:22%; }
+  .sweep-table th:nth-child(2) { width:40%; }
+  .sweep-table th:nth-child(3) { width:25%; }
+  .sweep-table th:last-child { width:13%; }
+  .sweep-table .source { display:block; color:var(--mute); font-size:12px; margin-top:4px; }
+  .sweep-decision-ref { color:var(--accent); font-weight:700; margin-right:8px; white-space:nowrap; text-underline-offset:3px; }
+  .sweep-table time { font-variant-numeric:tabular-nums; }
+  #sweepStatus { font-size:12px; }
+  #sweepHistory .pager { flex-wrap:wrap; font-size:12px; }
+
+  .origin { margin:16px 0; padding-block:14px; border-block:1px solid var(--line); max-width:75ch; }
+  .origin h3 { font-size:14px; margin:0 0 6px; }
+  .origin p { margin:4px 0; color:var(--mute); overflow-wrap:anywhere; }
+  .requests-toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:12px 0; }
+  .requests-toolbar label { display:flex; flex-direction:column; gap:4px; color:var(--mute); }
+  .requests-toolbar input, .requests-toolbar select { color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:8px; font:inherit; max-width:100%; box-sizing:border-box; }
+  .requests-toolbar label:first-child { flex:1; min-width:min(100%,230px); }
+  .requests-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  .requests-table th, .requests-table td { padding:14px 8px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+  .requests-table th { color:var(--dim); font-size:12px; }
+  .requests-table th:first-child { width:64%; }
+  .requests-table th:last-child { width:36%; }
+  .request-body { white-space:pre-wrap; max-width:75ch; margin:6px 0; }
+  .request-meta { display:block; color:var(--dim); font-size:12px; margin-top:6px; }
+  .request-state { font-weight:600; }
+  .request-origin { display:flex; width:fit-content; max-width:100%; margin-bottom:10px; padding:4px 9px; border:1px solid #1f5f7a; border-radius:6px; background:#123c50; color:var(--accent); font-weight:600; text-decoration:none; }
+  .request-origin:hover { background:#17506a; text-decoration:underline; text-underline-offset:3px; }
+  .request-answer { margin-top:14px; }
+  .request-answer label { display:block; font-size:13px; }
+  .request-answer textarea { display:block; width:100%; max-width:75ch; min-height:88px; resize:vertical; margin-top:6px; padding:10px; border:1px solid #414955; border-radius:6px; background:var(--panel); color:var(--ink); font:inherit; }
+  .requests-table td button { margin-top:10px; }
+  .request-frozen { white-space:pre-wrap; overflow-wrap:anywhere; margin-top:6px; }
+  .request-error { color:var(--warn); }
+  #requestsStatus { color:var(--dim); margin:8px 0; }
+  #requestsStatus.bad { color:var(--warn); }
+  #requestPager { margin-bottom:28px; }
+  #requestPager span { text-align:center; }
+  #requestsSection :focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+
+  @media(max-width:700px) {
+    .wrap { padding:20px 16px 50px; }
+    .meta { margin-left:0; flex-wrap:wrap; }
+    .decision-row > summary { grid-template-columns:28px 65px minmax(0,1fr); gap:8px; }
+    .row-date { grid-column:3; text-align:left; }
+    .row-date span { display:inline; margin-right:8px; }
+    .toolbar label { flex:1; }
+    .decision-row .card { padding:14px 8px; }
+    .card .title { flex-basis:100%; }
+    .browse-meta { align-items:start; font-size:12px; }
+    .gov .row { flex-wrap:wrap; }
+    .sweep-table th, .sweep-table td { padding:12px 5px; }
+    .sweep-table { font-size:12px; }
+    .sweep-table th:nth-child(2) { width:32%; }
+    .sweep-table th:nth-child(3) { width:24%; }
+    .sweep-table th:last-child { width:22%; }
+
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Decision history and reports</h1>
+  </header>
+  <p class="sub"><a id="backToQueue" href="/decision-guide.html" hidden>Back to Decisions</a> Past answers, older reports, and monitoring. Questions that need you are in Decisions.</p>
+  <section id="requestsSection" aria-labelledby="requestsHeading">
+    <h2 id="requestsHeading">Owner questions <span id="requestCount"></span></h2>
+    <p id="requestsStatus" role="status">Checking the local queue source…</p>
+    <div id="requestCoverageIssues" role="status"></div>
+    <div class="requests-toolbar">
+      <label>Find an owner question<input id="requestSearch" type="search" placeholder="Ticket, question tag, or text"></label>
+      <label>Show<select id="requestFilter"><option value="needs">Needs answer</option><option value="delivery">Answer delivery</option><option value="history">History</option><option value="all">All requests</option></select></label>
+      <button id="requestRefresh" type="button">Check source</button>
+    </div>
+    <table class="requests-table" aria-label="Owner questions"><thead><tr><th scope="col">Question</th><th scope="col">State and source</th></tr></thead><tbody id="requestRows"></tbody></table>
+    <nav id="requestPager" class="pager" aria-label="Owner question pages"><button id="requestPrev" type="button">Previous</button><span id="requestPage" role="status"></span><button id="requestNext" type="button">Next</button></nav>
+  </section>
+  <header><h2>Reports and monitoring</h2><span class="tag status" id="openCount">Loading reports…</span>
+    <div class="meta"><span id="lastRun">no scan yet</span>
+      <button id="scanBtn" title="Run the stalled-work scan now (hourly otherwise)">Scan now</button>
+    </div>
+  </header>
+  <div id="freshness" class="freshness" role="status">Connecting to the inbox…</div>
+  <section class="inbox-help" id="sweepHistory" aria-labelledby="sweepSummary">
+    <h2 id="sweepSummary">Sweep history</h2>
+    <p id="sweepStatus" role="status">Loading recorded sweeps…</p>
+    <table class="sweep-table"><thead><tr><th scope="col">Date · Pacific time</th><th scope="col">Decision</th><th scope="col">Trigger</th><th scope="col">LLM used</th></tr></thead><tbody id="sweepRuns"></tbody></table>
+    <nav class="pager" aria-label="Decision history pages"><button id="sweepPrev">Newer decisions</button><span id="sweepPage"></span><button id="sweepNext">Older decisions</button><button id="sweepRetry">Refresh history</button></nav>
+  </section>
+  <div class="toolbar" role="search" aria-label="Browse decisions">
+    <label class="search">Search decisions<input id="search" type="search" placeholder="Question number, ticket, title or context"></label>
+    <label>Status<select id="statusFilter"><option value="open">Open reports</option><option value="closed">History</option><option value="monitoring">Monitoring</option><option value="all">All items</option></select></label>
+    <label>Source<select id="sourceFilter"><option value="all">All sources</option></select></label>
+    <label>Sort<select id="sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="updated">Recently updated</option></select></label>
+  </div>
+  <div class="browse-meta"><span id="resultCount" role="status"></span><span id="timezone"></span></div>
+  <div id="cards"><div class="empty">Loading decisions…</div></div>
+  <nav class="pager" aria-label="Decision pages"><button id="prev">Previous</button><span id="pageCount"></span><button id="next">Next</button></nav>
+  <details class="gov-disclosure"><summary>Session health <span id="governorCount"></span></summary><div class="gov" id="governor"></div></details>
+
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function () {
+  "use strict";
+  if (location.pathname === "/decision-inbox.html") document.getElementById("backToQueue").hidden = false;
+var state = { cards: [], governor: [], queueRepos: {}, busy: {}, page: 0, expanded: new Set() };
+  var legacyById = {};
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function ago(iso) {
+    if (!iso) return "";
+    var s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (s < 90) return "just now";
+    if (s < 3600) return Math.round(s / 60) + " min ago";
+    if (s < 86400) return Math.round(s / 3600) + " h ago";
+    return Math.round(s / 86400) + " d ago";
+  }
+  function exact(iso) {
+    var d = new Date(iso);
+    return !iso || !Number.isFinite(d.getTime()) ? "Unknown" : d.toLocaleString("en-US", {timeZone:"America/Los_Angeles", year:"numeric", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit", timeZoneName:"short"});
+  }
+  function reference(c) {
+    var q = String(c.title || "").match(/\[Q(\d+):[^\]]+\]/);
+    return q ? "Q" + q[1] : c.decision_number ? "D-" + c.decision_number : String(c.id || "").replace(/^dc_/, "D-");
+  }
+  function cleanTitle(c) { return String(c.title || "Untitled decision").replace(/^\[Q\d+:[^\]]+\]\s*/, ""); }
+  function toast(msg, bad) {
+    var t = $("toast"); t.textContent = msg; t.style.color = bad ? "var(--bad)" : "var(--ink)";
+    t.classList.add("show"); clearTimeout(toast._t); toast._t = setTimeout(function () { t.classList.remove("show"); }, 2600);
+  }
+  async function post(url, body) {
+    try { var r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    var j = null; try { j = await r.json(); } catch (e) { j = { ok: false, error: "bad response" }; }
+    return j; } catch (e) { return {ok:false, error:"Connection failed. Try again."}; }
+  }
+
+  function actionVerb(a) {
+    var k = (a && a.kind) || "human";
+    return { spawn: "Spawn session", inject: "Steer session", pause: "Pause", kill: "Kill", human: "I'll do it", snooze: "Snooze",
+      wt_accept: "Accept", wt_reject: "Reject…" }[k] || k;
+  }
+
+  var REF_RE = /\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d+\b|\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*#\d+\b/g;
+
+  function cardRefs(c) {
+    var text = String(c.title || "") + " " + String(c.context || "") + " " + String(c.source_id || "");
+    var seen = {}, out = [], m;
+    REF_RE.lastIndex = 0;
+    while ((m = REF_RE.exec(text))) {
+      var ref = m[0].replace("#", "-").toUpperCase();
+      if (seen[ref]) continue;
+      seen[ref] = 1; out.push(ref);
+      if (out.length >= 6) break;
+    }
+    return out;
+  }
+
+  function refPills(c) {
+    return cardRefs(c).map(function (r) {
+      var cut = r.lastIndexOf("-");
+      var queue = r.slice(0, cut), num = r.slice(cut + 1);
+      var repo = state.queueRepos[queue];
+      return repo
+        ? '<a class="tag ref" href="https://github.com/' + esc(repo) + "/issues/" + esc(num) +
+          '" target="_blank" rel="noopener" title="Open issue">' + esc(r) + "</a>"
+        : '<span class="tag ref">' + esc(r) + "</span>";
+    }).join("");
+  }
+
+  function originExplanation(c) {
+    var src = c.source || {}, route;
+    if (c.kind === "external") {
+      route = "Submitted by " + (src.source || "a connected tool") + ". This report was filed directly, independently of the scheduled scan.";
+    } else if (c.kind === "wt_review") {
+      route = "This ticket is awaiting review in its queue. Its review state is read live when the inbox refreshes.";
+    } else {
+      route = ({wt:"A scan found a stalled queue.", board:"A scan found a blocked or overdue board item.", session:"A scan found an idle session with unfinished work.", governor:"A scan detected a session health warning."})[c.kind] || "This item was recorded by an inbox source.";
+    }
+    var trigger = src.reason || src.detail;
+    return '<section class="origin"><h3>Why this appeared</h3><p>' + esc(route) + '</p>' +
+      (trigger ? '<p><strong>Recorded trigger:</strong> ' + esc(trigger) + '</p>' : '<p>The report’s explanation is in the context below; no separate trigger was recorded.</p>') +
+      '<p><strong>Source reference:</strong> ' + esc(c.source_id || "Not recorded") + '</p>' +
+      (c.seen_count > 1 ? '<p>Reported ' + esc(c.seen_count) + ' times. Latest report: ' + esc(exact(c.last_seen_at)) + '.</p>' : '') + '</section>';
+  }
+
+  function renderCard(c) {
+    var closed = c.status !== "open";
+    var historical = c.canonical_required === true;
+    var annotation = legacyById[c.id];
+    var opts = (c.options || []).map(function (o, i) {
+      var decidedHere = c.decided && c.decided.option === i;
+      return '<div class="opt' + (o.recommended ? " rec" : "") + '">' +
+        (o.recommended ? '<span class="rec-pill">Recommended</span>' : "") +
+        '<span class="lbl">' + esc(o.label) + "</span>" +
+        '<span class="det">' + esc(o.detail || "") + "</span>" +
+        (o.cost ? '<span class="cost">Cost: ' + esc(o.cost) + "</span>" : "") +
+        (closed || historical ? (decidedHere ? '<span class="result">Chosen ' + ago(c.decided.at) + "</span>" : "") :
+          '<button class="' + (o.recommended ? "primary" : "") + (o.action && o.action.kind === "kill" ? " danger" : "") +
+          '" data-decide="' + esc(c.id) + '" data-idx="' + i + '">' + esc(actionVerb(o.action)) + "</button>") +
+        "</div>";
+    }).join("");
+    var src = c.source || {};
+    var srcLine = c.kind === "wt" ? (src.tickets || []).join("\n") :
+      c.kind === "wt_review" ? ["Reviewer: " + (src.reviewer || "submitter"), src.commit ? "Commit: " + src.commit : ""].filter(Boolean).join("\n") :
+      c.kind === "session" ? (src.goal || src.last_assistant_text || "") :
+      c.kind === "board" ? [src.category, src.status, src.eta, src.notes].filter(Boolean).join(" · ") : (src.detail || "");
+    var analyst = c.analyst ? (c.analyst.error ? "analyst failed (" + esc(c.analyst.error) + "), generic options" :
+      esc(c.analyst.model || "") + " · " + (c.analyst.duration_s || 0) + "s") : c.kind === "wt_review" ? "WatchTower review gate" : c.kind === "external" ? "submitted report" : "governor";
+    var dres = c.decided && c.decided.result;
+    var money = (String(c.title || "") + " " + String(c.context || "")).match(/\$\s?\d[\d,]*(?:\.\d+)?/);
+    return '<div class="card' + (closed ? " closed" : "") + '" id="card-' + esc(c.id) + '">' +
+      '<div class="top"><span class="title">' + esc(c.title) + '</span>' +
+      refPills(c) +
+      (money ? '<span class="tag sev-critical money" title="mentions money">' + esc(money[0].replace(/\s+/g, "")) + "</span>" : "") +
+      (c.severity && c.severity !== "info" ? '<span class="tag sev-' + esc(c.severity) + '">' + esc(c.severity) + "</span>" : "") +
+      (c.seen_count > 1 ? '<span class="tag">seen ' + esc(c.seen_count) + "x</span>" : "") +
+      '<span class="tag ' + esc(c.kind) + '">' + esc(c.kind) + "</span>" +
+      (closed ? '<span class="tag">' + esc(c.status) + "</span>" : "") + "</div>" +
+      '<div class="timestamps"><span>Created ' + esc(exact(c.created_at)) + '</span><span>Updated ' + esc(exact(c.updated_at)) + '</span>' + (c.last_seen_at ? '<span>Last reported ' + esc(exact(c.last_seen_at)) + '</span>' : '') + '</div>' + originExplanation(c) + '<div class="ctx">' + esc(c.context || "") + "</div>" +
+      (historical ? '<p class="ctx">Retained report — old choices are read-only. ' +
+        (annotation && annotation.classification === 'no-longer-waiting' ? 'No current owner question on this ticket.' :
+         annotation && annotation.classification === 'unlinked/no-ticket' ? 'No structured ticket link was recorded for this report. Find the current question in Owner questions above.' :
+         annotation && annotation.current_questions.length ? 'Review and answer the current question below; no earlier answer is prefilled.' :
+         'Current question coverage is unavailable. Check source before answering.') + '</p>' +
+        (annotation ? annotation.current_questions.map(function(q) {
+          return '<p><a href="#request-' + esc(q.request_id) + '">Open current question ' + esc(q.origin_id) + '</a></p>';
+        }).join('') : '') : '') + '<div class="opts">' + opts + "</div>" +
+      '<div class="foot"><span>' + esc(c.source_id) + " · " + ago(c.created_at) + " · " + analyst + "</span>" +
+      (srcLine ? '<details><summary>source</summary><pre>' + esc(srcLine) + "</pre></details>" : "") +
+      '<span class="grow"></span>' +
+      (dres ? '<span class="result' + (dres.ok ? "" : " bad") + '">' + esc(dres.effect || "") + (dres.session_id ? " · " + esc(String(dres.session_id).slice(0, 8)) : "") + (dres.error ? " · " + esc(dres.error) : "") + "</span>" : "") +
+      (closed || c.live ? "" : '<button class="ghost" data-dismiss="' + esc(c.id) + '">Close</button>') +
+      "</div></div>";
+  }
+
+  function renderGovernor(findings) {
+    var el = $("governor");
+    if (!findings.length) { el.innerHTML = '<div class="empty">No live session looks stuck or wasteful.</div>'; return; }
+    el.innerHTML = findings.map(function (f) {
+      return '<div class="row"><span class="tag governor">' + esc(f.kind.replace("_", " ")) + "</span>" +
+        '<span class="name">' + esc(f.name) + "</span>" +
+        '<span class="det">' + esc(f.detail) + "</span>" +
+        '<span class="acts">' +
+        '<button class="primary" data-gov="nudge" data-sid="' + esc(f.session_id) + '" data-reason="' + esc(f.detail) + '">Nudge</button>' +
+        '<button data-gov="pause" data-sid="' + esc(f.session_id) + '">Pause</button>' +
+        '<button class="danger" data-gov="kill" data-sid="' + esc(f.session_id) + '">Kill</button>' +
+        "</span></div>";
+    }).join("");
+  }
+
+  var DECISION_KINDS = { external: 1, wt: 1, board: 1, wt_review: 1 };
+
+  function browse() {
+    var query = $("search").value.trim().toLowerCase(), status = $("statusFilter").value;
+    var cards = state.cards.filter(function(c) {
+      return (status === "all" || (status === "closed" ? c.status !== "open" : c.status === "open" && (!!DECISION_KINDS[c.kind] === (status === "open")))) &&
+        ($("sourceFilter").value === "all" || c.kind === $("sourceFilter").value) &&
+        (!query || [reference(c), c.title, c.context, c.source_id, c.id].join(" ").toLowerCase().includes(query));
+    });
+    var order = $("sort").value;
+    cards.sort(function(a,b) { var key = order === "updated" ? "updated_at" : "created_at"; return (String(a[key] || "").localeCompare(String(b[key] || "")) || String(a.id).localeCompare(String(b.id))) * (order === "oldest" ? 1 : -1); });
+    var pages = Math.max(1, Math.ceil(cards.length / 10)); state.page = Math.min(state.page, pages-1);
+    var start = state.page * 10;
+    $("resultCount").textContent = cards.length ? (start+1) + "–" + Math.min(start+10,cards.length) + " of " + cards.length + " items" : "0 matching items";
+    $("pageCount").textContent = "Page " + (state.page+1) + " of " + pages;
+    $("prev").disabled = state.page === 0; $("next").disabled = state.page === pages-1;
+    $("cards").innerHTML = cards.slice(start,start+10).map(function(c,i) {
+      return '<details class="decision-row" data-id="' + esc(c.id) + '"' + (state.expanded.has(c.id) ? ' open' : '') + '><summary><span class="row-number">' + (start+i+1) + '</span><span class="row-ref">' + esc(reference(c)) + '</span><span class="row-title">' + esc(cleanTitle(c)) + '<span class="row-preview">' + esc(c.kind + ' · ' + c.status + ' · ' + (c.context || 'Review options')) + '</span></span><span class="row-date"><span>' + esc(exact(c.created_at)) + '</span><span>' + esc(ago(c.created_at)) + '</span></span></summary>' + renderCard(c) + '</details>';
+    }).join("") || '<div class="empty">No decisions match this view. Try another status or clear your search.</div>';
+    document.querySelectorAll('.decision-row').forEach(function(el) { el.addEventListener('toggle', function() { if (el.open) state.expanded.add(el.dataset.id); else state.expanded.delete(el.dataset.id); }); });
+  }
+  var pendingDecisionId = new URLSearchParams(location.hash.slice(1)).get('decision');
+  function revealDecision() {
+    if (!pendingDecisionId || !state.loaded) return;
+    var card = state.cards.find(function(c) { return c.id === pendingDecisionId; });
+    pendingDecisionId = null;
+    if (!card) { toast('This decision is no longer retained.', true); return; }
+    $('statusFilter').value = 'all'; $('sourceFilter').value = 'all'; $('search').value = card.id;
+    state.page = 0; state.expanded.add(card.id); browse();
+    var row = document.querySelector('.decision-row');
+    if (row) { row.scrollIntoView({block:'center'}); row.querySelector('summary').focus({preventScroll:true}); }
+  }
+  window.addEventListener('hashchange', function() {
+    pendingDecisionId = new URLSearchParams(location.hash.slice(1)).get('decision');
+    revealDecision();
+  });
+  function render(data) {
+    state.loaded = true; state.cards = data.cards || []; state.queueRepos = data.queue_repos || {};
+    var selected = $("sourceFilter").value;
+    var kinds = Array.from(new Set(state.cards.map(function(c) { return c.kind; }))).sort();
+    $("sourceFilter").innerHTML = '<option value="all">All sources</option>' + kinds.map(function(k) { return '<option value="' + esc(k) + '">' + esc(k) + '</option>'; }).join('');
+    $("sourceFilter").value = kinds.includes(selected) ? selected : "all";
+    $("openCount").textContent = (data.open_count == null ? state.cards.filter(function(c) { return c.status === "open"; }).length : data.open_count) + " open reports";
+    var fingerprint = JSON.stringify([state.cards, state.queueRepos]);
+    if (fingerprint !== state.fingerprint) { browse(); state.fingerprint = fingerprint; }
+    var findings = (data.governor && data.governor.findings) || [];
+    renderGovernor(findings); $("governorCount").textContent = findings.length ? "· " + findings.length + " findings" : "· No findings";
+    var lr = data.last_run, stamp = lr && (lr.finished_at || lr.started_at);
+    $("lastRun").textContent = data.running_since ? "Scan in progress since " + exact(data.running_since) : stamp ? "Last scan · " + exact(stamp) : "No scan recorded";
+    var stale = !stamp || Date.now() - new Date(stamp).getTime() > ((data.config && data.config.interval_s) || 3600) * 2000;
+    var errors = lr && lr.errors && lr.errors.length;
+    $("freshness").classList.toggle("bad", stale || !!errors);
+    $("freshness").textContent = "Feed refreshed " + exact(new Date().toISOString()) + " · " +
+      (data.config && data.config.enabled === false ? "Automatic scans disabled" : stale ? "Scan overdue or unavailable" : "Scanner on schedule") +
+      (errors ? " · Last scan reported " + errors + " error(s)" : "") +
+      ". Older items may need rechecking against their source." + (data.total_count > state.cards.length ? " Showing the latest " + state.cards.length + " of " + data.total_count + " stored items." : "");
+    $("scanBtn").disabled = !!data.running_since;
+    revealDecision();
+  }
+  var sweepOffset = 0, sweepLimit = 5, sweepBusy = false, sweepFingerprint = "";
+  function sweepTime(iso) {
+    var d = new Date(iso);
+    return !iso || !Number.isFinite(d.getTime()) ? "Not recorded" : d.toLocaleString("en-US", {timeZone:"America/Los_Angeles",year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit",timeZoneName:"short"});
+  }
+  async function loadSweeps() {
+    if (sweepBusy) return;
+    sweepBusy = true;
+    try {
+      var r = await fetch('/api/decision-inbox/runs?offset=' + sweepOffset + '&limit=' + sweepLimit, {cache:'no-store'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var data = await r.json(); if (!data.ok) throw new Error(data.error);
+      var total = data.decision_total, rows = data.decision_rows;
+      if (sweepOffset >= total && sweepOffset > 0) { sweepOffset = 0; sweepFingerprint = ''; setTimeout(loadSweeps, 0); return; }
+      $('sweepSummary').textContent = 'Sweep history · ' + total + ' entries';
+      $('sweepStatus').textContent = 'Pacific time (PST/PDT) · ' + data.hidden_count + ' empty script-only sweeps hidden.' +
+        (data.invalid_records ? ' ' + data.invalid_records + ' unreadable record(s) skipped.' : '');
+      $('sweepPage').textContent = total ? (sweepOffset + 1) + '–' + Math.min(sweepOffset + sweepLimit, total) + ' of ' + total : '0 entries';
+      $('sweepPrev').disabled = sweepOffset === 0;
+      $('sweepNext').disabled = sweepOffset + sweepLimit >= total;
+      var fingerprint = JSON.stringify(rows);
+      if (fingerprint !== sweepFingerprint) {
+        $('sweepRuns').innerHTML = rows.map(function(decision) {
+          var src = decision.source || {};
+          var llm = decision.llm_used === true ? 'Yes' : decision.llm_used === false ? 'No' : 'Unknown';
+          var title = decision.id
+            ? '<a class="sweep-decision-ref" href="#decision=' + encodeURIComponent(decision.id) + '" data-open-decision="' + esc(decision.id) + '" aria-label="Open decision ' + esc(reference(decision)) + '">' + esc(reference(decision)) + '</a><strong>' + esc(cleanTitle(decision)) + '</strong>'
+            : '<strong>No decisions added.</strong>';
+          return '<tr class="sweep" data-run-id="' + esc(decision.run_id) + '" data-decision-id="' + esc(decision.id || '') + '"><td><time datetime="' + esc(decision.created_at) + '">' + esc(sweepTime(decision.created_at)) + '</time></td><td>' + title +
+            '</td><td class="sweep-trigger">' + esc(src.reason || src.detail || 'Not recorded') +
+            '</td><td class="sweep-llm"><strong>' + llm + '</strong><span class="source">' +
+            esc(decision.llm_calls == null ? decision.llm_usage_basis : decision.llm_calls + ' request(s)') + '</span></td></tr>';
+        }).join('') || '<tr><td colspan="4">No sweeps added decisions or used an LLM.</td></tr>';
+        sweepFingerprint = fingerprint;
+      }
+    } catch(e) {
+      $('sweepStatus').textContent = 'Cannot refresh sweep history. Displayed records may be out of date. Use Refresh history to retry.';
+    } finally { sweepBusy = false; }
+  }
+  $('sweepPrev').onclick = function() { if (sweepBusy) return; sweepOffset = Math.max(0, sweepOffset - sweepLimit); loadSweeps(); };
+  $('sweepNext').onclick = function() { if (sweepBusy) return; sweepOffset += sweepLimit; loadSweeps(); };
+  $('sweepRetry').onclick = loadSweeps;
+  async function load() {
+    loadSweeps();
+    loadReconciliation();
+    try {
+      var r = await fetch("/api/decision-inbox", { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      var data = await r.json(); if (!data.ok) throw new Error(data.error || "Unavailable");
+      render(data);
+    } catch (e) {
+      $("freshness").textContent = "Cannot refresh the inbox. Displayed items may be out of date. Retrying automatically.";
+      $("freshness").classList.add("bad");
+    }
+  }
+  async function loadReconciliation() {
+    try {
+      var r = await fetch('/api/decision-inbox/legacy-reconciliation', {cache:'no-store'});
+      if (!r.ok) throw new Error('Reconciliation unavailable');
+      var result = await r.json();
+      legacyById = {};
+      (result.cards || []).forEach(function(row) { legacyById[row.card_id] = row; });
+      browse();
+    } catch (_) { legacyById = {}; browse(); }
+  }
+  $("timezone").textContent = "Pacific time (PST/PDT)";
+  ["search", "statusFilter", "sourceFilter", "sort"].forEach(function(id) { $(id).addEventListener(id === "search" ? "input" : "change", function() { state.page = 0; browse(); }); });
+  $("prev").onclick = function() { state.page--; browse(); };
+  $("next").onclick = function() { state.page++; browse(); };
+
+  document.addEventListener("click", async function (ev) {
+    var link = ev.target.closest('[data-open-decision]');
+    if (link && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && !ev.altKey) {
+      ev.preventDefault();
+      pendingDecisionId = link.dataset.openDecision;
+      history.pushState(null, '', '#decision=' + encodeURIComponent(pendingDecisionId));
+      revealDecision();
+      return;
+    }
+    var b = ev.target.closest("button"); if (!b) return;
+    if (b.dataset.decide) {
+      var cid = b.dataset.decide, idx = +b.dataset.idx;
+      if (b.classList.contains("danger") && !confirm("Kill this session's process?")) return;
+      var card = state.cards.filter(function (c) { return c.id === cid; })[0];
+      var act = card && card.options && card.options[idx] && card.options[idx].action;
+      var reason = "";
+      if (act && act.kind === "wt_reject") {
+        reason = (prompt("What must change before " + (act.ref || "this ticket") + " can be accepted?") || "").trim();
+        if (!reason) return;
+      }
+      b.disabled = true; b.textContent = "…";
+      var res = await post("/api/decision-inbox/decide", { card_id: cid, option: idx, reason: reason });
+      toast(res.ok ? "Done: " + ((res.result && res.result.effect) || "ok") : "Failed: " + (res.error || (res.result && res.result.error) || "?"), !res.ok);
+      load();
+    } else if (b.dataset.dismiss) {
+      b.disabled = true;
+      var d = await post("/api/decision-inbox/dismiss", { card_id: b.dataset.dismiss });
+      if (d.ok) {
+        var gone = document.getElementById("card-" + b.dataset.dismiss);
+        if (gone) gone.remove();
+        toast("Closed");
+      } else {
+        toast("Failed: " + (d.error || "?"), true);
+        b.disabled = false;
+      }
+      load();
+    } else if (b.dataset.gov) {
+      if (b.dataset.gov === "kill" && !confirm("Kill this session's process?")) return;
+      b.disabled = true;
+      var g = await post("/api/decision-inbox/governor", { session_id: b.dataset.sid, action: b.dataset.gov, reason: b.dataset.reason || "" });
+      toast(g.ok ? (b.dataset.gov + " sent") : "Failed: " + (g.error || "?"), !g.ok);
+      b.disabled = false;
+    } else if (b.id === "scanBtn") {
+      b.disabled = true;
+      var s = await post("/api/decision-inbox/run", {});
+      toast(s.ok ? "Scan started" : (s.error || "could not start"), !s.ok);
+      setTimeout(load, 1500);
+    }
+  });
+
+  load();
+  setInterval(load, 30000);
+})();
+</script>
+</body>
+</html>

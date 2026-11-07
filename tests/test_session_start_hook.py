@@ -43,7 +43,7 @@ class HookLabelTests(unittest.TestCase):
 
     def test_labels(self):
         L = self.mod._label
-        self.assertEqual(L("node /x/node_modules/.bin/tsx scripts/becky-replay/grade-findings.ts --a"), "grade-findings.ts")
+        self.assertEqual(L("node /x/node_modules/.bin/tsx scripts/wren-replay/grade-findings.ts --a"), "grade-findings.ts")
         self.assertEqual(L("/bin/zsh -c foo"), "")
         self.assertEqual(L("/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"), "Terminal")
         self.assertEqual(L("/usr/bin/python3 /a/b/run_eval.py"), "run_eval.py")

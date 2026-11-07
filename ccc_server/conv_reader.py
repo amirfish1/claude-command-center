@@ -307,7 +307,7 @@ def _handle(conn, server_mod):
 def _handle_op(req):
     """JSON ops (call() above). memory_recall (MEMORY-20): the query is ~60
     SQLite calls, each a GIL round trip; on a busy dashboard those cost a
-    switch interval each (71 ms alone, 0.5-2.5 s live on hermes-gcp)."""
+    switch interval each (71 ms alone, 0.5-2.5 s live on a busy host)."""
     op = str(req.get("op") or "")
     try:
         if op == "memory_recall":
@@ -492,7 +492,16 @@ def serve(path, parent_pid, port=None, dashboard_port=None):
     os.umask(0o077)
     path = Path(path)
     sys.path.insert(0, str(PROJECT_ROOT))
+    from ccc_server import memory_release
+    memory_release.start()
     import server as server_mod  # noqa: E402  (heavy; child only)
+    # The first compact sender header would otherwise index the journals inside
+    # someone's open; the previous child still answers while this runs.
+    try:
+        import sender_envelope
+        sender_envelope.lookup(message_id="conv-reader-warm")
+    except Exception:
+        pass
     if port:
         _serve_http(server_mod, port, dashboard_port)
     try:

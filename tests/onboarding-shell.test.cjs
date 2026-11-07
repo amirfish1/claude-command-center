@@ -383,6 +383,47 @@ test('a first task finished while closed resumes to the finale with its savings'
   } finally { await page.close(); }
 });
 
+test('the finale offers one reminder only when this computer can show it', async () => {
+  const open = async (canNotify) => {
+    const page = await browser.newPage();
+    await page.goto(fixtureUrl, { waitUntil: 'load' });
+    await page.evaluate((can) => {
+      window.__posts = 0;
+      const state = { ok: true, armed: false, can_notify: can, background: false };
+      window.fetch = async (url, init) => {
+        if (String(url) !== '/api/return-reminder') throw new Error('unexpected fetch ' + url);
+        if (init && init.method === 'POST') { window.__posts += 1; state.armed = true; }
+        return { json: async () => state };
+      };
+      window.cccOnboarding.open({ scene: 'finale' });
+    }, canNotify);
+    await page.waitForSelector('.mz-finale', { visible: true });
+    return page;
+  };
+  const find = (page) => page.evaluate(() => {
+    const b = [...document.querySelectorAll('.mz-finale .mz-linklike')]
+      .find((n) => /Remind me|Set for/.test(n.textContent));
+    return b ? b.textContent : null;
+  });
+
+  const silent = await open(false);
+  try {
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(await find(silent), null);
+  } finally { await silent.close(); }
+
+  const page = await open(true);
+  try {
+    await page.waitForFunction(() => /Remind me/.test(document.querySelector('.mz-finale').textContent));
+    await page.evaluate(() => {
+      [...document.querySelectorAll('.mz-finale .mz-linklike')]
+        .find((n) => /Remind me/.test(n.textContent)).click();
+    });
+    await page.waitForFunction(() => /CCC has to be running/.test(document.querySelector('.mz-finale').textContent));
+    assert.equal(await page.evaluate(() => window.__posts), 1);
+  } finally { await page.close(); }
+});
+
 test('reopening the finale never replays a stale savings number', async () => {
   const page = await openFixture();
   try {
@@ -423,6 +464,113 @@ test('existing install does not auto-claim', async () => {
     assert.equal(claimed, false);
     const opened = await page.evaluate(() => window.cccOnboarding.isOpen());
     assert.equal(opened, false);
+  } finally {
+    await page.close();
+  }
+});
+
+test('Claude Code users run the first task on their own account, with no $0 claim', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({ steps: [
+          { id: 'node', status: 'missing' },
+          { id: 'claude_cli', status: 'ok' },
+          { id: 'free_router', status: 'missing' },
+        ] }),
+        firstTask: async (id, runtime) => { window.__mzRuntime = runtime; return { job_id: 'own' }; },
+        pollFirstTask: async () => ({ status: 'done', runtime: 'standard',
+          result: { verified: true }, usage: { api_value_usd: 0.3 }, lines: [] }),
+      });
+      window.cccOnboarding.open();
+    });
+    await page.waitForFunction(() => document.querySelector('.mz-btn-primary')?.textContent === 'Run a first task');
+    assert.ok(await page.evaluate(() => /your own Claude account/.test(document.querySelector('.mz-sub').textContent)));
+    await page.click('.mz-btn-primary');
+    await page.waitForSelector('.mz-task-card');
+    await page.click('.mz-task-card');
+    await page.waitForSelector('.mz-finale', { visible: true });
+    const finale = await page.evaluate(() => ({
+      runtime: window.__mzRuntime,
+      text: document.querySelector('.mz-finale').textContent,
+    }));
+    assert.equal(finale.runtime, 'standard');
+    assert.ok(!finale.text.includes('$0'), finale.text);
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});
+
+test('a signed-out Claude Code gets a plain sign-in instruction', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({ steps: [{ id: 'first_task', status: 'missing' }] }),
+        firstTask: async () => { throw new Error('The agent hit an error (Not logged in · Please run /login).'); },
+      });
+      window.cccOnboarding.open({ scene: 'steps' });
+    });
+    await page.waitForSelector('.mz-task-card');
+    await page.click('.mz-task-card');
+    await page.waitForSelector('.mz-task-error', { visible: true, timeout: 2000 });
+    const text = await page.evaluate(() => document.querySelector('.mz-task-error').textContent);
+    assert.match(text, /run claude, sign in/);
+    assert.ok(!text.includes('/login'), text);
+  } finally { await page.close(); }
+});
+
+test('Claude Code users can still choose the free-model setup', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => {
+      window.cccOnboarding._setDriver({
+        getPlan: async () => ({ steps: [
+          { id: 'claude_cli', status: 'ok' },
+          { id: 'free_router', status: 'missing', needs_consent: true },
+        ] }),
+      });
+      window.cccOnboarding.open();
+    });
+    await page.waitForFunction(() => [...document.querySelectorAll('.mz-linklike')]
+      .some((b) => b.textContent === 'Set up free models instead'));
+    await page.evaluate(() => [...document.querySelectorAll('.mz-linklike')]
+      .find((b) => b.textContent === 'Set up free models instead').click());
+    await page.waitForSelector('.mz-steps-card');
+    assert.equal(await page.$('.mz-task-card'), null);
+  } finally { await page.close(); }
+});
+
+test('agent history skips every first-run screen so the board shows', async () => {
+  const page = await openFixture();
+  try {
+    const state = await page.evaluate(async () => {
+      window.__cccEnginesFirstRun = true;
+      window.cccPopups = { allowed: () => true };
+      window.cccOnboarding._setDriver({
+        freshInstall: async () => ({ ok: true, fresh_install: false, has_history: true }),
+      });
+      const claimed = await window.cccOnboarding.claimFirstRun();
+      return {
+        claimed,
+        engines: window.__cccEnginesFirstRun,
+        tour: localStorage.getItem('ccc-tour-done'),
+      };
+    });
+    assert.deepEqual(state, { claimed: false, engines: false, tour: 'skipped-after-welcome' });
+  } finally {
+    await page.close();
+  }
+});
+
+test('leaving the welcome does not start the guide on its own', async () => {
+  const page = await openFixture();
+  try {
+    await page.evaluate(() => window.cccOnboarding.open());
+    await page.evaluate(() => [...document.querySelectorAll('#cccMomentZero button')]
+      .find((b) => b.textContent === 'I will explore on my own').click());
+    const tour = await page.evaluate(() => localStorage.getItem('ccc-tour-done'));
+    assert.equal(tour, 'skipped-after-welcome');
   } finally {
     await page.close();
   }

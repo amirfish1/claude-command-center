@@ -1,0 +1,3 @@
+- Share this run no longer exports other people's chat messages as your prompts. A session holding a chat bridge message is refused on any engine, and Hermes sessions export only from the desktop app or when every prompt was sent from the dashboard.
+- Share this run now includes prompts typed in the dashboard. CCC records a fingerprint of each dashboard send and matches it to the transcript row, so prompts dispatched by agents still stay out.
+- Share this run hides a password written on the line after a label such as `The password is:`, and reads tab, semicolon and quoted table headers. Copilot Chat thinking and progress parts, Aider and Antigravity console output, and Grok sub-agent progress stay out, and an unreadable hide list now stops the export.

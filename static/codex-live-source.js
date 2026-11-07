@@ -3,7 +3,7 @@
   'use strict';
 
   // Slices 1-6 of the codex-single-renderer-merge plan (see
-  // CCC-private-docs/plans/2026-09-12-codex-single-renderer-merge.md). Slice 6
+  // the private plans repo, codex-single-renderer-merge). Slice 6
   // deleted the native inline renderer (static/codex-client.js) entirely, so
   // this module is now the only way a Codex pane gets live (in-progress-turn)
   // data -- there is no flag and no opt-out.

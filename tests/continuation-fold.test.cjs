@@ -180,7 +180,7 @@ test('pane header and sidebar row share the continuation title backstop', () => 
   assert.match(header, /continuationBackstopTitle\(fullRow, rowRawTitle\(fullRow\)\.rawTitle\)/);
   assert.match(app, /if \(_continuationParentId\) title = continuationBackstopTitle\(c, title\);/);
 
-  const parent = { id: 'parent-session', ai_title: 'Question from joyce about intake' };
+  const parent = { id: 'parent-session', ai_title: 'Question from maya about intake' };
   const leg = { id: 'leg', continued_from_session_id: 'parent-session' };
   const ctx = {
     LEADING_PATH_OR_URL_RE: /(?!)/,
@@ -202,7 +202,7 @@ test('pane header and sidebar row share the continuation title backstop', () => 
     ctx,
   );
   const boiler = 'You are continuing a task from an earlier Codex session, which ran long. Origin session id: x';
-  assert.equal(ctx.backstop(leg, boiler), 'Question from joyce about intake');
+  assert.equal(ctx.backstop(leg, boiler), 'Question from maya about intake');
   assert.equal(ctx.backstop(leg, 'Real topic'), 'Real topic');
   assert.equal(ctx.backstop({ id: 'solo' }, boiler), boiler);
   assert.equal(ctx.backstop({ id: 'orphan', continued_from_session_id: 'gone-session' }, boiler), 'gone-ses');

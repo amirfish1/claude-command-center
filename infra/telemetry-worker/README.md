@@ -57,8 +57,14 @@ wrangler d1 create ccc-telemetry       # one-time, capture DB id
 wrangler d1 execute ccc-telemetry --remote --file migrations/0001-downloads.sql
 wrangler d1 execute ccc-telemetry --remote --file migrations/0002-pings-is-dev.sql
 wrangler d1 execute ccc-telemetry --remote --file migrations/0003-opens-weekly-monthly-geo.sql
+wrangler kv namespace create STATS_CACHE   # one-time, bind it as STATS_CACHE
 wrangler deploy
 ```
+
+`/v1/stats` reads through the `STATS_CACHE` KV binding: one D1 scan an hour at
+most. Without the binding every caller rescans, and D1's free plan stops all
+reads for the day after 5M rows. Don't swap it for the Cache API; that has no
+effect on `*.workers.dev`.
 
 Migrations run in filename order and are additive (`ALTER TABLE ... ADD
 COLUMN`) — safe to run against a live table. `0003` adds `first_this_week`,
