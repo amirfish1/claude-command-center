@@ -44016,7 +44016,9 @@
         // parent chain in as anchor rows so the child nests (CCC-352).
         const keptIds = new Set(keptRows.map(_currentSessionId));
         const pool = new Map();
-        (_visibleSessionConvs || []).forEach(c => {
+        // Use the unwindowed list: the parent is often older than the In Progress
+        // window, which is exactly when the child is left loose.
+        (_sessionConvs || []).forEach(c => {
           const id = _currentSessionId(c);
           if (id) pool.set(id, c);
         });
