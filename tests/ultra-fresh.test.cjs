@@ -371,3 +371,28 @@ test('ultra-fresh patches only top-four message slots, rotates on scroll/filter,
 
   } finally { await browser.close(); }
 });
+
+test('raw footer of a pushed fix waiting only on a deploy parses as ready to close', () => {
+  const start = app.indexOf('  function sessionCompletionDetails(');
+  const end = app.indexOf('  const _ultraFresh = {');
+  const context = { sessionQuickAction: () => null };
+  vm.createContext(context);
+  vm.runInContext(app.slice(start, end), context);
+  const act = (text, owner) => ({ text, confidence: 0.9, downside: 0, reversible: true, within_scope: true, owner });
+  const completion = { version: 1,
+    scope: { goal: 'Fix false alert', done_when: 'Prod has fix', closure_met: false, evidence: 'Pushed; not deployed' },
+    resolution: { score: 0.85, evidence: 'Fixed' }, verification: { score: 0.85, evidence: '59 tests' },
+    delivery: { score: 0.5, evidence: 'Pushed to next', applicable: true },
+    decision_dependency: { score: 0, evidence: 'None' },
+    caveats: [{ text: 'Alert remains until the scheduled release deploys.', blocking: true }],
+    remaining_actions: [act('Scheduled release deploys commit 1173a1b9b.', 'external'),
+      act('After deployment, verify the alert is gone.', 'agent')] };
+  const parse = c => context._ultraFreshParseState('<session-state>\nDID: x\nNEXT_STEP_USER: None.\nCOMPLETION: '
+    + JSON.stringify(c) + '\n</session-state>').completion;
+  assert.equal(parse(completion).ready_to_close, true, parse(completion).reasons.join());
+  completion.delivery.score = 0.2;
+  assert.equal(parse(completion).ready_to_close, false);
+  completion.delivery.score = 0.5;
+  completion.remaining_actions.push(act('Write the missing regression test.', 'agent'));
+  assert.equal(parse(completion).ready_to_close, false);
+});

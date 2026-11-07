@@ -3632,13 +3632,23 @@
         && (a.owner === undefined || ['agent', 'user', 'external'].includes(a.owner)));
     const reasons = [];
     if (valid) {
-      if (openTopic) reasons.push('topic goal is not yet met');
-      if (assessment.resolution.score < 0.9) reasons.push('resolution below 0.9');
+      // Mirrors the server (_completion_assessment): pushed work that only
+      // waits on a deploy/release is done; deployment is not part of fixing.
+      const isDeployWait = t => /\b(?:deploy(?:s|ed|ment)?|release|rollout|roll\s+out|ship(?:s|ped)?\s+to\s+prod\w*)\b/i.test(t)
+        && /\b(?:schedul\w*|pending|await\w*|wait\w*|until|after|once|when)\b/i.test(t);
+      const deployWaits = assessment.remaining_actions.filter(a => isDeployWait(a.text));
+      const deployPending = deployWaits.length > 0 && assessment.delivery.applicable !== false
+        && assessment.delivery.score >= 0.5;
+      const otherActions = deployPending ? assessment.remaining_actions.filter(a => !deployWaits.includes(a))
+        : assessment.remaining_actions;
+      const blocking = assessment.caveats.filter(c => c.blocking && !(deployPending && isDeployWait(c.text)));
+      if (openTopic && !deployPending) reasons.push('topic goal is not yet met');
+      if (assessment.resolution.score < (deployPending ? 0.8 : 0.9)) reasons.push('resolution below 0.9');
       if (assessment.verification.score < 0.8) reasons.push('verification below 0.8');
-      if (assessment.delivery.applicable === false || assessment.delivery.score !== 1) reasons.push('delivery incomplete');
+      if (assessment.delivery.applicable === false || assessment.delivery.score < (deployPending ? 0.5 : 1)) reasons.push('delivery incomplete');
       if (assessment.decision_dependency.score !== 0) reasons.push('a user decision remains');
-      if (assessment.caveats.some(c => c.blocking)) reasons.push('a blocking caveat remains');
-      if (assessment.remaining_actions.length) reasons.push('unfinished actions remain');
+      if (blocking.length) reasons.push('a blocking caveat remains');
+      if (otherActions.length) reasons.push('unfinished actions remain');
     }
     return { scope, validScope, openTopic, valid: !!valid, reasons, axes };
   }
