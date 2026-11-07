@@ -88,3 +88,14 @@ test('explicit category questions get literal reply chips without inventing acti
   const authored = [{ label: 'Other', reply: 'Another channel.' }];
   assert.equal(rowOutcomeView(row({ next_step_user: next, next_actions: authored })).label, 'Next');
 });
+
+
+test('an event-triggered agent step reads Waiting, not Waiting for agent', () => {
+  const state = { did: 'Shipped the worker changes.', next_step_user: 'None',
+    completion: { valid: true, ready_to_close: false, remaining_actions: [
+      { text: 'Agent: on the first went_bad or stuck_loop grade after release, query production for a second-review row.' }] } };
+  const info = rowOutcomeView(row(state));
+  assert.equal(info.label, 'Waiting');
+  assert.equal(info.kind, 'plan');
+  assert.match(info.text, /^on the first went_bad/);
+});

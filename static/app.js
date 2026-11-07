@@ -3770,10 +3770,14 @@
     if (planned && typeof planned.text === 'string' && planned.text.trim()) {
       const ownerTag = planned.text.match(/^\s*(?:owner\s*[:=]\s*)?\(?(agent|user|external|amir|human)\)?\s*[:=—–-]\s*/i);
       const owner = String(planned.owner || (ownerTag && ownerTag[1]) || '').trim().toLowerCase();
+      const planText = (ownerTag ? planned.text.slice(ownerTag[0].length) : planned.text).trim();
+      // An agent step that starts with a trigger ("on the first…", "after a
+      // day…") is not being worked now; no agent is busy, so say "Waiting".
+      const eventDriven = /^(?:on|after|once|when|if|upon|next time|the next)\b/i.test(planText);
       if (!['user', 'amir', 'human'].includes(owner)) plan = {
-        label: owner === 'agent' ? 'Waiting for agent' : owner === 'external' ? 'Waiting' : 'Next', kind: 'plan',
-        planOwner: owner,
-        text: (ownerTag ? planned.text.slice(ownerTag[0].length) : planned.text).trim(),
+        label: owner === 'agent' && !eventDriven ? 'Waiting for agent' : (owner === 'agent' || owner === 'external') ? 'Waiting' : 'Next', kind: 'plan',
+        planOwner: owner, eventDriven,
+        text: planText,
       };
     }
     if (working) return Object.assign(base, { label: 'Working', kind: 'working',
