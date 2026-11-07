@@ -147,6 +147,7 @@ from ccc_server import approval_evidence as _approval_evidence
 # one name so its spawn_env/readiness don't collide with engine globals.
 from ccc_server import free_runtime as _free_runtime
 from ccc_server.events import DashboardEventHub
+from ccc_server.paths import _is_pid_alive as _path_pid_alive
 
 # Pure helpers and path constants moved to leaf modules (slice 3)
 _adopt_ccc_module("paths")
@@ -25330,12 +25331,9 @@ def _notification_is_blocking(notif):
     if notif.get("source") == "permission-request":
         pid = notif.get("pid")
         if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+            # perm_alive: a permission error does not prove the hook exited.
+            if not _path_pid_alive(pid, perm_alive=True):
                 return False
-            except OSError:
-                pass  # Permission errors do not establish that it exited.
     msg = str(notif.get("message") or "").lower()
     if "waiting for your input" in msg or "waiting for input" in msg:
         return False

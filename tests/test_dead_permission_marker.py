@@ -2,6 +2,7 @@
 
 import os
 
+import ccc_server.paths as paths
 import server
 
 
@@ -9,7 +10,7 @@ def test_dead_hook_does_not_block(monkeypatch):
     def dead(pid, signal):
         raise ProcessLookupError
 
-    monkeypatch.setattr(server.os, "kill", dead)
+    monkeypatch.setattr(paths.os, "kill", dead)
     assert not server._notification_is_blocking({
         "source": "permission-request", "pid": 12345,
         "message": "Claude needs your permission to use Bash",
@@ -34,7 +35,7 @@ def test_unreadable_process_still_blocks(monkeypatch):
     def unreadable(pid, signal):
         raise PermissionError
 
-    monkeypatch.setattr(server.os, "kill", unreadable)
+    monkeypatch.setattr(paths.os, "kill", unreadable)
     assert server._notification_is_blocking({
         "source": "permission-request", "pid": 12345,
         "message": "Claude needs your permission to use Bash",
