@@ -15,9 +15,9 @@ test('anything else is minor, and risk words in the body do not raise it', () =>
   assert.equal(weight(row).level, 'Minor');
 });
 
-test('Becky behavior alone is minor; actual consequences still count', () => {
-  assert.equal(weight({title: "Change Becky's instructions?"}).level, 'Minor');
-  assert.equal(weight({title: "Adjust Becky's studio-memory wording?"}).level, 'Minor');
-  assert.equal(weight({title: 'Make Becky refund charges?'}).reason, 'moves real money');
-  assert.equal(weight({title: 'Have Becky send customers a message?'}).reason, 'reaches customers');
+test('assistant behavior alone is minor; actual consequences still count', () => {
+  assert.equal(weight({title: "Change the assistant's instructions?"}).level, 'Minor');
+  assert.equal(weight({title: "Adjust the assistant's memory wording?"}).level, 'Minor');
+  assert.equal(weight({title: 'Have the assistant refund charges?'}).reason, 'moves real money');
+  assert.equal(weight({title: 'Have the assistant send customers a message?'}).reason, 'reaches customers');
 });
