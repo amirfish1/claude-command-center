@@ -523,6 +523,23 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
         hide=list(hide) + _user_hide_list(),
         keep=keep,
     )
+    # Repeated safe replies are common in long agent runs. Reuse only text
+    # that survived this export's fixed rules verbatim, without any masking
+    # side effects. Redacted text still runs through the full pipeline so
+    # aliases and hidden-detail counts retain their original behavior.
+    safe_text = set()
+
+    def redact_text(value, limit):
+        cacheable = isinstance(value, str) and len(value) <= limit
+        key = (value, limit) if cacheable else None
+        if key in safe_text:
+            return value
+        before = redactor.counts.copy() if cacheable else None
+        result = redactor.text(value, limit)
+        if cacheable and result == value and redactor.counts == before and len(safe_text) < MAX_STEPS:
+            safe_text.add(key)
+        return result
+
     steps = []
     stats = Counter()
     edited = set()
@@ -551,7 +568,7 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
         if kind == "user_text":
             if not _is_typed_prompt(event, proven, terminal):
                 continue
-            text = redactor.text(_typed_text(event), MAX_PROMPT_CHARS)
+            text = redact_text(_typed_text(event), MAX_PROMPT_CHARS)
             if not text:
                 continue
             first_prompt = first_prompt or text
@@ -566,7 +583,7 @@ def build_replay(events, *, engine="", identity=None, hide=(), keep=(), title=""
             for block in event.get("blocks") or ():
                 block_kind = block.get("kind")
                 if block_kind == "text" and not block.get("not_reply"):
-                    text = redactor.text(block.get("text"), MAX_REPLY_CHARS)
+                    text = redact_text(block.get("text"), MAX_REPLY_CHARS)
                     if text:
                         stats["replies"] += 1
                         steps.append({"kind": "agent", "at": at, "text": text})

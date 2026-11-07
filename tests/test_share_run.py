@@ -178,6 +178,34 @@ def test_long_session_is_capped():
     assert any(s["kind"] == "gap" and s["count"] == 760 for s in replay["steps"])
 
 
+def test_repeated_safe_replies_skip_work_but_masked_replies_keep_counts(monkeypatch):
+    safe = "Checked the handler and it works."
+    private = "Fix the refund bug for Dana Okafor."
+    events = [{"type": "user_text", "entrypoint": "cli", "text": "go"}]
+    events += [{"type": "assistant", "blocks": [{"kind": "text", "text": text}]}
+               for text in (safe, private, safe, private)]
+    expected = share_redact.Redactor(identity=IDENTITY["people"], phrases=IDENTITY["projects"])
+    masked = expected.text(private, share_run.MAX_REPLY_CHARS)
+    assert expected.text(private, share_run.MAX_REPLY_CHARS) == masked
+    calls = []
+    original = share_redact.Redactor.text
+
+    def counting(self, value, limit=0):
+        calls.append(value)
+        return original(self, value, limit)
+
+    monkeypatch.setattr(share_redact.Redactor, "text", counting)
+    replay = export(events)
+    assert calls.count(safe) == 1
+    assert calls.count(private) == 2
+    assert replay["hidden"] == dict(expected.counts)
+    assert [s["text"] for s in replay["steps"] if s["kind"] == "agent"] == [safe, masked, safe, masked]
+    # A later export can hide something the previous one considered safe.
+    later = export(events, hide=["handler"])
+    assert "handler" not in everything(later)
+    assert calls.count(safe) == 3
+
+
 def test_page_is_inert_and_self_contained():
     page = share_run.render_html(export())
     assert 'http-equiv="Content-Security-Policy"' in page
