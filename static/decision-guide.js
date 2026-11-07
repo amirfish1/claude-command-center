@@ -135,7 +135,8 @@
   }
   function question(row, entry, history = false) {
     const card = el('article', '', history ? 'history' : 'question'); card.dataset.requestId = row.request_id;
-    card.append(ticket(row), el('h2', row.title || row.origin_id));
+    const weight = window.decisionWeight(row);
+    card.append(ticket(row), el('p', `${weight.level}: ${weight.reason}`, 'weight weight-' + weight.level.toLowerCase()), el('h2', row.title || row.origin_id));
     if (row.aliases?.length) card.append(el('div', row.aliases.join(' · '), 'meta'));
     const date = new Date(row.observed_at);
     if (Number.isFinite(date.getTime())) {

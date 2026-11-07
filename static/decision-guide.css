@@ -50,3 +50,6 @@ time { font-variant-numeric:tabular-nums; }
 .close-confirm p { margin:0; }
 button.danger { background:#4d2020; border-color:#7a3232; }
 button.danger:hover:enabled { background:#642929; }
+.weight { margin:8px 0 0; font-size:13px; font-weight:600; }
+.weight-major { color:#f0b35a; }
+.weight-minor { color:var(--mute); }

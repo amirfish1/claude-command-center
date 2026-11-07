@@ -42,6 +42,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
         }
         if (['/','/decision-guide.html','/static/decision-guide.html'].includes(url.pathname)) return await req.respond({status:200,contentType:'text/html',body:assets.html});
         if (url.pathname === '/static/decision-guide.js') return await req.respond({status:200,contentType:'application/javascript',body:assets.js});
+        if (url.pathname === '/static/decision-weight.js') return await req.respond({status:200,contentType:'application/javascript',body:fs.readFileSync(path.join(root,'static/decision-weight.js'),'utf8')});
         if (url.pathname === '/static/decision-guide.css') return await req.respond({status:200,contentType:'text/css',body:assets.css});
         if (url.pathname === '/api/decision-inbox/requests') {
           const response = {status:200,contentType:'application/json',body:JSON.stringify(model)};
