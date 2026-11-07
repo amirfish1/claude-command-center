@@ -20947,6 +20947,7 @@
     if (isImage && !(opts && opts.noPreview)) src = _mediaPreviewUrl(src) || src;
     const $full = lb.querySelector('.img-lightbox-full');
     lb.dataset.fullSrc = src !== fullSrc ? fullSrc : '';
+    lb.dataset.origSrc = fullSrc;
     if ($full) {
       $full.hidden = src === fullSrc;
       $full.disabled = false;
@@ -21016,10 +21017,42 @@
       return;
     }
   });
+  // CCC-364: Left/Right arrows step through the other images on the page
+  // (DOM order) without leaving the lightbox.
+  function _lightboxGallery() {
+    const out = [];
+    document.querySelectorAll('img.msg-image, .tool-result-image-zoom[data-zoom-src], a.uxq-td-img-wrap, .ann-ux-preview-shot a').forEach((el) => {
+      let src = '', title = 'image.png';
+      if (el.matches('img.msg-image')) { src = el.dataset.fullSrc || el.src; title = el.alt || title; }
+      else if (el.matches('.tool-result-image-zoom')) { src = el.getAttribute('data-zoom-src'); title = el.getAttribute('data-zoom-title') || title; }
+      else { src = el.getAttribute('href') ? el.href : ''; title = 'screenshot.png'; }
+      if (!src) return;
+      try { src = new URL(src, window.location.href).href; } catch (_) {}
+      if (!out.some((o) => o.src === src)) out.push({ src, title });
+    });
+    return out;
+  }
+  function stepMediaLightbox(dir) {
+    if (!_imgLightbox || !_imgLightbox.classList.contains('open')) return false;
+    if (!_imgLightbox.querySelector('.img-lightbox-stage.is-image')) return false;
+    const items = _lightboxGallery();
+    let cur = _imgLightbox.dataset.origSrc || '';
+    try { cur = new URL(cur, window.location.href).href; } catch (_) {}
+    const i = items.findIndex((o) => o.src === cur);
+    if (i < 0 || items.length < 2) return false;
+    const n = items[(i + dir + items.length) % items.length];
+    openMediaLightbox(n.src, { kind: 'image', title: n.title });
+    return true;
+  }
   document.addEventListener('keydown', (ev) => {
     if (isImeKey(ev)) return;
     if (ev.key === 'Escape' && _imgLightbox && _imgLightbox.classList.contains('open')) {
       closeMediaLightbox();
+      return;
+    }
+    if ((ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey
+        && _imgLightbox && _imgLightbox.classList.contains('open')) {
+      if (stepMediaLightbox(ev.key === 'ArrowRight' ? 1 : -1)) ev.preventDefault();
     }
   });
 
