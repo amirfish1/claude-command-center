@@ -1,0 +1,1 @@
+- Decisions 2 no longer stacks old copies of finished or skipped questions above the current card, and the count drops as soon as an answer is accepted.

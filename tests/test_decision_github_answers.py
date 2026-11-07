@@ -38,6 +38,7 @@ def test_answers_a_live_wait_as_the_human_with_a_receipt_the_ui_accepts():
     payload, status = answer_github_wait(_body(), [_ticket()], executable='wt', runner=wt)
     assert status == 200 and payload['state'] == 'accepted'
     assert payload['request_id'] == json.loads(_body())['request_id']
+    assert payload['origin_id'] == 'OPS-7'
     assert payload['answer']['text'] == '-yes, go ahead' and payload['answer']['expected_revision'] == 1
     assert wt.calls[-1] == ['answer', '--by', 'human', '--', 'OPS-7', '-yes, go ahead']
 

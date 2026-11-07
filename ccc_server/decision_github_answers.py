@@ -56,5 +56,6 @@ def answer_github_wait(body, tickets, *, executable, runner=subprocess.run):
         return {'ok': False, 'error': 'delivery_unknown: check the ticket; do not resend'}, 502
     answer_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f'ccc-github-answer:{request_id}:{key}'))
     return {'ok': True, 'request_id': request_id, 'answer_id': answer_id, 'state': 'accepted',
+            'origin_id': ref,
             'answer': {'request_id': request_id, 'text': text,
                        'expected_revision': row['revision']}}, 200

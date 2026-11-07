@@ -41522,9 +41522,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             action = 'record' if path.endswith('/answers') else path.rsplit('/', 1)[1]
             result, status = answer_payload(action, self.rfile.read(length),
                                             github_tickets=_wt_list_items_for_requests)
-            if result.get('state') == 'accepted':
+            if result.get('state') == 'accepted' and result.get('origin_id'):
+                # The ticket cache lags GitHub; it must not re-show what was just answered.
                 with _wt_items_memo_lock:
-                    _wt_items_memo["at"] = 0  # An answered wait must leave the queue promptly.
+                    _wt_items_memo["at"] = 0
+                    if _wt_items_memo["items"] is not None:
+                        _wt_items_memo["items"] = [
+                            {**item, "needs_input": False} if item.get("ref") == result["origin_id"] else item
+                            for item in _wt_items_memo["items"]]
             self.send_json(result, status)
         elif path == "/api/decision-inbox/close":
             from ccc_server.decision_answer_api import MAX_BODY_BYTES

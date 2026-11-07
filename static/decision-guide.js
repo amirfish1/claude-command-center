@@ -180,10 +180,20 @@
       const section = el('article', '', 'question'); section.append(ticket({...issue,adapter:'watchtower-block'}),el('h2',issue.title),el('div',issue.body,'raw'),el('p',issue.reason || 'No stable source identity. Read-only.','meta warning')); $('issues').append(section);
     });
     $('transcript').replaceChildren();
+    // Only answers still in flight stay on screen. Finished ones collapse, and
+    // questions merely viewed stay in Browse: an old snapshot must not read as open.
+    const finished = el('details', ''), finishedRows = el('div', '');
+    let finishedCount = 0;
     for (const seenId of state.seen) {
-      if (seenId === id) continue;
-      const snapshot = state.snapshots[seenId];
-      if (snapshot) $('transcript').append(question(snapshot, state.entries[seenId], true));
+      const snapshot = state.snapshots[seenId], seenEntry = state.entries[seenId];
+      const closedHere = state.closed[seenId] || state.closes[seenId];
+      if (seenId === id || !snapshot || (!seenEntry && !closedHere)) continue;
+      if (closedHere || seenEntry.saved?.state === 'accepted') { finishedRows.append(question(snapshot, seenEntry, true)); finishedCount++; }
+      else $('transcript').append(question(snapshot, seenEntry, true));
+    }
+    if (finishedCount) {
+      finished.append(el('summary', `Finished in this visit (${finishedCount})`), finishedRows);
+      $('transcript').prepend(finished);
     }
     $('current').replaceChildren(); $('recovery').replaceChildren();
     if (row) {
@@ -282,6 +292,7 @@
     } catch (error) {
       notices.set(id, (phase === 'record' ? 'Save not confirmed. Retry saving the same answer; do not create a new payload. ' : 'Delivery not confirmed. Use Check delivery; do not resend. ') + error.message);
     } finally { active = null; render(); if (advanced) revealCurrent(); }
+    if (entry.saved?.state === 'accepted') refresh();  // The count must drop now, not at the next poll.
   }
   async function closeAct(id) {
     if (active) return;
@@ -373,6 +384,6 @@
     if (parent !== window && event.source === parent && event.origin === location.origin
         && event.data?.type === 'ccc:decision-refresh') refreshVisible();
   });
-  setInterval(refreshVisible, 60000);
+  setInterval(refreshVisible, 30000);
   refresh();
 })();

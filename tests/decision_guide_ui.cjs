@@ -269,7 +269,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       model.needs_answer_count=5; await refresh();
       const inView=()=>page.$eval('#current h2',el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;});
       for (let n=0;n<4;n++) { await click('Skip / next'); assert.equal(await inView(),true); }
-      assert.equal(await page.$$eval('#transcript article',nodes=>nodes.length),4);
+      assert.equal(await page.$$eval('#transcript article',nodes=>nodes.length),0);  // Skipped cards stay in Browse only.
       await page.focus('textarea'); await page.type('textarea','retained draft');
       const before=await page.evaluate(()=>({scroll:scrollY,focus:document.activeElement.id}));
       await page.keyboard.type(' plus text');
@@ -445,7 +445,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       assert.equal(posts.length,0);
     },{before:()=>{
       const native=window.setInterval;
-      window.setInterval=(fn,ms,...args)=>ms===60000?(window.guideRefreshTick=fn,0):native(fn,ms,...args);
+      window.setInterval=(fn,ms,...args)=>ms===30000?(window.guideRefreshTick=fn,0):native(fn,ms,...args);
     }});
     await fixture('returning to the sidebar view refreshes its retained iframe',async ({page,model,posts})=>{
       const tabScript=fs.readFileSync(path.join(root,'static/decision-tab.js'),'utf8');
