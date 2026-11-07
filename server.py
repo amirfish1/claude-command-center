@@ -5416,7 +5416,13 @@ def _apply_session_lane_overrides(rows, overrides=None):
             continue
         sid = row.get("session_id") or row.get("id")
         if sid:
-            row["all_lane_override"] = overrides.get(str(sid), "")
+            # Tool-free helper runs use disposable working directories. Their
+            # transcripts belong in Other even when no spawn marker survives.
+            cwd = str(row.get("session_cwd") or row.get("folder_path") or row.get("cwd") or "")
+            helper = bool(re.fullmatch(r"(?:te-side|wt-model)-[A-Za-z0-9_-]+", Path(cwd).name))
+            if not cwd:
+                helper = bool(re.search(r"-(?:te-side|wt-model)-[A-Za-z0-9_-]+$", str(row.get("slug") or "")))
+            row["all_lane_override"] = overrides.get(str(sid), "other" if helper else "")
     return rows
 
 

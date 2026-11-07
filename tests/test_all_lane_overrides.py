@@ -107,3 +107,15 @@ def test_typed_spawn_marker_can_route_a_session_to_other():
     assert "return lane === 'workers' || lane === 'other' ? lane : '';" in app_js
     assert "if (spawnedLane) return spawnedLane;" in app_js
     assert "const _allTabOtherConvs = _allTabConvs.filter(c => {" in app_js
+
+
+def test_helper_conversations_default_to_other_but_allow_manual_move():
+    rows = [
+        {"id": "te", "session_cwd": "/tmp/te-side-example"},
+        {"id": "wt", "folder_path": "/tmp/wt-model-example"},
+        {"id": "old", "slug": "-tmp-te-side-older"},
+        {"id": "user", "session_cwd": "/projects/app", "display_name": "wt-model-example"},
+        {"id": "moved", "session_cwd": "/tmp/wt-model-moved"},
+    ]
+    server._apply_session_lane_overrides(rows, {"moved": "coding"})
+    assert [r["all_lane_override"] for r in rows] == ["other", "other", "other", "", "coding"]
