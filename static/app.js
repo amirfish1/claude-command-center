@@ -44837,7 +44837,7 @@
     // pinning and lane overrides never redefine lifecycle state.
     const _allTabLaneOverride = (c) => {
       const lane = String((c && c.all_lane_override) || '').trim();
-      return (lane === 'coding' || lane === 'workers' || lane === 'messages') ? lane : '';
+      return (lane === 'coding' || lane === 'workers' || lane === 'messages' || lane === 'other') ? lane : '';
     };
     const _arcEngineFilter = _archiveEngineFilter();
     const _arcEngineFilterLabel = {

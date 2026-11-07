@@ -5310,7 +5310,7 @@ def _append_custom_repo(path_str):
     return str(p)
 
 
-_SESSION_LANE_VALUES = {"coding", "workers", "messages"}
+_SESSION_LANE_VALUES = {"coding", "workers", "messages", "other"}
 
 
 

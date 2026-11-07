@@ -131,3 +131,10 @@ def test_cold_archive_snapshot_routes_helpers_and_honors_manual_moves(monkeypatc
     ]
     server._overlay_conversation_lifecycle_flags(rows)
     assert [r["all_lane_override"] for r in rows] == ["other", "coding"]
+
+
+def test_other_lane_is_valid_on_server_and_browser():
+    assert server._normalize_session_lane("other") == "other"
+    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("const _allTabLaneOverride =")
+    assert "lane === 'other'" in app_js[start:start + 300]
