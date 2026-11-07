@@ -23001,12 +23001,8 @@ def _resolve_apps(include_disabled=False):
         apps.append({"id": "morning", "label": "Morning",
                      "icon": "\N{BLACK SUN WITH RAYS}", "url": "/morning",
                      "builtin": True})
-    # Decision Inbox: the hourly stalled-work scanner + token governor
-    # (ccc_server/decision_inbox.py). Ships with the repo but is not core
-    # navigation, so it can be switched off from the Applications page.
-    apps.append({"id": "decision-inbox", "label": "Decision history",
-                 "icon": "\N{BALLOT BOX WITH CHECK}", "url": "/decision-inbox.html",
-                 "builtin": False})
+    # History and reports remain linked from the guided queue, rather than
+    # appearing as a second Decisions application in desktop/mobile navigation.
     apps.append({"id": "decision-guide", "label": "Decisions",
                  "icon": "\N{SPEECH BALLOON}", "url": "/decision-guide.html",
                  "builtin": False})

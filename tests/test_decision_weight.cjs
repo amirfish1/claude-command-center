@@ -14,3 +14,10 @@ test('anything else is minor, and risk words in the body do not raise it', () =>
   const row = {title: 'Log back in on the server', body: 'A $500 charge cannot be undone.'};
   assert.equal(weight(row).level, 'Minor');
 });
+
+test('Becky behavior alone is minor; actual consequences still count', () => {
+  assert.equal(weight({title: "Change Becky's instructions?"}).level, 'Minor');
+  assert.equal(weight({title: "Adjust Becky's studio-memory wording?"}).level, 'Minor');
+  assert.equal(weight({title: 'Make Becky refund charges?'}).reason, 'moves real money');
+  assert.equal(weight({title: 'Have Becky send customers a message?'}).reason, 'reaches customers');
+});

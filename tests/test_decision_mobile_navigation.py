@@ -6,4 +6,4 @@ def test_guided_decisions_is_a_navigable_application(tmp_path, monkeypatch):
     apps = {app['id']: app for app in server._resolve_apps()}
     assert apps['decision-guide']['label'] == 'Decisions'
     assert apps['decision-guide']['nav'] == '/decision-guide.html'
-    assert apps['decision-inbox']['nav'] == '/decision-inbox.html'
+    assert 'decision-inbox' not in apps
