@@ -84,13 +84,12 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       }
       model.answers_enabled=false;
       model.requests[1]={...second,adapter:'session-question',can_answer:false,answer_unavailable_reason:'Reply in the originating session.'};
-      await refresh(); await page.click('#queue summary');
+      await refresh();
       assert.equal(await page.$eval('#answerFields',el=>el.getBoundingClientRect().height),0);
       assert.equal(await page.$eval('#send',el=>el.getBoundingClientRect().height),0);
       assert.equal(await page.$eval('#skip',el=>el.disabled),false);
       await page.screenshot({path:path.join(screenshots,'guide-read-only-390.png'),fullPage:true});
-      assert.equal(await page.$$eval('#items button',nodes=>nodes.length),2);
-      await page.click('#items button:nth-child(2)');
+      await page.click('#skip');
       assert.match(await page.$eval('#guidance',el=>el.textContent),/not enabled/);
       model.answers_enabled=true; await refresh();
       assert.match(await page.$eval('#guidance',el=>el.textContent),/originating session/); assert.equal(posts.length,0);
@@ -119,7 +118,6 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       assert.deepEqual(Object.keys(posts[0].body).sort(),['expected_revision','idempotency_key','request_id']);
       assert.equal(posts[0].body.expected_revision,4); assert.equal(await selected(),secondId);
       await refresh();
-      assert.equal(await page.$$eval('#items button',nodes=>nodes.length),1);
     });
     await fixture('a question that changes during confirmation closes nothing',async ({page,model,posts,refresh,click,wait})=>{
       closeable(model); await refresh(); await click('Close…');
@@ -170,8 +168,6 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       assert.deepEqual(Object.keys(posts[0].body).sort(),['expected_revision','idempotency_key','request_id','text']);
       assert.equal(posts[0].body.text,exact); assert.equal(posts[0].body.expected_revision,4);
       assert.deepEqual(posts[1].body,{answer_id:answerId});
-      assert.equal(await page.$eval('#transcript .raw',el=>el.textContent),base.body);
-      assert.equal(await page.$eval('#transcript .reply span:last-child',el=>el.textContent),exact);
       await page.screenshot({path:path.join(screenshots,'guide-accepted.png'),fullPage:true});
       model.requests[0].answer=summary('pending'); await refresh(); await load();
       assert.match(await page.$eval('#transcript',el=>el.textContent),/Answer accepted by source/); assert.equal(posts.length,2);
@@ -270,7 +266,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       model.needs_answer_count=5; await refresh();
       const inView=()=>page.$eval('#current h2',el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;});
       for (let n=0;n<4;n++) { await click('Skip / next'); assert.equal(await inView(),true); }
-      assert.equal(await page.$$eval('#transcript article',nodes=>nodes.length),0);  // Skipped cards stay in Browse only.
+      assert.equal(await page.$$eval('#transcript article',nodes=>nodes.length),0);
       await page.focus('textarea'); await page.type('textarea','retained draft');
       const before=await page.evaluate(()=>({scroll:scrollY,focus:document.activeElement.id}));
       await page.keyboard.type(' plus text');
@@ -279,7 +275,7 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       await page.waitForFunction(()=>!document.querySelector('#refresh').disabled);
       assert.deepEqual(await page.evaluate(()=>({scroll:scrollY,focus:document.activeElement.id})),before);
       assert.equal(await page.$eval('textarea',el=>el.value),'retained draft plus text');
-      await page.evaluate(()=>{document.querySelector('#queue').open=true;document.querySelector('#items button').click();});
+      await click('Skip / next');
       assert.equal(await inView(),true); assert.equal(posts.length,0);
       await page.screenshot({path:path.join(screenshots,'guide-next-viewport.png')});
     });
@@ -413,7 +409,6 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
       await load();
       assert.equal(await selected(),secondId);
       assert.match(await page.$eval('#transcript',el=>el.textContent),/Answer accepted by source/);
-      assert.equal(await page.$$eval('#items button',nodes=>nodes.length),1);
       assert.equal(await page.$eval('#current h2',el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;}),true);
       await page.screenshot({path:path.join(screenshots,'guide-external-answer.png'),fullPage:true});
       assert.equal(posts.length,0);

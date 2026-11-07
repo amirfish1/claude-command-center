@@ -9,6 +9,7 @@
   let state = {entries:{}, drafts:{}, seen:[], snapshots:{}, selected:null, closes:{}, closed:{}};
   let storageReady = true, rows = [], model = null, loading = false, loaded = false, readError = '', active = null, confirming = null;
   const notices = new Map();
+  document.documentElement.classList.toggle('embedded', parent !== window);
   function validAnswer(answer) {
     return answer && uuid(answer.answer_id) && states.includes(answer.state) && typeof answer.text === 'string' && revision(answer.expected_revision);
   }
@@ -171,31 +172,24 @@
     const checked = new Date(model?.checked_at);
     $('coverage').textContent = readError || (!model ? 'Checking source coverage…' : verified ? (Number.isFinite(checked.getTime()) ? 'Updated ' + time.format(checked) + '. ' : '') + 'Updates automatically.' : (model.error || 'Source coverage incomplete or unavailable.') + ' This is not a current count.');
     $('coverage').classList.toggle('warning', loaded && !verified);
-    $('queueCount').textContent = `(${openRows().length} listed)`;
-    $('items').replaceChildren();
-    openRows().forEach(r => {
-      const b = el('button', `${r.origin_id} · ${r.title}`); b.type = 'button'; b.setAttribute('aria-current', String(r.request_id === id)); b.onclick = () => select(r.request_id, true); $('items').append(b);
-    });
+    // The question comes first: a saved card shows at once, without loading text around it.
+    $('intro').hidden = !model && !!row; $('coverage').hidden = !model && !!row;
     $('issues').replaceChildren();
     (model?.coverage_issues || []).forEach(issue => {
       const section = el('article', '', 'question'); section.append(ticket({...issue,adapter:'watchtower-block'}),el('h2',issue.title),el('div',issue.body,'raw'),el('p',issue.reason || 'No stable source identity. Read-only.','meta warning')); $('issues').append(section);
     });
     $('transcript').replaceChildren();
-    // Only answers still in flight stay on screen. Finished ones collapse, and
-    // questions merely viewed stay in Browse: an old snapshot must not read as open.
-    const finished = el('details', ''), finishedRows = el('div', '');
-    let finishedCount = 0;
+    // Answers still in flight stay on screen. Of the finished ones, only the latest
+    // leaves a one-line receipt, and a Close keeps its undo there.
+    let receipt = '';
     for (const seenId of state.seen) {
       const snapshot = state.snapshots[seenId], seenEntry = state.entries[seenId];
       const closedHere = state.closed[seenId] || state.closes[seenId];
       if (seenId === id || !snapshot || (!seenEntry && !closedHere)) continue;
-      if (closedHere || seenEntry.saved?.state === 'accepted') { finishedRows.append(question(snapshot, seenEntry, true)); finishedCount++; }
+      if (closedHere || seenEntry.saved?.state === 'accepted') receipt = state.closed[seenId] || (seenEntry ? `${snapshot.origin_id}: ${status(seenEntry)}` : receipt);
       else $('transcript').append(question(snapshot, seenEntry, true));
     }
-    if (finishedCount) {
-      finished.append(el('summary', `Finished in this visit (${finishedCount})`), finishedRows);
-      $('transcript').prepend(finished);
-    }
+    if (receipt) $('transcript').prepend(el('p', receipt, 'receipt accepted'));
     $('current').replaceChildren(); $('recovery').replaceChildren();
     if (row) {
       const snapshot = entry ? state.snapshots[id] || row : row;
@@ -204,7 +198,7 @@
         const changed = el('details', ''); changed.append(el('summary', 'Current source question has changed'), el('div', row.body, 'raw')); $('current').append(changed);
       }
       if (entry?.saved?.state !== 'accepted' && (!rows.some(r => r.request_id === id) || row.status !== 'open')) $('current').append(el('p', 'No longer open at source. Withdrawal is not delivery confirmation.', 'warning'));
-    } else if (loaded) $('current').append(el('p', verified ? 'No next unanswered question. You can browse open questions and review receipts above.' : 'No verified questions to show. Use Try again.', 'meta'));
+    } else if (loaded) $('current').append(el('p', verified ? 'No next unanswered question.' : 'No verified questions to show. Use Try again.', 'meta'));
     const reason = entry ? frozenGate(!entry.saved ? 'record' : entry.saved.state === 'pending' ? 'send' : 'reconcile', row) : gate(row);
     const changed = draft && (draft.revision !== row?.revision || draft.body !== row?.body);
     $('answer').value = entry ? entry.payload.text : draft?.text || '';

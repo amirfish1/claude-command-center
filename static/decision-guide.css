@@ -53,3 +53,6 @@ button.danger:hover:enabled { background:#642929; }
 .weight { margin:8px 0 0; font-size:13px; font-weight:600; }
 .weight-major { color:#f0b35a; }
 .weight-minor { color:var(--mute); }
+.embedded h1 { display:none; }
+.embedded header { margin:0; }
+.embedded #intro { margin-top:0; }
