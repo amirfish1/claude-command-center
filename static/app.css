@@ -16568,6 +16568,31 @@
      reads brighter, glyph steps back (CCC-1242). */
   .fq-working-row .fq-working-id { color: #c9d1d9; font-weight: 600; }
   .fq-working-row.is-mobile .fq-working-engine { opacity: .7; transform: scale(.85); transform-origin: left center; }
+  /* The Workers lane can open before the Queues panel. Its phone layout
+     must not depend on that panel's measured .fq-mobile state. */
+  @media (max-width: 700px) {
+    .fq-working-head { flex-wrap: wrap; row-gap: 4px; }
+    .fq-working-summary { flex: 1 0 100%; padding-left: 15px; color: #8b949e; }
+    .fq-working-strip .fq-working-row.is-mobile {
+      display: grid; grid-template-columns: minmax(0, 1fr) 6px;
+      gap: 5px 8px; padding: 10px; min-height: 44px;
+    }
+    .fq-working-row.is-mobile .fq-working-lead {
+      grid-column: 1; flex-direction: row; align-items: center; gap: 8px;
+      min-width: 0;
+    }
+    .fq-working-row.is-mobile .fq-working-id {
+      flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis;
+    }
+    .fq-working-row.is-mobile .fq-working-body { grid-column: 1 / -1; gap: 5px; }
+    .fq-working-row.is-mobile .fq-working-title { font-size: 13px; line-height: 1.4; }
+    .fq-working-row.is-mobile .fq-working-meta {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      color: #8b949e; line-height: 1.5;
+    }
+    .fq-working-row.is-mobile .fq-working-chips { margin-left: 0; flex-wrap: wrap; }
+    .fq-working-row.is-mobile > .fq-working-dot { grid-column: 2; grid-row: 1; }
+  }
   .fq-working-role {
     font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px; line-height: 1;
     padding: 2px 4px; border-radius: 3px; white-space: nowrap; flex: 0 0 auto;

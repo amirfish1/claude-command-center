@@ -8735,7 +8735,7 @@
 
   function sessionEngineIconHtml(row, options) {
     const opts = options || {};
-    const portrait = _ideaAvatarHtml(row, opts.context === 'pane') || _repoSessionAvatarHtml(row, opts.context === 'pane');
+    const portrait = !opts.compact && (_ideaAvatarHtml(row, opts.context === 'pane') || _repoSessionAvatarHtml(row, opts.context === 'pane'));
     if (portrait) return portrait;
     const sid = row && (row.session_id || row.id);
     const optimistic = !!(sid && typeof sessionIsOptimisticallySending === 'function'
@@ -55324,7 +55324,7 @@
       // On mobile, tapping the row itself should jump straight to the CCC
       // session instead of silently doing nothing (idle workers have no
       // ticket ref) or opening the ticket picker.
-      if (_uxqPicker.isMobile) {
+      if ($row.classList.contains('is-mobile')) {
         const rowSid = $row.getAttribute('data-uxq-session') || '';
         if (rowSid) {
           if (typeof window.cccOpenSession === 'function') window.cccOpenSession(rowSid);
@@ -55480,7 +55480,7 @@
         engine: w.engine, source: w.engine, model: w.model,
         state: Number.isFinite(idleS) && idleS < 60 ? 'working' : 'idle',
       };
-      const icon = '<span class="fq-working-engine">' + sessionEngineIconHtml(iconRow) + '</span>';
+      const icon = '<span class="fq-working-engine">' + sessionEngineIconHtml(iconRow, { compact: true }) + '</span>';
       const stageRef = stage ? String(w.ref || '').trim() : '';
       const stageItem = stageRef ? items.find(it => it && _uxqItemRef(it) === stageRef) : null;
       // Until the ticket list lands every worker looks claim-less; keep them
@@ -55498,6 +55498,7 @@
         const ownerAsk = !!it.needs_input && (!att || att.owner || att.key === 'gate');
         return {
           ref: cRef,
+          title: String(it.title || it.note || it.text || '').split('\n')[0],
           label: (ownerAsk ? '?' : '#') + short,
           needsInput: ownerAsk,
           tip: cRef + (ownerAsk ? ' needs input: ' : (att ? ' ' + att.label + ': ' : ' also claimed: '))
@@ -55506,7 +55507,7 @@
       });
       const ref = on ? _uxqItemRef(on) : stageRef;
       const title = on ? String(on.note || on.title || on.text || '').split('\n')[0]
-        : (stage || !_uxqItemsLoaded ? 'loading ticket…' : (chips.length ? 'waiting on input' : 'idle'));
+        : (stage || !_uxqItemsLoaded ? 'loading ticket…' : (chips.length ? (chips[0].title || 'waiting on input') : 'idle'));
       // Ticket age from its own claim; a stage session is as old as itself,
       // and without a live claim only the worker's age is left.
       const elapsed = on && !stage ? ageOf(on.claimed_at) : workerAge;
@@ -55552,25 +55553,27 @@
         const workerAgeHtml = r.ref && r.workerAge
           ? '<span class="fq-working-worker-age" title="' + escapeAttr('Worker ' + r.worker + ' running ' + r.workerAge) + '">up ' + escapeHtml(r.workerAge) + '</span>'
           : '';
-        if (_uxqPicker.isMobile) {
+        if (_uxqPicker.isMobile || window.matchMedia('(max-width: 700px)').matches) {
           // Engine icon stacks under the ref so the id column stays narrow,
           // and the hover buttons overlay the title instead of reserving a
           // column of their own (CCC-1242).
-          return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(r.ref) + '" data-uxq-session="' + escapeAttr(r.sid) + '">'
+          const displayRef = r.ref || (r.chips[0] && r.chips[0].ref) || '';
+          const waiting = !r.ref && !r.stage && r.chips.length;
+          return '<div class="fq-working-row is-mobile" data-uxq-working-ref="' + escapeAttr(displayRef) + '" data-uxq-session="' + escapeAttr(r.sid) + '">'
             + '<span class="fq-working-lead">'
-            + '<span class="fq-working-id">' + escapeHtml(r.ref || '-') + '</span>'
+            + '<span class="fq-working-id">' + escapeHtml(displayRef || '-') + '</span>'
             + r.icon
             + roleHtml
             + '</span>'
             + '<span class="fq-working-body">'
             + '<span class="fq-working-title">' + escapeHtml(r.title) + '</span>'
-            + '<span class="fq-working-meta">' + escapeHtml(r.queue + ' · ' + r.elapsed) + chipsHtml + '</span>'
+            + '<span class="fq-working-meta">' + escapeHtml([waiting ? 'Waiting on input' : '', r.queue, r.elapsed].filter(Boolean).join(' · ')) + chipsHtml + '</span>'
             + '</span>'
             + '<span class="fq-working-actions">'
             + sessBtn
             + killBtn
             + '</span>'
-            + '<span class="fq-working-dot"></span>'
+            + (waiting ? '' : '<span class="fq-working-dot"></span>')
             + '</div>';
         }
         return '<div class="fq-working-row' + (r.ref ? ' has-ref' : '') + '" data-uxq-working-ref="' + escapeAttr(r.ref) + '">'
