@@ -160,3 +160,7 @@ static/reddit/
 .hunch-cache/
 .hunch-private/
 # <<< hunch <<<
+
+# Hardened deployment secrets (Layer A reverse-proxy auth) — local only,
+# never commit real credentials. The .example template IS committed.
+.env.hardened

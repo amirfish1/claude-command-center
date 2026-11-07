@@ -1,8 +1,12 @@
 # Claude Command Center — trial install path.
 #
-# CCC's runtime is stdlib-only (see pyproject.toml: `dependencies = []`), so
-# this image does NOT run `pip install`. Anything beyond the slim base is a
-# bug — keep it that way.
+# CCC's own code is stdlib-only (see pyproject.toml: `dependencies = []`), but
+# server.py hard-requires the `watchtower` package (watchtower.queue) as its
+# queue engine with no standalone fallback — it raises ImportError and exits
+# at startup if the module is missing. So the image installs exactly one thing:
+# WatchTower, from the same upstream source scripts/install-watchtower.sh
+# prefers (the GitHub tarball of main, not the lagging PyPI `watchtower-cli`).
+# Do not add other pip installs — anything beyond WatchTower is a bug.
 #
 # Caveats vs. the native `./run.sh` path on macOS:
 #   - macOS-only desktop conveniences (jump-to-terminal, screenshots, native
@@ -31,6 +35,16 @@ ENV PYTHONUNBUFFERED=1 \
     CCC_BIND_HOST=0.0.0.0
 
 WORKDIR /app
+
+# WatchTower is CCC's queue engine and a hard import-time dependency of
+# server.py (watchtower.queue). Install it from the upstream tarball of main,
+# matching the preferred source in scripts/install-watchtower.sh. Override
+# WATCHTOWER_TARBALL_URL at build time to pin a specific ref or point at a
+# fork. Needs Python 3.11+ (satisfied by the 3.12-slim base).
+ARG WATCHTOWER_TARBALL_URL=https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz
+RUN pip install --no-cache-dir "${WATCHTOWER_TARBALL_URL}" \
+    && python3 -c "import watchtower.queue" \
+    && echo "watchtower.queue import OK"
 
 # Copy the whole repo. .dockerignore strips caches, .git, gitignored plugin
 # files, and other noise so the layer stays lean.
