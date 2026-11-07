@@ -231,3 +231,32 @@ def test_prompt_keeps_theoretical_answers_open_until_a_working_result_is_deliver
                  "never bypasses the delivery", "explanation\nonly or no changes"):
         assert term in _CCC_SESSION_STATE_SYSTEM_PROMPT
     assert "complete without implementation" not in _CCC_SESSION_STATE_SYSTEM_PROMPT
+
+
+def _pushed_awaiting_deploy():
+    assessment = completed()
+    assessment["scope"] = {"goal": "Fix false alert", "done_when": "Production has the fix",
+                           "closure_met": False, "evidence": "Pushed; not deployed"}
+    assessment["delivery"] = {"score": 0.5, "evidence": "Pushed to origin/next; not yet deployed"}
+    assessment["caveats"] = [{"text": "Production alert remains until the scheduled release deploys.", "blocking": True}]
+    assessment["remaining_actions"] = [
+        {"text": "external: Scheduled release deploys commit abc123.", "confidence": 0.95, "downside": 0.1,
+         "reversible": True, "within_scope": True, "owner": "external"},
+        {"text": "After deployment, verify the alert is gone.", "confidence": 0.98, "downside": 0,
+         "reversible": True, "within_scope": True, "owner": "agent"}]
+    return assessment
+
+
+def test_pushed_work_waiting_only_on_a_deploy_is_ready_to_close():
+    result = _completion_assessment(_pushed_awaiting_deploy())
+    assert result["ready_to_close"] is True and result["remaining_actions"] == []
+
+
+def test_deploy_wait_does_not_excuse_unpushed_or_other_open_work():
+    unpushed = _pushed_awaiting_deploy()
+    unpushed["delivery"]["score"] = 0.2
+    assert _completion_assessment(unpushed)["ready_to_close"] is False
+    other = _pushed_awaiting_deploy()
+    other["remaining_actions"].append({"text": "Write the missing regression test.", "confidence": 0.9,
+        "downside": 0, "reversible": True, "within_scope": True, "owner": "agent"})
+    assert _completion_assessment(other)["ready_to_close"] is False

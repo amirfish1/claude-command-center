@@ -1355,6 +1355,18 @@ def _claude_peer_inbound_args():
     return ["--settings", json.dumps({"crossSessionInbound": "accept"}, separators=(",", ":"))]
 
 
+_DEPLOY_WAIT_RE = re.compile(
+    r"\b(?:deploy(?:s|ed|ment)?|release|rollout|roll\s+out|ship(?:s|ped)?\s+to\s+prod\w*)\b", re.I)
+_DEPLOY_WAIT_VERIFY_RE = re.compile(
+    r"\b(?:schedul\w*|pending|await\w*|wait\w*|until|after|once|when)\b", re.I)
+
+
+def _is_deploy_wait(text):
+    """True for an action/caveat that only waits for a deploy or release."""
+    text = str(text or "")
+    return bool(_DEPLOY_WAIT_RE.search(text) and _DEPLOY_WAIT_VERIFY_RE.search(text))
+
+
 def _completion_assessment(value):
     """Validate a self-report and derive readiness; never accept its verdict."""
     invalid = {"version": 1, "valid": False, "ready_to_close": False,
@@ -1413,14 +1425,26 @@ def _completion_assessment(value):
         if "owner" in action:
             parsed_action["owner"] = action["owner"]
         result["remaining_actions"].append(parsed_action)
+    # Owner decision (DECISIONS-FIX-7): a fix that is pushed and only waits on a
+    # scheduled deploy/release is done. Deployment is not part of fixing, so
+    # those waits (and the delivery/closure/caveat flags that restate them) must
+    # not hold the session open. Pushed work still needs delivery >= 0.5.
+    deploy_waits = [a for a in result["remaining_actions"] if _is_deploy_wait(a["text"])]
+    if deploy_waits and result["delivery"]["applicable"] and result["delivery"]["score"] >= 0.5:
+        result["remaining_actions"] = [a for a in result["remaining_actions"] if a not in deploy_waits]
+        result["caveats"] = [c for c in result["caveats"]
+                             if not (c["blocking"] and _is_deploy_wait(c["text"]))]
+        result["deploy_pending"] = True
     reasons = []
-    if "scope" in result and not result["scope"]["closure_met"]:
+    if ("scope" in result and not result["scope"]["closure_met"]
+            and not result.get("deploy_pending")):
         reasons.append("Topic goal is not yet met.")
     if result["resolution"]["score"] < 0.9:
         reasons.append("Resolution is below 0.9.")
     if result["verification"]["score"] < 0.8:
         reasons.append("Verification is below 0.8.")
-    if not result["delivery"]["applicable"] or result["delivery"]["score"] != 1:
+    if (not result["delivery"]["applicable"]
+            or result["delivery"]["score"] < (0.5 if result.get("deploy_pending") else 1)):
         reasons.append("Delivery is incomplete.")
     if result["decision_dependency"]["score"] != 0:
         reasons.append("A user decision remains.")
