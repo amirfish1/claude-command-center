@@ -5404,6 +5404,16 @@ def _set_session_lane_overrides(session_ids, lane):
     return clean, ids
 
 
+def _default_session_lane(row):
+    """Disposable helper working directories belong in Other."""
+    cwd = str(row.get("session_cwd") or row.get("folder_path") or row.get("cwd") or "")
+    if cwd:
+        helper = re.fullmatch(r"(?:te-side|wt-model)-[A-Za-z0-9_-]+", Path(cwd).name)
+    else:
+        helper = re.search(r"-(?:te-side|wt-model)-[A-Za-z0-9_-]+$", str(row.get("slug") or ""))
+    return "other" if helper else ""
+
+
 def _apply_session_lane_overrides(rows, overrides=None):
     """Stamp per-session All-tab lane overrides onto any row shape."""
     if overrides is None:
@@ -5416,13 +5426,7 @@ def _apply_session_lane_overrides(rows, overrides=None):
             continue
         sid = row.get("session_id") or row.get("id")
         if sid:
-            # Tool-free helper runs use disposable working directories. Their
-            # transcripts belong in Other even when no spawn marker survives.
-            cwd = str(row.get("session_cwd") or row.get("folder_path") or row.get("cwd") or "")
-            helper = bool(re.fullmatch(r"(?:te-side|wt-model)-[A-Za-z0-9_-]+", Path(cwd).name))
-            if not cwd:
-                helper = bool(re.search(r"-(?:te-side|wt-model)-[A-Za-z0-9_-]+$", str(row.get("slug") or "")))
-            row["all_lane_override"] = overrides.get(str(sid), "other" if helper else "")
+            row["all_lane_override"] = overrides.get(str(sid), _default_session_lane(row))
     return rows
 
 
@@ -17357,7 +17361,7 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
                 if sid:
                     row["archived"] = sid in archived_set
                     row["trashed"] = sid in trashed_set
-                    row["all_lane_override"] = lane_overrides.get(str(sid), "")
+                    row["all_lane_override"] = lane_overrides.get(str(sid), _default_session_lane(row))
                     # CCC-142: only rows whose lifecycle/lane actually moved
                     # ride the next ?since= delta.
                     if tracked and row != original:
@@ -17778,6 +17782,8 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
     _phase("claude_reg_ms")
     extra = ((codex_overlay or []) + (overlay or []) + (devin_overlay or []) + (worker_overlay or [])
              + (claude_overlay or []))
+    if extra:
+        _apply_session_lane_overrides(extra)
     body_ver = _archive_list_body_ver(key, rows, extra)
     _phase("ver_ms")
     return rows, from_cache, body_ver
@@ -18916,6 +18922,7 @@ def _overlay_conversation_lifecycle_flags(rows):
         if sid:
             row["archived"] = sid in archived_set
             row["trashed"] = sid in trashed_set
+    _apply_session_lane_overrides(rows)
     return rows
 
 

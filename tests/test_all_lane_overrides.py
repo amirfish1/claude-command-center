@@ -119,3 +119,15 @@ def test_helper_conversations_default_to_other_but_allow_manual_move():
     ]
     server._apply_session_lane_overrides(rows, {"moved": "coding"})
     assert [r["all_lane_override"] for r in rows] == ["other", "other", "other", "", "coding"]
+
+
+def test_cold_archive_snapshot_routes_helpers_and_honors_manual_moves(monkeypatch):
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
+    monkeypatch.setattr(server, "_codex_deleted_thread_ids", lambda: set())
+    monkeypatch.setattr(server, "_load_session_lane_overrides", lambda: {"moved": "coding"})
+    rows = [
+        {"id": "helper", "session_cwd": "/tmp/wt-model-cold", "all_lane_override": ""},
+        {"id": "moved", "session_cwd": "/tmp/te-side-cold", "all_lane_override": ""},
+    ]
+    server._overlay_conversation_lifecycle_flags(rows)
+    assert [r["all_lane_override"] for r in rows] == ["other", "coding"]
