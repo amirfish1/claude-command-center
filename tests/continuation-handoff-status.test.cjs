@@ -69,3 +69,15 @@ test('current user decisions and first user actions still ask the owner', () => 
   assert.equal(result.kind, 'next');
   assert.equal(result.text, userFirst.remaining_actions[0].text);
 });
+
+test('a paused takeover with unconfirmed delivery reads Stalled, not passive Waiting', () => {
+  const stalled = outcome({ ...row, session_state: null, idea_ticket: { handoff: {
+    state: 'waiting', session: 'continuation', supervision_state: 'paused_unreachable',
+    delivery_state: 'uncertain',
+    waiting_on: 'Delivery outcome unknown; inspect receipt before explicit recovery' } } });
+  assert.equal(stalled.label, 'Stalled');
+  assert.match(stalled.text, /Nothing is progressing/);
+  const real = outcome({ ...row, session_state: null, idea_ticket: { handoff: {
+    state: 'waiting', session: 'continuation', waiting_on: 'IDEAS-5' } } });
+  assert.equal(real.label, 'Waiting');
+});

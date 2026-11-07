@@ -4109,6 +4109,14 @@
       return { label: 'Needs you', kind: 'next', handoff: 'blocked',
         text: String(h.question || 'The handed-off session is waiting on you.') };
     }
+    if (h && h.state === 'waiting'
+        && (h.supervision_state === 'paused_unreachable' || h.delivery_state === 'uncertain')) {
+      // Supervision stopped and nothing is being waited on: a takeover
+      // message whose delivery is unconfirmed never resumes by itself.
+      return { label: 'Stalled', kind: 'next', handoff: 'blocked',
+        text: 'WatchTower supervision is paused: ' + String(h.waiting_on || 'session unreachable')
+          + '. Nothing is progressing; recover it explicitly.' };
+    }
     if (h && h.state === 'waiting') {
       // Parked on another ticket, a worker or a client: not the owner's turn.
       return { label: 'Waiting', kind: 'handoff', handoff: 'running',
