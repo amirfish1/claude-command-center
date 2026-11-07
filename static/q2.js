@@ -47,6 +47,7 @@
   };
 
   var state = {
+    loaded: false,      // first successful queue fetch has landed
     queues: [],
     projects: {},       // queue name → per-project health row (why it's stuck)
     workers: [],        // live WatchTower workers — the only proof a claim is real
@@ -786,11 +787,13 @@
       state.workerSessionMap = (results[0] && results[0].worker_session_map) || {};
       state.items = (results[1] && results[1].items) || [];
       state.offline = false;
+      state.loaded = true;
     } catch (e) {
       // Keep the last good render on screen and flag it, rather than
       // blanking the board every time a poll misses.
       state.offline = true;
       renderChrome();
+      if (!state.loaded) renderQueues();
       return;
     }
     reconcileDrainOverrides();
@@ -1086,6 +1089,13 @@
     if (!host) return;
     $('q2QueueCount').textContent = state.queues.length ? String(state.queues.length) : '';
 
+    if (!state.queues.length && !state.loaded) {
+      // Never claim "No queues yet" before the first fetch has succeeded.
+      host.innerHTML = '<div class="q2-empty"><div class="q2-empty-title">'
+        + (state.offline ? 'Can\'t reach the queue service' : 'Loading queues\u2026')
+        + '</div>' + (state.offline ? 'Retrying automatically.' : '') + '</div>';
+      return;
+    }
     if (!state.queues.length) {
       host.innerHTML = '<div class="q2-empty">'
         + '<div class="q2-empty-title">No queues yet</div>'
@@ -4605,6 +4615,7 @@
   }
 
   // ── boot ─────────────────────────────────────────────────────────────────
+  renderQueues();  // "Loading queues…" until the first fetch lands
   refresh();
   setInterval(function () {
     if (document.hidden) return;
