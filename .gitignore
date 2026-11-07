@@ -94,6 +94,7 @@ throughput_*.png
 # local. The Worker source ships; the deploy binding does not. See
 # infra/telemetry-worker/README.md for the deploy procedure.
 /infra/telemetry-worker/wrangler.toml
+/infra/telemetry-worker/wrangler.toml.bak-*
 /infra/telemetry-worker/.wrangler/
 /infra/telemetry-worker/node_modules/
 
