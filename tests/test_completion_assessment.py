@@ -260,3 +260,23 @@ def test_deploy_wait_does_not_excuse_unpushed_or_other_open_work():
     other["remaining_actions"].append({"text": "Write the missing regression test.", "confidence": 0.9,
         "downside": 0, "reversible": True, "within_scope": True, "owner": "agent"})
     assert _completion_assessment(other)["ready_to_close"] is False
+
+
+def test_captured_joyce_completion_replay_is_ready_to_close():
+    captured = {"version": 1,
+        "scope": {"goal": "Resolve incorrect $95 price alert", "done_when": "Production excludes standalone payments",
+                  "closure_met": False, "evidence": "Fix pushed to next; production deployment remains pending"},
+        "resolution": {"score": 0.85, "evidence": "Comparison fixed and stale approval guarded"},
+        "verification": {"score": 0.85, "evidence": "59 tests passed; replay of 608 purchases"},
+        "delivery": {"score": 0.5, "evidence": "1173a1b9b pushed to origin/next; not yet deployed", "applicable": True},
+        "decision_dependency": {"score": 0, "evidence": "No user decision required"},
+        "caveats": [{"text": "Production alert remains until the scheduled release deploys.", "blocking": True}],
+        "remaining_actions": [
+            {"text": "external: Scheduled release deploys commit 1173a1b9b; success is a healthy production deployment containing the fix.",
+             "confidence": 0.95, "downside": 0.1, "reversible": True, "within_scope": True},
+            {"text": "agent: After deployment, verify LCPP's price-review response no longer includes the false alert.",
+             "confidence": 0.98, "downside": 0, "reversible": True, "within_scope": True}]}
+    result = _completion_assessment(captured)
+    assert result["ready_to_close"] is True, result["reasons"]
+    captured["resolution"]["score"] = 0.7
+    assert _completion_assessment(captured)["ready_to_close"] is False

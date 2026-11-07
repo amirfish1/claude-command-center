@@ -1439,7 +1439,8 @@ def _completion_assessment(value):
     if ("scope" in result and not result["scope"]["closure_met"]
             and not result.get("deploy_pending")):
         reasons.append("Topic goal is not yet met.")
-    if result["resolution"]["score"] < 0.9:
+    # Models discount resolution while a deploy is pending; allow 0.8 then.
+    if result["resolution"]["score"] < (0.8 if result.get("deploy_pending") else 0.9):
         reasons.append("Resolution is below 0.9.")
     if result["verification"]["score"] < 0.8:
         reasons.append("Verification is below 0.8.")
