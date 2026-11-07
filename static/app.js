@@ -45891,8 +45891,7 @@
     // CCC-851: "Other" (née All) holds only the leftover lanes -- Hermes
     // messages + group chats -- since Coding/Workers sessions now live
     // exclusively under their own top-level tabs. Hidden entirely when empty.
-    const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length
-      + (_ideaTicketsOn && !_ticketlessRowsInAll ? _allTabCodingConvs.length : 0);
+    const _otherTabCount = _allTabGroupChatCount + _allTabOtherConvs.length;
     const _otherTabDef = ['archived', 'Other', _otherTabCount];
     const _tabDefs = _ideaTicketsOn
       ? [
