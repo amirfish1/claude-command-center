@@ -4,7 +4,7 @@
 (function (root) {
   'use strict';
   const major = [
-    ['moves real money', /(?:\$(?!0\.)\d|\b(?:charges?|overcharge|refunds?|billing|billed|subscription|pricing|price|prices|payments?|stripe|promo code|ad spend|unpaid|referring|offer)\b)/i],
+    ['moves real money', /(?:\$(?!0\.)\d|\b(?:charges?|overcharge|refunds?|billing|billed|subscription|pricing|price|prices|payments?|stripe|promo code|ad spend|unpaid|referring|offer|spend|cents)\b)/i],
     ['reaches customers', /\b(?:send|sends|sending|tell|email|emails|replies|reply to|dms?|message to)\b.{0,60}\b(?:joyce|client|clients|customer|customers|studio|studios|host|hosts|prospect|prospects|lowcountry)\b|\b(?:cold emails?|client messaging|client-email|daily send|email replies|prospect dms?)\b/i],
     ['is public', /\b(?:public|publish|landing pages?|launch video|try becky|launch)\b/i],
     ['changes the live product', /\b(?:release|live database|production|prod|live for every|live client|go live|studio pages|live|for every studio)\b/i],

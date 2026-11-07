@@ -4,6 +4,7 @@ const weight = require('../static/decision-weight.js');
 
 test('real money, customers, public and permanent titles are major with a reason', () => {
   assert.deepEqual(weight({title: 'Honor the $99 offer for 164 studios?'}), {level: 'Major', reason: 'moves real money'});
+  assert.equal(weight({title: 'Spend about 39 cents on a test?'}).level, 'Major');
   assert.equal(weight({title: 'Answer the 3 new email replies?'}).reason, 'reaches customers');
   assert.equal(weight({title: 'Replace the public demo?'}).reason, 'is public');
   assert.equal(weight({title: 'Erase copies when a user is permanently deleted?'}).reason, "can't be undone");
