@@ -58736,7 +58736,16 @@
         const guessQueue = async () => {
           const text = (textarea.value || '').trim();
           const seq = ++guessSeq;
-          if (text.length < 12 || queuePickedByHand) return;
+          if (queuePickedByHand) return;
+          // A queue named in the note wins (exact name, else the shortest
+          // queue whose name starts with a mentioned prefix like "becky-*").
+          const words = text.toLowerCase().match(/[a-z0-9_]+(?:-[a-z0-9_]+)*/g) || [];
+          const exact = queueNames.find(n => n.length >= 3 && words.includes(n.toLowerCase()));
+          const stem = exact ? '' : words.map(w => w.replace(/-+$/, '')).filter(w => w.length >= 3)
+            .map(w => queueNames.filter(n => n.toLowerCase() === w || n.toLowerCase().startsWith(w + '-'))
+              .sort((a, b) => a.length - b.length)[0]).find(Boolean);
+          if (exact || stem) { queueSel.value = exact || stem; return; }
+          if (text.length < 12) return;
           try {
             const map = await loadMap();
             if (!map.size) return;
@@ -58746,7 +58755,8 @@
             const g = await res.json();
             if (seq !== guessSeq || queuePickedByHand || !g || !g.ok) return;
             const rows = (g.candidates || []).filter(r => Number(r.probability) >= 0.5);
-            const paths = [g.repo_path, ...rows.map(r => r.repo_path)].filter(Boolean).map(norm);
+            const paths = [g.repo_path, ...rows.map(r => r.repo_path)].filter(Boolean)
+              .map(x => norm(x).replace(/\/\.claude\/worktrees\/[^/]+$/, ''));
             for (const rp of paths) {
               const qs = map.get(rp);
               if (!qs || !qs.length) continue;
