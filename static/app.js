@@ -87036,6 +87036,9 @@
           }
         }
       } else if (cl.contains('event') && cl.contains('assistant')) {
+        // Silent-thinking-only turns are display:none (no saved reasoning);
+        // counting them made "3 thoughts" expand to one visible thought.
+        if (cl.contains('is-silent-thinking-only')) { units.push({ el, kind: 'passive' }); continue; }
         let found = false;
         for (const c of el.children) {
           const cc = c.classList;

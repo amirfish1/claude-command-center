@@ -1,0 +1,1 @@
+- Compact view no longer counts hidden silent thoughts in the "N thoughts" fold label, so the count matches what expands.
