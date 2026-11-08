@@ -91,7 +91,7 @@ n="$(printf '%s' "$entries" | grep -c . || true)"
 [ "$n" -ge "$MIN" ] || waive "only $n changelog entries (need $MIN)"
 printf '%s\n' "$entries" | grep -Eq '^(added|fixed)-' || waive "no added-/fixed- entries among $n"
 
-tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
 if [ -n "$tag" ]; then
   age=$(( $(date +%s) - $(git log -1 --format=%ct "$tag") ))
   [ "$age" -ge 86400 ] || waive "last release $tag is only $((age/3600))h old"
@@ -116,7 +116,7 @@ if [ "$rc" = 0 ]; then say "$([ "$DRY" = 1 ] && echo DRY-RUN-OK || echo RELEASED
 # the verdict line is FAILED even though CCC itself shipped.
 for r in $EXTRA_REPOS; do
   [ -x "$r/scripts/cut-release.sh" ] || continue
-  wtag="$(git -C "$r" describe --tags --abbrev=0 2>/dev/null || true)"
+  wtag="$(git -C "$r" describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
   [ -n "$wtag" ] || continue
   if [ "$(git -C "$r" rev-list --count "$wtag"..HEAD)" = 0 ]; then say "$(basename "$r"): no commits since $wtag, not releasing"; continue; fi
   say "releasing $(basename "$r") (patch bump from $wtag, dry-run=$DRY)"
