@@ -2130,7 +2130,7 @@ def test_cold_persisted_snapshot_does_not_rehydrate_on_request(
     )
 
     assert rows == [
-        {"session_id": "persisted", "state": "ended", "archived": False, "trashed": False}
+        {"session_id": "persisted", "state": "ended", "archived": False, "trashed": False, "all_lane_override": ""}
     ]
     assert from_cache is True
 
@@ -2180,7 +2180,7 @@ def test_cold_archive_variant_borrows_base_snapshot_and_refreshes_detached(
     )
 
     assert rows == [
-        {"session_id": "base-snapshot", "archived": False, "trashed": False}
+        {"session_id": "base-snapshot", "archived": False, "trashed": False, "all_lane_override": ""}
     ]
     assert from_cache is True
     assert len(spawned) == 1

@@ -2024,8 +2024,7 @@ class TestServerImports(unittest.TestCase):
         )
         self.assertIn("const _allTabView = _topLevelLaneOverride || 'other';", app_js)
         self.assertIn("const _allTabGroupChatCount = _allTabGroupChatItems.length + _archivedGroupChatsForRender.length;", app_js)
-        self.assertIn("const _otherTabCount = _allTabGroupChatCount + _allTabHermesMessageConvs.length\n"
-            "      + (_ideaTicketsOn && !_ticketlessRowsInAll ? _allTabCodingConvs.length : 0);", app_js)
+        self.assertIn("const _otherTabCount = _allTabGroupChatCount + _allTabOtherConvs.length;", app_js)
         self.assertIn("const _otherTabDef = ['archived', 'Other', _otherTabCount];", app_js)
         self.assertIn("['coding', 'Coding', _allTabCodingConvs.length]", app_js)
         self.assertIn("['workers', 'Workers', _allTabWorkerConvs.length]", app_js)

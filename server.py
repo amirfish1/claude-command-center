@@ -147,6 +147,7 @@ from ccc_server import approval_evidence as _approval_evidence
 # one name so its spawn_env/readiness don't collide with engine globals.
 from ccc_server import free_runtime as _free_runtime
 from ccc_server.events import DashboardEventHub
+from ccc_server.paths import _is_pid_alive as _path_pid_alive
 
 # Pure helpers and path constants moved to leaf modules (slice 3)
 _adopt_ccc_module("paths")
@@ -3176,6 +3177,47 @@ def _wt_origin_badge(origin):
     }
 
 
+def _wt_block_params(ref):
+    """CCC-379: read-only view of a blocked ticket's structured block proposal
+    plus the per-check gate-check result. Returns (payload, status)."""
+    ref = str(ref or "").strip().upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*-[0-9]+", ref):
+        return {"ok": False, "error": "invalid ref"}, 400
+    if not _wt_cli_available():
+        return {"ok": False, "error": "wt CLI not available"}, 503
+    wt_bin = _wt_cli_path() or "wt"
+    item = {}
+    try:
+        proc = subprocess.run([wt_bin, "find", ref, "--json"], capture_output=True, text=True, timeout=15)
+        if proc.returncode == 0:
+            item = json.loads(proc.stdout or "{}")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        item = {}
+    proposal = item.get("block_proposal") if isinstance(item, dict) else None
+    if not proposal:
+        # GitHub-backed tickets keep it in a side file keyed by ref + blocked_at.
+        data_dir = os.environ.get("WATCHTOWER_DATA_DIR") or os.path.join(
+            os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "watchtower")
+        try:
+            with open(os.path.join(data_dir, "auto-decision-proposals.json"), encoding="utf-8") as fh:
+                rec = (json.load(fh) or {}).get(ref)
+            if isinstance(rec, dict) and (not item.get("blocked_at") or rec.get("blocked_at") == item.get("blocked_at")):
+                proposal = rec.get("proposal")
+        except (OSError, ValueError):
+            proposal = None
+    gate = None
+    try:
+        # Exits 2 for "not eligible" but still prints the JSON; exit 1 = no proposal.
+        proc = subprocess.run([wt_bin, "gate-check", ref, "--json"], capture_output=True, text=True, timeout=20)
+        if proc.returncode in (0, 2):
+            gate = json.loads(proc.stdout or "null")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        gate = None
+    if not proposal and not gate:
+        return {"ok": True, "ref": ref, "proposal": None, "gate": None}, 200
+    return {"ok": True, "ref": ref, "proposal": proposal or None, "gate": gate}, 200
+
+
 def _wt_clip_title(text, limit=60):
     text = " ".join(str(text or "").split()).strip()
     if limit and len(text) > limit:
@@ -5309,7 +5351,7 @@ def _append_custom_repo(path_str):
     return str(p)
 
 
-_SESSION_LANE_VALUES = {"coding", "workers", "messages"}
+_SESSION_LANE_VALUES = {"coding", "workers", "messages", "other"}
 
 
 
@@ -5403,6 +5445,16 @@ def _set_session_lane_overrides(session_ids, lane):
     return clean, ids
 
 
+def _default_session_lane(row):
+    """Disposable helper working directories belong in Other."""
+    cwd = str(row.get("session_cwd") or row.get("folder_path") or row.get("cwd") or "")
+    if cwd:
+        helper = re.fullmatch(r"(?:te-side|wt-model)-[A-Za-z0-9_-]+", Path(cwd).name)
+    else:
+        helper = re.search(r"-(?:te-side|wt-model)-[A-Za-z0-9_-]+$", str(row.get("slug") or ""))
+    return "other" if helper else ""
+
+
 def _apply_session_lane_overrides(rows, overrides=None):
     """Stamp per-session All-tab lane overrides onto any row shape."""
     if overrides is None:
@@ -5415,7 +5467,7 @@ def _apply_session_lane_overrides(rows, overrides=None):
             continue
         sid = row.get("session_id") or row.get("id")
         if sid:
-            row["all_lane_override"] = overrides.get(str(sid), "")
+            row["all_lane_override"] = overrides.get(str(sid), _default_session_lane(row))
     return rows
 
 
@@ -17350,7 +17402,7 @@ def _restamp_archive_serve_cache_after_mutation(archived_set=None, trashed_set=N
                 if sid:
                     row["archived"] = sid in archived_set
                     row["trashed"] = sid in trashed_set
-                    row["all_lane_override"] = lane_overrides.get(str(sid), "")
+                    row["all_lane_override"] = lane_overrides.get(str(sid), _default_session_lane(row))
                     # CCC-142: only rows whose lifecycle/lane actually moved
                     # ride the next ?since= delta.
                     if tracked and row != original:
@@ -17771,6 +17823,8 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
     _phase("claude_reg_ms")
     extra = ((codex_overlay or []) + (overlay or []) + (devin_overlay or []) + (worker_overlay or [])
              + (claude_overlay or []))
+    if extra:
+        _apply_session_lane_overrides(extra)
     body_ver = _archive_list_body_ver(key, rows, extra)
     _phase("ver_ms")
     return rows, from_cache, body_ver
@@ -18909,6 +18963,7 @@ def _overlay_conversation_lifecycle_flags(rows):
         if sid:
             row["archived"] = sid in archived_set
             row["trashed"] = sid in trashed_set
+    _apply_session_lane_overrides(rows)
     return rows
 
 
@@ -25330,12 +25385,9 @@ def _notification_is_blocking(notif):
     if notif.get("source") == "permission-request":
         pid = notif.get("pid")
         if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+            # perm_alive: a permission error does not prove the hook exited.
+            if not _path_pid_alive(pid, perm_alive=True):
                 return False
-            except OSError:
-                pass  # Permission errors do not establish that it exited.
     msg = str(notif.get("message") or "").lower()
     if "waiting for your input" in msg or "waiting for input" in msg:
         return False
@@ -30491,6 +30543,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 result = {"ok": False, "error": str(e)}
             self.send_json(result, 200 if result.get("ok") else 400)
+        elif path == "/api/queue/block-params":
+            qs = urllib.parse.parse_qs(parsed.query)
+            payload, code = _wt_block_params((qs.get("ref", [""])[0] or ""))
+            self.send_json(payload, code)
         elif path == "/api/queue/learnings":
             qs = urllib.parse.parse_qs(parsed.query)
             queue = (qs.get("queue", [""])[0] or "").strip()
@@ -31360,6 +31416,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server.decision_requests import requests_payload
             result = requests_payload(tickets=_wt_list_items_for_requests())
             self.send_json(result, 200 if result.get('ok') else 503)
+        elif path == "/api/decision-inbox/auto-decisions":
+            from ccc_server.auto_decisions import auto_decision_rows
+            self.send_json(auto_decision_rows(_wt_list_items_for_requests()))
         elif path == "/api/decision-inbox/legacy-reconciliation":
             from ccc_server.decision_legacy_http import reconciliation_payload
             self.send_json(reconciliation_payload())
@@ -41537,6 +41596,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _wt_items_memo["items"] = [
                             {**item, "needs_input": False} if item.get("ref") == result["origin_id"] else item
                             for item in _wt_items_memo["items"]]
+            self.send_json(result, status)
+        elif path == "/api/decision-inbox/auto-decisions/revert":
+            from ccc_server.auto_decisions import revert as _auto_revert
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                body = json.loads(self.rfile.read(length)) if 0 < length <= 4096 else {}
+            except (ValueError, TypeError):
+                body = {}
+            result, status = _auto_revert((body or {}).get('ref') if isinstance(body, dict) else None)
+            with _wt_items_memo_lock:
+                _wt_items_memo["at"] = 0
             self.send_json(result, status)
         elif path == "/api/decision-inbox/close":
             from ccc_server.decision_answer_api import MAX_BODY_BYTES

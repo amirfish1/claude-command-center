@@ -6,6 +6,7 @@
   <title>Decisions · Guided queue</title>
   <link rel="stylesheet" href="/static/decision-guide.css">
   <script src="/static/decision-weight.js" defer></script>
+  <script src="/static/block-params.js" defer></script>
   <script src="/static/decision-guide.js" defer></script>
 </head>
 <body>
@@ -19,7 +20,7 @@
     <form id="composer" aria-label="Answer current question">
       <div id="answerFields" hidden>
         <label for="answer">Your answer</label>
-        <textarea id="answer" rows="4" maxlength="24000" aria-describedby="guidance" disabled></textarea>
+        <div class="answer-box"><textarea id="answer" rows="4" maxlength="24000" aria-describedby="guidance" disabled></textarea><button id="send" class="primary" type="submit" hidden disabled>Send answer</button></div>
       </div>
       <p id="guidance" class="meta">Checking source before answering.</p>
       <div id="recovery" class="actions"></div>
@@ -27,8 +28,9 @@
         <p id="closeText"></p>
         <div class="actions"><button id="closeYes" class="danger" type="button"></button><button id="closeKeep" type="button">Keep it</button></div>
       </div>
-      <div class="actions"><button id="send" class="primary" type="submit" hidden disabled>Send answer</button><button id="skip" type="button" disabled>Skip / next</button><button id="close" type="button" hidden>Close…</button></div>
+      <div class="actions"><button id="skip" type="button" disabled>Skip / next</button><button id="close" type="button" hidden>Close…</button></div>
     </form>
+    <section id="autoDecisions" aria-label="Automatic decisions" hidden></section>
     <section id="issues" aria-label="Questions without stable source identities"></section>
     <p id="coverage" class="meta" role="status">Checking source coverage…</p>
     <p class="meta footnote">Skip moves to the next question. Closing asks you to confirm first. Source acceptance confirms delivery, not completion of the work. <a href="/decision-inbox.html">History and reports</a></p>

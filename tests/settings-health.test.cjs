@@ -91,7 +91,7 @@ test('legacy maintenance entry preserves preferences and leads to health, Escape
 
 test('native System Tab trap works on phone and Escape restores its visible opener',async t=>{
  const{page}=await open(t,390);
- await page.evaluate(()=>{window.__first=document.getElementById('sysCloseBtn');window.__last=document.querySelector('#sysTabContentHealth>details>summary');window.__last.focus();});
+ await page.evaluate(()=>{window.__first=document.getElementById('sysCloseBtn');window.__last=document.querySelector('#sysTabContentHealth .settings-health-links button:last-child');window.__last.focus();});
  await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.activeElement===window.__first),true);
  await page.keyboard.down('Shift');await page.keyboard.press('Tab');await page.keyboard.up('Shift');assert.equal(await page.evaluate(()=>document.activeElement===window.__last),true);
  await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.id),'opener');

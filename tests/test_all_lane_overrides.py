@@ -107,3 +107,34 @@ def test_typed_spawn_marker_can_route_a_session_to_other():
     assert "return lane === 'workers' || lane === 'other' ? lane : '';" in app_js
     assert "if (spawnedLane) return spawnedLane;" in app_js
     assert "const _allTabOtherConvs = _allTabConvs.filter(c => {" in app_js
+
+
+def test_helper_conversations_default_to_other_but_allow_manual_move():
+    rows = [
+        {"id": "te", "session_cwd": "/tmp/te-side-example"},
+        {"id": "wt", "folder_path": "/tmp/wt-model-example"},
+        {"id": "old", "slug": "-tmp-te-side-older"},
+        {"id": "user", "session_cwd": "/projects/app", "display_name": "wt-model-example"},
+        {"id": "moved", "session_cwd": "/tmp/wt-model-moved"},
+    ]
+    server._apply_session_lane_overrides(rows, {"moved": "coding"})
+    assert [r["all_lane_override"] for r in rows] == ["other", "other", "other", "", "coding"]
+
+
+def test_cold_archive_snapshot_routes_helpers_and_honors_manual_moves(monkeypatch):
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
+    monkeypatch.setattr(server, "_codex_deleted_thread_ids", lambda: set())
+    monkeypatch.setattr(server, "_load_session_lane_overrides", lambda: {"moved": "coding"})
+    rows = [
+        {"id": "helper", "session_cwd": "/tmp/wt-model-cold", "all_lane_override": ""},
+        {"id": "moved", "session_cwd": "/tmp/te-side-cold", "all_lane_override": ""},
+    ]
+    server._overlay_conversation_lifecycle_flags(rows)
+    assert [r["all_lane_override"] for r in rows] == ["other", "coding"]
+
+
+def test_other_lane_is_valid_on_server_and_browser():
+    assert server._normalize_session_lane("other") == "other"
+    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    start = app_js.index("const _allTabLaneOverride =")
+    assert "lane === 'other'" in app_js[start:start + 300]

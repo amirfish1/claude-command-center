@@ -2128,7 +2128,59 @@ def _record_titler_target(titler_sid, target_sid, target_mtime):
         pass
 
 
-def _summarize_title_text(first_msg, validate=False, target_sid=""):
+_IMAGE_TAG_RE = re.compile(r"<image\b[^>]*>(?:\s*</image>)?", re.IGNORECASE)
+_IMAGE_PATH_RE = re.compile(r"\S*/pasted-images/\S+\.(?:png|jpe?g|gif|webp)", re.IGNORECASE)
+
+
+def _strip_image_markup(text):
+    """Drop <image ...> tags and pasted-image paths; collapse whitespace."""
+    t = _IMAGE_TAG_RE.sub(" ", str(text or ""))
+    t = _IMAGE_PATH_RE.sub(" ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _title_opener_is_thin(text):
+    """True when the opening prompt has too little text to name the task."""
+    return len(re.findall(r"\w+", _strip_image_markup(text))) < 6
+
+
+def _codex_followup_user_messages(session_id, limit=3):
+    """First few real user messages after the opener in a Codex rollout."""
+    try:
+        path = _core._resolve_codex_rollout_path(session_id)
+    except Exception:
+        path = None
+    out = []
+    if not path:
+        return out
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            seen_opener = False
+            for line in f:
+                if '"role": "user"' not in line and '"role":"user"' not in line:
+                    continue
+                try:
+                    pl = json.loads(line).get("payload") or {}
+                except ValueError:
+                    continue
+                if pl.get("type") != "message" or pl.get("role") != "user":
+                    continue
+                t = "".join(c.get("text", "") for c in pl.get("content") or [] if isinstance(c, dict))
+                if t.lstrip().startswith(("# AGENTS.md", "<environment", "<user_instructions")):
+                    continue
+                if not seen_opener:
+                    seen_opener = True
+                    continue
+                if _strip_image_markup(t):
+                    out.append(t)
+                if len(out) >= limit:
+                    break
+    except OSError:
+        pass
+    return out
+
+
+def _summarize_title_text(first_msg, validate=False, target_sid="", followups=None):
     """Use `claude -p` to produce a concise title for an opening prompt string.
 
     Engine-agnostic: callers resolve the opening prompt however fits their
@@ -2144,13 +2196,21 @@ def _summarize_title_text(first_msg, validate=False, target_sid=""):
     # Image-first prompts commonly come from CCC's screenshot helpers. Keep
     # their request text, but do not hand the title model a local file target
     # that it can try to read instead of producing a title.
+    prompt_text = _strip_image_markup(first_msg)
     prompt_text = re.sub(
         r"^\s*/\S+\.(?:png|jpe?g|gif|webp)(?=\s|$)",
         "[image]",
-        first_msg,
+        prompt_text,
         count=1,
         flags=re.IGNORECASE,
     )
+    followups = [_strip_image_markup(m) for m in (followups or [])]
+    followups = [m for m in followups if m]
+    if followups:
+        # CCC-365: an opener like "what are these? [image]" says nothing about
+        # the task; the later messages do.
+        prompt_text += "\n\nThe opening prompt is vague. Later messages from the user:\n" + "\n---\n".join(
+            m[:600] for m in followups)
 
     instruction = (
         "Produce a concise 4-8 word title summarizing what the user is trying to do "
@@ -2616,7 +2676,8 @@ def _codex_auto_title_worker(session_id, first_message):
         _auto_title_release(session_id)
         return
     try:
-        result = _summarize_title_text(first_message, validate=True, target_sid=session_id)
+        followups = _codex_followup_user_messages(session_id) if _title_opener_is_thin(first_message) else None
+        result = _summarize_title_text(first_message, validate=True, target_sid=session_id, followups=followups)
         if not result.get("ok"):
             _auto_title_release(session_id)
             _core._log_activity("autotitle", "FAILED",
