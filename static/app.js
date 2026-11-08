@@ -452,6 +452,12 @@
     if (typeof window.__cccStartupHoldForOpen === 'function') window.__cccStartupHoldForOpen(pending);
     return pending;
   }
+  // CCC-343: 1 while read-aloud is playing, so long tasks can be ranked
+  // for the case the ticket is about. _ttsActive is declared further down, so
+  // read it lazily and tolerate the temporal dead zone.
+  function _loafReadTag() {
+    try { return _ttsActive && !_ttsPaused ? 1 : 0; } catch (_) { return 0; }
+  }
   // Catch-all for client-side jank that no single poller owns (render/reshuffle
   // thrash, GC pauses): any main-thread block >= 200ms surfaces once per 5s.
   try {
@@ -461,7 +467,7 @@
           _perfLongTasks.push([entry.startTime, entry.startTime + entry.duration]);
           if (_perfLongTasks.length > 300) _perfLongTasks.shift();
           if (entry.duration >= 200) {
-            _clientLog('[LONGTASK] ' + Math.round(entry.duration) + 'ms blocking frame');
+            _clientLog('[LONGTASK] ' + Math.round(entry.duration) + 'ms blocking frame read=' + _loafReadTag());
           }
         }
       });
@@ -482,12 +488,15 @@
           if (now - _loafLast < 2000) continue;
           _loafLast = now;
           const sc = (e.scripts || []).slice().sort((x, y) => y.duration - x.duration)[0];
+          // fn= is the function name: char offsets shift on every build, names don't.
           const src = sc ? ((sc.invoker || sc.sourceFunctionName || sc.type || '?')
             + ' @' + String(sc.sourceURL || '').split('/').pop() + ':' + (sc.sourceCharPosition || 0)
+            + ' fn=' + (sc.sourceFunctionName || '-')
             + ' script=' + Math.round(sc.duration) + 'ms') : 'no-script';
           const render = Math.round(Math.max(0, (e.startTime + e.duration) - (e.renderStart || (e.startTime + e.duration))));
           _clientLog('[LOAF] ' + Math.round(e.duration) + 'ms ' + src
-            + ' block=' + Math.round(e.blockingDuration || 0) + 'ms render=' + render + 'ms');
+            + ' block=' + Math.round(e.blockingDuration || 0) + 'ms render=' + render + 'ms'
+            + ' read=' + _loafReadTag());
         }
       }).observe({ type: 'long-animation-frame', buffered: false });
     }
