@@ -56,3 +56,8 @@ button.danger:hover:enabled { background:#642929; }
 .embedded h1 { display:none; }
 .embedded header { margin:0; }
 .embedded #intro { margin-top:0; }
+
+.answer-box { position:relative; }
+.answer-box textarea { padding-bottom:58px; }
+.answer-box #send { position:absolute; right:10px; bottom:10px; min-height:36px; }
+.answer-box #send[hidden] { display:none; }
