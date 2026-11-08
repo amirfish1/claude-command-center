@@ -4113,7 +4113,7 @@
         && (h.supervision_state === 'paused_unreachable' || h.delivery_state === 'uncertain')) {
       // Supervision stopped and nothing is being waited on: a takeover
       // message whose delivery is unconfirmed never resumes by itself.
-      return { label: 'Stalled', kind: 'next', handoff: 'blocked',
+      return { label: 'Stalled', kind: 'next', handoff: 'stalled', needsYou: true,
         text: 'WatchTower supervision is paused: ' + String(h.waiting_on || 'session unreachable')
           + '. Nothing is progressing; recover it explicitly.' };
     }

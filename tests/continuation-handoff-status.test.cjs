@@ -77,6 +77,9 @@ test('a paused takeover with unconfirmed delivery reads Stalled, not passive Wai
     waiting_on: 'Delivery outcome unknown; inspect receipt before explicit recovery' } } });
   assert.equal(stalled.label, 'Stalled');
   assert.match(stalled.text, /Nothing is progressing/);
+  assert.equal(stalled.attn.handoff, 'stalled');
+  assert.notEqual(stalled.attn.handoff, 'blocked'); // blocked renders an Answer button
+  assert.equal(stalled.attn.needsYou, true);
   const real = outcome({ ...row, session_state: null, idea_ticket: { handoff: {
     state: 'waiting', session: 'continuation', waiting_on: 'IDEAS-5' } } });
   assert.equal(real.label, 'Waiting');
