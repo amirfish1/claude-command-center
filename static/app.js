@@ -58711,6 +58711,56 @@
           if (sug && queueNames.includes(sug)) queueSel.value = sug;
         } catch (_) {}
       });
+      // CCC-384: like a new session, let Jev read the note and pick the queue.
+      // /api/repo/guess names the repo; the queue whose configured repo_path
+      // is that repo is selected, until the user picks one by hand.
+      if (queueSel && textarea) {
+        let repoToQueues = null, guessTimer = null, guessSeq = 0;
+        const norm = (p) => String(p || '').replace(/\/+$/, '');
+        const loadMap = async () => {
+          if (repoToQueues) return repoToQueues;
+          repoToQueues = new Map();
+          try {
+            const res = await fetch('/api/queue/config-options', { method: 'POST' });
+            const data = await res.json();
+            for (const q of (data && data.queues) || []) {
+              const rp = norm(q.config && q.config.repo_path);
+              const name = String(q.queue || '');
+              if (!rp || !queueNames.includes(name)) continue;
+              if (!repoToQueues.has(rp)) repoToQueues.set(rp, []);
+              repoToQueues.get(rp).push(name);
+            }
+          } catch (_) {}
+          return repoToQueues;
+        };
+        const guessQueue = async () => {
+          const text = (textarea.value || '').trim();
+          const seq = ++guessSeq;
+          if (text.length < 12 || queuePickedByHand) return;
+          try {
+            const map = await loadMap();
+            if (!map.size) return;
+            const res = await fetch('/api/repo/guess', { method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ prompt: text }) });
+            const g = await res.json();
+            if (seq !== guessSeq || queuePickedByHand || !g || !g.ok) return;
+            const rows = (g.candidates || []).filter(r => Number(r.probability) >= 0.5);
+            const paths = [g.repo_path, ...rows.map(r => r.repo_path)].filter(Boolean).map(norm);
+            for (const rp of paths) {
+              const qs = map.get(rp);
+              if (!qs || !qs.length) continue;
+              const cur = queueSel.value;
+              queueSel.value = qs.includes(cur) ? cur : (qs.find(n => _rankTicketQueues(qs).top.includes(n)) || qs[0]);
+              return;
+            }
+          } catch (_) {}
+        };
+        textarea.addEventListener('input', () => {
+          clearTimeout(guessTimer);
+          guessTimer = setTimeout(guessQueue, 800);
+        });
+      }
     });
   }
 
