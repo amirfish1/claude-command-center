@@ -31100,9 +31100,10 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   border: 1px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
   border-radius: 4px; background: var(--surface, transparent);
   color: var(--text-muted);
-  font: 600 8px/13px ui-monospace, SFMono-Regular, Menlo, monospace;
+  font: 600 8px/11px ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: 0.02em; text-align: center;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* Wrap long refs (BECKY-3363 -> BECKY- / 3363) instead of cutting them with an ellipsis. */
+  white-space: normal; overflow-wrap: anywhere; overflow: visible;
   cursor: pointer; opacity: 0.85;
   transition: color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
 }
