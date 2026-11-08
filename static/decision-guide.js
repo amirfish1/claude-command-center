@@ -145,6 +145,7 @@
     }
     if (row.episode_provenance) card.append(el('p', 'Episode initialized at this time; historical block time is unknown.', 'meta'));
     card.append(el('div', row.body, 'raw'));
+    if ((row.adapter === 'watchtower-block' || row.adapter === 'watchtower-github') && window.cccBlockParams) { const bp = window.cccBlockParams(row.origin_id); if (bp) card.append(bp); }
     if (state.closed[row.request_id]) card.append(el('p', state.closed[row.request_id], 'receipt accepted'));
     if (entry) {
       const reply = el('div', '', 'reply'); reply.append(el('span', 'Your answer', 'speaker'), el('span', entry.payload.text)); card.append(reply);

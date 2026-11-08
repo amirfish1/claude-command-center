@@ -1,0 +1,1 @@
+- Blocked ticket view and decision cards now have a collapsible read-only 'Block parameters' section showing the worker's proposal (class, weight, recommend, undo, major reason) and the gate-check PASS/FAIL list.

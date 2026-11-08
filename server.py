@@ -3177,6 +3177,47 @@ def _wt_origin_badge(origin):
     }
 
 
+def _wt_block_params(ref):
+    """CCC-379: read-only view of a blocked ticket's structured block proposal
+    plus the per-check gate-check result. Returns (payload, status)."""
+    ref = str(ref or "").strip().upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*-[0-9]+", ref):
+        return {"ok": False, "error": "invalid ref"}, 400
+    if not _wt_cli_available():
+        return {"ok": False, "error": "wt CLI not available"}, 503
+    wt_bin = _wt_cli_path() or "wt"
+    item = {}
+    try:
+        proc = subprocess.run([wt_bin, "find", ref, "--json"], capture_output=True, text=True, timeout=15)
+        if proc.returncode == 0:
+            item = json.loads(proc.stdout or "{}")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        item = {}
+    proposal = item.get("block_proposal") if isinstance(item, dict) else None
+    if not proposal:
+        # GitHub-backed tickets keep it in a side file keyed by ref + blocked_at.
+        data_dir = os.environ.get("WATCHTOWER_DATA_DIR") or os.path.join(
+            os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "watchtower")
+        try:
+            with open(os.path.join(data_dir, "auto-decision-proposals.json"), encoding="utf-8") as fh:
+                rec = (json.load(fh) or {}).get(ref)
+            if isinstance(rec, dict) and (not item.get("blocked_at") or rec.get("blocked_at") == item.get("blocked_at")):
+                proposal = rec.get("proposal")
+        except (OSError, ValueError):
+            proposal = None
+    gate = None
+    try:
+        # Exits 2 for "not eligible" but still prints the JSON; exit 1 = no proposal.
+        proc = subprocess.run([wt_bin, "gate-check", ref, "--json"], capture_output=True, text=True, timeout=20)
+        if proc.returncode in (0, 2):
+            gate = json.loads(proc.stdout or "null")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        gate = None
+    if not proposal and not gate:
+        return {"ok": True, "ref": ref, "proposal": None, "gate": None}, 200
+    return {"ok": True, "ref": ref, "proposal": proposal or None, "gate": gate}, 200
+
+
 def _wt_clip_title(text, limit=60):
     text = " ".join(str(text or "").split()).strip()
     if limit and len(text) > limit:
@@ -30502,6 +30543,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 result = {"ok": False, "error": str(e)}
             self.send_json(result, 200 if result.get("ok") else 400)
+        elif path == "/api/queue/block-params":
+            qs = urllib.parse.parse_qs(parsed.query)
+            payload, code = _wt_block_params((qs.get("ref", [""])[0] or ""))
+            self.send_json(payload, code)
         elif path == "/api/queue/learnings":
             qs = urllib.parse.parse_qs(parsed.query)
             queue = (qs.get("queue", [""])[0] or "").strip()

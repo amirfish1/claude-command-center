@@ -56799,6 +56799,12 @@
       window.CCCTicketProse.hydrateBlocked(modal,
         status === 'blocked' && item.needs_input && latestBlock ? String(latestBlock.question || '').trim() : '');
     }
+    if (window.cccBlockParams && (item.needs_input || status === 'blocked')) {
+      const bp = window.cccBlockParams(ref);
+      const host = modal.querySelector('.uxq-td-main');
+      const tl = modal.querySelector('.uxq-timeline');
+      if (bp && host) host.insertBefore(bp, tl ? tl.parentNode : null);
+    }
     _uxqLoadLinkedConversation(modal, ref);
     _uxqInitTicketZoom(modal);
 
