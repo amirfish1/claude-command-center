@@ -66,7 +66,7 @@
     }root.append(links);
     const destination=get('sysTabContentHealth');destination.prepend(root);
     const details=make('details'),summary=make('summary','Resource diagnostics');details.append(summary);
-    const load=make('button','Load resource snapshot (inspects processes)');load.type='button';load.className='settings-action-btn';details.append(load,get('sysHealthBody'));destination.append(details);
+    const load=make('button','Load resource snapshot (inspects processes)');load.type='button';load.className='settings-action-btn';details.append(load,get('sysHealthBody'));destination.prepend(details);details.id='sysResourceDetails';
     get('sysHealthBody').textContent='Not loaded. This optional diagnostic inspects local resources and processes.';
     load.addEventListener('click',async()=>{const initiated=document.activeElement===load;load.disabled=true;try{await api.resources();}finally{load.disabled=false;if(initiated&&document.activeElement===document.body)load.focus();}});
     root.addEventListener('click',e=>{const b=e.target.closest('[data-health-repair]');if(b)repair(b);});refreshButton.addEventListener('click',refresh);

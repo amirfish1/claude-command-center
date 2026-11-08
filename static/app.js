@@ -980,6 +980,11 @@
   function _openSystemHealth() {
     _ensureSysHealthModal();
     sysOpenModal(document.getElementById('cccSystemPill'), 'health');
+    // Opened from the system pill / CPU chip: the user wants live CPU and
+    // memory, not setup boilerplate. Show the resource snapshot first, loaded.
+    const rd = document.getElementById('sysResourceDetails');
+    if (rd) rd.open = true;
+    _pollSystemHealth();
   }
   function _closeSystemHealth() {
     sysCloseModal();

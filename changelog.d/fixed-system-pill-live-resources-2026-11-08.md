@@ -1,0 +1,1 @@
+- fixed: System pill and CPU chip now open the live resource snapshot (CPU, memory, hogs) first and auto-loaded, instead of the setup-only Health checks list.
