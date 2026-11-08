@@ -17493,6 +17493,45 @@
     }, true);
     btn.addEventListener('contextmenu', (ev) => { if (isTouchPrimary()) ev.preventDefault(); });
   })();
+  // Touch: long-press the session header (breadcrumb) copies the session ID +
+  // transcript path (#convSessionId is hidden on phones, so its click-to-copy
+  // is unreachable there). Delegated: the breadcrumb is re-rendered often.
+  (function _initHeaderLongPressCopy() {
+    const bc = document.getElementById('cccBreadcrumb');
+    if (!bc) return;
+    let timer = 0, fired = false, sx = 0, sy = 0;
+    const clear = () => { clearTimeout(timer); timer = 0; };
+    bc.addEventListener('touchstart', (ev) => {
+      fired = false;
+      clear();
+      const t = ev.touches && ev.touches[0];
+      sx = t ? t.clientX : 0; sy = t ? t.clientY : 0;
+      timer = setTimeout(async () => {
+        const src = document.getElementById('convSessionId');
+        const sid = (src && src.dataset.copySessionId) || '';
+        if (!sid) return;
+        fired = true;
+        try { if (navigator.vibrate) navigator.vibrate(10); } catch (_) {}
+        const path = ((src && src.dataset.copyTranscriptPath) || '').trim();
+        const ok = await copyTextValue(path ? (sid + ' (' + path + ')') : sid);
+        showOpToast(ok ? (path ? 'Copied session ID + transcript path' : 'Copied session ID')
+                       : 'Copy failed - select and copy manually', ok ? 'ok' : 'error');
+      }, 500);
+    }, { passive: true });
+    bc.addEventListener('touchmove', (ev) => {
+      const t = ev.touches && ev.touches[0];
+      if (t && Math.abs(t.clientX - sx) + Math.abs(t.clientY - sy) < 10) return;
+      clear();
+    }, { passive: true });
+    ['touchend', 'touchcancel'].forEach(n => bc.addEventListener(n, clear, { passive: true }));
+    bc.addEventListener('click', (ev) => {
+      if (!fired) return;
+      fired = false;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+    }, true);
+    bc.addEventListener('contextmenu', (ev) => { if (isTouchPrimary()) ev.preventDefault(); });
+  })();
   // Touch: one tap on Send while the keyboard is up. The tap's focus change
   // blurs the composer, the keyboard drops and the bar reflows under the
   // finger, and iOS then cancels the click, so the user had to tap twice.
