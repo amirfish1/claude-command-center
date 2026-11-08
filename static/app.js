@@ -42010,7 +42010,7 @@
       const pinTitle = c.pinned ? 'Unpin conversation' : 'Pin conversation';
       // Today star: only on top-level ticket rows in the ticket tabs.
       const _todayStarred = todayStarActive(c);
-      const todayStarHtml = (lifecycleContext === 'all-main' && c.idea_ticket && !(opts.currentChildDepth > 0))
+      const todayStarHtml = (((lifecycleContext === 'all-main' && c.idea_ticket) || (_wkFacts && lifecycleContext !== 'trash')) && !(opts.currentChildDepth > 0))
         ? '<button type="button" class="conv-today-star' + (_todayStarred ? ' is-on' : '') + '" data-role="today-star"'
           + ' aria-pressed="' + _todayStarred + '" title="' + (_todayStarred ? 'Unstar (starred for today)' : 'Star for today: keeps it on top until midnight') + '"'
           + ' aria-label="' + (_todayStarred ? 'Unstar for today' : 'Star for today') + '">' + (_todayStarred ? '&#9733;' : '&#9734;') + '</button>'
@@ -45433,6 +45433,7 @@
           type: 'session-cluster',
           cluster,
           bucket,
+          starred: _wkSectioned && todayStarActive(cluster.rows[0] && cluster.rows[0].card),
           pinRank: _allTabClusterPinRank(cluster),
           mtime: _allTabClusterMtime(cluster),
           cost: _allTabClusterCost(cluster),
@@ -45458,6 +45459,8 @@
         if (_wkSectioned) {
           const d = (WORKER_BUCKET_ORDER[a.bucket] ?? 9) - (WORKER_BUCKET_ORDER[b.bucket] ?? 9);
           if (d) return d;
+          // Today-starred workers lead their section, then newest-first.
+          if (a.starred !== b.starred) return a.starred ? -1 : 1;
         }
         if (_arcCostMode) return (b.cost || 0) - (a.cost || 0);
         return (b.mtime || 0) - (a.mtime || 0);
