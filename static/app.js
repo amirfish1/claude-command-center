@@ -57284,6 +57284,10 @@
   // it's claimed, for the queue currently selected in queueScopeSelect only
   // (mirrors the facts q2.html's flow diagram shows, without the full
   // multi-stage diagram, which needs ~440px and the rail is narrower).
+  let _uxqWorkloadParts = null;
+  document.addEventListener('click', ev => {
+    document.querySelectorAll('details.fq-status-more[open]').forEach(d => { if (!d.contains(ev.target)) d.open = false; });
+  });
   function _renderQueueStatusStrip(proj, items, liveWorkers) {
     const $el = document.getElementById('queueStatusStrip');
     if (!$el) return;
@@ -57384,24 +57388,39 @@
         + ' title="Open this queue\'s WatchTower activity log (spawns, nudges, reaps)">Open queue activity log</button>'
         + '</div></div>';
     }
-    const watchHtml = controls.configBtn
-      // CCC-976: the queue name is already shown in the picker above this
-      // strip — dropped the redundant fq-status-proj label from this row.
-      + (row ? ('<span class="fq-status-depth" title="' + escapeAttr(depth + ' open') + '">' + depth + '</span>'
-          + (blockedCount ? '<span class="fq-status-sep">·</span><span class="fq-status-blocked" title="'
-            + escapeAttr(blockedCount + ' open ticket' + (blockedCount === 1 ? '' : 's') + ' waiting on another ticket (blocked_by); not ready to claim')
-            + '">' + blockedCount + ' blocked</span>' : '')
-          + '<span class="fq-status-sep">·</span>'
-          + '<span class="fq-status-age" title="' + escapeAttr('oldest ' + age) + '">' + escapeHtml(age) + '</span>') : '')
+    // CCC-378: only the daily controls stay inline; LIVE, sync age, refresh,
+    // claim types, learnings and log live behind a ⋯ menu. Ticket stats are
+    // one merged line instead of two.
+    const wl = _uxqWorkloadParts;
+    const statBits = [];
+    if (wl) statBits.push(wl.unfinished + ' unfinished');
+    if (row) {
+      statBits.push(depth + ' open' + (blockedCount ? ' (' + blockedCount + ' blocked)' : ''));
+      if (age) statBits.push('oldest ' + age);
+    }
+    if (wl) statBits.push(wl.ready + ' ready', wl.working + ' working', wl.budget + ' worker slots');
+    const statsHtml = statBits.length
+      ? '<div class="fq-workload-summary fq-status-stats" role="status" title="'
+        + escapeAttr('Unfinished includes deferred and blocked. Open is the queue depth; blocked are waiting on another ticket. Ready comes from scheduler eligibility; working requires a live ticket owner. Worker slots are the configured budget, not a live process count.')
+        + '">' + escapeHtml(statBits.join(' · ')) + '</div>'
+      : '';
+    const wasOpen = !!$el.querySelector('details.fq-status-more[open]');
+    const moreHtml = '<details class="fq-status-more"' + (wasOpen ? ' open' : '') + '>'
+      + '<summary class="fq-status-more-btn" title="More queue options" aria-label="More queue options">⋯</summary>'
+      + '<div class="fq-status-more-pop">'
       + (workers.length ? '<span class="fq-status-live">LIVE</span>' : '')
       + lastSyncedHtml
       + refreshBtn
+      + controls.typeToggle
+      + learningsLink
+      + logLink
+      + '</div></details>';
+    const watchHtml = controls.configBtn
       + controls.drainToggle
       + controls.workersToggle
-      + controls.typeToggle
       + planHtml
-      + learningsLink
-      + logLink;
+      + moreHtml
+      + statsHtml;
     // Per-worker rows used to be appended here too, but they just repeated
     // what the WORKING NOW strip already shows above (CCC-1019) — this strip
     // now stays to the queue-level facts (depth/age/live/drain/claim-types).
@@ -57803,13 +57822,16 @@
         ? workloadQueues.reduce((n, q) => n + Number(q.claimable), 0) : '-';
       const budget = workloadQueues.length && workloadQueues.every(q => q.desired_workers != null)
         ? workloadQueues.reduce((n, q) => n + Number(q.desired_workers), 0) : '-';
-      const workloadHtml = '<div class="fq-workload-summary" role="status"'
+      _uxqWorkloadParts = { unfinished, ready, working, budget };
+      const stripShown = !getQueueRhsListPref() && !!_uxqProjectKey(proj);
+      const workloadHtml = stripShown ? '' : '<div class="fq-workload-summary" role="status"'
         + ' title="All unfinished tickets in this scope, including deferred and blocked. Ready comes from scheduler eligibility; working requires a live ticket owner. Worker slots are the configured budget, not a live process count.">'
         + unfinished + ' unfinished · ' + ready + ' ready · ' + working + ' working · ' + budget + ' worker slots</div>';
       $queue.innerHTML = workloadHtml + pendingAddsHtml + queueRowsHtml
         + historyPagerHtml
         + '<button class="fq-add-row" id="filesQueueAdd" type="button" title="Add a ticket to this queue" aria-label="Add a queue item">+ Add</button>'
         + '<div class="fq-create-session-queue-wrap"><button class="fq-create-session-queue" id="filesQueueCreateForSession" type="button" title="Create a new WatchTower queue for this session\'s repo, auto-drain off">Create queue for this session</button></div>';
+      if (stripShown) _renderQueueStatusStrip(proj, items, _liveWorkers);
       const $count = document.getElementById('queueCount');
       if ($count) $count.textContent = rows.length;
     });

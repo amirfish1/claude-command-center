@@ -34465,3 +34465,22 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
   border-radius: 6px;
 }
 .status-rail-title-images { margin-top: 6px; }
+
+/* CCC-378: ⋯ menu for the less-used queue strip controls. */
+.fq-status-more { position: relative; flex-shrink: 0; }
+.fq-status-more-btn {
+  list-style: none; cursor: pointer; user-select: none;
+  font-size: 14px; line-height: 1; padding: 1px 8px; border-radius: 999px;
+  background: rgba(139,148,158,0.10); color: var(--text-muted);
+  border: 1px solid rgba(139,148,158,0.18);
+}
+.fq-status-more-btn::-webkit-details-marker { display: none; }
+.fq-status-more-btn:hover, .fq-status-more[open] > .fq-status-more-btn { background: rgba(139,148,158,0.18); color: var(--text); }
+.fq-status-more-pop {
+  position: absolute; z-index: 30; top: calc(100% + 4px); left: 0;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+  padding: 8px; min-width: 150px;
+  background: var(--bg-elevated, var(--bg, #161b22)); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+}
+.fq-status-stats { flex-basis: 100%; padding: 4px 0 0; border-bottom: 0; }

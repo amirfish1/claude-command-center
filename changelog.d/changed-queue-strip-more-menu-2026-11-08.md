@@ -1,0 +1,1 @@
+- The queue status strip now keeps only the gear, auto-drain, worker count and plan inline; LIVE, sync age, refresh, claim types, Learnings and Log moved into a ⋯ menu, and the two ticket-stat lines are merged into one.
