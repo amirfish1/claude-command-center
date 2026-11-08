@@ -16590,6 +16590,7 @@
           return;
         }
       }
+      if (!(state.prefetch && state.prefetch[from + Math.max(0, k)]) && _ttsRestartWithBrowserVoice()) return;
       _ttsEngineCancel();
       _ttsUtterance = null;
       state.index = from + Math.max(0, k);
@@ -17063,6 +17064,7 @@
         }
       }
     }
+    if (_ttsForceBridge && !macBridge && _ttsHeadReady && _ttsMacBridgeOk([0, 1])) macBridge = true;
     _ttsPerfTarget = '';
     // A new read frees the voice server: the old read's unfinished foreground
     // clips would otherwise keep generating and starve this one (CCC-144). A
@@ -17700,12 +17702,22 @@
     const sentenceEnd = /[.!?]+[)\]"'”]?(\s+|$)/g;
     sentenceEnd.lastIndex = from;
     const m = sentenceEnd.exec(text);
-    if (!m || m.index + m[0].length >= text.length) {
-      // No further sentence in this message — nothing to jump to.
+    let target = m && m.index + m[0].length < text.length ? m.index + m[0].length : -1;
+    // A new line is a new bullet / list item / paragraph: when one starts
+    // before the next sentence ends, skip to it (CCC-389).
+    const nl = /\n+\s*(?=\S)/g;
+    nl.lastIndex = from;
+    const b = nl.exec(text);
+    if (b && b.index + b[0].length < text.length) {
+      const bt = b.index + b[0].length;
+      if (target < 0 || bt < target) target = bt;
+    }
+    if (target < 0) {
+      // No further sentence or bullet in this message — nothing to jump to.
       stopTextToSpeech();
       return;
     }
-    _ttsLastCharIndex = m.index + m[0].length;
+    _ttsLastCharIndex = target;
     if (_ttsSeekNeuralTo(_ttsLastCharIndex)) return;
     _restartTtsAtCurrentPosition();
   }
@@ -17713,6 +17725,16 @@
   // the clip holding the target, instead of re-requesting speech (a multi-second
   // wait). The position is a character-proportional estimate. False = no neural
   // audio to seek in, so the caller restarts from text.
+  // Restart at the current position with the browser voice reading the first
+  // piece while the free voice makes the next clip. False = unavailable.
+  let _ttsForceBridge = false;
+  function _ttsRestartWithBrowserVoice() {
+    if (!_ttsMacBridgeOk([0, 1])) return false;
+    _ttsForceBridge = true;
+    const ok = _restartTtsAtCurrentPosition();
+    _ttsForceBridge = false;
+    return ok;
+  }
   function _ttsSeekNeuralTo(target) {
     const st = _ttsChunkState;
     if (!st || st.neuralOk === false) return false;
@@ -17722,6 +17744,9 @@
       _ttsNeural.seek(target);
       return true;
     }
+    // Target clip not made yet: read from the browser voice until the free
+    // voice catches up instead of going silent (CCC-389).
+    if (!(st.prefetch && st.prefetch[k]) && _ttsRestartWithBrowserVoice()) return true;
     // Keep state.prefetch and the original clip text: re-chunking at the
     // sentence boundary loses the prepared clip and creates a cold request.
     _ttsEngineCancel();
