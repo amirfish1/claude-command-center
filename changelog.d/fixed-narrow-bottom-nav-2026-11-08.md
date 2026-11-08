@@ -1,0 +1,1 @@
+- Narrow windows (701-1200px) keep the bottom navigation bar visible while a conversation is open.

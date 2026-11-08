@@ -34484,3 +34484,19 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
   border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,0.35);
 }
 .fq-status-stats { flex-basis: 100%; padding: 4px 0 0; border-bottom: 0; }
+
+/* Narrow (701-1200px) layout keeps the app-rail on screen. The conversation
+   pane (.main, z-index 800) used to cover the bottom nav here, so it vanished
+   whenever a conversation was open, and its left edge slid under the rail.
+   Lift the nav above the pane, start it after the rail, and shorten the pane
+   so the composer sits above it (CCC-385). Phones (<=700px) keep the
+   full-screen pane with the Back button. */
+@media (min-width: 701px) and (max-width: 1200px) {
+  body.has-mobile-bottom-nav:not(.kanban-split) .mobile-bottom-nav {
+    left: var(--ccc-rail-w, 76px);
+    z-index: 850;
+  }
+  body.has-mobile-bottom-nav:not(.kanban-split) .main {
+    height: calc(var(--app-vh, 100vh) - env(safe-area-inset-top, 0px) - 64px - env(safe-area-inset-bottom, 0px));
+  }
+}
