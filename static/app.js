@@ -79013,6 +79013,13 @@
     if (!c) return 'done';
     if (sessionIsActivelyWorking(c)) return 'working';
     const live = _applyLiveOverlayToRow(c);
+    // The row's WIP timer chip (wipAgeChipHtml) reads the live overlay, so
+    // the bucket must too: a row that shows a running turn timer is working,
+    // not standing by (BECKY-3372). Parked states never carry the chip.
+    if (live && live !== c && sessionIsActivelyWorking(live)) return 'working';
+    if (live && Number(live.working_since) > 0 && live.is_live
+        && !(live.needs_approval || live.question_waiting
+             || live.state === 'waiting' || live.codex_state === 'waiting')) return 'working';
     const alive = !!(c.is_live || (live && live.is_live));
     if (alive && (live.needs_approval || live.question_waiting || c.needs_approval || c.question_waiting)) return 'needs-you';
     return alive ? 'idle' : 'done';
