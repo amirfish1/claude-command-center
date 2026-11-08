@@ -18925,6 +18925,11 @@
     }
   }, true);
 
+  // Chip labels bind their words with no-break spaces: a nowrap flex button
+  // rendered "Yes do it" as "Yesdoit" for the owner (CCC-382).
+  function ssbChipLabel(label) {
+    return escapeHtml(String(label).replace(/ /g, '\u00a0'));
+  }
   // CCC-1218: turn a "Needs you" ask into buttons. Built from what agents
   // actually write there: decide/confirm/tell/answer (-> Reply), reload or
   // hard-refresh CCC (-> Reload), a CCC launchctl kickstart (-> Restart CCC),
@@ -19110,7 +19115,7 @@
       const chips = sessionQuickActions(Array.isArray(authored) ? { next_actions: authored } : { next_action: authored }, nextStep);
       const actions = chips.length
         ? chips.map(action => '<button type="button" class="ssb-action ssb-act-say" data-ssb-act="say" data-ssb-value="' + escapeAttr(action.reply)
-          + '" title="' + escapeAttr('Send to this session: ' + action.reply) + '">' + escapeHtml(action.label) + '</button>').join(' ')
+          + '" title="' + escapeAttr('Send to this session: ' + action.reply) + '">' + ssbChipLabel(action.label) + '</button>').join(' ')
         : needsYouActionsHtml(nextStep);
       rows.push('<div class="ssb-row ssb-primary ssb-next"><span class="ssb-key">Needs you</span>' + renderInline(nextStep) + (actions ? ' <span class="ssb-actions">' + actions + '</span>' : '') + '</div>');
     } else if (fields.DID) {

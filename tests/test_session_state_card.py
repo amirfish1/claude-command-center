@@ -271,7 +271,8 @@ class TestSessionStateCard(unittest.TestCase):
             'NEXT_ACTION: {"label":"Build triage","reply":"Yes, build the triage routine."}',
             PROJECT_ROOT / "static" / "app.js",
         )
-        self.assertIn('>Build triage</button>', html)
+        # Words are bound with no-break spaces so the chip never reads 'Buildtriage' (CCC-382).
+        self.assertIn('>Build\u00a0triage</button>', html)
         self.assertIn('data-ssb-value="Yes, build the triage routine."', html)
         self.assertNotIn('>Reply</button>', html)
 
