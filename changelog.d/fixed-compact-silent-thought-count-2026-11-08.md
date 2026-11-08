@@ -1,0 +1,1 @@
+- Compact view's "N thoughts" count skips thoughts whose reasoning text was not saved.

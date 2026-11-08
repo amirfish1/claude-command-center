@@ -87428,7 +87428,7 @@
           const cc = c.classList;
           if (cc.contains('tool-call-group')) { found = true; units.push({ el: c, kind: 'tool', calls: Math.max(1, c.querySelectorAll('.tool-call').length) }); }
           else if (cc.contains('tool-call')) { found = true; units.push({ el: c, kind: 'tool', calls: 1 }); }
-          else if (cc.contains('thinking-block')) { found = true; units.push({ el: c, kind: 'think' }); }
+          else if (cc.contains('thinking-block')) { found = true; units.push({ el: c, kind: cc.contains('thinking-block-silent') ? 'passive' : 'think' }); }
           else if (cc.contains('assistant-text')) { found = true; units.push({ el: c, kind: 'break' }); }
         }
         if (!found) units.push({ el, kind: 'passive' });
