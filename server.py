@@ -31371,6 +31371,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server.decision_requests import requests_payload
             result = requests_payload(tickets=_wt_list_items_for_requests())
             self.send_json(result, 200 if result.get('ok') else 503)
+        elif path == "/api/decision-inbox/auto-decisions":
+            from ccc_server.auto_decisions import auto_decision_rows
+            self.send_json(auto_decision_rows(_wt_list_items_for_requests()))
         elif path == "/api/decision-inbox/legacy-reconciliation":
             from ccc_server.decision_legacy_http import reconciliation_payload
             self.send_json(reconciliation_payload())
@@ -41548,6 +41551,17 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         _wt_items_memo["items"] = [
                             {**item, "needs_input": False} if item.get("ref") == result["origin_id"] else item
                             for item in _wt_items_memo["items"]]
+            self.send_json(result, status)
+        elif path == "/api/decision-inbox/auto-decisions/revert":
+            from ccc_server.auto_decisions import revert as _auto_revert
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                body = json.loads(self.rfile.read(length)) if 0 < length <= 4096 else {}
+            except (ValueError, TypeError):
+                body = {}
+            result, status = _auto_revert((body or {}).get('ref') if isinstance(body, dict) else None)
+            with _wt_items_memo_lock:
+                _wt_items_memo["at"] = 0
             self.send_json(result, status)
         elif path == "/api/decision-inbox/close":
             from ccc_server.decision_answer_api import MAX_BODY_BYTES
