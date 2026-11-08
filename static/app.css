@@ -31013,6 +31013,106 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 @media (prefers-reduced-motion: reduce) {
   .conv-workers-live-dot { animation: none; }
 }
+
+/* ---- Workers tab: fleet strip, state sections, ticket under the avatar ----
+   The Workers tab answers one question: is anything moving, and is anything
+   waiting on me. The strip above counts the four states once; the list is
+   sectioned by the same four states; each row's ticket sits under its
+   avatar so the title is free to say what the worker is doing. */
+.conv-workers-uniform .conv-workers-needs b { color: var(--orange, #d29922); }
+.conv-workers-uniform .conv-workers-starting b { color: #39d2c0; }
+.conv-workers-uniform .conv-workers-idle,
+.conv-workers-uniform .conv-workers-done { opacity: 0.75; }
+.conv-workers-uniform .conv-workers-uniform-note { flex-basis: 100%; text-align: center; }
+
+/* Section heads: a coloured dot, a small-caps label, the count, and a rule
+   that runs to the edge. Sticky so a long Finished section still says what
+   it is while you scroll through it. */
+#convList .conv-worker-section {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 7px;
+  margin: 10px 8px 4px; padding: 3px 2px 3px 4px;
+  font-size: 10.5px; line-height: 1.4; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-muted);
+  background: linear-gradient(var(--surface, #0d1117) 70%, transparent);
+}
+#convList .conv-worker-section:first-child { margin-top: 4px; }
+#convList .conv-worker-section .wk-sec-dot {
+  flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-muted); opacity: 0.6;
+}
+#convList .conv-worker-section .wk-sec-label { font-weight: 700; color: var(--text); }
+#convList .conv-worker-section .wk-sec-count {
+  min-width: 16px; padding: 0 5px; border-radius: 8px; text-align: center;
+  font-weight: 700; font-size: 10px; letter-spacing: 0;
+  background: var(--surface-2); color: var(--text);
+}
+#convList .conv-worker-section .wk-sec-line { flex: 1 1 auto; height: 1px; background: var(--border); opacity: 0.8; }
+#convList .conv-worker-section.wk-working .wk-sec-dot { background: #49dc88; opacity: 1; animation: qPulse 2s ease-in-out infinite; }
+#convList .conv-worker-section.wk-working .wk-sec-label { color: #49dc88; }
+#convList .conv-worker-section.wk-starting .wk-sec-dot { background: #39d2c0; opacity: 1; animation: qPulse 2s ease-in-out infinite; }
+#convList .conv-worker-section.wk-needs-you .wk-sec-dot { background: var(--orange, #d29922); opacity: 1; }
+#convList .conv-worker-section.wk-needs-you .wk-sec-label { color: var(--orange, #d29922); }
+#convList .conv-worker-section.wk-needs-you .wk-sec-count { background: color-mix(in srgb, var(--orange, #d29922) 22%, transparent); color: var(--orange, #d29922); }
+#convList .conv-worker-section.wk-done .wk-sec-dot { opacity: 0.35; }
+#convList .conv-worker-section.wk-done .wk-sec-label { color: var(--text-muted); }
+@media (prefers-reduced-motion: reduce) {
+  #convList .conv-worker-section .wk-sec-dot { animation: none; }
+}
+
+/* Row accents by state: a 2px inset bar on the left edge, the same colour
+   as the section dot, so a row still says its state when scrolled away
+   from its heading. Finished rows dim; helper rows (verifier, planner,
+   assessor) are quieter still, since they are stage work, not workers. */
+#convList .conv-item.is-worker-row { position: relative; }
+#convList .conv-item.is-worker-row::before {
+  content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;
+  border-radius: 2px; background: transparent; pointer-events: none;
+}
+#convList .conv-item.is-worker-row.wk-working::before { background: #49dc88; }
+#convList .conv-item.is-worker-row.wk-needs-you::before { background: var(--orange, #d29922); }
+#convList .conv-item.is-worker-row.wk-needs-you { background: color-mix(in srgb, var(--orange, #d29922) 6%, transparent); }
+#convList .conv-item.is-worker-row.wk-idle::before { background: color-mix(in srgb, var(--text-muted) 40%, transparent); }
+#convList .conv-item.is-worker-row.wk-done .conv-title { opacity: 0.72; }
+#convList .conv-item.is-worker-row.wk-done .conv-idea-avatar { filter: saturate(0.55); opacity: 0.8; }
+#convList .conv-item.is-worker-row.is-worker-helper .conv-title { font-style: italic; opacity: 0.85; }
+
+/* Ticket under the avatar. The avatar is absolutely positioned in the
+   desktop row, so the stack is display:contents and the chip takes the
+   same absolute slot the AUTO switch uses, one line below the portrait.
+   Rows with both push the ticket under the switch. Child-mini avatars
+   (nested helpers) have no room for it and their owner shows it anyway. */
+.conv-avatar-stack { display: contents; }
+.conv-item:has(.conv-main-row > .conv-avatar-stack > .conv-idea-avatar) {
+  --conv-content-left: calc(var(--conv-icon-left) + 44px);
+  min-height: 60px;
+}
+#convList .conv-item .conv-main-row > .conv-avatar-stack > .conv-avatar-ticket {
+  position: absolute; left: calc(var(--conv-icon-left) - 11px); top: 41px; z-index: 4;
+  width: 54px;
+}
+#convList .conv-item .conv-main-row:has(> .conv-auto-switch) > .conv-avatar-stack > .conv-avatar-ticket { top: 57px; }
+#convList .conv-item .conv-main-row:has(> .conv-auto-switch) { min-height: 76px; }
+#convList .conv-item .conv-main-row > .conv-avatar-stack:has(> .is-child-mini) > .conv-avatar-ticket { display: none; }
+.conv-avatar-ticket {
+  display: inline-block; box-sizing: border-box;
+  max-width: 100%; padding: 0 3px;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 45%, transparent);
+  border-radius: 4px; background: var(--surface, transparent);
+  color: var(--text-muted);
+  font: 600 8px/13px ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em; text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer; opacity: 0.85;
+  transition: color 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+.conv-avatar-ticket:hover, .conv-avatar-ticket:focus-visible {
+  opacity: 1; color: var(--accent); border-color: var(--accent); outline: none;
+}
+#convList .conv-item.is-worker-row.wk-working .conv-avatar-ticket { color: var(--text); border-color: color-mix(in srgb, #49dc88 55%, transparent); }
+#convList .conv-item.is-worker-row.wk-needs-you .conv-avatar-ticket { color: var(--orange, #d29922); border-color: color-mix(in srgb, var(--orange, #d29922) 60%, transparent); }
+#convList .conv-item .wa-av-col > .conv-avatar-ticket { position: static; width: 54px; }
+
 /* The per-row dot answers "which ones". At 4px hollow-vs-filled it was losing
    that argument, so in the table a live row gets the WORKING NOW dot's size
    and pulse -- the two surfaces now say "live" the same way. */

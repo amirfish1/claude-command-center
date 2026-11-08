@@ -41417,6 +41417,14 @@
       // A session the auto-unarchive sweep just pulled back out of Archived
       // (CCC-443) — flag it so the user notices it reappeared rather than
       // wondering why an "archived" session is back in Current sessions.
+      // Workers lane: the row is a worker, so it is titled like one -- the
+      // prose of what it is doing, with the ticket ref moved under the avatar
+      // (workerTicketChipHtml) and generic spawn names ("CCC worker", the raw
+      // drain prompt, "You are an INDEPENDENT verifier…") replaced by what the
+      // worker is actually doing right now.
+      const _wkFacts = (workersLaneActive() && !isBacklogRow && !isGithubPrRow && c.source !== 'hermes')
+        ? workerRowFacts(c, title) : null;
+      if (_wkFacts) title = _wkFacts.title;
       if (c.recently_unarchived) title = '[unarchived] ' + title;
       let titleClass = '';
       if (c.name_overridden && !quietTitleChrome) titleClass = 'user-renamed';
@@ -41598,11 +41606,17 @@
       }
 
       const ideaAvatarHtml = _ideaAvatarHtml(c, false, Number(opts.currentChildDepth || 0) > 0);
-      const sessionIconHtml = ideaAvatarHtml || (iconType
+      const _sessionIconHtml0 = ideaAvatarHtml || (iconType
         ? '<span class="conv-session-icon ' + iconType + ' is-not-working" title="' + escapeAttr(iconTitle) + '" aria-hidden="true">'
             + svgMarkup
             + '</span>'
         : sessionEngineIconHtml(c, { context: 'sidebar' }));
+      // Workers lane: the ticket ref rides under the avatar as one cell, so
+      // the title line is free for the prose and the refs line up in a column.
+      const _wkTicketChip = _wkFacts ? workerTicketChipHtml(_wkFacts) : '';
+      const sessionIconHtml = _wkTicketChip
+        ? '<span class="conv-avatar-stack">' + _sessionIconHtml0 + _wkTicketChip + '</span>'
+        : _sessionIconHtml0;
       // Row time should reflect ANY activity on the session: user UI
       // action (`last_interacted`), CCC inject (touched optimistically
       // via markSessionSending), or agent JSONL writes (`modified` =
@@ -42518,7 +42532,8 @@
         : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
       const waHtml = '<div class="wa-row">'
         // Ticket rows keep the AUTO switch under the avatar here too.
-        + (autoSwitchHtml ? '<div class="wa-av-col">' + _waAvatarHtml(c, _waTitle) + autoSwitchHtml + '</div>'
+        + ((autoSwitchHtml || _wkTicketChip)
+          ? '<div class="wa-av-col">' + _waAvatarHtml(c, _waTitle, autoSwitchHtml ? false : _childLaneRow) + autoSwitchHtml + _wkTicketChip + '</div>'
           : _waAvatarHtml(c, _waTitle, _childLaneRow))
         + '<div class="wa-body">'
         +   '<div class="wa-line1"><span class="wa-title" dir="auto">' + escapeHtml(_waTitle) + '</span>'
@@ -42531,7 +42546,11 @@
         + (window.CCCSessionRecaps ? window.CCCSessionRecaps.render(c, _outView) : '')
         + '</div>'
         + '</div>';
-      return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (_todayStarred && todayStarHtml ? ' is-today-starred' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-lifecycle-group="' + ticketSessionSection(c) + '" data-repo-path="' + rowRepoAttr + '">'
+      const _wkRowClass = _wkFacts
+        ? ' is-worker-row wk-' + _wkFacts.bucket + (_wkFacts.isHelper ? ' is-worker-helper' : '')
+        : '';
+      return '<div class="conv-item' + active + _ctxLevelClass + needsYouRowClass + _wkRowClass + (_readyToCloseRow ? ' is-ready-to-close' : '') + groupedRowClass + evergreenRowClass + evergreenSingleLineClass + currentChildRowClass + subagentCompactClass + subagentBridgeClass + (isCodexRow ? ' is-codex' : '') + (isGeminiRow ? ' is-gemini' : '') + (isCursorRow ? ' is-cursor' : '') + (isAntigravityRow ? ' is-antigravity' : '') + (isHermesRow ? ' is-hermes' : '') + (c.pinned && lifecycleContext !== 'trash' ? ' is-pinned' : '') + (_todayStarred && todayStarHtml ? ' is-today-starred' : '') + (c.archived ? ' is-archived-row' : '') + (c.pinned_repo ? ' is-repo-pinned' : '') + (c._historyMatch ? ' is-history-match' : '') + (_historyIsSemantic ? ' is-semantic-match' : '') + (_historyIsRecall ? ' is-recall-match' : '') + ((c.backlog_type === 'github' || isGithubPrRow) ? ' is-github-issue' : '') + (_briefOpen ? ' is-brief-open' : '') + '"' + currentChildStyle + ' draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-lifecycle-group="' + ticketSessionSection(c) + '" data-repo-path="' + rowRepoAttr + '"'
+        + (_wkFacts ? ' data-worker-role="' + escapeAttr(_wkFacts.role) + '" data-worker-state="' + escapeAttr(_wkFacts.bucket) + '"' : '') + '>'
         + waHtml
         + '<span class="drag-handle" data-role="drag">&#10495;</span>'
         + mobileStatusHtml
@@ -42604,7 +42623,7 @@
           + '</div>'
           + evergreenMetaRowHtml
         + '</div>'
-        + (_childLaneRow || _ideaStack ? '' : (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c)))
+        + (_childLaneRow || _ideaStack ? '' : (_ideaRowRef ? _ideaRowLine(c) : _uxFixesWorkerHistoryHtml(c, _wkFacts ? _wkFacts.ticketRef : '')))
         + mobileDetailsHtml
         + (window.CCCSessionRecaps ? window.CCCSessionRecaps.render(c, _outView) : '')
         // Hover-revealed extras wrapped in one container so the current-sessions
@@ -44889,9 +44908,31 @@
       + ((_gcItems || []).length || 0)
       + ((Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []).length || 0);
     const _allTabSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
+    // Stage helpers (verifier, planner, plan reviewer, assessor) are spawned
+    // for ONE ticket by the worker draining it, but WatchTower's origin ledger
+    // often records no parent session for them. Without one they sat in the
+    // Workers tab as peers of the workers. Map each self-declared "QUEUE#N"
+    // worker row to its ticket so a parentless helper can nest under it.
+    const _wkTicketOwnerSid = new Map();
+    const _wkTicketOwnerTs = new Map();
+    _allTabUnfilteredConvs.forEach(c => {
+      const ref = workerSelfTicketRef(c);
+      if (!ref) return;
+      const ts = Number(c.modified || c.last_interacted || c.mtime || 0) || 0;
+      if (!_wkTicketOwnerSid.has(ref) || ts > (_wkTicketOwnerTs.get(ref) || 0)) {
+        _wkTicketOwnerSid.set(ref, _allTabSessionId(c));
+        _wkTicketOwnerTs.set(ref, ts);
+      }
+    });
+    const _wkHelperParentId = (c) => {
+      const facts = workerRowFacts(c);
+      if (!facts.isHelper || !facts.ticketRef) return '';
+      const owner = _wkTicketOwnerSid.get(facts.ticketRef) || '';
+      return owner && owner !== _allTabSessionId(c) ? owner : '';
+    };
     const _allTabParentId = (c) => f2EffectiveParentSessionId(
       _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || continuationParentId(c) || c.continued_from_session_id)
-    );
+    ) || _wkHelperParentId(c);
     const _allTabTreeRowsFor = (rows) => {
       const byId = new Map();
       (rows || []).forEach(c => {
@@ -44933,8 +44974,12 @@
     });
     try { _ensureEvergreenQueuesFresh(); } catch (_) {}
     const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
+    // A Hermes row is a worker when it ran under a worker profile
+    // (~/.hermes/profiles/*). Tool-call count alone is not a worker signal: a
+    // chat that happened to call tools ("Friendly greeting #7") was landing in
+    // Workers beside real queue drainers.
     const _isHermesWorkerRow = (c) => _isHermesAllRow(c)
-      && (Number(c.hermes_tool_calls || 0) > 0 || !!String(c.hermes_profile || '').trim());
+      && !!String(c.hermes_profile || '').trim();
     const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);
     const _wtWorkerSessionIds = new Set();
     const _wtWorkerQueues = new Set();
@@ -45146,6 +45191,18 @@
     // column that actually varies is left alone and stays per-row.
     const _workersHoist = _workersUniformColumns(!_ipSearchActive && _allTabView === 'workers' ? _allTabMainConvs : []);
     _workersHoistState = { engine: _workersHoist.engine, tier: _workersHoist.tier };
+    // Workers lane: per-state counts of the clusters the list actually shows,
+    // filled by the flat-list pass below and read by the header strip, so the
+    // strip and the section headers can never disagree.
+    let _wkSectionCounts = null;
+    const _wkClusterBucket = (cluster) => {
+      let best = 'done';
+      ((cluster && cluster.rows) || []).forEach(item => {
+        const b = workerStateBucket(item && item.card);
+        if (WORKER_BUCKET_ORDER[b] < WORKER_BUCKET_ORDER[best]) best = b;
+      });
+      return best;
+    };
     const _allTabRowsToClusters = (rows) => {
       const clusters = [];
       (rows || []).forEach(item => {
@@ -45353,10 +45410,19 @@
         _refreshQuotaCostCalibration();
       }
       const _archivedItems = [];
+      // Workers lane: the list is sectioned by state (working / needs you /
+      // standing by / finished) instead of by time gaps. "Is anything
+      // moving, and is anything waiting on me" is the question this tab
+      // answers; a 200-row list ordered only by recency buried it.
+      const _wkSectioned = _allTabView === 'workers' && !_arcCostMode;
+      if (_wkSectioned) _wkSectionCounts = { working: 0, 'needs-you': 0, idle: 0, done: 0 };
       for (const cluster of _allTabClusters) {
+        const bucket = _wkSectioned ? _wkClusterBucket(cluster) : '';
+        if (bucket) _wkSectionCounts[bucket] = (_wkSectionCounts[bucket] || 0) + 1;
         _archivedItems.push({
           type: 'session-cluster',
           cluster,
+          bucket,
           pinRank: _allTabClusterPinRank(cluster),
           mtime: _allTabClusterMtime(cluster),
           cost: _allTabClusterCost(cluster),
@@ -45379,6 +45445,10 @@
       }
       _archivedItems.sort((a, b) => {
         if (a.pinRank !== b.pinRank) return a.pinRank - b.pinRank;
+        if (_wkSectioned) {
+          const d = (WORKER_BUCKET_ORDER[a.bucket] ?? 9) - (WORKER_BUCKET_ORDER[b.bucket] ?? 9);
+          if (d) return d;
+        }
         if (_arcCostMode) return (b.cost || 0) - (a.cost || 0);
         return (b.mtime || 0) - (a.mtime || 0);
       });
@@ -45394,9 +45464,16 @@
       // pinned row would falsely read as a huge gap before today's rows.
       let _arcPrevMtime = null;
       let _arcPrevPinRank = null;
+      let _wkCurBucket = null;
+      const _wkSectionBefore = (it) => {
+        if (!_wkSectioned || !it || !it.bucket || it.bucket === _wkCurBucket) return '';
+        _wkCurBucket = it.bucket;
+        return workerSectionHeaderHtml(it.bucket, (_wkSectionCounts || {})[it.bucket] || 0);
+      };
       const _arcSeparatorBefore = (mtime, pinRank) => {
         let sep = '';
         if (_arcCostMode) return sep; // time gaps are meaningless when sorted by cost
+        if (_wkSectioned) return sep; // state sections replace time gaps
         if (_arcPrevMtime && mtime && _arcPrevPinRank === Infinity && pinRank === Infinity) {
           const gapS = _arcPrevMtime - mtime;
           if (gapS >= ARCHIVE_GAP_SEPARATOR_S) {
@@ -45430,6 +45507,8 @@
           _arcChunks.push(sep + (it.html || ''));
           continue;
         }
+        const _wkHeader = _wkSectionBefore(it);
+        if (_wkHeader) { _arcFlushCards(); _arcChunks.push(_wkHeader); }
         if (it.cluster.rows.length > 1) {
           _arcFlushCards();
           const sep = _arcSeparatorBefore(it.mtime, it.pinRank);
@@ -45756,39 +45835,43 @@
           + '</div>';
       }).join('');
       let _workersUniformHtml = '';
-      if (_workersHoist.engine || _workersHoist.tier || _workersHoist.working || _wtPending.length) {
+      if (_allTabView === 'workers' && (_allTabMainConvs.length || _wtPending.length)) {
+        // Fleet pulse: the same four states the list is sectioned by, counted
+        // once, liveness first. Engine and cost -- the two columns the rows
+        // hoist -- are stated once in the note so a hidden glyph never hides
+        // a fact.
+        let counts = _wkSectionCounts;
+        if (!counts) {
+          counts = { working: 0, 'needs-you': 0, idle: 0, done: 0 };
+          _allTabMainConvs.forEach(c => { counts[workerStateBucket(c)]++; });
+        }
+        const sep = '<span class="conv-workers-uniform-sep">&middot;</span>';
+        const live = counts.working
+          ? '<span class="conv-workers-live"><span class="conv-workers-live-dot"></span><b>'
+            + counts.working + '</b> working now</span>'
+          : '<span class="conv-workers-live is-idle"><span class="conv-workers-live-dot"></span>none working now</span>';
+        const bits = [];
+        if (counts['needs-you']) bits.push('<span class="conv-workers-needs"><b>' + counts['needs-you'] + '</b> need' + (counts['needs-you'] === 1 ? 's' : '') + ' you</span>');
+        if (_wtPending.length) bits.push('<span class="conv-workers-starting"><b>' + _wtPending.length + '</b> starting</span>');
+        if (counts.idle) bits.push('<span class="conv-workers-idle"><b>' + counts.idle + '</b> standing by</span>');
+        if (counts.done) bits.push('<span class="conv-workers-done"><b>' + counts.done + '</b> finished</span>');
         const parts = [];
-        if (_workersHoist.engine) parts.push('<b>' + escapeHtml(_workersHoist.engineLabel || _workersHoist.engine) + '</b>');
-        // The banner states the whole cost spread, not just the tier it
-        // hoisted, so hiding the column never understates the list.
-        if (_workersHoist.tierRange) parts.push('<b>' + escapeHtml(_workersHoist.tierRange) + '</b>');
-        const noun = (_workersHoist.engine && _workersHoist.tier) ? 'engine &amp; cost'
-          : (_workersHoist.engine ? 'engine' : 'cost');
+        if (_workersHoist.engine) parts.push(escapeHtml(_workersHoist.engineLabel || _workersHoist.engine));
+        if (_workersHoist.tierRange) parts.push(escapeHtml(_workersHoist.tierRange));
         const others = Math.max(
           _workersHoist.engine ? _workersHoist.engineOthers : 0,
           _workersHoist.tier ? _workersHoist.tierOthers : 0);
-        const note = others
-          ? noun + ' hidden where it matches &middot; ' + others + ' exception' + (others === 1 ? '' : 's') + ' still shown'
-          : noun + ' columns hidden while uniform';
-        // Liveness leads, in the Queues tab's WORKING NOW language: same teal
-        // pulsing dot, same count-first phrasing. The per-row dot says which
-        // ones; this says how many, which is the question you ask first.
-        const live = _workersHoist.working
-          ? '<span class="conv-workers-live"><span class="conv-workers-live-dot"></span><b>'
-            + _workersHoist.working + '</b> working now</span>'
-          : '<span class="conv-workers-live is-idle">none working now</span>';
-        const starting = _wtPending.length
-          ? '<span class="conv-workers-uniform-sep">&middot;</span><span class="conv-workers-starting"><b>'
-            + _wtPending.length + '</b> starting</span>'
+        const note = parts.length
+          ? '<span class="conv-workers-uniform-note">' + parts.join(' &middot; ')
+            + (others ? ' &middot; ' + others + ' exception' + (others === 1 ? '' : 's') + ' marked' : '') + '</span>'
           : '';
-        const shared = parts.length
-          ? 'all <b>' + _workersHoist.count + '</b> workers: ' + parts.join(' &middot; ')
-          : '<b>' + _workersHoist.count + '</b> workers';
         _workersUniformHtml = '<div class="conv-workers-uniform" data-role="workers-uniform"'
-          + ' title="' + escapeAttr('Working now counts sessions mid-turn, the same signal the Queues tab shows. Engine and cost are stated once here and dropped from the rows that match; any session that differs keeps its own glyph.') + '">'
-          + live + starting + '<span class="conv-workers-uniform-sep">&middot;</span>' + shared
-          + (parts.length ? '<span class="conv-workers-uniform-note">' + note + '</span>' : '')
+          + ' title="' + escapeAttr('Working now counts sessions mid-turn, the same signal the Queues tab shows. Needs you = alive and waiting on an answer or approval. Standing by = alive with no turn running. Finished = process gone. Engine and cost are stated once here and dropped from rows that match; any row that differs keeps its own glyph.') + '">'
+          + live + bits.map(b => sep + b).join('') + note
           + '</div>';
+        // Starting workers get their own section head so they read as a
+        // state, not as stray rows above the list.
+        if (_wtPendingHtml) _wtPendingHtml = workerSectionHeaderHtml('starting', _wtPending.length) + _wtPendingHtml;
       }
       // CCC-1061: the Workers lane owns TIME. WORKING NOW (who is live right
       // now) and the recent-work list (which tickets moved, with their body
@@ -55229,7 +55312,9 @@
   const WORKERS_RECENT_DETAILED = 3;
   const WORKERS_RECENT_OPEN_KEY = 'ccc-workers-recent-open';
   function _workersRecentOpen() {
-    try { return localStorage.getItem(WORKERS_RECENT_OPEN_KEY) !== 'off'; } catch (_) { return true; }
+    // Closed by default: open, the ten-card list pushed the worker rows --
+    // the one thing this tab exists to show -- below the fold.
+    try { return localStorage.getItem(WORKERS_RECENT_OPEN_KEY) === 'on'; } catch (_) { return false; }
   }
   // Rendered into EVERY mounted host rather than one id. The block lives in the
   // Workers lane now, whose list renderConversationList rebuilds wholesale — so
@@ -78833,6 +78918,144 @@
     return _uxFixesWorkerTicketsForRow(c).filter(t => t.status === 'closed').slice(0, limit);
   }
 
+  // WORKER_ROW_FACTS_START
+  // The Workers tab reads a worker session as a worker, not as a transcript:
+  // which ticket it is on, what role it plays, what it is doing, and whether
+  // it is working right now. These facts drive the lane's title, the ticket
+  // chip under the avatar, the state sections and the header counts, so they
+  // are computed in exactly one place.
+  const WORKER_HELPER_ROLE_LABELS = {
+    verifier: 'Independent verifier', planner: 'Planner',
+    plan_reviewer: 'Plan reviewer', assessor: 'Post-fix assessor',
+    probe: 'Probe', helper: 'Helper', adhoc: 'Helper',
+    critic: 'Critique', monitor: 'Loop watch',
+  };
+  const WORKER_BUCKET_ORDER = { working: 0, 'needs-you': 1, idle: 2, done: 3 };
+  const WORKER_BUCKET_LABELS = {
+    starting: 'Starting', working: 'Working now', 'needs-you': 'Needs you',
+    idle: 'Standing by', done: 'Finished',
+  };
+  const _WK_SELF_TICKET_RE = /^\s*(?:\u{1F9F5}\s*)?([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*)#(\d+)\b/u;
+  const _WK_TICKET_REF_RE = /\b([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*)-(\d+)\b/;
+  const _WK_GENERIC_TITLE_RE = /^(?:\(untitled\)|(?:[A-Z][A-Z0-9_-]*\s+)?(?:queue\s+)?worker(?:\s*·.*)?|drain the .*? watchtower queue\b.*|you are an independent\b.*|you are the (?:planner|independent post-fix assessor)\b.*|you monitor an ai coding agent\b.*|critique task\b.*|fix ticket \S+ on the \S+ watchtower queue\b.*)$/i;
+  // The ticket a worker says it is on, from the "QUEUE#N" name WatchTower
+  // workers give themselves when they claim. Null for anything else.
+  function workerSelfTicketRef(c) {
+    const name = String((c && c.display_name) || '').trim();
+    const m = name.match(_WK_SELF_TICKET_RE);
+    return m ? m[1] + '-' + m[2] : '';
+  }
+  function _workerRoleFromPrompt(c) {
+    const text = String((c && (c.first_message || c.display_name)) || '').trim();
+    if (!text) return '';
+    if (/^you are an independent plan reviewer/i.test(text)) return 'plan_reviewer';
+    if (/^you are an independent verifier/i.test(text)) return 'verifier';
+    if (/^you are the planner for watchtower ticket/i.test(text)) return 'planner';
+    if (/^you are the independent post-fix assessor/i.test(text)) return 'assessor';
+    if (/^critique task\b/i.test(text)) return 'critic';
+    if (/^you monitor an ai coding agent/i.test(text)) return 'monitor';
+    return '';
+  }
+  function workerQueueOf(c, ticketRef) {
+    const self = String((c && c.display_name) || '').match(_WK_SELF_TICKET_RE);
+    if (self) return self[1];
+    const origin = c && c.worker_origin;
+    if (origin && origin.queue) return String(origin.queue).toUpperCase();
+    const ref = String(ticketRef || '').match(/^([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*)-\d+$/);
+    if (ref) return ref[1];
+    const first = String((c && c.first_message) || '');
+    const drain = first.match(/^drain the ([A-Za-z0-9_-]+) watchtower queue/i);
+    if (drain) return drain[1].toUpperCase();
+    const name = String((c && c.display_name) || '').match(/^([A-Z][A-Z0-9_-]*) worker\b/);
+    return name ? name[1] : '';
+  }
+  // working: mid-turn right now. needs-you: alive and blocked on the owner.
+  // idle: alive, holding no turn. done: process gone.
+  function workerStateBucket(c) {
+    if (!c) return 'done';
+    if (sessionIsActivelyWorking(c)) return 'working';
+    const live = _applyLiveOverlayToRow(c);
+    const alive = !!(c.is_live || (live && live.is_live));
+    if (alive && (live.needs_approval || live.question_waiting || c.needs_approval || c.question_waiting)) return 'needs-you';
+    return alive ? 'idle' : 'done';
+  }
+  function workerRowFacts(c, shownTitle) {
+    const origin = (c && c.worker_origin) || null;
+    let role = String((origin && origin.role) || '').trim();
+    if (!role || role === 'worker') role = _workerRoleFromPrompt(c) || 'worker';
+    const isHelper = role !== 'worker';
+    // Ticket: the worker's own claim name wins (it is what the worker is on
+    // NOW); the origin ledger names a helper's ticket; the worked-ticket
+    // history is the fallback for rows that never renamed themselves.
+    let ticketRef = workerSelfTicketRef(c);
+    if (!ticketRef && origin && origin.ref) ticketRef = String(origin.ref).trim();
+    if (!ticketRef) {
+      const prompt = String((c && c.first_message) || '').match(/watchtower ticket ([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-\d+)/i)
+        || String((c && c.first_message) || '').match(/^fix ticket ([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-\d+)/i);
+      if (prompt) ticketRef = prompt[1].toUpperCase();
+    }
+    if (!ticketRef) {
+      try {
+        const top = _uxFixesWorkerTicketsForRow(c, 1)[0];
+        if (top && _WK_TICKET_REF_RE.test(String(top.ref || ''))) ticketRef = String(top.ref);
+      } catch (_) { /* queue meta not loaded */ }
+    }
+    const queue = workerQueueOf(c, ticketRef);
+    const bucket = workerStateBucket(c);
+    // Prose: the row's title with every worker marker peeled off -- the 🧵
+    // glyph, the decorative title glyphs, and any number of "QUEUE#N:" tags
+    // (the history prefix and the self-claim name could stack two of them).
+    let prose = String(shownTitle || (typeof rowRawTitle === 'function' ? rowRawTitle(c).rawTitle : '') || '').trim();
+    prose = prose.replace(/^(?:[\p{Extended_Pictographic}️‍›⤴]\s*)+/u, '');
+    for (let i = 0; i < 4; i++) {
+      const next = prose.replace(/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*#\d+:?\s*/, '').replace(/^(?:\u{1F9F5}\s*)+/u, '').trim();
+      if (next === prose) break;
+      prose = next;
+    }
+    const generic = !prose || _WK_GENERIC_TITLE_RE.test(prose);
+    const roleLabel = WORKER_HELPER_ROLE_LABELS[role] || ('Worker ' + role.replace(/_/g, ' '));
+    let title;
+    if (isHelper) {
+      // "Critique: Critique X" -> "Critique: X" when the prose repeats the role.
+      const dupRe = new RegExp('^' + roleLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[:\u00b7-]?\\s*', 'i');
+      const body = prose.replace(dupRe, '').trim();
+      title = (generic || !body) ? roleLabel : roleLabel + ': ' + body;
+    } else if (!generic) {
+      title = prose;
+    } else if (bucket === 'working') {
+      title = ticketRef ? 'Working on ' + ticketRef : 'Working on the ' + (queue || 'WatchTower') + ' queue';
+    } else if (bucket === 'needs-you') {
+      title = ticketRef ? 'Waiting on you for ' + ticketRef : 'Waiting on you';
+    } else if (bucket === 'idle') {
+      title = (ticketRef ? 'Done with ' + ticketRef + ' \u00b7 standing by' : 'Standing by')
+        + ' for the next ' + (queue ? queue + ' ' : '') + 'ticket';
+    } else {
+      title = ticketRef ? 'Finished ' + ticketRef : (queue ? queue + ' worker' : 'Worker') + ' \u00b7 drained the queue, nothing claimed';
+    }
+    return { role, roleLabel, isHelper, ticketRef, queue, bucket, prose, generic, title };
+  }
+  // Ticket identity sits under the avatar, not at the head of the title: the
+  // name reads as what the worker is doing and the ref stays scannable in a
+  // fixed column. Click opens the ticket (same handler as the history chips).
+  function workerTicketChipHtml(facts) {
+    const ref = facts && facts.ticketRef;
+    if (!ref) return '';
+    const m = ref.match(/^([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*)-(\d+)$/);
+    const label = m ? m[1].replace(/^(.{1,9}).*$/, '$1') + '-' + m[2] : ref;
+    return '<button type="button" class="conv-avatar-ticket" data-worker-ticket="' + escapeAttr(ref) + '"'
+      + ' title="' + escapeAttr('Ticket ' + ref + ' · click to open') + '" aria-label="' + escapeAttr('Open ticket ' + ref) + '">'
+      + escapeHtml(label) + '</button>';
+  }
+  function workerSectionHeaderHtml(bucket, count) {
+    return '<div class="conv-worker-section wk-' + escapeAttr(bucket) + '" data-role="worker-section" data-bucket="' + escapeAttr(bucket) + '">'
+      + '<span class="wk-sec-dot" aria-hidden="true"></span>'
+      + '<span class="wk-sec-label">' + escapeHtml(WORKER_BUCKET_LABELS[bucket] || bucket) + '</span>'
+      + '<span class="wk-sec-count">' + Number(count || 0) + '</span>'
+      + '<span class="wk-sec-line" aria-hidden="true"></span>'
+      + '</div>';
+  }
+  // WORKER_ROW_FACTS_END
+
   // A session that worked a ticket leads its name with the newest one as
   // "CCC#333", so the row says which ticket it is on before the prose does.
   function _withTicketPrefix(c, title) {
@@ -78885,8 +79108,14 @@
   // open the ticket, and the ticket view is where titles and status live.
   // (An inline expandable list of every ticket's title used to sit here; it
   // turned the row into a second ticket list, so it is gone.)
-  function _uxFixesWorkerHistoryHtml(c) {
-    const tickets = _uxFixesWorkerTicketsForRow(c);
+  function _uxFixesWorkerHistoryHtml(c, excludeRef) {
+    let tickets = _uxFixesWorkerTicketsForRow(c);
+    // The Workers lane prints the current ticket under the avatar; a chip
+    // for the same ref on the next line would be the duplicate CCC-1240 removed.
+    if (excludeRef) {
+      tickets = tickets.filter(t => t && t.ref !== excludeRef);
+      if (!tickets.length) return '';
+    }
     // The Workers table keeps a fixed chips column, and a blank cell reads as
     // "not loaded yet" rather than "this worker closed nothing". Say it. CSS
     // shows this only in that layout: on a card list it would be a repeated
@@ -78934,7 +79163,7 @@
   // ticket instead of selecting the row. Clicks elsewhere in the strip fall
   // through to the row as usual.
   document.addEventListener('click', ev => {
-    const ticket = ev.target.closest && ev.target.closest('.conv-worker-history [data-worker-ticket]');
+    const ticket = ev.target.closest && ev.target.closest('.conv-worker-history [data-worker-ticket], .conv-avatar-ticket[data-worker-ticket]');
     if (!ticket) return;
     ev.stopPropagation();
     ev.preventDefault();
