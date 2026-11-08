@@ -45811,15 +45811,6 @@
         _wtWarmActivityForWorkersLane();
         const recentOpen = _workersRecentOpen();
         _workersActivityHtml = '<div class="conv-workers-activity" data-role="workers-activity">'
-          + '<div class="fq-working-strip wa-now" data-role="workers-working-now"'
-          +   ' aria-label="Working now across all queues">'
-          +   '<div class="fq-working-head">'
-          +     '<span class="fq-working-dot pulse"></span>'
-          +     '<span class="fq-working-label">WORKING NOW</span>'
-          +     '<span class="fq-working-summary"></span>'
-          +   '</div>'
-          +   '<div class="fq-working-rows"></div>'
-          + '</div>'
           + '<div class="wa-health" data-role="workers-queue-health"></div>'
           + '<details class="fq-recent-work wa-recent" data-role="workers-recent-work"'
           +   (recentOpen ? ' open' : '') + '>'
@@ -55404,7 +55395,7 @@
   // could not: are the queues actually auto-draining, and is anything running
   // in a circle. Every field is already on /api/queue/status, so this costs no
   // extra request and no per-row work (CCC-1061).
-  function _uxqRenderWorkersQueueHealth(health, workers) {
+  function _uxqRenderWorkersQueueHealth(health, workers, idleQueues) {
     const hosts = document.querySelectorAll('[data-role="workers-queue-health"]');
     if (!hosts.length) return;
     const queues = (Array.isArray(health.queues) ? health.queues : []).filter(Boolean);
@@ -55455,6 +55446,16 @@
         + names(loopers, 'worker_id')
         + '\n\nAdvisory only - a genuinely long ticket looks the same.'));
     }
+    // CCC-369: the standalone WORKING NOW strip was merged into the session
+    // list below; its one unique fact, workers standing by with no ticket,
+    // rides here as a quiet chip (live/starting counts are in the list banner).
+    const idleN = (idleQueues || []).length;
+    if (idleN) {
+      const per = new Map();
+      idleQueues.forEach(q => per.set(q || '?', (per.get(q || '?') || 0) + 1));
+      chips.push(chip('is-quiet', '<b>' + idleN + '</b> idle workers',
+        'Alive but holding no ticket: ' + [...per].map(([q, n]) => q + (n > 1 ? ' x' + n : '')).join(', ')));
+    }
     const html = chips.join('');
     hosts.forEach($el => {
       if ($el.innerHTML !== html) $el.innerHTML = html;
@@ -55466,7 +55467,7 @@
     // Same multi-host lookup as the recent-work list, for the same reason: the
     // strip now lives inside the Workers lane, which is rebuilt wholesale.
     const hosts = document.querySelectorAll('[data-role="workers-working-now"], #queueWorkingStrip');
-    if (!hosts.length) return;
+    if (!hosts.length && !document.querySelector('[data-role="workers-queue-health"]')) return;
     const health = _uxqHealthCache || {};
     // The registry can hold two records for one worker id (a rebind stub plus
     // the spawn record); merge them so the strip shows one row per worker.
@@ -55482,7 +55483,6 @@
         _workersById.set(key, merged);
       });
     const workers = [..._workersById.values()];
-    _uxqRenderWorkersQueueHealth(health, workers);
     const items = Array.isArray(_uxqItemsCache.items) ? _uxqItemsCache.items : [];
     const queues = Array.isArray(health.queues) ? health.queues : [];
     // One row per worker. A worker can hold several in_progress tickets (a
@@ -55571,6 +55571,7 @@
     }).filter(Boolean);
     // The roster is local to this server. Idle/parked processes are not
     // working tickets, and remote claims must not imply local liveness.
+    _uxqRenderWorkersQueueHealth(health, workers, idleQueues);
     const workingCount = rows.filter(r => r.ref || r.stage).length;
     const waitingCount = rows.filter(r => !r.ref && !r.stage && r.chips.length).length;
     const summary = [!_uxqHealthLoaded ? 'loading workers' : !_uxqItemsLoaded ? 'loading tickets' : String(workingCount),
