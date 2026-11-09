@@ -34545,3 +34545,5 @@ body.outcomes-enabled #mobileBottomNav,body.outcomes-enabled #convList > .conv-t
 @media(max-width:720px){body.outcomes-enabled .main{top:64px;height:calc(var(--app-vh,100vh) - 64px)}body.outcomes-everything .main{top:116px;height:calc(var(--app-vh,100vh) - 116px)}}
 
 .ow-health{border-block:1px solid var(--border);margin:16px 0;padding:8px 0;max-width:76ch;overflow-wrap:anywhere}.ow-health summary{cursor:pointer;min-height:44px;align-content:center}.ow-health p{color:var(--text-secondary);margin:10px 0}.ow-health dl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 20px}.ow-health dd{margin:0;font-variant-numeric:tabular-nums}
+
+.outcome-tools a{display:inline-flex;align-items:center;min-height:44px;padding:8px;color:var(--text);border:1px solid var(--border);border-radius:6px;white-space:nowrap;text-decoration:none}.outcome-tools a:hover{background:var(--surface-2)}

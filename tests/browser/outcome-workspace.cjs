@@ -50,7 +50,7 @@ const server = http.createServer(async(req,res)=>{
   const browser=await puppeteer.launch({executablePath:findChromePath(),headless:true,args:['--no-sandbox']});
   try {
     const page=await browser.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
-    await page.setViewport({width:1280,height:900});
+    await page.setViewport({width:1280,height:900});await page.emulateTimezone('America/Los_Angeles');
     await page.goto(origin+'/?workspace=outcomes');
     await page.waitForFunction(()=>!document.querySelector('#outcomeSettingToggle').disabled);
     assert(await page.$eval('#outcomeNavigation',e=>e.hidden));
@@ -72,10 +72,10 @@ const server = http.createServer(async(req,res)=>{
     await page.click('[data-ow-action="commit"]');await page.waitForFunction(()=>document.querySelector('[data-ow-action="commit"]').textContent==='Remove commitment');assert.equal(rows[0].commitment,true);
     Object.assign(rows[0].criteria[0],{accepts:['verified'],max_age_s:3600});await page.click('[data-ow-action="refresh"]');await page.waitForFunction(()=>document.querySelector('#owStatus').textContent==='Outcomes refreshed.');
     await page.click('[data-ow-action="edit"]');
-    await page.$eval('[name="rank"]',e=>{e.value='1';});await page.$eval('[name="description"]',e=>{e.value='Upcoming release window';});await page.$eval('[name="deadline"]',e=>{e.value='2027-01-15';});await page.click('[type="submit"]');
-    await page.waitForFunction(()=>document.querySelector('#owStatus').textContent.includes('valid deadline'));
-    await page.$eval('[name="deadline"]',e=>{e.value='2027-01-15T12:00:00Z';});await page.click('[type="submit"]');
-    await page.waitForFunction(()=>document.querySelector('.ow-brief').textContent.includes('Upcoming release window'));assert.equal(rows[0].rank,1);assert.deepEqual(rows[0].criteria[0].accepts,['verified']);assert.equal(rows[0].criteria[0].max_age_s,3600);assert((await page.$eval('.ow-brief',e=>e.textContent)).includes('lead · example-attempt'));assert((await page.$eval('.ow-brief',e=>e.textContent)).includes('Release receipt ready for inspection'));assert(await page.$('.ow-health'));
+    await page.$eval('[name="rank"]',e=>{e.value='1';});await page.$eval('[name="description"]',e=>{e.value='Upcoming release window';});await page.$eval('[name="deadline"]',e=>{e.value='2027-02-30';});await page.click('[type="submit"]');
+    await page.waitForFunction(()=>document.querySelector('#owStatus').textContent.includes('valid calendar date'));
+    await page.$eval('[name="deadline"]',e=>{e.value='2026-11-10';});await page.click('[type="submit"]');
+    await page.waitForFunction(()=>document.querySelector('.ow-brief').textContent.includes('Upcoming release window'));assert.equal(rows[0].rank,1);assert.equal(rows[0].deadline,'2026-11-10');assert((await page.$eval('.ow-brief',e=>e.textContent)).includes('11/10/2026'));assert.deepEqual(rows[0].criteria[0].accepts,['verified']);assert.equal(rows[0].criteria[0].max_age_s,3600);assert((await page.$eval('.ow-brief',e=>e.textContent)).includes('lead · example-attempt'));assert((await page.$eval('.ow-brief',e=>e.textContent)).includes('Release receipt ready for inspection'));assert(await page.$('.ow-health'));
     mode='conflict';await page.click('[data-ow-action="park"]');await page.waitForFunction(()=>document.querySelector('#owStatus').textContent.includes('Revision conflict'));assert.equal(rows[0].state,'active');
     mode='';await page.click('[data-ow-action="refresh"]');await page.waitForFunction(()=>document.querySelector('#owStatus').textContent==='Outcomes refreshed.');
     rows[0].decision_refs=[{id:'pending-link',state:'unprepared'}];
@@ -105,7 +105,7 @@ const server = http.createServer(async(req,res)=>{
     await page.waitForFunction(()=>document.querySelector('#owStatus').textContent==='Outcomes refreshed.');assert.equal(reads,beforeReturn+1,'One coalesced stale-return refresh');
     await page.evaluate(()=>{Date.now=window.originalDateNow;});
     mode='wait';await page.click('[data-ow-action="refresh"]');await page.click('[data-ow-action="cancel"]');await page.waitForFunction(()=>document.querySelector('#owStatus').textContent.includes('cancelled'));assert(await page.$('.ow-brief'));
-    mode='';await page.click('[data-ow-action="everything"]');assert(await page.$eval('#outcomeWorkspace',e=>e.hidden));assert.equal(await page.$eval('#legacy',e=>e.inert),false);assert.equal(await page.$eval('#outcomeTools',e=>e.hidden),false);
+    mode='';await page.click('[data-ow-action="everything"]');assert(await page.$eval('#outcomeWorkspace',e=>e.hidden));assert.equal(await page.$eval('#legacy',e=>e.inert),false);assert.equal(await page.$eval('#outcomeTools',e=>e.hidden),false);assert.equal(await page.$eval('#outcomeFlowLink',e=>new URL(e.href).search),'?ccc_popout=flow');assert.equal(await page.$eval('#outcomeFlowLink',e=>e.target),'_blank');
     await page.click('[data-ow-view="today"]');await page.waitForSelector('.ow-brief');await page.click('[data-ow-view="needs"]');await page.waitForFunction(()=>document.querySelector('#outcomeWorkspace').getAttribute('aria-busy')==='false');await page.click('[data-ow-action="decisions"]');
     assert.equal(await page.$eval('.ow-decisions-frame',e=>new URL(e.src).pathname),'/decision-guide.html');
     const accepted={...base(),id:'outcome-delivered',state:'delivered',criteria_revision:2,evidence:[{id:'evidence-pass',criterion_id:'c1',criteria_revision:2,result:'pass'}],acceptance:{accepted_at:new Date().toISOString(),criteria_revision:2,evidence_ids:{c1:'evidence-pass'}}};rows.push(accepted,{...accepted,id:'outcome-stale-delivery',criteria_revision:3});

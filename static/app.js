@@ -99247,7 +99247,11 @@
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const list = value => Array.isArray(value) ? value : [];
   const plain = value => typeof value === 'object' && value !== null ? JSON.stringify(value, null, 2) : String(value == null ? '' : value);
-  const date = value => { const d = new Date(value); return value && Number.isFinite(d.getTime()) ? d.toLocaleString() : value || 'Not set'; };
+  const calendarDate = value => typeof value==='string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  const date = value => {
+    if (calendarDate(value)) { const [year,month,day]=value.split('-').map(Number); return new Date(year,month-1,day).toLocaleDateString(); }
+    const d=new Date(value); return value && Number.isFinite(d.getTime()) ? d.toLocaleString() : value || 'Not set';
+  };
   const current = () => outcomes.find(o => o.id === selected);
   const button = (action, label) => '<button type="button" data-ow-action="'+action+'">'+label+'</button>';
   function message(text, error = false) { status.textContent = text; status.classList.toggle('ow-error', error); }
@@ -99364,7 +99368,7 @@
   }
   function form(o) {
     if (request) return;
-    editor.innerHTML = '<form class="ow-form"><h2>'+(o?'Edit outcome':'New outcome proposal')+'</h2><label>Title<input name="title" required maxlength="200" value="'+esc(o?.title || '')+'"></label><label>Goal<textarea name="goal" required>'+esc(o?.goal || '')+'</textarea></label><label>Finish line · one criterion per line<textarea name="criteria" required>'+esc(list(o?.criteria).map(c=>c.text || c).join('\n'))+'</textarea></label><label>Repository path<input name="repo_path" required value="'+esc(o?.repo_path || '')+'"></label><label>Queue<input name="queue" value="'+esc(o?.queue || '')+'"></label><label>Priority reason<textarea name="description">'+esc(o?.priority_reason || o?.rank_reason || o?.description || '')+'</textarea></label><label>Rank<input name="rank" type="number" min="1" step="1" value="'+esc(o?.rank || '')+'"></label><label>Deadline · include timezone<input name="deadline" placeholder="YYYY-MM-DDTHH:mm:ssZ" value="'+esc(o?.deadline || '')+'"></label><p>Saving a proposal does not commit it to focus or establish delivery.</p><div class="ow-actions"><button type="submit">Save '+(o?'changes':'proposal')+'</button>'+button('discard','Cancel editing')+'</div></form>';
+    editor.innerHTML = '<form class="ow-form"><h2>'+(o?'Edit outcome':'New outcome proposal')+'</h2><label>Title<input name="title" required maxlength="200" value="'+esc(o?.title || '')+'"></label><label>Goal<textarea name="goal" required>'+esc(o?.goal || '')+'</textarea></label><label>Finish line · one criterion per line<textarea name="criteria" required>'+esc(list(o?.criteria).map(c=>c.text || c).join('\n'))+'</textarea></label><label>Repository path<input name="repo_path" required value="'+esc(o?.repo_path || '')+'"></label><label>Queue<input name="queue" value="'+esc(o?.queue || '')+'"></label><label>Priority reason<textarea name="description">'+esc(o?.priority_reason || o?.rank_reason || o?.description || '')+'</textarea></label><label>Rank<input name="rank" type="number" min="1" step="1" value="'+esc(o?.rank || '')+'"></label><label>Deadline · date, or time with timezone<input name="deadline" placeholder="YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ" value="'+esc(o?.deadline || '')+'"></label><p>Saving a proposal does not commit it to focus or establish delivery.</p><div class="ow-actions"><button type="submit">Save '+(o?'changes':'proposal')+'</button>'+button('discard','Cancel editing')+'</div></form>';
     if (o) { editor.querySelector('[name="repo_path"]').readOnly = true; editor.querySelector('[name="queue"]').readOnly = true; }
     busy(false); editor.querySelector('input').focus();
     editor.querySelector('form').addEventListener('submit', event => {
@@ -99376,7 +99380,7 @@
       patch.criteria = texts.map((text,i) => ({...(list(o?.criteria)[i] || {id:'criterion-'+(i+1),required:true}),text}));
       patch.rank = patch.rank ? Number(patch.rank) : 0;
       patch.deadline = patch.deadline.trim() || null;
-      if (patch.deadline && (!Number.isFinite(Date.parse(patch.deadline)) || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(patch.deadline))) { message('Enter a valid deadline with timezone, or leave it blank.',true); return; }
+      if (patch.deadline && (!Number.isFinite(Date.parse(patch.deadline)) || (calendarDate(patch.deadline) ? new Date(patch.deadline).toISOString().slice(0,10)!==patch.deadline : !/(?:Z|[+-]\d{2}:\d{2})$/i.test(patch.deadline)))) { message('Enter a valid calendar date or a time with timezone, or leave it blank.',true); return; }
       if (o) { delete patch.repo_path; delete patch.queue; api('update',{id:o.id,expected_revision:o.revision,patch}); }
       else api('create',{...patch,state:'proposed',commitment:false});
     });
