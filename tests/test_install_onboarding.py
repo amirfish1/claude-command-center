@@ -232,7 +232,8 @@ def _dashboard_notes(home: Path, url: str, **env) -> str:
                           text=True, check=True).stdout.strip()
     return subprocess.run(
         [bash, "-c",
-         'source "$1"; PORT=8090; note() { printf "%s\\n" "$1"; }; '
+         # Pretend Linux: on Darwin can_open_browser always trusts `open`.
+         'source "$1"; PORT=8090; note() { printf "%s\\n" "$1"; }; uname() { echo Linux; }; '
          'command() { [ "$2" = open ] || [ "$2" = xdg-open ] && return 1; builtin command "$@"; }; '
          'print_dashboard_notes "$2"',
          "_", str(INSTALL_SH), url],

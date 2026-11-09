@@ -16553,7 +16553,13 @@ def _codex_archive_homes():
     primary = codex_home()
     if os.environ.get("CCC_CODEX_ACCOUNT_KEY"):
         return [primary]
-    return list(dict.fromkeys([primary, *homes()]))
+    # homes() resolves symlinks (/var -> /private/var on macOS) while
+    # codex_home() keeps the env spelling; dedupe by resolved path so one
+    # store is not scanned twice under two names.
+    seen = {}
+    for home in [primary, *homes()]:
+        seen.setdefault(Path(home).expanduser().resolve(), home)
+    return list(seen.values())
 
 
 def _codex_rollout_day_dirs():
