@@ -16,7 +16,7 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
     await page.goto(base+'/?ccc_settings=defaults',{waitUntil:'domcontentloaded'});
     await page.waitForSelector('#settingsModal.open');
     const visibleTabs = () => page.evaluate(() => [...document.querySelectorAll('#settingsRail .settings-rail-item')].filter(el=>el.offsetParent).map(el=>el.textContent.trim()));
-    assert.deepEqual(await visibleTabs(),['Agents','Queues','Workspace','Notifications & voice','Vault','Usage & budgets','System','Engines']);
+    assert.deepEqual(await visibleTabs(),['Agents','Queues','Workspace','Notifications & voice','Vault','Usage & budgets','System','Engines','Advanced']);
     assert.equal(await page.$$eval('#settingsPane #settingsModelUsage, #settingsPane #settingsSection-tools, #settingsPane #settingsSection-help',els=>els.length),0);
     assert.equal(await page.$eval('#settingsActionsUsage',el=>el.open),false);
     for (const id of ['appearance','notifications','vault','sessions','maintenance','defaults']) {

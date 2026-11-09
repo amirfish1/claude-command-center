@@ -95699,9 +95699,11 @@
       ['appearance', 'Workspace', ['appearance','layout','preferences']],
       ['notifications', 'Notifications & voice', ['notifications','voice']],
       ['vault', 'Vault', ['vault','api-keys','network']],
-      ['sessions', 'Usage & budgets', ['sessions','limits','usage-advanced','leftover','free']],
+      ['sessions', 'Usage & budgets', ['sessions','limits']],
       ['maintenance', 'System', ['maintenance','capabilities','experimental']],
       ['engines', 'Engines', ['engines']],
+      // Untested extras live on their own page at the very end.
+      ['leftover', 'Advanced', ['leftover','free']],
     ];
     window.cccSettingsDestinations = destinations;
     const titles = {defaults:'Launch defaults', engines:'Install & connect engines',
@@ -95711,17 +95713,6 @@
       sessions:'Subscription costs', limits:'Usage limits', leftover:'Use spare quota',
       free:'Free model setup', capabilities:'Optional capabilities', maintenance:'Diagnostics & config access',
       tools:'Workspace tools', help:'Help & setup', experimental:'Preview features'};
-    // Untested extras (spare quota, free model setup) sit behind one Advanced
-    // toggle at the end of Usage & budgets. The plugin sections stay where
-    // their own modules put them; the toggle only reveals them.
-    if (!document.getElementById('settingsSection-usage-advanced')) {
-      const adv = document.createElement('section');
-      adv.id = 'settingsSection-usage-advanced'; adv.className = 'settings-section';
-      adv.dataset.sectionId = 'usage-advanced'; adv.setAttribute('role', 'tabpanel');
-      adv.innerHTML = '<details class="settings-disclosure" id="usageAdvancedToggle"><summary>Advanced</summary></details>';
-      pane.append(adv);
-      adv.firstChild.addEventListener('toggle', event => pane.classList.toggle('usage-advanced-open', event.target.open));
-    }
     function consolidate() {
       for (const [primary, title, ids] of destinations) {
         let nav = rail.querySelector('[data-settings-destination="'+primary+'"]');
@@ -95746,11 +95737,11 @@
           section.dataset.consolidated='true';
           const heading=section.querySelector('.settings-section-eyebrow');
           if(heading) heading.textContent=titles[id] || heading.textContent;
-          if(id !== primary && id !== 'usage-advanced') {
+          if(id !== primary) {
             const disclosure=document.createElement('details');
             disclosure.className='settings-disclosure';
             // A live list of sessions waiting on a limit is never tucked away.
-            if(id==='limits') disclosure.open=true;
+            if(id==='limits' || id==='free') disclosure.open=true;
             const summary=document.createElement('summary');
             summary.textContent=titles[id] || id;
             disclosure.append(summary);
@@ -96356,7 +96347,6 @@
       sec.setAttribute('aria-hidden', active ? 'false' : 'true');
     });
     if (sectionId !== destination || firstRun) { const details=requested?.querySelector(':scope > details'); if(details)details.open=true; }
-    if (sectionId === 'leftover' || sectionId === 'free') { const adv=document.getElementById('usageAdvancedToggle'); if(adv)adv.open=true; }
     if (!opts.cachedOnly && typeof startEnginesHub === 'function') startEnginesHub();
     if (!opts.cachedOnly && typeof startAgentsOverview === 'function') startAgentsOverview();
     if (typeof aoRouteFoldedSection === 'function') aoRouteFoldedSection(sectionId);
