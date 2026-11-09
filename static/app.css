@@ -34559,3 +34559,9 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 .ao-q-add-status { grid-column: 1 / -1; font-size: 12px; color: var(--text-muted); }
 .ao-q-add-status:empty { display: none; }
 @media (max-width: 700px) { .ao-q-add { grid-template-columns: 1fr; } .ao-q-add :is(input, select, button) { min-height: 44px; } }
+
+/* Usage & budgets: limits appear only while sessions wait; extras behind Advanced. */
+#settingsSection-limits.ccc-limits-empty { display: none !important; }
+.settings-modal:not(.is-searching) #settingsPane:not(.usage-advanced-open) :is(#settingsSection-leftover, #settingsSection-free) { display: none !important; }
+#settingsPane.usage-advanced-open :is(#settingsSection-leftover, #settingsSection-free) { margin-left: 18px; }
+#cfgConsentModal .settings-scope-container { display: none !important; }

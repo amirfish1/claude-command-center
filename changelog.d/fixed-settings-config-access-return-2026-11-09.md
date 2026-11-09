@@ -1,0 +1,1 @@
+- Settings → System → Agent config access: Review now opens over Settings and returns to it on Close or Esc, instead of closing Settings and leaving you on the dashboard.

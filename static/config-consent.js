@@ -286,6 +286,7 @@
       + (!review.length && !carried.length && !rest.length ? '<div class="cfgc-muted">Nothing to review.</div>' : '');
     m.querySelector('[data-role="cfgc-approve-all"]').hidden = !review.length || compact;
     m.querySelector('[data-role="cfgc-save"]').hidden = compact;
+    m.querySelector('[data-role="cfgc-later"]').textContent = mode === 'manage' ? 'Close' : 'Not now';
     m.querySelector('[data-role="cfgc-ok"]').hidden = !compact;
     m.querySelector('[data-role="cfgc-details"]').hidden = !compact;
     m.querySelector('[data-role="cfgc-revoke-all"]').hidden = mode !== 'manage' || !items.some((i) => i.installed);
@@ -298,6 +299,7 @@
     }
   }
 
+  let returnFocus = null;
   function open(opts) {
     mode = (opts && opts.mode) || 'manage';
     expanded = true;
@@ -314,6 +316,7 @@
   function close(later) {
     if (!$modal) return;
     $modal.classList.remove('open');
+    if (returnFocus) { const el = returnFocus; returnFocus = null; if (el.isConnected && el.getClientRects().length) el.focus({ preventScroll: true }); }
     if (later && mode === 'auto') snooze();
   }
 
@@ -432,10 +435,9 @@
     const $btn = document.getElementById('configConsentBtn');
     if ($btn && !$btn._cfgcBound) {
       $btn._cfgcBound = true;
-      $btn.addEventListener('click', () => {
-        if (typeof window._cccCloseSettingsModal === 'function') window._cccCloseSettingsModal();
-        open({ mode: 'manage' });
-      });
+      // Opens over Settings and returns to it: closing Settings first left
+      // people on the dashboard with no way back to where they were.
+      $btn.addEventListener('click', () => { returnFocus = $btn; open({ mode: 'manage' }); });
     }
   }
 

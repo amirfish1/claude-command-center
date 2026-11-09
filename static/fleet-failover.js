@@ -184,6 +184,8 @@
     var status = unsupported ? 'Session limits are not available on this server yet.'
       : fetchError || (!data ? 'Checking session limits...' : !groups.length ? 'No sessions are waiting on a limit.' : '');
     swap(panel, (status ? '<p class="ccc-fleet-status" role="status">' + esc(status) + '</p>' : '') + html);
+    // Nothing to choose until a session is actually waiting on a limit.
+    if (section) section.classList.toggle('ccc-limits-empty', !groups.length);
     if (popupAllowed() && !unsupported) {
       swap(banner, groups.map(function (g) { return groupHtml(g, true); }).join(''));
       banner.hidden = !banner.children.length;
@@ -313,9 +315,8 @@
     section.setAttribute('aria-labelledby', tab.id);
     section.setAttribute('aria-hidden', 'true');
     section.innerHTML = '<div class="settings-section-eyebrow">Session limits</div>'
-      + '<div class="settings-row" data-keywords="session limits fleet weekly reset free resume paused">'
-      + '<div class="settings-row-main"><div class="settings-row-desc">Choose which stopped sessions should continue free or resume when their allowance resets. Nothing starts until you choose.</div></div></div>'
-      + '<div id="cccFleetLimitsPanel"></div>';
+      + '<div id="cccFleetLimitsPanel" data-keywords="session limits fleet weekly reset free resume paused"></div>';
+    section.classList.add('ccc-limits-empty');
     pane.appendChild(section);
     panel = document.getElementById('cccFleetLimitsPanel');
     banner = document.createElement('div');
