@@ -393,6 +393,8 @@
       rowsA.slice(0, 20).forEach(d => {
         const art = el('article', '', 'question');
         art.append(el('h2', d.ref + ' ' + d.title), el('div', d.text, 'raw'));
+        const ft = d.followthrough || {};
+        if (ft.state) art.append(el('p', 'Follow-through: ' + ft.state + (ft.reason ? ' — ' + ft.reason : ''), ft.state === 'failed' ? 'meta warning' : 'meta'));
         if (d.reversed) art.append(el('p', 'Reversed ' + d.reversed_at, 'meta warning'));
         else if (d.revertable) {
           const b = el('button', 'Revert'); b.type = 'button';

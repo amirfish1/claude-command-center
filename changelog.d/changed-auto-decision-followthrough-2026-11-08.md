@@ -1,0 +1,1 @@
+- The Decisions view now shows each auto-decision's follow-through state (pending, consumed, applied, verified, failed) with its reason, failed first.

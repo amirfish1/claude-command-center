@@ -11,13 +11,27 @@ import subprocess
 REF = re.compile(r'^[A-Z][A-Z0-9_]*-\d+$')
 
 
-def _decided(item, event, reversal):
+FT_ORDER = {'failed': 0, 'pending': 1, 'consumed': 2, 'applied': 3, 'verified': 4}
+
+
+def _followthrough(hist, event):
+    """WatchTower's own derivation when importable (CCC-392); otherwise unknown."""
+    try:
+        from watchtower import autodecide
+        ft = autodecide.followthrough(hist, event) or {}
+        return {'state': ft.get('state', ''), 'reason': ft.get('reason', '')}
+    except Exception:
+        return {'state': '', 'reason': ''}
+
+
+def _decided(item, event, reversal, followthrough=None):
     return {
         'ref': item.get('ref', ''), 'title': item.get('title', ''),
         'decision_id': event.get('decision_id', ''), 'at': event.get('at', ''),
         'text': event.get('text', ''), 'class': event.get('class', ''),
         'commit': event.get('commit', ''),
         'reversed': bool(reversal), 'reversed_at': (reversal or {}).get('at', ''),
+        'followthrough': followthrough,
         'revertable': (not reversal and event.get('class') == 'code-change-revertable'
                        and bool(event.get('commit'))),
     }
@@ -34,14 +48,15 @@ def auto_decision_rows(items, limit=200):
             if kind == 'auto_decision':
                 rev = next((r for r in hist if r.get('event') == 'auto_decision_reversed'
                             and r.get('decision_id') == h.get('decision_id')), None)
-                decided.append(_decided(item, h, rev))
+                decided.append(_decided(item, h, rev, _followthrough(hist, h)))
             elif kind == 'contradiction':
                 flags.append({'ref': item.get('ref', ''), 'title': item.get('title', ''),
                               'at': h.get('at', ''), 'text': h.get('text', '')})
     decided.sort(key=lambda r: r['at'], reverse=True)
     flags.sort(key=lambda r: r['at'], reverse=True)
-    # Exception-first: reversed decisions, then everything else.
-    decided.sort(key=lambda r: not r['reversed'])
+    # Exception-first: failed follow-through, then reversed, then the rest by state.
+    decided.sort(key=lambda r: (r['followthrough']['state'] != 'failed', not r['reversed'],
+                                FT_ORDER.get(r['followthrough']['state'], 5)))
     return {'ok': True, 'decisions': decided[:limit], 'contradictions': flags[:limit]}
 
 

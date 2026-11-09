@@ -19,6 +19,19 @@ class AutoDecisionTests(unittest.TestCase):
         self.assertFalse(out['decisions'][0]['revertable'])
         self.assertTrue(out['decisions'][1]['revertable'])
 
+    def test_failed_followthrough_sorts_first(self):
+        try:
+            import watchtower.autodecide  # noqa: F401
+        except ImportError:
+            self.skipTest('watchtower not installed')
+        ok = {'event': 'auto_decision', 'decision_id': 'ok', 'at': '2026-01-09'}
+        bad = {'event': 'auto_decision', 'decision_id': 'bad', 'at': '2026-01-01'}
+        close = {'event': 'close', 'resolution': {'summary': 'PARTIAL: half done'}}
+        out = ad.auto_decision_rows([item([ok]), item([bad, close])])
+        self.assertEqual([d['decision_id'] for d in out['decisions']], ['bad', 'ok'])
+        self.assertEqual(out['decisions'][0]['followthrough']['state'], 'failed')
+        self.assertEqual(out['decisions'][1]['followthrough']['state'], 'pending')
+
     def test_contradiction(self):
         out = ad.auto_decision_rows([item([{'event': 'contradiction', 'at': 'x', 'text': 'no'}])])
         self.assertEqual(out['contradictions'][0]['ref'], 'CCC-1')
