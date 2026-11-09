@@ -98,7 +98,7 @@ def _validate_patch(patch):
         for item in criteria:
             if not isinstance(item, dict) or not isinstance(item.get("text"), str) or not item["text"].strip():
                 raise ValueError("Each acceptance criterion needs text")
-            if set(item) - {"id", "text", "required", "check_kind"}:
+            if set(item) - {"id", "text", "required", "check_kind", "accepts", "max_age_s"}:
                 raise ValueError("Acceptance evidence cannot be set through the editor")
 
 

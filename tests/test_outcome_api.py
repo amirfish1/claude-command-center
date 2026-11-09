@@ -42,6 +42,14 @@ class OutcomeAPITest(unittest.TestCase):
             self.assertEqual(outcome_api.operate('update', {'id': 'OUT-1', 'expected_revision': True, 'patch': {'title': 'Updated'}})[1], 400)
         call.assert_not_called()
 
+    def test_edit_preserves_backend_criterion_check_configuration(self):
+        criterion = {'id': 'serving', 'text': 'Serving check passes', 'required': True,
+                     'accepts': ['independent_verification'], 'max_age_s': 3600}
+        with self.enabled(), patch.object(outcome_api, '_call', return_value=({'ok': True}, 200)) as call:
+            data, status = outcome_api.operate('update', {'id': 'OUT-1', 'expected_revision': 1, 'patch': {'criteria': [criterion]}})
+        self.assertEqual(status, 200)
+        self.assertEqual(call.call_args.args[1]['patch']['criteria'], [criterion])
+
     def test_inferred_link_cannot_impersonate_explicit_provenance(self):
         with self.enabled(), patch.object(outcome_api, '_call', return_value=({'ok': True}, 200)) as call:
             outcome_api.operate('link', {'id': 'OUT-1', 'ref': 'TASK-12', 'source': 'verifier', 'relation': 'serves'})
