@@ -34547,3 +34547,5 @@ body.outcomes-enabled #mobileBottomNav,body.outcomes-enabled #convList > .conv-t
 .ow-health{border-block:1px solid var(--border);margin:16px 0;padding:8px 0;max-width:76ch;overflow-wrap:anywhere}.ow-health summary{cursor:pointer;min-height:44px;align-content:center}.ow-health p{color:var(--text-secondary);margin:10px 0}.ow-health dl{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 20px}.ow-health dd{margin:0;font-variant-numeric:tabular-nums}
 
 .outcome-tools a{display:inline-flex;align-items:center;min-height:44px;padding:8px;color:var(--text);border:1px solid var(--border);border-radius:6px;white-space:nowrap;text-decoration:none}.outcome-tools a:hover{background:var(--surface-2)}
+
+.ow-agenda h3{font-size:13px;color:var(--text-secondary);font-weight:600;margin:20px 10px 4px}.ow-agenda h3:first-child{margin-top:0}.ow-deadlines{margin:16px 0;max-width:76ch;overflow-wrap:anywhere}.ow-deadlines h2{font-size:14px;margin:0 0 8px}.ow-deadlines>div{display:flex;gap:8px;flex-wrap:wrap}.ow-deadlines button{text-align:left}.ow-deadlines p{font-size:12px;color:var(--text-secondary);margin:5px 0}
