@@ -34543,3 +34543,11 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 .ao-sub:empty { display: none; }
 .agents-overview .ao-def-row select.ao-select { max-width: 190px !important; flex: 0 1 auto; }
 .agents-overview .ao-def-row select.ao-def-engine { font-weight: 650; margin-right: 0; }
+
+/* Narrow layout (bottom nav present): the hamburger menu already lists every
+   app, so the left app rail is dropped and everything offset by it collapses. */
+@media (max-width: 1200px) {
+  html:has(body.has-mobile-bottom-nav) { --ccc-rail-w: 0px !important; }
+  body.has-mobile-bottom-nav { padding-left: 0 !important; }
+  body.has-mobile-bottom-nav :is(.ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag, .ccc-account-wrap, .ccc-account-pop) { display: none !important; }
+}

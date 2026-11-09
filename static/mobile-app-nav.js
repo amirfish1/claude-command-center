@@ -16,8 +16,9 @@
     body:has(#mobileBottomNav .mobile-nav-menu:not([hidden])) #pwaInstallBanner { display:none !important; }
     #mobileBottomNav .mobile-nav-menu { max-height:calc(100dvh - 100px); overflow-y:auto; overscroll-behavior:contain; min-width:220px; max-width:calc(100vw - 16px); }
     #mobileBottomNav .ccc-mobile-app-list { display:flex; flex-direction:column; border-top:1px solid var(--border); margin-top:6px; padding-top:6px; }
-    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-btn, #mobileBottomNav .ccc-guided-decisions-shortcut { flex:none; flex-direction:row; justify-content:flex-start; gap:12px; min-height:44px; padding:8px 12px; }
-    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-label, #mobileBottomNav .ccc-guided-decisions-shortcut .mobile-nav-label { font-size:15px; }
+    #mobileBottomNav .ccc-mobile-settings { border-top:1px solid var(--border); margin-top:6px; border-radius:0; position:sticky; bottom:-6px; z-index:1; background:var(--surface, #161b22); }
+    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-btn, #mobileBottomNav .ccc-mobile-settings, #mobileBottomNav .ccc-guided-decisions-shortcut { flex:none; flex-direction:row; justify-content:flex-start; gap:12px; min-height:44px; padding:8px 12px; }
+    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-label, #mobileBottomNav .ccc-mobile-settings .mobile-nav-label, #mobileBottomNav .ccc-guided-decisions-shortcut .mobile-nav-label { font-size:15px; }
     #mobileBottomNav .ccc-mobile-app-heading { padding:8px 12px; color:var(--text-muted); font-size:12px; }
     #mobileBottomNav[data-ccc-apps-open] .mobile-nav-menu:not([hidden]) { display:flex; }
     body.ccc-mobile-app-open #mobileBottomNav > [data-mobile-nav] { color:var(--text-muted); }
@@ -116,6 +117,18 @@
         menu.prepend(a);
       } else list.appendChild(a);
     });
+    // Settings sits at the bottom of the full (advanced) menu; Simple mode
+    // already has its own Settings entry at the top.
+    let settings = menu.querySelector('[data-mobile-settings]');
+    if (!settings) {
+      settings = document.createElement('button'); settings.type = 'button'; settings.className = 'mobile-nav-btn ccc-mobile-settings';
+      settings.dataset.mobileNav = 'more'; settings.dataset.mobileSettings = ''; settings.dataset.navChrome = 'advanced';
+      settings.setAttribute('role','menuitem'); settings.setAttribute('aria-label','Settings');
+      const icon = document.createElement('span'); icon.className = 'mobile-nav-icon'; icon.textContent = '⚙'; icon.setAttribute('aria-hidden','true');
+      const label = document.createElement('span'); label.className = 'mobile-nav-label'; label.textContent = 'Settings';
+      settings.append(icon,label);
+    }
+    menu.appendChild(settings);
     mark();
     if (document.readyState === 'complete') restore();
   }
