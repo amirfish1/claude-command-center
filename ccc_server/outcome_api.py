@@ -86,8 +86,8 @@ def _validate_patch(patch):
         raise ValueError("Delivery is determined by evidence, not an editing operation")
     if "commitment" in patch and type(patch["commitment"]) is not bool:
         raise ValueError("commitment must be a boolean")
-    if "rank" in patch and (type(patch["rank"]) is not int or not 0 <= patch["rank"] <= 10000):
-        raise ValueError("rank must be a nonnegative integer")
+    if "rank" in patch and patch["rank"] is not None and (type(patch["rank"]) is not int or not 0 <= patch["rank"] <= 10000):
+        raise ValueError("rank must be a nonnegative integer or null")
     for key, limit in (("title", 300), ("goal", 8000)):
         if key in patch and (not isinstance(patch[key], str) or not patch[key].strip() or len(patch[key]) > limit):
             raise ValueError(f"{key} must be nonempty text, up to {limit} characters")

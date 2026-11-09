@@ -50,6 +50,14 @@ class OutcomeAPITest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(call.call_args.args[1]['patch']['criteria'], [criterion])
 
+    def test_rank_distinguishes_explicit_zero_from_unset(self):
+        with self.enabled(), patch.object(outcome_api, '_call', return_value=({'ok': True}, 200)) as call:
+            for rank in (0, None):
+                self.assertEqual(outcome_api.operate('update', {'id': 'OUT-1', 'expected_revision': 1, 'patch': {'rank': rank}})[1], 200)
+                self.assertEqual(call.call_args.args[1]['patch']['rank'], rank)
+            for rank in (True, -1, '0'):
+                self.assertEqual(outcome_api.operate('update', {'id': 'OUT-1', 'expected_revision': 1, 'patch': {'rank': rank}})[1], 400)
+
     def test_inferred_link_cannot_impersonate_explicit_provenance(self):
         with self.enabled(), patch.object(outcome_api, '_call', return_value=({'ok': True}, 200)) as call:
             outcome_api.operate('link', {'id': 'OUT-1', 'ref': 'TASK-12', 'source': 'verifier', 'relation': 'serves'})
