@@ -31,7 +31,10 @@ def _run_as_conn_owner(monkeypatch):
 # Harness registration
 # ---------------------------------------------------------------------------
 
-def test_devin_harness_is_registered():
+def test_devin_harness_is_registered(monkeypatch):
+    # The kill switch is env-driven; a host that exports CCC_DEVIN_ACP=0
+    # (e.g. a shell spawned by a dashboard with Devin off) must not fail this.
+    monkeypatch.delenv("CCC_DEVIN_ACP", raising=False)
     server = _server()
     cfg = server._ACP_HARNESSES["devin"]
     assert cfg["bin_names"] == ("devin",)

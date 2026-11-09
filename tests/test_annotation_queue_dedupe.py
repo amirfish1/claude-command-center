@@ -18,7 +18,7 @@ class _BlockingQueue:
     def enqueue(self, **kwargs):
         self.calls += 1
         self.started.set()
-        self.release.wait(timeout=2)
+        self.release.wait(timeout=10)
         return {"number": self.calls, "project": "CCC", "ref": f"CCC-{self.calls}"}
 
 
@@ -37,6 +37,9 @@ class TestAnnotationQueueDedupe(unittest.TestCase):
         with (
             mock.patch.object(server, "_q", queue),
             mock.patch.object(server, "_WT_WORKERS_AVAILABLE", False),
+            # resolve_repo_path shells out to git; on a loaded host it took
+            # 1.5s and outran the wait below.
+            mock.patch.object(server, "resolve_repo_path", lambda p: p),
         ):
             first = threading.Thread(
                 target=lambda: first_result.append(
@@ -44,11 +47,11 @@ class TestAnnotationQueueDedupe(unittest.TestCase):
                 )
             )
             first.start()
-            self.assertTrue(queue.started.wait(timeout=1))
+            self.assertTrue(queue.started.wait(timeout=10))
 
             duplicate = server.enqueue_annotation_ux_fixes_queue("The button is broken", meta=meta)
             queue.release.set()
-            first.join(timeout=1)
+            first.join(timeout=10)
 
         self.assertEqual(1, queue.calls)
         self.assertEqual(409, duplicate["status"])
