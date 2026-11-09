@@ -99266,24 +99266,44 @@
     return list(items).length ? items.map(item => '<div class="ow-record">'+(item && typeof item === 'object' ? '<dl>'+Object.entries(item).map(([k,v]) => '<dt>'+esc(k.replace(/_/g,' '))+'</dt><dd>'+esc(plain(v))+'</dd>').join('')+'</dl>' : esc(item))+recordActions(item)+'</div>').join('') : '<p>'+esc(empty)+'</p>';
   }
   function disclosure(title, items, empty) { return '<details><summary>'+title+'</summary>'+records(items,empty)+'</details>'; }
-  const preparedQuestion = ref => ref && typeof ref === 'object' && ref.request_id && (!ref.kind || ref.kind === 'question') && !['closed','answered','accepted','cancelled','applied','verified'].includes(ref.status || ref.state) && (ref.prepared === true || ref.state === 'prepared');
+  let decisionRows=[], decisionCoverage=false, decisionError='Decision source not checked.';
+  function resolvedDecision(ref) {
+    if (!ref || ref.kind!=='decision' || ref.state!=='pending' || !ref.request_id || !ref.preparation || !['why_now','options','recommendation','tradeoffs'].every(key=>ref.preparation[key])) return null;
+    return decisionRows.find(row=>row.request_id===ref.request_id && row.kind==='question' && row.status==='open' && row.answer?.state!=='accepted' && (decisionCoverage || row.source_current===true) && (ref.revision==null || ref.revision==='' || String(ref.revision)===String(row.revision))) || null;
+  }
+  function verifiedDelivery(o) {
+    const accepted=o.acceptance;
+    if(o.state!=='delivered' || !Number.isFinite(Date.parse(accepted?.accepted_at || '')) || !Number.isSafeInteger(accepted?.criteria_revision) || accepted.criteria_revision!==o.criteria_revision || !accepted.evidence_ids || typeof accepted.evidence_ids!=='object') return false;
+    const required=list(o.criteria).filter(c=>c.required!==false);
+    return required.length>0 && required.every(c=>list(o.evidence).some(e=>e.id===accepted.evidence_ids[c.id] && e.criterion_id===c.id && e.criteria_revision===accepted.criteria_revision && e.result==='pass'));
+  }
+  async function readDecisionSource(signal) {
+    decisionRows=[]; decisionCoverage=false; decisionError='';
+    try {
+      const response=await fetch('/api/decision-inbox/requests',{cache:'no-store',cccPriority:'user',signal});
+      const data=await response.json();
+      if(!response.ok || data.ok!==true || !Array.isArray(data.requests)) throw Error(data.error || 'Decision source unavailable.');
+      decisionRows=data.requests;decisionCoverage=data.source_current===true;
+      if(!decisionCoverage) decisionError='Complete decision source coverage is unavailable; only individually current source requests can be linked.';
+    } catch(error) {decisionError=error.name==='AbortError'?'Decision source check cancelled or timed out.':error.message;}
+  }
   function organizationCheck() {
     const active=outcomes.filter(o=>o.state==='active');
-    const gaps=active.filter(o=>list(o.gaps).length || !o.next_action?.text || !o.next_action?.owner || !o.next_action?.trigger);
-    const exhausted=outcomes.filter(o=>o.health==='recovery_exhausted' || o.recovery?.state==='exhausted');
-    const ownerWaits=outcomes.filter(o=>['owner','user'].includes(o.next_action?.owner) || ['waiting_owner','awaiting_owner'].includes(o.state) || list(o.decision_refs).some(preparedQuestion));
+    const gaps=outcomes.filter(o=>o.health==='gap');
+    const exhausted=gaps.filter(o=>list(o.events).some(event=>event.state==='exhausted'));
+    const ownerWaits=outcomes.filter(o=>['owner','user'].includes(o.next_action?.owner) || ['waiting_owner','awaiting_owner'].includes(o.state) || list(o.decision_refs).some(ref=>ref.kind==='decision' && ref.state==='pending'));
     const delivered=outcomes.filter(o=>o.state==='delivered');
-    const withEvidence=delivered.filter(o=>list(o.evidence).length);
+    const withEvidence=delivered.filter(verifiedDelivery);
     const attempts=outcomes.flatMap(o=>list(o.attempts));
-    const attemptTime=a=>Date.parse(a.updated_at || a.started_at || a.created_at || '');
+    const attemptTime=a=>Date.parse(a.ended_at || a.spawned_at || a.reserved_at || '');
     const timed=attempts.filter(a=>Number.isFinite(attemptTime(a)));
     const recent=timed.filter(a=>attemptTime(a)<=Date.now() && Date.now()-attemptTime(a)<86400000);
     const missing=[];
     if(outcomes.some(o=>!Array.isArray(o.attempts))) missing.push('Attempt telemetry is not supplied for every outcome.');
     if(attempts.length>timed.length) missing.push((attempts.length-timed.length)+' attempts have no usable timestamp.');
-    if(delivered.length>withEvidence.length) missing.push((delivered.length-withEvidence.length)+' delivered records lack evidence in this snapshot.');
+    if(delivered.length>withEvidence.length) missing.push((delivered.length-withEvidence.length)+' delivered records lack matching acceptance and evidence in this snapshot.');
     if(outcomes.some(o=>!o.health || o.health==='unknown')) missing.push('Some outcome health is unknown.');
-    return '<details class="ow-health"><summary>Organization check · '+active.length+' active · '+outcomes.filter(o=>o.commitment).length+' committed</summary><p>Recorded workflow and evidence counts, not a measure of user value.</p><dl><dt>Active / committed</dt><dd>'+active.length+' / '+outcomes.filter(o=>o.commitment).length+'</dd><dt>Active outcomes with next-action gaps / recorded exhausted recovery</dt><dd>'+gaps.length+' / '+exhausted.length+'</dd><dt>Recorded owner waits</dt><dd>'+ownerWaits.length+'</dd><dt>Delivered with evidence in snapshot</dt><dd>'+withEvidence.length+'</dd><dt>Attempt records in the last 24 hours</dt><dd>'+recent.length+'</dd></dl><p>'+esc(missing.join(' ') || 'Counts reflect only the supplied records; missing activity cannot establish healthy operation.')+'</p></details>';
+    return '<details class="ow-health"><summary>Organization check · '+active.length+' active · '+outcomes.filter(o=>o.commitment).length+' committed</summary><p>Recorded workflow and evidence counts, not a measure of user value.</p><dl><dt>Active / committed</dt><dd>'+active.length+' / '+outcomes.filter(o=>o.commitment).length+'</dd><dt>Authoritative health gaps / exhausted recovery</dt><dd>'+gaps.length+' / '+exhausted.length+'</dd><dt>Recorded owner waits</dt><dd>'+ownerWaits.length+'</dd><dt>Verified delivered with matching acceptance evidence</dt><dd>'+withEvidence.length+'</dd><dt>Attempt records in the last 24 hours</dt><dd>'+recent.length+'</dd></dl><p>'+esc(missing.join(' ') || 'Counts reflect only the supplied records; missing activity cannot establish healthy operation.')+'</p></details>';
   }
   function render() {
     const focusKey = document.activeElement?.dataset.owAction;
@@ -99296,8 +99316,8 @@
     if (view === 'needs') {
       // Only explicit prepared, linked requests are presented as ready decisions.
       const refs = outcomes.flatMap(o => list(o.decision_refs).map(ref => ({o,ref})));
-      const ready = refs.filter(({ref}) => preparedQuestion(ref)).sort((a,b) => (Number(a.ref.rank)||9999)-(Number(b.ref.rank)||9999));
-      content.innerHTML = '<section class="ow-needs"><p>Review and answer through the existing Decisions workspace.</p>'+button('decisions','Open Decisions')+(ready.length ? ready.map(({o,ref}) => '<article class="ow-record"><h2>'+esc(ref.title || o.title)+'</h2><p>'+esc(ref.rank_reason || 'Priority reason not supplied')+'</p>'+records([ref],'')+'<p>Linked outcome: '+esc(o.title)+'</p>'+button('decisions','Review in Decisions')+'</article>').join('') : '<p class="ow-empty">No prepared linked decisions in this snapshot.</p>')+(refs.length > ready.length ? '<p>Other decision references are awaiting preparation or identity linkage. Open Decisions to inspect their source status.</p>' : '')+'</section>';
+      const ready = refs.filter(({ref}) => resolvedDecision(ref)).sort((a,b) => (Number(a.ref.rank)||9999)-(Number(b.ref.rank)||9999));
+      content.innerHTML = '<section class="ow-needs"><p>Review and answer through the existing Decisions workspace.</p><p>'+esc(decisionError)+'<\/p>'+button('decisions','Open Decisions')+(ready.length ? ready.map(({o,ref}) => '<article class="ow-record"><h2>'+esc(ref.question || ref.title || o.title)+'</h2><p>'+esc(ref.rank_reason || ref.preparation?.why_now || 'Priority reason not supplied')+'</p>'+records([ref.preparation],'')+disclosure('Decision source and linkage',[{request_id:ref.request_id,source_revision:resolvedDecision(ref)?.revision,outcome_id:o.id,decision_id:ref.id,state:ref.state}],'')+'<p>Linked outcome: '+esc(o.title)+'</p>'+button('decisions','Review in Decisions')+'</article>').join('') : '<p class="ow-empty">No prepared linked decisions in this snapshot.</p>')+(refs.length > ready.length ? '<p>Other decision references are awaiting preparation or identity linkage. Open Decisions to inspect their source status.</p>' : '')+'</section>';
       return;
     }
     const verifiedIncident = o => list(o.incidents).concat(o.incident?[o.incident]:[]).some(i => i.verified === true);
@@ -99307,9 +99327,9 @@
     if (!o) { content.innerHTML = '<p class="ow-empty">'+(loadedAt ? 'No outcomes yet. Create a proposal to define a goal and finish line.' : 'Load outcomes to see your commitments.')+'</p>'; return; }
     const next = o.next_action || {};
     const responsibility = typeof o.responsibility === 'string' ? o.responsibility : [o.responsibility?.role || 'Unassigned',o.responsibility?.ref].filter(Boolean).join(' · ');
-    const gap = !next.text || !next.owner || !next.trigger;
+    const gap = o.health==='gap';
     const incidents = sorted.filter(verifiedIncident).map(x => '<p class="ow-warning">Verified incident: '+esc(x.title)+' <button type="button" data-ow-select="'+esc(x.id)+'">Review incident</button></p>').join('');
-    content.innerHTML = organizationCheck()+incidents+'<div class="ow-mobile-select"><label for="owSelect">Selected outcome</label><select id="owSelect">'+sorted.map(x => '<option value="'+esc(x.id)+'"'+(x.id===o.id?' selected':'')+'>'+esc((x.commitment?'Committed · ':'Proposal / other · ')+x.title)+'</option>').join('')+'</select></div><div class="ow-layout"><aside class="ow-agenda" aria-label="Select outcome">'+sorted.map(x => '<button type="button" data-ow-select="'+esc(x.id)+'" aria-pressed="'+(x.id===o.id)+'"><strong>'+esc(x.title)+'</strong><small>'+esc(x.commitment?'Committed · rank '+(x.rank || 'not set'):'Not committed · '+(x.state || 'proposal'))+'</small></button>').join('')+'</aside><article class="ow-brief" aria-label="Selected outcome brief"><h2 tabindex="-1">'+esc(o.title)+'</h2><p>'+esc(o.goal)+'</p><p class="ow-state">'+esc(o.state || 'Unknown state')+' · '+esc(o.health || 'Health unknown')+' · '+(o.commitment?'Committed':'Not committed')+'</p><h3>The finish line</h3><ul>'+list(o.criteria).map(c => '<li>'+esc(c.text || c)+(c.required===false?' (optional)':'')+'</li>').join('')+'</ul><h3>Priority and timing</h3><p>'+esc(o.priority_reason || o.rank_reason || o.description || 'No priority reason supplied')+'</p><p>Rank: '+esc(o.rank || 'Not set')+' · Deadline: '+esc(date(o.deadline))+'</p><h3>What changed</h3><p>'+esc(plain(o.changed || o.briefing || o.summary || o.latest_change || o.health_reason || 'No change summary supplied'))+'</p><p class="ow-state">Source updated: '+esc(date(o.updated_at))+' · Revision '+esc(o.revision)+'</p><h3>Next action</h3><p>'+esc(next.text || 'No next action recorded')+'</p><p>Responsible: '+esc(responsibility)+'<br>Action owner: '+esc(next.owner || 'Unassigned')+'<br>Next trigger: '+esc(plain(next.trigger || 'Not recorded'))+'<br>Due: '+esc(date(next.due_at))+'</p>'+(gap?'<p class="ow-warning">Organization gap: next action, responsible owner or trigger is missing. Agent recovery is needed; this is not an owner decision.</p>':'')+'<div class="ow-actions">'+button('edit','Edit outcome')+button('commit',o.commitment?'Remove commitment':'Commit to focus')+button('park',o.state==='parked'?'Return to proposal':'Park outcome')+'</div>'+disclosure('Incidents and displaced commitments',list(o.incidents).concat(o.incident?[o.incident]:[],list(o.displacements),o.displacement?[o.displacement]:[]),'No incident or displacement supplied.')+disclosure('Organization check and unapplied findings',list(o.gaps).concat(list(o.findings)),'No organization findings supplied. Missing runtime evidence is not proof of health.')+disclosure('Supporting work, provenance and evidence',list(o.links).concat(list(o.evidence)),'No linked work or criterion evidence supplied.')+disclosure('Decision linkage',o.decision_refs,'No linked decisions. Use Needs you to open existing Decisions.')+(!list(o.attempts).length && !o.runtime?'<p class="ow-state">No active attempt telemetry supplied. A responsibility record alone does not establish a running agent.</p>':'')+disclosure('Agent runtime and receipts',list(o.attempts).concat(o.runtime?[o.runtime]:[],o.responsibility && typeof o.responsibility==='object'?[{responsibility:o.responsibility}]:[]),'No active runtime supplied. A proposed role is not a staffed agent.')+'</article></div>';
+    content.innerHTML = organizationCheck()+incidents+'<div class="ow-mobile-select"><label for="owSelect">Selected outcome</label><select id="owSelect">'+sorted.map(x => '<option value="'+esc(x.id)+'"'+(x.id===o.id?' selected':'')+'>'+esc((x.commitment?'Committed · ':'Proposal / other · ')+x.title)+'</option>').join('')+'</select></div><div class="ow-layout"><aside class="ow-agenda" aria-label="Select outcome">'+sorted.map(x => '<button type="button" data-ow-select="'+esc(x.id)+'" aria-pressed="'+(x.id===o.id)+'"><strong>'+esc(x.title)+'</strong><small>'+esc(x.commitment?'Committed · rank '+(x.rank || 'not set'):'Not committed · '+(x.state || 'proposal'))+'</small></button>').join('')+'</aside><article class="ow-brief" aria-label="Selected outcome brief"><h2 tabindex="-1">'+esc(o.title)+'</h2><p>'+esc(o.goal)+'</p><p class="ow-state">'+esc(o.state || 'Unknown state')+' · '+esc(o.health || 'Health unknown')+' · '+(o.commitment?'Committed':'Not committed')+'</p><h3>The finish line</h3><ul>'+list(o.criteria).map(c => '<li>'+esc(c.text || c)+(c.required===false?' (optional)':'')+'</li>').join('')+'</ul><h3>Priority and timing</h3><p>'+esc(o.priority_reason || o.rank_reason || o.description || 'No priority reason supplied')+'</p><p>Rank: '+esc(o.rank || 'Not set')+' · Deadline: '+esc(date(o.deadline))+'</p><h3>What changed</h3><p>'+esc(plain(o.changed || o.briefing || o.summary || o.latest_change || o.health_reason || 'No change summary supplied'))+'</p><p class="ow-state">Source updated: '+esc(date(o.updated_at))+' · Revision '+esc(o.revision)+'</p><h3>Next action</h3><p>'+esc(next.text || 'No next action recorded')+'</p><p>Responsible: '+esc(responsibility)+'<br>Action owner: '+esc(next.owner || 'Unassigned')+'<br>Next trigger: '+esc(plain(next.trigger || 'Not recorded'))+'<br>Due: '+esc(date(next.due_at))+'</p>'+(gap?'<p class="ow-warning">Organization gap: '+esc(o.health_reason || 'Authoritative health record requires recovery')+'. Agent recovery is needed; this is not an owner decision.</p>':'')+'<div class="ow-actions">'+button('edit','Edit outcome')+button('commit',o.commitment?'Remove commitment':'Commit to focus')+button('park',o.state==='parked'?'Return to proposal':'Park outcome')+'</div>'+disclosure('Incidents and displaced commitments',list(o.incidents).concat(o.incident?[o.incident]:[],list(o.displacements),o.displacement?[o.displacement]:[]),'No incident or displacement supplied.')+disclosure('Organization check and unapplied findings',list(o.gaps).concat(list(o.findings)),'No organization findings supplied. Missing runtime evidence is not proof of health.')+disclosure('Supporting work, provenance and evidence',list(o.links).concat(list(o.evidence)),'No linked work or criterion evidence supplied.')+disclosure('Decision linkage',o.decision_refs,'No linked decisions. Use Needs you to open existing Decisions.')+(!list(o.attempts).length && !o.runtime?'<p class="ow-state">No active attempt telemetry supplied. A responsibility record alone does not establish a running agent.</p>':'')+disclosure('Agent runtime and receipts',list(o.attempts).concat(o.runtime?[o.runtime]:[],o.responsibility && typeof o.responsibility==='object'?[{responsibility:o.responsibility}]:[]),'No active runtime supplied. A proposed role is not a staffed agent.')+'</article></div>';
     if (focusKey) root.querySelector('[data-ow-action="'+focusKey+'"]')?.focus();
   }
   function busy(value) {
@@ -99336,6 +99356,7 @@
         if (!Array.isArray(data.outcomes)) throw Error('Outcome list is missing. Existing snapshot retained.');
         outcomes = data.outcomes; loadedAt = Date.now(); message(outcomes.length?'Outcomes refreshed.':'Outcome registry is empty.');
       }
+      if (view==='needs') await readDecisionSource(controller.signal);
       if (!root.hidden) render();
     } catch (err) {
       if (!root.hidden) message((err.name==='AbortError' ? (action?'Request cancelled or timed out. A save may have reached the server; refresh before retrying.':'Read cancelled or timed out. Refresh to try again.') : err.message)+(loadedAt?' Previous snapshot retained; it may be stale.':''),true);
@@ -99389,7 +99410,7 @@
   let background=[];
   function open() {
     if (!enabled || popout) return;
-    if (!root.hidden) { render(); return; }
+    if (!root.hidden) { render(); if(view==='needs') api(); return; }
     returnFocus=document.activeElement; root.hidden=false; document.body.classList.add('outcomes-open');
     background=Array.from(document.body.children).filter(el=>el!==root && el!==navigation && !['SCRIPT','STYLE'].includes(el.tagName)).map(el=>[el,el.inert]);
     background.forEach(([el])=>{el.inert=true;});
