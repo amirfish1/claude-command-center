@@ -33374,8 +33374,18 @@
   function _sidebarHasHoveredConvItem() {
     return !!document.querySelector('.conv-item:hover');
   }
+  // CCC-343: LOAF samples with read=1 put this rAF render at 19 of 28 long
+  // frames during read-aloud. Poll-driven rebuilds are throttled to one per
+  // 30s while a read plays (pollers keep ticking, so the next one repaints);
+  // lifecycle/user renders bypass this.
+  let _lastPolledSidebarRenderAt = 0;
+  function _readAloudThrottlesSidebar() {
+    try {
+      return _ttsActive && !_ttsPaused && Date.now() - _lastPolledSidebarRenderAt < 30000;
+    } catch (_) { return false; }
+  }
   function _pausePeriodicSidebarRender() {
-    return shouldPausePeriodicUiWork() || isConversationListScrollActive() || Date.now() < _convRowActionHoverUntil || _sidebarHasHoveredConvItem();
+    return _readAloudThrottlesSidebar() || shouldPausePeriodicUiWork() || isConversationListScrollActive() || Date.now() < _convRowActionHoverUntil || _sidebarHasHoveredConvItem();
   }
   function _flushDeferredSidebarRenderIfAny() {
     if (!_sidebarRenderPendingWhilePaused) return;
@@ -33399,6 +33409,7 @@
         return;
       }
       _sidebarRenderPendingWhilePaused = false;
+      _lastPolledSidebarRenderAt = Date.now();
       try {
         const $s = document.getElementById('convSearch');
         const convs = (typeof filterConversations === 'function')
