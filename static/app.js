@@ -6847,6 +6847,7 @@
       if (typeof window.__cccRenderThroughputActivity === 'function') {
         window.__cccRenderThroughputActivity();
       }
+      window.dispatchEvent(new Event('ccc:activity-refreshed'));
       return _liveSessionsActivityLast;
     } catch (_) { return _liveSessionsActivityLast; }
     finally { _liveSessionsActivityPromise = null; }
@@ -99245,6 +99246,7 @@
   const editor = root.querySelector('#owEditor');
   const status = root.querySelector('#owStatus');
   const freshness = root.querySelector('#owFreshness');
+  let intake = null;
   let outcomes = [], selected = '', view = 'today', request = null, loadedAt = 0, returnFocus = null;
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const list = value => Array.isArray(value) ? value : [];
@@ -99315,6 +99317,18 @@
       if(!decisionCoverage) decisionError='Complete decision source coverage is unavailable; only individually current source requests can be linked.';
     } catch(error) {decisionError=error.name==='AbortError'?'Decision source check cancelled or timed out.':error.message;}
   }
+  const intakeCount=()=>intake?.enabled===true && Number.isSafeInteger(intake.summary?.unfiled) && intake.summary.unfiled>=0 ? intake.summary.unfiled : 'Unknown';
+  function intakeCheck() {
+    if (!intake || intake.enabled!==true) return '<p>Unfiled count and intake source coverage unavailable. Next agent check not supplied.</p>';
+    const summary=intake.summary || {}, rows=list(intake.unfiled);
+    const count=intakeCount();
+    const coverage=summary.coverage && typeof summary.coverage==='object' ? Object.entries(summary.coverage).slice(0,5) : [];
+    const checks=rows.map(row=>row.next_action).filter(action=>action?.owner==='agent');
+    checks.sort((a,b)=>(Date.parse(a.due_at)||Infinity)-(Date.parse(b.due_at)||Infinity));
+    const next=checks[0];
+    const clipped=value=>plain(value).slice(0,300);
+    return '<h3>Unfiled work</h3><p>Unfiled: '+esc(count)+'. Association is agent-owned; no owner filing is required.</p><p>Source coverage: '+(coverage.length?coverage.map(([name,source])=>esc(name)+': '+esc(source?.state || 'Unknown')+(source?.checked_at?' (checked '+esc(date(source.checked_at))+')':'')+(source?.error?' · '+esc(clipped(source.error)):'')).join('; '):'Unknown; no source coverage supplied')+'</p><p>Next agent check: '+(next?esc(clipped(next.text || 'Action detail not supplied'))+' · due '+esc(date(next.due_at)):'Not supplied in this snapshot')+'</p>'+(rows.length?'<ul>'+rows.slice(0,5).map(row=>'<li>'+esc(clipped(row.name || row.session_id || 'Unfiled work'))+': '+esc(clipped(row.reason || 'Reason not supplied'))+'</li>').join('')+'</ul>'+(rows.length>5?'<p>Showing 5 reasons; more unfiled records remain.</p>':''):'<p>No unfiled reasons supplied.</p>');
+  }
   function organizationCheck() {
     const active=outcomes.filter(o=>o.state==='active');
     const gaps=outcomes.filter(o=>o.health==='gap');
@@ -99331,7 +99345,7 @@
     if(attempts.length>timed.length) missing.push((attempts.length-timed.length)+' attempts have no usable timestamp.');
     if(delivered.length>withEvidence.length) missing.push((delivered.length-withEvidence.length)+' delivered records lack matching acceptance and evidence in this snapshot.');
     if(outcomes.some(o=>!o.health || o.health==='unknown')) missing.push('Some outcome health is unknown.');
-    return '<details class="ow-health"><summary>Organization check · '+active.length+' active · '+outcomes.filter(o=>o.commitment).length+' committed</summary><p>Recorded workflow and evidence counts, not a measure of user value.</p><dl><dt>Active / committed</dt><dd>'+active.length+' / '+outcomes.filter(o=>o.commitment).length+'</dd><dt>Authoritative health gaps / exhausted recovery</dt><dd>'+gaps.length+' / '+exhausted.length+'</dd><dt>Recorded owner waits</dt><dd>'+ownerWaits.length+'</dd><dt>Verified delivered with matching acceptance evidence</dt><dd>'+withEvidence.length+'</dd><dt>Attempt records in the last 24 hours</dt><dd>'+recent.length+'</dd></dl><p>'+esc(missing.join(' ') || 'Counts reflect only the supplied records; missing activity cannot establish healthy operation.')+'</p></details>';
+    return '<details class="ow-health"><summary>Organization check · '+active.length+' active · '+outcomes.filter(o=>o.commitment).length+' committed · Unfiled '+esc(intakeCount())+'</summary><p>Recorded workflow and evidence counts, not a measure of user value.</p><dl><dt>Active / committed</dt><dd>'+active.length+' / '+outcomes.filter(o=>o.commitment).length+'</dd><dt>Authoritative health gaps / exhausted recovery</dt><dd>'+gaps.length+' / '+exhausted.length+'</dd><dt>Recorded owner waits</dt><dd>'+ownerWaits.length+'</dd><dt>Verified delivered with matching acceptance evidence</dt><dd>'+withEvidence.length+'</dd><dt>Attempt records in the last 24 hours</dt><dd>'+recent.length+'</dd></dl><p>'+esc(missing.join(' ') || 'Counts reflect only the supplied records; missing activity cannot establish healthy operation.')+'</p>'+intakeCheck()+'</details>';
   }
   function render() {
     const focusKey = document.activeElement?.dataset.owAction;
@@ -99350,11 +99364,11 @@
       content.innerHTML = '<section class="ow-needs"><p>Review and answer through the existing Decisions workspace.</p><p>'+esc(decisionError)+'</p><p>'+esc(coverage)+'</p>'+button('decisions','Open Decisions')+(linked.length ? linked.map(decisionCard).join('') : '<p class="ow-empty">'+(decisionCoverage?'No prepared linked decisions in this snapshot.':'Linked decision readiness is unknown until the source can be checked.')+'</p>')+(refs.length>linked.length?'<p>Other decision references are awaiting preparation or identity linkage. Open Decisions to inspect their source status.</p>':'')+'</section>';
       return;
     }
-    const verifiedIncident = o => list(o.incidents).concat(o.incident?[o.incident]:[]).some(i => i.verified === true);
+    const verifiedIncident = o => list(o.incidents).concat(o.incident?[o.incident]:[]).some(i => i.verified === true && i.state === 'active');
     const sorted = outcomes.slice().sort((a,b) => Number(verifiedIncident(b))-Number(verifiedIncident(a)) || Number(!!b.commitment)-Number(!!a.commitment) || (Number(a.rank)||9999)-(Number(b.rank)||9999));
     if (!current() && sorted.length) selected = sorted[0].id;
     const o = current();
-    if (!o) { content.innerHTML = '<p class="ow-empty">'+(loadedAt ? 'No outcomes yet. Create a proposal to define a goal and finish line.' : 'Load outcomes to see your commitments.')+'</p>'; return; }
+    if (!o) { content.innerHTML = organizationCheck()+'<p class="ow-empty">'+(loadedAt ? 'No outcomes yet. Create a proposal to define a goal and finish line.' : 'Load outcomes to see your commitments.')+'</p>'; return; }
     const next = o.next_action || {};
     const responsibility = typeof o.responsibility === 'string' ? o.responsibility : [o.responsibility?.role || 'Unassigned',o.responsibility?.ref].filter(Boolean).join(' · ');
     const gap = o.health==='gap';
@@ -99375,8 +99389,12 @@
     if (!value && editor.childElementCount) root.querySelector('[data-ow-action="refresh"]').disabled = true;
     root.setAttribute('aria-busy',String(value));
   }
-  async function api(action, payload) {
+  function automaticRefreshAllowed() {
+    return enabled && !root.hidden && !document.hidden && !editor.childElementCount && !content.querySelector('.ow-decisions-frame, details[open]');
+  }
+  async function api(action, payload, automatic = false) {
     if (!enabled || request) return;
+    const priorFocus=document.activeElement, priorView=view, priorSelected=selected;
     const controller = new AbortController(); request = controller; busy(true); message(action?'Saving outcome…':'Loading outcomes…');
     const timer = setTimeout(() => controller.abort(),12000);
     try {
@@ -99390,10 +99408,24 @@
         message('Saved. The server record is shown below.');
       } else {
         if (!Array.isArray(data.outcomes)) throw Error('Outcome list is missing. Existing snapshot retained.');
+        if (automatic && (!automaticRefreshAllowed() || view!==priorView || selected!==priorSelected)) return;
+        intake = data.intake && typeof data.intake==='object' ? data.intake : null;
         outcomes = data.outcomes; loadedAt = Date.now(); message(outcomes.length?'Outcomes refreshed.':'Outcome registry is empty.');
       }
       if (view==='needs') await readDecisionSource(controller.signal);
+      if (automatic && (!automaticRefreshAllowed() || view!==priorView || selected!==priorSelected)) return;
+      const readingFocus=document.activeElement===document.body ? priorFocus : document.activeElement;
+      const readingScroll=root.scrollTop;
+      const focusMatch=readingFocus && root.contains(readingFocus) ? {tag:readingFocus.tagName,id:readingFocus.id,action:readingFocus.dataset.owAction,select:readingFocus.dataset.owSelect,text:readingFocus.textContent} : null;
       if (!root.hidden) render();
+      if (automatic) {
+        if (focusMatch && (document.activeElement===readingFocus || document.activeElement===document.body)) {
+          const target=Array.from(root.querySelectorAll(focusMatch.tag)).find(el=>focusMatch.id?el.id===focusMatch.id:focusMatch.action?el.dataset.owAction===focusMatch.action:focusMatch.select?el.dataset.owSelect===focusMatch.select:el.textContent===focusMatch.text);
+          // Controls are enabled again in finally before restoring their focus.
+          queueMicrotask(()=>target?.focus({preventScroll:true}));
+        }
+        root.scrollTop=readingScroll;
+      }
     } catch (err) {
       if (!root.hidden) message((err.name==='AbortError' ? (action?'Request cancelled or timed out. A save may have reached the server; refresh before retrying.':'Read cancelled or timed out. Refresh to try again.') : err.message)+(loadedAt?' Previous snapshot retained; it may be stale.':''),true);
     } finally { clearTimeout(timer); if (request===controller) {request=null; busy(false);} }
@@ -99480,11 +99512,12 @@
   document.getElementById('outcomeToolSelect').addEventListener('change',event=>{
     if (enabled && event.target.value) window.cccInspectWorkspace?.(event.target.value);
   });
-  // Finite, explicit refresh; no polling or model invocation on render.
+  // Reuse existing activity signals; no outcome timer or model invocation.
   window.addEventListener('pageshow',()=>{if(loadedAt&&!root.hidden) freshness.textContent='Snapshot from '+date(loadedAt)+' · refresh to check current state';});
   function refreshOnReturn() {
-    if (enabled && !root.hidden && !document.hidden && loadedAt && Date.now()-loadedAt>30000 && !request && !editor.childElementCount && !content.querySelector('.ow-decisions-frame')) api();
+    if (automaticRefreshAllowed() && loadedAt && Date.now()-loadedAt>30000 && !request) api(undefined,undefined,true);
   }
+  window.addEventListener('ccc:activity-refreshed',refreshOnReturn);
   window.addEventListener('focus',refreshOnReturn);
   document.addEventListener('visibilitychange',refreshOnReturn);
   async function installationSetting(next) {
@@ -99504,7 +99537,7 @@
       navigation.hidden=!enabled || popout;
       document.body.classList.toggle('outcomes-enabled',enabled && !popout);
       settingStatus.textContent=enabled?'On for this installation. Sessions and diagnostics are under Everything.':'Off. Existing workspace is unchanged.';
-      if (!enabled) { if (!root.hidden) close(); document.body.classList.remove('outcomes-everything'); document.getElementById('outcomeTools').hidden=true; outcomes=[]; loadedAt=0; }
+      if (!enabled) { if (!root.hidden) close(); document.body.classList.remove('outcomes-everything'); document.getElementById('outcomeTools').hidden=true; outcomes=[]; intake=null; loadedAt=0; }
       else if (!wasEnabled && !new URLSearchParams(location.search).has('ccc_popout') && !window.__CCC_CONVERSATION_POPOUT__) {
         // A setting changed in Settings applies after the owner leaves Settings.
         // Initial enabled installations land directly in Today.
