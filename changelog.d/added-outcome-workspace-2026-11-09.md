@@ -1,0 +1,1 @@
+- Add an opt-in Today outcome workspace with selected briefs, durable proposal and commitment editing, evidence and runtime disclosures, and existing Decisions fallback; preserve Simple and Flow navigation.

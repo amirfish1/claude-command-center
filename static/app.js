@@ -99214,3 +99214,152 @@
     boot();
   }
 })();
+
+// Outcomes are a projection of durable server state, never a browser supervisor.
+(function outcomeWorkspace() {
+  'use strict';
+  const root = document.getElementById('outcomeWorkspace');
+  const entry = document.getElementById('outcomeEntry');
+  if (!root || !entry) return;
+  const content = root.querySelector('#owContent');
+  const editor = root.querySelector('#owEditor');
+  const status = root.querySelector('#owStatus');
+  const freshness = root.querySelector('#owFreshness');
+  let outcomes = [], selected = '', view = 'today', request = null, loadedAt = 0, returnFocus = null;
+  const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const list = value => Array.isArray(value) ? value : [];
+  const plain = value => typeof value === 'object' && value !== null ? JSON.stringify(value, null, 2) : String(value == null ? '' : value);
+  const date = value => { const d = new Date(value); return value && Number.isFinite(d.getTime()) ? d.toLocaleString() : value || 'Not set'; };
+  const current = () => outcomes.find(o => o.id === selected);
+  const button = (action, label) => '<button type="button" data-ow-action="'+action+'">'+label+'</button>';
+  function message(text, error = false) { status.textContent = text; status.classList.toggle('ow-error', error); }
+  function recordActions(item) {
+    if (!item || typeof item !== 'object') return '';
+    let html = item.session_id ? '<button type="button" data-ow-session="'+esc(item.session_id)+'">Open supporting session</button>' : '';
+    if (item.url) {
+      try {
+        const url = new URL(item.url, location.origin);
+        if (['https:','http:'].includes(url.protocol)) html += '<p><a href="'+esc(url.href)+'" target="_blank" rel="noopener noreferrer">Open source evidence</a></p>';
+      } catch (_) { /* Invalid evidence URLs remain visible as text. */ }
+    }
+    return html;
+  }
+  function records(items, empty) {
+    return list(items).length ? items.map(item => '<div class="ow-record">'+(item && typeof item === 'object' ? '<dl>'+Object.entries(item).map(([k,v]) => '<dt>'+esc(k.replace(/_/g,' '))+'</dt><dd>'+esc(plain(v))+'</dd>').join('')+'</dl>' : esc(item))+recordActions(item)+'</div>').join('') : '<p>'+esc(empty)+'</p>';
+  }
+  function disclosure(title, items, empty) { return '<details><summary>'+title+'</summary>'+records(items,empty)+'</details>'; }
+  function render() {
+    const focusKey = document.activeElement?.dataset.owAction;
+    root.querySelector('h1').textContent = view === 'needs' ? 'Needs you' : 'Today';
+    root.querySelectorAll('[data-ow-view]').forEach(b => b.setAttribute('aria-pressed',String(b.dataset.owView === view)));
+    freshness.textContent = loadedAt ? 'Last refreshed '+date(loadedAt)+' · refresh to check for changes' : 'No snapshot loaded';
+    if (view === 'needs') {
+      // Only explicit prepared, linked requests are presented as ready decisions.
+      const refs = outcomes.flatMap(o => list(o.decision_refs).map(ref => ({o,ref})));
+      const ready = refs.filter(({ref}) => ref && typeof ref === 'object' && ref.request_id && (!ref.kind || ref.kind === 'question') && !['closed','answered','accepted','cancelled','applied','verified'].includes(ref.status || ref.state) && (ref.prepared === true || ref.state === 'prepared')).sort((a,b) => (Number(a.ref.rank)||9999)-(Number(b.ref.rank)||9999));
+      content.innerHTML = '<section class="ow-needs"><p>Review and answer through the existing Decisions workspace.</p>'+button('decisions','Open Decisions')+(ready.length ? ready.map(({o,ref}) => '<article class="ow-record"><h2>'+esc(ref.title || o.title)+'</h2><p>'+esc(ref.rank_reason || 'Priority reason not supplied')+'</p>'+records([ref],'')+'<p>Linked outcome: '+esc(o.title)+'</p>'+button('decisions','Review in Decisions')+'</article>').join('') : '<p class="ow-empty">No prepared linked decisions in this snapshot.</p>')+(refs.length > ready.length ? '<p>Other decision references are awaiting preparation or identity linkage. Open Decisions to inspect their source status.</p>' : '')+'</section>';
+      return;
+    }
+    const verifiedIncident = o => list(o.incidents).concat(o.incident?[o.incident]:[]).some(i => i.verified === true);
+    const sorted = outcomes.slice().sort((a,b) => Number(verifiedIncident(b))-Number(verifiedIncident(a)) || Number(!!b.commitment)-Number(!!a.commitment) || (Number(a.rank)||9999)-(Number(b.rank)||9999));
+    if (!current() && sorted.length) selected = sorted[0].id;
+    const o = current();
+    if (!o) { content.innerHTML = '<p class="ow-empty">'+(loadedAt ? 'No outcomes yet. Create a proposal to define a goal and finish line.' : 'Load outcomes to see your commitments.')+'</p>'; return; }
+    const next = o.next_action || {};
+    const responsibility = typeof o.responsibility === 'string' ? o.responsibility : plain(o.responsibility || 'Unassigned');
+    const gap = !next.text || !next.owner || !next.trigger;
+    const incidents = sorted.filter(verifiedIncident).map(x => '<p class="ow-warning">Verified incident: '+esc(x.title)+' <button type="button" data-ow-select="'+esc(x.id)+'">Review incident</button></p>').join('');
+    content.innerHTML = incidents+'<div class="ow-mobile-select"><label for="owSelect">Selected outcome</label><select id="owSelect">'+sorted.map(x => '<option value="'+esc(x.id)+'"'+(x.id===o.id?' selected':'')+'>'+esc((x.commitment?'Committed · ':'Proposal / other · ')+x.title)+'</option>').join('')+'</select></div><div class="ow-layout"><aside class="ow-agenda" aria-label="Select outcome">'+sorted.map(x => '<button type="button" data-ow-select="'+esc(x.id)+'" aria-pressed="'+(x.id===o.id)+'"><strong>'+esc(x.title)+'</strong><small>'+esc(x.commitment?'Committed · rank '+(x.rank || 'not set'):'Not committed · '+(x.state || 'proposal'))+'</small></button>').join('')+'</aside><article class="ow-brief" aria-label="Selected outcome brief"><h2 tabindex="-1">'+esc(o.title)+'</h2><p>'+esc(o.goal)+'</p><p class="ow-state">'+esc(o.state || 'Unknown state')+' · '+esc(o.health || 'Health unknown')+' · '+(o.commitment?'Committed':'Not committed')+'</p><h3>The finish line</h3><ul>'+list(o.criteria).map(c => '<li>'+esc(c.text || c)+(c.required===false?' (optional)':'')+'</li>').join('')+'</ul><h3>Priority and timing</h3><p>'+esc(o.priority_reason || o.rank_reason || o.description || 'No priority reason supplied')+'</p><p>Rank: '+esc(o.rank || 'Not set')+' · Deadline: '+esc(date(o.deadline))+'</p><h3>What changed</h3><p>'+esc(plain(o.changed || o.summary || o.latest_change || 'No change summary supplied'))+'</p><p class="ow-state">Source updated: '+esc(date(o.updated_at))+' · Revision '+esc(o.revision)+'</p><h3>Next action</h3><p>'+esc(next.text || 'No next action recorded')+'</p><p>Responsible: '+esc(responsibility)+'<br>Action owner: '+esc(next.owner || 'Unassigned')+'<br>Next trigger: '+esc(plain(next.trigger || 'Not recorded'))+'<br>Due: '+esc(date(next.due_at))+'</p>'+(gap?'<p class="ow-warning">Organization gap: next action, responsible owner or trigger is missing. Agent recovery is needed; this is not an owner decision.</p>':'')+'<div class="ow-actions">'+button('edit','Edit outcome')+button('commit',o.commitment?'Remove commitment':'Commit to focus')+button('park',o.state==='parked'?'Return to proposal':'Park outcome')+'</div>'+disclosure('Incidents and displaced commitments',list(o.incidents).concat(o.incident?[o.incident]:[],list(o.displacements),o.displacement?[o.displacement]:[]),'No incident or displacement supplied.')+disclosure('Organization check and unapplied findings',list(o.gaps).concat(list(o.findings)),'No organization findings supplied. Missing runtime evidence is not proof of health.')+disclosure('Supporting work, provenance and evidence',list(o.links).concat(list(o.evidence)),'No linked work or criterion evidence supplied.')+disclosure('Decision linkage',o.decision_refs,'No linked decisions. Use Needs you to open existing Decisions.')+disclosure('Agent runtime and receipts',list(o.attempts).concat(o.runtime?[o.runtime]:[]),'No active runtime supplied. A proposed role is not a staffed agent.')+'</article></div>';
+    if (focusKey) root.querySelector('[data-ow-action="'+focusKey+'"]')?.focus();
+  }
+  function busy(value) {
+    root.querySelector('[data-ow-action="cancel"]').hidden = !value;
+    root.querySelector('[data-ow-action="refresh"]').disabled = value || !!editor.childElementCount;
+    root.querySelectorAll('button:not([data-ow-action="cancel"]):not([data-ow-action="close"]):not([data-ow-action="everything"])').forEach(b => { b.disabled = value; });
+    if (!value && editor.childElementCount) root.querySelector('[data-ow-action="refresh"]').disabled = true;
+    root.setAttribute('aria-busy',String(value));
+  }
+  async function api(action, payload) {
+    if (request) return;
+    const controller = new AbortController(); request = controller; busy(true); message(action?'Saving outcome…':'Loading outcomes…');
+    const timer = setTimeout(() => controller.abort(),12000);
+    try {
+      const response = await fetch('/api/outcomes'+(action?'/'+action:''), {method:action?'POST':'GET', cccPriority:'user', cache:'no-store',signal:controller.signal,headers:action?{'Content-Type':'application/json'}:{},...(action?{body:JSON.stringify(payload)}:{})});
+      let data; try { data = await response.json(); } catch (_) { throw Error('Outcome service returned an unreadable response. Refresh to retry.'); }
+      if (!response.ok || data.ok === false) throw Error((response.status===409?'Revision conflict. Refresh before saving again. ': '')+plain(data.error || data.errors || 'Outcome request failed ('+response.status+').'));
+      if (action) {
+        if (!data.outcome || !data.outcome.id) throw Error('Save receipt is missing. Refresh to reconcile before trying again.');
+        outcomes = outcomes.filter(o => o.id !== data.outcome.id).concat(data.outcome); selected = data.outcome.id; editor.replaceChildren();
+        message('Saved. The server record is shown below.');
+      } else {
+        if (!Array.isArray(data.outcomes)) throw Error('Outcome list is missing. Existing snapshot retained.');
+        outcomes = data.outcomes; loadedAt = Date.now(); message(outcomes.length?'Outcomes refreshed.':'Outcome registry is empty.');
+      }
+      if (!root.hidden) render();
+    } catch (err) {
+      if (!root.hidden) message((err.name==='AbortError' ? (action?'Request cancelled or timed out. A save may have reached the server; refresh before retrying.':'Read cancelled or timed out. Refresh to try again.') : err.message)+(loadedAt?' Previous snapshot retained; it may be stale.':''),true);
+    } finally { clearTimeout(timer); if (request===controller) {request=null; busy(false);} }
+  }
+  function form(o) {
+    if (request) return;
+    editor.innerHTML = '<form class="ow-form"><h2>'+(o?'Edit outcome':'New outcome proposal')+'</h2><label>Title<input name="title" required maxlength="200" value="'+esc(o?.title || '')+'"></label><label>Goal<textarea name="goal" required>'+esc(o?.goal || '')+'</textarea></label><label>Finish line · one criterion per line<textarea name="criteria" required>'+esc(list(o?.criteria).map(c=>c.text || c).join('\n'))+'</textarea></label><label>Repository path<input name="repo_path" required value="'+esc(o?.repo_path || '')+'"></label><label>Queue<input name="queue" value="'+esc(o?.queue || '')+'"></label><label>Priority reason<textarea name="description">'+esc(o?.priority_reason || o?.rank_reason || o?.description || '')+'</textarea></label><label>Rank<input name="rank" type="number" min="1" step="1" value="'+esc(o?.rank || '')+'"></label><label>Deadline · include timezone<input name="deadline" placeholder="YYYY-MM-DDTHH:mm:ssZ" value="'+esc(o?.deadline || '')+'"></label><p>Saving a proposal does not commit it to focus or establish delivery.</p><div class="ow-actions"><button type="submit">Save '+(o?'changes':'proposal')+'</button>'+button('discard','Cancel editing')+'</div></form>';
+    if (o) { editor.querySelector('[name="repo_path"]').readOnly = true; editor.querySelector('[name="queue"]').readOnly = true; }
+    busy(false); editor.querySelector('input').focus();
+    editor.querySelector('form').addEventListener('submit', event => {
+      event.preventDefault(); if (request) return;
+      const fields = new FormData(event.target), patch = Object.fromEntries(fields);
+      const texts = patch.criteria.split('\n').map(s=>s.trim()).filter(Boolean);
+      if (!texts.length) {message('Add at least one finish-line criterion.',true); return;}
+      // Preserve criterion identities and metadata while editing their text.
+      patch.criteria = texts.map((text,i) => ({...(list(o?.criteria)[i] || {id:'criterion-'+(i+1),required:true}),text}));
+      patch.rank = patch.rank ? Number(patch.rank) : 0;
+      patch.deadline = patch.deadline.trim() || null;
+      if (patch.deadline && !Number.isFinite(Date.parse(patch.deadline))) { message('Enter a valid deadline with timezone, or leave it blank.',true); return; }
+      if (o) { delete patch.repo_path; delete patch.queue; api('update',{id:o.id,expected_revision:o.revision,patch}); }
+      else api('create',{...patch,state:'proposed',commitment:false});
+    });
+  }
+  function close() {
+    request?.abort(); root.hidden=true; document.body.classList.remove('outcomes-open'); editor.replaceChildren();
+    for (const [el,prior] of background) el.inert=prior;
+    background=[];
+    const url=new URL(location.href); url.searchParams.delete('workspace'); history.replaceState(null,'',url);
+    (returnFocus?.isConnected?returnFocus:entry).focus();
+  }
+  let background=[];
+  function open() {
+    returnFocus=document.activeElement; root.hidden=false; document.body.classList.add('outcomes-open');
+    background=Array.from(document.body.children).filter(el=>el!==root && !['SCRIPT','STYLE'].includes(el.tagName)).map(el=>[el,el.inert]);
+    background.forEach(([el])=>{el.inert=true;});
+    const url=new URL(location.href);url.searchParams.set('workspace','outcomes');history.replaceState(null,'',url);
+    root.querySelector('h1').focus(); render(); api();
+  }
+  root.addEventListener('keydown',event=>{
+    if (event.key !== 'Tab') return;
+    const nodes = Array.from(root.querySelectorAll('button:not(:disabled),input,textarea,select,a[href],summary')).filter(el=>el.getClientRects().length);
+    const first=nodes[0], last=nodes[nodes.length-1];
+    if (event.shiftKey && (document.activeElement===first || document.activeElement===root.querySelector('h1'))) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement===last) {event.preventDefault();first?.focus();}
+  });
+  entry.addEventListener('click',open);
+  root.addEventListener('change',event=>{if(event.target.id==='owSelect'){selected=event.target.value;render();root.querySelector('.ow-brief h2')?.focus();}});
+  root.addEventListener('click',event=>{
+    const target=event.target.closest('button'); if(!target) return;
+    if(target.dataset.owSession){close();window.cccOpenSession?.(target.dataset.owSession);return;}
+    if(target.dataset.owSelect){selected=target.dataset.owSelect;render();return;}
+    if(target.dataset.owView){if(editor.childElementCount){message('Save or cancel editing before changing views.');return;} view=target.dataset.owView;render();return;}
+    const action=target.dataset.owAction, o=current();
+    if(action==='close'||action==='everything') close();
+    else if(action==='cancel') request?.abort();
+    else if(action==='refresh') api();
+    else if(action==='create') form(null);
+    else if(action==='edit'&&o) form(o);
+    else if(action==='discard'){editor.replaceChildren();busy(false);root.querySelector('[data-ow-action="create"]').focus();}
+    else if(action==='commit'&&o) api('update',{id:o.id,expected_revision:o.revision,patch:{commitment:!o.commitment,...(!o.commitment?{state:'active'}:{})}});
+    else if(action==='park'&&o) api('update',{id:o.id,expected_revision:o.revision,patch:{state:o.state==='parked'?'proposed':'parked',commitment:false}});
+    else if(action==='decisions') { close(); location.assign('/decision-guide.html'); }
+  });
+  // Finite, explicit refresh; no polling or model invocation on render.
+  window.addEventListener('pageshow',()=>{if(loadedAt&&!root.hidden) freshness.textContent='Snapshot from '+date(loadedAt)+' · refresh to check current state';});
+  if(new URLSearchParams(location.search).get('workspace')==='outcomes') open();
+})();

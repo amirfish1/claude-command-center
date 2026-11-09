@@ -236,6 +236,12 @@
   <!-- Core-app frame: Queues (q2) overlays the dashboard without unloading
        the session list. src is set on first open. Hidden until then.
        See cccSwitchCoreApp() in app.js and the rail click intercept. -->
+  <section id="outcomeWorkspace" class="outcome-workspace" aria-label="Outcome workspace" hidden>
+    <header class="ow-header"><h1 tabindex="-1">Today</h1><nav aria-label="Outcome workspace"><button type="button" data-ow-view="today" aria-pressed="true">Today</button><button type="button" data-ow-view="needs" aria-pressed="false">Needs you</button><button type="button" data-ow-action="everything">Everything</button></nav><button type="button" data-ow-action="close">Back to workspace</button></header>
+    <div class="ow-tools"><button type="button" data-ow-action="create">New outcome</button><button type="button" data-ow-action="refresh">Refresh</button><button type="button" data-ow-action="cancel" hidden>Cancel request</button><span id="owFreshness"></span></div>
+    <p id="owStatus" role="status" aria-live="polite"></p>
+    <div id="owEditor"></div><div id="owContent"></div>
+  </section>
   <iframe id="cccCoreAppFrame" class="ccc-core-app-frame" hidden title="q2"></iframe>
   <!-- Floating Annotate button for popout contexts (CCC-166). The topbar
        Annotate button is hidden by the popout CSS, so this floating affordance
@@ -608,6 +614,7 @@
          always-visible layer that also hosts the slim header and bottom
          nav. Home open therefore means "sidebar shows #simpleHome instead
          of the list chrome"; opening a conversation slides .main in. -->
+    <button type="button" class="outcome-entry" id="outcomeEntry" aria-controls="outcomeWorkspace">Today <span>Outcomes and commitments</span></button>
     <div class="simple-home" id="simpleHome" aria-label="Home">
       <!-- Home sections: user-orderable (drag handle) and collapsible (tap
            the heading row) so a section can be shrunk down to just its
