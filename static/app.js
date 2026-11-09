@@ -40757,7 +40757,7 @@
     'not-available',
   ]);
 
-  const _WT_LAUNCH_PROMPT_RE = /^(?:drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b|fix ticket \S+ on the \S+ watchtower queue\b|you are the planner for watchtower ticket |you are an independent (?:plan reviewer|verifier) for watchtower ticket |you are the independent post-fix assessor for the bug ticket )/;
+  const _WT_LAUNCH_PROMPT_RE = /^(?:drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b|fix ticket \S+ on the \S+ watchtower queue\b|you are the planner for watchtower ticket |you are an independent (?:plan reviewer|verifier) for watchtower ticket |you are the independent post-fix assessor for the bug ticket |you are the bounded senior reviewer for )/;
   // Coarse lane guess for the render budget only (the authoritative split is
   // _allTabLaneFor inside renderConversationList, which also consults
   // WatchTower ledgers). Used to rank rows, never to hide them.
