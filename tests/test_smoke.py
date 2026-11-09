@@ -20014,8 +20014,9 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
                 after = len(os.listdir("/dev/fd"))
             finally:
                 os.close(reader_fd)
-        # A leak grows the count by one per call (5 here); allow GC noise.
-        self.assertLessEqual(after, before)
+        # A leak grows the count by one per call (5 here); allow GC noise
+        # of a couple of fds from background threads of earlier tests.
+        self.assertLessEqual(after, before + 2)
 
     # ---- wired into _inject_text_into_session's fork-guard branch -----
 

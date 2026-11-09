@@ -28,6 +28,9 @@ def test_annotation_enqueue_does_not_wait_for_worker_dispatch():
         mock.patch.object(server, "_q", Queue()),
         mock.patch.object(server, "_WT_WORKERS_AVAILABLE", True),
         mock.patch.object(server, "_wt_workers", Workers()),
+        # resolve_repo_path shells out to git (1.1s on a loaded release
+        # host); this test times only the dispatch hand-off.
+        mock.patch.object(server, "resolve_repo_path", lambda p: p),
     ):
         began = time.monotonic()
         result = server.enqueue_annotation_ux_fixes_queue(
