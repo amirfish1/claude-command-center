@@ -95694,16 +95694,16 @@
     // Task destinations; legacy tabs remain as hidden deep-link adapters.
     // Engines is last: a reference list of what CCC supports, set up once.
     const destinations = [
+      ['appearance', 'Appearance', ['appearance','layout']],
       ['defaults', 'Agents', ['defaults','routing']],
       ['queues', 'Queues', ['queues']],
-      ['appearance', 'Workspace', ['appearance','layout','preferences']],
       ['notifications', 'Notifications & voice', ['notifications','voice']],
       ['vault', 'Vault', ['vault','api-keys','network']],
       ['sessions', 'Usage & budgets', ['sessions','limits']],
       ['maintenance', 'System', ['maintenance','capabilities','experimental']],
       ['engines', 'Engines', ['engines']],
       // Untested extras live on their own page at the very end.
-      ['leftover', 'Advanced', ['leftover','free']],
+      ['leftover', 'Advanced', ['leftover','free','preferences','reset-all']],
     ];
     window.cccSettingsDestinations = destinations;
     const titles = {defaults:'Launch defaults', engines:'Install & connect engines',
@@ -95713,6 +95713,20 @@
       sessions:'Subscription costs', limits:'Usage limits', leftover:'Use spare quota',
       free:'Free model setup', capabilities:'Optional capabilities', maintenance:'Diagnostics & config access',
       tools:'Workspace tools', help:'Help & setup', experimental:'Preview features'};
+    // One reset for the whole browser-side look, on Advanced. The per-page
+    // reset buttons stay in the DOM (hidden) and do the actual work.
+    if (!document.getElementById('settingsSection-reset-all')) {
+      const reset = document.createElement('section');
+      reset.id = 'settingsSection-reset-all'; reset.className = 'settings-section';
+      reset.dataset.sectionId = 'reset-all'; reset.setAttribute('role', 'tabpanel');
+      reset.innerHTML = '<div class="settings-row" data-keywords="reset all settings defaults restore appearance layout list theme font"><div class="settings-row-main"><div class="settings-row-label">Reset all settings</div></div>'
+        + '<div class="settings-row-control"><button type="button" class="settings-action-btn" id="settingsResetAll">Reset</button></div></div>';
+      pane.append(reset);
+      reset.querySelector('#settingsResetAll').addEventListener('click', () => {
+        if (!window.confirm('Reset theme, font, font size, list and layout settings in this browser to their defaults?')) return;
+        pane.querySelectorAll('#settingsResetAppearance, #settingsResetLayout, [data-reset-list], [aria-label="Reset conversation text size"]').forEach(button => button.click());
+      });
+    }
     function consolidate() {
       for (const [primary, title, ids] of destinations) {
         let nav = rail.querySelector('[data-settings-destination="'+primary+'"]');
@@ -95737,7 +95751,7 @@
           section.dataset.consolidated='true';
           const heading=section.querySelector('.settings-section-eyebrow');
           if(heading) heading.textContent=titles[id] || heading.textContent;
-          if(id !== primary) {
+          if(id !== primary && id !== 'layout' && id !== 'reset-all') {
             const disclosure=document.createElement('details');
             disclosure.className='settings-disclosure';
             // A live list of sessions waiting on a limit is never tucked away.
@@ -95766,6 +95780,16 @@
       _settingsSearchIndex=null;
     }
     consolidate();
+    // Appearance leads with the four things people actually change: theme,
+    // font, font size, simple mode. Everything else follows (CSS `order`).
+    const look = pane.querySelector('[data-section-id="appearance"]');
+    if (look) {
+      const simple = document.getElementById('settingsUiModeToggle')?.closest('.settings-row');
+      if (simple) look.append(simple);
+      const byLabel = text => [...look.querySelectorAll(':scope > .settings-row')].find(row => row.querySelector('.settings-row-label')?.textContent.trim() === text);
+      [byLabel('Theme'), byLabel('Font'), look.querySelector('[data-context-home="reader"]'), simple]
+        .forEach((row, index) => { if (row) row.style.order = String(index + 1); });
+    }
     // Optional integrations register their sections after app startup.
     new MutationObserver(records => {
       if(records.some(record => [...record.addedNodes].some(node =>

@@ -34563,3 +34563,14 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 /* Usage & budgets: limits appear only while sessions wait. */
 #settingsSection-limits.ccc-limits-empty { display: none !important; }
 #cfgConsentModal .settings-scope-container { display: none !important; }
+
+/* Appearance: theme, font, font size, simple mode first; the rest after. */
+#settingsPane #appearancePopover.is-active-section { display: flex !important; flex-direction: column; }
+#appearancePopover > * { order: 10; }
+#appearancePopover > .settings-section-eyebrow { order: 0; }
+#appearancePopover > .settings-reset-row { order: 20; }
+#appearancePopover > [data-context-home="reader"] { order: 3; }
+
+/* One "Reset all settings" lives on Advanced; per-page resets are hidden. */
+#settingsPane :is(.settings-reset-row, [data-reset-list], [aria-label="Reset conversation text size"]) { display: none !important; }
+#settingsSection-layout > .settings-section-eyebrow { display: none; }

@@ -16,7 +16,7 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
     await page.goto(base+'/?ccc_settings=defaults',{waitUntil:'domcontentloaded'});
     await page.waitForSelector('#settingsModal.open');
     const visibleTabs = () => page.evaluate(() => [...document.querySelectorAll('#settingsRail .settings-rail-item')].filter(el=>el.offsetParent).map(el=>el.textContent.trim()));
-    assert.deepEqual(await visibleTabs(),['Agents','Queues','Workspace','Notifications & voice','Vault','Usage & budgets','System','Engines','Advanced']);
+    assert.deepEqual(await visibleTabs(),['Appearance','Agents','Queues','Notifications & voice','Vault','Usage & budgets','System','Engines','Advanced']);
     assert.equal(await page.$$eval('#settingsPane #settingsModelUsage, #settingsPane #settingsSection-tools, #settingsPane #settingsSection-help',els=>els.length),0);
     assert.equal(await page.$eval('#settingsActionsUsage',el=>el.open),false);
     for (const id of ['appearance','notifications','vault','sessions','maintenance','defaults']) {
@@ -39,7 +39,7 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
     await page.click('[data-settings-destination="appearance"]');
     await page.focus('[data-settings-destination="appearance"]');
     await page.keyboard.press('ArrowDown');
-    assert.equal(await page.evaluate(()=>document.activeElement.dataset.settingsDestination),'notifications');
+    assert.equal(await page.evaluate(()=>document.activeElement.dataset.settingsDestination),'defaults');
     // Existing adapters still open their correct disclosure.
     for (const id of ['engines','queues','routing']) {
       await page.$eval('#settingsRailTab-'+id,el=>el.click());

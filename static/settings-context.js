@@ -204,7 +204,7 @@
       list.append(element);
     } }
     const cycle = get('chipsColorToggle'); if (cycle) { cycle.hidden = true; list.append(cycle); }
-    const listReset = make('button', 'Reset list presentation'); listReset.type = 'button'; listReset.className = 'settings-action-btn';
+    const listReset = make('button', 'Reset list presentation'); listReset.type = 'button'; listReset.className = 'settings-action-btn'; listReset.dataset.resetList = '';
     listReset.addEventListener('click', () => hooks.resetList()); list.append(listReset);
     list.addEventListener('click', hooks.preferenceClick);
 
@@ -227,7 +227,7 @@
     // Move the real stepper now, before removing its old row.
     const stepper = reader.querySelector('.font-size-controls') || get('fontMinus')?.closest('.font-size-controls');
     if (stepper) reader.append(stepper);
-    reader.prepend(make('p', 'Text size · This browser'));
+    reader.prepend(make('p', 'Font size'));
     const reset = make('button', 'Reset'); reset.type = 'button'; reset.className = 'font-size-btn'; reset.style.width = 'auto'; reset.setAttribute('aria-label', 'Reset conversation text size');
     reset.addEventListener('click', hooks.resetReader); reader.append(reset); syncReader(); readerRow?.remove();
     // One canonical stepper follows the reader menu; pane cloning excludes it.

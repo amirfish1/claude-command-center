@@ -9,3 +9,19 @@
 #settingsConfigurationHistory summary {cursor:pointer;padding:12px 0}
 #settingsConfigurationHistory :is(button,summary):focus-visible {outline:2px solid var(--accent);outline-offset:2px}
 @media(max-width:600px){#settingsConfigurationHistory dl {grid-template-columns:1fr;gap:4px}#settingsConfigurationHistory dd {margin-bottom:8px}#settingsConfigurationHistory button,#settingsConfigurationHistory summary {min-height:44px}}
+
+/* Condensed: one row per change (what, when, fields, details, undo), scrollable. */
+#settingsConfigurationHistory { margin:8px 0 16px; padding-bottom:12px; }
+#settingsConfigurationHistory h3 { font-size:15px; margin:0 0 8px; }
+#settingsHistoryEntries { max-height:320px; overflow:auto; margin:6px 0; }
+#settingsHistoryEntries > li { display:grid; grid-template-columns:minmax(0,.9fr) minmax(0,1fr) minmax(0,1.4fr) auto auto; gap:0 12px; align-items:center; padding:4px 0; font-size:12.5px; }
+#settingsHistoryEntries > li > p { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); }
+#settingsHistoryEntries > li > p:nth-of-type(3) { display:none; }
+#settingsHistoryEntries > li > details > summary { padding:2px 0; font-size:0; }
+#settingsHistoryEntries > li > details > summary::after { content:'Before / after'; font-size:12px; }
+#settingsHistoryEntries > li > details[open] { grid-column:1 / -1; order:5; }
+#settingsHistoryEntries > li > button { font-size:0; padding:2px 8px; min-height:0; margin:0; }
+#settingsHistoryEntries > li > button::after { content:'Undo'; font-size:12px; }
+#settingsHistoryEntries > li > button[disabled] { visibility:hidden; }
+#settingsHistoryEntries li li { padding:4px 0; }
+@media(max-width:600px){ #settingsHistoryEntries > li { grid-template-columns:minmax(0,1fr) auto auto; } #settingsHistoryEntries > li > p { display:none; } #settingsHistoryEntries > li > button { min-height:44px; } }
