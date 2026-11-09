@@ -1,0 +1,1 @@
+- Settings → Queues has a "+ Add" button: name the queue, pick its repository, save. New queues start manual, like queues created elsewhere.

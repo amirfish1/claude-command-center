@@ -95815,7 +95815,14 @@
       block('defaults', 'agentsOverview', head('aoDefTitle', 'Launch defaults', 'aoDefSub', '')
         + '<div class="ao-defaults-bar" id="aoDefaultsBar"></div>'
         + '<button type="button" class="ao-link" data-ao-advanced>Worker fallback &amp; model profiles →</button>'),
-      block('queues', 'agentsOverviewQueues', head('aoQueueTitle', 'Queues', 'aoQueueSub', 'Loading queues…')
+      block('queues', 'agentsOverviewQueues', head('aoQueueTitle', 'Queues', 'aoQueueSub', 'Loading queues…',
+          '<button type="button" class="settings-action-btn" id="aoQueueAdd" data-ao-queue-add>+ Add</button>')
+        + '<form class="ao-q-add" id="aoQueueAddForm" hidden>'
+        + '<input type="text" class="settings-text-input" id="aoQueueAddName" placeholder="Name" aria-label="Queue name" autocomplete="off" spellcheck="false" maxlength="64">'
+        + '<select class="settings-select" id="aoQueueAddRepo" aria-label="Repository"></select>'
+        + '<button type="submit" class="settings-action-btn" id="aoQueueAddSave">Save</button>'
+        + '<button type="button" class="settings-action-btn" data-ao-queue-add-cancel>Cancel</button>'
+        + '<span class="ao-q-add-status" id="aoQueueAddStatus" role="status"></span></form>'
         + '<div class="ao-q-list" id="aoQueueList" role="list"></div>'),
       block('engines', 'agentsOverviewEngines', head('aoEngTitle', 'Engines', 'aoEngSub', 'Checking your engines…', '<div class="ao-stats" id="aoEngStats"></div>')
         + '<div class="ao-eng-list" id="aoEngGroups" role="list"></div>'),
@@ -95826,7 +95833,17 @@
       if (setup) { openEngineSetupPopup(setup.dataset.aoSetup); return; }
       const inherit = event.target.closest('[data-ao-inherit]');
       if (inherit) { aoSaveDefaults({worker_inherit_session: inherit.dataset.aoInherit === 'on'}, inherit.dataset.aoInherit === 'on' ? 'Queue workers now follow new sessions.' : 'Queue workers now have their own engine.'); return; }
-      if (event.target.closest('[data-ao-advanced]')) openAdvancedRoutingPopup();
+      if (event.target.closest('[data-ao-advanced]')) { openAdvancedRoutingPopup(); return; }
+      if (event.target.closest('[data-ao-queue-add]')) { aoOpenQueueAdd(); return; }
+      if (event.target.closest('[data-ao-queue-add-cancel]')) aoCloseQueueAdd();
+    });
+    on('input', event => {
+      if (event.target.id === 'aoQueueAddName') document.getElementById('aoQueueAddStatus').textContent = '';
+    });
+    on('submit', event => {
+      if (event.target.id !== 'aoQueueAddForm') return;
+      event.preventDefault();
+      aoSaveQueueAdd();
     });
     on('change', event => {
       const pick = event.target.closest('[data-ao-pick]');
@@ -95849,6 +95866,59 @@
       const q = event.target.closest('[data-ao-queue-engine]');
       if (q) aoSetQueueEngine(q.dataset.aoQueueEngine, q.value, q);
     });
+  }
+  // New queues start manual (auto-drain off), the same as every other
+  // creation path: nothing runs until someone starts workers.
+  async function aoOpenQueueAdd() {
+    const form = document.getElementById('aoQueueAddForm');
+    const repo = document.getElementById('aoQueueAddRepo');
+    const status = document.getElementById('aoQueueAddStatus');
+    if (!form) return;
+    form.hidden = false;
+    status.textContent = '';
+    document.getElementById('aoQueueAddName').focus();
+    try {
+      const res = await fetch('/api/queue/config-options', {method: 'POST', cccPriority: 'user'});
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+      const keep = repo.value;
+      repo.innerHTML = (data.repo_paths || []).map(p => '<option value="' + escapeHtml(p) + '" title="' + escapeHtml(p) + '">'
+        + escapeHtml(String(p).replace(/\/+$/, '').split('/').pop() || p) + '</option>').join('');
+      if (keep) repo.value = keep;
+    } catch (err) {
+      status.textContent = 'Could not load repositories: ' + ((err && err.message) || 'network');
+    }
+  }
+  function aoCloseQueueAdd() {
+    const form = document.getElementById('aoQueueAddForm');
+    if (!form) return;
+    form.hidden = true;
+    form.reset();
+    document.getElementById('aoQueueAddStatus').textContent = '';
+    document.getElementById('aoQueueAdd')?.focus();
+  }
+  async function aoSaveQueueAdd() {
+    const nameEl = document.getElementById('aoQueueAddName');
+    const status = document.getElementById('aoQueueAddStatus');
+    const save = document.getElementById('aoQueueAddSave');
+    const name = _uxqNormalizeQueueName(nameEl.value);
+    const repoPath = document.getElementById('aoQueueAddRepo').value;
+    if (!name || !/^[A-Z0-9]/.test(name)) { status.textContent = 'Name needs letters or numbers.'; nameEl.focus(); return; }
+    if (!repoPath) { status.textContent = 'Pick a repository.'; return; }
+    const taken = ((_agentsOverviewQueues && _agentsOverviewQueues.queues) || []).some(q => String(q.queue).toUpperCase() === name);
+    if (taken) { status.textContent = name + ' already exists.'; nameEl.focus(); return; }
+    save.disabled = true;
+    try {
+      await aoPost('/api/queue/config', {queue: name, repo_path: repoPath, auto_drain: false, backend: 'file', desired_workers: 1, claim_types: []});
+      aoCloseQueueAdd();
+      document.activeElement?.blur?.();
+      await refreshAgentsOverview();
+      document.getElementById('aoQueueAdd')?.focus();
+    } catch (err) {
+      status.textContent = 'Could not add: ' + ((err && err.message) || 'network');
+    } finally {
+      save.disabled = false;
+    }
   }
   function aoEngineLabel(engine) { return (ENGINE_HUB_META[engine] || {}).label || engine; }
   function aoMono(engine) {

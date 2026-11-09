@@ -34551,3 +34551,11 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
   body.has-mobile-bottom-nav { padding-left: 0 !important; }
   body.has-mobile-bottom-nav :is(.ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag, .ccc-account-wrap, .ccc-account-pop) { display: none !important; }
 }
+
+/* Queues page: inline add form under the header. */
+.ao-q-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 8px; align-items: center; margin: 0 0 12px; }
+.ao-q-add[hidden] { display: none; }
+.ao-q-add .settings-text-input, .ao-q-add .settings-select { width: 100%; box-sizing: border-box; }
+.ao-q-add-status { grid-column: 1 / -1; font-size: 12px; color: var(--text-muted); }
+.ao-q-add-status:empty { display: none; }
+@media (max-width: 700px) { .ao-q-add { grid-template-columns: 1fr; } .ao-q-add :is(input, select, button) { min-height: 44px; } }
