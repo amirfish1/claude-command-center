@@ -1,1 +1,1 @@
-- Add an opt-in Today outcome workspace with selected briefs, durable proposal and commitment editing, evidence and runtime disclosures, and existing Decisions fallback; preserve Simple and Flow navigation.
+- Add a default-off outcome workspace setting: opted-in installations use Today, Needs you, and Everything navigation, with durable proposal and commitment editing, evidence/runtime disclosures, and existing Decisions actions; existing session modes remain available under Everything.

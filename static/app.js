@@ -22147,6 +22147,18 @@
       renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
     }
   }
+  // The opt-in outcome shell consolidates diagnostic tabs into one selector.
+  // Reuse the original navigation paths, including Simple-mode screens.
+  window.cccInspectWorkspace = function (tab) {
+    const known = ['inprogress','coding','workers','queues','jobs','issues','archived','alltickets','ideas','smallbugs','ask'];
+    if (!/^[a-z0-9_-]+$/.test(tab) || (!known.includes(tab) && !Array.from(document.querySelectorAll('[data-conv-tab]')).some(el=>el.dataset.convTab===tab))) return false;
+    if (isSimpleMode()) {
+      _simpleOpenScreen(tab === 'queues' ? 'automations' : 'history');
+    } else {
+      _activateSidebarTabFromMobileNav(tab);
+    }
+    return true;
+  };
   function _syncMobileBottomNav() {
     const nav = document.getElementById('mobileBottomNav');
     if (!nav) return;
@@ -99219,8 +99231,14 @@
 (function outcomeWorkspace() {
   'use strict';
   const root = document.getElementById('outcomeWorkspace');
-  const entry = document.getElementById('outcomeEntry');
-  if (!root || !entry) return;
+  const navigation = document.getElementById('outcomeNavigation');
+  const toggle = document.getElementById('outcomeSettingToggle');
+  const settingStatus = document.getElementById('outcomeSettingStatus');
+  const settingRetry = document.getElementById('outcomeSettingRetry');
+  if (!root || !navigation || !toggle) return;
+  let enabled = false;
+  window.outcomes_workspace_enabled = false;
+  const popout = new URLSearchParams(location.search).has('ccc_popout') || !!window.__CCC_CONVERSATION_POPOUT__;
   const content = root.querySelector('#owContent');
   const editor = root.querySelector('#owEditor');
   const status = root.querySelector('#owStatus');
@@ -99248,15 +99266,37 @@
     return list(items).length ? items.map(item => '<div class="ow-record">'+(item && typeof item === 'object' ? '<dl>'+Object.entries(item).map(([k,v]) => '<dt>'+esc(k.replace(/_/g,' '))+'</dt><dd>'+esc(plain(v))+'</dd>').join('')+'</dl>' : esc(item))+recordActions(item)+'</div>').join('') : '<p>'+esc(empty)+'</p>';
   }
   function disclosure(title, items, empty) { return '<details><summary>'+title+'</summary>'+records(items,empty)+'</details>'; }
+  const preparedQuestion = ref => ref && typeof ref === 'object' && ref.request_id && (!ref.kind || ref.kind === 'question') && !['closed','answered','accepted','cancelled','applied','verified'].includes(ref.status || ref.state) && (ref.prepared === true || ref.state === 'prepared');
+  function organizationCheck() {
+    const active=outcomes.filter(o=>o.state==='active');
+    const gaps=active.filter(o=>list(o.gaps).length || !o.next_action?.text || !o.next_action?.owner || !o.next_action?.trigger);
+    const exhausted=outcomes.filter(o=>o.health==='recovery_exhausted' || o.recovery?.state==='exhausted');
+    const ownerWaits=outcomes.filter(o=>['owner','user'].includes(o.next_action?.owner) || ['waiting_owner','awaiting_owner'].includes(o.state) || list(o.decision_refs).some(preparedQuestion));
+    const delivered=outcomes.filter(o=>o.state==='delivered');
+    const withEvidence=delivered.filter(o=>list(o.evidence).length);
+    const attempts=outcomes.flatMap(o=>list(o.attempts));
+    const attemptTime=a=>Date.parse(a.updated_at || a.started_at || a.created_at || '');
+    const timed=attempts.filter(a=>Number.isFinite(attemptTime(a)));
+    const recent=timed.filter(a=>attemptTime(a)<=Date.now() && Date.now()-attemptTime(a)<86400000);
+    const missing=[];
+    if(outcomes.some(o=>!Array.isArray(o.attempts))) missing.push('Attempt telemetry is not supplied for every outcome.');
+    if(attempts.length>timed.length) missing.push((attempts.length-timed.length)+' attempts have no usable timestamp.');
+    if(delivered.length>withEvidence.length) missing.push((delivered.length-withEvidence.length)+' delivered records lack evidence in this snapshot.');
+    if(outcomes.some(o=>!o.health || o.health==='unknown')) missing.push('Some outcome health is unknown.');
+    return '<details class="ow-health"><summary>Organization check · '+active.length+' active · '+outcomes.filter(o=>o.commitment).length+' committed</summary><p>Recorded workflow and evidence counts, not a measure of user value.</p><dl><dt>Active / committed</dt><dd>'+active.length+' / '+outcomes.filter(o=>o.commitment).length+'</dd><dt>Active outcomes with next-action gaps / recorded exhausted recovery</dt><dd>'+gaps.length+' / '+exhausted.length+'</dd><dt>Recorded owner waits</dt><dd>'+ownerWaits.length+'</dd><dt>Delivered with evidence in snapshot</dt><dd>'+withEvidence.length+'</dd><dt>Attempt records in the last 24 hours</dt><dd>'+recent.length+'</dd></dl><p>'+esc(missing.join(' ') || 'Counts reflect only the supplied records; missing activity cannot establish healthy operation.')+'</p></details>';
+  }
   function render() {
     const focusKey = document.activeElement?.dataset.owAction;
     root.querySelector('h1').textContent = view === 'needs' ? 'Needs you' : 'Today';
-    root.querySelectorAll('[data-ow-view]').forEach(b => b.setAttribute('aria-pressed',String(b.dataset.owView === view)));
+    navigation.querySelectorAll('[data-ow-view]').forEach(b => b.setAttribute('aria-pressed',String(b.dataset.owView === view)));
+    document.body.classList.remove('outcomes-everything');
+    document.getElementById('outcomeTools').hidden=true;
+    navigation.querySelector('[data-ow-action="everything"]').setAttribute('aria-pressed','false');
     freshness.textContent = loadedAt ? 'Last refreshed '+date(loadedAt)+' · refresh to check for changes' : 'No snapshot loaded';
     if (view === 'needs') {
       // Only explicit prepared, linked requests are presented as ready decisions.
       const refs = outcomes.flatMap(o => list(o.decision_refs).map(ref => ({o,ref})));
-      const ready = refs.filter(({ref}) => ref && typeof ref === 'object' && ref.request_id && (!ref.kind || ref.kind === 'question') && !['closed','answered','accepted','cancelled','applied','verified'].includes(ref.status || ref.state) && (ref.prepared === true || ref.state === 'prepared')).sort((a,b) => (Number(a.ref.rank)||9999)-(Number(b.ref.rank)||9999));
+      const ready = refs.filter(({ref}) => preparedQuestion(ref)).sort((a,b) => (Number(a.ref.rank)||9999)-(Number(b.ref.rank)||9999));
       content.innerHTML = '<section class="ow-needs"><p>Review and answer through the existing Decisions workspace.</p>'+button('decisions','Open Decisions')+(ready.length ? ready.map(({o,ref}) => '<article class="ow-record"><h2>'+esc(ref.title || o.title)+'</h2><p>'+esc(ref.rank_reason || 'Priority reason not supplied')+'</p>'+records([ref],'')+'<p>Linked outcome: '+esc(o.title)+'</p>'+button('decisions','Review in Decisions')+'</article>').join('') : '<p class="ow-empty">No prepared linked decisions in this snapshot.</p>')+(refs.length > ready.length ? '<p>Other decision references are awaiting preparation or identity linkage. Open Decisions to inspect their source status.</p>' : '')+'</section>';
       return;
     }
@@ -99266,10 +99306,10 @@
     const o = current();
     if (!o) { content.innerHTML = '<p class="ow-empty">'+(loadedAt ? 'No outcomes yet. Create a proposal to define a goal and finish line.' : 'Load outcomes to see your commitments.')+'</p>'; return; }
     const next = o.next_action || {};
-    const responsibility = typeof o.responsibility === 'string' ? o.responsibility : plain(o.responsibility || 'Unassigned');
+    const responsibility = typeof o.responsibility === 'string' ? o.responsibility : [o.responsibility?.role || 'Unassigned',o.responsibility?.ref].filter(Boolean).join(' · ');
     const gap = !next.text || !next.owner || !next.trigger;
     const incidents = sorted.filter(verifiedIncident).map(x => '<p class="ow-warning">Verified incident: '+esc(x.title)+' <button type="button" data-ow-select="'+esc(x.id)+'">Review incident</button></p>').join('');
-    content.innerHTML = incidents+'<div class="ow-mobile-select"><label for="owSelect">Selected outcome</label><select id="owSelect">'+sorted.map(x => '<option value="'+esc(x.id)+'"'+(x.id===o.id?' selected':'')+'>'+esc((x.commitment?'Committed · ':'Proposal / other · ')+x.title)+'</option>').join('')+'</select></div><div class="ow-layout"><aside class="ow-agenda" aria-label="Select outcome">'+sorted.map(x => '<button type="button" data-ow-select="'+esc(x.id)+'" aria-pressed="'+(x.id===o.id)+'"><strong>'+esc(x.title)+'</strong><small>'+esc(x.commitment?'Committed · rank '+(x.rank || 'not set'):'Not committed · '+(x.state || 'proposal'))+'</small></button>').join('')+'</aside><article class="ow-brief" aria-label="Selected outcome brief"><h2 tabindex="-1">'+esc(o.title)+'</h2><p>'+esc(o.goal)+'</p><p class="ow-state">'+esc(o.state || 'Unknown state')+' · '+esc(o.health || 'Health unknown')+' · '+(o.commitment?'Committed':'Not committed')+'</p><h3>The finish line</h3><ul>'+list(o.criteria).map(c => '<li>'+esc(c.text || c)+(c.required===false?' (optional)':'')+'</li>').join('')+'</ul><h3>Priority and timing</h3><p>'+esc(o.priority_reason || o.rank_reason || o.description || 'No priority reason supplied')+'</p><p>Rank: '+esc(o.rank || 'Not set')+' · Deadline: '+esc(date(o.deadline))+'</p><h3>What changed</h3><p>'+esc(plain(o.changed || o.summary || o.latest_change || 'No change summary supplied'))+'</p><p class="ow-state">Source updated: '+esc(date(o.updated_at))+' · Revision '+esc(o.revision)+'</p><h3>Next action</h3><p>'+esc(next.text || 'No next action recorded')+'</p><p>Responsible: '+esc(responsibility)+'<br>Action owner: '+esc(next.owner || 'Unassigned')+'<br>Next trigger: '+esc(plain(next.trigger || 'Not recorded'))+'<br>Due: '+esc(date(next.due_at))+'</p>'+(gap?'<p class="ow-warning">Organization gap: next action, responsible owner or trigger is missing. Agent recovery is needed; this is not an owner decision.</p>':'')+'<div class="ow-actions">'+button('edit','Edit outcome')+button('commit',o.commitment?'Remove commitment':'Commit to focus')+button('park',o.state==='parked'?'Return to proposal':'Park outcome')+'</div>'+disclosure('Incidents and displaced commitments',list(o.incidents).concat(o.incident?[o.incident]:[],list(o.displacements),o.displacement?[o.displacement]:[]),'No incident or displacement supplied.')+disclosure('Organization check and unapplied findings',list(o.gaps).concat(list(o.findings)),'No organization findings supplied. Missing runtime evidence is not proof of health.')+disclosure('Supporting work, provenance and evidence',list(o.links).concat(list(o.evidence)),'No linked work or criterion evidence supplied.')+disclosure('Decision linkage',o.decision_refs,'No linked decisions. Use Needs you to open existing Decisions.')+disclosure('Agent runtime and receipts',list(o.attempts).concat(o.runtime?[o.runtime]:[]),'No active runtime supplied. A proposed role is not a staffed agent.')+'</article></div>';
+    content.innerHTML = organizationCheck()+incidents+'<div class="ow-mobile-select"><label for="owSelect">Selected outcome</label><select id="owSelect">'+sorted.map(x => '<option value="'+esc(x.id)+'"'+(x.id===o.id?' selected':'')+'>'+esc((x.commitment?'Committed · ':'Proposal / other · ')+x.title)+'</option>').join('')+'</select></div><div class="ow-layout"><aside class="ow-agenda" aria-label="Select outcome">'+sorted.map(x => '<button type="button" data-ow-select="'+esc(x.id)+'" aria-pressed="'+(x.id===o.id)+'"><strong>'+esc(x.title)+'</strong><small>'+esc(x.commitment?'Committed · rank '+(x.rank || 'not set'):'Not committed · '+(x.state || 'proposal'))+'</small></button>').join('')+'</aside><article class="ow-brief" aria-label="Selected outcome brief"><h2 tabindex="-1">'+esc(o.title)+'</h2><p>'+esc(o.goal)+'</p><p class="ow-state">'+esc(o.state || 'Unknown state')+' · '+esc(o.health || 'Health unknown')+' · '+(o.commitment?'Committed':'Not committed')+'</p><h3>The finish line</h3><ul>'+list(o.criteria).map(c => '<li>'+esc(c.text || c)+(c.required===false?' (optional)':'')+'</li>').join('')+'</ul><h3>Priority and timing</h3><p>'+esc(o.priority_reason || o.rank_reason || o.description || 'No priority reason supplied')+'</p><p>Rank: '+esc(o.rank || 'Not set')+' · Deadline: '+esc(date(o.deadline))+'</p><h3>What changed</h3><p>'+esc(plain(o.changed || o.briefing || o.summary || o.latest_change || o.health_reason || 'No change summary supplied'))+'</p><p class="ow-state">Source updated: '+esc(date(o.updated_at))+' · Revision '+esc(o.revision)+'</p><h3>Next action</h3><p>'+esc(next.text || 'No next action recorded')+'</p><p>Responsible: '+esc(responsibility)+'<br>Action owner: '+esc(next.owner || 'Unassigned')+'<br>Next trigger: '+esc(plain(next.trigger || 'Not recorded'))+'<br>Due: '+esc(date(next.due_at))+'</p>'+(gap?'<p class="ow-warning">Organization gap: next action, responsible owner or trigger is missing. Agent recovery is needed; this is not an owner decision.</p>':'')+'<div class="ow-actions">'+button('edit','Edit outcome')+button('commit',o.commitment?'Remove commitment':'Commit to focus')+button('park',o.state==='parked'?'Return to proposal':'Park outcome')+'</div>'+disclosure('Incidents and displaced commitments',list(o.incidents).concat(o.incident?[o.incident]:[],list(o.displacements),o.displacement?[o.displacement]:[]),'No incident or displacement supplied.')+disclosure('Organization check and unapplied findings',list(o.gaps).concat(list(o.findings)),'No organization findings supplied. Missing runtime evidence is not proof of health.')+disclosure('Supporting work, provenance and evidence',list(o.links).concat(list(o.evidence)),'No linked work or criterion evidence supplied.')+disclosure('Decision linkage',o.decision_refs,'No linked decisions. Use Needs you to open existing Decisions.')+(!list(o.attempts).length && !o.runtime?'<p class="ow-state">No active attempt telemetry supplied. A responsibility record alone does not establish a running agent.</p>':'')+disclosure('Agent runtime and receipts',list(o.attempts).concat(o.runtime?[o.runtime]:[],o.responsibility && typeof o.responsibility==='object'?[{responsibility:o.responsibility}]:[]),'No active runtime supplied. A proposed role is not a staffed agent.')+'</article></div>';
     if (focusKey) root.querySelector('[data-ow-action="'+focusKey+'"]')?.focus();
   }
   function busy(value) {
@@ -99280,12 +99320,13 @@
     root.setAttribute('aria-busy',String(value));
   }
   async function api(action, payload) {
-    if (request) return;
+    if (!enabled || request) return;
     const controller = new AbortController(); request = controller; busy(true); message(action?'Saving outcome…':'Loading outcomes…');
     const timer = setTimeout(() => controller.abort(),12000);
     try {
       const response = await fetch('/api/outcomes'+(action?'/'+action:''), {method:action?'POST':'GET', cccPriority:'user', cache:'no-store',signal:controller.signal,headers:action?{'Content-Type':'application/json'}:{},...(action?{body:JSON.stringify(payload)}:{})});
       let data; try { data = await response.json(); } catch (_) { throw Error('Outcome service returned an unreadable response. Refresh to retry.'); }
+      if (data.code === 'outcomes_disabled') await installationSetting();
       if (!response.ok || data.ok === false) throw Error((response.status===409?'Revision conflict. Refresh before saving again. ': '')+plain(data.error || data.errors || 'Outcome request failed ('+response.status+').'));
       if (action) {
         if (!data.outcome || !data.outcome.id) throw Error('Save receipt is missing. Refresh to reconcile before trying again.');
@@ -99314,7 +99355,7 @@
       patch.criteria = texts.map((text,i) => ({...(list(o?.criteria)[i] || {id:'criterion-'+(i+1),required:true}),text}));
       patch.rank = patch.rank ? Number(patch.rank) : 0;
       patch.deadline = patch.deadline.trim() || null;
-      if (patch.deadline && !Number.isFinite(Date.parse(patch.deadline))) { message('Enter a valid deadline with timezone, or leave it blank.',true); return; }
+      if (patch.deadline && (!Number.isFinite(Date.parse(patch.deadline)) || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(patch.deadline))) { message('Enter a valid deadline with timezone, or leave it blank.',true); return; }
       if (o) { delete patch.repo_path; delete patch.queue; api('update',{id:o.id,expected_revision:o.revision,patch}); }
       else api('create',{...patch,state:'proposed',commitment:false});
     });
@@ -99324,32 +99365,46 @@
     for (const [el,prior] of background) el.inert=prior;
     background=[];
     const url=new URL(location.href); url.searchParams.delete('workspace'); history.replaceState(null,'',url);
-    (returnFocus?.isConnected?returnFocus:entry).focus();
+    navigation.querySelectorAll('[data-ow-view]').forEach(b=>b.setAttribute('aria-pressed','false'));
+    showTools();
+    navigation.querySelector('[data-ow-action="everything"]').setAttribute('aria-pressed','true');
+    if (enabled) (returnFocus?.isConnected && !root.contains(returnFocus)?returnFocus:navigation.querySelector('[data-ow-action="everything"]')).focus();
+  }
+  function showTools() {
+    document.body.classList.toggle('outcomes-everything',enabled && !popout);
+    document.getElementById('outcomeTools').hidden=!enabled || popout;
+    const select=document.getElementById('outcomeToolSelect');
+    const options=document.body.classList.contains('ccc-simple-mode')
+      ? [['inprogress','Task history'],['queues','Helpers']]
+      : [['inprogress','Sessions'],['coding','Coding'],['workers','Workers'],['queues','Queues'],['jobs','Jobs'],['alltickets','All tickets'],['ideas','Features'],['smallbugs','Small bugs'],['issues','Issues'],['ask','Ask'],['archived','History']];
+    if (!document.body.classList.contains('ccc-simple-mode')) {
+      document.querySelectorAll('#convList > .conv-tab-bar [data-conv-tab]').forEach(button=>{
+        if (options.some(([value])=>value===button.dataset.convTab)) return;
+        const label=button.cloneNode(true); label.querySelectorAll('.conv-tab-count').forEach(el=>el.remove());
+        options.push([button.dataset.convTab,label.textContent.trim()]);
+      });
+    }
+    select.innerHTML='<option value="">Choose a tool</option>'+options.map(([value,label])=>'<option value="'+esc(value)+'">'+esc(label)+'</option>').join('');
   }
   let background=[];
   function open() {
+    if (!enabled || popout) return;
+    if (!root.hidden) { render(); return; }
     returnFocus=document.activeElement; root.hidden=false; document.body.classList.add('outcomes-open');
-    background=Array.from(document.body.children).filter(el=>el!==root && !['SCRIPT','STYLE'].includes(el.tagName)).map(el=>[el,el.inert]);
+    background=Array.from(document.body.children).filter(el=>el!==root && el!==navigation && !['SCRIPT','STYLE'].includes(el.tagName)).map(el=>[el,el.inert]);
     background.forEach(([el])=>{el.inert=true;});
     const url=new URL(location.href);url.searchParams.set('workspace','outcomes');history.replaceState(null,'',url);
     root.querySelector('h1').focus(); render(); api();
   }
-  root.addEventListener('keydown',event=>{
-    if (event.key !== 'Tab') return;
-    const nodes = Array.from(root.querySelectorAll('button:not(:disabled),input,textarea,select,a[href],summary')).filter(el=>el.getClientRects().length);
-    const first=nodes[0], last=nodes[nodes.length-1];
-    if (event.shiftKey && (document.activeElement===first || document.activeElement===root.querySelector('h1'))) { event.preventDefault(); last?.focus(); }
-    else if (!event.shiftKey && document.activeElement===last) {event.preventDefault();first?.focus();}
-  });
-  entry.addEventListener('click',open);
   root.addEventListener('change',event=>{if(event.target.id==='owSelect'){selected=event.target.value;render();root.querySelector('.ow-brief h2')?.focus();}});
-  root.addEventListener('click',event=>{
+  function onAction(event) {
     const target=event.target.closest('button'); if(!target) return;
     if(target.dataset.owSession){close();window.cccOpenSession?.(target.dataset.owSession);return;}
     if(target.dataset.owSelect){selected=target.dataset.owSelect;render();return;}
-    if(target.dataset.owView){if(editor.childElementCount){message('Save or cancel editing before changing views.');return;} view=target.dataset.owView;render();return;}
+    if(target.dataset.owView){if(editor.childElementCount){message('Save or cancel editing before changing views.');return;} view=target.dataset.owView;open();return;}
     const action=target.dataset.owAction, o=current();
     if(action==='close'||action==='everything') close();
+    else if(action==='settings') { close(); document.getElementById('settingsBtn')?.click(); document.getElementById('settingsRailTab-layout')?.click(); }
     else if(action==='cancel') request?.abort();
     else if(action==='refresh') api();
     else if(action==='create') form(null);
@@ -99357,9 +99412,56 @@
     else if(action==='discard'){editor.replaceChildren();busy(false);root.querySelector('[data-ow-action="create"]').focus();}
     else if(action==='commit'&&o) api('update',{id:o.id,expected_revision:o.revision,patch:{commitment:!o.commitment,...(!o.commitment?{state:'active'}:{})}});
     else if(action==='park'&&o) api('update',{id:o.id,expected_revision:o.revision,patch:{state:o.state==='parked'?'proposed':'parked',commitment:false}});
-    else if(action==='decisions') { close(); location.assign('/decision-guide.html'); }
+    else if(action==='decisions') {
+      let frame=content.querySelector('.ow-decisions-frame');
+      if (!frame) { frame=document.createElement('iframe'); frame.className='ow-decisions-frame'; frame.title='Existing Decisions workspace'; frame.src='/decision-guide.html'; content.append(frame); }
+      frame.focus(); frame.scrollIntoView({block:'start'});
+    }
+  }
+  root.addEventListener('click',onAction);
+  navigation.addEventListener('click',onAction);
+  document.getElementById('outcomeToolSelect').addEventListener('change',event=>{
+    if (enabled && event.target.value) window.cccInspectWorkspace?.(event.target.value);
   });
   // Finite, explicit refresh; no polling or model invocation on render.
   window.addEventListener('pageshow',()=>{if(loadedAt&&!root.hidden) freshness.textContent='Snapshot from '+date(loadedAt)+' · refresh to check current state';});
-  if(new URLSearchParams(location.search).get('workspace')==='outcomes') open();
+  function refreshOnReturn() {
+    if (enabled && !root.hidden && !document.hidden && loadedAt && Date.now()-loadedAt>30000 && !request && !editor.childElementCount && !content.querySelector('.ow-decisions-frame')) api();
+  }
+  window.addEventListener('focus',refreshOnReturn);
+  document.addEventListener('visibilitychange',refreshOnReturn);
+  async function installationSetting(next) {
+    toggle.disabled=true; settingRetry.hidden=true;
+    settingStatus.textContent=next === undefined?'Checking installation setting…':'Saving installation setting…';
+    const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),10000);
+    try {
+      const response=await fetch('/api/outcomes/settings',{method:next === undefined?'GET':'POST',cccPriority:'user',cache:'no-store',signal:controller.signal,...(next === undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:next})})});
+      const data=await response.json();
+      if (!response.ok || data.ok === false || typeof data.enabled !== 'boolean' || data.available === false) throw Error(data.error || 'Outcome workspace setting is unavailable.');
+      const wasEnabled=enabled;
+      enabled=data.enabled;
+      // Only this durable installation response controls the effective UI state.
+      window.outcomes_workspace_enabled=enabled;
+      toggle.setAttribute('aria-checked',String(enabled));
+      toggle.classList.toggle('is-on',enabled);
+      navigation.hidden=!enabled || popout;
+      document.body.classList.toggle('outcomes-enabled',enabled && !popout);
+      settingStatus.textContent=enabled?'On for this installation. Sessions and diagnostics are under Everything.':'Off. Existing workspace is unchanged.';
+      if (!enabled) { if (!root.hidden) close(); document.body.classList.remove('outcomes-everything'); document.getElementById('outcomeTools').hidden=true; outcomes=[]; loadedAt=0; }
+      else if (!wasEnabled && !new URLSearchParams(location.search).has('ccc_popout') && !window.__CCC_CONVERSATION_POPOUT__) {
+        // A setting changed in Settings applies after the owner leaves Settings.
+        // Initial enabled installations land directly in Today.
+        if (next === undefined) open();
+        else { showTools(); navigation.querySelector('[data-ow-action="everything"]').setAttribute('aria-pressed','true'); }
+      }
+      toggle.disabled=false;
+    } catch (error) {
+      settingStatus.textContent=error.name==='AbortError'?'Setting request timed out. Retry to reconcile the saved value.':error.message;
+      settingRetry.hidden=false;
+      // A failed read never grants opt-in; a failed save does not claim success.
+    } finally {clearTimeout(timer);}
+  }
+  toggle.addEventListener('click',()=>installationSetting(!enabled));
+  settingRetry.addEventListener('click',()=>installationSetting());
+  installationSetting();
 })();
