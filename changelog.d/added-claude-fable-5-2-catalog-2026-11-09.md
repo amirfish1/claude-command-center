@@ -1,0 +1,1 @@
+- Claude Fable 5.2 is now in the Claude model picker, with its $8 / $40 per 1M list price and 2.5% cache-read rate used for session cost and cache-weighted token counts.

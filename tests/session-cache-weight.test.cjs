@@ -11,6 +11,9 @@ test('Fable 5.1 cache reads use 2.5% in the value and explanation', () => {
   assert.equal(ctx._cacheAdjustedTurnTokens(208770, 1656, 208051, 'claude-fable-5-1'), 7576);
   assert.match(ctx._cacheAdjustedTurnTitle(208770, 1656, 208051, 'claude-fable-5-1'), /2.5%/);
 });
+test('Fable 5.2 cache reads also use 2.5%', () => {
+  assert.equal(ctx._cacheAdjustedTurnTokens(208770, 1656, 208051, 'claude-fable-5-2'), 7576);
+});
 test('Opus and original Fable retain their 10% cache discount', () => {
   for (const model of ['claude-opus-5', 'claude-fable-5', '']) {
     assert.equal(ctx._cacheAdjustedTurnTokens(208770, 1656, 208051, model), 23180);

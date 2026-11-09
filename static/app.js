@@ -64551,10 +64551,10 @@
   }
 
   // Cache-read weights follow the model's cache-read / fresh-input price.
-  // Fable 5.1 uses $0.25 / $10; older Claude models use a 10% ratio.
+  // Fable 5.1/5.2 use 2.5% of input; older Claude models use a 10% ratio.
   const CACHE_READ_TOKEN_WEIGHT = 0.10;
   function _cacheReadTokenWeight(model) {
-    return /^(?:claude-)?fable-5[-.]1(?:$|\[|-[0-9]{8}$)/i.test(String(model || ''))
+    return /^(?:claude-)?fable-5[-.][12](?:$|\[|-[0-9]{8}$)/i.test(String(model || ''))
       ? 0.025 : CACHE_READ_TOKEN_WEIGHT;
   }
 
@@ -92665,6 +92665,7 @@
   function spawnModelDescription(engine, opt) {
     if (opt.description) return opt.description;
     const claudeGuidance = {
+      'fable-5-2': 'Demanding reasoning and long-horizon agent tasks.',
       'fable-5-1': 'Demanding reasoning and long-running agent tasks.',
       'opus-5-5': 'Complex coding agents and enterprise tasks.',
       'opus-5': 'Complex coding agents and enterprise tasks.',

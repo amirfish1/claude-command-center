@@ -1795,6 +1795,9 @@ def extract_session_timeline(session_id):
 # checked 2026-07. If rates change, edit here. Rates are
 # (input_per_mtok, cache_write, cache_read, output_per_mtok).
 _MODEL_RATES = {
+    # Fable 5.2 cuts Fable 5.1 list prices by 20%; cache hits stay at 2.5%
+    # of input (Anthropic pricing, checked 2026-11-09).
+    "claude-fable-5-2": (8.00, 10.00, 0.20, 40.00),
     # Fable 5.1 retains Fable's input/output rates but discounts cache hits
     # below both Fable 5 and Opus 5 (Anthropic pricing, 2026-09).
     "claude-fable-5-1": (10.00, 12.50, 0.25, 50.00),

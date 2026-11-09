@@ -8404,6 +8404,7 @@ _CLAUDE_MODEL_CATALOG_FILE = COMMAND_CENTER_STATE_DIR / "claude-models.json"
 # cross-check against docs/en/about-claude/models/overview.md and
 # docs/en/about-claude/pricing.md.
 _CLAUDE_ANTHROPIC_MODELS = (
+    {"id": "claude-fable-5-2", "label": "Claude Fable 5.2", "cost_tier": 48.0, "cost_summary": "$8.00 in / 1M, $40.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-fable-5-1", "label": "Claude Fable 5.1", "cost_tier": 60.0, "cost_summary": "$10.00 in / 1M, $50.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-fable-5", "label": "Claude Fable 5", "cost_tier": 60.0, "cost_summary": "$10.00 in / 1M, $50.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},
     {"id": "claude-opus-5-5", "label": "Claude Opus 5.5", "cost_tier": 30.0, "cost_summary": "$5.00 in / 1M, $25.00 out / 1M", "max_context_tokens": 1000000, "max_output_tokens": 128000, "reasoning_efforts": ("low", "medium", "high", "xhigh", "max"), "default_reasoning_effort": "high"},

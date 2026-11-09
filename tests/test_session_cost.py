@@ -49,6 +49,21 @@ def test_fable_5_1_uses_its_discounted_cache_read_rate():
     assert cost["total"] == pytest.approx(0.25)
 
 
+def test_fable_5_2_uses_its_list_prices():
+    cost = server._claude_usage_cost_breakdown(
+        "claude-fable-5-2",
+        {
+            "input_tokens": 1_000_000,
+            "cache_read_input_tokens": 1_000_000,
+            "output_tokens": 1_000_000,
+        },
+    )
+
+    assert cost["input"] == pytest.approx(8.0)
+    assert cost["cache_read"] == pytest.approx(0.2)
+    assert cost["output"] == pytest.approx(40.0)
+
+
 def test_claude_tail_meta_exposes_cache_aware_session_cost(tmp_path):
     transcript = tmp_path / "claude.jsonl"
     transcript.write_text(json.dumps({
