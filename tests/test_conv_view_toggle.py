@@ -62,7 +62,7 @@ class ConvViewToggleTest(unittest.TestCase):
         # Devin/Codex/ACP: tool calls and thinking live inside the
         # .event.assistant next to the text, so they are units too.
         self.assertIn("else if (cc.contains('tool-call')) { found = true; units.push({ el: c, kind: 'tool', calls: 1 }); }", js)
-        self.assertIn("else if (cc.contains('thinking-block')) { found = true; units.push({ el: c, kind: 'think' }); }", js)
+        self.assertIn("else if (cc.contains('thinking-block')) { found = true; units.push({ el: c, kind: cc.contains('thinking-block-silent') ? 'passive' : 'think' }); }", js)
         # The observer is only live while compact is on.
         self.assertIn("_ccSyncRunsObserver(mode === 'compact');", js)
         # Declared before the boot-time sync call (const TDZ).

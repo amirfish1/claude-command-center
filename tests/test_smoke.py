@@ -7,6 +7,7 @@ import importlib
 import inspect
 import ast
 import fcntl
+import gc
 import json
 import multiprocessing
 import os
@@ -2004,7 +2005,8 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
 
         self.assertIn("const _isHermesWorkerRow = (c) => _isHermesAllRow(c)", app_js)
-        self.assertIn("Number(c.hermes_tool_calls || 0) > 0 || !!String(c.hermes_profile || '').trim()", app_js)
+        # A chat that merely called tools is not a worker: only a profile counts.
+        self.assertIn("const _isHermesWorkerRow = (c) => _isHermesAllRow(c)\n      && !!String(c.hermes_profile || '').trim();", app_js)
         self.assertIn("const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);", app_js)
         self.assertIn("_uxqHealthCache && _uxqHealthCache.worker_session_ids", app_js)
         self.assertIn("c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c)", app_js)
@@ -19998,6 +20000,7 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
             os.mkfifo(fifo, 0o600)
             reader_fd = os.open(str(fifo), os.O_RDONLY | os.O_NONBLOCK)
             try:
+                gc.collect()  # drop unclosed fds left by earlier tests
                 before = len(os.listdir("/dev/fd"))
                 for _ in range(5):
                     self.assertTrue(
@@ -20007,10 +20010,12 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
                         os.read(reader_fd, 65536)  # drain so the pipe never fills
                     except BlockingIOError:
                         pass
+                gc.collect()
                 after = len(os.listdir("/dev/fd"))
             finally:
                 os.close(reader_fd)
-        self.assertEqual(after, before)
+        # A leak grows the count by one per call (5 here); allow GC noise.
+        self.assertLessEqual(after, before)
 
     # ---- wired into _inject_text_into_session's fork-guard branch -----
 

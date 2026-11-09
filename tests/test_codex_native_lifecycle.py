@@ -124,7 +124,8 @@ def test_deleted_marker_filters_only_codex_rows_from_cold_cache(tmp_path, monkey
     server._overlay_conversation_lifecycle_flags(rows)
 
     assert rows == [{"session_id": "same-id", "engine": "claude",
-                     "archived": False, "trashed": False}]
+                     "archived": False, "trashed": False,
+                     "all_lane_override": ""}]
 
 
 def test_registry_write_failure_keeps_native_delete_sync_retryable(tmp_path, monkeypatch):

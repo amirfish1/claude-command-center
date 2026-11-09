@@ -124,7 +124,7 @@ class FrontendWiringTest(unittest.TestCase):
         self.assertIn("'waiting on ' + escapeHtml(waitingOn)", src)
         self.assertIn("data-blocker-ref", src)
         self.assertIn("it.readiness && it.status !== 'closed'", src)
-        self.assertIn("' blocked</span>'", src)
+        self.assertIn("' (' + blockedCount + ' blocked)'", src)
 
 
 if __name__ == "__main__":

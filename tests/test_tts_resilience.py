@@ -470,6 +470,7 @@ const _perfEvent = () => {};
 const _perfActiveElapsed = (a, b) => b - a;
 const _TTS_HEAD_CHARS = 160;
 let _ttsStartWhy = "";
+let _ttsForceBridge = false;
 let _ttsKeepVoice = null;
 let _ttsDirectBtn = null;
 const _ttsLog = () => {};
