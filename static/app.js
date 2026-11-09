@@ -20232,7 +20232,23 @@
     }).join('');
   }
 
+  // CCC-403: a pasted multi-MB log in one assistant reply took the markdown
+  // renderer 50-124s (5.2 MB, 12 events). Above the cap, render only the head
+  // as markdown and tuck the rest into a collapsed plain-text <pre>.
+  const MD_RENDER_MAX_CHARS = 40000;
   function renderMarkdown(text) {
+    if (text.length > MD_RENDER_MAX_CHARS) {
+      let cut = text.lastIndexOf('\n', MD_RENDER_MAX_CHARS);
+      if (cut < MD_RENDER_MAX_CHARS / 2) cut = MD_RENDER_MAX_CHARS;
+      const rest = text.slice(cut);
+      // An odd fence count in the head would swallow the notice; close it.
+      const head = text.slice(0, cut);
+      const fenced = (head.match(/^\s*```/gm) || []).length % 2 ? '\n```' : '';
+      return renderMarkdown(head + fenced)
+        + '<details class="ctx-usage-details"><summary>Show remaining '
+        + Math.round(rest.length / 1024).toLocaleString() + ' KB as plain text</summary>'
+        + '<pre style="white-space:pre-wrap;word-break:break-word">' + escapeHtml(rest) + '</pre></details>';
+    }
     const lines = text.split('\n');
     const out = [];
     let i = 0;
