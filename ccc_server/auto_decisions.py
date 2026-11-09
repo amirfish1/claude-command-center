@@ -24,6 +24,16 @@ def _followthrough(hist, event):
         return {'state': '', 'reason': ''}
 
 
+def _legacy_events(hist):
+    """Decisions whose auto_decision event was never stored (CCC-409): WatchTower
+    rebuilds them from the saved answer. Unknown when it is not importable."""
+    try:
+        from watchtower import queue as wtq
+        return list(wtq._legacy_auto_decision_events(hist))
+    except Exception:
+        return []
+
+
 def _decided(item, event, reversal, followthrough=None):
     return {
         'ref': item.get('ref', ''), 'title': item.get('title', ''),
@@ -43,7 +53,7 @@ def auto_decision_rows(items, limit=200):
     decided, flags = [], []
     for item in items or []:
         hist = item.get('history') or []
-        for h in hist:
+        for h in list(hist) + _legacy_events(hist):
             kind = h.get('event')
             if kind == 'auto_decision':
                 rev = next((r for r in hist if r.get('event') == 'auto_decision_reversed'

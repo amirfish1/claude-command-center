@@ -1,0 +1,1 @@
+- The Decisions panel now lists auto-decisions whose record was never stored (rebuilt from the delivered answer), so failed follow-through is no longer hidden.
