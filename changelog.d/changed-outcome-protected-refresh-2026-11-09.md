@@ -1,1 +1,0 @@
-- Refresh stale outcome snapshots from successful existing activity polls while protecting drafts, open disclosures, Decisions, focus and scroll; show bounded Unfiled intake coverage and agent next checks in Organization check, and prioritize only active verified incidents.

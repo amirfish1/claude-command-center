@@ -1,1 +1,0 @@
-- Keep chosen outcome commitments distinct from other work, and surface date-bearing uncommitted outcomes without inventing a clock time or adding them to focus.

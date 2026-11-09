@@ -1,4 +1,4 @@
-"""Boundary checks for the optional outcome workspace HTTP adapter."""
+"""Boundary checks for the optional outcome HTTP adapter."""
 import io
 import unittest
 from unittest.mock import patch
@@ -127,14 +127,6 @@ class OutcomeAPITest(unittest.TestCase):
             outcome_api.associate_spawn({'id': 'OUT-1'}, result)
         self.assertTrue(result['ok'])
         self.assertEqual(result['outcome_association'], 'unconfirmed')
-
-    def test_new_mode_suppresses_automatic_session_ticket_filing(self):
-        from ccc_server import idea_tickets
-        with patch.object(outcome_api, 'cached_enabled', return_value=True), patch.object(idea_tickets, '_mutate') as mutate:
-            idea_tickets.note_ui_spawn('new-session', 'ui')
-            result = idea_tickets.attach_or_file('new-session')
-        mutate.assert_not_called()
-        self.assertEqual(result['reason'], 'outcome_workspace')
 
 
 if __name__ == '__main__':

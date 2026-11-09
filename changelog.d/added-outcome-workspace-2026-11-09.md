@@ -1,1 +1,0 @@
-- Add a default-off outcome workspace setting: opted-in installations use Today, Needs you, and Everything navigation, with durable proposal and commitment editing, evidence/runtime disclosures, and existing Decisions actions; existing session modes remain available under Everything.

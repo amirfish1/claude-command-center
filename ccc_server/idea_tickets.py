@@ -440,9 +440,6 @@ def _opening_text(sid, jsonl=None):
 def note_ui_spawn(session_id, via):
     """Spawn-time entry point: remember a session the user started from the
     UI, so its first reply can file a ticket. Any engine."""
-    from ccc_server.outcome_api import cached_enabled
-    if cached_enabled():
-        return
     sid = str(session_id or "").strip()
     if not sid or str(via or "") != "ui" or not _enabled():
         return
@@ -640,9 +637,6 @@ def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint
                    text_hint=""):
     """Give ``sid`` its ticket: inherit from a continuation origin or parent,
     file a new one for a UI-started session, or record a skip."""
-    from ccc_server.outcome_api import cached_enabled
-    if cached_enabled():
-        return {"ok": True, "skipped": True, "reason": "outcome_workspace"}
     jsonl = _session_transcript_path(sid)
     continued_from = ""
     if jsonl:

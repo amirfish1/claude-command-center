@@ -1,1 +1,0 @@
-- Preserve explicit zero priority ranks in outcome ordering and editing; leave blank ranks unset.
