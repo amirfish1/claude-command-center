@@ -30419,6 +30419,35 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # it may auto-open. Cached on directory mtimes; bounded scan.
             from ccc_server.moment_zero import moment_zero_state
             self.send_json(moment_zero_state())
+        elif path == "/api/issue-flow/status":
+            # GitHub issue auto-fix wizard (ccc_server/issue_flow.py): is gh
+            # signed in, is WatchTower up, which local repos could feed a queue.
+            from ccc_server import issue_flow
+            qs = urllib.parse.parse_qs(parsed.query)
+            refresh = (qs.get("refresh", [""])[0] or "") in ("1", "true")
+            self.send_json(issue_flow.status(sys.modules[__name__], refresh=refresh))
+        elif path == "/api/issue-flow/repo":
+            from ccc_server import issue_flow
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                self.send_json(issue_flow.repo_info(
+                    sys.modules[__name__],
+                    qs.get("github_repo", [""])[0], qs.get("repo_path", [""])[0]))
+            except issue_flow.FlowError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+        elif path == "/api/issue-flow/test":
+            from ccc_server import issue_flow
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                self.send_json(issue_flow.test_status(
+                    sys.modules[__name__],
+                    qs.get("queue", [""])[0], qs.get("number", [""])[0]))
+            except issue_flow.FlowError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
         elif path == "/api/onboarding/first-task":
             # First magic task: playground state + starter tasks + job snapshots
             # for the onboarding step UI (static/first-task.js).
@@ -35990,6 +36019,41 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(body) if body else {}
                 armed = not isinstance(payload, dict) or payload.get("armed") is not False
                 self.send_json(return_reminder.arm() if armed else return_reminder.cancel())
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path in ("/api/issue-flow/prepare", "/api/issue-flow/test"):
+            # GitHub issue auto-fix wizard. Local-only: these write labels and
+            # open an issue on the user's GitHub repo with the host's gh login;
+            # a phone or tunnel peer must not trigger that.
+            if phone_access.is_remote_request(self.client_address[0], self.headers):
+                self.send_json({"ok": False, "error": "issue flow setup is local-only"}, 403)
+                return
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+                if not isinstance(payload, dict):
+                    payload = {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            from ccc_server import issue_flow
+            core = sys.modules[__name__]
+            try:
+                if path.endswith("/prepare"):
+                    result = issue_flow.prepare(
+                        core, payload.get("queue"), str(payload.get("mode") or ""),
+                        hold_existing=bool(payload.get("hold_existing")))
+                    _log_activity("queue", "ISSUE_FLOW_PREPARE",
+                                  f"queue={result['queue']} mode={result['mode']} held={result['held']}")
+                else:
+                    result = issue_flow.create_test_issue(core, payload.get("queue"))
+                    _log_activity("queue", "ISSUE_FLOW_TEST",
+                                  f"queue={result['queue']} ref={result['ref']}")
+                self.send_json(result)
+            except issue_flow.FlowError as e:
+                self.send_json({"ok": False, "error": str(e)}, 400)
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return

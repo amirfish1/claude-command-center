@@ -4019,6 +4019,23 @@
     // already scoped to this queue; opening a ticket is an explicit click.
   }
 
+  // The issue-flow wizard (static/issue-flow.js) ends by landing the user on
+  // the queue it created. Before the first queue list arrives the saved
+  // selection it wrote is restored by the boot path instead.
+  window.cccQ2SelectQueue = function (name) {
+    var pick = function () {
+      var match = state.queues.filter(function (q) {
+        return projectKey(q.queue) === projectKey(name);
+      })[0];
+      if (match) selectQueue(match.queue);
+      return !!match;
+    };
+    if (pick()) return true;
+    // Created seconds ago, so not in the last poll yet: pull a fresh list.
+    refresh().then(pick);
+    return false;
+  };
+
   function showQueueLearningsInDetail() {
     // Opens the queue's learnings doc in the same popup renderDetail() uses
     // for a ticket (CCC-904) — deselect the ticket first so renderDetail()'s

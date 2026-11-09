@@ -6,6 +6,7 @@
   <title>Queues</title>
   <link rel="stylesheet" href="/static/q2.css">
   <link rel="stylesheet" href="/static/ticket-prose.css">
+  <link rel="stylesheet" href="/static/issue-flow.css">
   <script>
     // When the dashboard hosts this page in #cccCoreAppFrame the parent
     // already has the rail and the Sessions/Queues bar. Mark framed so
@@ -35,6 +36,8 @@
         <span class="q2-col-title">Queues</span>
         <span class="q2-col-count" id="q2QueueCount"></span>
         <span class="q2-spacer"></span>
+        <!-- Guided setup: GitHub issues in, fixes out (static/issue-flow.js). -->
+        <button type="button" class="q2-icon-btn q2-iflow-btn" id="q2IssueFlowBtn" data-issue-flow-open title="Auto-fix GitHub issues: guided setup" aria-label="Auto-fix GitHub issues: guided setup"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.4 2.5 4.6 13.3a.6.6 0 0 0 .5 1h5.3l-1 6.9a.4.4 0 0 0 .7.3l8.8-10.8a.6.6 0 0 0-.5-1h-5.3l1-6.9a.4.4 0 0 0-.7-.3Z"/></svg></button>
         <button type="button" class="q2-icon-btn" id="q2NewQueueBtn" title="Create a queue" aria-label="Create a queue" data-q2-icon="plus"></button>
       </div>
       <div class="q2-list" id="q2Queues"></div>
@@ -116,6 +119,7 @@
   <script src="/static/ticket-prose.js"></script>
   <script src="/static/q2.js"></script>
   <script src="/static/q2-annotation.js"></script>
+  <script src="/static/issue-flow.js"></script>
   <script>
     window.Q2Annotation.attach(document.getElementById('q2AnnotateBtn'), {});
   </script>

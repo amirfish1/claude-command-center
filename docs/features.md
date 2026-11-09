@@ -65,6 +65,10 @@ queue's shared learnings before starting and writes back at the end. See
 
 - **Queue inbox:** see tickets needing a decision, per-queue AI briefs,
   GitHub-backed queues, and one-click queue creation from a session.
+- **Auto-fix issues from production:** a five-step wizard (the **Auto-fix**
+  button in the left rail) wires a GitHub repo to a queue so issues your
+  product opens are worked and closed by agents. It creates the queue, gives
+  you the code that opens an issue, and runs one live test issue end to end.
 - **Plan-to-fleet:** import a plan, preview the tickets, approve them, and
   optionally start a worker. See [Plan to fleet](plan-to-fleet.md).
 - **Workers tab:** Compact, Cozy, and Detailed densities, fixed columns, a

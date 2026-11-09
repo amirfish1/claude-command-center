@@ -97,6 +97,20 @@
     "  place-items: center; padding: 0; margin-top: 2px;",
     "}",
     ".ccc-side-nav .add:hover { border-color: #5ac8fa; color: #5ac8fa; }",
+    /* Guided setup for the GitHub issue auto-fix flow (static/issue-flow.js). */
+    ".ccc-side-nav .autofix {",
+    "  display: flex; flex-direction: column; align-items: center; gap: 3px;",
+    "  width: calc(var(--ccc-rail-w, " + RAIL_DEFAULT + "px) - 12px);",
+    "  flex-shrink: 0; margin: 2px 0; padding: 7px 2px 6px; border-radius: 8px;",
+    "  cursor: pointer; border: 1px solid rgba(122,162,255,.34);",
+    "  background: linear-gradient(160deg, rgba(122,162,255,.16), rgba(57,210,192,.08));",
+    "  color: #a9c0ff; font: 9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;",
+    "  text-transform: uppercase; letter-spacing: 0.2px; white-space: nowrap;",
+    "  overflow: hidden; transition: background .12s, color .12s, border-color .12s;",
+    "}",
+    ".ccc-side-nav .autofix svg { width: 17px; height: 17px; display: block; }",
+    ".ccc-side-nav .autofix:hover { border-color: #7aa2ff; color: #dbe5ff;",
+    "  background: linear-gradient(160deg, rgba(122,162,255,.28), rgba(57,210,192,.14)); }",
     /* Applications popup: keeps you on the page you were already on. */
     ".ccc-apps-scrim {",
     "  position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 4000;",
@@ -329,6 +343,26 @@
   flagBtn.appendChild(flagIcon);
   flagBtn.appendChild(document.createTextNode("Report"));
   flag.appendChild(flagBtn);
+
+  // "Auto-fix": the guided setup that turns GitHub issues from a product
+  // into agent work. The wizard itself is static/issue-flow.js, which only
+  // the dashboard and the Queues board load; every other page hands off to
+  // the dashboard with ?issue-flow=1.
+  var autofix = document.createElement("button");
+  autofix.type = "button";
+  autofix.className = "autofix";
+  autofix.title = "Auto-fix issues from production: your product opens a GitHub issue, an agent fixes it";
+  autofix.setAttribute("aria-label", "Set up auto-fix for GitHub issues");
+  autofix.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+    + '<path d="M13.4 2.5 4.6 13.3a.6.6 0 0 0 .5 1h5.3l-1 6.9a.4.4 0 0 0 .7.3l8.8-10.8a.6.6 0 0 0-.5-1h-5.3l1-6.9a.4.4 0 0 0-.7-.3Z"/></svg>';
+  autofix.appendChild(document.createTextNode("Auto-fix"));
+  autofix.addEventListener("click", function () {
+    if (window.cccIssueFlow && typeof window.cccIssueFlow.open === "function") {
+      window.cccIssueFlow.open();
+      return;
+    }
+    window.location.href = "/?issue-flow=1";
+  });
 
   function hintReport(why) {
     flag.classList.add("hint");
@@ -754,6 +788,7 @@
     window.dispatchEvent(new CustomEvent("ccc:apps", { detail: apps }));
     var activeId = activeIdFor(apps);
     nav.textContent = "";
+    var autofixPlaced = false;
     for (var i = 0; i < apps.length; i++) {
       var app = apps[i];
       var a = document.createElement("a");
@@ -779,7 +814,11 @@
       a.appendChild(icon);
       a.appendChild(document.createTextNode(app.label));
       nav.appendChild(a);
+      // Auto-fix sets up a queue, so it sits right under Queues: near the
+      // top, where a long app list cannot push it below the fold.
+      if (app.id === "queues") { nav.appendChild(autofix); autofixPlaced = true; }
     }
+    if (!autofixPlaced) nav.appendChild(autofix);
     // Adding an app is a rail action, so the affordance belongs in the rail
     // rather than buried in dashboard settings. It opens a popup instead of
     // navigating: you should not lose the session you were reading.
