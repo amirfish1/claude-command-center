@@ -61713,6 +61713,18 @@
     return String(sid || '').slice(0, 8);
   }
 
+  // Engine / model / effort of a continuation segment, for the seam marker.
+  function _contSegmentConfig(sid) {
+    const row = _continuationRowForSid(sid);
+    if (!row) return null;
+    const engine = sessionIconEngine(row);
+    return {
+      engine: SESSION_ENGINE_LABELS[engine] || 'Claude',
+      model: String(row.model || '').trim(),
+      effort: rowReasoningEffort(row),
+    };
+  }
+
   function _insertLoadEarlierBanner($view, id, paneId) {
     if (!$view || $view.querySelector('.conv-load-earlier')) return;
     _ensureLoadEarlierStyle();
@@ -62412,6 +62424,8 @@
               parent_sid: _hopSid, child_sid: _childSid,
               parent_title: _contSegmentTitle(_hopSid),
               child_title: _contSegmentTitle(_childSid),
+              parent_cfg: _contSegmentConfig(_hopSid),
+              child_cfg: _contSegmentConfig(_childSid),
             });
           }
         }
@@ -71150,7 +71164,8 @@
           if (ev.parent_sid) div.dataset.boundaryParentSid = String(ev.parent_sid);
           div.innerHTML = '<span class="csb-line" aria-hidden="true"></span>'
             + '<span class="csb-label" role="button" tabindex="0" title="' + escapeAttr(_csTip) + '">'
-            + '⤴︎ continued' + (_csChild ? ' as &ldquo;' + escapeHtml(_csChild) + '&rdquo;' : '') + '</span>'
+            + '⤴︎ New session' + (_csChild ? ' &ldquo;' + escapeHtml(_csChild) + '&rdquo;' : '') + '</span>'
+            + _csCfgHtml
             + '<button type="button" class="csb-jump" title="Jump to the end of the earlier session">end ⇡</button>'
             + '<span class="csb-line" aria-hidden="true"></span>';
         } else if (ev.subtype === 'hermes_segment') {
@@ -94911,6 +94926,7 @@
     _engHubUnavailable = false;
     _engHubData = { doctor, onboarding, usage, updates };
     renderEnginesHub();
+    if (typeof renderAgentsOverview === 'function') renderAgentsOverview();   // Engines page rows read this data
     refreshEnginesFirstRunFoot();
     return _engHubData;
   }
@@ -95663,14 +95679,17 @@
       const p = document.createElement('p'); p.className='settings-section-note'; p.textContent=note;
       section.querySelector('.settings-section-eyebrow')?.after(p);
     }
-    // Six task destinations; legacy tabs remain as hidden deep-link adapters.
+    // Task destinations; legacy tabs remain as hidden deep-link adapters.
+    // Engines is last: a reference list of what CCC supports, set up once.
     const destinations = [
-      ['defaults', 'Agents', ['defaults','queues','engines','routing']],
+      ['defaults', 'Agents', ['defaults','routing']],
+      ['queues', 'Queues', ['queues']],
       ['appearance', 'Workspace', ['appearance','layout','preferences']],
       ['notifications', 'Notifications & voice', ['notifications','voice']],
       ['vault', 'Vault', ['vault','api-keys','network']],
       ['sessions', 'Usage & budgets', ['sessions','limits','leftover','free']],
       ['maintenance', 'System', ['maintenance','capabilities','experimental']],
+      ['engines', 'Engines', ['engines']],
     ];
     window.cccSettingsDestinations = destinations;
     const titles = {defaults:'Launch defaults', engines:'Install & connect engines',
@@ -95763,51 +95782,47 @@
   let _agentsOverviewQueues = null, _agentsOverviewCodex = null, _agentsOverviewTimer = null, _agentsOverviewSig = '';
   let _aoBusy = false, _aoPopup = null;
   function agentsOverviewVisible() {
-    const sec = document.getElementById('settingsSection-defaults');
-    return !!($settingsModal && !$settingsModal.hidden && sec && sec.classList.contains('is-active-section') && !document.hidden);
+    return !!($settingsModal && !$settingsModal.hidden && !document.hidden
+      && ['defaults', 'queues', 'engines'].some(id => document.getElementById('settingsSection-' + id)?.classList.contains('is-active-section')));
   }
   function mountAgentsOverview() {
     const sec = document.getElementById('settingsSection-defaults');
     if (!sec || document.getElementById('agentsOverview')) return;
     AO_FOLDED.forEach(id => document.getElementById('settingsSection-' + id)?.classList.add('ao-folded'));
-    const box = document.createElement('div');
-    box.className = 'agents-overview'; box.id = 'agentsOverview';
-    box.innerHTML = '<div class="ao-block"><div class="ao-head"><div class="ao-head-main"><div class="ao-title" id="aoEngTitle">Engines</div>'
-      + '<div class="ao-sub" id="aoEngSub">Checking your engines…</div></div><div class="ao-stats" id="aoEngStats"></div></div>'
-      + '<div class="ao-defaults-bar" id="aoDefaultsBar"></div>'
-      + '<div id="aoEngGroups"></div>'
-      + '<button type="button" class="ao-link" data-ao-advanced>Worker fallback &amp; model profiles →</button></div>'
-      + '<div class="ao-block"><div class="ao-head"><div class="ao-head-main"><div class="ao-title" id="aoQueueTitle">Queues</div>'
-      + '<div class="ao-sub" id="aoQueueSub">Loading queues…</div></div></div>'
-      + '<div class="ao-q-list" id="aoQueueList" role="list"></div></div>';
-    sec.prepend(box);
-    box.addEventListener('click', event => {
-      const def = event.target.closest('[data-ao-default]');
-      if (def) { if (!def.classList.contains('is-active')) aoSetDefault(def.dataset.aoEngine, def.dataset.aoDefault); return; }
+    // One block per page: launch defaults (Agents), queues (Queues) and the
+    // supported-engine list (Engines). They share one click/change handler.
+    const block = (sectionId, id, html) => {
+      const el = document.createElement('div');
+      el.className = 'agents-overview'; el.id = id; el.innerHTML = '<div class="ao-block">' + html + '</div>';
+      document.getElementById('settingsSection-' + sectionId)?.prepend(el);
+      return el;
+    };
+    const head = (titleId, title, subId, sub, extra) => '<div class="ao-head"><div class="ao-head-main"><div class="ao-title" id="' + titleId + '">' + title + '</div>'
+      + '<div class="ao-sub" id="' + subId + '">' + sub + '</div></div>' + (extra || '') + '</div>';
+    const boxes = [
+      block('defaults', 'agentsOverview', head('aoDefTitle', 'Launch defaults', 'aoDefSub', '')
+        + '<div class="ao-defaults-bar" id="aoDefaultsBar"></div>'
+        + '<button type="button" class="ao-link" data-ao-advanced>Worker fallback &amp; model profiles →</button>'),
+      block('queues', 'agentsOverviewQueues', head('aoQueueTitle', 'Queues', 'aoQueueSub', 'Loading queues…')
+        + '<div class="ao-q-list" id="aoQueueList" role="list"></div>'),
+      block('engines', 'agentsOverviewEngines', head('aoEngTitle', 'Engines', 'aoEngSub', 'Checking your engines…', '<div class="ao-stats" id="aoEngStats"></div>')
+        + '<div class="ao-eng-list" id="aoEngGroups" role="list"></div>'),
+    ];
+    const on = (type, handler) => boxes.forEach(box => box.addEventListener(type, handler));
+    on('click', event => {
       const setup = event.target.closest('[data-ao-setup]');
       if (setup) { openEngineSetupPopup(setup.dataset.aoSetup); return; }
-      const acct = event.target.closest('[data-ao-codex-account]');
-      if (acct) {
-        if (acct.classList.contains('is-active')) return;
-        const id = acct.dataset.aoCodexAccount;
-        const stored = id === 'local-codex' ? '' : id;
-        if (acct.dataset.aoCodexFor === 'worker') {
-          const body = {worker_codex_account_id: stored};
-          if (aoWorkerEngine() !== 'codex') Object.assign(body, {worker_engine: 'codex', worker_model: (spawnDefaultsState.models || {}).codex || '', worker_inherit_session: false});
-          aoSaveDefaults(body, 'Queue workers now run on Codex (' + aoCodexAccountRole(id).toLowerCase() + ' account).');
-          return;
-        }
-        const picker = document.getElementById('codexAccountSelect');
-        if (picker && picker.dataset.userPicked !== '1' && [...picker.options].some(o => o.value === id)) picker.value = id;
-        aoSaveDefaults({engine: 'codex', codex_account_id: stored},
-          'New sessions now start on Codex (' + aoCodexAccountRole(id).toLowerCase() + ' account).');
-        return;
-      }
       const inherit = event.target.closest('[data-ao-inherit]');
       if (inherit) { aoSaveDefaults({worker_inherit_session: inherit.dataset.aoInherit === 'on'}, inherit.dataset.aoInherit === 'on' ? 'Queue workers now follow new sessions.' : 'Queue workers now have their own engine.'); return; }
       if (event.target.closest('[data-ao-advanced]')) openAdvancedRoutingPopup();
     });
-    box.addEventListener('change', event => {
+    on('change', event => {
+      const pick = event.target.closest('[data-ao-pick]');
+      if (pick) {
+        const [engine, account] = pick.value.split('|');
+        if (account) aoSetCodexAccount(account, pick.dataset.aoPick); else aoSetDefault(engine, pick.dataset.aoPick);
+        return;
+      }
       const field = event.target.closest('[data-ao-field]');
       if (field) {
         const v = field.value, engine = field.dataset.aoEngine;
@@ -95848,6 +95863,19 @@
       _aoBusy = false; _agentsOverviewSig = '';
       renderAgentsOverview(); refreshAgentsOverview();
     }
+  }
+  function aoSetCodexAccount(id, which) {
+    const stored = id === 'local-codex' ? '' : id;
+    if (which === 'worker') {
+      const body = {worker_codex_account_id: stored};
+      if (aoWorkerEngine() !== 'codex') Object.assign(body, {worker_engine: 'codex', worker_model: (spawnDefaultsState.models || {}).codex || '', worker_inherit_session: false});
+      aoSaveDefaults(body, 'Queue workers now run on Codex (' + aoCodexAccountRole(id).toLowerCase() + ' account).');
+      return;
+    }
+    const picker = document.getElementById('codexAccountSelect');
+    if (picker && picker.dataset.userPicked !== '1' && [...picker.options].some(o => o.value === id)) picker.value = id;
+    aoSaveDefaults({engine: 'codex', codex_account_id: stored},
+      'New sessions now start on Codex (' + aoCodexAccountRole(id).toLowerCase() + ' account).');
   }
   function aoSetDefault(engine, which) {
     const model = (spawnDefaultsState.models || {})[engine] || '';
@@ -95948,7 +95976,6 @@
   function aoRouteFoldedSection(sectionId) {
     if (!$settingsModalInner || $settingsModalInner.classList.contains('is-first-run') || $settingsModalInner.classList.contains('is-searching')) return;
     if (sectionId === 'routing') setTimeout(openAdvancedRoutingPopup, 0);
-    else if (sectionId === 'engines') setTimeout(() => openEngineSetupPopup(), 0);
   }
   function aoCodexAccounts() {
     return new Set((_agentsOverviewCodex || []).filter(r => r.source === 'codex').map(r => r.id));
@@ -95982,37 +96009,40 @@
       const role = r.id === 'local-codex' ? 'Primary' : (accounts.length > 2 ? 'Secondary ' + i : 'Secondary');
       const left = typeof r.remaining === 'number' ? Math.round(r.remaining) + '% left' : 'no reading';
       const tone = r.status === 'blocked' || r.error ? 'bad' : (typeof r.remaining === 'number' && r.remaining < 20 ? 'warn' : 'ok');
-      const pickBtn = (which, label, active, tip) => '<button type="button" class="ao-default ao-account-pick' + (active ? ' is-active' : '') + '" data-ao-codex-account="' + escapeHtml(r.id) + '" data-ao-codex-for="' + which + '" aria-pressed="' + active + '" title="' + escapeHtml(tip) + '">' + (active ? '✓ ' : '') + label + '</button>';
-      const sActive = aoCodexSessionAccount() === r.id, wActive = aoCodexWorkerAccount() === r.id;
-      const pick = accounts.length < 2 ? '' : '<span class="ao-account-picks">' + pickBtn('session', 'Sessions', sActive, sActive ? 'New Codex sessions use this account' : 'Start new sessions on Codex with this account')
-        + pickBtn('worker', 'Workers', wActive, wActive ? 'Queue workers run on Codex with this account' : 'Run queue workers on Codex with this account') + '</span>';
       return '<span class="ao-account is-' + tone + '" title="' + escapeHtml([r.identity, r.kind, r.deadline ? 'resets ' + new Date(r.deadline).toLocaleString() : '', r.error || ''].filter(Boolean).join(' · ')) + '">'
-        + '<span class="ao-account-role">' + role + '</span><span>' + escapeHtml(r.plan || '') + '</span><span class="ao-account-left">' + left + '</span>' + pick + '</span>';
+        + '<span class="ao-account-role">' + role + '</span><span>' + escapeHtml(r.plan || '') + '</span><span class="ao-account-left">' + left + '</span></span>';
     }).join('') + '</span>';
   }
+  // One row per supported engine: what it is, its state, and one action.
+  // Which engine sessions and workers start on is chosen on the Agents page.
   function aoEngineTile(r) {
     const mono = r.meta.mono || r.meta.label.replace(/[^A-Za-z]/g, '').slice(0, 2);
-    const head = '<span class="eng-mono" aria-hidden="true">' + escapeHtml(mono) + '</span>';
-    if (r.state === 'ready') {
-      const inherit = spawnDefaultsState.worker_inherit_session === true;
-      const btn = (which, text, active, eligible, tip) => !eligible ? ''
-        : '<button type="button" class="ao-default' + (active ? ' is-active' : '') + '" data-ao-engine="' + r.engine + '" data-ao-default="' + which + '" aria-pressed="' + active + '" title="' + escapeHtml(tip) + '">' + (active ? '✓ ' : '') + text + '</button>';
-      return '<div role="listitem" class="ao-eng is-ready' + (r.limited ? ' is-limited' : '') + '" style="--eng-hue:' + r.meta.hue + '">'
-        + '<span class="ao-eng-top">' + head + '<span class="ao-eng-id"><span class="ao-eng-name">' + escapeHtml(r.meta.label) + '</span>'
-        + '<span class="ao-state is-' + (r.limited ? 'warn' : 'ok') + '"><span class="eng-pill-dot"></span>' + (r.limited ? 'Out of usage' : 'Ready') + '</span></span>'
-        + '<button type="button" class="ao-gear" data-ao-setup="' + r.engine + '" title="Account and sign-in" aria-label="' + escapeHtml(r.meta.label) + ' setup">⚙</button></span>'
-        + (r.engine === 'codex' ? aoCodexAccountsHtml() : '')
-        + '<span class="ao-defaults">'
-        + btn('session', 'Sessions', r.isDefault, SPAWN_DEFAULT_ENGINES.includes(r.engine) && !(r.engine === 'codex' && aoCodexAccounts().size > 1), r.isDefault ? 'New sessions start on ' + r.meta.label : 'Start new sessions on ' + r.meta.label)
-        + btn('worker', 'Workers', inherit ? r.isDefault : r.isWorkerDefault, ENGINE_HUB_WORKER_ENGINES.includes(r.engine) && !(r.engine === 'codex' && aoCodexAccounts().size > 1), (inherit ? r.isDefault : r.isWorkerDefault) ? 'Queue workers run on ' + r.meta.label : 'Run queue workers on ' + r.meta.label)
-        + '</span></div>';
+    const kind = r.state === 'ready' ? 'ready' : r.state === 'off' ? 'off' : !r.installed ? 'missing' : 'signin';
+    const label = {ready: r.limited ? 'Out of usage' : 'Ready', off: 'Switched off', missing: 'Not installed', signin: 'Not signed in'}[kind];
+    const tone = kind === 'ready' ? (r.limited ? ' is-warn' : ' is-ok') : '';
+    const cta = {ready: 'Manage', off: 'Turn on', missing: 'Install', signin: 'Sign in'}[kind];
+    return '<div role="listitem" class="ao-eng is-' + kind + (r.limited ? ' is-limited' : '') + '" style="--eng-hue:' + r.meta.hue + '">'
+      + '<span class="eng-mono" aria-hidden="true">' + escapeHtml(mono) + '</span>'
+      + '<span class="ao-eng-name">' + escapeHtml(r.meta.label) + '</span>'
+      + '<span class="ao-state' + tone + '"><span class="eng-pill-dot"></span>' + label + '</span>'
+      + (kind === 'ready' && r.engine === 'codex' ? aoCodexAccountsHtml() : '')
+      + '<button type="button" class="ao-q-btn ao-eng-action" data-ao-setup="' + r.engine + '" aria-label="' + escapeHtml(cta + ' ' + r.meta.label) + '">' + cta + '</button></div>';
+  }
+  // Engine picker for a launch default. Lists ready engines that can take the
+  // role; with two Codex accounts, each account is its own choice.
+  function aoEnginePick(which, current, account) {
+    const allowed = which === 'worker' ? ENGINE_HUB_WORKER_ENGINES : SPAWN_DEFAULT_ENGINES;
+    const ready = (_engHubData ? _engHubRows() : []).filter(r => r.state === 'ready' && allowed.includes(r.engine)).map(r => r.engine);
+    const order = Object.keys(ENGINE_HUB_META);
+    const engines = [...new Set([current, ...ready])].filter(Boolean).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    const accounts = [...aoCodexAccounts()].sort((a, b) => (b === 'local-codex') - (a === 'local-codex'));
+    const opts = [];
+    for (const e of engines) {
+      if (e === 'codex' && accounts.length > 1) accounts.forEach(id => opts.push(['codex|' + id, aoEngineLabel(e) + ' · ' + aoCodexAccountRole(id), current === 'codex' && account === id]));
+      else opts.push([e, aoEngineLabel(e), e === current]);
     }
-    const kind = r.state === 'off' ? 'off' : !r.installed ? 'missing' : 'signin';
-    const label = {off: 'Switched off', missing: 'Not installed', signin: 'Not signed in'}[kind];
-    const cta = {off: 'Turn on →', missing: 'Install →', signin: 'Sign in →'}[kind];
-    return '<button type="button" role="listitem" class="ao-eng is-' + kind + '" style="--eng-hue:' + r.meta.hue + '" data-ao-setup="' + r.engine + '">'
-      + '<span class="ao-eng-top">' + head + '<span class="ao-eng-id"><span class="ao-eng-name">' + escapeHtml(r.meta.label) + '</span>'
-      + '<span class="ao-state"><span class="eng-pill-dot"></span>' + label + '</span></span><span class="ao-cta">' + cta + '</span></span></button>';
+    return '<select class="ao-select ao-def-engine" data-ao-pick="' + which + '" aria-label="' + (which === 'worker' ? 'Queue worker engine' : 'New session engine') + '">'
+      + opts.map(o => '<option value="' + escapeHtml(o[0]) + '"' + (o[2] ? ' selected' : '') + '>' + escapeHtml(o[1]) + '</option>').join('') + '</select>';
   }
   function aoModelSelect(field, engine, current) {
     const opts = modelOptionsForSpawnEngine(engine, current, false);
@@ -96028,16 +96058,15 @@
   }
   function aoDefaultsBarHtml() {
     const s = spawnDefaultsState, inherit = s.worker_inherit_session === true;
-    const acct = s.engine === 'codex' && aoCodexAccounts().size > 1 ? ' · ' + aoCodexAccountRole(aoCodexSessionAccount()) : '';
     const session = '<div class="ao-def-row"><span class="ao-def-label">New sessions</span>' + aoMono(s.engine)
-      + '<span class="ao-def-engine">' + escapeHtml(aoEngineLabel(s.engine) + acct) + '</span>'
+      + aoEnginePick('session', s.engine, aoCodexSessionAccount())
       + aoModelSelect('session-model', s.engine, (s.models || {})[s.engine] || '') + aoEffortSelect('session-effort', s.engine, s.reasoning_effort || '') + '</div>';
     const we = s.worker_engine || s.engine;
     const wAcct = aoWorkerEngine() === 'codex' && aoCodexAccounts().size > 1 ? ' · ' + aoCodexAccountRole(aoCodexWorkerAccount()) + ' account' : '';
     const worker = inherit
       ? '<div class="ao-def-row"><span class="ao-def-label">Queue workers</span><span class="ao-def-follow">Same as new sessions' + wAcct + '</span>'
         + '<button type="button" class="ao-q-btn" data-ao-inherit="off">Use their own engine</button></div>'
-      : '<div class="ao-def-row"><span class="ao-def-label">Queue workers</span>' + aoMono(we) + '<span class="ao-def-engine">' + escapeHtml(aoEngineLabel(we) + wAcct) + '</span>'
+      : '<div class="ao-def-row"><span class="ao-def-label">Queue workers</span>' + aoMono(we) + aoEnginePick('worker', we, aoCodexWorkerAccount())
         + aoModelSelect('worker-model', we, s.worker_model || '') + aoEffortSelect('worker-effort', we, s.worker_reasoning_effort || '')
         + '<button type="button" class="ao-q-btn" data-ao-inherit="on">Follow new sessions</button></div>';
     const k = Number(s.auto_compact_k) || 0;
@@ -96068,7 +96097,7 @@
     const sig = JSON.stringify([rows.map(r => [r.engine, r.state, r.installed, r.auth, r.limited, r.isDefault, r.isWorkerDefault]),
       s.engine, s.models, s.reasoning_effort, s.worker_engine, s.worker_model, s.worker_reasoning_effort, s.worker_inherit_session, s.auto_compact_k, s.codex_account_id, s.worker_codex_account_id, qd, _agentsOverviewCodex]);
     if (sig === _agentsOverviewSig) return;
-    if (document.activeElement && document.activeElement.closest?.('#agentsOverview :is(select, input)')) return;   // don't yank an open picker
+    if (document.activeElement && document.activeElement.closest?.('.agents-overview :is(select, input)')) return;   // don't yank an open picker
     _agentsOverviewSig = sig;
     document.getElementById('aoDefaultsBar').innerHTML = aoDefaultsBarHtml();
     const ready = rows.filter(r => r.state === 'ready');
@@ -96078,17 +96107,14 @@
       const signin = rows.filter(r => r.state === 'setup' && r.installed);
       const missing = rows.filter(r => r.state === 'setup' && !r.installed);
       const off = rows.filter(r => r.state === 'off');
-      document.getElementById('aoEngTitle').textContent = ready.length + ' of ' + rows.length + ' engines ready';
+      document.getElementById('aoEngTitle').textContent = 'Engines';
       const limited = ready.filter(r => r.limited);
       document.getElementById('aoEngSub').textContent = limited.length
-        ? limited.map(r => r.meta.label).join(', ') + ' ' + (limited.length > 1 ? 'are' : 'is') + ' out of usage right now.' : '';
+        ? limited.map(r => r.meta.label).join(', ') + ' ' + (limited.length > 1 ? 'are' : 'is') + ' out of usage right now.'
+        : '';
       document.getElementById('aoEngStats').innerHTML = [[ready.length, 'Ready', 'ok'], [signin.length, 'Sign-in', signin.length ? 'bad' : 'muted'], [missing.length + off.length, 'Not installed', 'muted']]
         .map(x => '<span class="eng-stat is-' + x[2] + '"><span class="eng-stat-num">' + x[0] + '</span><span class="eng-stat-label">' + x[1] + '</span></span>').join('');
-      const group = (cls, title, list) => !list.length ? ''
-        : '<div class="ao-eng-group is-' + cls + '">' + (title ? '<div class="ao-group-label">' + title + ' · ' + list.length + '</div>' : '')
-          + '<div class="ao-eng-grid" role="list">' + list.map(aoEngineTile).join('') + '</div></div>';
-      groups.innerHTML = group('ready', '', ready.slice().sort((a, b) => order.indexOf(a.engine) - order.indexOf(b.engine)))
-        + group('signin', 'Needs sign-in', signin) + group('missing', 'Not installed', missing) + group('off', 'Switched off', off);
+      groups.innerHTML = [...ready, ...signin, ...missing, ...off].map(aoEngineTile).join('');
     } else if (_engHubUnavailable) {
       document.getElementById('aoEngSub').textContent = 'Engine status is unavailable right now. Retrying on its own.';
     }
@@ -96098,8 +96124,7 @@
     const own = queues.filter(q => q.pins && q.pins.engine).length;
     document.getElementById('aoQueueTitle').textContent = queues.length + ' queues';
     document.getElementById('aoQueueSub').textContent = own
-      ? own + ' with their own engine; the rest use the queue-worker default.'
-      : 'All use the queue-worker default. Pick an engine to give a queue its own.';
+      ? own + ' with their own engine' : '';
     list.innerHTML = queues.length ? queues.map(q => aoQueueRow(q, ready.map(r => r.engine))).join('') : '<p class="settings-empty">No queues configured.</p>';
   }
   async function refreshAgentsOverview() {

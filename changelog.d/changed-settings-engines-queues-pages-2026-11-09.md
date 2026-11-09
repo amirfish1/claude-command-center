@@ -1,0 +1,2 @@
+- Settings: Agents is now three pages. Agents holds the launch defaults (pick the engine, model and effort for new sessions and queue workers), Queues has its own page, and Engines is a one-row-per-engine list at the bottom of the menu.
+- Settings: removed the "Where this applies" notes and page intro text, and the Workspace page now edits repository appearance, list presentation, text size and the queue sidebar in place instead of sending you to another screen.

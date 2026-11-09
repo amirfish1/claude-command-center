@@ -147,13 +147,21 @@ async function open(t,width=1440,query=''){
 }
 async function listMenu(page){await page.evaluate(()=>window.cccSettingsContext.redirect('list-presentation'));await page.waitForFunction(()=>document.getElementById('settingsGhIssuesToggle').getClientRects().length>0);}
 for(const width of [1440,390]){
- test(`one canonical editor per preference, absent from Settings at ${width}px`,async t=>{
+ test(`one canonical editor per preference, edited in place while Settings is open at ${width}px`,async t=>{
   const page=await open(t,width);
   assert.equal(await page.$$eval('#settingsPane #repoAvatarSelect,#settingsPane #fontPlus,#settingsPane [data-chips-mode],#settingsPane #settingsGhIssuesToggle,#settingsPane #settingsSeparateTabsToggle,#settingsPane #settingsQueueRhsListToggle',els=>els.length),0);
   assert.equal(await page.evaluate(()=>Object.entries(window.__originals).every(([id,node])=>node===document.getElementById(id))),true);
   for(const id of ['repoAvatarSelect','fontPlus','settingsGhIssuesToggle','settingsQueueRhsListToggle'])assert.equal(await page.$$eval('#'+id,els=>els.length),1);
   for(const id of ['settingsUiModeToggle','settingsDebugModeToggle','settingsTtsCacheDebugToggle'])assert.equal(await page.$eval('#'+id,el=>!!el.closest('#settingsPane')),true);
-  assert.equal(await page.$$eval('#settingsPane [data-settings-context]',els=>els.length),4);
+  // Settings never sends people elsewhere: opening it brings the real controls in.
+  const inPane='#settingsPane #repoAvatarSelect,#settingsPane #fontPlus,#settingsPane #settingsGhIssuesToggle,#settingsPane #settingsQueueRhsListToggle';
+  assert.equal(await page.$$eval('#settingsPane [data-settings-context]',els=>els.length),0);
+  await page.evaluate(()=>openSettingsModal());
+  await page.waitForFunction(sel=>document.querySelectorAll(sel).length===4,{},inPane);
+  assert.equal(await page.evaluate(()=>Object.entries(window.__originals).every(([id,node])=>node===document.getElementById(id))),true);
+  await page.evaluate(()=>{document.getElementById('settingsModal').hidden=true;});
+  await page.waitForFunction(sel=>document.querySelectorAll(sel).length===0,{},inPane);
+  for(const id of ['repoAvatarSelect','fontPlus','settingsGhIssuesToggle','settingsQueueRhsListToggle'])assert.equal(await page.$$eval('#'+id,els=>els.length),1);
  });
  test(`native list adapters survive rerenders and menu mirroring at ${width}px`,async t=>{
   const page=await open(t,width);await listMenu(page);
@@ -250,13 +258,13 @@ test('global resets no longer modify contextual choices; reload preserves adapte
  assert.equal(await page.$$eval('[data-segmented-group="theme"]',els=>els.length),1);
 });
 
-test('contextual links survive outside-click handlers and escape collapsed folder picker',async t=>{
+test('contextual redirects survive outside-click handlers and escape collapsed folder picker',async t=>{
  const page=await open(t,390);
  await page.evaluate(()=>{
    document.addEventListener('click',event=>{if(event.target.closest('[data-settings-context]'))document.getElementById('sidebarMoreMenu').hidden=true;});
    openSettingsModal();
  });
- await page.evaluate(()=>document.querySelector('[data-settings-context="list-presentation"]').click());
+ await page.evaluate(()=>window.cccSettingsContext.redirect('list-presentation'));
  assert.equal(await page.$eval('#settingsGhIssuesToggle',e=>!!e.getClientRects().length),true);
  await page.evaluate(()=>{
    const summary=document.getElementById('spawnCwdSummary');summary.innerHTML='<button class="spawn-cwd-change">Change</button>';
@@ -310,19 +318,19 @@ test('repository editor spans the collapsed phone composer grid',async t=>{
 });
 
 
-test('phone contextual Settings links wrap within the pane and retain touch targets',async t=>{
+test('phone Settings hosts the moved controls without horizontal overflow',async t=>{
  const page=await open(t,390);
+ await page.evaluate(()=>openSettingsModal());
+ await page.waitForFunction(()=>document.querySelectorAll('#settingsPane [data-context-home] > [data-context-preferences]').length>=3);
  const result=await page.evaluate(()=>{
-   openSettingsModal();
    const pane=document.getElementById('settingsPane');
    pane.style.width='350px';pane.style.maxWidth='100%';
-   return [...pane.querySelectorAll('[data-settings-context]')].map(button=>{
-     for(let node=button.parentElement;node&&node!==pane;node=node.parentElement){node.hidden=false;node.style.setProperty('display','block','important');if(node.tagName==='DETAILS')node.open=true;}
-     const row=button.parentElement;row.style.width='100%';
-     const r=button.getBoundingClientRect(),p=row.getBoundingClientRect();
-     return {height:r.height,fits:r.width<=p.width,nowrap:getComputedStyle(button).whiteSpace==='nowrap'};
+   return [...pane.querySelectorAll('[data-context-home]')].map(row=>{
+     for(let node=row;node&&node!==pane;node=node.parentElement){node.hidden=false;if(node.tagName==='DETAILS')node.open=true;}
+     const block=row.firstElementChild;
+     return {fits:block.scrollWidth<=row.clientWidth+1};
    });
  });
  assert(result.length>=4);
- for(const item of result){assert(item.height>=44);assert(item.fits);assert.equal(item.nowrap,false);}
+ for(const item of result)assert(item.fits);
 });

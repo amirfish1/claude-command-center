@@ -6,7 +6,7 @@
   'use strict';
   const get = id => document.getElementById(id);
   const make = (tag, text) => { const el = document.createElement(tag); if (text) el.textContent = text; return el; };
-  let hooks, list, branding, reader, parking, mounted = false, brandingOpened = false, brandingTarget;
+  let hooks, list, branding, reader, queue, parking, mounted = false, brandingOpened = false, brandingTarget, borrowed = false;
   const phone = () => matchMedia('(max-width:1200px)').matches || document.documentElement.classList.contains('ccc-mobile-list-view');
   const routes = {
     'list-presentation': 'list', 'folder-chips': 'list', 'chips': 'list',
@@ -16,14 +16,33 @@
     'repoAvatarUpload': 'repo', 'repoAvatarReset': 'repo',
     'queue-view': 'queue', 'settingsQueueRhsListToggle': 'queue', 'ccc-queue-rhs-list': 'queue',
   };
-  function syncList() {
+  // Settings edits these in place: while it is open the real controls sit in
+  // their Settings rows, and they return to their contextual menus on close.
+  const home = kind => document.querySelector('#settingsPane [data-context-home="' + kind + '"]');
+  function settingsHome(open) {
     if (!mounted) return;
+    const pane = get('settingsPane');
+    if (open) {
+      borrowed = true;
+      for (const [kind, node] of [['list', list], ['reader', reader], ['queue', queue], ['repo', branding]]) home(kind)?.append(node);
+      if (home('repo')) branding.open = true;
+      return;
+    }
+    borrowed = false;
+    if (pane.contains(branding)) { branding.open = false; brandingOpened = false; parking.append(branding); }
+    if (pane.contains(queue)) (get('queueMoreMenu') || parking).append(queue);
+    if (pane.contains(list)) { parking.append(list); syncList(); }
+    if (pane.contains(reader)) { parking.append(reader); syncReader(); }
+  }
+  function syncList() {
+    if (!mounted || borrowed) return;
     const menu = document.querySelector('#convList .conv-archived-overflow-menu');
     const target = (phone() ? get('sidebarMoreFilters') : menu) || parking;
     if (target && list.parentElement !== target) target.append(list);
     if (phone() && target) target.hidden = false;
   }
   function syncReader(pane) {
+    if (borrowed) return;
     const mobileSlot = document.querySelector('#convSimpleActionsMenu [data-context-phone-reader]');
     const usePhone = phone() && mobileSlot && !document.body.classList.contains('conversation-popout');
     const target = usePhone ? mobileSlot : (pane || document.querySelector('.conv-pane.is-active') || document.querySelector('.conv-pane'))?.querySelector('[data-context-reader-slot]');
@@ -57,7 +76,7 @@
   }
   function openBranding(repo, anchor) {
     if (!mounted) return;
-    hooks.closeSettings(); closeOtherMenus('repo');
+    hooks.closeSettings(); settingsHome(false); closeOtherMenus('repo');
     if (anchor) {
       const header = anchor.closest('.conv-folder-group-header, .flow-inspector-toolbar');
       header?.after(branding);
@@ -77,7 +96,7 @@
   }
   function redirect(route) {
     const kind = routes[route]; if (!mounted || !kind) return false;
-    hooks.closeSettings(); closeOtherMenus(kind);
+    hooks.closeSettings(); settingsHome(false); closeOtherMenus(kind);
     if (kind === 'repo') { openBranding(); return true; }
     if (kind === 'reader') {
       hooks.openReader(); syncReader();
@@ -145,6 +164,11 @@
       #convList .conv-archived-overflow-menu {width:min(340px,calc(100vw - 16px));min-width:0;max-width:calc(100vw - 16px);max-height:70vh;overflow-y:auto;overscroll-behavior:contain}
       [data-context-preferences] .settings-segmented {flex-wrap:wrap}
       #settingsPane [data-settings-context] {max-width:100%;min-width:0;white-space:normal;overflow-wrap:anywhere;box-sizing:border-box;text-align:left}
+      #settingsPane .settings-context-home {display:block}
+      #settingsPane .settings-context-home:empty {display:none}
+      #settingsPane .settings-context-home > [data-context-preferences] {width:100%;padding:0;margin:0;border:0;background:none;font-size:13px}
+      #settingsPane .settings-context-home [data-context-preferences] .settings-row:last-of-type {border-bottom:0}
+      #settingsPane .settings-context-home h3, #settingsPane .settings-context-home > [data-context-preferences] > p, #settingsPane #contextRepoPreferences > summary {font-size:13px;font-weight:500;margin:0 0 4px;list-style:none;cursor:default}
       @media(max-width:1200px) {
         [data-context-preferences] button {min-height:36px}
         #settingsModalFontSlot .font-size-btn {min-width:44px;min-height:44px}
@@ -153,21 +177,14 @@
     `; document.head.append(style);
     const singleton = (element, id) => { if (id) element.id = id; element.dataset.contextSingleton = ''; element.dataset.contextPreferences = ''; return element; };
     const row = id => get(id)?.closest('.settings-row');
-    const link = (oldRow, text, route) => {
+    // Each moved control keeps a Settings row; the control itself is placed
+    // there whenever Settings is open (see settingsHome).
+    const link = (oldRow, kind) => {
       if (!oldRow) return;
-      const entry = make('div'); entry.className = 'settings-row'; entry.dataset.keywords = oldRow.dataset.keywords || '';
-      // One ordinary row per moved setting: name, where it lives now, Open.
-      const [title, place] = text.split(' → ');
-      const main = make('div'); main.className = 'settings-row-main';
-      const label = make('div', title); label.className = 'settings-row-label';
-      const desc = make('div', 'Now in ' + place + '.'); desc.className = 'settings-row-desc';
-      main.append(label, desc);
-      const control = make('div'); control.className = 'settings-row-control';
-      const button = make('button', 'Open'); button.type = 'button'; button.className = 'settings-action-btn'; button.dataset.settingsContext = route;
-      button.setAttribute('aria-label', 'Open ' + title + ' in ' + place);
-      control.append(button); entry.append(main, control); oldRow.before(entry);
+      const entry = make('div'); entry.className = 'settings-row settings-context-home'; entry.dataset.keywords = oldRow.dataset.keywords || '';
+      entry.dataset.contextHome = kind; oldRow.before(entry);
     };
-    const repoRow = row('repoAvatarSelect'); link(repoRow, 'Repository appearance → the folder picker or repository header', 'repository-branding');
+    const repoRow = row('repoAvatarSelect'); link(repoRow, 'repo');
     branding = singleton(make('details'), 'contextRepoPreferences'); branding.append(make('summary', 'Repository appearance'));
     // Keep the editor out of the composer until an appearance action opens it.
     branding.append(repoRow); parking.append(branding);
@@ -179,7 +196,7 @@
     list = singleton(make('section'), 'contextListPreferences');
     list.setAttribute('aria-label', 'List presentation · This browser'); list.append(make('h3', 'List presentation · This browser'));
     const chipRow = document.querySelector('[data-segmented-group="chips"]')?.closest('.settings-row');
-    link(chipRow, 'List presentation → the list’s View options', 'list-presentation');
+    link(chipRow, 'list');
     if (chipRow) list.append(chipRow);
     for (const id of ['settingsGhIssuesToggle', 'settingsSeparateTabsToggle']) { const element = row(id); if (element) {
       const description = element.querySelector('.settings-row-desc');
@@ -191,8 +208,8 @@
     listReset.addEventListener('click', () => hooks.resetList()); list.append(listReset);
     list.addEventListener('click', hooks.preferenceClick);
 
-    const queueRow = row('settingsQueueRhsListToggle'); link(queueRow, 'Queue sidebar → Queue view options', 'queue-view');
-    const queue = singleton(make('section'), 'contextQueuePreferences'); queue.append(make('h3', 'Queue sidebar · This browser'));
+    const queueRow = row('settingsQueueRhsListToggle'); link(queueRow, 'queue');
+    queue = singleton(make('section'), 'contextQueuePreferences'); queue.append(make('h3', 'Queue sidebar · This browser'));
     if (queueRow) {
       queueRow.querySelector('.settings-row-label').textContent = 'Show full queue list';
       queueRow.querySelector('.settings-row-desc').textContent = 'Display all queues instead of the selected queue’s compact status strip.';
@@ -205,7 +222,7 @@
     reader = singleton(get('settingsModalFontSlot'));
     const phoneReader = document.querySelector('#convSimpleActionsMenu .mobile-actions-row[aria-label="Text size"]');
     if (phoneReader) { phoneReader.replaceChildren(); phoneReader.dataset.contextPhoneReader = ''; }
-    const readerRow = reader.closest('.settings-row'); link(readerRow, 'Conversation text size → the conversation’s Reader actions', 'text-size');
+    const readerRow = reader.closest('.settings-row'); link(readerRow, 'reader');
     // The toolbar's delayed setup used to move these controls into Settings.
     // Move the real stepper now, before removing its old row.
     const stepper = reader.querySelector('.font-size-controls') || get('fontMinus')?.closest('.font-size-controls');
@@ -260,6 +277,11 @@
       if (get('queueMoreMenu')?.contains(event.target)) { get('queueMoreBtn')?.focus(); }
     }
     document.addEventListener('keydown', keyboard, true);
+    const modal = get('settingsModal');
+    if (modal) {
+      new MutationObserver(() => { if (modal.hidden === borrowed) settingsHome(!modal.hidden); }).observe(modal, {attributes: true, attributeFilter: ['hidden']});
+      if (!modal.hidden) settingsHome(true);
+    }
     const listHost = get('convList');
     if (listHost) new MutationObserver(() => {
       syncList();

@@ -34328,20 +34328,22 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 .ao-eng-group.is-signin .ao-group-label { color: var(--red); }
 .ao-eng-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 8px; }
 .ao-eng-group.is-missing .ao-eng-grid, .ao-eng-group.is-off .ao-eng-grid { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.ao-eng-list { display: flex; flex-direction: column; }
 .ao-eng {
-  font: inherit; color: inherit; text-align: left;
-  display: flex; flex-direction: column; gap: 8px; padding: 9px 10px; min-width: 0;
-  border: 1px solid hsl(var(--eng-hue) 40% 30% / 0.7); border-radius: 10px;
-  background: linear-gradient(135deg, hsl(var(--eng-hue) 50% 22% / 0.45), transparent 70%), var(--bg);
+  display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 2px;
+  border-top: 1px solid var(--border);
 }
-button.ao-eng { cursor: pointer; transition: border-color 0.12s ease-out; }
-button.ao-eng:hover { border-color: hsl(var(--eng-hue) 60% 55%); }
+.ao-eng:first-child { border-top: 0; }
+.ao-eng .eng-mono { flex: none; }
+.ao-eng .ao-eng-name { flex: 0 0 150px; }
+.ao-eng .ao-state { flex: 0 0 120px; }
+.ao-eng .ao-accounts { flex: 1 1 auto; flex-direction: row; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.ao-eng-action { margin-left: auto; flex: none; }
+.ao-eng.is-missing .eng-mono, .ao-eng.is-off .eng-mono { filter: grayscale(1); opacity: 0.55; }
+.ao-eng.is-missing .ao-eng-name, .ao-eng.is-off .ao-eng-name { color: var(--text-muted); }
+.ao-eng.is-signin .ao-state { color: var(--red); }
+@media (max-width: 700px) { .ao-eng { flex-wrap: wrap; } .ao-eng .ao-eng-name { flex: 1 1 110px; } .ao-eng .ao-state { flex: 0 0 auto; } .ao-eng .ao-accounts { flex-basis: 100%; order: 5; } }
 .ao-eng:focus-visible, .ao-q-btn:focus-visible, .ao-default:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.ao-eng.is-signin { border-color: color-mix(in srgb, var(--red) 55%, transparent); background: color-mix(in srgb, var(--red) 9%, var(--bg)); }
-.ao-eng.is-signin .ao-state, .ao-eng.is-signin .ao-cta { color: var(--red); }
-.ao-eng.is-missing, .ao-eng.is-off { padding: 6px 9px; opacity: 0.5; filter: grayscale(1); background: var(--bg); border-color: var(--border); }
-.ao-eng.is-missing:hover, .ao-eng.is-off:hover { opacity: 0.85; filter: none; }
-.ao-eng.is-missing .eng-mono, .ao-eng.is-off .eng-mono { width: 24px; height: 24px; font-size: 10px; border-radius: 7px; }
 .ao-eng-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .ao-eng-id { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .ao-eng-name { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -34406,7 +34408,6 @@ button.ao-eng:hover { border-color: hsl(var(--eng-hue) 60% 55%); }
 .ao-setup-body { overflow: auto; padding: 4px 16px 16px; }
 .ao-setup-body #engineConnection > h2, .ao-setup-body #engineConnection > p:first-of-type,
 .ao-setup-body #engineConnection > label, .ao-setup-body #engineConnectionSelect { display: none; }
-[data-theme="light"] .ao-eng { border-color: hsl(var(--eng-hue) 50% 80%); background: linear-gradient(135deg, hsl(var(--eng-hue) 70% 94%), transparent 75%), var(--bg); }
 [data-theme="light"] .ao-default.is-active { color: hsl(var(--eng-hue) 60% 28%); background: hsl(var(--eng-hue) 70% 90%); }
 [data-theme="light"] .ao-badge { color: hsl(var(--eng-hue, 210) 60% 32%); background: hsl(var(--eng-hue, 210) 70% 92%); border-color: hsl(var(--eng-hue, 210) 50% 80%); }
 
@@ -34427,10 +34428,9 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 
 /* Agents tab = the two diagrams. Text sections stay in the DOM for search,
    first-run and pop-ups, but are folded away otherwise. */
-.settings-modal:not(.is-first-run):not(.is-searching) #settingsSection-defaults.ao-folded > :not(#agentsOverview):not(.ao-setup-overlay),
-.settings-modal:not(.is-first-run):not(.is-searching) :is(#settingsSection-engines, #settingsSection-queues, #settingsSection-routing).ao-folded > :not(.ao-setup-overlay) { display: none !important; }
-.settings-modal:not(.is-first-run):not(.is-searching) :is(#settingsSection-engines, #settingsSection-queues, #settingsSection-routing).ao-folded { border: 0; padding: 0; margin: 0; min-height: 0; }
-.settings-modal.is-first-run #agentsOverview, .settings-modal.is-searching #agentsOverview { display: none; }
+.settings-modal:not(.is-first-run):not(.is-searching) :is(#settingsSection-defaults, #settingsSection-engines, #settingsSection-queues, #settingsSection-routing).ao-folded > :not(.agents-overview):not(.ao-setup-overlay) { display: none !important; }
+.settings-modal:not(.is-first-run):not(.is-searching) #settingsSection-routing.ao-folded { border: 0; padding: 0; margin: 0; min-height: 0; }
+.settings-modal.is-first-run .agents-overview, .settings-modal.is-searching .agents-overview { display: none; }
 .ao-head-main { min-width: 0; }
 .ao-sub:empty { display: none; }
 .ao-defaults-bar { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
@@ -34446,9 +34446,9 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 .ao-link:hover { color: var(--accent); text-decoration: underline; }
 .ao-setup-body .settings-section-eyebrow { display: none; }
 @media (max-width: 700px) { .ao-q { grid-template-columns: 1fr; } .ao-def-label { width: auto; } }
-#agentsOverview :is(select, input).ao-select { font-size: 12px !important; line-height: 1.3; height: 26px; min-height: 0; padding: 2px 22px 2px 7px; width: auto; }
-#agentsOverview select.ao-q-select { width: 100%; }
-#agentsOverview input.ao-num { width: 72px; padding-right: 6px; }
+.agents-overview :is(select, input).ao-select { font-size: 12px !important; line-height: 1.3; height: 26px; min-height: 0; padding: 2px 22px 2px 7px; width: auto; }
+.agents-overview select.ao-q-select { width: 100%; }
+.agents-overview input.ao-num { width: 72px; padding-right: 6px; }
 /* The pop-ups show only what the diagram cannot: no repeated defaults. */
 .ao-setup-body #routingPolicyContext option[value="defaults"] { display: none; }
 .ao-setup-body #engineConnectionPanel > section.engine-connection-step:nth-of-type(n+2) { display: none; }
@@ -34507,3 +34507,10 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
     height: calc(var(--app-vh, 100vh) - env(safe-area-inset-top, 0px) - 64px - env(safe-area-inset-bottom, 0px));
   }
 }
+
+/* Settings carries no standalone explanation text: only control labels and
+   their own descriptions. Scope help stays in the DOM for aria-describedby. */
+#settingsPane .settings-scope-container, #settingsPane .settings-section-note { display: none !important; }
+.ao-sub:empty { display: none; }
+.agents-overview .ao-def-row select.ao-select { max-width: 190px !important; flex: 0 1 auto; }
+.agents-overview .ao-def-row select.ao-def-engine { font-weight: 650; margin-right: 0; }
