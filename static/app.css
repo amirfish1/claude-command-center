@@ -34540,7 +34540,7 @@ body.outcomes-enabled .outcome-workspace{top:64px}
 .outcome-tools{display:flex;align-items:center;gap:8px;margin-left:16px;font-size:13px;color:var(--text-secondary)}
 .outcome-tools select{font:inherit;min-height:44px;max-width:210px;padding:8px;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:6px}
 body.outcomes-enabled #mobileBottomNav,body.outcomes-enabled #convList > .conv-tab-bar{display:none!important}
-@media(max-width:720px){body.outcomes-everything{padding-top:116px}body.outcomes-everything .outcome-navigation{height:116px;flex-wrap:wrap;align-content:center}.outcome-tools{order:5;margin:0;width:100%;justify-content:space-between}.outcome-tools select{max-width:none;flex:1}}
+@media(max-width:720px){body.outcomes-everything{padding-top:116px}body.outcomes-everything .outcome-navigation{height:116px;flex-wrap:wrap;align-content:center}.outcome-tools{order:5;margin:0;width:100%;justify-content:space-between}.outcome-tools select{min-width:0;max-width:none;flex:1}}
 
 @media(max-width:720px){body.outcomes-enabled .main{top:64px;height:calc(var(--app-vh,100vh) - 64px)}body.outcomes-everything .main{top:116px;height:calc(var(--app-vh,100vh) - 116px)}}
 

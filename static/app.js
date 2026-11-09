@@ -99275,9 +99275,29 @@
   }
   function disclosure(title, items, empty) { return '<details><summary>'+title+'</summary>'+records(items,empty)+'</details>'; }
   let decisionRows=[], decisionCoverage=false, decisionError='Decision source not checked.';
+  const decisionRef = ref => typeof ref==='string' ? {request_id:ref} : (ref && typeof ref==='object' ? ref : {});
   function resolvedDecision(ref) {
-    if (!ref || ref.kind!=='decision' || ref.state!=='pending' || !ref.request_id || !ref.preparation || !['why_now','options','recommendation','tradeoffs'].every(key=>ref.preparation[key])) return null;
-    return decisionRows.find(row=>row.request_id===ref.request_id && row.kind==='question' && row.status==='open' && row.answer?.state!=='accepted' && (decisionCoverage || row.source_current===true) && (ref.revision==null || ref.revision==='' || String(ref.revision)===String(row.revision))) || null;
+    const link=decisionRef(ref);
+    return decisionRows.find(row=>row.request_id===link.request_id) || null;
+  }
+  function decisionCard({o,ref}) {
+    const link=decisionRef(ref), row=resolvedDecision(ref);
+    if (!row) return '';
+    const preparation=link.preparation || row.preparation || {};
+    const expected=link.source_revision ?? link.revision;
+    const revisionMatches=expected==null || expected==='' || String(expected)===String(row.revision);
+    const currentSource=decisionCoverage || row.source_current===true;
+    const answer=row.answer || {}, answered=answer.state || row.delivery_state;
+    const sourceOpen=row.kind==='question' && row.status==='open' && answer.state!=='accepted' && (!row.answer_state || row.answer_state==='none') && (!answered || answered==='none');
+    const prepared=['why_now','options','recommendation'].every(key=>Array.isArray(preparation[key]) ? preparation[key].length>0 : !!preparation[key]);
+    const ready=sourceOpen && currentSource && revisionMatches && row.revision!=null && prepared && row.can_answer!==false;
+    const state=ready?'Prepared question · review at source':!currentSource?'Source freshness unconfirmed':!revisionMatches?'Linked revision changed · review current source':!sourceOpen?'Source answer or question status recorded':!prepared?'Preparation incomplete · review source question':'Source question is read-only';
+    let receipt='';
+    if (answered==='pending') receipt='Answer saved. Delivery pending; sending requires an explicit click in Decisions.';
+    else if (['sending','unknown'].includes(answered)) receipt='Delivery unknown. Check delivery in Decisions; do not resend.';
+    else if (answered==='accepted') receipt=(answer.receipt?.acceptance==='source_inbox' || row.adapter==='session-question') ? (answer.session_consumed===true?'Answer received by the originating session. The work is not necessarily complete.':'Answer saved for the originating session; waiting for session receipt. The work is not complete.') : 'Answer accepted by source. Delivery confirmed; the work is not necessarily complete.';
+    else if (answered==='rejected') receipt='Answer rejected by source. Review the retained answer in Decisions; this question has not advanced.';
+    return '<article class="ow-record ow-decision" data-decision-ready="'+ready+'"><h2>'+esc(link.question || row.title || link.title || o.title)+'</h2><p class="ow-state">'+esc(state)+'</p>'+(row.body?'<p>'+esc(row.body)+'</p>':'')+'<dl><dt>Why now</dt><dd>'+esc(plain(preparation.why_now || 'Not supplied'))+'</dd><dt>Recommendation</dt><dd>'+esc(plain(preparation.recommendation || 'Not supplied'))+'</dd><dt>Options</dt><dd>'+esc(plain(preparation.options || 'Not supplied'))+'</dd><dt>Source revision</dt><dd>'+esc(row.revision ?? 'Not supplied')+'</dd><dt>Question status</dt><dd>'+esc(row.status || 'Unknown')+'</dd><dt>Answer state</dt><dd>'+esc(row.answer_state || 'Not supplied')+'</dd><dt>Delivery state</dt><dd>'+esc(row.delivery_state || answer.state || 'Not supplied')+'</dd><dt>Session receipt</dt><dd>'+esc(answer.session_consumed===true?'Consumed by originating session':answer.session_consumed===false?'Not yet consumed':'Not supplied')+'</dd></dl>'+(receipt?'<p>'+esc(receipt)+'</p>':'')+disclosure('Decision source and linkage',[{request_id:row.request_id,source_revision:row.revision,linked_revision:expected,outcome_id:o.id,decision_id:link.id,preparation,answer:row.answer}],'')+'<p>Linked outcome: '+esc(o.title)+'</p>'+button('decisions','Review in Decisions')+'</article>';
   }
   function verifiedDelivery(o) {
     const accepted=o.acceptance;
@@ -99322,10 +99342,12 @@
     navigation.querySelector('[data-ow-action="everything"]').setAttribute('aria-pressed','false');
     freshness.textContent = loadedAt ? 'Last refreshed '+date(loadedAt)+' · refresh to check for changes' : 'No snapshot loaded';
     if (view === 'needs') {
-      // Only explicit prepared, linked requests are presented as ready decisions.
       const refs = outcomes.flatMap(o => list(o.decision_refs).map(ref => ({o,ref})));
-      const ready = refs.filter(({ref}) => resolvedDecision(ref)).sort((a,b) => (Number(a.ref.rank)||9999)-(Number(b.ref.rank)||9999));
-      content.innerHTML = '<section class="ow-needs"><p>Review and answer through the existing Decisions workspace.</p><p>'+esc(decisionError)+'<\/p>'+button('decisions','Open Decisions')+(ready.length ? ready.map(({o,ref}) => '<article class="ow-record"><h2>'+esc(ref.question || ref.title || o.title)+'</h2><p>'+esc(ref.rank_reason || ref.preparation?.why_now || 'Priority reason not supplied')+'</p>'+records([ref.preparation],'')+disclosure('Decision source and linkage',[{request_id:ref.request_id,source_revision:resolvedDecision(ref)?.revision,outcome_id:o.id,decision_id:ref.id,state:ref.state}],'')+'<p>Linked outcome: '+esc(o.title)+'</p>'+button('decisions','Review in Decisions')+'</article>').join('') : '<p class="ow-empty">No prepared linked decisions in this snapshot.</p>')+(refs.length > ready.length ? '<p>Other decision references are awaiting preparation or identity linkage. Open Decisions to inspect their source status.</p>' : '')+'</section>';
+      const linked=refs.filter(({ref})=>resolvedDecision(ref)).sort((a,b)=>(Number(decisionRef(a.ref).rank)||9999)-(Number(decisionRef(b.ref).rank)||9999));
+      const linkedIds=new Set(refs.map(({ref})=>decisionRef(ref).request_id));
+      const unlinked=decisionRows.filter(row=>row.kind==='question' && row.status==='open' && row.answer?.state!=='accepted' && !linkedIds.has(row.request_id));
+      const coverage=decisionCoverage ? unlinked.length+' other open source questions are not linked to these outcomes. All questions remain in Decisions.' : 'Current question coverage is unknown. Unlinked and urgent questions may exist; inspect Decisions.';
+      content.innerHTML = '<section class="ow-needs"><p>Review and answer through the existing Decisions workspace.</p><p>'+esc(decisionError)+'</p><p>'+esc(coverage)+'</p>'+button('decisions','Open Decisions')+(linked.length ? linked.map(decisionCard).join('') : '<p class="ow-empty">'+(decisionCoverage?'No prepared linked decisions in this snapshot.':'Linked decision readiness is unknown until the source can be checked.')+'</p>')+(refs.length>linked.length?'<p>Other decision references are awaiting preparation or identity linkage. Open Decisions to inspect their source status.</p>':'')+'</section>';
       return;
     }
     const verifiedIncident = o => list(o.incidents).concat(o.incident?[o.incident]:[]).some(i => i.verified === true);
