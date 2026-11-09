@@ -1,1 +1,2 @@
 - Keep regular sessions and tabs accessible from the outcome workspace, respect iPhone safe areas, and simplify briefs with direct session/question actions, semantic status icons, verified finish-check progress, and expandable context and controls.
+- Return to the phone session list after opening a conversation, keep recovery and question-source diagnostics in Details, and show completed goals with a direct evidence action.
