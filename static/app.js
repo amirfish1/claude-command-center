@@ -22153,9 +22153,12 @@
   // The opt-in outcome shell consolidates diagnostic tabs into one selector.
   // Reuse the original navigation paths, including Simple-mode screens.
   window.cccInspectWorkspace = function (tab) {
-    const known = ['inprogress','coding','workers','queues','jobs','issues','archived','alltickets','ideas','smallbugs','ask'];
+    const known = ['regular','inprogress','coding','workers','queues','jobs','issues','archived','alltickets','ideas','smallbugs','ask'];
     if (!/^[a-z0-9_-]+$/.test(tab) || (!known.includes(tab) && !Array.from(document.querySelectorAll('[data-conv-tab]')).some(el=>el.dataset.convTab===tab))) return false;
-    if (isSimpleMode()) {
+    if (tab === 'regular') {
+      setUiMode('advanced');
+      _activateSidebarTabFromMobileNav('inprogress');
+    } else if (isSimpleMode()) {
       _simpleOpenScreen(tab === 'queues' ? 'automations' : 'history');
     } else {
       _activateSidebarTabFromMobileNav(tab);
@@ -99300,7 +99303,24 @@
     else if (['sending','unknown'].includes(answered)) receipt='Delivery unknown. Check delivery in Decisions; do not resend.';
     else if (answered==='accepted') receipt=(answer.receipt?.acceptance==='source_inbox' || row.adapter==='session-question') ? (answer.session_consumed===true?'Answer received by the originating session. The work is not necessarily complete.':'Answer saved for the originating session; waiting for session receipt. The work is not complete.') : 'Answer accepted by source. Delivery confirmed; the work is not necessarily complete.';
     else if (answered==='rejected') receipt='Answer rejected by source. Review the retained answer in Decisions; this question has not advanced.';
-    return '<article class="ow-record ow-decision" data-decision-ready="'+ready+'"><h2>'+esc(link.question || row.title || link.title || o.title)+'</h2><p class="ow-state">'+esc(state)+'</p>'+(row.body?'<p>'+esc(row.body)+'</p>':'')+'<dl><dt>Why now</dt><dd>'+esc(plain(preparation.why_now || 'Not supplied'))+'</dd><dt>Recommendation</dt><dd>'+esc(plain(preparation.recommendation || 'Not supplied'))+'</dd><dt>Options</dt><dd>'+esc(plain(preparation.options || 'Not supplied'))+'</dd><dt>Source revision</dt><dd>'+esc(row.revision ?? 'Not supplied')+'</dd><dt>Question status</dt><dd>'+esc(row.status || 'Unknown')+'</dd><dt>Answer state</dt><dd>'+esc(row.answer_state || 'Not supplied')+'</dd><dt>Delivery state</dt><dd>'+esc(row.delivery_state || answer.state || 'Not supplied')+'</dd><dt>Session receipt</dt><dd>'+esc(answer.session_consumed===true?'Consumed by originating session':answer.session_consumed===false?'Not yet consumed':'Not supplied')+'</dd></dl>'+(receipt?'<p>'+esc(receipt)+'</p>':'')+disclosure('Decision source and linkage',[{request_id:row.request_id,source_revision:row.revision,linked_revision:expected,outcome_id:o.id,decision_id:link.id,preparation,answer:row.answer}],'')+'<p>Linked outcome: '+esc(o.title)+'</p>'+button('decisions','Review in Decisions')+'</article>';
+    return '<article class="ow-record ow-decision" data-decision-ready="'+ready+'"><h2>'+sign('question')+esc(link.question || row.title || link.title || o.title)+'</h2><p class="ow-state">'+esc(state)+'</p>'+'<p><strong>Why now:</strong> '+concise(preparation.why_now || 'Not supplied')+'</p><p><strong>Recommendation:</strong> '+concise(preparation.recommendation || 'Not supplied')+'</p><details><summary>'+sign('info')+'Options & full context</summary>'+(row.body?'<p>'+esc(row.body)+'</p>':'')+'<dl><dt>Why now</dt><dd>'+esc(plain(preparation.why_now || 'Not supplied'))+'</dd><dt>Recommendation</dt><dd>'+esc(plain(preparation.recommendation || 'Not supplied'))+'</dd><dt>Options</dt><dd>'+esc(plain(preparation.options || 'Not supplied'))+'</dd><dt>Source revision</dt><dd>'+esc(row.revision ?? 'Not supplied')+'</dd><dt>Question status</dt><dd>'+esc(row.status || 'Unknown')+'</dd><dt>Answer state</dt><dd>'+esc(row.answer_state || 'Not supplied')+'</dd><dt>Delivery state</dt><dd>'+esc(row.delivery_state || answer.state || 'Not supplied')+'</dd><dt>Session receipt</dt><dd>'+esc(answer.session_consumed===true?'Consumed by originating session':answer.session_consumed===false?'Not yet consumed':'Not supplied')+'</dd></dl></details>'+(receipt?'<p>'+esc(receipt)+'</p>':'')+disclosure('Decision source and linkage',[{request_id:row.request_id,source_revision:row.revision,linked_revision:expected,outcome_id:o.id,decision_id:link.id,preparation,answer:row.answer}],'')+'<p>Linked outcome: '+esc(o.title)+'</p>'+button('decisions','Review in Decisions')+'</article>';
+  }
+  // Progress counts current passing finish checks, not estimated effort or ticket activity.
+  function finishProgress(o) {
+    const required=list(o.criteria).filter(c=>c.required!==false);
+    const passed=required.filter(c=>{
+      const latest=list(o.evidence).filter(e=>Number.isSafeInteger(o.criteria_revision) && e.criterion_id===c.id && e.criteria_revision===o.criteria_revision && list(c.accepts).includes(e.method)).at(-1);
+      const age=Date.now()-Date.parse(latest?.observed_at || '');
+      return latest?.result==='pass' && (!c.max_age_s || (Number.isFinite(age) && age>=0 && age<=c.max_age_s*1000));
+    }).length;
+    return {total:required.length,passed,score:required.length?Math.round(100*passed/required.length):null};
+  }
+  function sign(kind) {
+    const paths={positive:'M5 12h14M12 5v14',negative:'M5 12h14',info:'M12 11v6M12 7h.01',question:'M9 8a3 3 0 1 1 5 2c-2 1-2 2-2 3M12 17h.01',next:'M5 12h14M13 6l6 6-6 6'};
+    return '<svg class="ow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+(['info','question'].includes(kind)?'<circle cx="12" cy="12" r="10"/>':'')+'<path d="'+paths[kind]+'"/></svg>';
+  }
+  function concise(value,limit=180) {
+    const text=plain(value);return esc(text.length>limit?text.slice(0,limit).trimEnd()+'…':text);
   }
   function verifiedDelivery(o) {
     const accepted=o.acceptance;
@@ -99346,7 +99366,7 @@
     if(attempts.length>timed.length) missing.push((attempts.length-timed.length)+' attempts have no usable timestamp.');
     if(delivered.length>withEvidence.length) missing.push((delivered.length-withEvidence.length)+' delivered records lack matching acceptance and evidence in this snapshot.');
     if(outcomes.some(o=>!o.health || o.health==='unknown')) missing.push('Some outcome health is unknown.');
-    return '<details class="ow-health"><summary>Organization check · '+active.length+' active · '+outcomes.filter(o=>o.commitment).length+' committed · Unfiled '+esc(intakeCount())+'</summary><p>Recorded workflow and evidence counts, not a measure of user value.</p><dl><dt>Active / committed</dt><dd>'+active.length+' / '+outcomes.filter(o=>o.commitment).length+'</dd><dt>Authoritative health gaps / exhausted recovery</dt><dd>'+gaps.length+' / '+exhausted.length+'</dd><dt>Recorded owner waits</dt><dd>'+ownerWaits.length+'</dd><dt>Verified delivered with matching acceptance evidence</dt><dd>'+withEvidence.length+'</dd><dt>Attempt records in the last 24 hours</dt><dd>'+recent.length+'</dd></dl><p>'+esc(missing.join(' ') || 'Counts reflect only the supplied records; missing activity cannot establish healthy operation.')+'</p>'+intakeCheck()+'</details>';
+    return '<details class="ow-health"><summary>'+sign('info')+'Organization</summary><p>Recorded workflow and evidence counts, not a measure of user value.</p><dl><dt>Active / committed</dt><dd>'+active.length+' / '+outcomes.filter(o=>o.commitment).length+'</dd><dt>Authoritative health gaps / exhausted recovery</dt><dd>'+gaps.length+' / '+exhausted.length+'</dd><dt>Recorded owner waits</dt><dd>'+ownerWaits.length+'</dd><dt>Verified delivered with matching acceptance evidence</dt><dd>'+withEvidence.length+'</dd><dt>Attempt records in the last 24 hours</dt><dd>'+recent.length+'</dd></dl><p>'+esc(missing.join(' ') || 'Counts reflect only the supplied records; missing activity cannot establish healthy operation.')+'</p>'+intakeCheck()+'</details>';
   }
   function render() {
     const focusKey = document.activeElement?.dataset.owAction;
@@ -99355,7 +99375,7 @@
     document.body.classList.remove('outcomes-everything');
     document.getElementById('outcomeTools').hidden=true;
     navigation.querySelector('[data-ow-action="everything"]').setAttribute('aria-pressed','false');
-    freshness.textContent = loadedAt ? 'Last refreshed '+date(loadedAt)+' · refresh to check for changes' : 'No snapshot loaded';
+    freshness.textContent = loadedAt ? 'Updated '+date(loadedAt) : 'No snapshot loaded';
     if (view === 'needs') {
       const refs = outcomes.flatMap(o => list(o.decision_refs).map(ref => ({o,ref})));
       const linked=refs.filter(({ref})=>resolvedDecision(ref)).sort((a,b)=>outcomeRank(decisionRef(a.ref))-outcomeRank(decisionRef(b.ref)));
@@ -99375,12 +99395,22 @@
     const gap = o.health==='gap';
     const incidents = sorted.filter(verifiedIncident).map(x => '<p class="ow-warning">Verified incident: '+esc(x.title)+' <button type="button" data-ow-select="'+esc(x.id)+'">Review incident</button></p>').join('');
     const dated=sorted.filter(item=>!item.commitment && item.deadline && !['parked','stopped','delivered'].includes(item.state));
-    const dates=dated.length?'<section class="ow-deadlines" aria-label="Dated work outside chosen focus"><h2>Dated work outside chosen focus</h2><div>'+dated.map(item=>'<button type="button" data-ow-select="'+esc(item.id)+'">'+esc(item.title)+' · '+esc(deadlineDate(item))+(dayDeadline(item)?' · date only; time not supplied':'')+'</button>').join('')+'</div><p>Not part of the chosen commitments.</p></section>':'';
+    const dates=dated.length?'<section class="ow-deadlines" aria-label="Dated work outside chosen focus"><h2>Other deadlines</h2><div>'+dated.map(item=>'<button type="button" data-ow-select="'+esc(item.id)+'">'+esc(item.title)+' · '+esc(deadlineDate(item))+(dayDeadline(item)?' · date only':'')+'</button>').join('')+'</div></section>':'';
+    const compactDates=dated.length>1?'<details class="ow-deadlines"><summary>Upcoming · '+dated.length+' outside your focus</summary>'+dates+'</details>':dates;
     const chosen=sorted.filter(item=>item.commitment), other=sorted.filter(item=>!item.commitment);
     const options=items=>items.map(x=>'<option value="'+esc(x.id)+'"'+(x.id===o.id?' selected':'')+'>'+esc(x.title)+'</option>').join('');
     const selection=(chosen.length?'<optgroup label="Chosen focus">'+options(chosen)+'</optgroup>':'')+(other.length?'<optgroup label="Other outcomes">'+options(other)+'</optgroup>':'');
     const agendaGroup=(title,items)=>items.length?'<h3>'+title+'</h3>'+items.map(x=>'<button type="button" data-ow-select="'+esc(x.id)+'" aria-pressed="'+(x.id===o.id)+'"><strong>'+esc(x.title)+'</strong><small>'+esc(x.commitment?'Committed · rank '+(x.rank ?? 'not set'):'Not committed · '+(x.state || 'proposed'))+'</small></button>').join(''):'';
-    content.innerHTML = organizationCheck()+incidents+dates+'<div class="ow-mobile-select"><label for="owSelect">Selected outcome</label><select id="owSelect">'+selection+'</select></div><div class="ow-layout"><aside class="ow-agenda" aria-label="Select outcome">'+agendaGroup('Chosen focus',chosen)+agendaGroup('Other outcomes',other)+'</aside><article class="ow-brief" aria-label="Selected outcome brief"><h2 tabindex="-1">'+esc(o.title)+'</h2><p>'+esc(o.goal)+'</p><p class="ow-state">'+esc(o.state || 'Unknown state')+' · '+esc(o.health || 'Health unknown')+' · '+(o.commitment?'Committed':'Not committed')+'</p><h3>The finish line</h3><ul>'+list(o.criteria).map(c => '<li>'+esc(c.text || c)+(c.required===false?' (optional)':'')+'</li>').join('')+'</ul><h3>Priority and timing</h3><p>'+esc(o.priority_reason || o.rank_reason || o.description || 'No priority reason supplied')+'</p><p>Rank: '+esc(o.rank ?? 'Not set')+' · Deadline: '+esc(deadlineDate(o))+(dayDeadline(o)?' (date only; time not supplied)':'')+'</p><h3>What changed</h3><p>'+esc(plain(o.changed || o.briefing || o.summary || o.latest_change || o.health_reason || 'No change summary supplied'))+'</p><p class="ow-state">Source updated: '+esc(date(o.updated_at))+' · Revision '+esc(o.revision)+'</p><h3>Next action</h3><p>'+esc(next.text || 'No next action recorded')+'</p><p>Responsible: '+esc(responsibility)+'<br>Action owner: '+esc(next.owner || 'Unassigned')+'<br>Next trigger: '+esc(plain(next.trigger || 'Not recorded'))+'<br>Due: '+esc(date(next.due_at))+'</p>'+(gap?'<p class="ow-warning">Organization gap: '+esc(o.health_reason || 'Authoritative health record requires recovery')+'. Agent recovery is needed; this is not an owner decision.</p>':'')+'<div class="ow-actions">'+button('edit','Edit outcome')+button('commit',o.commitment?'Remove commitment':'Commit to focus')+button('park',o.state==='parked'?'Return to proposal':'Park outcome')+'</div>'+disclosure('Incidents and displaced commitments',list(o.incidents).concat(o.incident?[o.incident]:[],list(o.displacements),o.displacement?[o.displacement]:[]),'No incident or displacement supplied.')+disclosure('Organization check and unapplied findings',list(o.gaps).concat(list(o.findings)),'No organization findings supplied. Missing runtime evidence is not proof of health.')+disclosure('Supporting work, provenance and evidence',list(o.links).concat(list(o.evidence)),'No linked work or criterion evidence supplied.')+disclosure('Decision linkage',o.decision_refs,'No linked decisions. Use Needs you to open existing Decisions.')+(!list(o.attempts).length && !o.runtime?'<p class="ow-state">No active attempt telemetry supplied. A responsibility record alone does not establish a running agent.</p>':'')+disclosure('Agent runtime and receipts',list(o.attempts).concat(o.runtime?[o.runtime]:[],o.responsibility && typeof o.responsibility==='object'?[{responsibility:o.responsibility}]:[]),'No active runtime supplied. A proposed role is not a staffed agent.')+'</article></div>';
+    const progress=finishProgress(o), needsOwner=['owner','user'].includes(next.owner);
+    const tone=gap?'negative':needsOwner?'question':verifiedDelivery(o)?'positive':'info';
+    const stateLabel=gap?'Agent recovery needed':needsOwner?'Needs your answer':verifiedDelivery(o)?'Verified delivered':o.health==='running'?'Agent working':o.health==='waiting'?'Agent follow-up scheduled':o.health==='unknown'?'Not checked':o.health || 'Not checked';
+    const associations=list(o.sessions).concat(list(o.associations)).filter(item=>item?.session_id);
+    const latestSession=associations.at(-1)?.session_id || list(o.session_ids).at(-1) || list(o.attempts).filter(item=>item.session_id).at(-1)?.session_id;
+    const primary=needsOwner?button('decisions','Review question'):latestSession?'<button type="button" class="ow-primary" data-ow-session="'+esc(latestSession)+'">Open session</button>':button('everything','Find session');
+    const nextText=plain(next.text || '').replace(/^Executor works step [^:]+:\s*/, '');
+    const scheduledAgentCheck=!needsOwner && ['agent','lead','executor','verifier'].includes(next.owner) && o.health==='waiting' && !!next.due_at;
+    const fullBrief = '<p>'+esc(o.goal)+'</p><p class="ow-state">'+esc(o.state || 'Unknown state')+' · '+esc(o.health || 'Health unknown')+' · '+(o.commitment?'Committed':'Not committed')+'</p><h3>The finish line</h3><ul>'+list(o.criteria).map(c => '<li>'+esc(c.text || c)+(c.required===false?' (optional)':'')+'</li>').join('')+'</ul><h3>Priority and timing</h3><p>'+esc(o.priority_reason || o.rank_reason || o.description || 'No priority reason supplied')+'</p><p>Rank: '+esc(o.rank ?? 'Not set')+' · Deadline: '+esc(deadlineDate(o))+(dayDeadline(o)?' (date only; time not supplied)':'')+'</p><h3>What changed</h3><p>'+esc(plain(o.changed || o.briefing || o.summary || o.latest_change || o.health_reason || 'No change summary supplied'))+'</p><p class="ow-state">Source updated: '+esc(date(o.updated_at))+' · Revision '+esc(o.revision)+'</p><h3>Next action</h3><p>'+esc(next.text || 'No next action recorded')+'</p><p>Responsible: '+esc(responsibility)+'<br>Action owner: '+esc(next.owner || 'Unassigned')+'<br>Next trigger: '+esc(plain(next.trigger || 'Not recorded'))+'<br>Due: '+esc(date(next.due_at))+'</p>'+(gap?'<p class="ow-warning">Organization gap: '+esc(o.health_reason || 'Authoritative health record requires recovery')+'. Agent recovery is needed; this is not an owner decision.</p>':'')+disclosure('Incidents and displaced commitments',list(o.incidents).concat(o.incident?[o.incident]:[],list(o.displacements),o.displacement?[o.displacement]:[]),'No incident or displacement supplied.')+disclosure('Organization check and unapplied findings',list(o.gaps).concat(list(o.findings)),'No organization findings supplied. Missing runtime evidence is not proof of health.')+disclosure('Supporting work, provenance and evidence',list(o.links).concat(list(o.evidence)),'No linked work or criterion evidence supplied.')+disclosure('Decision linkage',o.decision_refs,'No linked decisions. Use Needs you to open existing Decisions.')+(!list(o.attempts).length && !o.runtime?'<p class="ow-state">No active attempt telemetry supplied. A responsibility record alone does not establish a running agent.</p>':'')+disclosure('Agent runtime and receipts',list(o.attempts).concat(o.runtime?[o.runtime]:[],o.responsibility && typeof o.responsibility==='object'?[{responsibility:o.responsibility}]:[]),'No active runtime supplied. A proposed role is not a staffed agent.');
+    content.innerHTML = incidents+compactDates+'<div class="ow-mobile-select"><label for="owSelect">Switch goal</label><select id="owSelect">'+selection+'</select></div><div class="ow-layout"><aside class="ow-agenda" aria-label="Select outcome">'+agendaGroup('Chosen focus',chosen)+agendaGroup('Other outcomes',other)+'</aside>'+'<article class="ow-brief" aria-label="Selected outcome brief"><h2 tabindex="-1">'+esc(o.title)+'</h2><div class="ow-scan"><span class="ow-signal ow-'+tone+'">'+sign(tone)+esc(stateLabel)+'</span><span class="ow-progress" title="Current passing required finish checks; not an estimate of effort">'+(progress.score===null?'—':progress.score)+'/100 <span>verified</span></span></div><p class="ow-state ow-progress-basis ow-sr-only">'+progress.passed+'/'+progress.total+' finish checks passed</p><section class="ow-next"><h3>'+sign(needsOwner?'question':'next')+(scheduledAgentCheck?'Next agent check':needsOwner?'Your answer needed':next.text?(['agent','lead','executor','verifier'].includes(next.owner)?'Agent’s next step':'Next step'):'Next step missing')+'</h3>'+(scheduledAgentCheck?'':'<p>'+concise(nextText || 'The next step has not been recorded.',120)+'</p>')+(next.due_at?'<p class="ow-state">Due '+esc(date(next.due_at))+'</p>':'')+primary+'</section>'+(gap?'<p class="ow-signal ow-negative">'+sign('negative')+concise(o.health_reason || 'Recovery has no current owner')+'</p>':'')+(progress.passed?'<p class="ow-signal ow-positive">'+sign('positive')+progress.passed+' finish '+(progress.passed===1?'check':'checks')+' verified</p>':'')+'<details class="ow-full-brief"><summary>'+sign('info')+'Details & controls</summary><div class="ow-actions">'+button('edit','Edit outcome')+button('commit',o.commitment?'Remove commitment':'Commit to focus')+button('park',o.state==='parked'?'Return to proposal':'Park outcome')+'</div>'+fullBrief+'</details></article></div>'+organizationCheck();
     if (focusKey) root.querySelector('[data-ow-action="'+focusKey+'"]')?.focus();
   }
   function busy(value) {
@@ -99465,7 +99495,7 @@
     document.getElementById('outcomeTools').hidden=!enabled || popout;
     const select=document.getElementById('outcomeToolSelect');
     const options=document.body.classList.contains('ccc-simple-mode')
-      ? [['inprogress','Task history'],['queues','Helpers']]
+      ? [['inprogress','Task history'],['queues','Helpers'],['regular','All regular tabs']]
       : [['inprogress','Sessions'],['coding','Coding'],['workers','Workers'],['queues','Queues'],['jobs','Jobs'],['alltickets','All tickets'],['ideas','Features'],['smallbugs','Small bugs'],['issues','Issues'],['ask','Ask'],['archived','History']];
     if (!document.body.classList.contains('ccc-simple-mode')) {
       document.querySelectorAll('#convList > .conv-tab-bar [data-conv-tab]').forEach(button=>{
@@ -99493,13 +99523,13 @@
     if(target.dataset.owSelect){selected=target.dataset.owSelect;render();return;}
     if(target.dataset.owView){if(editor.childElementCount){message('Save or cancel editing before changing views.');return;} view=target.dataset.owView;open();return;}
     const action=target.dataset.owAction, o=current();
-    if(action==='close'||action==='everything') close();
+    if(action==='close'||action==='everything') { close(); if(action==='everything') window.cccInspectWorkspace?.('inprogress'); }
     else if(action==='settings') { close(); document.getElementById('settingsBtn')?.click(); document.getElementById('settingsRailTab-layout')?.click(); }
     else if(action==='cancel') request?.abort();
     else if(action==='refresh') api();
     else if(action==='create') form(null);
     else if(action==='edit'&&o) form(o);
-    else if(action==='discard'){editor.replaceChildren();busy(false);root.querySelector('[data-ow-action="create"]').focus();}
+    else if(action==='discard'){editor.replaceChildren();busy(false);root.querySelector('.ow-page-tools')?.setAttribute('open','');root.querySelector('[data-ow-action="create"]').focus();}
     else if(action==='commit'&&o) api('update',{id:o.id,expected_revision:o.revision,patch:{commitment:!o.commitment,...(!o.commitment?{state:'active'}:{})}});
     else if(action==='park'&&o) api('update',{id:o.id,expected_revision:o.revision,patch:{state:o.state==='parked'?'proposed':'parked',commitment:false}});
     else if(action==='decisions') {
@@ -99511,10 +99541,10 @@
   root.addEventListener('click',onAction);
   navigation.addEventListener('click',onAction);
   document.getElementById('outcomeToolSelect').addEventListener('change',event=>{
-    if (enabled && event.target.value) window.cccInspectWorkspace?.(event.target.value);
+    if (enabled && event.target.value) { window.cccInspectWorkspace?.(event.target.value); showTools(); }
   });
   // Reuse existing activity signals; no outcome timer or model invocation.
-  window.addEventListener('pageshow',()=>{if(loadedAt&&!root.hidden) freshness.textContent='Snapshot from '+date(loadedAt)+' · refresh to check current state';});
+  window.addEventListener('pageshow',()=>{if(loadedAt&&!root.hidden) freshness.textContent='Updated '+date(loadedAt);});
   function refreshOnReturn() {
     if (automaticRefreshAllowed() && loadedAt && Date.now()-loadedAt>30000 && !request) api(undefined,undefined,true);
   }

@@ -1,0 +1,1 @@
+- Keep regular sessions and tabs accessible from the outcome workspace, respect iPhone safe areas, and simplify briefs with direct session/question actions, semantic status icons, verified finish-check progress, and expandable context and controls.

@@ -239,15 +239,15 @@
   <nav id="outcomeNavigation" class="outcome-navigation" aria-label="Main workspace" hidden>
     <button type="button" data-ow-view="today" aria-pressed="false">Today</button>
     <button type="button" data-ow-view="needs" aria-pressed="false">Needs you</button>
-    <button type="button" data-ow-action="everything" aria-pressed="false">Everything</button>
+    <button type="button" data-ow-action="everything" aria-pressed="false">Sessions</button>
     <div id="outcomeTools" class="outcome-tools" hidden><label for="outcomeToolSelect">Tools</label><select id="outcomeToolSelect" aria-label="Inspect existing workspace tools"><option value="">Choose a tool</option></select><a id="outcomeFlowLink" href="/?ccc_popout=flow" target="_blank" rel="noopener" aria-label="Open Flow in a new tab">Open Flow</a><a id="outcomeDecisionLink" href="/decision-guide.html" target="_blank" rel="noopener">Decisions</a></div>
     <button type="button" data-ow-action="settings">Settings</button>
   </nav>
   <section id="outcomeWorkspace" class="outcome-workspace" aria-label="Outcome workspace" hidden>
     <header class="ow-header"><h1 tabindex="-1">Today</h1></header>
-    <div class="ow-tools"><button type="button" data-ow-action="create">New outcome</button><button type="button" data-ow-action="refresh">Refresh</button><button type="button" data-ow-action="cancel" hidden>Cancel request</button><span id="owFreshness"></span></div>
     <p id="owStatus" role="status" aria-live="polite"></p>
     <div id="owEditor"></div><div id="owContent"></div>
+    <details class="ow-page-tools"><summary>Workspace tools</summary><div class="ow-tools"><button type="button" data-ow-action="create">New outcome</button><button type="button" data-ow-action="refresh">Refresh</button><button type="button" data-ow-action="cancel" hidden>Cancel request</button><span id="owFreshness"></span></div></details>
   </section>
   <iframe id="cccCoreAppFrame" class="ccc-core-app-frame" hidden title="q2"></iframe>
   <!-- Floating Annotate button for popout contexts (CCC-166). The topbar

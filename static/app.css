@@ -34539,7 +34539,7 @@ body.outcomes-enabled .outcome-workspace{top:64px}
 .outcome-tools[hidden]{display:none!important}
 .outcome-tools{display:flex;align-items:center;gap:8px;margin-left:16px;font-size:13px;color:var(--text-secondary)}
 .outcome-tools select{font:inherit;min-height:44px;max-width:210px;padding:8px;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:6px}
-body.outcomes-enabled #mobileBottomNav,body.outcomes-enabled #convList > .conv-tab-bar{display:none!important}
+body.outcomes-open #mobileBottomNav,body.outcomes-open #convList > .conv-tab-bar{display:none!important}
 @media(max-width:720px){body.outcomes-everything{padding-top:116px}body.outcomes-everything .outcome-navigation{height:116px;flex-wrap:wrap;align-content:center}.outcome-tools{order:5;margin:0;width:100%;justify-content:space-between}.outcome-tools select{min-width:0;max-width:none;flex:1}}
 
 @media(max-width:720px){body.outcomes-enabled .main{top:64px;height:calc(var(--app-vh,100vh) - 64px)}body.outcomes-everything .main{top:116px;height:calc(var(--app-vh,100vh) - 116px)}}
@@ -34549,3 +34549,29 @@ body.outcomes-enabled #mobileBottomNav,body.outcomes-enabled #convList > .conv-t
 .outcome-tools a{display:inline-flex;align-items:center;min-height:44px;padding:8px;color:var(--text);border:1px solid var(--border);border-radius:6px;white-space:nowrap;text-decoration:none}.outcome-tools a:hover{background:var(--surface-2)}
 
 .ow-agenda h3{font-size:13px;color:var(--text-secondary);font-weight:600;margin:20px 10px 4px}.ow-agenda h3:first-child{margin-top:0}.ow-deadlines{margin:16px 0;max-width:76ch;overflow-wrap:anywhere}.ow-deadlines h2{font-size:14px;margin:0 0 8px}.ow-deadlines>div{display:flex;gap:8px;flex-wrap:wrap}.ow-deadlines button{text-align:left}.ow-deadlines p{font-size:12px;color:var(--text-secondary);margin:5px 0}
+
+/* Shared inset keeps fixed navigation and every workspace below iOS status hardware. */
+body.outcomes-enabled{--ow-safe-top:env(safe-area-inset-top,0px);--ow-nav-height:64px;padding-top:calc(var(--ow-nav-height) + var(--ow-safe-top))}
+body.outcomes-enabled .outcome-navigation{height:calc(var(--ow-nav-height) + var(--ow-safe-top));padding-top:calc(8px + var(--ow-safe-top));padding-left:max(8px,env(safe-area-inset-left,0px));padding-right:max(8px,env(safe-area-inset-right,0px))}
+body.outcomes-enabled .outcome-workspace{top:calc(var(--ow-nav-height) + var(--ow-safe-top))}
+.ow-icon{width:20px;height:20px;flex:none;vertical-align:middle;margin-right:6px}
+.ow-scan{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+.ow-signal{display:inline-flex;align-items:center;font-weight:600}
+.ow-positive{color:var(--green)}.ow-negative{color:var(--red)}.ow-question{color:var(--orange)}.ow-info{color:var(--text-secondary)}
+.ow-progress{font-size:20px;font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}.ow-progress span{font-size:13px;font-weight:400;color:var(--text-secondary)}
+.ow-progress-basis{font-size:12px}.ow-next{border-block:1px solid var(--border);padding:16px 0;margin-top:18px}.ow-next h3{margin:0 0 8px;color:var(--text)}.ow-next p{margin:4px 0}.ow-next>p:first-of-type{font-size:17px}
+.ow-full-brief>summary{color:var(--text-secondary)}.ow-full-brief>summary .ow-icon{width:18px;height:18px}
+.ow-health{margin-top:28px;font-size:13px}.ow-health summary{color:var(--text-secondary)}
+.ow-tools{margin:12px 0 0}.ow-tools #owFreshness{display:none}#owStatus:not(.ow-error){position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.ow-tools button{font-size:13px}.ow-deadlines{margin:12px 0}.ow-deadlines h2{color:var(--orange);font-size:13px}.ow-deadlines button{font-size:13px;padding:6px 10px}
+@media(max-width:720px){body.outcomes-everything{--ow-nav-height:116px}body.outcomes-enabled .main{top:calc(var(--ow-nav-height) + var(--ow-safe-top));height:calc(var(--app-vh,100vh) - var(--ow-nav-height) - var(--ow-safe-top))}.ow-header{display:none}.ow-mobile-select{margin-bottom:14px}.ow-mobile-select label{font-size:12px;color:var(--text-secondary)}.ow-brief h2{font-size:22px;margin-bottom:14px}.ow-layout{margin-top:16px}.ow-actions button{font-size:13px;padding:8px}.outcome-tools{gap:4px}.outcome-tools a{padding:6px;font-size:12px}}
+
+#outcomeWorkspace[aria-busy=true] #owStatus:not(.ow-error){position:static;width:auto;height:auto;clip-path:none;font-size:13px;color:var(--text-secondary)}
+.ow-needs details{border-block:1px solid var(--border);padding:8px 0;margin:12px 0}.ow-needs summary{min-height:44px;align-content:center;cursor:pointer;color:var(--text-secondary)}
+.ow-deadlines>summary{cursor:pointer;min-height:44px;align-content:center;color:var(--orange)}
+
+.ow-page-tools{margin:4px 0 12px}.ow-page-tools>summary{cursor:pointer;min-height:44px;align-content:center;font-size:13px;color:var(--text-secondary)}
+.ow-next>button{margin-top:12px;border-color:var(--accent);font-weight:600}.ow-manage .ow-actions{margin:8px 0 12px}.ow-manage>summary{color:var(--text-secondary);font-size:13px}
+@media(max-width:720px){.ow-mobile-select{margin-bottom:12px}.ow-mobile-select label{font-size:13px}.ow-brief>h2{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.ow-next{margin-top:12px}.ow-health{margin-top:16px}}
+
+.ow-sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
