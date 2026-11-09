@@ -1,0 +1,1 @@
+- Settings → Vault is now titled "Vault" and has a single "+ Add" button that opens a name and secret value form at the top of the page. Saved secrets are plain rows with Edit and Delete.

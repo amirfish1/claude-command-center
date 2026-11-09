@@ -23,3 +23,19 @@
  .service-connection-directory .vault-entry-main { min-width:0; overflow-wrap:anywhere; }
  .service-connection-directory .vault-entry-actions { flex-wrap:wrap; }
 }
+
+/* Vault: one "+ Add", an inline name + secret value form, plain rows. */
+#serviceCredentialEditor { margin:0; border-top:0; padding-top:0; }
+#serviceCredentialEditor > summary,
+#serviceCredentialEditor > .settings-row:not(#vaultFormRow),
+#serviceCredentialEditor :is(#vaultFormTitle, #vaultFormHint, #vaultKindSelect, #vaultServiceInput, #vaultUsernameInput, #vaultEnvVarInput, #vaultWebsiteInput, #vaultNotesInput) { display:none !important; }
+#serviceCredentialEditor .vault-form { grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto; align-items:center; }
+#serviceCredentialEditor .vault-form > * { grid-column:auto; }
+.service-connection-add { margin:0; }
+.service-connection-directory .settings-row:has(#byokProfilesList:empty) { display:none; }
+.service-connection-directory .byok-profile-row { padding:0; border-bottom:0; }
+.service-provider-account { padding:8px 0; margin-top:0; border-bottom:1px solid var(--border); }
+.service-provider-account > span { flex:1; color:var(--text-dim, inherit); }
+@media(max-width:700px) { #serviceCredentialEditor .vault-form { grid-template-columns:1fr; } }
+#settingsSection-vault #smartRepoSettingsStatus ~ .settings-row-desc { display:none; }
+.service-connection-directory .settings-row:has(#byokProfilesList > :not(.byok-profile-row)), .service-connection-directory .settings-row:not(:has(#byokProfilesList .byok-profile-row)):has(#byokProfilesList) { display:none; }

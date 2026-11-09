@@ -58,9 +58,9 @@ async function open(t,width=1440,query='',before){
 const posts=requests=>requests.filter(r=>r.method==='POST');
 for(const width of [1440,390])test('single directory uses native controls without changing metadata at '+width,async t=>{
  const {page,requests}=await open(t,width);assert.deepEqual(state(),initial);assert.deepEqual(posts(requests),[]);
- assert.match(await page.$eval('#serviceConnections',n=>n.textContent),/Saved credentials, not verified access/);
- assert.match(await page.$eval('#byokProfilesList',n=>n.textContent),/example-profile.*OpenAI.*Access not verified/s);
- assert.match(await page.$eval('#vaultEntriesList',n=>n.textContent),/example-login.*Example service/s);
+ assert.equal(await page.$eval('#serviceConnectionAdd',n=>n.textContent),'+ Add');assert.equal(await page.$('#serviceConnectionPurpose'),null);assert.equal(await page.$eval('#settingsSection-vault .settings-section-eyebrow',n=>n.textContent),'Vault');
+ assert.match(await page.$eval('#byokProfilesList',n=>n.textContent),/example-profile.*OpenAI/s);
+ assert.match(await page.$eval('#vaultEntriesList',n=>n.textContent),/example-login/);
  assert.equal(await page.$$eval('#byokProfileInput',n=>n.length),1);assert.equal(await page.$$eval('#vaultValueInput',n=>n.length),1);
  assert.equal(await page.$eval('#settingsSection-api-keys',n=>!!n.getClientRects().length),false);
  assert.equal(await page.$eval('#serviceCredentialEditor',n=>n.open),false);
@@ -89,11 +89,11 @@ test('other service add/edit uses native metadata editor, no value round trip an
  assert.equal(await page.$eval('#vaultNameInput',n=>n.readOnly),true);assert.equal(await page.$eval('#vaultValueInput',n=>n.value),'');
  await page.$eval('#vaultServiceInput',n=>n.value='Example service updated');await page.click('#vaultSaveBtn');await page.waitForFunction(()=>document.querySelector('#vaultFormStatus').textContent==='Details updated.');
  const request=posts(requests)[0];assert.equal(new URL(request.url).pathname,'/api/vault/entries/update');const data=JSON.parse(request.body);assert.equal(data.name,'example-login');assert.equal('value'in data,false);
- assert.match(await page.$eval('#vaultEntriesList',n=>n.textContent),/Example service updated/);
- await page.select('#serviceConnectionPurpose','credential');await page.click('#serviceConnectionAdd');assert.equal(await page.evaluate(()=>document.activeElement.id),'vaultNameInput');assert.equal(await page.$eval('#vaultNameInput',n=>n.readOnly),false);
+ assert.equal(data.service,'Example service updated');assert.equal(await page.$eval('#serviceCredentialEditor',n=>n.open),false);
+ await page.click('#serviceConnectionAdd');assert.equal(await page.evaluate(()=>document.activeElement.id),'vaultNameInput');assert.equal(await page.$eval('#vaultNameInput',n=>n.readOnly),false);
 });
 test('failed named credential save retains metadata and clears value',async t=>{
- const {page}=await open(t,390);fs.writeFileSync(path.join(scratch,'fail-save'),'1');await page.select('#serviceConnectionPurpose','credential');await page.click('#serviceConnectionAdd');
+ const {page}=await open(t,390);fs.writeFileSync(path.join(scratch,'fail-save'),'1');await page.click('#serviceConnectionAdd');
  await page.type('#vaultNameInput','example-new');await page.type('#vaultValueInput','not-a-secret');await page.click('#vaultSaveBtn');await page.waitForFunction(()=>document.querySelector('#vaultFormStatus').textContent.includes('Could not save'));
  assert.equal(await page.$eval('#vaultValueInput',n=>n.value),'');assert.equal(await page.evaluate(()=>document.activeElement.id),'vaultSaveBtn');assert.deepEqual(state(),initial);assert.equal(await page.$eval('#vaultNameInput',n=>n.value),'example-new');
 });
@@ -103,20 +103,20 @@ for(const legacy of ['vault','api-keys'])test('legacy '+legacy+' links use one d
  if(legacy==='api-keys')assert.equal(await page.evaluate(()=>document.activeElement.id),'byokProfileInput');
  await page.keyboard.press('Escape');await page.waitForFunction(()=>document.querySelector('#settingsModal').hidden);assert.equal(await page.evaluate(()=>document.activeElement.id),'opener');assert.deepEqual(posts(requests),[]);
 });
-test('empty directory has honest add actions and independent provider/general state',async t=>{
+test('empty vault adds with only a name and a secret value and independent provider/general state',async t=>{
  const {page,requests}=await open(t,390,'',()=>{fs.writeFileSync(path.join(scratch,'provider-metadata/index.json'),'{}');fs.writeFileSync(path.join(scratch,'credential-metadata/index.json'),'{"entries":{}}');});
- assert.match(await page.$eval('#byokProfilesList',n=>n.textContent),/No provider accounts saved/);assert.match(await page.$eval('#vaultEntriesList',n=>n.textContent),/No other credentials saved/);assert.deepEqual(posts(requests),[]);
- await page.click('#serviceConnectionAdd');assert.equal(await page.evaluate(()=>document.activeElement.id),'byokProfileInput');assert.equal(await page.$eval('#byokProviderSelect',n=>n.disabled),false);
+ assert.equal(await page.$eval('#byokProfilesList',n=>n.textContent),'');assert.match(await page.$eval('#vaultEntriesList',n=>n.textContent),/Nothing saved yet/);assert.deepEqual(posts(requests),[]);
+ await page.click('#serviceConnectionAdd');assert.equal(await page.evaluate(()=>document.activeElement.id),'vaultNameInput');assert.equal(await page.$$eval('#serviceCredentialEditor input,#serviceCredentialEditor select',ns=>ns.filter(n=>n.getClientRects().length).map(n=>n.id).join()),'vaultNameInput,vaultValueInput');await page.click('#serviceProviderEditor>summary');assert.equal(await page.$eval('#byokProviderSelect',n=>n.disabled),false);
  await page.screenshot({path:path.join(scratch,'phone-empty.png'),fullPage:true});
 });
 test('unavailable directory distinguishes failure from empty and offers retry',async t=>{
  const {page,requests}=await open(t,390,'',()=>fs.writeFileSync(path.join(scratch,'fail-list'),'1'));
- assert.match(await page.$eval('#byokProfilesList',n=>n.textContent),/unavailable.*Refresh/);assert.match(await page.$eval('#vaultEntriesList',n=>n.textContent),/unavailable.*Refresh/);
+ assert.match(await page.$eval('#byokProfilesList',n=>n.textContent),/unavailable/);assert.match(await page.$eval('#vaultEntriesList',n=>n.textContent),/unavailable/);
  await page.screenshot({path:path.join(scratch,'phone-unavailable.png'),fullPage:true});fs.rmSync(path.join(scratch,'fail-list'));await page.click('#serviceConnectionRefresh');await page.waitForSelector('[data-service-provider="openai"]');assert.deepEqual(posts(requests),[]);
 });
 test('search finds canonical provider editor without reviving retired duplicate section',async t=>{
  const {page}=await open(t);await page.evaluate(()=>window.__search('provider account'));assert.equal(await page.$eval('#settingsSection-api-keys',n=>!!n.getClientRects().length),false);
- await page.evaluate(()=>window.__search(''));await page.click('#serviceConnectionAdd');await page.type('#byokKeyInput','not-a-secret');await page.click('#serviceProviderEditor>summary');await page.waitForFunction(()=>document.querySelector('#byokKeyInput').value==='');
+ await page.evaluate(()=>window.__search(''));await page.click('#serviceProviderEditor>summary');await page.type('#byokKeyInput','not-a-secret');await page.click('#serviceProviderEditor>summary');await page.waitForFunction(()=>document.querySelector('#byokKeyInput').value==='');
 });
 
 test('native removal requires confirmation and preserves other providers on the same profile',async t=>{
@@ -131,15 +131,15 @@ test('failed native removal reports visible error and preserves both providers',
  assert.equal(await page.$eval('#serviceProviderEditor',n=>n.open),true);assert.deepEqual(state(),initial);
 });
 test('new provider and named credential saves use their existing stores and no import copies',async t=>{
- const {page,requests}=await open(t,390);await page.click('#serviceConnectionAdd');await page.type('#byokProfileInput','example-other');await page.type('#byokKeyInput','not-a-secret');
+ const {page,requests}=await open(t,390);await page.click('#serviceProviderEditor>summary');await page.type('#byokProfileInput','example-other');await page.type('#byokKeyInput','not-a-secret');
  await page.click('#byokSaveKeyBtn');await page.waitForFunction(()=>document.querySelector('#byokProfilesList').textContent.includes('example-other'));
- await page.select('#serviceConnectionPurpose','credential');await page.click('#serviceConnectionAdd');await page.type('#vaultNameInput','example-token');await page.type('#vaultServiceInput','Example tool');await page.type('#vaultValueInput','not-a-secret');
+ await page.click('#serviceConnectionAdd');await page.type('#vaultNameInput','example-token');await page.type('#vaultValueInput','not-a-secret');
  await page.click('#vaultSaveBtn');await page.waitForFunction(()=>document.querySelector('#vaultEntriesList').textContent.includes('example-token'));
  assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/byok/keys','/api/vault/entries']);
  assert.deepEqual(await page.evaluate(()=>Object.keys(localStorage)),[]);
 });
 test('closing Settings clears unfinished credentials without a request and returns phone keyboard focus',async t=>{
- const {page,requests}=await open(t,390);await page.click('#serviceConnectionAdd');await page.type('#byokKeyInput','not-a-secret');await page.keyboard.press('Escape');
+ const {page,requests}=await open(t,390);await page.click('#serviceProviderEditor>summary');await page.type('#byokKeyInput','not-a-secret');await page.keyboard.press('Escape');
  await page.waitForFunction(()=>document.querySelector('#settingsModal').hidden);assert.equal(await page.$eval('#byokKeyInput',n=>n.value),'');assert.equal(await page.evaluate(()=>document.activeElement.id),'opener');assert.deepEqual(posts(requests),[]);
 });
 test('existing explicit copy capability only opens the canonical editor and explains independent scope',async t=>{
@@ -153,7 +153,7 @@ test('unrecognized providers and credential provenance stay intact without expos
   const credentials=JSON.parse(initial['credential-metadata/index.json']);Object.assign(credentials.entries['example-login'],{hint:'example-hidden-hint',source:{type:'byok',profile:'example-profile',provider:'openai'}});fs.writeFileSync(path.join(scratch,'credential-metadata/index.json'),JSON.stringify(credentials));
  });
  assert.equal(await page.$eval('[data-service-provider="future-example-provider"]',n=>n.disabled),true);
- assert.match(await page.$eval('#vaultEntriesList',n=>n.textContent),/independent copy from provider profile example-profile\/openai/);assert.doesNotMatch(await page.$eval('#vaultEntriesList',n=>n.textContent),/example-hidden-hint/);
+ assert.doesNotMatch(await page.$eval('#vaultEntriesList',n=>n.textContent),/example-hidden-hint/);
  assert.deepEqual(posts(requests),[]);
 });
 
