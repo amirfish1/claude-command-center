@@ -95708,7 +95708,7 @@
     ];
     window.cccSettingsDestinations = destinations;
     const titles = {defaults:'Launch defaults', engines:'Install & connect engines',
-      queues:'Queue overrides', routing:'Launch policy', appearance:'Appearance',
+      queues:'Queue overrides', routing:'Worker fallback & model profiles', appearance:'Appearance',
       layout:'Layout & visibility', preferences:'Review & transfer preferences', notifications:'Notifications', voice:'Voice & sound',
       vault:'Saved secrets', 'api-keys':'Model provider keys', network:'Devices & remote access',
       sessions:'Subscription costs', limits:'Usage limits', leftover:'Use spare quota',
@@ -95738,7 +95738,10 @@
       const title = document.createElement('h2'); title.className = 'settings-section-eyebrow'; title.textContent = 'Repositories';
       repos.append(title); pane.append(repos);
       const entry = pane.querySelector('[data-context-home="repo"]'); if (entry) repos.append(entry);
+      const list = document.createElement('div'); list.id = 'repoSettingsList'; list.className = 'repo-settings-list';
+      title.after(list);
     }
+    pane.dataset.settingsFlat = "1";
     function consolidate() {
       for (const [primary, title, ids] of destinations) {
         let nav = rail.querySelector('[data-settings-destination="'+primary+'"]');
@@ -95838,7 +95841,7 @@
   // are folded away; rare routing settings open in a pop-up. Polls only
   // while Agents is visible.
   const AGENTS_OVERVIEW_POLL_MS = 15000;
-  const AO_FOLDED = ['defaults', 'engines', 'queues', 'routing'];
+  const AO_FOLDED = ['defaults', 'engines', 'queues'];
   let _agentsOverviewQueues = null, _agentsOverviewCodex = null, _agentsOverviewTimer = null, _agentsOverviewSig = '';
   let _aoBusy = false, _aoPopup = null;
   function agentsOverviewVisible() {
@@ -95849,6 +95852,8 @@
     const sec = document.getElementById('settingsSection-defaults');
     if (!sec || document.getElementById('agentsOverview')) return;
     AO_FOLDED.forEach(id => document.getElementById('settingsSection-' + id)?.classList.add('ao-folded'));
+    const routingTitle = document.querySelector('#settingsSection-routing > h2');
+    if (routingTitle) routingTitle.textContent = 'Worker fallback & model profiles';
     // One block per page: launch defaults (Agents), queues (Queues) and the
     // supported-engine list (Engines). They share one click/change handler.
     const block = (sectionId, id, html) => {
@@ -95861,8 +95866,7 @@
       + '<div class="ao-sub" id="' + subId + '">' + sub + '</div></div>' + (extra || '') + '</div>';
     const boxes = [
       block('defaults', 'agentsOverview', head('aoDefTitle', 'Launch defaults', 'aoDefSub', '')
-        + '<div class="ao-defaults-bar" id="aoDefaultsBar"></div>'
-        + '<button type="button" class="ao-link" data-ao-advanced>Worker fallback &amp; model profiles →</button>'),
+        + '<div class="ao-defaults-bar" id="aoDefaultsBar"></div>'),
       block('queues', 'agentsOverviewQueues', head('aoQueueTitle', 'Queues', 'aoQueueSub', 'Loading queues…',
           '<button type="button" class="settings-action-btn" id="aoQueueAdd" data-ao-queue-add>+ Add</button>')
         + '<form class="ao-q-add" id="aoQueueAddForm" hidden>'
@@ -95881,7 +95885,9 @@
       if (setup) { openEngineSetupPopup(setup.dataset.aoSetup); return; }
       const inherit = event.target.closest('[data-ao-inherit]');
       if (inherit) { aoSaveDefaults({worker_inherit_session: inherit.dataset.aoInherit === 'on'}, inherit.dataset.aoInherit === 'on' ? 'Queue workers now follow new sessions.' : 'Queue workers now have their own engine.'); return; }
-      if (event.target.closest('[data-ao-advanced]')) { openAdvancedRoutingPopup(); return; }
+      const chip = event.target.closest('[data-ao-chip]');
+      if (chip) { aoApplyChip(chip.dataset.aoChip, chip.dataset.engine, chip.dataset.model, chip.dataset.effort || ''); return; }
+      if (event.target.closest('[data-ao-apply-all]')) { aoApplyWorkerToAllQueues(event.target.closest('[data-ao-apply-all]')); return; }
       if (event.target.closest('[data-ao-queue-add]')) { aoOpenQueueAdd(); return; }
       if (event.target.closest('[data-ao-queue-add-cancel]')) aoCloseQueueAdd();
     });
@@ -95912,7 +95918,9 @@
         return;
       }
       const q = event.target.closest('[data-ao-queue-engine]');
-      if (q) aoSetQueueEngine(q.dataset.aoQueueEngine, q.value, q);
+      if (q) { aoSetQueueEngine(q.dataset.aoQueueEngine, q.value, q); return; }
+      const qf = event.target.closest('[data-ao-queue-field]');
+      if (qf) aoSetQueueField(qf);
     });
   }
   // New queues start manual (auto-drain off), the same as every other
@@ -96016,6 +96024,60 @@
       (which === 'worker' ? 'Queue workers now run on ' : follows ? 'New sessions and queue workers now start on ' : 'New sessions now start on ')
       + aoEngineLabel(engine) + '.');
   }
+  // One-click launch setups, the same shortcuts the New session bar offers.
+  function aoChipsHtml(which) {
+    const s = spawnDefaultsState, inherit = s.worker_inherit_session === true;
+    const engine = which === 'worker' ? (s.worker_engine || s.engine) : s.engine;
+    const model = which === 'worker' ? (s.worker_model || '') : ((s.models || {})[s.engine] || '');
+    const picks = getTopSpawnPicks().filter(p => which !== 'worker' || ENGINE_HUB_WORKER_ENGINES.includes(p.engine)).slice(0, 6);
+    // The saved setup is always one of the chips, so one is always lit.
+    const effort = which === 'worker' ? (s.worker_reasoning_effort || '') : (s.reasoning_effort || '');
+    if (engine && !picks.some(p => p.engine === engine && _normalizeModelId(p.model) === _normalizeModelId(model))) picks.unshift({engine, model, effort});
+    const follow = which === 'worker'
+      ? '<button type="button" class="orch-tier-chip' + (inherit ? ' is-selected' : '') + '" role="radio" aria-checked="' + inherit + '" data-ao-inherit="on">Same as new sessions</button>' : '';
+    return '<span class="ao-chips" role="radiogroup" aria-label="' + (which === 'worker' ? 'Queue worker setup' : 'New session setup') + '">' + follow + picks.map(p => {
+      const on = !(which === 'worker' && inherit) && p.engine === engine && _normalizeModelId(p.model) === _normalizeModelId(model);
+      return '<button type="button" class="orch-tier-chip' + (on ? ' is-selected' : '') + '" role="radio" aria-checked="' + on + '" data-ao-chip="' + which + '"'
+        + ' data-engine="' + escapeAttr(p.engine) + '" data-model="' + escapeAttr(p.model) + '" data-effort="' + escapeAttr(p.effort || '') + '">'
+        + '<span class="orch-glyph orch-glyph-' + escapeAttr(p.engine) + '">' + escapeHtml(MODEL_PICKER_ENGINE_GLYPHS[p.engine] || '?') + '</span>'
+        + escapeHtml(getModelPillLabel(p.engine, p.model, p.effort || '')) + '</button>';
+    }).join('') + '</span>';
+  }
+  function aoApplyChip(which, engine, model, effort) {
+    const label = getModelPillLabel(engine, model, effort);
+    if (which === 'worker') {
+      const body = {worker_engine: engine, worker_model: model, worker_inherit_session: false};
+      if (effort) body.worker_reasoning_effort = effort;
+      aoSaveDefaults(body, 'Queue workers now run on ' + label + '.');
+      return;
+    }
+    const body = {engine, models: {[engine]: model}};
+    if (effort) body.reasoning_effort = effort;
+    aoSaveDefaults(body, 'New sessions now start on ' + label + '.');
+  }
+  // Clears every queue's own engine, model and effort so all of them run the
+  // queue worker setup above.
+  async function aoApplyWorkerToAllQueues(button) {
+    const queues = ((_agentsOverviewQueues && _agentsOverviewQueues.queues) || []).filter(q => q.pins && (q.pins.engine || q.pins.model || q.pins.effort));
+    if (!queues.length) { showOpToast('All queues already use this setup.', 'ok'); return; }
+    button.disabled = true;
+    const failed = [];
+    for (const q of queues) {
+      try { await aoApplyQueuePolicy(q.queue, {engine: null, model: null, effort: null}); }
+      catch (err) { failed.push(q.queue); }
+    }
+    button.disabled = false;
+    showOpToast(failed.length ? 'Could not change: ' + failed.join(', ') : queues.length + (queues.length === 1 ? ' queue now uses' : ' queues now use') + ' this setup.', failed.length ? 'err' : 'ok');
+    _agentsOverviewSig = '';
+    refreshAgentsOverview();
+  }
+  async function aoApplyQueuePolicy(queue, changes) {
+    const read = await aoPost('/api/queue/config', {queue, policy_action: 'read'});
+    const preview = await aoPost('/api/queue/config', {queue, policy_action: 'preview', expected_revision: read.policy_revision, changes});
+    if ((preview.changes || []).length) {
+      await aoPost('/api/queue/config', {queue, policy_action: 'apply', expected_revision: read.policy_revision, changes, preview_token: preview.preview_token});
+    }
+  }
   // Changes only this queue's engine pin (and clears its model/effort pins),
   // through the same read → preview → apply policy path as the queue editor.
   async function aoSetQueueEngine(queue, engine, select) {
@@ -96105,7 +96167,6 @@
   // show those as pop-ups over the overview.
   function aoRouteFoldedSection(sectionId) {
     if (!$settingsModalInner || $settingsModalInner.classList.contains('is-first-run') || $settingsModalInner.classList.contains('is-searching')) return;
-    if (sectionId === 'routing') setTimeout(openAdvancedRoutingPopup, 0);
   }
   function aoCodexAccounts() {
     return new Set((_agentsOverviewCodex || []).filter(r => r.source === 'codex').map(r => r.id));
@@ -96188,22 +96249,46 @@
   }
   function aoDefaultsBarHtml() {
     const s = spawnDefaultsState, inherit = s.worker_inherit_session === true;
-    const session = '<div class="ao-def-row"><span class="ao-def-label">New sessions</span>' + aoMono(s.engine)
+    const session = '<div class="ao-def-row"><span class="ao-def-label">New sessions</span>' + aoChipsHtml('session') + '</div>'
+      + '<div class="ao-def-row ao-def-fine"><span class="ao-def-label"></span>' + aoMono(s.engine)
       + aoEnginePick('session', s.engine, aoCodexSessionAccount())
       + aoModelSelect('session-model', s.engine, (s.models || {})[s.engine] || '') + aoEffortSelect('session-effort', s.engine, s.reasoning_effort || '') + '</div>';
     const we = s.worker_engine || s.engine;
     const wAcct = aoWorkerEngine() === 'codex' && aoCodexAccounts().size > 1 ? ' · ' + aoCodexAccountRole(aoCodexWorkerAccount()) + ' account' : '';
-    const worker = inherit
-      ? '<div class="ao-def-row"><span class="ao-def-label">Queue workers</span><span class="ao-def-follow">Same as new sessions' + wAcct + '</span>'
-        + '<button type="button" class="ao-q-btn" data-ao-inherit="off">Use their own engine</button></div>'
-      : '<div class="ao-def-row"><span class="ao-def-label">Queue workers</span>' + aoMono(we) + aoEnginePick('worker', we, aoCodexWorkerAccount())
-        + aoModelSelect('worker-model', we, s.worker_model || '') + aoEffortSelect('worker-effort', we, s.worker_reasoning_effort || '')
-        + '<button type="button" class="ao-q-btn" data-ao-inherit="on">Follow new sessions</button></div>';
+    const applyAll = '<button type="button" class="ao-q-btn" data-ao-apply-all>Apply to all queues</button>';
+    const worker = '<div class="ao-def-row"><span class="ao-def-label">Queue workers</span>' + aoChipsHtml('worker') + '</div>'
+      + '<div class="ao-def-row ao-def-fine"><span class="ao-def-label"></span>' + (inherit ? '' : aoMono(we) + aoEnginePick('worker', we, aoCodexWorkerAccount())
+        + aoModelSelect('worker-model', we, s.worker_model || '') + aoEffortSelect('worker-effort', we, s.worker_reasoning_effort || ''))
+      + (wAcct && inherit ? '<span class="ao-def-follow">' + wAcct.replace(/^ · /, '') + '</span>' : '') + applyAll + '</div>';
     const k = Number(s.auto_compact_k) || 0;
     const compact = '<div class="ao-def-row"><span class="ao-def-label">Claude autocompact</span>'
       + '<input class="ao-select ao-num" type="number" min="50" max="1000" step="10" inputmode="numeric" data-ao-field="autocompact" value="' + (k || 250) + '" aria-label="Claude autocompact, thousands of tokens">'
       + '<span class="ao-def-follow">K tokens</span></div>';
     return session + worker + compact;
+  }
+  // Model or effort for one queue: "Default" follows the queue worker setup.
+  function aoQueueFieldSelect(q, field) {
+    const pin = (q.pins && q.pins[field]) || '';
+    const opts = field === 'model'
+      ? modelOptionsForSpawnEngine(q.engine, pin, false).filter(o => !_isUnnamedSpawnModel(o.id)).map(o => [o.id, o.label, !!o.disabled])
+      : effortLevelsForEngine(q.engine).map(l => [l.id, l.label || l.id, false]);
+    const inherited = field === 'model' ? String(q.model || '').replace(/^claude-/, '') : (q.effort || '');
+    if (pin && !opts.some(o => _normalizeModelId(o[0]) === _normalizeModelId(pin))) opts.unshift([pin, pin, false]);
+    return '<select class="ao-select ao-q-select ao-q-' + field + '" data-ao-queue-field="' + field + '" data-ao-queue="' + escapeHtml(q.queue) + '" aria-label="' + (field === 'model' ? 'Model' : 'Effort') + ' for ' + escapeHtml(q.queue) + '">'
+      + '<option value=""' + (pin ? '' : ' selected') + '>Default' + (!pin && inherited ? ' · ' + escapeHtml(inherited) : '') + '</option>'
+      + opts.map(o => '<option value="' + escapeHtml(o[0]) + '"' + (pin && _normalizeModelId(o[0]) === _normalizeModelId(pin) ? ' selected' : '') + (o[2] ? ' disabled' : '') + '>' + escapeHtml(o[1]) + '</option>').join('') + '</select>';
+  }
+  async function aoSetQueueField(select) {
+    const queue = select.dataset.aoQueue, field = select.dataset.aoQueueField;
+    select.disabled = true;
+    try {
+      await aoApplyQueuePolicy(queue, {[field]: select.value || null});
+      showOpToast(queue + ' ' + field + (select.value ? ' set to ' + select.options[select.selectedIndex].text + '.' : ' now follows the worker default.'), 'ok');
+    } catch (err) {
+      showOpToast('Could not change ' + queue + ': ' + ((err && err.message) || 'network'), 'err');
+    }
+    _agentsOverviewSig = '';
+    refreshAgentsOverview();
   }
   function aoQueueRow(q, readyEngines) {
     const pinned = !!(q.pins && q.pins.engine);
@@ -96216,7 +96301,7 @@
     return '<div role="listitem" class="ao-q' + (q.auto_drain ? '' : ' is-manual') + '" style="--eng-hue:' + ((ENGINE_HUB_META[q.engine] || {}).hue ?? 210) + '">'
       + '<span class="ao-q-name"' + (q.auto_drain ? '' : ' title="Manual queue: workers start only when you ask"') + '>' + escapeHtml(q.queue) + '</span>'
       + '<span class="ao-q-route">' + aoMono(q.engine) + select + '</span>'
-      + '<span class="ao-q-model">' + escapeHtml(String(q.model || '').replace(/^claude-/, '')) + (q.effort ? ' · ' + escapeHtml(q.effort) : '') + '</span></div>';
+      + aoQueueFieldSelect(q, 'model') + aoQueueFieldSelect(q, 'effort') + '</div>';
   }
   function renderAgentsOverview() {
     const groups = document.getElementById('aoEngGroups');
@@ -96225,6 +96310,7 @@
     const qd = _agentsOverviewQueues;
     const s = spawnDefaultsState;
     const sig = JSON.stringify([rows.map(r => [r.engine, r.state, r.installed, r.auth, r.limited, r.isDefault, r.isWorkerDefault]),
+      getTopSpawnPicks().map(p => [p.engine, p.model, p.effort]),
       s.engine, s.models, s.reasoning_effort, s.worker_engine, s.worker_model, s.worker_reasoning_effort, s.worker_inherit_session, s.auto_compact_k, s.codex_account_id, s.worker_codex_account_id, qd, _agentsOverviewCodex]);
     if (sig === _agentsOverviewSig) return;
     if (document.activeElement && document.activeElement.closest?.('.agents-overview :is(select, input)')) return;   // don't yank an open picker
@@ -96259,6 +96345,8 @@
   }
   async function refreshAgentsOverview() {
     if (!agentsOverviewVisible()) return;
+    if (_spawnDefaultsLoaded) renderAgentsOverview();   // saved defaults show at once; live data follows
+    fetchModelPickerPicksFromServer(false).then(() => renderAgentsOverview()).catch(() => {});
     const get = url => fetch(url, {cache: 'no-store'}).then(r => r.ok ? r.json() : null).catch(() => null);
     const [, queues, allowances] = await Promise.all([
       (!_engHubData || !_engHubVisible()) ? refreshEnginesHub({fresh: false}) : null,
@@ -96378,8 +96466,15 @@
     _settingsCurrentSection = sectionId;
 
     if (sectionId === 'queues') refreshSettingsQueues();
+    // Default routes are the launch defaults at the top of Agents; the
+    // editor below opens on what only lives there.
+    if (destination === 'defaults') {
+      const ctx = document.getElementById('routingPolicyContext');
+      if (ctx && ctx.value === 'defaults') { ctx.value = 'worker_fallback'; ctx.dispatchEvent(new Event('change', {bubbles: true})); }
+    }
     // Export/Import on Advanced need the preference list loaded.
     if (destination === 'leftover' && !opts.cachedOnly) window.cccSettingsPreferences?.refresh();
+    if (destination === 'repositories' && !opts.cachedOnly) void renderRepoSettingsList();
     if (sectionId === 'voice') window.cccVoiceSetup?.enter();
     // A destination contains related sections; first-run isolates engine setup.
     // Search crosses destinations and reveals only matching controls.
@@ -96688,6 +96783,111 @@
       status.textContent = info.mode === 'custom' ? 'Custom avatar' : (info.mode === 'initials' ? 'Initials · no local logo found' : 'Automatic · ' + info.source);
     } catch (error) { status.textContent = error.message; }
   }
+  // Repositories page: every repository the new-session picker offers, each
+  // with its avatar and inline Upload / Auto controls.
+  const repoAvatarModes = new Map();
+  let repoSettingsAddOpen = false;
+  function repoSettingsOptions() {
+    try { if (!spawnCwdOptions.length) populateSpawnCwdPicker(); } catch (_) {}
+    const seen = new Set(), out = [];
+    const add = (path, label) => {
+      if (!path || seen.has(path)) return;
+      seen.add(path); out.push({ path, label: label || path.split('/').filter(Boolean).pop() || path });
+    };
+    (spawnCwdOptions || []).forEach(o => add(o.value, o.label));
+    (repoListState.repos || []).forEach(r => add(r.path, r.label));
+    return out.slice(0, 60);
+  }
+  function drawRepoSettingsList() {
+    const list = document.getElementById('repoSettingsList');
+    if (!list) return;
+    const repos = repoSettingsOptions();
+    const sig = JSON.stringify([repos, [...repoAvatarModes], repoSettingsAddOpen]);
+    if (list.dataset.sig === sig) return;
+    if (list.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
+    list.dataset.sig = sig;
+    list.innerHTML = '<div class="repo-settings-add">'
+      + (repoSettingsAddOpen
+        ? '<input type="text" class="settings-text-input" id="repoSettingsAddPath" placeholder="Folder path" aria-label="Repository folder path" spellcheck="false">'
+          + '<button type="button" class="settings-action-btn" data-repo-add-save>Add</button>'
+          + '<button type="button" class="settings-action-btn" data-repo-add-cancel>Cancel</button>'
+        : '<button type="button" class="settings-action-btn" data-repo-add>+ Add</button>')
+      + '</div>'
+      + repos.map(repo => {
+        const mode = repoAvatarModes.get(repo.path);
+        const custom = mode === 'custom';
+        return '<div class="settings-row repo-settings-row" data-repo-row="' + escapeHtml(repo.path) + '">'
+          + '<div class="settings-row-main">' + repoAvatarHtml(repo.path, repo.label, 'repo-avatar-preview')
+          + '<span class="repo-settings-name"><span class="settings-row-label">' + escapeHtml(repo.label) + '</span>'
+          + '<span class="settings-row-desc" title="' + escapeHtml(repo.path) + '">' + escapeHtml(repo.path) + '</span></span></div>'
+          + '<div class="settings-row-control">'
+          + '<span class="repo-settings-mode">' + (mode ? (custom ? 'Custom' : 'Auto mode') : '') + '</span>'
+          + '<button type="button" class="settings-action-btn" data-repo-upload>Upload</button>'
+          + (custom ? '<button type="button" class="settings-action-btn" data-repo-auto>Auto</button>' : '')
+          + '</div></div>';
+      }).join('');
+    if (repoSettingsAddOpen) list.querySelector('#repoSettingsAddPath')?.focus();
+  }
+  async function renderRepoSettingsList() {
+    drawRepoSettingsList();
+    try { await loadRepoList({ foreground: true }); } catch (_) {}
+    drawRepoSettingsList();
+    const pending = repoSettingsOptions().filter(repo => !repoAvatarModes.has(repo.path));
+    const worker = async () => {
+      for (let repo; (repo = pending.shift());) {
+        try {
+          const response = await fetch('/api/repo/avatar/info?repo_path=' + encodeURIComponent(repo.path));
+          const info = await response.json();
+          repoAvatarModes.set(repo.path, response.ok && info.mode === 'custom' ? 'custom' : 'auto');
+        } catch (_) { repoAvatarModes.set(repo.path, 'auto'); }
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    drawRepoSettingsList();
+  }
+  function repoSettingsSelect(path) {
+    const select = document.getElementById('repoAvatarSelect');
+    if (!select) return false;
+    if (![...select.options].some(option => option.value === path)) {
+      const option = document.createElement('option'); option.value = path; option.textContent = path; select.appendChild(option);
+    }
+    select.value = path;
+    return true;
+  }
+  async function repoSettingsAdd() {
+    const input = document.getElementById('repoSettingsAddPath');
+    const path = (input?.value || '').trim();
+    if (!path) { input?.focus(); return; }
+    try {
+      const response = await fetch('/api/repo/add', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) throw new Error(result.error || 'Could not add repository');
+      if (Array.isArray(result.repos)) repoListState.repos = result.repos;
+      try { populateSpawnCwdPicker(); } catch (_) {}
+      repoSettingsAddOpen = false; input.blur();
+      showOpToast('Repository added.', 'success');
+      void renderRepoSettingsList();
+    } catch (error) { showOpToast(error.message, 'error'); }
+  }
+  document.addEventListener('click', event => {
+    const list = event.target.closest?.('#repoSettingsList');
+    if (!list) return;
+    const redraw = open => { repoSettingsAddOpen = open; document.activeElement?.blur?.(); drawRepoSettingsList(); };
+    if (event.target.closest('[data-repo-add]')) return redraw(true);
+    if (event.target.closest('[data-repo-add-cancel]')) return redraw(false);
+    if (event.target.closest('[data-repo-add-save]')) return void repoSettingsAdd();
+    const path = event.target.closest('[data-repo-row]')?.dataset.repoRow;
+    if (!path || !repoSettingsSelect(path)) return;
+    if (event.target.closest('[data-repo-upload]')) document.getElementById('repoAvatarFile')?.click();
+    else if (event.target.closest('[data-repo-auto]')) void saveRepoAvatar(null);
+  });
+  document.addEventListener('keydown', event => {
+    if (event.target.id !== 'repoSettingsAddPath') return;
+    if (event.key === 'Enter') { event.preventDefault(); void repoSettingsAdd(); }
+    else if (event.key === 'Escape') { event.stopPropagation(); repoSettingsAddOpen = false; event.target.blur(); drawRepoSettingsList(); }
+  });
   async function saveRepoAvatar(image) {
     const repo = document.getElementById('repoAvatarSelect').value;
     if (!repo) return;
@@ -96709,6 +96909,8 @@
         img.hidden = false;
         img.src = '/api/repo/avatar?repo_path=' + encodeURIComponent(repo) + '&v=' + Date.now();
       });
+      repoAvatarModes.set(repo, image === null ? 'auto' : 'custom');
+      drawRepoSettingsList();
       showOpToast(image === null ? 'Automatic repo avatar restored.' : 'Repo avatar saved.', 'success');
     } catch (error) { showOpToast(error.message, 'error'); }
     finally { controls.forEach(control => { control.disabled = false; }); }

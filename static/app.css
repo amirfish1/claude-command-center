@@ -34583,3 +34583,27 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 #settingsPane #settingsSection-preferences[data-destination] [data-pref-preview] > p { display: none; }
 /* Repositories page: the avatar editor sits open with no extra heading. */
 #settingsSection-repositories [data-context-preferences] > summary { display: none; }
+/* Agents: one-click setup chips, with the fine-tuning selects on the line below. */
+.agents-overview .ao-chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; flex: 1 1 0; }
+.agents-overview .ao-def-fine { margin: -2px 0 8px; }
+.agents-overview .ao-def-fine [data-ao-apply-all] { margin-left: auto; }
+/* Queues: name, engine, model, effort on one row. */
+.agents-overview .ao-q { grid-template-columns: minmax(110px, 1fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 0.8fr); }
+.agents-overview .ao-q select.ao-q-select { min-width: 0; max-width: 100%; width: 100%; }
+@media (max-width: 700px) { .agents-overview .ao-q { grid-template-columns: 1fr; } }
+/* Agents: the fallback editor sits on the page without its intro prose. */
+.settings-modal:not(.is-first-run) #settingsSection-routing > .settings-section-note,
+.settings-modal:not(.is-first-run) #settingsSection-routing #routingPolicyScope { display: none; }
+
+/* Repositories page: one row per repository, no picker. */
+#settingsSection-repositories [data-context-home="repo"] { display: none; }
+.repo-settings-add { display: flex; gap: 8px; align-items: center; padding: 4px 0 10px; }
+.repo-settings-add .settings-text-input { flex: 1 1 auto; min-width: 0; }
+.repo-settings-row .settings-row-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.repo-settings-row .repo-settings-name { display: flex; flex-direction: column; min-width: 0; }
+.repo-settings-row .repo-settings-name .settings-row-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repo-settings-row .repo-settings-mode { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+#settingsSection-repositories > :not(h2):not(#repoSettingsList) { display: none; }
+/* Settings shows controls, not collapsed explanations. */
+#settingsPane[data-settings-flat] details.choice-eligibility,
+#settingsPane[data-settings-flat] #capabilityRows details { display: none; }
