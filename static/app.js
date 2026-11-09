@@ -95582,7 +95582,7 @@
   const $settingsEmptyQuery = document.getElementById('settingsEmptyQuery');
   let _settingsModalPrevFocus = null;
   let _settingsSearchIndex = null;
-  let _settingsCurrentSection = 'defaults';
+  let _settingsCurrentSection = 'appearance';
 
   // Settings insight panels are refreshed on entry, not by a polling timer.
   let settingsQueueSnapshot = null;
@@ -95697,6 +95697,7 @@
       ['appearance', 'Appearance', ['appearance','layout']],
       ['defaults', 'Agents', ['defaults','routing']],
       ['queues', 'Queues', ['queues']],
+      ['repositories', 'Repositories', ['repositories']],
       ['notifications', 'Notifications & voice', ['notifications','voice']],
       ['vault', 'Vault', ['vault','api-keys','network']],
       ['sessions', 'Usage & budgets', ['sessions','limits']],
@@ -95724,8 +95725,19 @@
       pane.append(reset);
       reset.querySelector('#settingsResetAll').addEventListener('click', () => {
         if (!window.confirm('Reset theme, font, font size, list and layout settings in this browser to their defaults?')) return;
-        pane.querySelectorAll('#settingsResetAppearance, #settingsResetLayout, [data-reset-list], [aria-label="Reset conversation text size"]').forEach(button => button.click());
+        pane.querySelectorAll('#settingsResetAppearance, #settingsResetLayout, [aria-label="Reset conversation text size"]').forEach(button => button.click());
+        window.cccSettingsContext?.resetList?.();
       });
+    }
+    // Repositories has its own page; the avatar editor is placed in it while
+    // Settings is open (see settings-context.js).
+    if (!document.getElementById('settingsSection-repositories')) {
+      const repos = document.createElement('section');
+      repos.id = 'settingsSection-repositories'; repos.className = 'settings-section';
+      repos.dataset.sectionId = 'repositories'; repos.setAttribute('role', 'tabpanel');
+      const title = document.createElement('h2'); title.className = 'settings-section-eyebrow'; title.textContent = 'Repositories';
+      repos.append(title); pane.append(repos);
+      const entry = pane.querySelector('[data-context-home="repo"]'); if (entry) repos.append(entry);
     }
     function consolidate() {
       for (const [primary, title, ids] of destinations) {
@@ -95751,11 +95763,11 @@
           section.dataset.consolidated='true';
           const heading=section.querySelector('.settings-section-eyebrow');
           if(heading) heading.textContent=titles[id] || heading.textContent;
-          if(id !== primary && id !== 'layout' && id !== 'reset-all') {
+          if(id !== primary && id !== 'layout' && id !== 'reset-all' && id !== 'preferences') {
             const disclosure=document.createElement('details');
             disclosure.className='settings-disclosure';
             // A live list of sessions waiting on a limit is never tucked away.
-            if(id==='limits' || id==='free') disclosure.open=true;
+            if(id==='limits') disclosure.open=true;
             const summary=document.createElement('summary');
             summary.textContent=titles[id] || id;
             disclosure.append(summary);
@@ -96362,6 +96374,8 @@
     _settingsCurrentSection = sectionId;
 
     if (sectionId === 'queues') refreshSettingsQueues();
+    // Export/Import on Advanced need the preference list loaded.
+    if (destination === 'leftover' && !opts.cachedOnly) window.cccSettingsPreferences?.refresh();
     if (sectionId === 'voice') window.cccVoiceSetup?.enter();
     // A destination contains related sections; first-run isolates engine setup.
     // Search crosses destinations and reveals only matching controls.
@@ -96652,7 +96666,7 @@
       void previewRepoAvatar();
     } catch (_) {
       if (refreshSeq !== repoAvatarRefreshSeq) return;
-      document.getElementById('repoAvatarStatus').textContent = 'Could not load repositories. Close and reopen Repository appearance to retry.';
+      document.getElementById('repoAvatarStatus').textContent = 'Could not load repositories.';
     }
   }
   async function previewRepoAvatar() {
@@ -96746,7 +96760,7 @@
       openSettingsModal();
       function activate() {
         if (window.cccSettingsActions?.redirect(want) || window.cccSettingsContext?.redirect(want)) return true;
-        const tab = document.getElementById('settingsRailTab-' + want);
+        const tab = document.getElementById('settingsRailTab-' + want) || document.getElementById('settingsDestination-' + want);
         const section = $settingsPane.querySelector('[data-section-id="' + CSS.escape(want) + '"]');
         if (!tab || !section?.dataset.destination) return false;
         tab.click();

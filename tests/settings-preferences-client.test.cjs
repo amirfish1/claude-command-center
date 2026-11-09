@@ -78,7 +78,9 @@ async function open(t, seed = {}, options = {}) {
 async function waitStatus(page, text) {
   await page.waitForFunction(text => document.querySelector('[data-pref-status]')?.textContent.includes(text), {}, text);
 }
-async function action(page, name) { await page.click(`[data-pref-action="${name}"]`); }
+// Settings shows only Export and Import; the other actions stay in the DOM
+// (hidden), so drive them with a DOM click rather than a pointer click.
+async function action(page, name) { await page.$eval(`[data-pref-action="${name}"]`, element => element.click()); }
 async function editor(page, profile) {
   await page.$eval('textarea', (element, text) => {element.value = text; element.dispatchEvent(new Event('input', {bubbles: true}));}, typeof profile === 'string' ? profile : JSON.stringify(profile));
 }
@@ -102,7 +104,6 @@ test('mounts once under Workspace, labels scope and supported preferences, detec
   await page.evaluate(() => {window.cccSettingsPreferences.mount(); window.cccSettingsPreferences.mount();});
   assert.equal(await page.$$eval('#settingsSection-preferences', elements => elements.length), 1);
   assert.equal(await page.$eval('[data-pref-action="undo"]', element => element.disabled), true);
-  await page.click('summary');
   assert.match(await page.$eval('[data-pref-supported]', element => element.textContent), /Worker row density/);
 });
 
@@ -318,15 +319,14 @@ test('empty/no-op import has no apply action; editing profile cancels an existin
   assert.equal(await page.$eval('[data-pref-preview]', element => element.hidden), true);
 });
 
-test('file import loads JSON without applying it, then follows the same preview flow', async t => {
+test('file import previews JSON without applying it, then follows the same preview flow', async t => {
   const page = await open(t);
   const target = path.join(screenshotDir, 'import.json');
   fs.writeFileSync(target, JSON.stringify(PROFILE({font: 'mono'})));
   await (await page.$('input[type=file]')).uploadFile(target);
-  await waitStatus(page, 'Profile loaded.');
-  assert.deepEqual(await storage(page), {});
-  await action(page, 'import');
+  // Choosing a file goes straight to the preview; nothing is saved yet.
   await page.waitForSelector('[data-pref-preview]:not([hidden])');
+  assert.deepEqual(await storage(page), {});
   await apply(page, 'import');
   assert.equal((await storage(page))['ccc-font'], 'mono');
 });

@@ -153,11 +153,13 @@ for(const width of [1440,390]){
   assert.equal(await page.evaluate(()=>Object.entries(window.__originals).every(([id,node])=>node===document.getElementById(id))),true);
   for(const id of ['repoAvatarSelect','fontPlus','settingsGhIssuesToggle','settingsQueueRhsListToggle'])assert.equal(await page.$$eval('#'+id,els=>els.length),1);
   for(const id of ['settingsUiModeToggle','settingsDebugModeToggle','settingsTtsCacheDebugToggle'])assert.equal(await page.$eval('#'+id,el=>!!el.closest('#settingsPane')),true);
-  // Settings never sends people elsewhere: opening it brings the real controls in.
-  const inPane='#settingsPane #repoAvatarSelect,#settingsPane #fontPlus,#settingsPane #settingsGhIssuesToggle,#settingsPane #settingsQueueRhsListToggle';
+  // Settings never sends people elsewhere: opening it brings the repository
+  // and text-size controls in. List and queue controls stay in their menus.
+  const inPane='#settingsPane #repoAvatarSelect,#settingsPane #fontPlus';
   assert.equal(await page.$$eval('#settingsPane [data-settings-context]',els=>els.length),0);
   await page.evaluate(()=>openSettingsModal());
-  await page.waitForFunction(sel=>document.querySelectorAll(sel).length===4,{},inPane);
+  await page.waitForFunction(sel=>document.querySelectorAll(sel).length===2,{},inPane);
+  assert.equal(await page.$$eval('#settingsPane #settingsGhIssuesToggle,#settingsPane #settingsQueueRhsListToggle',els=>els.length),0);
   assert.equal(await page.evaluate(()=>Object.entries(window.__originals).every(([id,node])=>node===document.getElementById(id))),true);
   await page.evaluate(()=>{document.getElementById('settingsModal').hidden=true;});
   await page.waitForFunction(sel=>document.querySelectorAll(sel).length===0,{},inPane);
@@ -321,7 +323,7 @@ test('repository editor spans the collapsed phone composer grid',async t=>{
 test('phone Settings hosts the moved controls without horizontal overflow',async t=>{
  const page=await open(t,390);
  await page.evaluate(()=>openSettingsModal());
- await page.waitForFunction(()=>document.querySelectorAll('#settingsPane [data-context-home] > [data-context-preferences]').length>=3);
+ await page.waitForFunction(()=>document.querySelectorAll('#settingsPane [data-context-home] > [data-context-preferences]').length>=2);
  const result=await page.evaluate(()=>{
    const pane=document.getElementById('settingsPane');
    pane.style.width='350px';pane.style.maxWidth='100%';
@@ -331,6 +333,6 @@ test('phone Settings hosts the moved controls without horizontal overflow',async
      return {fits:block.scrollWidth<=row.clientWidth+1};
    });
  });
- assert(result.length>=4);
+ assert(result.length>=2);
  for(const item of result)assert(item.fits);
 });

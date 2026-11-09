@@ -1,0 +1,1 @@
+- Settings opens on Appearance. Repository avatars moved to a new Repositories page. The list presentation and queue sidebar blocks are gone from Settings (they remain in their own menus). Advanced now shows a single Preferences row with Export and Import, and Free model setup starts collapsed.

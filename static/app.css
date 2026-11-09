@@ -34574,3 +34574,12 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 /* One "Reset all settings" lives on Advanced; per-page resets are hidden. */
 #settingsPane :is(.settings-reset-row, [data-reset-list], [aria-label="Reset conversation text size"]) { display: none !important; }
 #settingsSection-layout > .settings-section-eyebrow { display: none; }
+/* Advanced → Preferences is one row: Export and Import. The review tables,
+   history, host profiles and selective resets stay out of sight.
+   Scoped to the consolidated Settings page (data-destination). */
+#settingsPane #settingsSection-preferences[data-destination] > :not(.ccc-prefs-row):not([data-pref-preview]):not([data-pref-status].is-error) { display: none !important; }
+#settingsPane #settingsSection-preferences[data-destination] .ccc-prefs-actions { margin: 0; }
+#settingsPane #settingsSection-preferences[data-destination] .ccc-prefs-actions > :not([data-pref-action="export"]):not([data-pref-action="pick"]) { display: none !important; }
+#settingsPane #settingsSection-preferences[data-destination] [data-pref-preview] > p { display: none; }
+/* Repositories page: the avatar editor sits open with no extra heading. */
+#settingsSection-repositories [data-context-preferences] > summary { display: none; }

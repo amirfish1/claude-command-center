@@ -182,7 +182,10 @@
     const link = (oldRow, kind) => {
       if (!oldRow) return;
       const entry = make('div'); entry.className = 'settings-row settings-context-home'; entry.dataset.keywords = oldRow.dataset.keywords || '';
-      entry.dataset.contextHome = kind; oldRow.before(entry);
+      entry.dataset.contextHome = kind;
+      // Repository avatars live on the Repositories page of Settings.
+      const page = kind === 'repo' && get('settingsSection-repositories');
+      if (page) page.append(entry); else oldRow.before(entry);
     };
     const repoRow = row('repoAvatarSelect'); link(repoRow, 'repo');
     branding = singleton(make('details'), 'contextRepoPreferences'); branding.append(make('summary', 'Repository appearance'));
@@ -196,7 +199,6 @@
     list = singleton(make('section'), 'contextListPreferences');
     list.setAttribute('aria-label', 'List presentation · This browser'); list.append(make('h3', 'List presentation · This browser'));
     const chipRow = document.querySelector('[data-segmented-group="chips"]')?.closest('.settings-row');
-    link(chipRow, 'list');
     if (chipRow) list.append(chipRow);
     for (const id of ['settingsGhIssuesToggle', 'settingsSeparateTabsToggle']) { const element = row(id); if (element) {
       const description = element.querySelector('.settings-row-desc');
@@ -208,7 +210,7 @@
     listReset.addEventListener('click', () => hooks.resetList()); list.append(listReset);
     list.addEventListener('click', hooks.preferenceClick);
 
-    const queueRow = row('settingsQueueRhsListToggle'); link(queueRow, 'queue');
+    const queueRow = row('settingsQueueRhsListToggle');
     queue = singleton(make('section'), 'contextQueuePreferences'); queue.append(make('h3', 'Queue sidebar · This browser'));
     if (queueRow) {
       queueRow.querySelector('.settings-row-label').textContent = 'Show full queue list';
@@ -295,5 +297,5 @@
     window.addEventListener('hashchange', hashRoute);
     hooks.refresh(); syncList(); hashRoute();
   }
-  window.cccSettingsContext = Object.freeze({mount, syncList, redirect, openBranding});
+  window.cccSettingsContext = Object.freeze({mount, syncList, redirect, openBranding, resetList: () => hooks?.resetList()});
 })();
