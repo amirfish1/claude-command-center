@@ -3821,6 +3821,31 @@
     border: 1px solid var(--border);
     background: var(--surface-2);
   }
+  .event.conv-session-boundary {
+    margin: 32px 12px;
+    padding: 10px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .conv-session-boundary .csb-label {
+    color: var(--text);
+    font-weight: 600;
+    border-color: var(--accent);
+  }
+  .conv-session-boundary .csb-cfg {
+    flex: 0 0 auto;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .conv-session-boundary .csb-cfg.is-changed {
+    color: var(--text);
+    border-color: var(--accent);
+    font-weight: 600;
+  }
   .conv-session-boundary .csb-label:hover {
     color: var(--text);
     border-color: var(--accent);

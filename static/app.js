@@ -71160,6 +71160,26 @@
             + ' The session below continued from it.'
             + '\nClick the label to jump to the start of the continued session; “end ⇡” jumps to the end of the earlier one.';
           div.classList.add('conv-session-boundary');
+          // Engine / model / effort of the new session; a chip is
+          // highlighted when it differs from the session above.
+          const _csC = ev.child_cfg || null;
+          const _csP = ev.parent_cfg || null;
+          let _csCfgHtml = '';
+          if (_csC) {
+            const _chip = (txt, changed, what) => txt
+              ? '<span class="csb-cfg' + (changed ? ' is-changed' : '') + '" title="'
+                + escapeAttr(what + (changed ? ' changed from the earlier session' : '')) + '">'
+                + escapeHtml(txt) + '</span>'
+              : '';
+            _csCfgHtml = _chip(_csC.engine, _csP && _csP.engine !== _csC.engine, 'Engine')
+              + _chip(_csC.model, _csP && _csP.model !== _csC.model, 'Model')
+              + _chip(_csC.effort ? 'effort ' + _csC.effort : '',
+                _csP && _csP.effort !== _csC.effort, 'Effort');
+            if (_csP && (_csP.engine !== _csC.engine || _csP.model !== _csC.model
+                || _csP.effort !== _csC.effort)) {
+              div.classList.add('is-config-changed');
+            }
+          }
           if (ev.child_sid) div.dataset.boundaryChildSid = String(ev.child_sid);
           if (ev.parent_sid) div.dataset.boundaryParentSid = String(ev.parent_sid);
           div.innerHTML = '<span class="csb-line" aria-hidden="true"></span>'

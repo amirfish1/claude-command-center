@@ -1,0 +1,1 @@
+- The seam between continued sessions now reads as a bold "New session" divider showing the new session's engine, model and effort, with changed values highlighted.
