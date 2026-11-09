@@ -1,1 +1,0 @@
-- A question a ticket is blocked on now goes by that ticket: chips show the ticket and open it in CCC, and "Needs you" gains Talk to worker, which opens the worker's session without sending anything. The question stays open until the ticket is unblocked.

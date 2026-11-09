@@ -1,1 +1,0 @@
-- Switching voices during a read no longer stalls the new voice, and an interrupted start no longer drops the read to the slower clip-by-clip player.

@@ -1,1 +1,0 @@
-- If Claude Code is already installed, the welcome now offers a first task on your own Claude account, without installing Node, the router or a free key. It says so plainly, shows no $0 math, and tells you to run `claude` and sign in if you aren't signed in yet.

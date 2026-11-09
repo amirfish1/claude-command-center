@@ -1,1 +1,0 @@
-- Fixed Windows proxy registry-key noise in the free-router install log (_run filter).

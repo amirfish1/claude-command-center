@@ -1,2 +1,0 @@
-- Share this run now needs proof on every engine. A row with no proof stays out, including older Claude Code SDK rows, queued messages and dispatched slash commands, and terminal prompts count only on Claude Code and Codex. A session with no prompt CCC can prove you wrote is refused, and so is one holding a Claude channel message such as Telegram.
-- Share this run hides more passwords made of ordinary words: `wifi:`, `p:`, `p/w`, `code word`, misspellings of `password`, `vault key`, `the key is ...`, `admin / ...` and `... that's the password`.

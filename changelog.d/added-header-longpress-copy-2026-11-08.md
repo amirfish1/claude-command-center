@@ -1,1 +1,0 @@
-- On phones, long-press the session header to copy the session ID and transcript path.

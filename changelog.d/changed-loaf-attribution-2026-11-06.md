@@ -1,1 +1,0 @@
-- Browser main-thread blocks of 200ms or more now log a [LOAF] line naming the longest script (function and source offset), so the top sources can be ranked from the service logs.

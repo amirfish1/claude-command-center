@@ -1,1 +1,0 @@
-- Save edited queue roles and other queue fields together after validating the whole form, so a refused role model leaves the native configuration unchanged. Queue and host feature controls now show saved durability warnings without retrying or claiming rollback.

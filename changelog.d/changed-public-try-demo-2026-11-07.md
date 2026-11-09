@@ -1,1 +1,0 @@
-- The public demo at ccc.amirfish.ai/demo is now the interactive try-it-in-ten-seconds demo: the real UI on invented data, where tapping a decision sends the agent back to work.

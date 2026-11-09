@@ -1,1 +1,0 @@
-- Opening a long session no longer freezes the page for many seconds: a Settings observer searched the page on every transcript change, Codex tool groups were rebuilt per event, and each new message made the next open re-read the whole attribution journal.

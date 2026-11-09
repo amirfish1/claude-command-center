@@ -1,1 +1,0 @@
-- Public usage stats no longer run out of their daily database reads. Numbers are now computed at most once an hour, and if the database is unavailable the stats page gets the last good numbers, marked as stale.

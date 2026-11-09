@@ -1,1 +1,0 @@
-- Add Decisions 2 to the Apps menu, including mobile More navigation, with direct links and reload support.

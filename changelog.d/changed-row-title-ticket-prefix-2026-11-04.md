@@ -1,1 +1,0 @@
-- A session row's name now starts with its newest ticket, e.g. `CCC#333 Folded tool call runs…`.

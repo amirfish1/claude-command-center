@@ -1,1 +1,0 @@
-- Active no longer shows spawned child rows loose when their parent is older than the In Progress window; the parent now anchors them.

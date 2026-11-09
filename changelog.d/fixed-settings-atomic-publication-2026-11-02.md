@@ -1,1 +1,0 @@
-- Validate and publish the complete queue configuration once, make network saves atomic with stale-draft protection, and serialize feature-switch updates without losing unrelated fields. Keep later reconciliation, restart and history outcomes separate from saved configuration.

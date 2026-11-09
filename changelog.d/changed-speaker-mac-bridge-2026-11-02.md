@@ -1,1 +1,0 @@
-- Speaker: when a reply is not prepared yet, the built-in Mac voice reads its first sentence instantly while the free voice makes the rest, then the free voice takes over (desktop; iPhone keeps the short tick). Set `localStorage['ccc-tts-mac-bridge']='0'` to turn it off.

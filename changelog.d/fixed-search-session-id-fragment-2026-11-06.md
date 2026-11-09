@@ -1,1 +1,0 @@
-- Sidebar search now finds a session from four or more characters of its id, even when the session is old or not loaded.

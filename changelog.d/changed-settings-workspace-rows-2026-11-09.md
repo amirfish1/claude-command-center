@@ -1,1 +1,0 @@
-- Settings: moved-setting links on the Workspace page are now ordinary rows with an Open button, and the stray second "Where this applies" line under each page now sits inside its folded section.

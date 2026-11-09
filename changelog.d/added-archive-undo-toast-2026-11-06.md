@@ -1,1 +1,0 @@
-- Archiving a session now shows an Undo for 8 seconds that restores the session and its helpers.

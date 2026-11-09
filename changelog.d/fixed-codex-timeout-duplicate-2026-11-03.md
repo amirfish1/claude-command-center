@@ -1,1 +1,0 @@
-- A queued Codex message is no longer delivered twice when the Codex app-server is slow. If a send times out but the message still reaches the session, CCC now finds it in the session's transcript and drops the queued copy instead of sending it again. Every removal from a session's message queue is now logged, so a queued message that disappears can be traced to what removed it.

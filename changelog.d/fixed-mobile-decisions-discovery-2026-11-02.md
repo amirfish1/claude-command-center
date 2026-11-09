@@ -1,1 +1,0 @@
-- Place Decisions 2 first in the mobile More menu and refresh the Apps catalog when opening More, so an already-open dashboard can discover newly available apps.

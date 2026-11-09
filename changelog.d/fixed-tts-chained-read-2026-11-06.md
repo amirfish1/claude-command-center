@@ -1,1 +1,0 @@
-- Read aloud no longer pauses between clips when the dashboard is busy. On browsers with MediaSource, a read now plays as one stream with its clips appended ahead of the listener, so a blocked page can't delay the next clip. Starting a new read also stops the old read's unfinished clips, and a cold read's second clip now uses the voice already prepared for that message.

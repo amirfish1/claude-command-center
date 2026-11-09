@@ -1,1 +1,0 @@
-- Each Decisions card now says Major or Minor under its ticket number, with the reason.

@@ -1,1 +1,0 @@
-- Support an installation-local opt-in for decision replies that stays consistent between question eligibility and delivery endpoints across dashboard restarts.

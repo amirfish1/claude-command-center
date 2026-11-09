@@ -1,1 +1,0 @@
-- The sidebar's live session status no longer freezes behind a slow rebuild. CCC shows the last saved status at once, including right after a restart, and refreshes it in the background. `/api/sessions/live-activity` adds a `live_status` field with the status source, its age, and whether a refresh is running.

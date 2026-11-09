@@ -1,1 +1,0 @@
-- Decisions now opens on the question: the Browse and Finished rows are gone, status sits below the card, and the latest answer leaves a one-line confirmation.

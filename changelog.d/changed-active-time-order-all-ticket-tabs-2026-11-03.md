@@ -1,1 +1,0 @@
-- The Active section in the Features and Small bugs tabs now lists sessions newest-first, the same as the All tab, instead of lifting older Needs You rows to the top. The yellow dot still marks sessions that need you.

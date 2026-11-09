@@ -1,1 +1,0 @@
-- `ccc start`, as the website teaches, now starts CCC instead of failing with an invalid choice error.

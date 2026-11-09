@@ -1,1 +1,0 @@
-- The floating mobile CALL button stays hidden unless you turn it on, and every switch for it now agrees; a live call always shows it.

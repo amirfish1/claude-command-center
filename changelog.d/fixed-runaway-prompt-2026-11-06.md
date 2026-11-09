@@ -1,1 +1,0 @@
-- A large process no longer pops the "Runaway process detected" dialog. It stays listed in the Health panel, and browsers, editors, CCC itself and process trees holding agent sessions are never flagged for it.

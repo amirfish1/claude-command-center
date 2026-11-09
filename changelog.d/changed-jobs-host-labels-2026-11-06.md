@@ -1,1 +1,0 @@
-- The Jobs tab now labels each machine with its real host name.

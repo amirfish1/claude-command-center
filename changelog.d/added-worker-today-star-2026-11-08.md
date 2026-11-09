@@ -1,1 +1,0 @@
-- Worker session rows can be starred for today; starred workers lead their section in the Workers tab.

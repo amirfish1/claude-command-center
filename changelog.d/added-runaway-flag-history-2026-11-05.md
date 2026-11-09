@@ -1,1 +1,0 @@
-- Runaway flags are now appended to runaway-flags.jsonl in STATE_DIR (once per session+streak) so thresholds can be tuned from real flag history.

@@ -1,1 +1,0 @@
-Performance alerts reuse the existing investigation for a topic, including tickets waiting for an answer or review. Sidebar initial loads and list refreshes share one investigation and receive throttled evidence updates. New investigations use atomic deduplication and the deep workflow.

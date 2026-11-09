@@ -1,1 +1,0 @@
-- Explain catalog and policy restrictions in Launch policy and queue model choices, prioritize cached local setup evidence, preserve stored custom selections, and open engine setup without automatic checks or losing the policy draft.

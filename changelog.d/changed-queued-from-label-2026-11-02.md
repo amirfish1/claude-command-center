@@ -1,1 +1,0 @@
-- Queued messages that were not typed in the composer (sent by another session, WatchTower, or a service) now have a purple frame and a "From:" line naming the sender — session title, engine, short id, and how it arrived — so they no longer look like your own words waiting to be sent.

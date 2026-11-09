@@ -1,1 +1,0 @@
-- Decisions 2 no longer shows a manual Check source button on a healthy list; it says when it last updated, and Try again appears only if a read fails.

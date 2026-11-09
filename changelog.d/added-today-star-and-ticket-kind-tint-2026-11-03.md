@@ -1,2 +1,0 @@
-- Star a ticket row for today: starred rows lead the Active section in a Today group, stay in sync across devices, and clear themselves at local midnight. Pins are unchanged.
-- Ticket rows show a thin left strip by kind: blue for Features, red for Small bugs, so the All tab reads apart at a glance.

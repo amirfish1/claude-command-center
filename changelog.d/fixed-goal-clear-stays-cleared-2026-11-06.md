@@ -1,1 +1,0 @@
-- A cleared Claude `/goal` banner no longer reappears when the session list serves a stale pre-clear snapshot; it stays hidden until the server confirms the clear.

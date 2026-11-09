@@ -1,1 +1,0 @@
-- Decisions now lists questions from GitHub-backed queues and links each to its ticket, where you answer it.

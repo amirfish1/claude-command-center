@@ -1,1 +1,0 @@
-- Personal names left in the source moved to local config: `local-overrides.json` gains `hermes_pending_dir` and `owner_names`, and `imessage-relay.json` gains optional `label` and `tag`. Linked conversations place any assistant role on the right, the Decisions inbox reads any `QUEUE#123` reference, and the Jobs tab shortens every `com.<vendor>.` launchd name except Apple's.

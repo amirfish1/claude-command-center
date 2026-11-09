@@ -1,2 +1,0 @@
-- Add **Share this run**: save a redacted replay page or image of a session, a weekly stats card, and a README badge. Files are built locally and nothing is uploaded; redaction is always on and an export that fails its final check is refused. Also available as `ccc share`. See `docs/sharing.md`.
-- Add a one-time first-week note offering to make a stats card. It stays local and asks for no post, star or sign-up.

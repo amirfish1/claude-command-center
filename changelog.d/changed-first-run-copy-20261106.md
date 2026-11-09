@@ -1,1 +1,0 @@
-- First-run wording: an empty board now says how to start a session instead of "No conversations on disk", the installer prints the full URL with an SSH tip when it can't open a browser and says what to do next, its pip and `wt` notes no longer read like errors, and `ccc doctor` no longer cites an internal ticket.

@@ -1,1 +1,0 @@
-- Heredoc shell commands that write a file (cat > x <<EOF) now say which file they write and show the command that runs after the heredoc, instead of 'Inline script: 1 line'.

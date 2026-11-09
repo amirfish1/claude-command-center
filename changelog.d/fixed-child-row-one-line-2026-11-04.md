@@ -1,1 +1,0 @@
-- Child sessions with no status text stay one line in the sidebar instead of growing into tall, mostly empty rows.

@@ -1,1 +1,0 @@
-- Approval cards now show a preview of the command, and Approve/Deny appear for headless sessions even when the session issued a parallel tool call.

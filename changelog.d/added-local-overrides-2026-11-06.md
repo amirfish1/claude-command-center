@@ -1,1 +1,0 @@
-- `local-overrides.json` in the CCC state folder holds per-install repo-to-queue names, repo aliases, commit scopes and the server's repo folder. With no file, CCC uses its generic behaviour.

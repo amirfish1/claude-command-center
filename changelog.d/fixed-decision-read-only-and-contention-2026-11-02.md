@@ -1,2 +1,0 @@
-- Hide the guided Decisions answer field and Send control when replies are unavailable, while keeping browsing and the explanation visible.
-- Allow Decisions projection updates alongside active readers without unnecessary database-lock warnings.

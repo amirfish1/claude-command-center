@@ -1,1 +1,0 @@
-- Fix cramped Working now rows on phones, use compact engine icons, and show ticket identities and titles for workers waiting on input.

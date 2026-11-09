@@ -1,1 +1,0 @@
-- Windows launcher now installs watchtower if missing; install must not start router before .env exists (free_router.start guard).

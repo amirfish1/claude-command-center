@@ -1,1 +1,0 @@
-- Old owner requests offer a contextual recap and a bounded, read-only recheck, deduplicated across refreshes and restarts with one checker at a time and at most three attempts per day.

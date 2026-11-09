@@ -1,1 +1,0 @@
-- Add preview `/api/outcomes` endpoints and `ccc spawn --outcome-id` for WatchTower outcome records. Off by default, with no dashboard screen; see `docs/outcomes-api.md`.

@@ -1,1 +1,0 @@
-- On a new install the All tab now lists sessions you run in a terminal. They used to go to Other, so All could read 0 while your work sat one tab away. Boards past 50 such sessions keep All as the ticket list.

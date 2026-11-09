@@ -1,1 +1,0 @@
-- Windows onboarding: Node.js 22 now installs through winget, the supported Node range matches freellmapi (<25), and the free-router first task no longer inherits stray `CLAUDE_CODE_*`/`ANTHROPIC_*` variables that caused 401 errors.

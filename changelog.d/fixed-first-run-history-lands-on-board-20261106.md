@@ -1,1 +1,0 @@
-- If you already have Claude Code or Codex sessions, a new install now opens your board instead of the free-model setup tour, with no engine screen or 23-step guide on top. Leaving the welcome no longer starts the guide on its own, and the "Install as an App" banner waits for your second visit.

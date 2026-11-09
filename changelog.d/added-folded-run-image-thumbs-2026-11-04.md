@@ -1,1 +1,0 @@
-- Compact view now keeps small thumbnails of images from folded tool calls visible beside the run chip; click one to enlarge.

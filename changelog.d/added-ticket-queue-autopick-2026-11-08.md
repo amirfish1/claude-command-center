@@ -1,1 +1,0 @@
-- The New queue ticket dialog now picks the queue for you from what you type, the same way new sessions pick a repo, until you choose a queue yourself.
