@@ -610,6 +610,22 @@ def _codex_thread_registry_entries():
     }
 
 
+def _codex_thread_registry_parents():
+    """child -> parent_session_id without the per-entry deepcopy that
+    _codex_thread_registry_entries pays (~0.2s on a 3k-thread registry)."""
+    try:
+        threads = _cached_codex_thread_registry_data().get("threads") or {}
+    except Exception:
+        return {}
+    out = {}
+    for sid, rec in threads.items():
+        if sid and isinstance(rec, dict):
+            parent = str(rec.get("parent_session_id") or "").strip()
+            if parent:
+                out[str(sid)] = parent
+    return out
+
+
 def _codex_retire_deleted_thread_state(thread_ids, *, persist=True):
     """Drop volatile approval/live/recovery state without recreating a thread."""
     ids = {sid.strip() for sid in thread_ids if isinstance(sid, str) and sid.strip()}

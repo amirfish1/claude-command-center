@@ -912,6 +912,14 @@ def note_explicit_archive(session_ids, archived):
     """Keep the owner's put-away action separate from automatic completion."""
     if not _enabled():
         return
+    # Most sessions have no ticket; skip the full-state rewrite for them.
+    try:
+        known = load_state().get("sessions") or {}
+        if not any(isinstance(known.get(sid), dict) and known[sid].get("ref")
+                   for sid in session_ids):
+            return
+    except Exception:
+        pass
     def record(data):
         for sid in session_ids:
             entry = data["sessions"].get(sid)

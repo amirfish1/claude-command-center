@@ -1,0 +1,1 @@
+- Restore (Move to Active) and Archive respond faster: the server no longer deep-copies the whole Codex thread registry or rewrites ticket state when no ticket is involved.

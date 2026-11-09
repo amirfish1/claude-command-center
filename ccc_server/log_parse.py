@@ -2296,11 +2296,8 @@ def _find_descendant_sessions(sid, max_depth=6):
     except Exception:
         pass
     try:
-        for child_id, entry in _core._codex_thread_registry_entries().items():
-            if not isinstance(entry, dict):
-                continue
-            parent = str(entry.get("parent_session_id") or "").strip()
-            if child_id and parent and child_id != parent:
+        for child_id, parent in _core._codex_thread_registry_parents().items():
+            if child_id != parent:
                 parent_by_child.setdefault(child_id, parent)
     except Exception:
         pass
