@@ -95701,10 +95701,10 @@
       ['notifications', 'Notifications & voice', ['notifications','voice']],
       ['vault', 'Vault', ['vault','api-keys','network']],
       ['sessions', 'Usage & budgets', ['sessions','limits']],
-      ['maintenance', 'System', ['maintenance','capabilities','experimental']],
+      ['maintenance', 'System', ['maintenance']],
       ['engines', 'Engines', ['engines']],
       // Untested extras live on their own page at the very end.
-      ['leftover', 'Advanced', ['leftover','free','preferences','reset-all']],
+      ['leftover', 'Advanced', ['reset-all','preferences','leftover','experimental','capabilities','free']],
     ];
     window.cccSettingsDestinations = destinations;
     const titles = {defaults:'Launch defaults', engines:'Install & connect engines',
@@ -95763,11 +95763,11 @@
           section.dataset.consolidated='true';
           const heading=section.querySelector('.settings-section-eyebrow');
           if(heading) heading.textContent=titles[id] || heading.textContent;
-          if(id !== primary && id !== 'layout' && id !== 'reset-all' && id !== 'preferences') {
+          // Sections sit open on their page. Only Free model setup is tucked away.
+          if(id === 'free') {
             const disclosure=document.createElement('details');
             disclosure.className='settings-disclosure';
             // A live list of sessions waiting on a limit is never tucked away.
-            if(id==='limits') disclosure.open=true;
             const summary=document.createElement('summary');
             summary.textContent=titles[id] || id;
             disclosure.append(summary);
@@ -95786,6 +95786,10 @@
         nav.setAttribute('aria-controls',controls.join(' '));
         // Sections that register after their page was opened join it now.
         const live=controls.map(cid=>document.getElementById(cid)).filter(Boolean);
+        // Page order follows the destination list even when a section
+        // registers late. Only touches the DOM when the order is wrong.
+        if(live.some((sec,i)=>i && !(live[i-1].compareDocumentPosition(sec) & Node.DOCUMENT_POSITION_FOLLOWING)))
+          live.forEach(sec=>pane.append(sec));
         if(!pane.closest('.is-first-run') && live.some(sec=>sec.classList.contains('is-active-section')))
           live.forEach(sec=>{sec.classList.add('is-active-section');sec.setAttribute('aria-hidden','false');});
       }

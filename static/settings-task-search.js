@@ -4,7 +4,7 @@
   const make=(tag,text)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;return node;};
   const tasks=[
     ['sounds','Stop or change completion sounds','notifications','settingsSoundsToggle','sound sounds chime chimes mute unmute beep audio','browser'],
-    ['notifications','Choose a notification policy','notifications','notificationPolicy','notification notifications alerts quiet digest interruptions','browser'],
+    ['notifications','Turn notifications on or off','notifications','settingsNotifyEnabledToggle','notification notifications alerts quiet digest interruptions','browser'],
     ['queue','Use an engine for a queue','queues','settingsQueueTable','queue queues dispatch pin pins','queue'],
     ['defaults','Change new-session defaults','routing','routingPolicyEditor','session sessions default defaults engine model codex claude effort','host'],
     ['worker','Follow session defaults or set worker overrides','routing','routingPolicyEditor','worker workers inherit inheritance','host'],

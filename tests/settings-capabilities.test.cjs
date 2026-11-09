@@ -53,7 +53,7 @@ ${capMount}
 ${deepLink}
 $settingsRail.addEventListener('click',event=>{const tab=event.target.closest('[data-section-target]');if(tab)setActiveSettingsRailSection(tab.dataset.sectionTarget);});
 $settingsModal.addEventListener('click',e=>{${ffClick}});
-document.getElementById('opener').onclick=()=>{openSettingsModal({focusSearch:false});setActiveSettingsRailSection('capabilities');document.querySelector('#settingsSection-capabilities>details').open=true;};
+document.getElementById('opener').onclick=()=>{openSettingsModal({focusSearch:false});setActiveSettingsRailSection('capabilities');const fold=document.querySelector('#settingsSection-capabilities>details');if(fold)fold.open=true;};
 document.getElementById('settingsModalClose').onclick=closeSettingsModal;document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$settingsModal.hidden)closeSettingsModal();});
 window.__navigate=setActiveSettingsRailSection;window.__search=applySettingsSearch;
 fetch('/api/features').then(r=>r.json()).then(d=>{window.__CCC_FLAGS__=d.preview;window.__CCC_FLAGS_META__=d.preview_meta;window.dispatchEvent(new CustomEvent('ccc:flags'));});
