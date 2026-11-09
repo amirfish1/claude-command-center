@@ -97,9 +97,14 @@
     const next=[...old,id].join(' ');if(control.getAttribute('aria-describedby')!==next)control.setAttribute('aria-describedby',next);
   }
   function place(group,help) {
-    if(help.parentElement===group)return;
+    if(help.parentElement===group||help.parentElement?.parentElement===group&&help.parentElement.matches('details.settings-disclosure'))return;
     const heading=[...group.children].find(n=>n.matches('h2,h3,.settings-section-eyebrow,summary,.upd-title,.fq-ticket-header'));
-    if(heading)heading.after(help);else group.prepend(help);
+    if(heading){heading.after(help);return;}
+    // A folded sub-section keeps its heading inside the disclosure; mount the
+    // help there too so a collapsed fold does not leave it stranded above.
+    const fold=[...group.children].find(n=>n.matches('details.settings-disclosure'));
+    const summary=fold&&[...fold.children].find(n=>n.matches('summary'));
+    if(summary){if(help.parentElement!==fold)summary.after(help);}else group.prepend(help);
   }
   function ensure(group) {
     let state=groups.get(group);

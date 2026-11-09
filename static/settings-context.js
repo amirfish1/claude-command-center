@@ -156,10 +156,18 @@
     const link = (oldRow, text, route) => {
       if (!oldRow) return;
       const entry = make('div'); entry.className = 'settings-row'; entry.dataset.keywords = oldRow.dataset.keywords || '';
-      const button = make('button', text); button.type = 'button'; button.className = 'settings-action-btn'; button.dataset.settingsContext = route;
-      entry.append(button); oldRow.before(entry);
+      // One ordinary row per moved setting: name, where it lives now, Open.
+      const [title, place] = text.split(' → ');
+      const main = make('div'); main.className = 'settings-row-main';
+      const label = make('div', title); label.className = 'settings-row-label';
+      const desc = make('div', 'Now in ' + place + '.'); desc.className = 'settings-row-desc';
+      main.append(label, desc);
+      const control = make('div'); control.className = 'settings-row-control';
+      const button = make('button', 'Open'); button.type = 'button'; button.className = 'settings-action-btn'; button.dataset.settingsContext = route;
+      button.setAttribute('aria-label', 'Open ' + title + ' in ' + place);
+      control.append(button); entry.append(main, control); oldRow.before(entry);
     };
-    const repoRow = row('repoAvatarSelect'); link(repoRow, 'Repository appearance → Folder picker or repository header', 'repository-branding');
+    const repoRow = row('repoAvatarSelect'); link(repoRow, 'Repository appearance → the folder picker or repository header', 'repository-branding');
     branding = singleton(make('details'), 'contextRepoPreferences'); branding.append(make('summary', 'Repository appearance'));
     // Keep the editor out of the composer until an appearance action opens it.
     branding.append(repoRow); parking.append(branding);
@@ -171,7 +179,7 @@
     list = singleton(make('section'), 'contextListPreferences');
     list.setAttribute('aria-label', 'List presentation · This browser'); list.append(make('h3', 'List presentation · This browser'));
     const chipRow = document.querySelector('[data-segmented-group="chips"]')?.closest('.settings-row');
-    link(chipRow, 'List presentation → View options', 'list-presentation');
+    link(chipRow, 'List presentation → the list’s View options', 'list-presentation');
     if (chipRow) list.append(chipRow);
     for (const id of ['settingsGhIssuesToggle', 'settingsSeparateTabsToggle']) { const element = row(id); if (element) {
       const description = element.querySelector('.settings-row-desc');
@@ -197,7 +205,7 @@
     reader = singleton(get('settingsModalFontSlot'));
     const phoneReader = document.querySelector('#convSimpleActionsMenu .mobile-actions-row[aria-label="Text size"]');
     if (phoneReader) { phoneReader.replaceChildren(); phoneReader.dataset.contextPhoneReader = ''; }
-    const readerRow = reader.closest('.settings-row'); link(readerRow, 'Conversation text size → Reader actions', 'text-size');
+    const readerRow = reader.closest('.settings-row'); link(readerRow, 'Conversation text size → the conversation’s Reader actions', 'text-size');
     // The toolbar's delayed setup used to move these controls into Settings.
     // Move the real stepper now, before removing its old row.
     const stepper = reader.querySelector('.font-size-controls') || get('fontMinus')?.closest('.font-size-controls');
