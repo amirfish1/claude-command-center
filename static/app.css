@@ -1784,6 +1784,10 @@
   .acp-perm-opt.is-submitting { opacity: 0.55; pointer-events: none; }
   .acp-perm-options.is-answered { opacity: 0.45; pointer-events: none; }
   .tool-call .arrow { color: var(--orange); font-weight: bold; }
+  /* CCC-408: an expanded tool row points its arrow down. */
+  .tool-call .arrow { display: inline-block; }
+  .tool-call.cc-open > .arrow,
+  .tool-call:has(> details.tool-command-disclosure[open]) > .arrow { transform: rotate(90deg); }
   .tool-call .tool-source {
     color: var(--text-muted);
     border: 1px solid var(--border);
