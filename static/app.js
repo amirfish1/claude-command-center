@@ -21993,6 +21993,8 @@
   // always wins. Without a saved choice, keep the Advanced workspace on all
   // screen sizes; mobile layout is handled independently by the chrome rules.
   function getUiMode() {
+    // Flow owns this window's presentation; keep the saved parent mode intact.
+    if (FLOW_POPOUT_MODE) return 'advanced';
     try {
       const stored = localStorage.getItem('ccc-ui-mode');
       if (stored === 'simple' || stored === 'advanced') return stored;
