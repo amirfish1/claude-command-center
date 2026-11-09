@@ -62,6 +62,16 @@ context explains the finish line without adding authority. A child can inherit a
 single explicit parent association; ambiguous or inferred relationships do not
 automatically establish contribution. Manual filing or dragging is not required.
 
+Hourly bounded intake reconciles explicit associations. Ambiguous sessions remain
+Unfiled with an agent-owned next check. Organization check shows cached coverage,
+reasons and the next review; unavailable sources are reported explicitly. Saved
+decision receipts are reconciled by their exact source identity and revision,
+with source acceptance distinguished from session consumption.
+
+Visible outcome pages refresh through the existing activity polling cycle when
+their snapshot is stale. Automatic refresh pauses while editing, reading expanded
+details or using the Decisions guide, and preserves reading position and focus.
+
 While the new workspace is enabled, ordinary UI sessions no longer automatically
 create a separate idea ticket after their first reply. Existing tickets and
 explicit manual filing remain intact.
