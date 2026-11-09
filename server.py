@@ -30109,6 +30109,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             credential_broker.handle(self, self.command)
             return
 
+        if path == "/api/outcomes" or path.startswith("/api/outcomes/"):
+            from ccc_server import outcome_api
+            outcome_api.handle(self, self.command, resolve_repo=resolve_repo_path)
+            return
+
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
@@ -34882,6 +34887,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             credential_broker.handle(self, self.command)
             return
 
+        if path == "/api/outcomes" or path.startswith("/api/outcomes/"):
+            from ccc_server import outcome_api
+            outcome_api.handle(self, self.command, resolve_repo=resolve_repo_path)
+            return
+
         if path.startswith("/api/codex/client/"):
             from ccc_server.codex_client import codex_client_call
             action = path.rsplit("/", 1)[-1]
@@ -39188,6 +39198,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 f"via={spawned_via} ua={_ua!r} origin={_origin or '-'} "
                 f"prompt=\"{_activity_log_preview(prompt)}\"",
             )
+            from ccc_server import outcome_api as _outcome_api
+            try:
+                spawn_outcome = _outcome_api.prepare_spawn(payload, parent_session_id)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+                return
             if not prompt:
                 _log_activity("spawn", "REJECT", "missing prompt")
                 self.send_json({"ok": False, "error": "missing prompt"}, 400)
@@ -39271,6 +39287,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 f"in-flight key={task_key or prompt_hash!r} "
                                 f"name={name!r}",
                             )
+                            _outcome_api.associate_spawn(spawn_outcome, waited, parent_session_id)
                             self.send_json(waited)
                         else:
                             self.send_json({
@@ -39307,6 +39324,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             f"matched pid={matched.get('pid')} "
                             f"finished={finished_row is not None} name={name!r}",
                         )
+                        _outcome_api.associate_spawn(spawn_outcome, result, parent_session_id)
                         with _SPAWN_DEDUPE_LOCK:
                             dedupe_slot["result"] = result
                             _SPAWN_DEDUPE_INFLIGHT.pop(dedupe_key, None)
@@ -39314,6 +39332,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         self.send_json(result)
                         return
                 try:
+                    if spawn_outcome:
+                        prompt = _outcome_api.spawn_prefix(spawn_outcome) + prompt
                     # Return address: spawned session reports back to its
                     # dispatcher on completion. No-op when report_to is unset.
                     # CCC-1202: the footer addresses a route id that CCC
@@ -39566,6 +39586,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             reasoning_effort=reasoning_effort,
                             runtime=spawn_runtime,
                         )
+                    _outcome_api.associate_spawn(spawn_outcome, result, parent_session_id)
                     result.setdefault("engine", engine)
                     if shipped_info and isinstance(result, dict):
                         result["already_shipped"] = shipped_info

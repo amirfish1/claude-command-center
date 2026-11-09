@@ -2097,6 +2097,8 @@ def cmd_spawn(args):
         payload["confirm_blocked_model"] = True
     if args.task_key:
         payload["task_key"] = args.task_key
+    if getattr(args, "outcome_id", None):
+        payload["outcome_id"] = args.outcome_id
     if args.dedupe:
         payload["dedupe"] = True
     if args.report_to:
@@ -2828,6 +2830,8 @@ def main(argv=None):
                    help="dedupe contract: if a lane already carries this key "
                         "(repo-scoped), return it with existing:true instead "
                         "of spawning a twin — e.g. a ticket id or task slug")
+    p.add_argument("--outcome-id", metavar="OUTCOME",
+                   help="link the session to an enabled durable outcome; children inherit explicit provenance")
     p.add_argument("--dedupe", action="store_true",
                    help="dedupe on the exact raw prompt hash instead of an "
                         "explicit key")
