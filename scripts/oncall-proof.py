@@ -460,6 +460,9 @@ def main():
             env.update(HOME=tmp, XDG_CONFIG_HOME=tmp, XDG_DATA_HOME=tmp, PATH=str(bins),
                        PYTHONPATH=os.pathsep.join(sys.path), CCC_FF_ONCALL='1',
                        WATCHTOWER_STORE=str(root / 'queues.json'), WT_NO_SELF_UPDATE='1',
+                       # The proof runs its own foreground watcher; newer WatchTower
+                       # honours this and never starts a detached one of its own.
+                       WT_NO_AUTOSTART='1',
                        WATCHTOWER_DELEGATE_URL='off', GIT_CONFIG_NOSYSTEM='1',
                        GIT_CONFIG_GLOBAL=os.devnull,
                        SSL_CERT_FILE=str(trust), PROOF_GIT=shutil.which('git'),
