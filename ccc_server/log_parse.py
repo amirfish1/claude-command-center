@@ -287,6 +287,12 @@ CAR_MODE_CONFIG_FILE = _core.COMMAND_CENTER_STATE_DIR / "car-mode.json"
 # `_feature_flag('name')`. The Settings "Experimental" section renders itself
 # from this registry — no extra markup per flag.
 _PREVIEW_FLAGS = {
+    "oncall": {
+        "default": False,
+        "label": "On-call",
+        "desc": "Agents fix reported bugs and message you only for real decisions. "
+                "Adds Settings, On-call and the ccc oncall command.",
+    },
     "presentation": {
         "default": False,
         "label": "Conversation presentation",

@@ -325,7 +325,124 @@ def _dashboard_session_watch_tick(previous):
         _notify.observe_session_states(previous, current)
     except Exception:
         pass
+    _oncall_observe_sessions(previous, current)
     return current
+
+
+# ── On-call (preview flag `oncall`; ccc_server/oncall/) ──────────────────────
+# Agents fix reported bugs and reach a person by message only when they must.
+# The engine owns all of it; this block only connects it to what the server
+# already knows: live session state, the inject path, and queue launch errors.
+
+class _OncallDeps:
+    """What the On-call engine needs from the running server."""
+
+    def inject(self, session_id, text):
+        if not session_id:
+            return False, "that session is gone"
+        try:
+            result = _inject_text_into_session(
+                session_id, "Owner answer: " + text, mode="send", source="oncall")
+        except Exception as e:
+            return False, str(e) or "inject failed"
+        if isinstance(result, dict) and result.get("ok") is False:
+            return False, str(result.get("error") or "the session did not take the message")
+        return True, ""
+
+
+def _oncall_engine():
+    from ccc_server.oncall import engine as _oncall_engine_mod
+    eng = _oncall_engine_mod.get()
+    if eng.deps is None:
+        eng.deps = _OncallDeps()
+    return eng
+
+
+def _oncall_describe_session(sid):
+    """(display name, pending question) for a session that is waiting."""
+    question = ""
+    try:
+        question = str(((build_live_sessions_activity() or {}).get(sid) or {}).get("question_text") or "")
+    except Exception:
+        pass
+    try:
+        from ccc_server import notify as _notify
+        name = _notify._display_name(sid, _notify._session_identity(sid))
+    except Exception:
+        name = "agent " + str(sid)[:8]
+    return name, question
+
+
+def _oncall_observe_sessions(previous, current):
+    """A session that starts waiting on a question becomes an On-call alert."""
+    try:
+        if not _feature_flag("oncall"):
+            return
+        from ccc_server.oncall import api as _oncall_api
+        _oncall_api.observe_sessions(previous, current, _oncall_describe_session, eng=_oncall_engine())
+    except Exception:
+        pass
+
+
+def _oncall_stuck_queues(eng):
+    """A queue whose workers cannot start is an alert, once per failure."""
+    try:
+        from ccc_server import wt_alerts as _wt_alerts
+        for alert in _wt_alerts.launch_failure_alerts():
+            if alert.get("queue"):
+                eng.raise_stuck(alert["queue"], " ".join(
+                    x for x in (alert.get("title"), alert.get("detail")) if x),
+                    stamp=str(int(alert.get("ts") or 0)))
+    except Exception:
+        pass
+
+
+def _oncall_loop():
+    """Run On-call with no browser open. Idle (one stat per pass) while it is off.
+
+    The dashboard's own watcher diffs session state only while a page is
+    connected; when none is, this loop does the same diff every few seconds so
+    a waiting or dead session is still noticed.
+    """
+    previous = None
+    next_watch = 0.0
+    next_stuck = 0.0
+    while True:
+        try:
+            eng = _oncall_engine()
+            if eng.active():
+                eng.tick()
+                now = time.time()
+                with _dashboard_event_watch_lock:
+                    watched = _dashboard_event_watch_subscribers > 0
+                if watched:
+                    previous = None
+                elif now >= next_watch:
+                    next_watch = now + 5.0
+                    previous = _dashboard_session_watch_tick(previous)
+                if now >= next_stuck:
+                    next_stuck = now + 120.0
+                    _oncall_stuck_queues(eng)
+            else:
+                previous = None
+        except Exception:
+            pass
+        time.sleep(3.0)
+
+
+def _oncall_request(handler, method, path, payload=None):
+    """Serve /api/oncall/*: preview-flag gated and local-only."""
+    if not _feature_flag("oncall"):
+        handler.send_json({"ok": False, "error": "On-call is a preview. Turn it on in Settings, Experimental."}, 404)
+        return
+    if phone_access.is_remote_request(handler.client_address[0], handler.headers):
+        handler.send_json({"ok": False, "error": "On-call settings are local-only"}, 403)
+        return
+    from ccc_server.oncall import api as _oncall_api
+    code, result = _oncall_api.handle(method, path, payload, eng=_oncall_engine())
+    if method == "POST" and code == 200:
+        _log_activity("oncall", "ONCALL_" + path.rsplit("/", 1)[-1].upper(), "ok")
+    handler.send_json(result, code)
 
 
 # A new install has a handful of transcripts, and a `claude` run in a terminal
@@ -30552,6 +30669,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # it may auto-open. Cached on directory mtimes; bounded scan.
             from ccc_server.moment_zero import moment_zero_state
             self.send_json(moment_zero_state())
+        elif path.startswith("/api/oncall/"):
+            _oncall_request(self, "GET", path)
         elif path == "/api/issue-flow/status":
             # GitHub issue auto-fix wizard (ccc_server/issue_flow.py): is gh
             # signed in, is WatchTower up, which local repos could feed a queue.
@@ -36170,6 +36289,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(return_reminder.arm() if armed else return_reminder.cancel())
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, 500)
+            return
+        if path.startswith("/api/oncall/"):
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                body = self.rfile.read(content_len) if content_len else b""
+                payload = json.loads(body) if body else {}
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            _oncall_request(self, "POST", path, payload if isinstance(payload, dict) else {})
             return
         if path in ("/api/issue-flow/prepare", "/api/issue-flow/test"):
             # GitHub issue auto-fix wizard. Local-only: these write labels and
@@ -47642,6 +47771,11 @@ def main():
         _throughput_week_rankings()
     if _should_prewarm_throughput_on_startup():
         threading.Thread(target=_prewarm_throughput, daemon=True, name="ccc-throughput-prewarm").start()
+    # On-call (preview flag `oncall`): message channels, monitoring sources and
+    # the alert/reply loop. The thread idles until the flag and the feature's
+    # own switch are both on. Never in ephemeral verification instances.
+    if not os.environ.get("CCC_EPHEMERAL") and not os.environ.get("CCC_ONCALL_DISABLED"):
+        threading.Thread(target=_oncall_loop, daemon=True, name="ccc-oncall").start()
     # Scheduled notifications: the 6pm daily digest and savings milestones.
     # Emitted on the dashboard event hub and, on macOS, as an osascript banner
     # so they land with no browser open. Ephemeral verification instances skip

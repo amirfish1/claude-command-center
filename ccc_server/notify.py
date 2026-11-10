@@ -674,7 +674,18 @@ def _emit_session_deaths(current, now_epoch, publish=None):
             continue
         out.append(_emit(item, publish=publish))
         _alert_off_dashboard(f"death:{sid}:{inc.get('size')}", item)
+        _oncall_stopped(sid, item, inc.get("size"))
     return out
+
+
+def _oncall_stopped(sid, item, stamp):
+    """On-call (preview): a dead session also reaches the owner's channels.
+    A no-op unless the feature is on; never raises."""
+    try:
+        from ccc_server.oncall import api as _oncall
+        _oncall.session_stopped(sid, item.get("title"), item.get("body"), stamp)
+    except Exception:
+        pass
 
 
 def _plan_rerun(inc):

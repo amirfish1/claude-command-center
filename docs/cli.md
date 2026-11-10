@@ -63,4 +63,6 @@ whether a CLI binary resolves. It does not launch an agent or spend tokens.
 For provider keys and other secrets, see [BYOK and Vault](byok-and-vault.md).
 For masked dashboard prompts and one-shot delivery, see
 [`ccc secret request` and `ccc secret forget`](credential-broker.md).
+For bug reports, alerts and replies from your phone, see
+[`ccc oncall`](oncall.md) (preview).
 For local memory and recent-work tools, see [the release history](../CHANGELOG.md).

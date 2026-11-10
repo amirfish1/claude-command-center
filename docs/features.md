@@ -102,6 +102,17 @@ search (Cmd/Ctrl+,), keyboard navigation, and per-section reset. The FIRST
 FLIGHT tour is replayable from Settings. [Onboarding](onboarding.md) covers
 the free first-task setup.
 
+## On-call (preview)
+
+[On-call](oncall.md) sends bugs from your customers and your monitoring to
+coding agents that fix them. Reports come from email, SMS or WhatsApp, GitHub
+issues, Sentry, PostHog, a URL check, or any command you already run. CCC
+messages you on Telegram, email, ntfy, iMessage, SMS or WhatsApp only when an
+agent needs a real decision or has stopped, and your reply there is the
+agent's answer. One switch lets agents decide small reversible things and
+keep going. It is off by default. Turn it on with `ccc oncall setup`. CCC has
+to be running on a machine that stays on; nothing is hosted for you.
+
 ## Phone access and voice
 
 [Phone access](phone-access.md) connects your browser over a trusted network.

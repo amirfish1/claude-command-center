@@ -1,0 +1,15 @@
+/* Settings, On-call (preview). Loaded on demand by static/oncall.js. */
+#settingsSection-oncall .oncall-form {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px; margin-top: 8px;
+}
+#settingsSection-oncall .oncall-form:empty { display: none; }
+#settingsSection-oncall .oncall-form .settings-text-input { width: 100%; box-sizing: border-box; }
+#settingsSection-oncall .oncall-form .oncall-form-wide { grid-column: 1 / -1; justify-self: start; }
+#settingsSection-oncall .oncall-status:empty { display: none; }
+#settingsSection-oncall .oncall-status.is-error { color: var(--red); }
+#settingsSection-oncall .oncall-list:empty { display: none; }
+#settingsSection-oncall .oncall-add-row { align-items: flex-start; }
+#settingsSection-oncall .settings-row-control .settings-text-input { min-width: 0; width: 190px; }
+#settingsSection-oncall .settings-row-control input[type="time"] { width: 120px; }
+#settingsSection-oncall[hidden], #settingsDestination-oncall[hidden] { display: none !important; }

@@ -92,7 +92,7 @@ PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
 SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "question", "brief", "where",
-               "brain", "consent", "jobs", "vault", "secret", "remind")
+               "brain", "consent", "jobs", "vault", "secret", "remind", "oncall")
 
 RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
 
@@ -1919,6 +1919,16 @@ def cmd_remind(args):
     return 0
 
 
+def cmd_oncall(argv, server=None):
+    """`ccc oncall ...` (preview): the commands live in ccc_server/oncall/cli.py
+    and are imported only when used, so every other `ccc` call stays as fast."""
+    repo_dir = os.path.dirname(os.path.realpath(__file__))
+    if repo_dir not in sys.path:
+        sys.path.append(repo_dir)
+    from ccc_server.oncall import cli as oncall_cli
+    return oncall_cli.run(argv, base=_resolve_server(server), get=_get_json, post=_post_json)
+
+
 def cmd_consent(args):
     base = _resolve_server(args.server)
     if not base:
@@ -2762,6 +2772,11 @@ def main(argv=None):
     if argv and argv[0] == "astra-check":
         script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "astra-check")
         os.execv(script, [script] + argv[1:])
+    # `ccc oncall ...` has its own nested parser (ccc_server/oncall/cli.py).
+    if argv[:1] == ["oncall"]:
+        return cmd_oncall(argv[1:])
+    if argv[:1] == ["--server"] and argv[2:3] == ["oncall"]:
+        return cmd_oncall(argv[3:], server=argv[1])
     # `ccc start` is the spelling the website teaches; it is bare `ccc`.
     if argv[:1] == ["start"]:
         argv = argv[1:]
@@ -3126,6 +3141,10 @@ def main(argv=None):
                    help="only this child (session id/prefix/name, or its rr_ route id)")
     p.add_argument("--json", action="store_true", help="raw rebind result JSON")
     p.set_defaults(func=cmd_rebind_report_to)
+
+    # Listed here so `ccc --help` shows it; main() hands it off before parsing.
+    sub.add_parser("oncall", add_help=False,
+                   help="agents fix reported bugs and message you only for real decisions (preview)")
 
     p = sub.add_parser(
         "remind",
