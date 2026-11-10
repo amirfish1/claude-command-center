@@ -1,7 +1,7 @@
 {
   "name": "Claude Command Center",
   "short_name": "CCC",
-  "description": "Multi-session orchestrator for Claude Code, GitHub issues, and worktrees.",
+  "description": "Coding agents on call for your product. Runs on your own machine.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

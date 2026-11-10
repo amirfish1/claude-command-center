@@ -87926,13 +87926,13 @@
     if (!$btn || !$modal) return;
 
     const SHARE_URL = 'https://github.com/amirfish1/claude-command-center';
-    const SHARE_TEXT = 'Try Claude Command Center. One dashboard to run and ' +
-      'manage your Claude, Codex, Cursor, and Anti-Gravity coding sessions. ' + SHARE_URL;
+    const SHARE_TEXT = 'Try Claude Command Center. It puts coding agents on call ' +
+      'for your product and messages you for real decisions. ' + SHARE_URL;
 
     function openShare() {
       $message.value = SHARE_TEXT;
       $reddit.href = 'https://www.reddit.com/submit?url=' + encodeURIComponent(SHARE_URL) +
-        '&title=' + encodeURIComponent('Claude Command Center - one dashboard for Claude, Codex, Cursor, and Anti-Gravity sessions');
+        '&title=' + encodeURIComponent('Claude Command Center - coding agents on call for your product, decisions by message');
       $x.href = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(SHARE_TEXT);
       $modal.classList.add('open');
     }

@@ -708,7 +708,7 @@ link_ccc_cli() {
 main() {
   printf '\n'
   step "Claude Command Center"
-  note "one board for every AI coding agent on this computer"
+  note "coding agents on call for your product, run from this computer"
   printf '\n'
 
   step "Step 1 of 4: checking this computer"

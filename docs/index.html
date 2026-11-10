@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CCC: Your coding agents outgrew your terminal</title>
-<meta name="description" content="CCC puts every coding-agent session, every engine, however you launched it, on one local board and tells you which one needs you. Local, source-available, and free to use and modify, including at work.">
+<title>CCC: Your agents are on call. You are not.</title>
+<meta name="description" content="CCC puts coding agents on call for your product. Bugs go to agents that fix them. It messages you for a real decision and takes your reply.">
 <link rel="canonical" href="https://ccc.amirfish.ai">
 <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
 
-<meta property="og:title" content="CCC: Your coding agents outgrew your terminal">
-<meta property="og:description" content="Every Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin session on one local board. See what needs you, steer any session, keep working on a free model when you hit the usage limit.">
+<meta property="og:title" content="CCC: Your agents are on call. You are not.">
+<meta property="og:description" content="Bugs from customers and from monitoring go to coding agents that fix them. CCC messages you when it needs a real decision and takes your answer from the same thread.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://ccc.amirfish.ai">
 <meta property="og:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=5">
@@ -31,6 +31,7 @@
     --orange-soft: rgba(245, 166, 35, 0.12);
     --green: #6ee7b7;
     --green-bright: #4dd599;
+    --green-soft: rgba(77, 213, 153, 0.10);
     --blue: #8fb3ff;
     --purple: #bd9bff;
     --red: #ff7a66;
@@ -44,6 +45,7 @@
   a { color: var(--fg); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
   a:hover { text-decoration-color: var(--orange); }
   code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
+  [id] { scroll-margin-top: 72px; }
 
   /* Layout */
   .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
@@ -56,14 +58,16 @@
     backdrop-filter: blur(8px);
     position: sticky; top: 0; z-index: 10;
   }
-  .nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-top: 14px; padding-bottom: 14px; }
   .brand { font-family: var(--mono); font-size: 14px; letter-spacing: 0.02em; display: flex; align-items: center; gap: 10px; flex-shrink: 0; white-space: nowrap; }
   .brand .dot { display: inline-block; width: 8px; height: 8px; background: var(--orange); border-radius: 50%; box-shadow: 0 0 12px var(--orange); }
   .brand .version { font-size: 11px; color: var(--orange); background: var(--orange-soft); padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(245, 166, 35, 0.4); }
   .nav-links { display: flex; gap: 22px; font-size: 14px; align-items: center; }
   .nav-links a { text-decoration: none; color: var(--fg-dim); }
   .nav-links a:hover { color: var(--fg); }
+  @media (max-width: 860px) { .nav-links { gap: 16px; } .nav-links a.nav-extra { display: none; } }
   @media (max-width: 640px) { .nav-links a:not(.download-link) { display: none; } }
+  @media (max-width: 420px) { .brand { font-size: 13px; gap: 8px; } }
 
   /* Hero */
   .hero { padding: 70px 0 40px; position: relative; }
@@ -75,64 +79,44 @@
       radial-gradient(ellipse 600px 300px at 85% 30%, rgba(110, 231, 183, 0.06), transparent 60%);
     pointer-events: none;
   }
-  .hero-inner { position: relative; text-align: center; }
+  .hero-inner { position: relative; }
+  .hero-grid {
+    display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+    column-gap: 52px; row-gap: 0; align-items: center; text-align: left;
+  }
+  .hero-copy { grid-column: 1; grid-row: 1; align-self: end; }
+  .hero-actions { grid-column: 1; grid-row: 2; align-self: start; }
+  .hero-thread { grid-column: 2; grid-row: 1 / span 2; }
+  @media (max-width: 900px) {
+    .hero { padding: 44px 0 32px; }
+    .hero-grid { grid-template-columns: minmax(0, 1fr); }
+    .hero-copy, .hero-actions, .hero-thread { grid-column: 1; grid-row: auto; }
+    .hero-thread { margin: 14px 0 6px; }
+  }
   .eyebrow {
     font-family: var(--mono); font-size: 12px; color: var(--green-bright);
     letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 22px;
-    display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
+    display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap;
   }
+  .eyebrow span { white-space: nowrap; }
+  .eyebrow .sep { color: var(--fg-mute); }
+  @media (max-width: 480px) { .eyebrow { gap: 6px 14px; } .eyebrow .sep { display: none; } }
   .eyebrow .badge {
     background: var(--orange); color: #0a0d11;
     padding: 3px 8px; border-radius: 4px; font-weight: 700;
     letter-spacing: 0.05em;
   }
   h1.hero-title {
-    font-size: clamp(40px, 6vw, 68px);
-    line-height: 1.02; letter-spacing: -0.025em;
-    margin: 0 auto 24px; font-weight: 700;
-    max-width: 20ch;
+    font-size: clamp(38px, 5.4vw, 66px);
+    line-height: 1.04; letter-spacing: -0.025em;
+    margin: 0 0 22px; font-weight: 700;
   }
   h1.hero-title .orange { color: var(--orange); }
-  h1.hero-title .green { color: var(--green-bright); }
-  .hero-engine {
-    font-size: clamp(36px, 5.5vw, 64px);
-    font-weight: 700;
-    line-height: 1.1;
-    letter-spacing: -0.025em;
-    margin: 0 auto 28px;
-    max-width: 24ch;
-    color: var(--fg-dim);
-  }
-  .hero-engine .engine-line {
-    display: block;
-  }
-  .hero-engine .engine-word {
-    display: block;
-    font-weight: 800;
-    font-size: clamp(48px, 8vw, 96px);
-    line-height: 1;
-    letter-spacing: -0.03em;
-    margin: 8px 0;
-    overflow: hidden;
-    animation: engineSlideIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-  @keyframes engineSlideIn {
-    from { transform: translateY(100%); opacity: 0; }
-    to   { transform: translateY(0);   opacity: 1; }
-  }
-  /* Per-engine brand colors */
-  .hero-engine .engine-word.claude       { color: #d97757; }  /* Claude orange  */
-  .hero-engine .engine-word.codex        { color: #10a37f; }  /* Codex green    */
-  .hero-engine .engine-word.cursor       { color: #6b8cff; }  /* Cursor blue    */
-  .hero-engine .engine-word.antigravity  { color: #b388ff; }  /* Antigravity    */
-  .hero-engine .engine-word.kilo         { color: #f0b429; }  /* Kilo gold      */
-  .hero-engine .engine-word.kimi         { color: #e879f9; }  /* Kimi magenta   */
-  .hero-engine .engine-word.opencode     { color: #22d3ee; }  /* OpenCode cyan  */
-  .hero-engine .engine-word.devin        { color: #a78bfa; }  /* Devin purple   */
-  .lede { font-size: 20px; color: var(--fg-dim); max-width: 62ch; margin: 0 auto 12px; }
+  h1.hero-title .dim { color: var(--fg-dim); }
+  .lede { font-size: 19px; color: var(--fg-dim); max-width: 56ch; margin: 0 0 12px; }
   .lede .tag { color: var(--fg); }
   .cta-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: center; }
-  .hero .cta-row { margin-top: 24px; }
+  .hero .cta-row { margin-top: 22px; justify-content: flex-start; }
   .btn {
     display: inline-flex; align-items: center; gap: 8px;
     padding: 13px 22px; border-radius: 8px;
@@ -157,11 +141,44 @@
     box-shadow: 0 14px 34px -18px rgba(245, 166, 35, 0.8);
   }
   .download-meta {
-    margin: 13px auto 0;
+    margin: 13px 0 0;
     color: var(--fg-mute);
     font: 12px/1.6 var(--mono);
   }
   .download-meta a { color: var(--fg-dim); }
+  @media (max-width: 480px) {
+    .hero .cta-row .btn { width: 100%; justify-content: center; }
+  }
+
+  /* Message thread: plain message text, as the program sends it */
+  .thread {
+    border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background: var(--bg-2); text-align: left;
+    box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.7);
+  }
+  .thread-head {
+    padding: 10px 16px; background: var(--bg-3); border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; color: var(--fg-mute);
+  }
+  .thread-body { padding: 16px; display: grid; gap: 14px; }
+  .msg { min-width: 0; max-width: 94%; }
+  .msg-who {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--fg-mute); margin-bottom: 6px;
+  }
+  .msg pre, pre.sample {
+    margin: 0; padding: 14px 16px; background: var(--code-bg);
+    border: 1px solid var(--line); border-radius: 10px;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    font-size: 13.5px; line-height: 1.55; color: var(--fg);
+  }
+  .msg.you { justify-self: end; }
+  .msg.you .msg-who { text-align: right; color: var(--orange); }
+  .msg.you pre { border-color: rgba(245, 166, 35, 0.45); background: var(--orange-soft); }
+  .thread-foot {
+    padding: 10px 16px; border-top: 1px solid var(--line);
+    font-size: 12.5px; color: var(--fg-mute);
+  }
 
   /* Demo block + shared framed media */
   .demo {
@@ -186,21 +203,11 @@
     color: var(--fg-mute);
   }
   .demo-bar .live {
-    margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--green-bright);
-    display: flex; align-items: center; gap: 6px;
+    margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--fg-mute);
   }
-  .demo-bar .live .pulse {
-    width: 7px; height: 7px; border-radius: 50%; background: var(--green-bright);
-    box-shadow: 0 0 0 0 var(--green-bright);
-    animation: pulse 2s infinite;
-  }
-  @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(77, 213, 153, 0.7); }
-    70% { box-shadow: 0 0 0 10px rgba(77, 213, 153, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(77, 213, 153, 0); }
-  }
+  @media (max-width: 640px) { .demo-bar .live { display: none; } .demo { margin-top: 36px; } }
   .demo-body { position: relative; aspect-ratio: 16 / 9; background: #0a0c0f; }
-  .demo-body img, .demo-body video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; background: #0a0c0f; }
+  .demo-body img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; background: #0a0c0f; }
   .demo-link {
     text-align: center; margin-top: 16px;
     color: var(--fg-dim); font-size: 14px;
@@ -209,6 +216,7 @@
 
   /* Sections */
   section { padding: 80px 0; border-top: 1px solid var(--line); }
+  @media (max-width: 640px) { section { padding: 56px 0; } }
   section h2 {
     font-size: clamp(30px, 4.4vw, 42px); margin: 0 0 14px;
     letter-spacing: -0.015em; font-weight: 700;
@@ -221,108 +229,80 @@
   }
 
   /* The moment */
-  .moment-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-  @media (max-width: 860px) { .moment-grid { grid-template-columns: 1fr; } }
-  .quote-card {
-    padding: 26px; background: var(--bg-2);
+  .moment-text { max-width: 30ch; font-size: clamp(22px, 3vw, 30px); line-height: 1.35; letter-spacing: -0.01em; margin: 0; color: var(--fg-dim); }
+  .moment-text strong { color: var(--fg); font-weight: 600; }
+  .moment-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 52px; align-items: end; }
+  @media (max-width: 860px) { .moment-grid { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+  .moment-close { margin: 0; font-size: 17px; color: var(--fg-dim); max-width: 44ch; }
+
+  /* What happens instead: the walk through one bug */
+  .legend { display: flex; gap: 10px; flex-wrap: wrap; margin: -20px 0 32px; }
+  .reach {
+    display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em;
+    padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line-strong);
+  }
+  .reach::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .reach--you { color: var(--orange); border-color: rgba(245, 166, 35, 0.4); background: var(--orange-soft); }
+  .reach--no { color: var(--green-bright); border-color: rgba(77, 213, 153, 0.35); background: var(--green-soft); }
+  ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+  .step {
+    display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 18px;
+    padding: 22px; background: var(--bg-2);
     border: 1px solid var(--line); border-radius: 12px;
-    display: flex; flex-direction: column;
   }
-  .quote-card blockquote { margin: 0; font-size: 16px; line-height: 1.5; color: var(--fg); }
-  .quote-card .attr { margin-top: 16px; padding-top: 12px; font-family: var(--mono); font-size: 12px; color: var(--fg-mute); }
-  .moment-close { margin: 40px 0 0; font-size: 19px; color: var(--fg-dim); text-align: center; }
-  .moment-close strong { color: var(--fg); font-weight: 600; }
-
-  /* Featured testimonial */
-  .testimonial { text-align: center; }
-  .testimonial-quote {
-    margin: 0 auto;
-    max-width: 36ch;
-    font-size: clamp(22px, 3.2vw, 32px);
-    line-height: 1.35;
-    letter-spacing: -0.015em;
-    color: var(--fg);
-    quotes: none;
+  .step--you { border-color: rgba(245, 166, 35, 0.4); }
+  .step-num {
+    width: 44px; height: 44px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 16px; font-weight: 600;
+    color: var(--green-bright); background: var(--green-soft); border: 1px solid rgba(77, 213, 153, 0.35);
   }
-  .testimonial-attr {
-    margin-top: 20px;
-    font-family: var(--mono); font-size: 13px;
-    color: var(--fg-mute);
+  .step--you .step-num { color: var(--orange); background: var(--orange-soft); border-color: rgba(245, 166, 35, 0.4); }
+  .step-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .step-top h3 { margin: 0; font-size: 19px; letter-spacing: -0.01em; }
+  .step-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  .step-cols.single { grid-template-columns: minmax(0, 1fr); }
+  .step p { margin: 0; color: var(--fg-dim); font-size: 15.5px; max-width: 60ch; }
+  .step p + p { margin-top: 10px; }
+  .step .msg { max-width: 100%; }
+  @media (max-width: 860px) { .step-cols { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
+  @media (max-width: 560px) {
+    .step { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 18px; }
+    .step-num { width: 36px; height: 36px; font-size: 14px; }
   }
 
-  /* Families intro */
-  .families-intro h2 .orange { color: var(--orange); }
+  /* The five claims, each with its limit beside it */
+  .claims { display: grid; gap: 14px; }
+  .claim {
+    display: grid; grid-template-columns: 44px minmax(0, 1.15fr) minmax(0, 1fr); gap: 22px;
+    padding: 24px; background: var(--bg-2);
+    border: 1px solid var(--line); border-radius: 12px;
+  }
+  .claim-num { font-family: var(--mono); font-size: 13px; color: var(--orange); padding-top: 4px; }
+  .claim h3 { margin: 0 0 8px; font-size: 19px; letter-spacing: -0.01em; }
+  .claim p { margin: 0; font-size: 15.5px; color: var(--fg-dim); }
+  .claim p + p, .claim p + pre, .claim pre + p { margin-top: 10px; }
+  .claim-limit { border-left: 1px solid var(--line-strong); padding-left: 22px; }
+  .limit-label {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--fg-mute); margin-bottom: 8px; padding-top: 4px;
+  }
+  .claim-limit p { color: var(--fg); }
+  @media (max-width: 860px) {
+    .claim { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 20px; }
+    .claim-limit { border-left: 0; border-top: 1px solid var(--line-strong); padding: 14px 0 0; }
+  }
 
-  /* Chapters */
-  .chapter { padding: 60px 0; border-top: 1px solid var(--line); }
-  .chapter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 52px; align-items: center; }
-  @media (max-width: 860px) { .chapter-grid { grid-template-columns: 1fr; gap: 28px; } }
-  @media (min-width: 861px) { .chapter--media-left .chapter-media { order: -1; } }
-  .chapter-eyebrow {
-    font-family: var(--mono); font-size: 12px; color: var(--orange);
-    letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 14px;
-  }
-  .chapter-title { font-size: clamp(25px, 3.3vw, 35px); margin: 0 0 12px; letter-spacing: -0.015em; font-weight: 700; }
-  .chapter-promise { color: var(--fg-dim); font-size: 17px; margin: 0; max-width: 48ch; }
-  .chapter-highlights { list-style: none; margin: 22px 0 0; padding: 0; }
-  .chapter-highlights li { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 15px; line-height: 1.5; }
-  .chapter-highlights li:last-child { border-bottom: 0; }
-  .hl-pain { color: var(--fg); font-weight: 600; }
-  .hl-out { color: var(--fg-dim); }
-
-  .chapter-details { margin-top: 18px; border-top: 1px solid var(--line); }
-  .chapter-details summary {
-    cursor: pointer; padding: 14px 0 0; font-family: var(--mono);
-    font-size: 13px; color: var(--fg-dim);
-  }
-  .chapter-details summary:hover { color: var(--fg); }
-  .chapter-details[open] summary { color: var(--orange); }
-  .mini-wrap { overflow-x: auto; }
-  table.mini { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13.5px; }
-  table.mini td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  table.mini tr:last-child td { border-bottom: 0; }
-  table.mini td:first-child { color: var(--fg); width: 44%; }
-  table.mini td:last-child { color: var(--fg-dim); }
-
-  /* Framed chapter media */
-  .chapter-frame {
-    border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
-    background: var(--bg-2); box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.7);
-  }
-  .frame-bar { padding: 9px 14px; }
-  .frame-bar .light { width: 10px; height: 10px; }
-  .frame-bar .url { margin-left: 12px; font-size: 11px; }
-  .frame-body { position: relative; aspect-ratio: 16 / 9; background: #0a0c0f; }
-  .frame-body img, .frame-body video {
-    position: absolute; inset: 0; width: 100%; height: 100%;
-    object-fit: cover; object-position: top left; display: block;
-  }
-  .frame-video[hidden] { display: none; }
-  .media-cap {
-    margin-top: 12px; font-family: var(--mono); font-size: 12px;
-    color: var(--fg-mute); display: flex; align-items: center; gap: 8px;
-  }
-  .media-cap .play { color: var(--orange); }
-
-  /* F6 phone + side shot */
-  .f6-media { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; justify-content: center; }
-  .phone-frame {
-    width: 196px; max-width: 58%; flex: 0 0 auto;
-    border: 8px solid var(--bg-4); border-radius: 30px; overflow: hidden;
-    background: #0a0c0f; box-shadow: 0 30px 60px -28px rgba(0, 0, 0, 0.85);
-  }
-  .phone-frame img { display: block; width: 100%; height: auto; }
-  .f6-side { flex: 1 1 240px; min-width: 220px; }
-
-  /* Comparison table */
+  /* Tables */
   .compare-wrap { overflow-x: auto; }
   table.compare {
-    width: 100%; border-collapse: collapse; font-size: 14px;
+    width: 100%; border-collapse: collapse; font-size: 14.5px;
     border: 1px solid var(--line); border-radius: 12px;
     overflow: hidden;
   }
   table.compare th, table.compare td {
-    padding: 14px 16px; text-align: left;
+    padding: 14px 16px; text-align: left; vertical-align: top;
     border-bottom: 1px solid var(--line);
     border-right: 1px solid var(--line);
   }
@@ -332,19 +312,43 @@
     background: var(--bg-3); color: var(--fg);
     font-family: var(--mono); font-size: 13px; font-weight: 600;
   }
-  table.compare thead th.us { color: var(--orange); }
   table.compare tbody td:first-child {
-    color: var(--fg); font-weight: 500; background: var(--bg-2);
+    color: var(--fg); font-weight: 500; background: var(--bg-2); white-space: nowrap;
   }
   table.compare tbody td { color: var(--fg-dim); }
-  table.compare .yes { color: var(--green-bright); font-weight: 600; }
-  table.compare .no { color: var(--fg-mute); }
-  table.compare .partial { color: var(--orange); font-weight: 500; }
+  .table-note {
+    margin: 22px 0 0; font-size: 17px; color: var(--fg); max-width: 62ch;
+    padding-left: 16px; border-left: 2px solid var(--green-bright);
+  }
+  @media (max-width: 640px) {
+    table.channels thead { display: none; }
+    table.channels, table.channels tbody, table.channels tr, table.channels td { display: block; width: 100%; }
+    table.channels tr { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    table.channels tr:last-child { border-bottom: 0; }
+    table.channels td, table.channels tbody td:first-child { border: 0; padding: 0; background: transparent; white-space: normal; }
+    table.channels tbody td:first-child { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+    table.channels td:empty { display: none; }
+    table.channels td[data-label]::before {
+      content: attr(data-label) ": "; font-family: var(--mono); font-size: 12px; color: var(--fg-mute);
+    }
+  }
 
-  /* Install section */
+  /* What always comes to you */
+  .stops { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 860px) { .stops { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 480px) { .stops { grid-template-columns: minmax(0, 1fr); } }
+  .stop {
+    padding: 22px; background: var(--bg-2); border-radius: 12px;
+    border: 1px solid rgba(245, 166, 35, 0.4);
+    font-size: 19px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3;
+  }
+  .stop span { display: block; font-family: var(--mono); font-size: 12px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--orange); margin-bottom: 10px; }
+
+  /* Install and setup blocks */
   .install-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
-  @media (max-width: 860px) { .install-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 860px) { .install-grid { grid-template-columns: minmax(0, 1fr); } }
   .install-block { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 26px; min-width: 0; }
+  @media (max-width: 560px) { .install-block { padding: 18px; } }
   .install-block h3 { margin: 0 0 14px; font-size: 16px; font-family: var(--mono); color: var(--fg-dim); font-weight: 500; }
   .install-block pre {
     margin: 0; padding: 16px; background: var(--code-bg);
@@ -352,23 +356,41 @@
     overflow-x: auto; color: var(--fg);
     font-size: 13.5px; line-height: 1.55;
   }
-  .install-block .req { margin-top: 14px; color: var(--fg-mute); font-size: 13px; }
+  .install-block .req { margin: 14px 0 0; color: var(--fg-mute); font-size: 13px; }
+  .install-block .req a { color: var(--orange); }
   .comment { color: var(--fg-mute); }
 
-  /* Why block */
-  .why { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: start; }
-  @media (max-width: 860px) { .why { grid-template-columns: 1fr; } }
-  .why-text p { color: var(--fg-dim); font-size: 16px; }
-  .why-text p + p { margin-top: 14px; }
-  .why-text strong { color: var(--fg); font-weight: 600; }
+  /* Plain fact lists */
   .why-list { margin: 0; padding: 0; list-style: none; }
   .why-list li {
     padding: 16px 0; border-bottom: 1px solid var(--line);
-    color: var(--fg-dim); font-size: 15px;
+    color: var(--fg-dim); font-size: 15.5px;
   }
   .why-list li:first-child { padding-top: 0; }
   .why-list li:last-child { border-bottom: 0; }
   .why-list li strong { color: var(--fg); display: block; margin-bottom: 4px; font-weight: 600; font-size: 14px; font-family: var(--mono); }
+  .why-list.plain li { color: var(--fg); font-size: 17px; }
+
+  /* When you want detail */
+  .detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 52px; align-items: start; }
+  @media (max-width: 860px) { .detail-grid { grid-template-columns: minmax(0, 1fr); gap: 28px; } }
+  .detail-media { display: grid; gap: 24px; }
+  .chapter-frame {
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+    background: var(--bg-2); box-shadow: 0 30px 60px -30px rgba(0, 0, 0, 0.7);
+  }
+  .frame-bar { padding: 9px 14px; }
+  .frame-bar .light { width: 10px; height: 10px; }
+  .frame-bar .url { margin-left: 12px; font-size: 11px; }
+  .frame-body { position: relative; aspect-ratio: 16 / 10; background: #0a0c0f; }
+  .frame-body img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; object-position: top left; display: block;
+  }
+  .media-cap {
+    margin-top: 12px; font-family: var(--mono); font-size: 12px;
+    color: var(--fg-mute);
+  }
 
   /* What's new strip */
   .whats-new-strip { border-top: 1px solid var(--line); }
@@ -401,70 +423,23 @@
 
   /* === Scroll-reveal animations === */
   @keyframes fade-up {
-    from { opacity: 0; transform: translateY(40px) scale(0.98); }
-    to   { opacity: 1; transform: translateY(0)    scale(1); }
+    from { opacity: 0; transform: translateY(24px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
-  @keyframes wipe-in {
-    0%   { clip-path: inset(0 100% 0 0); transform: translateX(-20px); opacity: 0; }
-    100% { clip-path: inset(0 0 0 0);    transform: translateX(0);     opacity: 1; }
-  }
-  @keyframes boot-up {
-    0%   { opacity: 0; filter: brightness(8) blur(20px) contrast(2);
-           transform: scaleY(0.005) scaleX(0);
-           box-shadow: 0 0 0 rgba(245, 166, 35, 0); }
-    18%  { opacity: 1; filter: brightness(3.5) blur(10px) contrast(1.5);
-           transform: scaleY(0.01) scaleX(1);
-           box-shadow: 0 0 100px rgba(245, 166, 35, 0.5); }
-    60%  { filter: brightness(1.4) blur(2px) contrast(1.1);
-           transform: scaleY(1)    scaleX(1.02); }
-    100% { opacity: 1; filter: brightness(1) blur(0) contrast(1);
-           transform: scaleY(1)    scaleX(1);
-           box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4); }
-  }
-
-  .fade-target { opacity: 0; transform: translateY(40px) scale(0.98); }
-  .fade-target.is-visible {
-    animation: fade-up 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  }
-
-  .boot-target { opacity: 0; transform: scaleY(0.005) scaleX(0); filter: brightness(8) blur(20px); }
-  .boot-target.is-visible {
-    animation: boot-up 2.0s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  }
-
-  .wipe-target { opacity: 0; }
-  .wipe-target.is-visible {
-    animation: wipe-in 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-    animation-delay: 0.4s;
-  }
-
-  /* Stagger children inside grids when the grid is visible */
-  .stagger-grid > * { opacity: 0; transform: translateY(40px) scale(0.98); }
-  .stagger-grid.is-visible > * {
-    animation: fade-up 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  }
-  .stagger-grid.is-visible > *:nth-child(1) { animation-delay: 0.10s; }
-  .stagger-grid.is-visible > *:nth-child(2) { animation-delay: 0.25s; }
-  .stagger-grid.is-visible > *:nth-child(3) { animation-delay: 0.40s; }
-  .stagger-grid.is-visible > *:nth-child(4) { animation-delay: 0.55s; }
-
-  /* Hero internal stagger (fires on load, not on observer) */
-  .hero .fade-target { animation-delay: 0s; }
-  .hero .fade-target.is-visible:nth-of-type(1) { animation-delay: 0.05s; }
-  .hero .fade-target.is-visible:nth-of-type(2) { animation-delay: 0.15s; }
-  .hero .fade-target.is-visible:nth-of-type(3) { animation-delay: 0.25s; }
-  .hero .fade-target.is-visible:nth-of-type(4) { animation-delay: 0.35s; }
+  .fade-target { opacity: 0; transform: translateY(24px); }
+  .fade-target.is-visible { animation: fade-up 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+  .boot-target { opacity: 0; transform: translateY(24px); }
+  .boot-target.is-visible { animation: fade-up 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 
   @media (prefers-reduced-motion: reduce) {
-    .fade-target, .boot-target, .wipe-target, .stagger-grid > * {
+    .fade-target, .boot-target {
       opacity: 1 !important;
       transform: none !important;
-      filter: none !important;
       animation: none !important;
     }
-    .demo-bar .live .pulse { animation: none !important; }
   }
 </style>
+<noscript><style>.fade-target, .boot-target { opacity: 1; transform: none; }</style></noscript>
 <script src="/analytics.js" defer></script>
 </head>
 <body>
@@ -477,10 +452,11 @@
       <span class="version">v5.44</span>
     </div>
     <nav class="nav-links">
-      <a class="captain-link" href="/captain/">Captain</a>
-      <a href="/watchtower/">WatchTower</a>
-      <a href="/receipts/">Receipts</a>
-      <a href="/demo/" rel="noopener">Demo</a>
+      <a href="#how">On-call</a>
+      <a class="captain-link nav-extra" href="/captain/">Captain</a>
+      <a class="nav-extra" href="/watchtower/">WatchTower</a>
+      <a class="nav-extra" href="/receipts/">Receipts</a>
+      <a class="nav-extra" href="/demo/" rel="noopener">Demo</a>
       <a class="download-link" href="#install" data-ccc-cta="install_options" data-ccc-placement="nav">Download</a>
       <a class="gh" href="https://github.com/amirfish1/claude-command-center" rel="noopener">GitHub</a>
     </nav>
@@ -490,33 +466,55 @@
 <main>
   <section class="hero" style="border-top: 0;">
     <div class="wrap hero-inner">
-      <div class="eyebrow fade-target">
-        <span class="badge">v5.44</span>
-        <span>Local &middot; Source-available &middot; FSL-1.1-MIT &middot; For developers running many coding agents</span>
-      </div>
-      <h1 class="hero-title fade-target">
-        Your coding agents <span class="orange">outgrew</span> your terminal.
-      </h1>
-      <div class="hero-engine fade-target">
-        <span class="engine-line">All your</span>
-        <span class="engine-word claude" id="engineRotator">Claude</span>
-        <span class="engine-line">sessions in one place.</span>
-      </div>
-      <p class="lede fade-target">
-        CCC puts every session, every engine, however you launched it, on one local board, and tells you which one needs you. Hit your usage limit and sessions can keep going on a $0 model. <span class="tag">Start the next while the first builds.</span>
-      </p>
+      <div class="hero-grid">
+        <div class="hero-copy fade-target">
+          <div class="eyebrow">
+            <span class="badge">v5.44</span>
+            <span>On-call preview</span><span class="sep">&middot;</span><span>Local</span><span class="sep">&middot;</span><span>Source-available</span><span class="sep">&middot;</span><span>FSL-1.1-MIT</span>
+          </div>
+          <h1 class="hero-title">
+            Your agents are<br><span class="orange">on call</span>.<br><span class="dim">You are not.</span>
+          </h1>
+          <p class="lede">
+            Bugs from customers and from monitoring go to coding agents that fix them. CCC decides the small reversible things, messages you when it needs a real decision, and <span class="tag">takes your answer from the same thread.</span>
+          </p>
+        </div>
 
-      <div class="cta-row fade-target">
-        <a class="btn btn-primary download-cta" id="downloadCta" href="https://github.com/amirfish1/claude-command-center/releases/download/v5.44.0/ccc-v5.44.0.dmg" data-ccc-cta="download" data-ccc-placement="hero">Download for macOS</a>
-        <a class="btn btn-soft" href="#install" data-ccc-cta="install_options" data-ccc-placement="hero">Linux, Windows &amp; Homebrew</a>
-      </div>
-      <p class="download-meta fade-target">
-        macOS app v5.44.0 &middot; source and Homebrew v5.44.0 &middot;
-        <a href="#install" data-ccc-cta="install_options" data-ccc-placement="hero">Homebrew, Linux, and Windows</a> &middot;
-        <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md#landing-page-download-clicks">anonymous click count</a>
-      </p>
+        <div class="hero-thread thread fade-target" aria-label="A decision message from CCC and the reply, as plain message text">
+          <div class="thread-head">The message you get, and your reply</div>
+          <div class="thread-body">
+            <div class="msg">
+              <div class="msg-who">CCC to you</div>
+<pre>SHOP-12 needs a decision (#4)
+Checkout button does nothing on Safari
 
-      <div class="demo boot-target" aria-label="CCC dashboard, fleet scan">
+Keep the old redirect as a fallback for one release, or remove it now?
+Agent recommends: keep it for one release.
+
+Reply with your answer.</pre>
+            </div>
+            <div class="msg you">
+              <div class="msg-who">You, in the same thread</div>
+<pre>keep it</pre>
+            </div>
+          </div>
+          <div class="thread-foot">Message text as CCC sends it. Example data. The agent resumes with your answer.</div>
+        </div>
+
+        <div class="hero-actions fade-target">
+          <div class="cta-row">
+            <a class="btn btn-primary download-cta" id="downloadCta" href="https://github.com/amirfish1/claude-command-center/releases/download/v5.44.0/ccc-v5.44.0.dmg" data-ccc-cta="download" data-ccc-placement="hero">Download for macOS</a>
+            <a class="btn btn-soft" href="#install" data-ccc-cta="install_options" data-ccc-placement="hero">Linux, Windows &amp; Homebrew</a>
+          </div>
+          <p class="download-meta">
+            macOS app v5.44.0 &middot; source and Homebrew v5.44.0 &middot;
+            <a href="#install" data-ccc-cta="install_options" data-ccc-placement="hero">Homebrew, Linux, and Windows</a> &middot;
+            <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md#landing-page-download-clicks">anonymous click count</a>
+          </p>
+        </div>
+      </div>
+
+      <div class="demo boot-target" aria-label="CCC session view">
         <div class="demo-bar">
           <div class="lights">
             <span class="light red"></span>
@@ -524,462 +522,416 @@
             <span class="light grn"></span>
           </div>
           <span class="url">localhost:8090</span>
-          <span class="live"><span class="pulse"></span>3 sessions live &middot; 12 total</span>
+          <span class="live">real capture &middot; synthetic demo sessions</span>
         </div>
         <div class="demo-body">
           <img class="frame-fallback" src="./images/ccc-v5-43-hero.png" alt="CCC v5.43 showing the session fleet and conversation reader, captured with synthetic demo sessions" onerror="this.onerror=null; this.src='./images/demo.png';">
-          <video class="frame-video" poster="./product-story/assets/video/posters/V-01.png" muted loop playsinline preload="none" hidden aria-label="CCC fleet scan: the board, the kanban, and engine badges across live and waiting sessions">
-            <source src="./product-story/assets/video/V-01-fleet-scan.mp4" type="video/mp4">
-          </video>
         </div>
       </div>
       <div class="demo-link fade-target">
-        Nothing to install. All data in the demo is fake. <a href="/demo">Tour the read-only demo &rarr;</a>
+        The session view is where you look when you want detail. On-call works with no browser open.
       </div>
-    </div>
-  </section>
-
-  <section class="testimonial" style="border-top: 0; padding: 20px 0 60px;">
-    <div class="wrap-narrow fade-target">
-      <blockquote class="testimonial-quote">“Hey Amir, great product. I tried about 20 before finding yours. I have been really enjoying it.”</blockquote>
-      <div class="testimonial-attr">— CCC user</div>
     </div>
   </section>
 
   <section id="moment">
     <div class="wrap">
       <div class="section-eyebrow fade-target">The problem</div>
-      <h2 class="fade-target">The moment CCC is built for.</h2>
-      <p class="section-lede fade-target">
-        Mid-afternoon, five terminals open. One agent finished an hour ago and nobody noticed. One is silently waiting on a question. One is about to run out of context mid-refactor. The bottleneck is no longer the model.
-      </p>
-
-      <div class="moment-grid stagger-grid">
-        <div class="quote-card">
-          <blockquote>"Parallel agents vanish"</blockquote>
-          <div class="attr">public issue title, openai/codex</div>
-        </div>
-        <div class="quote-card">
-          <blockquote>"The bottleneck stopped being the models. It became me."</blockquote>
-          <div class="attr">every developer past three parallel sessions</div>
-        </div>
-        <div class="quote-card">
-          <blockquote>"Used to find 8 orphaned sessions I'd forgotten about."</blockquote>
-          <div class="attr">CCC's author, before CCC</div>
-        </div>
+      <h2 class="fade-target">11pm. The checkout button is <span class="orange">dead</span>.</h2>
+      <div class="moment-grid">
+        <p class="moment-text fade-target">
+          A customer reports it. The fix is ten minutes for an agent, but only if someone starts it, answers its one question and tells the customer. <strong>That someone is you.</strong>
+        </p>
+        <p class="moment-close fade-target">
+          You ship a product with real users. You are the support desk, the on-call engineer and the product owner at once.
+        </p>
       </div>
-
-      <p class="moment-close fade-target">If you have felt this, <strong>the rest of this page is for you.</strong></p>
     </div>
   </section>
 
-  <section id="families" class="families-intro">
+  <section id="how">
     <div class="wrap">
-      <div class="section-eyebrow fade-target">What it solves</div>
-      <h2 class="fade-target">Seven problems that arrive in <span class="orange">order</span>.</h2>
+      <div class="section-eyebrow fade-target">What happens instead</div>
+      <h2 class="fade-target">One bug. Five steps. <span class="orange">See which reach you.</span></h2>
       <p class="section-lede fade-target">
-        The list grows the same way for everyone. First you cannot see every session. Then you cannot tell which one needs you. Then the flat list itself stops making sense. Eventually the usage limit stops the whole fleet. CCC answers them in that order, and each answer is a real capture from seeded demo data below.
+        The same bug, with CCC On-call turned on. Every message below is the text CCC sends, with example data.
       </p>
-    </div>
-  </section>
+      <div class="legend fade-target">
+        <span class="reach reach--no">Does not reach you</span>
+        <span class="reach reach--you">Reaches you</span>
+      </div>
 
-  <!-- F1 -->
-  <section class="chapter chapter--media-left" id="f1" aria-labelledby="f1-title">
-    <div class="wrap chapter-grid">
-      <div class="chapter-copy fade-target">
-        <div class="chapter-eyebrow">01 &middot; See everything</div>
-        <h2 class="chapter-title" id="f1-title">Nine terminals, nine engines, one board.</h2>
-        <p class="chapter-promise">Every coding-agent session on your machine, on one local board, however you launched it.</p>
-        <ul class="chapter-highlights">
-          <li><span class="hl-pain">Resume a session by hand</span> <span class="hl-out">and it still appears. CCC reads each engine's on-disk state as truth, so it sees sessions it never spawned — and since v5.33, headless sessions launched outside the dashboard attach to their parent session automatically.</span></li>
-          <li><span class="hl-pain">One board for nine engines.</span> <span class="hl-out">Claude Code is first-class; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, Grok, and Devin spawn and ingest with documented gaps.</span></li>
-          <li><span class="hl-pain">Close the dashboard</span> <span class="hl-out">and sessions keep running. Reopen tomorrow and everything reattaches.</span></li>
-          <li><span class="hl-pain">Forgotten work resurfaces.</span> <span class="hl-out">Dormant and archived sessions stay in the inventory with time-gap markers, so nothing is silently lost.</span></li>
-        </ul>
-        <details class="chapter-details">
-          <summary>Every way CCC helps here</summary>
-          <div class="mini-wrap">
-            <table class="mini">
-              <tr><td>Nine terminal tabs, no idea which session is which.</td><td>One local board listing every coding-agent session on the machine.</td></tr>
-              <tr><td>You resume a session by hand and your dashboard goes blind.</td><td>CCC reads each engine's on-disk state as truth; hand-launched and hand-resumed sessions appear automatically.</td></tr>
-              <tr><td>Old sessions pile up invisibly; you rediscover forgotten work weeks later.</td><td>Full inventory including dormant and archived sessions, with time-gap markers.</td></tr>
-              <tr><td>Work split across Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, and Devin.</td><td>One board across engines. Claude Code is first-class; the other seven spawn and ingest with documented gaps.</td></tr>
-              <tr><td>Closing the dashboard feels dangerous, so a tab stays open forever.</td><td>Sessions run independently; close the board, reopen tomorrow, everything reattaches.</td></tr>
-            </table>
-          </div>
-        </details>
-      </div>
-      <div class="chapter-media fade-target">
-        <div class="chapter-frame">
-          <div class="frame-bar">
-            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
-            <span class="url">localhost:8090</span>
-          </div>
-          <div class="frame-body">
-            <img class="frame-fallback" src="./product-story/assets/shots/S-OVR.png" alt="CCC board showing mixed live, waiting, and pull-request rows across three repositories with engine badges" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
-            <video class="frame-video" poster="./product-story/assets/video/posters/V-01.png" muted loop playsinline preload="none" hidden aria-label="Scanning the fleet: list view, board view, engine badges, and live rows">
-              <source src="./product-story/assets/video/V-01-fleet-scan.mp4" type="video/mp4">
-            </video>
-          </div>
-        </div>
-        <div class="media-cap"><span class="play">&#9654;</span> Watch a 20-second fleet scan</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- F2 -->
-  <section class="chapter" id="f2" aria-labelledby="f2-title">
-    <div class="wrap chapter-grid">
-      <div class="chapter-copy fade-target">
-        <div class="chapter-eyebrow">02 &middot; Know what needs you</div>
-        <h2 class="chapter-title" id="f2-title">An agent asked you a question 40 minutes ago.</h2>
-        <p class="chapter-promise">Questions waiting, context running out, limits approaching. Surfaced, not discovered.</p>
-        <ul class="chapter-highlights">
-          <li><span class="hl-pain">An agent asked and nobody saw.</span> <span class="hl-out">The needs-attention lane flags sessions ending on a real question, including plain-prose ones, with desktop notifications on macOS.</span></li>
-          <li><span class="hl-pain">A context window fills silently.</span> <span class="hl-out">A per-session meter warns at danger levels before it costs you a session, with one click through to compact.</span></li>
-          <li><span class="hl-pain">Rate limits sneak up.</span> <span class="hl-out">Usage windows for Claude plans and Codex limits project your pace, and when a limit hits, sessions can fall back to a free model (see 07).</span></li>
-        </ul>
-        <details class="chapter-details">
-          <summary>Every way CCC helps here</summary>
-          <div class="mini-wrap">
-            <table class="mini">
-              <tr><td>An agent asked "want me to proceed?" 40 minutes ago and you never saw it.</td><td>Attention detection flags sessions ending on a real question, including plain-prose ones, plus desktop notifications on macOS.</td></tr>
-              <tr><td>A session dies mid-task because its context window silently filled.</td><td>Per-session context meter with warning and danger levels; click through to compact.</td></tr>
-              <tr><td>No idea how close you are to your plan's rate limits.</td><td>Usage windows for Claude plans and Codex limits, with pace projections and an optional free-model fallback when a limit hits.</td></tr>
-              <tr><td>You cannot say what your agent fleet actually produced this week.</td><td>Throughput view: token-weighted output over time, per engine, and a shareable monthly card.</td></tr>
-            </table>
-          </div>
-        </details>
-      </div>
-      <div class="chapter-media fade-target">
-        <div class="chapter-frame">
-          <div class="frame-bar">
-            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
-            <span class="url">localhost:8090 &middot; needs attention</span>
-          </div>
-          <div class="frame-body">
-            <img class="frame-fallback" src="./product-story/assets/shots/S-F2a.png" alt="The needs-attention lane with a session flagged as waiting on a question, next to per-session context meters" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
-          </div>
-        </div>
-        <div class="media-cap">Needs-attention lane with a question-waiting session</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- F3 -->
-  <section class="chapter chapter--media-left" id="f3" aria-labelledby="f3-title">
-    <div class="wrap chapter-grid">
-      <div class="chapter-copy fade-target">
-        <div class="chapter-eyebrow">03 &middot; Organize the fleet</div>
-        <h2 class="chapter-title" id="f3-title">A long session list needs a shape.</h2>
-        <p class="chapter-promise">Pin strategy, nest execution, arrange the whole operation on a canvas.</p>
-        <ul class="chapter-highlights">
-          <li><span class="hl-pain">A flat list stops meaning anything.</span> <span class="hl-out">Kanban states, a project tree, and a Flow canvas give the operation a shape.</span></li>
-          <li><span class="hl-pain">Strategy sinks under execution.</span> <span class="hl-out">Pin strategy sessions to the top and spawned sub-sessions nest beneath them.</span></li>
-          <li><span class="hl-pain">Comparing two transcripts is window Tetris.</span> <span class="hl-out">Split pane puts two conversations side by side, each with its own input bar.</span></li>
-          <li><span class="hl-pain">"What did I decide last week?"</span> <span class="hl-out">Search and ask across your session history from multiple engines, with citations back to the session where it was decided.</span></li>
-        </ul>
-        <details class="chapter-details">
-          <summary>Every way CCC helps here</summary>
-          <div class="mini-wrap">
-            <table class="mini">
-              <tr><td>Strategy sessions sink under a pile of execution sessions.</td><td>Pin sessions to the top; spawned sub-sessions nest underneath them.</td></tr>
-              <tr><td>A flat list of dozens of sessions means nothing.</td><td>Kanban states (Working, Review, In Testing, Verified, Archived) with drag-and-drop and multi-select.</td></tr>
-              <tr><td>Sessions belong to projects and features, not just columns.</td><td>Project tree: group sessions under nestable named objects.</td></tr>
-              <tr><td>You want the whole operation laid out spatially, like a whiteboard.</td><td>Flow canvas: drag repos, sessions, group chats, and objects on an infinite zoomable board with edges.</td></tr>
-              <tr><td>Comparing two transcripts means window Tetris.</td><td>Split pane: two conversations side by side, each with its own input bar.</td></tr>
-              <tr><td>"What did I decide about this last week?" takes minutes of grep.</td><td>Search and ask across session history from multiple engines and paired machines, with citations to the source session.</td></tr>
-              <tr><td>Auto-generated session titles are useless slugs.</td><td>One-click AI-regenerated titles.</td></tr>
-            </table>
-          </div>
-        </details>
-      </div>
-      <div class="chapter-media fade-target">
-        <div class="chapter-frame">
-          <div class="frame-bar">
-            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
-            <span class="url">localhost:8090 &middot; flow</span>
-          </div>
-          <div class="frame-body">
-            <img class="frame-fallback" src="./product-story/assets/shots/S-F3d.png" alt="The Flow canvas with repos, sessions, and group chats arranged as nodes with edges drawn between them" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
-            <video class="frame-video" poster="./product-story/assets/video/posters/V-07.png" muted loop playsinline preload="none" hidden aria-label="Flow canvas: panning, zooming, dragging a node, and drawing an edge">
-              <source src="./product-story/assets/video/V-07-flow-canvas.mp4" type="video/mp4">
-            </video>
-          </div>
-        </div>
-        <div class="media-cap"><span class="play">&#9654;</span> Watch the Flow canvas pan, zoom, and link</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- F4 -->
-  <section class="chapter" id="f4" aria-labelledby="f4-title">
-    <div class="wrap chapter-grid">
-      <div class="chapter-copy fade-target">
-        <div class="chapter-eyebrow">04 &middot; Steer without orchestration code</div>
-        <h2 class="chapter-title" id="f4-title">Steer every agent from one composer.</h2>
-        <p class="chapter-promise">Type into any session. Let agents talk in group chats. No orchestrator to write.</p>
-        <ul class="chapter-highlights">
-          <li><span class="hl-pain">A dormant session needs one more instruction.</span> <span class="hl-out">Type into any session from the browser and dormant ones auto-resume to receive it.</span></li>
-          <li><span class="hl-pain">You want agents to divide work.</span> <span class="hl-out">Group chats let multiple sessions share a thread and auto-ping each other to respond in turn.</span></li>
-          <li><span class="hl-pain">Headless spawning loses the follow-up.</span> <span class="hl-out">Dashboard-spawned headless sessions keep their input open, so fire-and-forget becomes fire-and-steer.</span></li>
-          <li><span class="hl-pain">Retyping the same kickoff prompt.</span> <span class="hl-out">A template gallery makes consistent spawns one click.</span></li>
-        </ul>
-        <details class="chapter-details">
-          <summary>Every way CCC helps here</summary>
-          <div class="mini-wrap">
-            <table class="mini">
-              <tr><td>A dormant session needs one more instruction; reopening a terminal is a chore.</td><td>Type into any session from the browser; dormant ones auto-resume to receive it.</td></tr>
-              <tr><td>You want agents to discuss and divide work, without writing an orchestrator.</td><td>Group chats: multiple sessions share a chat and are auto-pinged to respond in turn.</td></tr>
-              <tr><td>One agent needs another agent's answer right now.</td><td>Sessions can ask a sibling synchronously over a local API and get the reply back.</td></tr>
-              <tr><td>Headless spawning means losing the ability to follow up.</td><td>Dashboard-spawned headless sessions keep input open; keep typing at them from the browser.</td></tr>
-              <tr><td>You retype the same kickoff prompt for every new session.</td><td>Template gallery for reusable spawn prompts.</td></tr>
-            </table>
-          </div>
-        </details>
-      </div>
-      <div class="chapter-media fade-target">
-        <div class="chapter-frame">
-          <div class="frame-bar">
-            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
-            <span class="url">localhost:8090 &middot; group chat</span>
-          </div>
-          <div class="frame-body">
-            <img class="frame-fallback" src="./product-story/assets/shots/S-F4b.png" alt="A group chat with several agent sessions taking turns in one shared thread" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
-          </div>
-        </div>
-        <div class="media-cap">Group chat with multiple agent participants</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- F5 -->
-  <section class="chapter chapter--media-left" id="f5" aria-labelledby="f5-title">
-    <div class="wrap chapter-grid">
-      <div class="chapter-copy fade-target">
-        <div class="chapter-eyebrow">05 &middot; Let work run unattended</div>
-        <h2 class="chapter-title" id="f5-title">Tickets in. Verified closures out.</h2>
-        <p class="chapter-promise">Queues that drain, issues that close verified, failed deploys that wake an agent instead of you.</p>
-        <ul class="chapter-highlights">
-          <li><span class="hl-pain">Drop tickets in a queue overnight.</span> <span class="hl-out">A bound worker claims, fixes, verifies, and closes them while you sleep.</span></li>
-          <li><span class="hl-pain">A worker gets stuck and nothing notices.</span> <span class="hl-out">A health watcher flags stuck queues from ground truth, and Watchtower, installed by default as CCC's queue engine, nudges stalled workers back into motion.</span></li>
-          <li><span class="hl-pain">A GitHub issue should become a session in one click.</span> <span class="hl-out">It does, and verify closes the issue with a commit-SHA comment.</span></li>
-          <li><span class="hl-pain">Production breaks while you sleep.</span> <span class="hl-out">Optional Vercel watch spawns a fix session on a failed deploy. Opt-in, requires the Vercel CLI.</span></li>
-        </ul>
-        <details class="chapter-details">
-          <summary>Every way CCC helps here</summary>
-          <div class="mini-wrap">
-            <table class="mini">
-              <tr><td>You want to drop tickets in a queue and have agents drain it overnight.</td><td>Work queue with claim, fix, verify, close lifecycle and bound agent workers.</td></tr>
-              <tr><td>A worker got stuck an hour ago and nothing noticed.</td><td>Queue-health watcher flags stuck queues from ground truth; Watchtower, installed by default as CCC's queue engine, nudges stalled workers back into motion.</td></tr>
-              <tr><td>Filing a bug from your running app takes ten steps.</td><td>Annotate mode: click an element in your app, type a note, it becomes a queue ticket.</td></tr>
-              <tr><td>A GitHub issue should become a working session with one click.</td><td>Issue board: one click spawns a session on the issue; verify closes it with a commit-SHA comment. Requires the gh CLI.</td></tr>
-              <tr><td>Parallel agents on one repo clobber each other's working tree.</td><td>One-click fresh git worktrees per task, with optional repo init scripts.</td></tr>
-              <tr><td>Production breaks while you sleep.</td><td>Optional Vercel watch: new failed prod deploys auto-spawn a fix session, deduped by commit. Opt-in, requires the Vercel CLI.</td></tr>
-            </table>
-          </div>
-        </details>
-      </div>
-      <div class="chapter-media fade-target">
-        <div class="chapter-frame">
-          <div class="frame-bar">
-            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
-            <span class="url">localhost:8090 &middot; work queue</span>
-          </div>
-          <div class="frame-body">
-            <img class="frame-fallback" src="./product-story/assets/shots/S-F5a.png" alt="The work queue with tickets moving through claimed, fixing, verified, and closed states" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
-          </div>
-        </div>
-        <div class="media-cap">Work queue with tickets across its lifecycle</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- F6 -->
-  <section class="chapter" id="f6" aria-labelledby="f6-title">
-    <div class="wrap chapter-grid">
-      <div class="chapter-copy fade-target">
-        <div class="chapter-eyebrow">06 &middot; Work from anywhere</div>
-        <h2 class="chapter-title" id="f6-title">The fleet stays home. You don't have to.</h2>
-        <p class="chapter-promise">Phone in hand or a different machine entirely. The fleet does not care where you are.</p>
-        <ul class="chapter-highlights">
-          <li><span class="hl-pain">Phone in hand.</span> <span class="hl-out">A responsive mobile UI shows the whole fleet and lets you steer any session. One button puts CCC on your Tailscale tailnet and shows a QR code for your phone.</span></li>
-          <li><span class="hl-pain">A different machine entirely.</span> <span class="hl-out">Install CCC where the fleet lives (a home server, a VM) and, with a trusted-network opt-in, reach it from any browser on that network. Never the open internet.</span></li>
-          <li><span class="hl-pain">No VPN on this phone.</span> <span class="hl-out">An opt-in CCC Cloud relay shows sessions, waiting questions, and queues on your phone. The connection is outbound-only from your machine.</span></li>
-        </ul>
-        <details class="chapter-details">
-          <summary>Every way CCC helps here</summary>
-          <div class="mini-wrap">
-            <table class="mini">
-              <tr><td>You stepped away; the fleet kept going; your phone shows nothing.</td><td>Responsive mobile UI: monitor and steer sessions from your phone. One-button Tailscale setup with a QR code, or the opt-in, outbound-only CCC Cloud relay.</td></tr>
-              <tr><td>The fleet lives on a machine that isn't the one in front of you.</td><td>Loopback-only by default; opt in on a trusted network (<code>CCC_TRUST_TAILNET=1</code>) and reach that machine's CCC from any browser on it. Never the open internet or an untrusted LAN.</td></tr>
-              <tr><td>A session needs to move machines, not just be viewed.</td><td>Cross-machine handoff can transfer a session to a paired peer (a niche path; the everyday answer is reaching the fleet where it already runs).</td></tr>
-            </table>
-          </div>
-        </details>
-      </div>
-      <div class="chapter-media fade-target">
-        <div class="f6-media">
-          <div class="phone-frame">
-            <img src="./product-story/assets/mobile/M-01.png" alt="CCC session list on a phone-width screen, showing live and waiting sessions" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
-          </div>
-          <div class="f6-side">
-            <div class="chapter-frame">
-              <div class="frame-bar">
-                <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
-                <span class="url">handoff</span>
-              </div>
-              <div class="frame-body">
-                <img class="frame-fallback" src="./product-story/assets/shots/S-F6a.png" alt="The continue-on-another-machine handoff dialog, ready to move a session to a paired peer" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+      <ol class="steps">
+        <li class="step fade-target">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <div class="step-top">
+              <h3>The report arrives.</h3>
+              <span class="reach reach--no">Does not reach you</span>
+            </div>
+            <div class="step-cols single">
+              <div>
+                <p>Dana is on your customer list. She emails your support mailbox: the checkout button does nothing on Safari. The report becomes one ticket, SHOP-12, in a WatchTower queue, deduplicated.</p>
               </div>
             </div>
-            <div class="media-cap">Handing a session to a paired machine</div>
           </div>
-        </div>
-      </div>
+        </li>
+
+        <li class="step fade-target">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <div class="step-top">
+              <h3>An agent starts.</h3>
+              <span class="reach reach--no">Does not reach you</span>
+            </div>
+            <div class="step-cols single">
+              <div>
+                <p>A worker agent picks up the ticket and works on it in the repo you pointed it at. Nobody starts the fix by hand.</p>
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step step--you fade-target">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <div class="step-top">
+              <h3>It asks you one real question.</h3>
+              <span class="reach reach--you">Reaches you</span>
+            </div>
+            <div class="step-cols">
+              <div>
+                <p>The agent hits a choice it cannot decide. You get one numbered message on your phone, on the channel you set up. It works with no browser open.</p>
+                <p>With the small-decisions switch on, minor reversible choices never get this far. The agent states its recommendation and how to undo it, and carries on.</p>
+              </div>
+              <div class="msg">
+                <div class="msg-who">CCC to you</div>
+<pre>SHOP-12 needs a decision (#4)
+Checkout button does nothing on Safari
+
+Keep the old redirect as a fallback for one release, or remove it now?
+Agent recommends: keep it for one release.
+
+Reply with your answer.</pre>
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step step--you fade-target">
+          <div class="step-num">4</div>
+          <div class="step-body">
+            <div class="step-top">
+              <h3>You reply in the thread.</h3>
+              <span class="reach reach--you">Your reply</span>
+            </div>
+            <div class="step-cols">
+              <div>
+                <p>Plain words, in the same email, Telegram, iMessage, SMS or WhatsApp thread. The reply becomes the agent's answer and the agent resumes.</p>
+              </div>
+              <div class="msg you" style="justify-self: stretch;">
+                <div class="msg-who" style="text-align: left;">You, in the same thread</div>
+<pre>keep it</pre>
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <li class="step step--you fade-target">
+          <div class="step-num">5</div>
+          <div class="step-body">
+            <div class="step-top">
+              <h3>The customer is told it is fixed.</h3>
+              <span class="reach reach--you">Reaches you: one approval</span>
+            </div>
+            <div class="step-cols">
+              <div>
+                <p>You get one message when the fix lands. Reply yes and CCC tells Dana, on the channel she wrote in on.</p>
+                <p>You can switch the fixed notice off.</p>
+              </div>
+              <div class="msg">
+                <div class="msg-who">CCC to you</div>
+<pre>Fixed: SHOP-12 (#7)
+Checkout button does nothing on Safari
+The click handler was bound before the button rendered. Bound it after render and added a test.
+
+Reply yes to tell Dana it is fixed, or no to skip.</pre>
+              </div>
+            </div>
+          </div>
+        </li>
+      </ol>
     </div>
   </section>
 
-  <!-- F7 -->
-  <section class="chapter chapter--media-left" id="f7" aria-labelledby="f7-title">
-    <div class="wrap chapter-grid">
-      <div class="chapter-copy fade-target">
-        <div class="chapter-eyebrow">07 &middot; Keep working past the limit</div>
-        <h2 class="chapter-title" id="f7-title">Hit the usage limit. Keep working.</h2>
-        <p class="chapter-promise">A limit-hit session can keep going on a free model, then switch back to Claude when the limit resets.</p>
-        <ul class="chapter-highlights">
-          <li><span class="hl-pain">Your plan runs out at 3pm.</span> <span class="hl-out">Limit-hit Claude sessions can move to a $0 model through a free-model router on your machine, then go back to Claude at reset. You choose when that happens in Settings &rarr; Session limits.</span></li>
-          <li><span class="hl-pain">Boring tasks burn your best tokens.</span> <span class="hl-out">Pick "$0 Free" when you start a session, so the expensive model is saved for the hard parts.</span></li>
-          <li><span class="hl-pain">"Free" turns into a surprise bill.</span> <span class="hl-out">A spawn that can't reach the free router refuses to start instead of silently billing you.</span></li>
-          <li><span class="hl-pain">Picking a free model is guesswork.</span> <span class="hl-out">A free-models leaderboard and a key wizard with signup links get you to a working $0 model in minutes.</span></li>
-        </ul>
-        <details class="chapter-details">
-          <summary>Every way CCC helps here</summary>
-          <div class="mini-wrap">
-            <table class="mini">
-              <tr><td>You hit the usage limit mid-afternoon and every session stops.</td><td>Limit fallback: sessions can keep going on a free model and switch back to Claude when the limit resets. Configure it in Settings &rarr; Session limits.</td></tr>
-              <tr><td>Routine tasks cost the same as hard ones.</td><td>"$0 Free" choice for new sessions, backed by a local free-model router.</td></tr>
-              <tr><td>Setting up free providers means reading five signup pages.</td><td>Free-key wizard: provider cards, paste-and-verify keys, keyless options where they exist.</td></tr>
-              <tr><td>You cannot tell which free model is good enough.</td><td>Free-models leaderboard: races each router model through small coding tasks and pins the winner as your default.</td></tr>
-              <tr><td>You want to know what free runs actually saved.</td><td>Free runs show "$0 &middot; saved $X" on the session and in notifications, and the Savings page adds it up against your plan cost.</td></tr>
-            </table>
-          </div>
-        </details>
-      </div>
-      <div class="chapter-media fade-target">
-        <div class="chapter-frame">
-          <div class="frame-bar">
-            <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
-            <span class="url">localhost:8090 &middot; running free</span>
-          </div>
-          <div class="frame-body">
-            <img class="frame-fallback" src="./product-story/assets/video/posters/V-20.png" alt="Claude usage at 0 percent left while twelve sessions keep running on a free model through the local router at no cost" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
-            <video class="frame-video" poster="./product-story/assets/video/posters/V-20.png" muted loop playsinline preload="none" hidden aria-label="Claude hits its usage limit and twelve sessions keep going on a free model">
-              <source src="./product-story/assets/video/V-20-limit-hit-16x9.mp4" type="video/mp4">
-            </video>
-          </div>
-        </div>
-        <div class="media-cap"><span class="play">&#9654;</span> Watch twelve sessions keep going after the limit</div>
-      </div>
-    </div>
-  </section>
-
-  <section id="compare">
+  <section id="claims">
+    <span id="families"></span>
     <div class="wrap">
-      <div class="section-eyebrow fade-target">Honest comparison</div>
-      <h2 class="fade-target">How CCC differs from the <span class="orange">other tools</span>.</h2>
+      <div class="section-eyebrow fade-target">What it does, and where it stops</div>
+      <h2 class="fade-target">Five claims. Each with its <span class="orange">limit</span>.</h2>
       <p class="section-lede fade-target">
-        Tools in this category make different bets. Here is where each one wins and where each one loses, as of July 2026 (herdr checked against its official docs in October 2026). We listed where CCC loses too. Comparing against a heavyweight visual IDE instead? Read <a href="/vs-heavyweight-ides.html">CCC vs heavyweight agent IDEs</a>.
+        CCC puts coding agents on call for your product. It is a preview. It is off until you turn it on.
+      </p>
+
+      <div class="claims">
+        <div class="claim fade-target">
+          <div class="claim-num">01</div>
+          <div class="claim-main">
+            <h3>Bugs come in by themselves.</h3>
+            <p>Reports arrive from GitHub issues, a support mailbox, Sentry, PostHog exceptions, a URL uptime check, any command you already run (a test suite, a health script) and <code>ccc oncall report</code>. Each becomes one ticket in a WatchTower queue, deduplicated, and a worker agent picks it up.</p>
+          </div>
+          <div class="claim-limit">
+            <div class="limit-label">The limit</div>
+            <p>Mail from someone not on your customer list waits for your go-ahead before an agent works on it. If Dana were not on your list, you would get this first:</p>
+<pre class="sample">New report from dana@example.com (#5)
+Checkout button does nothing on Safari
+
+Reply go to have an agent work on it, or no to drop it.</pre>
+          </div>
+        </div>
+
+        <div class="claim fade-target">
+          <div class="claim-num">02</div>
+          <div class="claim-main">
+            <h3>You hear when an agent stops or needs you.</h3>
+            <p>One numbered message when an agent asks a question it cannot decide, an agent session dies mid-task, a queue stops moving, or a bug is fixed. The fixed notice is optional. It works with no browser open.</p>
+          </div>
+          <div class="claim-limit">
+            <div class="limit-label">The limit</div>
+            <p>CCC must be running on a machine that stays on: your Mac, a Linux box or a small VM. Nothing is hosted for you.</p>
+          </div>
+        </div>
+
+        <div class="claim fade-target">
+          <div class="claim-num">03</div>
+          <div class="claim-main">
+            <h3>Small reversible decisions do not reach you.</h3>
+            <p>One switch. An agent that hits a minor, reversible choice states its recommendation and how to undo it, and carries on. Every such decision is listed with its undo.</p>
+          </div>
+          <div class="claim-limit">
+            <div class="limit-label">The limit</div>
+            <p>Money, messages to customers, public posts and anything that cannot be undone always come to you.</p>
+          </div>
+        </div>
+
+        <div class="claim fade-target">
+          <div class="claim-num">04</div>
+          <div class="claim-main">
+            <h3>Answer from the message.</h3>
+            <p>Reply to the email, Telegram message, iMessage, SMS or WhatsApp message in plain words. The reply becomes the agent's answer and the agent resumes. The same thread also takes <code>status</code>, <code>pause</code> and <code>resume</code>.</p>
+          </div>
+          <div class="claim-limit">
+            <div class="limit-label">The limit</div>
+            <p>WhatsApp and SMS need your own Twilio number. iMessage needs a Mac. WhatsApp only delivers free text within 24 hours of your last message to the number.</p>
+          </div>
+        </div>
+
+        <div class="claim fade-target">
+          <div class="claim-num">05</div>
+          <div class="claim-main">
+            <h3>Agents can ask your customer.</h3>
+            <p>An agent, or you, asks the person who reported the bug a question, or tells them it is fixed, on the channel they wrote in on. Their reply goes back onto the ticket and the agent resumes.</p>
+          </div>
+          <div class="claim-limit">
+            <div class="limit-label">The limit</div>
+            <p>Agents never message a customer without your approval unless you turn that off. You see the wording first:</p>
+<pre class="sample">An agent wants to ask Dana (dana@example.com) about SHOP-12 (#6):
+
+Which Safari version are you on, and does it happen in a private window?
+
+Reply yes to send, no to drop, or reply with your own wording.</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="channels">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">Channels</div>
+      <h2 class="fade-target">The alert arrives where you <span class="orange">already are</span>.</h2>
+      <p class="section-lede fade-target">
+        Pick one channel or several. Replying there answers the agent.
       </p>
 
       <div class="compare-wrap fade-target">
-        <table class="compare">
+        <table class="compare channels">
           <thead>
             <tr>
-              <th></th>
-              <th class="us">CCC v5.44</th>
-              <th>claude-squad</th>
-              <th>Conductor</th>
-              <th>Sculptor</th>
-              <th>herdr</th>
+              <th>Channel</th>
+              <th>Needs</th>
+              <th>Notes</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Sees terminal sessions you didn't spawn</td>
-              <td class="yes">&#10003;</td>
-              <td class="no">no</td>
-              <td class="no">no</td>
-              <td class="no">no</td>
-              <td class="partial">only agents running in its panes</td>
+              <td>Email</td>
+              <td data-label="Needs">An address and an app password</td>
+              <td>Mail servers are detected from the address for Gmail, Outlook, iCloud, Yahoo, Fastmail, Zoho, AOL, GMX. Replies are matched by a private token in the thread.</td>
             </tr>
             <tr>
-              <td>Multi-engine dashboard</td>
-              <td class="yes">&#10003; nine engines, Claude Code first-class</td>
-              <td class="partial">Claude + Codex</td>
-              <td class="partial">Claude + Codex</td>
-              <td class="partial">Claude + Codex</td>
-              <td class="yes">&#10003; 20+ agent CLIs detected</td>
+              <td>Telegram</td>
+              <td data-label="Needs">A bot token</td>
+              <td>CCC finds your chat after you message the bot once.</td>
             </tr>
             <tr>
-              <td>Antigravity app-session input (local RPC)</td>
-              <td class="yes">&#10003;</td>
-              <td class="no">no</td>
-              <td class="no">no</td>
-              <td class="no">no</td>
-              <td class="no">unverified (supports Antigravity CLI)</td>
+              <td>ntfy</td>
+              <td data-label="Needs">Nothing</td>
+              <td>Phone push with answer buttons.</td>
             </tr>
             <tr>
-              <td>Row pinning + sub-session hierarchy</td>
-              <td class="yes">&#10003;</td>
-              <td class="no">no</td>
-              <td class="no">no</td>
-              <td class="no">no</td>
-              <td class="partial">workspaces, tabs, panes; pinning unverified</td>
+              <td>iMessage</td>
+              <td data-label="Needs">CCC running on a Mac signed in to Messages</td>
+              <td></td>
             </tr>
             <tr>
-              <td>GitHub issue to session in one click</td>
-              <td class="yes">&#10003;</td>
-              <td class="no">no</td>
-              <td class="no">no</td>
-              <td class="no">no</td>
-              <td class="no">unverified</td>
+              <td>SMS</td>
+              <td data-label="Needs">Your own Twilio number</td>
+              <td></td>
             </tr>
             <tr>
-              <td>Local. Survives dashboard close.</td>
-              <td class="yes">&#10003;</td>
-              <td class="yes">&#10003;</td>
-              <td class="yes">&#10003;</td>
-              <td class="yes">&#10003;</td>
-              <td class="yes">&#10003; background server keeps panes after detach</td>
+              <td>WhatsApp</td>
+              <td data-label="Needs">Your own Twilio WhatsApp sender</td>
+              <td>WhatsApp only delivers free text within 24 hours of your last message to the number.</td>
             </tr>
             <tr>
-              <td>Readable source, no build step</td>
-              <td class="yes">&#10003; stdlib Python, no-build UI</td>
-              <td class="partial">Go</td>
-              <td class="no">closed</td>
-              <td class="no">docs only</td>
-              <td class="partial">Rust, Apache 2.0, compiled binary</td>
-            </tr>
-            <tr>
-              <td>Native-ish install path</td>
-              <td class="yes">&#10003; DMG + Homebrew</td>
-              <td class="no">CLI</td>
-              <td class="yes">&#10003;</td>
-              <td class="yes">&#10003;</td>
-              <td class="yes">&#10003; Homebrew, binaries</td>
-            </tr>
-            <tr>
-              <td>Windows / Linux</td>
-              <td class="partial">macOS first-class, Linux headless, native Windows install</td>
-              <td class="yes">&#10003;</td>
-              <td class="no">macOS</td>
-              <td class="partial">macOS + Linux</td>
-              <td class="yes">&#10003; macOS, Linux, Windows</td>
+              <td>Your own command</td>
+              <td data-label="Needs">Any script</td>
+              <td>For Slack, Discord or anything else you can script.</td>
             </tr>
           </tbody>
         </table>
       </div>
+      <p class="table-note fade-target">No channel needs a public URL or a webhook. CCC polls from the machine it runs on.</p>
+    </div>
+  </section>
+
+  <section id="always-yours">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">The hard stops</div>
+      <h2 class="fade-target">What <span class="orange">always</span> comes to you.</h2>
+      <p class="section-lede fade-target">
+        Agents do not decide these. The switch for small decisions does not cover them.
+      </p>
+
+      <div class="stops fade-target">
+        <div class="stop"><span>Always you</span>Money</div>
+        <div class="stop"><span>Always you</span>Messages to customers</div>
+        <div class="stop"><span>Always you</span>Public posts</div>
+        <div class="stop"><span>Always you</span>Anything that cannot be undone</div>
+      </div>
+
+      <ul class="why-list plain fade-target" style="margin-top: 32px; max-width: 76ch;">
+        <li>Agents never message a customer without your approval unless you turn that off.</li>
+        <li>Mail from someone not on your customer list waits for your go-ahead before an agent works on it.</li>
+        <li>Agents fix bugs in the repo you point them at. They open the change the way your queue is set up to: a commit or a pull request. You decide what deploys.</li>
+        <li>Every small decision an agent made without you is listed with its undo.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="setup">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">Setup</div>
+      <h2 class="fade-target">Three commands. <span class="orange">Off</span> until you run them.</h2>
+      <p class="section-lede fade-target">
+        CCC On-call is a preview. It is off until you turn it on. CCC must be running on a machine that stays on: your Mac, a Linux box or a small VM. Nothing is hosted for you.
+      </p>
+
+      <div class="install-grid">
+        <div class="install-block fade-target">
+          <h3># turn it on</h3>
+<pre><span class="comment"># 1. turns the preview on, sends a test message</span>
+ccc oncall setup
+
+<span class="comment"># 2. where bugs come from</span>
+ccc oncall source add github
+
+<span class="comment"># 3. what is on, what is waiting for you</span>
+ccc oncall status</pre>
+          <p class="req">No CCC yet? <a href="#install">Install it first</a>.</p>
+        </div>
+
+        <div class="install-block fade-target">
+          <h3># or in Settings</h3>
+          <ul class="why-list">
+            <li><strong>Settings &gt; Advanced &gt; Preview features</strong>Turns the preview on.</li>
+            <li><strong>Settings &gt; On-call</strong>Does the setup: the same questions as <code>ccc oncall setup</code>.</li>
+            <li><strong>What you need first</strong>WhatsApp and SMS need your own Twilio number. iMessage needs a Mac. Email needs an address and an app password.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="install-block fade-target" style="margin-top: 24px;">
+        <h3># day to day</h3>
+<pre><span class="comment"># what is on, what is waiting for you</span>
+ccc oncall status
+ccc oncall on | off
+
+ccc oncall channel add email|telegram|ntfy|imessage|sms|whatsapp|command
+ccc oncall source add github|sentry|posthog|http|command
+
+<span class="comment"># someone whose reports go straight to an agent</span>
+ccc oncall customer add ADDRESS
+
+ccc oncall report "Checkout button does nothing on Safari"
+
+<span class="comment"># ask the reporter, or tell them it is fixed</span>
+ccc oncall ask REF "Which browser are you on?"
+ccc oncall tell REF "This is fixed. Reload the page."</pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="detail">
+    <div class="wrap">
+      <div class="section-eyebrow fade-target">When you want detail</div>
+      <h2 class="fade-target">Open the <span class="orange">session view</span>.</h2>
+      <p class="section-lede fade-target">
+        Every agent, what it is doing, its transcript. You do not need it open for On-call to work. It is there when you want to look.
+      </p>
+
+      <div class="detail-grid">
+        <ul class="why-list fade-target">
+          <li><strong>Works with the agents you already run</strong>CCC works across nine engines. Claude Code is first-class; Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, Grok, and Devin spawn and ingest with documented gaps.</li>
+          <li id="compare"><strong>Attaches to sessions you already have</strong>CCC reads each engine's on-disk state as truth, so a session you started by hand in a terminal appears too. It does not own your sessions. Close the browser tab and they keep running.</li>
+          <li><strong>Answer and steer in place</strong>A session that ends on a real question is flagged. Type into any session from the browser. Dormant ones resume to receive it.</li>
+          <li><strong>Queues and workers</strong>WatchTower is installed by default as CCC's queue engine. Tickets go through claim, fix, verify and close, and you can see which worker holds which ticket.</li>
+          <li><strong>Past the usage limit</strong>A Claude session that hits its usage limit can keep going on a free model, then switch back when the limit resets. You choose when in Settings.</li>
+          <li><strong>Runs on your machine</strong>Source-available under FSL-1.1-MIT. A stdlib-only Python server and a no-build browser UI. On-call sends the messages you configure, on the channels you set up. Anonymous <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md">telemetry</a> is a public contract with no transcripts.</li>
+        </ul>
+
+        <div class="detail-media fade-target">
+          <div>
+            <div class="chapter-frame">
+              <div class="frame-bar">
+                <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+                <span class="url">localhost:8090 &middot; a session asking a question</span>
+              </div>
+              <div class="frame-body">
+                <img src="./images/ccc-v5-41-question.png" alt="The CCC session view with a session list on the left and, on the right, a Claude session asking how cancelled-stay refunds should work, with two options to pick from" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+              </div>
+            </div>
+            <div class="media-cap">Real capture, synthetic demo sessions. The same question On-call sends to your phone.</div>
+          </div>
+          <div>
+            <div class="chapter-frame">
+              <div class="frame-bar">
+                <div class="lights"><span class="light red"></span><span class="light yel"></span><span class="light grn"></span></div>
+                <span class="url">localhost:8090 &middot; queue workers</span>
+              </div>
+              <div class="frame-body">
+                <img src="./images/ccc-v5-33-workers.png" alt="The CCC workers view listing queue tickets being worked now, recently worked tickets, and the worker agent bound to each queue" loading="lazy" onerror="this.onerror=null; this.src='./images/demo.png';">
+              </div>
+            </div>
+            <div class="media-cap">Real capture, synthetic demo data. Worker agents and the tickets they hold.</div>
+          </div>
+        </div>
+      </div>
+
+      <p class="demo-link fade-target" style="margin-top: 40px;">
+        Nothing to install. All data in the demo is fake. <a href="/demo">Tour the read-only demo of the session view &rarr;</a>
+      </p>
     </div>
   </section>
 
@@ -988,13 +940,13 @@
       <div class="section-eyebrow fade-target">Get it</div>
       <h2 class="fade-target">Start free.</h2>
       <p class="section-lede fade-target">
-        macOS, Linux, or Windows with Python 3.9+. Already use Claude Code? Your sessions are on the board when it opens. New to coding agents? First run walks you through engines and free-model keys and runs your first task on a $0 model. Add Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, Devin, or GitHub CLI and the matching surfaces light up.
+        macOS, Linux, or Windows with Python 3.9+. Already use Claude Code or Codex? Your sessions are in the session view when it opens. On-call is a preview and stays off until you turn it on.
       </p>
 
-      <div class="install-grid stagger-grid">
-        <div class="install-block">
+      <div class="install-grid">
+        <div class="install-block fade-target">
           <h3># one-line install</h3>
-<pre><span class="comment"># macOS / Linux: downloads, installs, opens the dashboard</span>
+<pre><span class="comment"># macOS / Linux: downloads, installs, opens CCC in your browser</span>
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=landing bash
 
 <span class="comment"># Windows PowerShell</span>
@@ -1008,7 +960,7 @@ ccc start                           <span class="comment"># then open http://loc
           <p class="req">Asks before adding its hooks to <code>~/.claude/settings.json</code> so every Claude Code session writes the sidecar state CCC reads. Idempotent.</p>
         </div>
 
-        <div class="install-block">
+        <div class="install-block fade-target">
           <h3># Homebrew or Mac app</h3>
 <pre><span class="comment"># drag-and-drop install (recommended if you avoid the terminal)</span>
 <a href="https://github.com/amirfish1/claude-command-center/releases/download/v5.44.0/ccc-v5.44.0.dmg" data-ccc-cta="download" data-ccc-placement="install" style="color: var(--orange); text-decoration: underline; text-underline-offset: 3px;">Download CCC.dmg &darr;</a>
@@ -1019,42 +971,15 @@ brew install amirfish1/tap/ccc</pre>
         </div>
       </div>
 
-      <div class="install-block" style="margin-top: 24px;">
-        <h3># the ccc CLI — your whole fleet from the terminal</h3>
+      <div class="install-block fade-target" style="margin-top: 24px;">
+        <h3># the ccc CLI: your whole fleet from the terminal</h3>
 <pre><span class="comment"># installed with CCC; talks to the running server</span>
 ccc sessions                        <span class="comment"># live census: state, age, engine, repo</span>
 ccc models                          <span class="comment"># every engine's models, efforts, cost</span>
 ccc spawn "fix the flaky test" --engine claude --model opus-5-5
 ccc send queue-drain "also update the changelog"
 ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for the reply</span></pre>
-        <p class="req">Address sessions by id or by name fragment. <code>send</code> is fire-and-forget (with <code>--steer</code> to interrupt a turn), <code>ask</code> waits for the reply — no dashboard, no hand-rolled <code>curl</code>.</p>
-      </div>
-    </div>
-  </section>
-
-  <section id="why">
-    <div class="wrap">
-      <div class="section-eyebrow fade-target">Why this exists</div>
-      <h2 class="fade-target">Most orchestrators want to <span class="orange">own you</span>.</h2>
-      <div class="why">
-        <div class="why-text fade-target">
-          <p>
-            Other tools want to own execution. You launch agents through their dashboard, and in return you get a card on a kanban. <strong>That's fine until you open a terminal.</strong>
-          </p>
-          <p>
-            The moment you resume a session by hand, you're outside the tool's universe. The dashboard can't see it. The work you just did doesn't show up against the issue, in the review queue, or anywhere.
-          </p>
-          <p>
-            <strong>CCC goes the other way.</strong> Each engine's on-disk state is the source of truth. If Claude Code, Codex, Cursor, Antigravity, Kilo Code, Kimi Code, OpenCode, or Devin is running anywhere on your machine, it shows up here. Close the dashboard. Sessions keep running. Reopen tomorrow. Everything still there.
-          </p>
-        </div>
-        <ul class="why-list fade-target">
-          <li><strong>Architecture</strong>A stdlib-only Python server and a no-build vanilla-JS browser UI. No pip installs, no bundler, no framework. Nothing hidden, nothing to audit but the source in front of you.</li>
-          <li><strong>State</strong>Human-readable JSON sidecars under <code>~/.claude/command-center/</code>. Rewriteable by hand.</li>
-          <li><strong>Workers</strong>No required background jobs. The optional queue watcher only runs when you use the work queue.</li>
-          <li><strong>Telemetry</strong>Public contract, bounded schemas, and no transcripts. The daily usage ping is opt-in; anonymous boot and site-click counters are documented and auditable.</li>
-          <li><strong>Scope</strong>Local dev tool. macOS desktop, headless Linux, native Windows install. No hosted multi-user control plane. Expose it only on trusted loopback or a private network.</li>
-        </ul>
+        <p class="req">Address sessions by id or by name fragment. <code>send</code> is fire-and-forget (with <code>--steer</code> to interrupt a turn), <code>ask</code> waits for the reply. No browser, no hand-rolled <code>curl</code>.</p>
       </div>
     </div>
   </section>
@@ -1063,7 +988,7 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
     <div class="wrap">
       <div class="wn-inner fade-target">
         <span class="ver">v5.44.0</span>
-        <span>2026-11-02 &middot; A shared Decisions inbox, clearer session groups, consolidated Connections and voice setup, and full app navigation on mobile.</span>
+        <span>2026-11-02 &middot; A shared Decisions inbox, clearer session groups, consolidated Connections, and full app navigation on mobile.</span>
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md">Full changelog &rarr;</a>
       </div>
     </div>
@@ -1072,8 +997,8 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
 
 <section class="cta-banner">
   <div class="wrap-narrow">
-    <h2 class="fade-target">Stop staring at the spinner.</h2>
-    <p class="fade-target">Every session on one local board, and the one that needs you surfaced. Start the next while Claude builds the first. Two-line install, local and source-available.</p>
+    <h2 class="fade-target">Put your agents on call.</h2>
+    <p class="fade-target">Bugs go to agents. Real decisions come to you, as a message you can answer. A preview, off until you turn it on, running on a machine you keep on.</p>
     <div class="cta-row fade-target">
       <a class="btn btn-primary" href="#install">Install <span class="arrow">&rarr;</span></a>
       <a class="btn btn-soft" href="https://github.com/amirfish1/claude-command-center" rel="noopener">&#9733; Star on GitHub</a>
@@ -1085,8 +1010,8 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
   <div class="wrap">
     <div class="foot-row">
       <div>
-        Claude Command Center. FSL-1.1-MIT &copy; 2026 Amir Fish.<br>
-        Built on top of <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a>, <a href="https://github.com/openai/codex">Codex</a>, Cursor, <a href="https://antigravity.google">Antigravity</a>, Kilo Code, Kimi Code, OpenCode, and Devin.
+        Claude Command Center. FSL-1.1-MIT &copy; 2026 Amir Fish. Not affiliated with Anthropic.<br>
+        Built on top of <a href="https://docs.claude.com/en/docs/claude-code">Claude Code</a>, <a href="https://github.com/openai/codex">Codex</a>, Cursor, <a href="https://antigravity.google">Antigravity</a>, Kilo Code, Kimi Code, OpenCode, Grok, and Devin.
       </div>
       <div class="links">
         <a href="/captain/">Captain</a>
@@ -1094,7 +1019,6 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
         <a href="/receipts/">Receipts</a>
         <a href="https://github.com/amirfish1/claude-command-center">GitHub</a>
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/CHANGELOG.md">Changelog</a>
-        <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/product-story/pain-feature-proof.md">Product story</a>
         <a href="https://github.com/amirfish1/claude-command-center/issues">Issues</a>
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md">Telemetry</a>
         <a href="https://github.com/amirfish1/claude-command-center/blob/main/SECURITY.md">Security</a>
@@ -1137,21 +1061,10 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
   document.addEventListener('DOMContentLoaded', () => {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    // Reveal video over its fallback poster once it actually starts playing.
-    const frameVideos = document.querySelectorAll('.frame-video');
-    frameVideos.forEach(v => {
-      v.addEventListener('playing', () => {
-        v.hidden = false;
-        const fb = v.parentElement.querySelector('.frame-fallback');
-        if (fb) fb.style.opacity = '0';
-      });
-    });
-
     // Scroll-reveal: add .is-visible when an element enters the viewport.
-    const targets = document.querySelectorAll('.fade-target, .boot-target, .wipe-target, .stagger-grid');
+    const targets = document.querySelectorAll('.fade-target, .boot-target');
 
     if (reduceMotion || !('IntersectionObserver' in window)) {
-      // Reduced motion: everything visible, no video autoplay (posters stay).
       targets.forEach(el => el.classList.add('is-visible'));
       return;
     }
@@ -1163,61 +1076,10 @@ ccc ask queue-drain "what's your status?"   <span class="comment"># blocks for t
           observer.unobserve(entry.target);
         }
       });
-    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    }, { threshold: 0.08, rootMargin: '0px 0px -30px 0px' });
 
     targets.forEach(el => observer.observe(el));
-
-    // Play videos only while visible; pause when they scroll away. If a source
-    // is missing, play() rejects and the fallback screenshot stays in place.
-    const videoObserver = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        const v = entry.target;
-        if (entry.isIntersecting) {
-          const p = v.play();
-          if (p && typeof p.catch === 'function') p.catch(() => {});
-        } else if (!v.paused) {
-          v.pause();
-        }
-      });
-    }, { threshold: 0.35 });
-
-    frameVideos.forEach(v => videoObserver.observe(v));
   });
-
-  // Rotate the engine name on its own line in the hero, one big word
-  // cycling through every engine CCC supports, each in its own brand color
-  // with a slide-up animation. The word sits on its own line between
-  // "All your" and "sessions in one place." so no width reservation is needed.
-  (function() {
-    var engines = [
-      { name: 'Claude',      cls: 'claude'      },
-      { name: 'Codex',       cls: 'codex'       },
-      { name: 'Cursor',      cls: 'cursor'      },
-      { name: 'Antigravity', cls: 'antigravity' },
-      { name: 'Kilo',        cls: 'kilo'        },
-      { name: 'Kimi',        cls: 'kimi'        },
-      { name: 'OpenCode',    cls: 'opencode'    },
-      { name: 'Devin',       cls: 'devin'       },
-    ];
-    var el = document.getElementById('engineRotator');
-    if (!el) return;
-    var i = 0;
-    function showEngine(idx) {
-      var e = engines[idx];
-      // Replace the element; recreating it re-triggers the CSS animation
-      // (engineSlideIn) without needing to toggle classes.
-      var next = document.createElement('span');
-      next.className = 'engine-word ' + e.cls;
-      next.id = 'engineRotator';
-      next.textContent = e.name;
-      el.parentNode.replaceChild(next, el);
-      el = next;
-    }
-    setInterval(function() {
-      i = (i + 1) % engines.length;
-      showEngine(i);
-    }, 1500);
-  })();
 </script>
 </body>
 </html>

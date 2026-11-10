@@ -793,7 +793,7 @@ def render_html(replay: dict) -> str:
 <ul class="tiles">{tiles}</ul>
 {steps}
 <footer><p>{_esc(_hidden_sentence(replay["hidden"]))} Tool output, tool arguments and timestamps were left out.</p>
-<p>Replay made with <a href="{REPO_URL}" rel="noreferrer">CCC</a>, a free local command center for coding agents.</p></footer>
+<p>Replay made with <a href="{REPO_URL}" rel="noreferrer">CCC</a>, which puts coding agents on call for your product.</p></footer>
 </main>
 <div class="player"><button type="button" data-a="play">Play</button>
 <input type="range" min="0" max="1" value="1" aria-label="Replay position">
@@ -828,7 +828,7 @@ def _svg_frame(body: str) -> str:
         '<rect width="1200" height="630" fill="#0d1117"/>'
         f"{body}"
         '<text x="64" y="582" fill="#8b949e" font-size="24">'
-        "Made with CCC, a free local command center for coding agents</text></svg>"
+        "Made with CCC, which puts coding agents on call for your product</text></svg>"
     )
 
 

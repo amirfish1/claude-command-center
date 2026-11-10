@@ -7,51 +7,114 @@
 [![License: FSL-1.1-MIT](https://img.shields.io/badge/license-FSL--1.1--MIT-green)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 ![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white)
-![Local only](https://img.shields.io/badge/runs-100%25%20local-purple)
 
 > 本文由英文版 README 翻译而来，内容以 [英文版](README.md) 为准。欢迎提 PR 改进译文。
 
-**终端已经装不下你的编程智能体了。**
+**值班的是你的智能体，不是你。**
 
-CCC 把所有会话放进同一块本地看板，并告诉你此刻哪个会话在等你。
+客户和监控报来的 bug，会交给编程智能体去修。
+小而可撤销的事由 CCC 决定。真正需要你拍板时，它给你发消息，并从同一个对话里接收你的回复。
 
-_让 Claude 忙着第一个任务，你可以先开下一个。_
-
-<a href="docs/product-story/assets/video/V-20-limit-hit-16x9.mp4"><img src="docs/product-story/assets/video/V-20-limit-hit-16x9.gif" alt="Claude 用量达到上限后，CCC 通过你自己的路由器让 12 个会话在免费模型上继续运行" width="100%" /></a>
-
-一个本地面板，统一管理 **Claude Code**、**Codex**、**Cursor**、**Antigravity**、
-**Kilo Code**、**Kimi Code**、**OpenCode** 和 **Devin** 的会话，无论它们是从哪里启动的。
-八种引擎都能从 CCC 启动和监控，其中七种支持继续发送消息（Kilo Code 只能发起，不能续聊）。
-CCC 完全在本地运行，源码公开，个人和公司都可以免费使用和修改。本项目与 Anthropic 无关联。
-
-![CCC v5.35：会话列表、正在进行的智能体对话和输入框](docs/images/ccc-v5-35-hero.png)
-
-用 curl 安装：
+CCC On-call 是预览功能，默认关闭，需要你手动开启。本项目与 Anthropic 无关联。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
 ```
 
-已经在用 Claude Code？打开时，过去的会话已在看板上，之后用 `claude` 运行的会话也会自动出现。还没有会话？它会提议在练习文件夹里，用你自己的 Claude 账号做一个小任务。
+需要 Git 和 Python 3.9+。也可以用 Homebrew：`brew install amirfish1/tap/ccc && ccc`，
+或下载 [macOS DMG](https://github.com/amirfish1/claude-command-center/releases/latest)。
 
-用 Homebrew 安装：
+## 它做什么
 
-```bash
-brew install amirfish1/tap/ccc
-ccc
+晚上 11 点，客户反馈结账按钮点了没反应。智能体十分钟就能修好，前提是有人启动它、回答它的一个问题、再通知客户。这个人就是你。
+
+CCC 面向这样的人：产品已有真实用户，并且已经在用 Claude Code 或 Codex 的创始人、外包团队负责人和小团队。
+
+**1. bug 自己进来。** 来源包括 GitHub issue、客服邮箱、Sentry、PostHog 异常、URL 可用性检查、你本来就在跑的任何命令（测试套件、健康检查脚本），以及 `ccc oncall report "..."`。每条报告去重后成为 [WatchTower](https://github.com/amirfish1/watchtower) 队列里的一张工单，由一个工作智能体接手。智能体只修你指定仓库里的 bug，并按队列的设置提交改动（一次提交或一个 pull request）。部署什么由你决定。
+
+**2. 智能体停下或需要你时，你会收到通知。** 智能体遇到自己决定不了的问题、会话在任务中途挂掉、队列不再推进、bug 修好（可选）时，你会收到一条带编号的消息。不用开着浏览器。CCC 必须运行在一台一直开着的机器上：你的 Mac、一台 Linux 机器或一台小型 VM。我们不提供托管。
+
+```text
+SHOP-12 needs a decision (#4)
+Checkout button does nothing on Safari
+
+Keep the old redirect as a fallback for one release, or remove it now?
+Agent recommends: keep it for one release.
+
+Reply with your answer.
 ```
 
-也可以下载 [macOS DMG](https://github.com/amirfish1/claude-command-center/releases/latest)，
-把 `CCC.app` 拖进“应用程序”文件夹。
+**3. 小而可撤销的决定不来打扰你。** 一个开关。智能体遇到次要、可撤销的选择时，写明它的建议和撤销方法，然后继续干活。每个这样的决定都会连同撤销方法列出来。涉及钱、发给客户的消息、公开发布的内容，以及任何无法撤销的事，一律交给你。
 
-想先看看？打开 [只读演示](https://ccc.amirfish.ai/demo/)：完整的面板，填充的是虚构数据，无需安装。
-[备用演示地址](https://amirfish1.github.io/claude-command-center/demo/)。
+**4. 直接回复消息就是回答。** 用平常的话回复那封邮件，或那条 Telegram、iMessage、短信、WhatsApp 消息。你的回复就是给智能体的答案，它随即继续工作。也可以回复 `status`、`pause`、`resume`。
 
-## 5 分钟免费上手
+```text
+keep it
+```
+
+**5. 智能体可以向你的客户提问。** 智能体或你自己，可以在对方来信的渠道上向报告 bug 的人提问，或告诉对方已经修好。对方的回复会回到工单上，智能体继续工作。除非你关闭审批，每条消息都要先经你批准。
+
+## 开始设置
+
+On-call 是预览功能，默认关闭。装好 CCC 后：
+
+1. 运行 `ccc oncall setup`。它会开启预览，问几个问题，并给你发一条测试消息。测试消息没有送达时，On-call 保持关闭。
+2. 添加 bug 的来源和你的客户地址。
+
+预览开启后，同样的设置也在 **Settings > On-call** 里（**Settings > Advanced > Preview features**，或带上 `CCC_FF_ONCALL=1` 启动 CCC）。完整说明见 [On-call](docs/oncall.md)（英文）。
+
+```bash
+ccc oncall setup                 # asks a few questions, sends a test message
+ccc oncall status                # what is on, what is waiting for you
+ccc oncall test                  # send a test message to every channel
+ccc oncall on | off
+ccc oncall channel add email|telegram|ntfy|imessage|sms|whatsapp|command
+ccc oncall source add github|sentry|posthog|http|command
+ccc oncall customer add ADDRESS  # someone whose reports go straight to an agent
+ccc oncall report "Checkout button does nothing on Safari"
+ccc oncall ask REF "Which browser are you on?"      # ask the reporter
+ccc oncall tell REF "This is fixed. Reload the page."
+```
+
+## 渠道
+
+| 渠道 | 需要 | 说明 |
+|---|---|---|
+| Email | 一个邮箱地址和应用专用密码 | Gmail、Outlook、iCloud、Yahoo、Fastmail、Zoho、AOL、GMX 的邮件服务器会根据地址自动识别。回复靠邮件线程里的私有令牌匹配。 |
+| Telegram | 一个 bot token | 你给 bot 发过一条消息后，CCC 就能找到你的对话。 |
+| ntfy | 无 | 手机推送，带回答按钮。 |
+| iMessage | CCC 运行在一台已登录“信息”的 Mac 上 | |
+| SMS | 你自己的 Twilio 号码 | |
+| WhatsApp | 你自己的 Twilio WhatsApp 发送方 | 只有在你最近一次给该号码发消息后的 24 小时内，WhatsApp 才会投递自由文本。 |
+| 你自己的命令 | 任意脚本 | 用于 Slack、Discord，或任何你能用脚本接入的工具。 |
+
+所有渠道都不需要公网 URL 或 webhook。CCC 从它所在的机器上轮询。
+
+## 一定会交给你的事
+
+- 钱。
+- 发给客户的消息。除非你关闭审批，智能体不会未经你批准就联系客户。
+- 公开发布的内容。
+- 任何无法撤销的事。
+- 不在你客户名单上的人发来的邮件。你点头之后，智能体才会处理。
+- 部署什么。智能体只提交改动或开 pull request。
+
+## 想看细节的时候
+
+想看细节，就打开会话视图：每个智能体、它正在做什么、它的对话记录。
+想先看看？打开 [演示](https://ccc.amirfish.ai/demo/)：完整的界面，填充的是虚构数据，无需安装。
+
+![CCC v5.43：会话列表和对话阅读器，使用虚构的演示会话截取](docs/images/ccc-v5-43-hero.png)
+
+**Claude Code**、**Codex**、**Cursor**、**Antigravity**、**Kilo Code**、**Kimi Code**、**OpenCode**、**Grok** 和 **Devin**，
+九种引擎的会话都在同一个会话视图里，无论是从 CCC、终端还是 IDE 启动的。
+CCC 接入你已有的会话，而不是接管它们。它读取各智能体自己的会话文件，无需迁移。
+CCC 运行在你自己的机器上，源码公开，个人和公司都可以免费使用和修改。
+
+## 免费上手
 
 第一次用编程智能体？首次运行向导会检查你的电脑，帮你装好 Node、Claude Code CLI
 和一个本地免费模型路由，然后用 **$0 的模型** 跑完你的第一个真实任务。每一步安装都需要你确认。
-最后它会给你算一笔账：*“这次运行花了 $0；按 API 价格算，本来要花 $X。”*
 
 [安装向导说明](docs/onboarding.md) · [免费模型与隐私](docs/free-models.md)（英文）。
 免费服务商各有用量限制。其中免密钥的服务商会把提示词用于训练，CCC 启用它之前会先征得你的同意。
@@ -62,9 +125,7 @@ ccc
 CCC 内置了五家国产模型的预设：**智谱 GLM**、**Kimi（月之暗面）**、**DeepSeek**、
 **通义千问 Qwen（阿里云百炼）** 和 **MiniMax**。除 DeepSeek 只有一个通用端点外，
 每家都分国际站和国内站两个端点，选你注册 API 密钥的那个区域即可。
-
-在 **设置 > 免费模型（Settings > Free models）** 或密钥向导里选择服务商、填入密钥，
-就能直接用这些模型启动 Claude 会话。会话恢复时也会继续使用同一家服务商，不会悄悄切回 Anthropic 账号。
+在 **设置 > 免费模型（Settings > Free models）** 或密钥向导里选择服务商、填入密钥，就能直接用这些模型启动 Claude 会话。
 
 - 这些是 **付费** 模型，按各家官方价格计费，不走 CCC 的免费路由。
 - 密钥只保存在 CCC 的本地密钥库里；提示词和代码会直接发给你选的服务商。
@@ -75,14 +136,8 @@ CCC 内置了五家国产模型的预设：**智谱 GLM**、**Kimi（月之暗�
 
 ## 快速开始
 
-运行面板需要 Git 和 Python 3.9+。要启动智能体，可以用你已经装好的智能体 CLI，
+运行 CCC 需要 Git 和 Python 3.9+。要启动智能体，可以用你已经装好的智能体 CLI，
 也可以让首次运行向导帮你装一个。`gh` 是可选的，用于 GitHub 相关功能。
-
-偏好 Python 工具？可以 [用 uvx 或 pipx 构建并运行 wheel](docs/install.md#python-runners-preview)。
-这是从源码构建的预览版，并未发布到 PyPI。
-
-### 自带 WatchTower
-
 CCC 的任务队列由 WatchTower 驱动。见 [安装与要求](docs/install.md#watchtower-queue-engine)。
 
 ### 在 Windows 上运行
@@ -103,33 +158,25 @@ cd claude-command-center
 ```
 
 打开 [http://localhost:8090](http://localhost:8090)，先选一个代码仓库再开始工作。
-前台启动时请保持终端开着。
-
-### 在 Linux 上运行
-
-用 `./run.sh` 前台运行，或用 `./run.sh --install-service` 安装为 systemd 用户服务。
+在 Linux 上可以用 `./run.sh --install-service` 安装为 systemd 用户服务。
 [Linux 与 WSL2 指南](docs/install.md#running-on-linux-and-wsl2) ·
 [macOS 服务](docs/install.md#from-source-on-macos) · [Docker](docs/docker.md)。
 
-### 你的智能体配置
-
-CCC 在智能体配置里注册钩子（hooks）或安装技能（skills）之前都会先问你。
-你可以跳过、先查看改动，或者之后在设置里移除。
-[会改什么，以及如何撤销](docs/agent-config-consent.md)。
+CCC 在智能体配置里注册钩子（hooks）或安装技能（skills）之前都会先问你。[会改什么，以及如何撤销](docs/agent-config-consent.md)。
 
 ## 引擎支持
 
-八种引擎都能从 CCC 发起会话。续聊和模型切换的支持程度各不相同：Kilo Code 不支持恢复会话，
-Cursor IDE 只同步元数据。**GitHub Copilot CLI**、**VS Code Copilot Chat**、**Grok CLI**
+九种引擎都能从 CCC 发起会话。续聊和模型切换的支持程度各不相同：Kilo Code 不支持恢复会话，
+Cursor IDE 只同步元数据。**GitHub Copilot CLI**、**VS Code Copilot Chat**
 以及 Devin 云端会话为只读。[完整的引擎支持表](docs/engine-support.md)。
 
 ## 了解更多
 
 以下文档目前只有英文版：
 
-- [功能指南](docs/features.md)：审批、搜索、worktree、设置、按成本续跑、语音、队列和看板视图。
+- [功能指南](docs/features.md)：审批、搜索、worktree、设置和队列。
 - [手机访问](docs/phone-access.md)：在可信网络里用手机查看会话并回复，可通过 Tailscale 设置。
-- [CLI 命令](docs/cli.md) · [编排 API](docs/orchestration.md) · [配置项](docs/configuration.md) · [架构](docs/architecture.md)。
+- [CLI 命令](docs/cli.md) · [API](docs/orchestration.md) · [配置项](docs/configuration.md) · [架构](docs/architecture.md)。
 - [更新日志](CHANGELOG.md) · [版本发布](https://github.com/amirfish1/claude-command-center/releases)。
 
 ## 参与贡献

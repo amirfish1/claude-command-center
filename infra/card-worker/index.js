@@ -31,7 +31,7 @@ const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const SITE_URL = "https://getccc.dev";
 const REPO_URL = "https://github.com/amirfish1/claude-command-center";
 const DESCRIPTION =
-  "Made with Claude Command Center (CCC), the open-source dashboard for AI coding agents.";
+  "Made with Claude Command Center (CCC). It puts coding agents on call for your product.";
 
 // Only CCC running on this machine may call the upload from a browser.
 function corsHeaders(request) {

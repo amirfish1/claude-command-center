@@ -1,14 +1,14 @@
 [project]
 name = "claude-command-center"
 version = "5.44.0"
-description = "A local command center for Claude Code that doesn't care how your agents were launched."
+description = "Puts coding agents on call for your product: bugs go to agents that fix them, and real decisions reach you by message."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
 authors = [
     { name = "Amir Fish" },
 ]
-keywords = ["claude", "claude-code", "kanban", "dashboard", "agent", "session-manager"]
+keywords = ["claude", "claude-code", "on-call", "bug-triage", "agent", "session-manager"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Web Environment",
