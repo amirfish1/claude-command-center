@@ -58,6 +58,9 @@ or ask Bob to put you straight through to a session and talk to it directly.
 During a call you can also type: the box above **END CALL** sends your text
 exactly as if you had said it (to Bob, or to the session on a direct line).
 
+The chevron in the panel header collapses it to a small bar showing the
+state, the timer and the mute and end buttons; the choice is remembered.
+
 Hide the panel to keep using the dashboard during a call. The floating
 button then says **IN CALL**; tapping it reopens the panel.
 

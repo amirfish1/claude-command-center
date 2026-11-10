@@ -89506,7 +89506,19 @@
     } catch (_) { /* best effort — server watchdog cleans up */ }
   }
 
+  function voiceSetCollapsed(on) {
+    if (!$voicePanel) return;
+    $voicePanel.classList.toggle('collapsed', !!on);
+    const btn = document.getElementById('voicePanelCollapseBtn');
+    if (btn) {
+      btn.setAttribute('aria-expanded', on ? 'false' : 'true');
+      btn.title = on ? 'Expand the voice panel' : 'Collapse to a small bar';
+      btn.setAttribute('aria-label', on ? 'Expand voice panel' : 'Collapse voice panel');
+    }
+    try { localStorage.setItem('ccc-voice-panel-collapsed', on ? '1' : '0'); } catch (_) {}
+  }
   function voiceOpenPanel() {
+    try { voiceSetCollapsed(localStorage.getItem('ccc-voice-panel-collapsed') === '1'); } catch (_) {}
     if ($voicePanel) $voicePanel.hidden = false;
     document.body.classList.add('voice-panel-open');
     if ($voiceMobileBtn) $voiceMobileBtn.setAttribute('aria-expanded', 'true');
@@ -89827,6 +89839,11 @@
   });
   voiceApplyCallButtonPref();
   if ($voicePanelHideBtn) $voicePanelHideBtn.addEventListener('click', voiceHidePanel);
+  (function () {
+    const btn = document.getElementById('voicePanelCollapseBtn');
+    if (btn) btn.addEventListener('click', () =>
+      voiceSetCollapsed(!($voicePanel && $voicePanel.classList.contains('collapsed'))));
+  })();
   if ($voicePanelStopBtn) $voicePanelStopBtn.addEventListener('click', () => voiceStop('user'));
   // Typed messages ride the live call: same handling as a spoken utterance.
   (function () {

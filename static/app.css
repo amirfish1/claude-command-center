@@ -13275,6 +13275,13 @@
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
   .voice-panel[hidden] { display: none; }
+  /* Collapsed: just the header bar (state, timer, mute, end, expand). */
+  .voice-panel.collapsed { width: auto; max-width: calc(100vw - 24px); }
+  .voice-panel.collapsed > :not(.voice-panel-head):not(audio) { display: none !important; }
+  .voice-panel.collapsed .voice-panel-head { border-bottom: 0; }
+  .voice-panel.collapsed .voice-state-pill { max-width: 46vw; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .voice-panel.collapsed #voicePanelCollapseBtn svg { transform: rotate(180deg); }
   .voice-mobile-btn { display: none; }
   .voice-button-options {
     position: fixed; z-index: 9600; width: min(260px, calc(100vw - 24px));
