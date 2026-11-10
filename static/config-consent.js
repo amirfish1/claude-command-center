@@ -5,7 +5,7 @@
  * folders) is an item with the exact diff. Nothing is written until the user
  * approves it here or with `ccc consent`.
  *
- * - After the first load (or a new/changed item for an installed agent): a small
+ * - First run (or a new/changed item for an installed agent): a small
  *   OK / Not now message opens on its own; "Details" expands the full list.
  * - Installs from before this gate: a one-time "already in your config" list
  *   with Keep / Remove.
@@ -463,7 +463,7 @@
   }
 
   function maybeAutoOpen(tries) {
-    if (!state || isPopout() || window.cccFirstRunLoad) return;
+    if (!state || isPopout()) return;
     const anyDue = (state.items || []).some(due) || (state.notice && state.notice.pending);
     if (!anyDue || snoozed(state) || ($modal && $modal.classList.contains('open'))) return;
     if (otherOverlayOpen()) {

@@ -80,24 +80,3 @@ test('existing-install notice remains readable without pending review', async ()
   assert.match(summary, /Earlier versions of CCC added 1 item/);
   assert.doesNotMatch(summary, /undefined/);
 });
-
-test('first load defers pending config consent without acknowledging it', async () => {
-  const requests = [];
-  let created = 0;
-  const state = { ok: true, items: [instruction('claude')], notice: { pending: true } };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../static/config-consent.js'), 'utf8'), {
-    window: { cccFirstRunLoad: true },
-    document: {
-      readyState: 'complete', addEventListener() {}, getElementById() { return null; },
-      createElement() { created++; throw new Error('Unexpected first-load dialog'); },
-    },
-    setInterval() {},
-    fetch: async (url, options) => {
-      requests.push([url, options?.method || 'GET']);
-      return { ok: true, json: async () => state };
-    },
-  });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(created, 0);
-  assert.deepEqual(requests, [['/api/config-consent', 'GET']]);
-});

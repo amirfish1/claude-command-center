@@ -28,10 +28,10 @@ After that you're on the dashboard with everything set up.
 
 ## First-load notices
 
-Only the welcome opens automatically on a fresh browser's first load. Closing
-it does not open another setup screen. Agent config approval waits until a
-later load; you can review it immediately in Settings > Agent config access.
-Nothing is approved by dismissing the welcome. The tour remains in Settings,
+Only the welcome opens automatically on a fresh browser's first load. When
+you close it, CCC may ask once to approve what it adds to your agent's
+config (OK / Not now); nothing is approved by dismissing the welcome, and
+Settings > Agent config access shows the same list. The tour remains in Settings,
 and What’s New remains in the app menu. The browser install banner waits for
 a later load. Promotional popups remain disabled by the popup approval list.
 
