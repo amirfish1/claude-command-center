@@ -249,7 +249,8 @@ def _collect(kind, etype, fields, args, io):
             continue
         default = ""
         if kind == "channel" and etype == "ntfy" and name == "topic":
-            default = "ccc-oncall-" + _secrets.token_hex(6)
+            entry[name] = "ccc-oncall-" + _secrets.token_hex(12)
+            continue
         if field["secret"]:
             if not io.interactive:
                 if field["optional"]:
@@ -285,7 +286,7 @@ def _add_channel(client, etype, args, io, types):
         if code == 200 and res.get("ok"):
             saved = res.get("channel") or {}
             if etype == "ntfy":
-                io.out(f"Subscribe to this topic in the ntfy app on your phone: {saved.get('topic')}")
+                io.out(f"Subscribe in the ntfy app: {saved.get('server') or 'https://ntfy.sh'}/{saved.get('topic')}")
             io.out(f"Added {CHANNEL_NAMES.get(etype, etype)}"
                    + (f" ({saved.get('owner')})" if saved.get("owner") else "") + "."
                    + (f" {res['note']}" if res.get("note") else ""))
@@ -306,7 +307,7 @@ def _add_channel(client, etype, args, io, types):
                 if value:
                     entry[name] = value
             continue
-        raise Stop(error)
+        raise Stop(" ".join(error.split()) + f" Check the settings, then run ccc oncall channel add {etype} again.")
     raise Stop("That did not work. Run ccc oncall channel add again when you are ready.")
 
 
@@ -335,12 +336,18 @@ def _print_status(status, io):
             flags = [] if c.get("enabled") else ["off"]
             if c.get("intake"):
                 flags.append("reads customer reports")
+            if c.get("last_ok") is False:
+                flags.append("last send failed")
+            elif c.get("last_ok") is None:
+                flags.append("not tested")
+            if not c.get("can_receive"):
+                flags.append("send only")
             if c.get("error"):
                 flags.append("error: " + c["error"])
             io.out(f"  {c['id']}  {c.get('owner') or ''}".rstrip()
                    + (f"  ({'; '.join(flags)})" if flags else ""))
     else:
-        io.out("No message channel yet. Add one: ccc oncall channel add telegram")
+        io.out("No message channel yet. Add one: ccc oncall channel add ntfy")
     sources = status.get("sources") or []
     if sources:
         io.out("Monitoring:")
@@ -349,6 +356,8 @@ def _print_status(status, io):
             if s.get("error"):
                 flags.append("error: " + s["error"])
             io.out(f"  {s['id']}  -> {s.get('queue') or '?'}" + (f"  ({'; '.join(flags)})" if flags else ""))
+    else:
+        io.out("No monitoring source configured. Add one: ccc oncall source add http")
     waiting = [w for w in status.get("waiting") or [] if w.get("needs_reply")]
     if waiting:
         io.out(f"{len(waiting)} waiting on you:")
@@ -380,11 +389,11 @@ def _setup(client, args, io):
         repo = io.prompt("Folder of the code agents should fix", os.getcwd())
     repo = os.path.abspath(os.path.expanduser(repo)) if repo else ""
     if repo and not os.path.isdir(repo):
-        raise Stop(f"{repo} is not a folder.")
+        raise Stop(f"{repo} is not a folder. Run ccc oncall setup --repo PATH with an existing folder.")
     queue = args.queue or status.get("queue") or ""
     if not queue:
         guess = re.sub(r"[^A-Z0-9]+", "-", os.path.basename(repo).upper()).strip("-")[:16] or "BUGS"
-        queue = io.prompt("Name for the queue of bug tickets", guess)
+        queue = guess
     res = client.must("config", {"queue": queue, "repo": repo})
     queue = res["config"]["queue"]
     io.out(f"Bug tickets go to the queue {queue}" + (f", worked on in {repo}." if repo else "."))
@@ -396,8 +405,8 @@ def _setup(client, args, io):
         etype = args.channel
         if not etype:
             if not io.interactive:
-                raise Stop("Say how CCC should reach you: --channel telegram (or email, ntfy, imessage, sms, whatsapp, command).")
-            order = ["telegram", "email", "ntfy", "imessage", "sms", "whatsapp", "command"]
+                raise Stop("Say how CCC should reach you: --channel ntfy (or telegram, email, imessage, sms, whatsapp, command).")
+            order = ["ntfy", "telegram", "email", "imessage", "sms", "whatsapp", "command"]
             io.out("How should CCC reach you?")
             for i, name in enumerate(order, 1):
                 io.out(f"  {i}. {CHANNEL_NAMES[name]}")
@@ -423,6 +432,9 @@ def _setup(client, args, io):
     io.out("Add monitoring:          ccc oncall source add github   (or sentry, posthog, http, command)")
     io.out("Let agents decide small reversible things:  ccc oncall minor on")
     io.out("See what is waiting:     ccc oncall status")
+    receives = any(c.get("enabled") and c.get("can_receive") for c in client.status().get("channels", []))
+    io.out("On-call is on: " + ("alerts and replies are enabled." if receives else "alerts are enabled; channels are send only.")
+           + " Turn it off: ccc oncall off")
     return 0
 
 
@@ -430,6 +442,8 @@ def run(argv, *, base, get, post, io=None):
     """Run one ``ccc oncall ...`` command. Returns the exit code."""
     io = io or IO()
     args = build_parser().parse_args(argv)
+    if args.action == "setup" and not args.yes and not args.secret_stdin:
+        io.interactive = True
     client = Client(base, get, post)
     try:
         return _run(args, client, io) or 0

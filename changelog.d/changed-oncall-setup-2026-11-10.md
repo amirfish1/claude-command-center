@@ -1,0 +1,1 @@
+On-call setup offers ntfy first, generates a private topic and queue name, accepts piped answers, and prints how to turn alerts off. Status distinguishes untested and send-only channels. A Docker proof checks local ntfy and email protocols with isolated state.

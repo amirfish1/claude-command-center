@@ -26,9 +26,58 @@ runs on.
 ccc oncall setup
 ```
 
-Setup turns the preview on, asks for a queue name and the code folder agents
-work in, adds one message channel, and sends you a test message. If the test
-message does not get through, On-call stays off.
+Setup asks these questions on a fresh install:
+
+```
+On-call is a preview. Turn it on for this machine? (Y/n):
+Folder of the code agents should fix [/your/current/folder]:
+Pick a number [1]:
+```
+
+Press Enter for each default. The channel choices are printed before the last
+prompt, in this order:
+
+```
+How should CCC reach you?
+  1. ntfy (phone push, no account)
+  2. Telegram
+  3. Email
+  4. iMessage (this Mac)
+  5. SMS (your Twilio number)
+  6. WhatsApp (your Twilio sender)
+  7. Your own command
+```
+
+The queue name comes from the folder name. Use `--queue NAME` or `--repo PATH`
+to choose something else. Setup generates a random ntfy topic and prints:
+
+```
+Subscribe in the ntfy app: https://ntfy.sh/ccc-oncall-<random-topic>
+```
+
+Subscribe to that URL in the ntfy app to read the test message. A successful
+send means the server accepted it; CCC cannot confirm that your phone displayed
+it. Keep the topic private. Self-hosted ntfy works with `--set server=URL`.
+The preview question is skipped when the preview is already on. Existing folder,
+queue and channel settings are reused. Piped answers work too.
+
+When a test send succeeds, the final line for ntfy is:
+
+```
+On-call is on: alerts and replies are enabled. Turn it off: ccc oncall off
+```
+
+For channels that cannot receive replies, the final line is:
+
+```
+On-call is on: alerts are enabled; channels are send only. Turn it off: ccc oncall off
+```
+
+If every test send fails, setup turns On-call off, including on a rerun:
+
+```
+ccc oncall: No test message got through. On-call is off. Fix the channel, then run ccc oncall setup again.
+```
 
 Without the questions:
 
@@ -155,6 +204,10 @@ environment.
 A command channel added with `--intake` and no recipient of its own is a line
 to customers only. Your alerts do not go out on it.
 
+Email uses verified TLS. SMTP defaults to implicit TLS on port 465 and
+STARTTLS on other ports. For a custom implicit TLS port, use
+`--set smtp_security=tls --set smtp_port=PORT`. IMAP always uses implicit TLS.
+
 Secrets are saved in the CCC Vault. The On-call settings file holds only the
 name of the Vault entry.
 
@@ -233,7 +286,31 @@ reply releases it.
   On-call queue.
 - Agents fix bugs in the code folder you point them at, the way your queue is
   set up to (a commit or a pull request). You decide what deploys.
+- Status shows configured channels and their last delivery result. It does not
+  prove that a worker is running or that a phone displayed a message.
+- ntfy decision replies use the separate `<topic>-reply` topic. Publish
+  `NUMBER your answer` there; fixed notices also offer answer buttons.
 - WhatsApp and SMS need your own Twilio number. iMessage needs a Mac.
+
+## Local protocol proof
+
+Run `python3 scripts/oncall-proof.py` with Docker, OpenSSL and Python 3.
+WatchTower is optional; without it the ticket check stops at that boundary.
+The script downloads pinned ntfy and GreenMail images, uses temporary state and
+a local TLS certificate, and removes its containers and network when done.
+It does not use your running CCC server or send to external accounts.
+
+It checks ntfy delivery and replies, SMTP delivery, IMAP replies, and, when
+WatchTower is installed, a real isolated ticket decision and a fixed notice to
+a local reporter mailbox. The HTTP adapter uses the real On-call API, engine
+and store. It does not exercise the dashboard server's routing or preview gate.
+No agent session runs. Closing a fixture ticket proves notification routing,
+not that an agent fixed a bug.
+
+`ccc oncall report` creates an owner report without a reporter address. The
+proof checks that command separately, then uses incoming email for the report
+that receives the fixed notice. It does not attach a fabricated reporter to an
+owner report.
 
 ## Commands
 

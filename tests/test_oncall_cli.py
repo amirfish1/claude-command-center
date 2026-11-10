@@ -97,13 +97,13 @@ def test_interactive_setup_asks_only_what_it_needs(box, tmp_path, monkeypatch):
     repo.mkdir()
     monkeypatch.chdir(repo)
     sent = tmp_path / "sent.txt"
-    # yes to the preview, accept the folder, accept the queue name, pick "your own command".
+    # Accept the preview and folder, then pick "your own command".
     code = box.run("setup", interactive=True,
-                   answers=["y", "", "", "7", f"sh -c 'cat >> {sent}'"])
+                   answers=["y", "", "7", f"sh -c 'cat >> {sent}'"])
     assert code == 0, box.text
     assert box.eng.config()["queue"] == "STOREFRONT"
     assert box.eng.config()["repo"] == str(repo)
-    assert [a for a in box.asked if "queue" in a] == ["Name for the queue of bug tickets [STOREFRONT]: "]
+    assert [a for a in box.asked if "queue" in a] == []
     assert sent.exists()
 
 
@@ -220,3 +220,22 @@ def test_failed_setup_turns_previously_enabled_oncall_off(box, tmp_path, capsys)
     assert box.run("setup", "--yes") == 1
     assert not box.eng.active()
     assert "On-call is off" in capsys.readouterr().err
+
+
+def test_ntfy_topic_is_generated_without_another_question():
+    from ccc_server.oncall.channels import required_fields
+    args = cli.build_parser().parse_args(['setup'])
+    asked = []
+    io = cli.IO(ask=lambda prompt: asked.append(prompt) or '', interactive=True)
+    entry, secrets = cli._collect('channel', 'ntfy', required_fields('ntfy'), args, io)
+    assert entry['topic'].startswith('ccc-oncall-')
+    assert len(entry['topic']) == len('ccc-oncall-') + 24
+    assert asked == [] and secrets == {}
+
+
+def test_status_distinguishes_untested_send_only_and_missing_monitoring():
+    lines = []
+    cli._print_status({'channels': [{'id': 'command', 'enabled': True}], 'wt': True},
+                      cli.IO(out=lines.append))
+    assert 'not tested; send only' in '\n'.join(lines)
+    assert 'No monitoring source configured.' in '\n'.join(lines)
