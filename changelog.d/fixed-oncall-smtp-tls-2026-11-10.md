@@ -1,1 +1,1 @@
-Email channels support verified implicit SMTP TLS on custom ports with `smtp_security=tls`.
+- On-call email channels can use implicit TLS on a custom SMTP port with `smtp_security=tls`.
