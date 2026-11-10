@@ -1,0 +1,1 @@
+- Accept gpt-6.1-terra in the Codex spawn model catalog.
