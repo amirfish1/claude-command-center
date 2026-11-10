@@ -91,6 +91,79 @@ def wait_worker(rec, timeout=240):
             pass
 
 
+def start_watcher(root, argv):
+    """Use the foreground service entry point, never the host service manager."""
+    log = Path(root) / 'watcher.log'
+    with log.open('wb') as stream:
+        proc = subprocess.Popen([*argv, 'start', '--foreground', '--auto-spawn',
+                                 '--host', '127.0.0.1', '--port', '0'],
+                                stdout=stream, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+    deadline = time.monotonic() + 15
+    try:
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                raise RuntimeError(log.read_text())
+            if 'HTTP server on' in log.read_text():
+                return proc
+            threading.Event().wait(.1)
+        raise TimeoutError('Isolated WatchTower watcher did not start')
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+
+
+def stop_watcher(proc):
+    if proc is not None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+
+
+def cleanup_isolated_processes(root):
+    """Kill only Linux processes carrying this proof's unique HOME marker.
+
+    Workers create their own sessions, so killing the watcher's process group
+    alone does not clean them up. This also covers a timed-out proof child.
+    """
+    marker = ('HOME=' + str(root)).encode()
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            if marker in (entry / 'environ').read_bytes().split(b'\0'):
+                os.kill(int(entry.name), signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
+
+
+def wait_automatic_worker(root, ref, wt, watcher, started, timeout=480):
+    """One bounded observer; it never dispatches, claims or changes policy."""
+    record_file = Path(root) / '.watchtower/workers.json'
+    deadline = time.monotonic() + timeout
+    rec = None
+    while time.monotonic() < deadline:
+        if watcher.poll() is not None:
+            raise RuntimeError('Isolated WatchTower watcher exited')
+        if rec is None and record_file.exists():
+            records = json.loads(record_file.read_text()).get('workers', [])
+            if records:
+                rec = records[0]
+                print(f'Report to observed worker start: {time.monotonic() - started:.2f}s', flush=True)
+                print(f"Observed worker: {rec.get('worker_id')}; pid: {rec.get('pid')}; "
+                      f"engine: {rec.get('engine')}; model: {rec.get('model')}", flush=True)
+        if rec and (wt.find(ref) or {}).get('status') == 'closed':
+            return rec
+        threading.Event().wait(1)
+    logs = '\n'.join(p.read_text(errors='replace')[-12000:]
+                     for p in (Path(root) / '.watchtower/logs').glob('*') if p.is_file())
+    raise TimeoutError('Automatic dispatch/fix exceeded 480 seconds.\n'
+                       + (Path(root) / 'watcher.log').read_text()[-12000:] + logs)
+
+
 def child(root, web, smtp, imap, with_agent=False):
     sys.path.insert(0, str(REPO))
     from ccc_server.oncall import api, engine, wt
@@ -120,6 +193,7 @@ def child(root, web, smtp, imap, with_agent=False):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     os.environ['CCC_SERVER'] = f'http://127.0.0.1:{server.server_port}'
     results = []
+    watcher = None
 
     def cli(*args, input=''):
         return run(sys.executable, str(REPO / 'ccc'), 'oncall', *args, input=input)
@@ -157,6 +231,8 @@ def child(root, web, smtp, imap, with_agent=False):
         project.mkdir()
         os.chdir(project)
         start = time.monotonic()
+        if eng.wt.available():
+            watcher = start_watcher(root, eng.wt.argv())
         output = cli('setup', '--set', 'server=' + web, input='\n\n')
         topic = eng.config()["channels"][0]["topic"]
         assert topic.startswith("ccc-oncall-")
@@ -189,33 +265,35 @@ def child(root, web, smtp, imap, with_agent=False):
         if not eng.wt.available():
             results.append(('ticket / decision / fixed', 'BOUNDARY: install WatchTower; no agent started'))
             return
-        # Real queue operations, with no worker session attached and no dispatch.
-        manual = cli('report', 'Local proof manual report')
-        assert 'Filed as ' in manual
-        cli('customer', 'add', 'reporter@example.test')
-        mail('reporter@example.test', 'Proof bug', 'The local proof button is broken.')
-        eng.tick(force=True)
-        report = next(r for r in eng.store.reports() if r.get('reporter_address') == 'reporter@example.test')
-        ref = report['ticket_ref']
-        assert ref
-        eng.wt._ok('block', ref, '--question', 'Keep the fallback?', '--wait-on', 'owner')
-        eng.tick(force=True)
-        alert = next(a for a in eng.store.alerts(state='open') if a['kind'] == 'decision' and a['ref'] == ref)
-        msg = next(m for m in mailbox('owner') if alert['token'] in m['Subject'])
-        mail('owner@example.test', 'Re: ' + msg['Subject'], 'Keep it.', msg['Message-ID'])
-        eng.tick(force=True)
-        assert not eng.wt.find(ref)['needs_input'], 'email decision reply not applied'
-        # Queue closure is a fixture event, not a claim that an agent fixed code.
         from watchtower import queue
-        commit = run(os.environ['PROOF_GIT'], '-C', str(REPO), 'rev-parse', 'HEAD')
-        queue.close(ref, resolution={'summary': 'Local protocol proof completed.', 'commit': commit})
-        eng.tick(force=True)
-        fixed = next(a for a in eng.store.alerts(state='open') if a['kind'] == 'fixed' and a['ref'] == ref)
-        assert mailbox('reporter') == [], 'Reporter was notified before approval'
-        publish(f"{fixed['token']} yes")
-        eng.tick(force=True)
-        assert any('fixed' in str(m).lower() for m in mailbox('reporter')), 'fixed notice missing'
-        results.append(('ticket / decision / fixed mailbox', 'PASS'))
+        cli('customer', 'add', 'reporter@example.test')
+        if not with_agent:
+            # Fixture closures must never become real agent work, even on a slow run.
+            eng.wt._ok('config', '-q', eng.config()['queue'], '--auto-drain', 'off')
+            manual = cli('report', 'Local proof manual report')
+            assert 'Filed as ' in manual
+            mail('reporter@example.test', 'Proof bug', 'The local proof button is broken.')
+            eng.tick(force=True)
+            report = next(r for r in eng.store.reports() if r.get('reporter_address') == 'reporter@example.test')
+            ref = report['ticket_ref']
+            assert ref
+            eng.wt._ok('block', ref, '--question', 'Keep the fallback?', '--wait-on', 'owner')
+            eng.tick(force=True)
+            alert = next(a for a in eng.store.alerts(state='open') if a['kind'] == 'decision' and a['ref'] == ref)
+            msg = next(m for m in mailbox('owner') if alert['token'] in m['Subject'])
+            mail('owner@example.test', 'Re: ' + msg['Subject'], 'Keep it.', msg['Message-ID'])
+            eng.tick(force=True)
+            assert not eng.wt.find(ref)['needs_input'], 'email decision reply not applied'
+            # Queue closure is a fixture event, not a claim that an agent fixed code.
+            commit = run(os.environ['PROOF_GIT'], '-C', str(REPO), 'rev-parse', 'HEAD')
+            queue.close(ref, resolution={'summary': 'Local protocol proof completed.', 'commit': commit})
+            eng.tick(force=True)
+            fixed = next(a for a in eng.store.alerts(state='open') if a['kind'] == 'fixed' and a['ref'] == ref)
+            assert mailbox('reporter') == [], 'Reporter was notified before approval'
+            publish(f"{fixed['token']} yes")
+            eng.tick(force=True)
+            assert any('fixed' in str(m).lower() for m in mailbox('reporter')), 'fixed notice missing'
+            results.append(('ticket / decision / fixed mailbox', 'PASS'))
         if not with_agent:
             results.append(('agent execution', 'BOUNDARY: no agent session started'))
         elif not shutil.which('codex') or not (Path.home() / '.codex/auth.json').exists():
@@ -227,20 +305,33 @@ def child(root, web, smtp, imap, with_agent=False):
             model = os.environ.get('PROOF_MODEL') or AGENT_MODEL
             baseline = seed_repo(project)
             queue_name = eng.config()['queue']
-            eng.wt._ok('config', '-q', queue_name, '--auto-drain', 'off',
+            eng.wt._ok('config', '-q', queue_name,
                        '--engine', 'codex', '--model', model, '--effort', 'medium')
-            eng.wt._ok('config', '-q', queue_name, '--codex-transport', 'exec')
+            from watchtower import config as wt_config
+            transport = wt_config.codex_transport(queue_name)
+            assert wt_config.auto_drain(queue_name), 'Setup did not enable auto-drain'
+            explicit = os.environ.get('PROOF_EXPLICIT_START') == '1'
+            if explicit:
+                eng.wt._ok('config', '-q', queue_name, '--auto-drain', 'off',
+                           '--codex-transport', 'exec')
+                transport = 'exec'
+            eng.wt._dispatch = not explicit
             before_mail = len(mailbox('reporter'))
             started = time.monotonic()
             mail('reporter@example.test', 'Addition bug', 'add(2, 3) returns -1 instead of 5. See test_sum.py.')
             eng.tick(force=True)
             report = next(r for r in eng.store.reports() if r.get('title') == 'Addition bug')
             agent_ref = report['ticket_ref']
-            rec = workers.spawn_run_once_worker(queue_name, agent_ref, repo_path=str(project),
-                                                engine='codex', model=model)
-            print(f'Worker model: {model}; effort: medium; transport: exec', flush=True)
+            rec = None
+            print(f'Worker model: {model}; effort: medium; transport: {transport}', flush=True)
             try:
-                wait_worker(rec)
+                if explicit:
+                    rec = workers.spawn_run_once_worker(queue_name, agent_ref,
+                                                        repo_path=str(project),
+                                                        engine='codex', model=model)
+                    wait_worker(rec)
+                else:
+                    rec = wait_automatic_worker(root, agent_ref, eng.wt, watcher, started)
                 item = eng.wt.find(agent_ref)
                 assert item['status'] == 'closed', 'Worker did not close the ticket'
                 commit = run(os.environ['PROOF_GIT'], '-C', str(project), 'rev-parse', 'HEAD')
@@ -262,11 +353,11 @@ def child(root, web, smtp, imap, with_agent=False):
                 assert len(received) == before_mail + 1 and 'fixed' in str(received[-1]).lower()
                 print(f'Report to fixed notice: {time.monotonic() - started:.2f}s')
                 print(f'Observed fix commit: {commit}')
-                results.append(('agent execution / approved fixed notice', 'PASS (WatchTower drain once)'))
+                results.append(('agent execution / approved fixed notice', 'PASS (explicit drain once)' if explicit else 'PASS (automatic WatchTower dispatch)'))
             except Exception:
                 results.append(('agent execution / approved fixed notice', 'FAIL'))
                 print(f'Report to fixed notice: not completed ({time.monotonic() - started:.2f}s elapsed)')
-                print(Path(rec['log']).read_text()[-12000:] if 'log' in rec else str(rec))
+                print(Path(rec['log']).read_text()[-12000:] if rec and 'log' in rec else str(rec))
                 raise
     except Exception as exc:
         results.append(('proof', 'FAIL: ' + str(exc)))
@@ -275,6 +366,8 @@ def child(root, web, smtp, imap, with_agent=False):
         print('\nCheck                                  Result')
         for name, result in results:
             print(f'{name:38} {result}')
+        stop_watcher(watcher)
+        cleanup_isolated_processes(root)
         server.shutdown()
         server.server_close()
 
@@ -283,9 +376,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--with-agent', action='store_true',
                         help='Run one paid Codex worker using an isolated copy of the login')
+    parser.add_argument('--explicit-start', action='store_true',
+                        help='With --with-agent, retain the explicit exec drain-once comparison')
     parser.add_argument('--model', default=AGENT_MODEL,
                         help=f'Codex model for --with-agent (default {AGENT_MODEL})')
     args = parser.parse_args()
+    if not sys.platform.startswith('linux'):
+        print('BOUNDARY: this proof requires Linux /proc for detached-worker cleanup')
+        return 0
     containers = []
     login_before = None
     with tempfile.TemporaryDirectory(prefix='ccc-oncall-proof-') as tmp:
@@ -361,9 +459,9 @@ def main():
                        WATCHTOWER_DELEGATE_URL='off', GIT_CONFIG_NOSYSTEM='1',
                        GIT_CONFIG_GLOBAL=os.devnull,
                        SSL_CERT_FILE=str(trust), PROOF_GIT=shutil.which('git'),
-                       PROOF_MODEL=args.model)
+                       PROOF_MODEL=args.model, PROOF_EXPLICIT_START='1' if args.explicit_start else '0')
             proc = subprocess.run([sys.executable, __file__, '--child', tmp,
-                                   f'http://127.0.0.1:{http}', str(smtp), str(imap), *(['--with-agent'] if args.with_agent else [])], env=env, timeout=360)
+                                   f'http://127.0.0.1:{http}', str(smtp), str(imap), *(['--with-agent'] if args.with_agent else [])], env=env, timeout=600)
             copied = root / '.codex' / 'auth.json'
             if login_before is not None and copied.is_file() and copied.read_bytes() != login_before:
                 # The renewed login lives only in the temporary copy and is discarded.
@@ -373,6 +471,7 @@ def main():
                 subprocess.run(["docker", "logs", mail_id], timeout=10)
             return proc.returncode
         finally:
+            cleanup_isolated_processes(root)
             for cid in containers:
                 run('docker', 'rm', '-f', cid)
             run('docker', 'network', 'rm', network)

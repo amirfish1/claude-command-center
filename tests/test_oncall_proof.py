@@ -39,3 +39,40 @@ def test_worker_deadline_kills_child(tmp_path):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+@pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Linux process cleanup')
+def test_cleanup_finds_detached_worker_by_isolated_home(tmp_path):
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                             env={**os.environ, 'HOME': str(tmp_path)},
+                             start_new_session=True)
+    other = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                             env={**os.environ, 'HOME': str(tmp_path / 'other')},
+                             start_new_session=True)
+    try:
+        proof.cleanup_isolated_processes(tmp_path)
+        assert child.wait(timeout=5) == -proof.signal.SIGKILL
+        assert other.poll() is None
+    finally:
+        for proc in (child, other):
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+
+
+def test_observer_requires_worker_record_and_ticket_closure(tmp_path):
+    import json
+    from types import SimpleNamespace
+    records = tmp_path / '.watchtower/workers.json'
+    records.parent.mkdir()
+    records.write_text(json.dumps({'workers': [{'pid': 123, 'argv': ['app-server']}]}))
+    wt = SimpleNamespace(find=lambda ref: {'status': 'closed'})
+    watcher = SimpleNamespace(poll=lambda: None)
+    observed = proof.wait_automatic_worker(tmp_path, 'PROOF-1', wt, watcher,
+                                          proof.time.monotonic(), timeout=1)
+    assert observed['pid'] == 123
+    # A stopped supervisor is a failure even if a ticket happens to be closed.
+    with pytest.raises(RuntimeError, match='watcher exited'):
+        proof.wait_automatic_worker(tmp_path, 'PROOF-1', wt,
+                                   SimpleNamespace(poll=lambda: 1),
+                                   proof.time.monotonic(), timeout=1)
