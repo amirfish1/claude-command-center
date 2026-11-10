@@ -9,6 +9,7 @@ lives. ``deliver`` sends what is unsent, within quiet hours and the hourly cap.
 
 from __future__ import annotations
 
+import re
 import time
 
 from . import wt as wtmod
@@ -38,6 +39,8 @@ def render(alert):
         lines = [head, title, "", body]
         if meta.get("recommend"):
             lines.append(f"Agent recommends: {meta['recommend']}")
+        if meta.get("why"):
+            lines.append(f"Needs you because: {meta['why']}")
         lines += ["", "Reply with your answer."]
     elif kind == "question":
         head = f"An agent is waiting on you (#{n})"
@@ -97,6 +100,18 @@ def watched_queues(cfg):
     return out
 
 
+_GATE_NOTE = re.compile(r"\s*\[auto-approval declined:\s*(?:needs you:\s*)?(.*?)\]\s*$", re.S)
+
+
+def _gate_note(question):
+    """Split WatchTower's "why this was not decided for you" note off a question."""
+    text = str(question or "").strip()
+    m = _GATE_NOTE.search(text)
+    if not m:
+        return text, ""
+    return text[:m.start()].strip(), " ".join(m.group(1).split())
+
+
 def collect_decisions(cfg, store, wt, *, now=None, silent_before=""):
     """Parked tickets waiting on the owner -> alerts; answered ones are cleared.
 
@@ -122,11 +137,13 @@ def collect_decisions(cfg, store, wt, *, now=None, silent_before=""):
             blocked_at = str(item.get("blocked_at") or "")
             key = f"wt:{ref}:{blocked_at}"
             live_keys.add(key)
+            question, why = _gate_note(item.get("block_question"))
             row, new = store.alert_upsert(
                 key, kind="decision", ref=ref,
                 title=_clip(item.get("title") or item.get("note") or ref, 160),
-                body=_clip(item.get("block_question") or "The agent needs a decision.", 1800),
-                meta={"queue": queue, "recommend": _clip(wtmod.recommendation(item), 400)}, now=now)
+                body=_clip(question or "The agent needs a decision.", 1800),
+                meta={"queue": queue, "recommend": _clip(wtmod.recommendation(item), 400),
+                      "why": _clip(why, 300)}, now=now)
             if new:
                 created += 1
                 if silent_before and blocked_at and blocked_at < silent_before:

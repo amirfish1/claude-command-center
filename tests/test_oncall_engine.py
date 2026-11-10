@@ -161,6 +161,17 @@ def test_parked_ticket_reaches_every_owner_channel_once(rig):
     assert out.thread and len(out.thread) == 16
 
 
+def test_gate_note_is_worded_for_a_person(rig):
+    _park(rig, question="Keep the old redirect, or remove it now?\n"
+                        "[auto-approval declined: needs you: Major: live-product. every shopper sees it]",
+          block_proposal={"recommend": "keep it"})
+    rig.tick()
+    assert rig.chan("tg").sent[0].text == (
+        "SHOP-1 needs a decision (#1)\nCheckout button does nothing on Safari\n\n"
+        "Keep the old redirect, or remove it now?\nAgent recommends: keep it\n"
+        "Needs you because: Major: live-product. every shopper sees it\n\nReply with your answer.")
+
+
 def test_chat_reply_answers_the_only_waiting_ticket(rig):
     ref = _park(rig)
     rig.tick()
