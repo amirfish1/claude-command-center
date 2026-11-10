@@ -40,7 +40,7 @@ class Box:
             self.flag = bool(payload.get("on"))
             return 200, {"ok": True}
         if not self.flag:
-            return 404, {"ok": False, "error": "On-call is a preview. Turn it on in Settings, Experimental."}
+            return 404, {"ok": False, "error": "On-call is a preview and it is off. Turn it on with: ccc oncall setup"}
         return api.handle("POST", path, payload, eng=self.eng)
 
     def run(self, *argv, answers=(), secrets=(), interactive=False, stdin="", base="http://127.0.0.1:1"):

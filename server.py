@@ -433,7 +433,7 @@ def _oncall_loop():
 def _oncall_request(handler, method, path, payload=None):
     """Serve /api/oncall/*: preview-flag gated and local-only."""
     if not _feature_flag("oncall"):
-        handler.send_json({"ok": False, "error": "On-call is a preview. Turn it on in Settings, Experimental."}, 404)
+        handler.send_json({"ok": False, "error": "On-call is a preview and it is off. Turn it on with: ccc oncall setup"}, 404)
         return
     if phone_access.is_remote_request(handler.client_address[0], handler.headers):
         handler.send_json({"ok": False, "error": "On-call settings are local-only"}, 403)
