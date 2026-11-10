@@ -98,6 +98,14 @@ def post_start():
                           "params": {"session_id": "sess_12345", "text": "say hi"},
                           "reason": "user asked"},
             "threadId": THREAD_ID, "turnId": "turn1", "callId": "c2"}})
+    elif MODE == "direct_line":
+        # The backend opens a direct line, then the user speaks twice: a
+        # message for the session, and the way back.
+        send({"id": 903, "method": "item/tool/call", "params": {
+            "tool": "ccc_connect", "arguments": {"session_id": "sess_direct"},
+            "threadId": THREAD_ID, "turnId": "turn1", "callId": "c4"}})
+        send({"method": "thread/realtime/transcript/done",
+              "params": {"role": "user", "text": "run the tests again"}})
     elif MODE == "approval_probe":
         send({"id": 902, "method": "execCommandApproval", "params": {
             "conversationId": THREAD_ID, "callId": "c3",
@@ -158,12 +166,16 @@ def main():
         elif method == "thread/realtime/appendAudio":
             respond(rid, {})
         elif method == "thread/realtime/appendSpeech":
+            _log("appendSpeech:" + json.dumps((msg.get("params") or {}).get("text")))
             respond(rid, {})
             # Simulate the spoken confirmation outcome.
             send({"method": "thread/realtime/transcript/delta",
                   "params": {"role": "assistant", "delta": "Done. "}})
             send({"method": "thread/realtime/transcript/done",
                   "params": {"role": "assistant", "text": "Done."}})
+        elif method == "thread/realtime/appendText":
+            _log("appendText:" + json.dumps((msg.get("params") or {}).get("text")))
+            respond(rid, {})
         elif method == "thread/realtime/stop":
             respond(rid, {})
             send({"method": "thread/realtime/closed", "params": {"reason": "user"}})

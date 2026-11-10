@@ -856,3 +856,141 @@ def test_ccc_session_reports_pid_verified_liveness(monkeypatch):
     out = vs._tool_session({"session_id": "abc"})
     assert "process pid 42 verified alive" in out and "Claude reports idle" in out
     assert "no running Claude process" in vs._tool_session({"session_id": "zzz"})
+
+
+# -- working / waiting / reply / direct line ---------------------------------
+
+def _board_rows(now):
+    return [
+        {"session_id": "mine-working", "engine": "claude", "is_live": True, "state": "working",
+         "display_name": "Split the monorepo", "spawned_via": "ui", "folder_label": "app",
+         "working_since": now - 240, "sidecar_tool": "Bash", "sidecar_file": "pytest", "modified": now - 5},
+        {"session_id": "mine-idle", "engine": "claude", "is_live": True, "state": "idle",
+         "display_name": "Old chat", "spawned_via": "terminal", "modified": now - 900},
+        {"session_id": "wk-working", "engine": "codex", "is_live": True, "state": "working",
+         "display_name": "OPS#12: fix watchdog", "is_watchtower_worker": True,
+         "spawned_via": "terminal", "modified": now - 8},
+        {"session_id": "wk-waiting", "engine": "claude", "is_live": True, "state": "idle",
+         "display_name": "OPS#13: sender address", "worker_origin": {"role": "worker"},
+         "last_event_type": "assistant", "modified": now - 600,
+         "session_state": {"next_step_user": "Change the sender address?",
+                           "next_actions": [{"label": "Yes change it", "reply": "[Q1:x] yes, change it"},
+                                            {"label": "Not yet", "reply": "[Q1:x] not yet"}]}},
+        {"session_id": "moved", "engine": "claude", "is_live": True, "state": "working",
+         "display_name": "Dragged to workers", "spawned_via": "ui", "all_lane_override": "workers",
+         "modified": now - 3},
+    ]
+
+
+def _board(monkeypatch):
+    rows = _board_rows(time.time())
+    monkeypatch.setattr(server, "_archive_all_rows_cached", lambda opts: (rows, True))
+    monkeypatch.setattr(server, "_load_session_registry", lambda: {})
+    return object.__new__(rv.VoiceSession)
+
+
+def test_ccc_working_lists_only_unfinished_turns_split_by_tab(monkeypatch):
+    out = _board(monkeypatch)._tool_working({})
+    assert "1 of the user's own sessions (All tab), 2 queue workers (Workers tab)" in out
+    mine, workers = out.split("Queue workers (Workers tab):")
+    assert "session=mine-working" in mine and "working for 4m" in mine and "doing: Bash pytest" in mine
+    assert "session=wk-working" in workers and "session=moved" in workers
+    # Open but idle sessions are counted, never listed as working.
+    assert "session=mine-idle" not in out and "session=wk-waiting" not in out
+    assert "1 of the user's own, 1 workers; 1 of them wait on the user" in out
+
+
+def test_ccc_waiting_reports_the_ask_and_its_options(monkeypatch):
+    out = _board(monkeypatch)._tool_waiting({})
+    assert "1 session(s) waiting on the user" in out
+    assert "OPS#13: sender address [Workers tab] session=wk-waiting" in out
+    assert "asks: Change the sender address?" in out
+    assert "option 1: Yes change it" in out and "option 2: Not yet" in out
+    assert "mine-working" not in out
+
+
+def test_row_ask_ignores_answered_and_mid_turn_sessions():
+    now = time.time()
+    chips = {"next_step_user": "Pick one?", "next_actions": [{"label": "A", "reply": "a"}]}
+    base = {"session_id": "s", "is_live": True, "state": "idle", "session_state": chips, "modified": now}
+    assert rv._row_ask(base, now)["options"] == [{"label": "A", "reply": "a"}]
+    assert rv._row_ask(dict(base, last_event_type="user"), now) is None
+    assert rv._row_ask(dict(base, state="working"), now) is None
+    assert rv._row_ask(dict(base, is_live=False, modified=now - 3 * 86400), now) is None
+    formal = dict(base, question_waiting=True, question_text="Deploy?", question_options=["Yes", "No"])
+    ask = rv._row_ask(formal, now)
+    assert ask["formal"] and ask["question"] == "Deploy?" and ask["options"][1]["reply"] == "No"
+
+
+def test_ccc_reply_sends_the_chosen_option_without_a_card(monkeypatch):
+    vs = _board(monkeypatch)
+    vs.base_url, vs.pending_actions, sent = "http://127.0.0.1:1", {}, []
+    monkeypatch.setattr(rv.VoiceSession, "_post",
+                        lambda self, path, body: sent.append((path, body)) or {"ok": True})
+    out = vs._tool_reply({"session_id": "sender address", "option": 2})
+    assert sent == [("/api/inject-input", {"session_id": "wk-waiting", "text": "[Q1:x] not yet"})]
+    assert out.startswith("Sent to OPS#13: sender address") and not vs.pending_actions
+    vs._tool_reply({"session_id": "wk-waiting", "text": "Go ahead."})
+    assert sent[-1][1]["text"] == "Go ahead."
+    assert "has 2 option(s)" in vs._tool_reply({"session_id": "wk-waiting", "option": 3})
+    assert vs._tool_reply({"session_id": "wk-waiting"}).startswith("error: give option")
+    assert len(sent) == 2
+
+
+def test_ccc_reply_reports_a_failed_send(monkeypatch):
+    vs = _board(monkeypatch)
+    monkeypatch.setattr(rv.VoiceSession, "_post",
+                        lambda self, path, body: {"ok": False, "error": "session is held"})
+    assert "not sent" in vs._tool_reply({"session_id": "wk-waiting", "text": "go"})
+
+
+def test_direct_exit_phrases():
+    for phrase in ("Okay, send me back.", "Bring me back, Bob", "take me back to Bob", "end direct line"):
+        assert rv._DIRECT_EXIT_RE.search(phrase), phrase
+    for phrase in ("send it back to the queue", "bring back the old header", "roll the change back"):
+        assert not rv._DIRECT_EXIT_RE.search(phrase), phrase
+
+
+def test_speakable_drops_footer_code_and_markdown():
+    text = ("**Done.** See [the PR](https://example.test/pr/1).\n```py\nprint(1)\n```\n"
+            "| a | b |\n<session-state>\nDID: x\n</session-state>")
+    out = rv._speakable(text)
+    assert "Done. See the PR." in out and "print(1)" not in out and "DID" not in out and "|" not in out
+    long = rv._speakable("One sentence here. " * 200)
+    assert len(long) < rv.DIRECT_SPEECH_MAX_CHARS + 40 and long.endswith("The rest is on screen.")
+
+
+def test_direct_line_forwards_speech_speaks_replies_and_returns(voice_env, monkeypatch):
+    monkeypatch.setenv("FAKE_VOICE_MODE", "direct_line")
+    monkeypatch.setattr(rv, "DIRECT_POLL_SECONDS", 0.05)
+    rows = [{"session_id": "sess_direct", "engine": "claude", "is_live": True, "state": "idle",
+             "display_name": "Split work", "spawned_via": "ui"}]
+    monkeypatch.setattr(server, "_archive_all_rows_cached", lambda opts: (rows, True))
+    monkeypatch.setattr(server, "_load_session_registry", lambda: {})
+    reply = {"text": "old reply", "state": "idle"}
+    monkeypatch.setattr(server, "compute_session_detail", lambda sid: (
+        {"ok": True, "last_assistant_text": reply["text"], "state": reply["state"]}, 200))
+    sent = []
+    monkeypatch.setattr(rv.VoiceSession, "_post",
+                        lambda self, path, body: sent.append(body) or {"ok": True})
+    res, _ = _start()
+    sid = _sess_id((res, 200))
+    sess = rv._session_by_id(sid)
+    assert _wait(lambda: sent, 6), "the user's words never reached the session"
+    assert sent == [{"session_id": "sess_direct", "text": "run the tests again"}]
+    assert sess.public()["direct"] == {"session_id": "sess_direct", "title": "Split work"}
+    log = voice_env.log
+    assert _wait(lambda: "DIRECT LINE OPEN" in log.read_text(), 5)
+    assert "old reply" not in log.read_text()            # what was said before is not replayed
+    # Mid-turn text is held; the finished reply is spoken once, footer stripped.
+    reply.update(text="Running them now.", state="working")
+    time.sleep(0.3)
+    assert "Running them now" not in log.read_text()
+    reply.update(text="All 12 tests pass.\n<session-state>\nDID: ran tests\n</session-state>", state="idle")
+    assert _wait(lambda: 'appendSpeech:"All 12 tests pass."' in log.read_text(), 5)
+    # The way back is handled by CCC, not forwarded to the session.
+    sess._on_notification("thread/realtime/transcript/done", {"role": "user", "text": "Bring me back, Bob."})
+    assert _wait(lambda: sess.direct is None, 5)
+    assert _wait(lambda: "back with Bob" in log.read_text() and "direct line to Split work is closed" in log.read_text(), 5)
+    assert len(sent) == 1
+    assert log.read_text().count('appendSpeech:"All 12 tests pass."') == 1

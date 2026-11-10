@@ -35465,7 +35465,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "invalid JSON body",
                                 "code": "voice_bad_request"}, 400)
                 return
-            result, status = voice_start(data)
+            result, status = voice_start(
+                data, base_url=f"http://127.0.0.1:{self.server.server_address[1]}")
             self.send_json(result, status)
             return
 

@@ -2,10 +2,10 @@
 
 Talk to Claude Command Center by voice: tap the floating phone button on mobile,
 or press the mic button in the desktop top bar,
-speak, and a voice answers questions about your board: what's waiting on
-you, what a session is doing, how the queues look. It can also act: "send
-the ads session a nudge" becomes a confirmation card in the dashboard that
-runs only when you click **Confirm**.
+speak, and a voice (it answers to **Bob**) tells you about your board: which
+sessions are working right now, what's waiting on you, how the queues look.
+You can answer a waiting session by voice ("go ahead", "the first option"),
+or ask Bob to put you straight through to a session and talk to it directly.
 
 ## Requirements
 
@@ -49,15 +49,32 @@ runs only when you click **Confirm**.
    voice welcomes you: "Hi, what's up?"
 3. Speak naturally. Transcript lines for you and the voice stream into
    the panel in real time, and the reply is spoken aloud.
-4. If the voice proposes an action (injecting into a session, spawning
-   one, filing a WatchTower ticket), a card appears in the panel. Nothing
-   runs until you click **Confirm** or **Dismiss**: spoken "yes" is never
-   enough, by design.
+4. Replies to a session are sent as soon as you say them; there is no
+   confirmation step. Starting a new session or filing a WatchTower ticket
+   still shows a card in the panel and runs only when you click **Confirm**.
 5. Press **END CALL** (or close the tab) to end the session. The red dot on
    the mic button means a session is live.
 
 Hide the panel to keep using the dashboard during a call. The floating
 button then says **IN CALL**; tapping it reopens the panel.
+
+### What is working, what is waiting
+
+- "What's working right now?" lists only sessions whose turn has not
+  finished, in two groups: your own sessions (the All tab) and queue workers
+  (the Workers tab). Open sessions that are idle are counted, not listed.
+- "What's waiting on me?" reads each waiting session's question and its
+  reply options, the same ones the session row shows.
+- "Go ahead", "the first option" or any other answer is sent to that
+  session at once.
+
+### Direct line to a session
+
+Say "let me talk to the ads session". From then on everything you say goes
+to that session as a message, and its reply is read to you when its turn
+ends (code and tables are skipped; long replies are cut short). Bob stays
+out of it. Say "send me back" or "bring me back, Bob" to return. The panel's
+state pill shows `direct line: <session>` while it is open.
 
 You can ask "Why does QUEUE-123 need input?" to hear its recorded question
 and recent comments, or "Which tickets in this queue need me?" for a queue
@@ -95,10 +112,17 @@ reports priorities. It starts only after you press **Confirm** on its card.
   `approvalPolicy: never`. Its window into CCC is the dynamic
   tools: `ccc_attention`, `ccc_session`, `ccc_sessions`, `ccc_queues`,
   `ccc_ticket`, `ccc_jobs` (scheduled jobs: systemd timers and cron),
-  `ccc_models` (all read-only; each result names its source and as-of time), plus `ccc_triage_queue` and
-  `ccc_propose_action`, which can only create a pending-action card
-  through the same confirmation path the Ask agent uses. Approval
-  requests from the model are denied outright.
+  `ccc_models`, `ccc_working`, `ccc_waiting` (all read-only; each result
+  names its source and as-of time). `ccc_reply` sends your spoken answer to
+  one session through `/api/inject-input`, and `ccc_connect` /
+  `ccc_disconnect` open and close a direct line; these are the only tools
+  that act without a click, and all they can do is message a session.
+  `ccc_triage_queue` and `ccc_propose_action` (new sessions, tickets) can
+  only create a pending-action card through the same confirmation path the
+  Ask agent uses. Approval requests from the model are denied outright.
+- On a direct line CCC itself forwards each finished utterance and speaks
+  the session's reply; the model is told to stay silent. The way back
+  ("send me back", "bring me back, Bob") is matched by CCC, not the model.
 - Each session seeds a small briefing from already-cached board data
   (attention feed + queue rollup) so the voice can answer "what needs
   me" without any scanning.
@@ -171,4 +195,7 @@ Typed errors: `voice_no_openai_key`, `voice_busy`, `voice_no_codex`,
   the API-key fallback is the workaround until OpenAI fixes it.
 - Single session, single dashboard instance.
 - The voice can describe board state but not read full transcripts aloud
-  (by design: the read-only tools return summaries, not raw logs).
+  (by design: the read-only tools return summaries, not raw logs). A direct
+  line reads only the session's newest reply.
+- On a direct line a reply is spoken when the session's turn ends, so a
+  long turn is silent until then.

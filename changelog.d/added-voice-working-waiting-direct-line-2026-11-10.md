@@ -1,0 +1,1 @@
+- Voice mode: ask what is working right now (only unfinished turns, split into your own sessions and queue workers), hear what each waiting session asks with its reply options, answer by voice with no confirmation step, and open a direct line to a session ("bring me back, Bob" returns).

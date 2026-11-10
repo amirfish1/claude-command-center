@@ -84,23 +84,54 @@ _ALL_VOICES = set(VOICES_V1) | set(VOICES_V2)
 
 # Dynamic tools the backing Codex thread may call. Read-only by contract;
 # every mutation goes through ccc_propose_action -> assistant_actions.
-TOOL_NAMES = ("ccc_attention", "ccc_session", "ccc_sessions", "ccc_models", "ccc_ticket",
+TOOL_NAMES = ("ccc_attention", "ccc_session", "ccc_sessions", "ccc_working", "ccc_waiting",
+              "ccc_reply", "ccc_connect", "ccc_disconnect", "ccc_models", "ccc_ticket",
               "ccc_queues", "ccc_jobs", "ccc_triage_queue", "ccc_propose_action")
+
+# The voice agent's spoken name: "bring me back, Bob" ends a direct line.
+AGENT_NAME = "Bob"
+DIRECT_POLL_SECONDS = 2.0
+DIRECT_SPEECH_MAX_CHARS = 1200
+# How far back a not-live session's unanswered ask still counts as waiting.
+WAITING_RECENT_SECONDS = 12 * 3600
+
+# spawned_via values that mean "a person started this", mirroring the All
+# tab's lane split in static/app.js (_NON_WORKER_SPAWNED_VIAS).
+_NON_WORKER_VIAS = frozenset({
+    "ui", "ui-automated", "cli", "api", "terminal", "subagent", "resumed", "resume",
+    "ccc-ask", "none", "null", "-", "unknown", "not available", "not-available",
+})
+
+# Spoken ways out of a direct line. Checked server-side on the user's final
+# transcript so leaving never depends on the model noticing.
+_DIRECT_EXIT_RE = re.compile(
+    r"\b(?:(?:send|bring|take|put|get|switch)\s+me\s+back|back\s+to\s+bob|"
+    r"bob[,.!\s]+(?:come|i'?m)\s+back|come\s+back[,\s]+bob|"
+    r"(?:end|close|leave|exit|stop)\s+(?:the\s+)?direct(?:\s+(?:line|mode))?|disconnect)\b",
+    re.IGNORECASE)
 
 _TICKET_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}-\d{1,7}$")
 _QUEUE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 _VOICE_PROMPT = (
-    "You are the voice of Claude Command Center (CCC), a dashboard for the "
-    "user's coding-agent sessions. Answers are spoken aloud: keep them to "
-    "one to three short sentences unless the user asks for detail. For "
-    "anything about live sessions, queues, or tickets, delegate to your "
+    "Your name is Bob. You are the voice of Claude Command Center (CCC), a "
+    "dashboard for the user's coding-agent sessions. Answers are spoken aloud: "
+    "keep them to one to three short sentences unless the user asks for detail. "
+    "For anything about live sessions, queues, or tickets, delegate to your "
     "Codex backend, which has ccc_* tools with the real board state — never "
-    "guess or invent session state. For anything that changes state (send "
-    "input to a session, spawn a session, file or comment a ticket), the "
-    "backend must call ccc_propose_action — tell the user the action is "
-    "waiting for their click in the CCC dashboard, and never claim it "
-    "happened before that confirmation arrives."
+    "guess or invent session state. An open session is not a working session: "
+    "'working' means the agent's turn has not finished, and only ccc_working "
+    "says which those are. Keep the user's own sessions (All tab) apart from "
+    "queue workers (Workers tab). When a session waits on the user, say what it "
+    "asks and name its options. When the user answers ('go ahead', 'the first "
+    "option'), the backend sends it with ccc_reply at once: no confirmation "
+    "step, just say it was sent. When the user asks to talk to a session "
+    "directly, the backend calls ccc_connect. While a direct line is open the "
+    "user is talking to that session, not to you: CCC forwards their words and "
+    "speaks the session's replies, so stay silent, answer nothing and delegate "
+    "nothing until CCC tells you the direct line closed. Spawning a session or "
+    "filing a ticket still goes through ccc_propose_action, which waits for a "
+    "click in the dashboard."
 )
 
 _CODEX_INSTRUCTIONS = (
@@ -112,7 +143,14 @@ _CODEX_INSTRUCTIONS = (
     "when is it next, why not), ccc_models to "
     "resolve an explicit model name to its approved ID before triage selection, and "
     "ccc_triage_queue to propose a senior triage session. Anything that mutates "
-    "CCC must go through ccc_propose_action; you never execute changes yourself. "
+    "'which sessions are working' is ccc_working (turn in progress, split into the "
+    "user's own sessions and queue workers); never answer it from ccc_sessions, "
+    "which lists every open session, most of them idle. 'what is waiting on me' is "
+    "ccc_waiting: relay each ask and its numbered options as written. When the user "
+    "picks one or says go ahead, call ccc_reply right away with option or text; it "
+    "sends immediately and needs no confirmation. 'let me talk to that session' is "
+    "ccc_connect; ccc_disconnect closes the line. Spawning sessions and ticket "
+    "changes still go through ccc_propose_action. "
     "Every tool result names its source and as-of time. Ticket needs-input "
     "questions and blocker notes are recorded reports with an age, not verified "
     "current health: say \"recorded N days ago\" and never state them as current "
@@ -420,6 +458,124 @@ def _tickets_synced_at():
 
 
 # ---------------------------------------------------------------------------
+# Session row reading (the same fields the session list renders from)
+# ---------------------------------------------------------------------------
+
+def _row_title(row):
+    for key in ("title", "display_name", "ai_title", "task_title", "first_message"):
+        val = str(row.get(key) or "").strip()
+        if val:
+            return " ".join(val.split())[:90]
+    return str(row.get("folder_label") or "untitled")
+
+
+def _row_lane(row):
+    """'workers' (Workers tab: queue workers and other automation) or 'yours'
+    (All tab: sessions the user started). Server-side twin of the lane split in
+    static/app.js; a manual move in the UI wins."""
+    override = str(row.get("all_lane_override") or "").strip().lower()
+    if override:
+        return "workers" if override == "workers" else "yours"
+    marker = str(row.get("spawned_lane") or "").strip().lower()
+    if marker:
+        return "workers" if marker == "workers" else "yours"
+    if row.get("continued_from_session_id"):
+        return "yours"   # a continuation of the user's own work is never a worker
+    if row.get("is_watchtower_worker") or row.get("worker_origin") or row.get("_worker_id"):
+        return "workers"
+    if (row.get("source") == "hermes" or row.get("engine") == "hermes") and str(row.get("hermes_profile") or "").strip():
+        return "workers"
+    via = str(row.get("spawned_via") or "").strip().lower()
+    if via and via not in _NON_WORKER_VIAS:
+        return "workers"
+    return "yours"
+
+
+def _row_ask(row, now=None):
+    """What a session is waiting on the user for, as the session row shows it.
+
+    Returns {"question", "options": [{"label", "reply"}], "formal"} or None.
+    Sources, strongest first: a blocking AskUserQuestion / permission prompt,
+    then the session's own footer (next step for the user plus its reply
+    chips), then a detected trailing question."""
+    if row.get("archived") or row.get("trashed"):
+        return None
+    now = time.time() if now is None else now
+    live = bool(row.get("is_live"))
+    if live and row.get("state") == "working" and not (row.get("question_waiting") or row.get("needs_approval")):
+        return None   # mid-turn: an older footer is not the current ask
+    if live and row.get("question_waiting"):
+        options = [{"label": str(o), "reply": str(o)} for o in (row.get("question_options") or []) if str(o).strip()]
+        return {"question": str(row.get("question_text") or row.get("question_preamble") or "").strip(),
+                "options": options, "formal": True}
+    if live and row.get("needs_approval"):
+        return {"question": str(row.get("needs_approval_message") or "approval requested").strip(),
+                "options": [], "formal": False}
+    if not live:
+        try:
+            age = now - float(row.get("modified") or row.get("mtime") or 0)
+        except (TypeError, ValueError):
+            return None
+        if age > WAITING_RECENT_SECONDS:
+            return None
+    if row.get("last_event_type") == "user":
+        return None   # already answered; the session owes the next move
+    state = row.get("session_state") if isinstance(row.get("session_state"), dict) else {}
+    chips = state.get("next_actions") or ([state["next_action"]] if state.get("next_action") else [])
+    options = []
+    for chip in chips:
+        if isinstance(chip, dict) and str(chip.get("reply") or "").strip():
+            options.append({"label": str(chip.get("label") or chip["reply"])[:60],
+                            "reply": str(chip["reply"])})
+    next_step = str(state.get("next_step_user") or "").strip()
+    if options:
+        return {"question": next_step, "options": options, "formal": False}
+    if not live or next_step.lower().startswith(("none", "no reply", "no action", "nothing", "no ")):
+        return None   # an ended session only counts with explicit reply options
+    try:
+        decision = bool(next_step) and _core._next_step_requests_decision(next_step)
+    except Exception:
+        decision = False
+    if decision:
+        return {"question": next_step, "options": [], "formal": False}
+    if live and row.get("state") == "waiting":
+        try:
+            question = (_core._detect_soft_block(row) or {}).get("question_text") or ""
+        except Exception:
+            question = ""
+        return {"question": str(question).strip(), "options": [], "formal": False}
+    return None
+
+
+_MD_FENCE_RE = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def _speakable(text, limit=DIRECT_SPEECH_MAX_CHARS):
+    """A session reply as something worth hearing: no footer, code, tables or
+    markdown noise, cut at a sentence once it runs long."""
+    try:
+        text = _core._strip_for_question_scan(text or "")
+    except Exception:
+        text = str(text or "")
+    text = _MD_FENCE_RE.sub(" (code is on screen) ", text)
+    text = _MD_LINK_RE.sub(r"\1", text)
+    text = _URL_RE.sub("a link", text)
+    lines = [ln for ln in text.splitlines() if not ln.lstrip().startswith("|")]
+    text = re.sub(r"[*_`#>]+", "", "\n".join(lines))
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    stop = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+    if stop > limit // 2:
+        cut = cut[:stop + 1]
+    return cut.rstrip() + " The rest is on screen."
+
+
+
+# ---------------------------------------------------------------------------
 # The voice session
 # ---------------------------------------------------------------------------
 
@@ -465,6 +621,10 @@ class VoiceSession:
         self._watchdog_stop = threading.Event()
         self._watchdog_started = False  # respawns share one watchdog
         self._welcome_sent = False
+        self.base_url = None          # loopback CCC base, for sending to sessions
+        self.direct = None            # {"sid", "title", "seen"} while a direct line is open
+        self._direct_out = deque()    # user utterances waiting to reach the session
+        self._direct_lock = threading.Lock()
 
     # -- events ---------------------------------------------------------
 
@@ -478,6 +638,9 @@ class VoiceSession:
             self.cond.notify_all()
 
     def set_state(self, state, detail=""):
+        direct = self.direct
+        if direct and not detail and state in ("listening", "speaking", "thinking"):
+            detail = "direct line: " + direct["title"]
         self.state = state
         self.state_detail = detail
         self.emit("state", {"state": state, "detail": detail})
@@ -657,6 +820,8 @@ class VoiceSession:
             self.emit("transcript", entry)
             if role == "assistant":
                 self.set_state("listening")
+            elif role == "user" and self.direct:
+                self._direct_heard(text)
             self.touch()
             return
         if method == "thread/realtime/outputAudio/delta":
@@ -773,6 +938,16 @@ class VoiceSession:
                 return _fmt_tool_text(self._tool_session(args))
             if tool == "ccc_sessions":
                 return _fmt_tool_text(self._tool_sessions(args))
+            if tool == "ccc_working":
+                return _fmt_tool_text(self._tool_working(args))
+            if tool == "ccc_waiting":
+                return _fmt_tool_text(self._tool_waiting(args))
+            if tool == "ccc_reply":
+                return _fmt_tool_text(self._tool_reply(args))
+            if tool == "ccc_connect":
+                return _fmt_tool_text(self._tool_connect(args))
+            if tool == "ccc_disconnect":
+                return _fmt_tool_text(self._direct_close("tool"))
             if tool == "ccc_models":
                 return _fmt_tool_text(self._tool_models(args))
             if tool == "ccc_ticket":
@@ -859,14 +1034,15 @@ class VoiceSession:
                 hits = self._match_prefix(sid) or self._match_title(sid)
                 if len(hits) > 1:
                     return "multiple matches, pick one:\n" + "\n".join(
-                        f"- {r.get('title')} session={r.get('session_id')}" for r in hits[:8])
+                        f"- {_row_title(r)} session={r.get('session_id')}" for r in hits[:8])
                 if not hits:
                     return f"session {sid} not found"
                 return self._tool_session({"session_id": hits[0].get("session_id")})
             parts = [f"session {row.get('session_id') or sid}:"]
-            title = row.get("title") or row.get("display_name")
-            if title:
-                parts.append(f"title={title}")
+            parts.append(f"title={_row_title(row)}")
+            parts.append("tab=" + ("Workers" if _row_lane(row) == "workers" else "All"))
+            if row.get("state"):
+                parts.append(f"state={row['state']}")
             for key in ("engine", "folder_label"):
                 if row.get(key):
                     parts.append(f"{key}={row[key]}")
@@ -926,7 +1102,7 @@ class VoiceSession:
         """Archive rows whose title contains every word of query (live first)."""
         words = query.lower().split()
         rows = [r for r in self._archive_rows()
-                if all(w in (r.get("title") or "").lower() for w in words)]
+                if all(w in _row_title(r).lower() for w in words)]
         rows.sort(key=lambda r: (not r.get("is_live"), -(r.get("modified") or r.get("mtime") or 0)))
         return rows
 
@@ -1008,8 +1184,9 @@ class VoiceSession:
         out = [header + ":"]
         for r in rows[:limit]:
             sid = r.get("session_id")
-            line = (f"- {r.get('title') or r.get('folder_label') or ''} "
-                    f"engine={r.get('engine') or 'claude'} session={sid}")
+            line = (f"- {_row_title(r)} "
+                    f"engine={r.get('engine') or 'claude'} session={sid}"
+                    f" tab={'Workers' if _row_lane(r) == 'workers' else 'All'}")
             if r.get("state"):
                 line += f" state={r['state']}"
             ts = r.get("modified") or r.get("mtime")
@@ -1021,6 +1198,320 @@ class VoiceSession:
                 line += " proof=engine/hook signal, no pid check"
             out.append(line)
         return "\n".join(out)[:4000]
+
+    # -- working / waiting ------------------------------------------------
+
+    def _open_rows(self):
+        """Live archive rows, plus Claude processes the archive cache has not caught up with."""
+        all_rows = self._archive_rows()
+        rows = [r for r in all_rows if r.get("is_live")]
+        have = {r.get("session_id") for r in rows}
+        archived = {r.get("session_id"): r for r in all_rows}
+        for sid, meta in self._registry_sessions().items():
+            if sid in have:
+                continue
+            state = _REGISTRY_STATE.get(meta.get("status"), meta.get("status"))
+            if sid in archived:
+                rows.append(dict(archived[sid], is_live=True, state=state or archived[sid].get("state")))
+            else:
+                rows.append({"session_id": sid, "engine": "claude", "is_live": True,
+                             "title": meta.get("name") or "", "state": state,
+                             "folder_label": os.path.basename(str(meta.get("cwd") or ""))})
+        return rows
+
+    def _tool_working(self, args):
+        """Sessions whose turn is in progress right now, split by tab."""
+        try:
+            limit = max(1, min(30, int(args.get("limit") or 12)))
+        except (TypeError, ValueError):
+            limit = 12
+        now = time.time()
+        rows = self._open_rows()
+        groups = {"yours": [], "workers": []}
+        idle = {"yours": 0, "workers": 0}
+        waiting = 0
+        for r in rows:
+            lane = _row_lane(r)
+            if r.get("state") == "working":
+                groups[lane].append(r)
+            else:
+                idle[lane] += 1
+                if _row_ask(r, now):
+                    waiting += 1
+        out = [f"Working right now, meaning the agent's turn has not finished (as of {_utc_stamp(now)}): "
+               f"{len(groups['yours'])} of the user's own sessions (All tab), "
+               f"{len(groups['workers'])} queue workers (Workers tab)."]
+        for lane, label in (("yours", "User's own sessions (All tab)"),
+                            ("workers", "Queue workers (Workers tab)")):
+            hits = groups[lane]
+            if not hits:
+                out.append(f"{label}: none working.")
+                continue
+            hits.sort(key=lambda r: -(r.get("modified") or r.get("mtime") or 0))
+            out.append(f"{label}:")
+            for r in hits[:limit]:
+                line = f"- {_row_title(r)} ({r.get('engine') or 'claude'}"
+                if r.get("folder_label"):
+                    line += f", {r['folder_label']}"
+                line += f") session={r.get('session_id')}"
+                try:
+                    since = float(r.get("working_since") or 0)
+                except (TypeError, ValueError):
+                    since = 0
+                if since > 0:
+                    line += f" working for {_age_text(now - since)}"
+                doing = " ".join(str(x) for x in (r.get("sidecar_tool"), r.get("sidecar_file")) if x)
+                if doing:
+                    line += f" doing: {self._compact_text(doing, 90)}"
+                out.append(line)
+            if len(hits) > limit:
+                out.append(f"- ... {len(hits) - limit} more")
+        out.append(f"Open but not working (do not report these as working): {idle['yours']} of the "
+                   f"user's own, {idle['workers']} workers; {waiting} of them wait on the user (ccc_waiting).")
+        return "\n".join(out)[:4000]
+
+    def _waiting_rows(self, now):
+        """[(row, ask)] for sessions waiting on the user, live ones first."""
+        hits = []
+        seen = set()
+        for r in self._open_rows() + self._archive_rows():
+            sid = r.get("session_id")
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            if not r.get("is_live"):
+                try:
+                    if now - float(r.get("modified") or r.get("mtime") or 0) > WAITING_RECENT_SECONDS:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            ask = _row_ask(r, now)
+            if ask:
+                hits.append((r, ask))
+        hits.sort(key=lambda h: (not h[0].get("is_live"), -(h[0].get("modified") or h[0].get("mtime") or 0)))
+        return hits
+
+    def _tool_waiting(self, args):
+        """Sessions waiting on the user: the ask and its options, as the row shows them."""
+        try:
+            limit = max(1, min(15, int(args.get("limit") or 6)))
+        except (TypeError, ValueError):
+            limit = 6
+        now = time.time()
+        hits = self._waiting_rows(now)
+        if not hits:
+            return f"No session is waiting on the user (as of {_utc_stamp(now)})."
+        out = [f"{len(hits)} session(s) waiting on the user (as of {_utc_stamp(now)}):"]
+        for n, (r, ask) in enumerate(hits[:limit], 1):
+            ts = r.get("modified") or r.get("mtime")
+            line = (f"{n}. {_row_title(r)} [{'Workers' if _row_lane(r) == 'workers' else 'All'} tab] "
+                    f"session={r.get('session_id')}")
+            if ts:
+                line += f", waiting {_age_text(now - float(ts))}"
+            if not r.get("is_live"):
+                line += ", process ended (a reply resumes it)"
+            out.append(line)
+            out.append("   asks: " + (self._compact_text(ask["question"], 400) or "no question text recorded"))
+            for i, opt in enumerate(ask["options"], 1):
+                out.append(f"   option {i}: {self._compact_text(opt['label'], 80)}")
+            if not ask["options"]:
+                out.append("   no preset options: a go-ahead or any spoken answer works")
+        if len(hits) > limit:
+            out.append(f"... {len(hits) - limit} more (raise limit)")
+        out.append("Answer with ccc_reply: session_id plus option (its number), or text for "
+                   "'go ahead' or any other answer. It sends at once.")
+        return "\n".join(out)[:4000]
+
+    # -- talking to sessions ----------------------------------------------
+
+    def _resolve_row(self, query):
+        """(row, None) for a session named by id, id prefix or title; else (None, why)."""
+        query = str(query or "").strip()
+        if not query:
+            return None, "error: session_id is required"
+        row = self._archive_row(query)
+        if row:
+            return row, None
+        for r in self._open_rows():
+            if r.get("session_id") == query:
+                return r, None
+        hits = self._match_prefix(query) or self._match_title(query)
+        if not hits:
+            return None, f"session {query} not found"
+        live = [r for r in hits if r.get("is_live")]
+        if len(live) == 1:
+            return live[0], None
+        if len(hits) > 1:
+            return None, "multiple matches, ask which one:\n" + "\n".join(
+                f"- {_row_title(r)} session={r.get('session_id')}" for r in (live or hits)[:8])
+        return hits[0], None
+
+    def _post(self, path, body):
+        if not self.base_url:
+            return {"ok": False, "error": "this voice session cannot reach the CCC server"}
+        from ccc_server import assistant_actions as _aa
+        try:
+            return _aa._post_json(self.base_url, path, body, timeout=30)
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:200]}
+
+    def _send_to_session(self, sid, text):
+        """Deliver the user's words to a session as an ordinary message."""
+        from ccc_server import assistant_actions as _aa
+        if not _aa._SID_RE.match(str(sid or "")):
+            return {"ok": False, "error": "session id has unexpected characters"}
+        text = str(text or "").strip()[:8000]
+        if not text:
+            return {"ok": False, "error": "nothing to send"}
+        data = self._post("/api/inject-input", {"session_id": sid, "text": text})
+        try:
+            _core._log_activity("voice", "SEND", f"sid={str(sid)[:8]} ok={bool(data.get('ok'))} "
+                                                 f"queued={data.get('queued')} chars={len(text)}")
+        except Exception:
+            pass
+        return data
+
+    def _tool_reply(self, args):
+        """Send the user's answer to a session now. No confirmation card."""
+        row, err = self._resolve_row(args.get("session_id"))
+        if err:
+            return err
+        sid = row.get("session_id")
+        text = str(args.get("text") or "").strip()
+        option = args.get("option")
+        ask = _row_ask(row) or {"options": [], "formal": False}
+        index = None
+        if option not in (None, ""):
+            try:
+                index = int(option) - 1
+            except (TypeError, ValueError):
+                return "error: option must be a number"
+            if not 0 <= index < len(ask["options"]):
+                return (f"error: {_row_title(row)} has {len(ask['options'])} option(s); "
+                        "send the user's words as text instead")
+            text = ask["options"][index]["reply"]
+        if not text:
+            return "error: give option (a number) or text"
+        if ask.get("formal") and index is not None:
+            # A blocking AskUserQuestion is answered through its own relay.
+            data = self._post("/api/answer-question",
+                              {"session_id": sid, "answers": [{"index": index, "text": text}]})
+            if not data.get("ok"):
+                data = self._send_to_session(sid, text)
+        else:
+            data = self._send_to_session(sid, text)
+        if not data.get("ok"):
+            return f"error: not sent to {_row_title(row)}: {self._compact_text(data.get('error') or 'send failed', 200)}"
+        note = " (queued: it will read it when its current turn ends)" if data.get("queued") else ""
+        return f"Sent to {_row_title(row)}{note}: {self._compact_text(text, 200)}"
+
+    def _direct_snapshot(self, sid):
+        """(last assistant text, turn in progress) for the session on the direct line."""
+        detail = None
+        try:
+            res = _core.compute_session_detail(sid)
+            detail = res[0] if isinstance(res, tuple) else res
+        except Exception:
+            detail = None
+        if isinstance(detail, dict) and detail.get("ok") and "last_assistant_text" in detail:
+            return str(detail.get("last_assistant_text") or ""), detail.get("state") == "working"
+        row = self._archive_row(sid) or {}
+        return str(row.get("last_assistant_text") or ""), row.get("state") == "working"
+
+    def _say(self, text):
+        if self.thread_id and text:
+            return self.call("thread/realtime/appendSpeech",
+                             {"threadId": self.thread_id, "text": text}, timeout=15)
+        return None, None
+
+    def _note(self, text):
+        """Quiet developer context for the realtime model (not spoken)."""
+        if self.thread_id and text:
+            return self.call("thread/realtime/appendText",
+                             {"threadId": self.thread_id, "role": "developer", "text": text}, timeout=15)
+        return None, None
+
+    def _tool_connect(self, args):
+        """Open a direct line: the user's words go to the session, its replies are spoken."""
+        row, err = self._resolve_row(args.get("session_id"))
+        if err:
+            return err
+        sid = row.get("session_id")
+        title = _row_title(row)
+        seen, _working = self._direct_snapshot(sid)
+        line = {"sid": sid, "title": title, "seen": seen, "opened": time.time()}
+        with self._direct_lock:
+            self.direct = line
+            self._direct_out.clear()
+        threading.Thread(target=self._direct_pump, args=(line,), name="voice-direct", daemon=True).start()
+        return (f"Direct line to {title} is open. Tell the user in a few words that they are on with "
+                f"{title} and that 'bring me back, {AGENT_NAME}' returns them. Then stay silent: CCC "
+                "forwards everything they say and speaks the session's replies.")
+
+    def _direct_heard(self, text):
+        """A finished user utterance while a direct line is open (reader thread: never block)."""
+        text = " ".join(str(text or "").split())
+        if not text:
+            return
+        bare = re.sub(r"[^a-z ]", "", text.lower()).strip()
+        if bare == "disconnect" or (len(text) <= 80 and _DIRECT_EXIT_RE.search(text)):
+            threading.Thread(target=self._direct_close, args=("voice",), name="voice-direct-close",
+                             daemon=True).start()
+            return
+        self._direct_out.append(text)
+
+    def _direct_close(self, reason="tool"):
+        with self._direct_lock:
+            line, self.direct = self.direct, None
+            self._direct_out.clear()
+        if not line:
+            return "No direct line is open."
+        if self.state not in ("stopping", "closed", "error"):
+            self.set_state("listening")
+
+            def _announce():
+                self._note(f"The direct line to {line['title']} is closed. You are {AGENT_NAME} again: "
+                           "answer the user normally.")
+                if reason == "voice":
+                    self._say(f"You're back with {AGENT_NAME}.")
+            # Tool calls arrive on the reader thread, which must stay free to
+            # receive the replies to these requests.
+            threading.Thread(target=_announce, name="voice-direct-note", daemon=True).start()
+        return f"Direct line to {line['title']} closed. The user is back with you."
+
+    def _direct_pump(self, line):
+        """Carry one direct line: forward queued utterances, speak new replies."""
+        self.set_state("listening")
+        self._note(f"DIRECT LINE OPEN to the session '{line['title']}'. The user is now talking to that "
+                   "session, not to you. CCC forwards each thing they say and speaks the session's "
+                   "replies itself. Do not answer, do not delegate and do not call tools until CCC "
+                   "tells you the direct line is closed.")
+        while self.direct is line and self.state not in ("stopping", "closed", "error"):
+            while self.direct is line and self._direct_out:
+                try:
+                    text = self._direct_out.popleft()
+                except IndexError:
+                    break
+                data = self._send_to_session(line["sid"], text)
+                if data.get("ok"):
+                    line["seen"] = self._direct_snapshot(line["sid"])[0] or line["seen"]
+                else:
+                    self._say("That did not reach the session: "
+                              + self._compact_text(data.get("error") or "send failed", 120))
+            try:
+                text, working = self._direct_snapshot(line["sid"])
+            except Exception:
+                text, working = "", False
+            if working:
+                self.touch()   # a long turn is not silence; keep the call up
+            elif text and text != line["seen"] and self.direct is line:
+                line["seen"] = text
+                spoken = _speakable(text)
+                if spoken:
+                    self._say(spoken)
+            if self._watchdog_stop.wait(DIRECT_POLL_SECONDS):
+                return
+
 
     def _tool_models(self, args):
         """List current catalog IDs suitable for a voice-selected route."""
@@ -1578,6 +2069,8 @@ class VoiceSession:
             "transport": self.transport,
             "billing": self.billing,
             "pending_actions": [dict(a) for a in self.pending_actions.values()],
+            "direct": ({"session_id": self.direct["sid"], "title": self.direct["title"]}
+                       if self.direct else None),
         }
 
 
@@ -1702,8 +2195,11 @@ class _MethodNotFound(Exception):
     pass
 
 
-def voice_start(params):
-    """Validate, spawn, negotiate. Returns (response_dict, http_status)."""
+def voice_start(params, base_url=None):
+    """Validate, spawn, negotiate. Returns (response_dict, http_status).
+
+    `base_url` is this server's loopback address; the session uses it to send
+    the user's spoken replies to sessions."""
     global _SESSION
     params = params if isinstance(params, dict) else {}
     transport_req = str(params.get("transport") or "auto").strip().lower()
@@ -1757,6 +2253,7 @@ def voice_start(params):
             return {"ok": False, "code": "voice_busy",
                     "error": "a voice session is already running"}, 409
         sess = VoiceSession("voice_" + secrets.token_hex(4), voice, None)
+        sess.base_url = base_url
         _SESSION = sess
 
     try:
@@ -1974,6 +2471,64 @@ def _tool_specs():
         },
         {
             "type": "function",
+            "name": "ccc_working",
+            "description": (
+                "Which sessions are working right now, meaning the agent's turn has "
+                "not finished. Split into the user's own sessions (All tab) and queue "
+                "workers (Workers tab), with what each is doing. Open-but-idle sessions "
+                "are only counted. Read-only."
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "limit": {"type": "integer", "description": "max per group, default 12"},
+            }},
+        },
+        {
+            "type": "function",
+            "name": "ccc_waiting",
+            "description": (
+                "Sessions waiting on the user, exactly as the session row shows: what "
+                "each one asks and its numbered reply options. Read-only."
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "limit": {"type": "integer", "description": "max sessions, default 6"},
+            }},
+        },
+        {
+            "type": "function",
+            "name": "ccc_reply",
+            "description": (
+                "Send the user's answer to a session immediately; no confirmation step. "
+                "session_id may be an id, an id prefix or the session title. Pass option "
+                "(1, 2, ...) to pick one of its listed options, or text for 'go ahead' or "
+                "any other spoken answer. Only send what the user actually said."
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "session_id": {"type": "string"},
+                "option": {"type": "integer", "description": "option number from ccc_waiting"},
+                "text": {"type": "string", "description": "the user's answer in their words"},
+            }, "required": ["session_id"]},
+        },
+        {
+            "type": "function",
+            "name": "ccc_connect",
+            "description": (
+                "Open a direct line between the user and one session: from then on CCC "
+                "forwards everything the user says to it and speaks its replies, until "
+                "the user says 'send me back' or 'bring me back, Bob'. session_id may "
+                "be an id, an id prefix or the session title."
+            ),
+            "inputSchema": {"type": "object", "properties": {
+                "session_id": {"type": "string"},
+            }, "required": ["session_id"]},
+        },
+        {
+            "type": "function",
+            "name": "ccc_disconnect",
+            "description": "Close the direct line and return the user to Bob.",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
+            "type": "function",
             "name": "ccc_models",
             "description": "List approved, currently available model IDs, labels, and supported efforts. Use before choosing an explicit engine/model triage route. Read-only.",
             "inputSchema": {"type": "object", "properties": {
@@ -2030,17 +2585,17 @@ def _tool_specs():
             "type": "function",
             "name": "ccc_propose_action",
             "description": (
-                "Propose a MUTATING action for the user to confirm in the CCC "
-                "dashboard. Never executes anything. kind is one of "
-                "spawn_session, inject, wt_add, wt_comment; params follows the "
+                "Propose starting a session or changing a ticket, for the user to "
+                "confirm in the CCC dashboard. Never executes anything. Not for "
+                "messages to an existing session: use ccc_reply. kind is one of "
+                "spawn_session, wt_add, wt_comment; params follows the "
                 "kind: spawn_session {cwd, prompt, engine?, model?, name?}; "
-                "inject {session_id, text}; wt_add {queue, title, text, priority?}; "
-                "wt_comment {ref, text}."
+                "wt_add {queue, title, text, priority?}; wt_comment {ref, text}."
             ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["spawn_session", "inject", "wt_add", "wt_comment"]},
+                    "kind": {"type": "string", "enum": ["spawn_session", "wt_add", "wt_comment"]},
                     "params": {"type": "object"},
                     "reason": {"type": "string"},
                 },
