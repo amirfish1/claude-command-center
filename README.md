@@ -7,6 +7,10 @@
 Bugs from customers and from monitoring go to coding agents that fix them.
 CCC decides the small reversible things, messages you when it needs a real decision, and takes your answer from the same thread.
 
+![A phone thread. CCC asks for one decision on a bug, you reply "keep it", and later it reports the fix and you reply "yes"](docs/images/oncall-hero.png)
+
+<sub>An illustration of the thread on your phone. The message text is what CCC sends. Example data.</sub>
+
 CCC On-call is a preview. It is off until you turn it on. Not affiliated with Anthropic.
 
 ```bash
@@ -29,6 +33,16 @@ Or `brew install amirfish1/tap/ccc && ccc`, or grab the [macOS DMG](https://gith
 It is 11pm. A customer reports the checkout button is dead. The fix is ten minutes for an agent, but only if someone starts it, answers its one question and tells the customer. That someone is you.
 
 CCC is for a founder, agency lead or small team that ships a product with real users and already uses Claude Code or Codex. CCC puts coding agents on call for your product.
+
+![How a bug moves: bugs come in from customers, GitHub issues, Sentry, PostHog, an uptime check or your test suite. Agents fix them. Real decisions reach you. Your customer hears back.](docs/images/oncall-flow.png)
+
+### One bug, five steps
+
+The same bug with On-call turned on. Two messages reach you. You type three words.
+
+![One bug in five steps: the report arrives, an agent starts, it asks you one real question, you reply in the thread, and the customer is told it is fixed](docs/images/oncall-story.png)
+
+<sub>An illustration of the thread on your phone. The message text is what CCC sends. Example data.</sub>
 
 **1. Bugs come in by themselves.** Reports arrive from GitHub issues, a support mailbox, Sentry, PostHog exceptions, a URL uptime check, any command you already run (a test suite, a health script), or `ccc oncall report "..."`. Each becomes one ticket in a [WatchTower](https://github.com/amirfish1/watchtower) queue, deduplicated, and a worker agent picks it up. Agents fix bugs in the repo you point them at. They open the change the way your queue is set up to (a commit or a pull request). You decide what deploys.
 
@@ -104,6 +118,8 @@ ccc oncall tell REF "This is fixed. Reload the page."
 ```
 
 ## Channels
+
+![The channels: Email, Telegram, ntfy, iMessage, SMS, WhatsApp and your own command, each with what it needs](docs/images/oncall-channels.png)
 
 | Channel | Needs | Notes |
 |---|---|---|

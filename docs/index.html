@@ -12,9 +12,9 @@
 <meta property="og:description" content="Bugs from customers and from monitoring go to coding agents that fix them. CCC messages you when it needs a real decision and takes your answer from the same thread.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://ccc.amirfish.ai">
-<meta property="og:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=5">
+<meta property="og:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=6">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=5">
+<meta name="twitter:image" content="https://ccc.amirfish.ai/images/social-preview.png?v=6">
 
 <style>
   :root {
@@ -91,7 +91,7 @@
     .hero { padding: 44px 0 32px; }
     .hero-grid { grid-template-columns: minmax(0, 1fr); }
     .hero-copy, .hero-actions, .hero-thread { grid-column: 1; grid-row: auto; }
-    .hero-thread { margin: 14px 0 6px; }
+    .hero-thread { margin: 30px 0 6px; order: 3; }
   }
   .eyebrow {
     font-family: var(--mono); font-size: 12px; color: var(--green-bright);
@@ -111,7 +111,11 @@
     line-height: 1.04; letter-spacing: -0.025em;
     margin: 0 0 22px; font-weight: 700;
   }
-  h1.hero-title .orange { color: var(--orange); }
+  h1.hero-title .orange {
+    color: var(--orange);
+    background: linear-gradient(90deg, #f5a623, #ff7a66);
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  }
   h1.hero-title .dim { color: var(--fg-dim); }
   .lede { font-size: 19px; color: var(--fg-dim); max-width: 56ch; margin: 0 0 12px; }
   .lede .tag { color: var(--fg); }
@@ -180,6 +184,142 @@
     font-size: 12.5px; color: var(--fg-mute);
   }
 
+  /* Icons */
+  .ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+  .ico.lg { width: 22px; height: 22px; }
+
+  /* Chat bubbles: an illustration that carries the message text CCC sends */
+  .chat { display: grid; gap: 8px; padding: 16px 14px 18px; }
+  .chat.mini { background: #0b0e13; border: 1px solid var(--line); border-radius: 18px; padding: 14px; min-width: 0; }
+  .chat-who { font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-mute); }
+  .chat-who.right { text-align: right; color: var(--orange); }
+  .chat-who.cust { color: var(--blue); }
+  .b {
+    max-width: 90%; min-width: 0; padding: 10px 13px; border-radius: 18px;
+    font-size: 14px; line-height: 1.42; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .b b { font-weight: 700; }
+  .b.in { justify-self: start; background: #1d232c; color: var(--fg); border-bottom-left-radius: 6px; }
+  .b.out { justify-self: end; background: var(--orange); color: #0a0d11; font-weight: 600; border-bottom-right-radius: 6px; }
+  .b.cust { justify-self: start; background: rgba(143, 179, 255, 0.13); border: 1px solid rgba(143, 179, 255, 0.35); color: var(--fg); border-bottom-left-radius: 6px; }
+  .chat-gap { justify-self: center; font-family: var(--mono); font-size: 11px; color: var(--fg-mute); padding: 2px 0; }
+  @keyframes pop-in {
+    from { opacity: 0; transform: translateY(10px) scale(0.96); }
+    to   { opacity: 1; transform: none; }
+  }
+  .is-visible .chat.play > * {
+    opacity: 0; animation: pop-in 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation-delay: calc(0.5s + var(--i, 0) * 0.85s);
+  }
+
+  /* The phone in the hero */
+  .phone-wrap { position: relative; max-width: 400px; margin: 0 auto; }
+  .phone-wrap::before {
+    content: ""; position: absolute; inset: -6% -14%;
+    background: radial-gradient(closest-side, rgba(245, 166, 35, 0.22), transparent 72%);
+    pointer-events: none;
+  }
+  .phone {
+    position: relative; border-radius: 36px; padding: 10px;
+    background: linear-gradient(160deg, #2c333d, #14181e);
+    border: 1px solid #3a424d;
+    box-shadow: 0 50px 90px -40px rgba(0, 0, 0, 0.9);
+  }
+  .phone-screen { border-radius: 27px; overflow: hidden; background: #0b0e13; }
+  .phone-top { display: flex; align-items: center; gap: 10px; padding: 13px 16px; background: #131820; border-bottom: 1px solid var(--line); }
+  .phone-avatar {
+    width: 34px; height: 34px; border-radius: 50%; background: var(--orange); color: #0a0d11;
+    display: grid; place-items: center; font-family: var(--mono); font-weight: 700; font-size: 11px;
+  }
+  .phone-name { font-weight: 600; font-size: 14.5px; line-height: 1.25; }
+  .phone-sub { font-size: 12px; color: var(--green-bright); display: flex; align-items: center; gap: 6px; }
+  .phone-sub::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--green-bright); box-shadow: 0 0 8px var(--green-bright); }
+  .phone-cap { position: relative; margin: 14px auto 0; max-width: 400px; text-align: center; font-size: 12.5px; color: var(--fg-mute); }
+
+  /* Channel chips under the headline */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+    padding: 6px 12px; border-radius: 999px; font-size: 13.5px; color: var(--fg);
+    background: var(--bg-2); border: 1px solid var(--line-strong);
+  }
+  .chip .ico { width: 15px; height: 15px; color: var(--orange); }
+
+  /* How a bug moves */
+  .flow-title {
+    text-align: center; font-family: var(--mono); font-size: 12px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--fg-mute); margin: 64px 0 22px;
+  }
+  .flow {
+    display: grid; align-items: stretch;
+    grid-template-columns: minmax(0, 1fr) 34px minmax(0, 1fr) 34px minmax(0, 1fr) 34px minmax(0, 1fr);
+  }
+  .flow-col { display: flex; flex-direction: column; min-width: 0; }
+  .flow-label {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--green-bright); margin-bottom: 10px;
+  }
+  .flow-label.you { color: var(--orange); }
+  .flow-label.cust { color: var(--blue); }
+  .flow-card {
+    flex: 1; background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px; display: grid; gap: 10px; align-content: start; min-width: 0;
+  }
+  .flow-card--you { border-color: rgba(245, 166, 35, 0.5); box-shadow: 0 0 70px -22px rgba(245, 166, 35, 0.45); }
+  .flow-card p { margin: 0; font-size: 13.5px; color: var(--fg-dim); }
+  .flow-card .b { font-size: 13px; max-width: 100%; }
+  .src-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+  .src-list li {
+    display: flex; align-items: center; gap: 9px; font-size: 13.5px;
+    padding: 7px 10px; background: var(--bg-3); border: 1px solid var(--line); border-radius: 9px;
+  }
+  .src-list .ico { width: 16px; height: 16px; color: var(--green-bright); }
+  .flow-arrow { position: relative; align-self: center; height: 2px; margin: 26px 6px 0; background: var(--line-strong); }
+  .flow-arrow::before {
+    content: ""; position: absolute; right: -2px; top: -4px;
+    border-left: 7px solid var(--line-strong); border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+  }
+  .flow-arrow::after {
+    content: ""; position: absolute; top: -3px; left: 0; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green-bright); box-shadow: 0 0 10px var(--green-bright);
+    animation: flow-x 1.8s linear infinite;
+  }
+  .flow-arrow.you::after { background: var(--orange); box-shadow: 0 0 10px var(--orange); animation-delay: 0.6s; }
+  .flow-arrow.cust::after { background: var(--blue); box-shadow: 0 0 10px var(--blue); animation-delay: 1.2s; }
+  @keyframes flow-x {
+    from { left: -4px; opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; }
+    to { left: calc(100% - 6px); opacity: 0; }
+  }
+  @keyframes flow-y {
+    from { top: -4px; opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; }
+    to { top: calc(100% - 6px); opacity: 0; }
+  }
+  @media (max-width: 900px) {
+    .flow { grid-template-columns: minmax(0, 1fr); }
+    .flow-title { margin-top: 44px; }
+    .flow-arrow { width: 2px; height: 32px; margin: 8px auto; }
+    .flow-arrow::before {
+      right: -4px; top: auto; bottom: -2px;
+      border-top: 7px solid var(--line-strong); border-bottom: 0;
+      border-left: 5px solid transparent; border-right: 5px solid transparent;
+    }
+    .flow-arrow::after { left: -3px; top: 0; animation-name: flow-y; }
+  }
+
+  /* A ticket and the agent working on it */
+  .ticket {
+    display: grid; gap: 6px; padding: 12px 14px; background: var(--bg-3);
+    border: 1px solid var(--line-strong); border-radius: 10px; font-size: 14px; min-width: 0;
+  }
+  .ticket-ref { font-family: var(--mono); font-size: 12px; color: var(--green-bright); }
+  .working { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 11.5px; color: var(--green-bright); }
+  .working i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: blink 1.2s infinite; }
+  .working i:nth-of-type(2) { animation-delay: 0.2s; }
+  .working i:nth-of-type(3) { animation-delay: 0.4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+  .auto-note { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; color: var(--fg-dim); }
+  .auto-note .ico { width: 16px; height: 16px; color: var(--green-bright); margin-top: 2px; }
+
   /* Demo block + shared framed media */
   .demo {
     margin: 60px auto 0; border: 1px solid var(--line);
@@ -233,6 +373,18 @@
   .moment-text strong { color: var(--fg); font-weight: 600; }
   .moment-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 52px; align-items: end; }
   @media (max-width: 860px) { .moment-grid { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+  .roles { display: grid; gap: 10px; margin-bottom: 22px; max-width: 420px; }
+  .role {
+    display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-radius: 12px;
+    background: var(--bg-2); border: 1px solid var(--line-strong); font-size: 16px;
+  }
+  .role .ico { color: var(--fg-dim); }
+  .role b { font-weight: 600; flex: 1; }
+  .role span {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--red); background: rgba(255, 122, 102, 0.12); border: 1px solid rgba(255, 122, 102, 0.4);
+    padding: 3px 10px; border-radius: 999px;
+  }
   .moment-close { margin: 0; font-size: 17px; color: var(--fg-dim); max-width: 44ch; }
 
   /* What happens instead: the walk through one bug */
@@ -251,7 +403,24 @@
     padding: 22px; background: var(--bg-2);
     border: 1px solid var(--line); border-radius: 12px;
   }
-  .step--you { border-color: rgba(245, 166, 35, 0.4); }
+  .step { position: relative; }
+  .step + .step::before {
+    content: ""; position: absolute; left: 43px; top: -15px; width: 2px; height: 15px; background: var(--line-strong);
+  }
+  .step--you { border-color: rgba(245, 166, 35, 0.45); box-shadow: 0 30px 70px -45px rgba(245, 166, 35, 0.55); }
+  .scene { display: grid; gap: 10px; min-width: 0; }
+  .scene-arrow { justify-self: center; width: 2px; height: 18px; background: var(--line-strong); position: relative; }
+  .scene-arrow::after {
+    content: ""; position: absolute; left: -4px; bottom: -2px;
+    border-top: 7px solid var(--line-strong); border-left: 5px solid transparent; border-right: 5px solid transparent;
+  }
+  .score { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
+  .score-item { padding: 24px; border-radius: 14px; background: var(--bg-2); border: 1px solid var(--line); }
+  .score-item b { display: block; font-size: clamp(48px, 7vw, 76px); line-height: 1; letter-spacing: -0.03em; color: var(--orange); }
+  .score-item.calm b { color: var(--green-bright); }
+  .score-item span { display: block; margin-top: 10px; font-size: 16px; color: var(--fg); }
+  .score-note { margin: 14px 0 0; font-size: 13px; color: var(--fg-mute); }
+  @media (max-width: 640px) { .score { grid-template-columns: minmax(0, 1fr); } }
   .step-num {
     width: 44px; height: 44px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
@@ -279,7 +448,13 @@
     padding: 24px; background: var(--bg-2);
     border: 1px solid var(--line); border-radius: 12px;
   }
-  .claim-num { font-family: var(--mono); font-size: 13px; color: var(--orange); padding-top: 4px; }
+  .claim-num { font-family: var(--mono); font-size: 13px; color: var(--orange); display: grid; gap: 8px; align-content: start; justify-items: center; }
+  .claim-ico {
+    width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+    color: var(--orange); background: var(--orange-soft); border: 1px solid rgba(245, 166, 35, 0.4);
+  }
+  .claim-limit .chat.mini { margin-top: 10px; }
+  @media (max-width: 860px) { .claim-num { grid-auto-flow: column; justify-content: start; align-items: center; } }
   .claim h3 { margin: 0 0 8px; font-size: 19px; letter-spacing: -0.01em; }
   .claim p { margin: 0; font-size: 15.5px; color: var(--fg-dim); }
   .claim p + p, .claim p + pre, .claim pre + p { margin-top: 10px; }
@@ -333,6 +508,26 @@
     }
   }
 
+  /* Channel cards */
+  .chan-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+  @media (max-width: 980px) { .chan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { .chan-grid { grid-template-columns: minmax(0, 1fr); } }
+  .chan {
+    --c: var(--orange); padding: 20px; background: var(--bg-2); border: 1px solid var(--line);
+    border-radius: 14px; min-width: 0; transition: transform 150ms, border-color 150ms;
+  }
+  .chan:hover { transform: translateY(-3px); border-color: var(--c); }
+  @media (min-width: 981px) { .chan.wide { grid-column: span 2; } }
+  .chan-ico {
+    width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center; margin-bottom: 14px;
+    color: var(--c); border: 1px solid var(--line-strong); background: var(--bg-3);
+    background: color-mix(in srgb, var(--c) 14%, transparent); border-color: color-mix(in srgb, var(--c) 42%, transparent);
+  }
+  .chan h3 { margin: 0 0 10px; font-size: 19px; letter-spacing: -0.01em; }
+  .chan-needs { margin: 0; font-size: 14.5px; color: var(--fg); }
+  .chan-needs span { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-mute); margin-bottom: 2px; }
+  .chan-note { margin: 10px 0 0; font-size: 13.5px; color: var(--fg-dim); }
+
   /* What always comes to you */
   .stops { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
   @media (max-width: 860px) { .stops { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -342,6 +537,7 @@
     border: 1px solid rgba(245, 166, 35, 0.4);
     font-size: 19px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3;
   }
+  .stop .ico { display: block; width: 26px; height: 26px; color: var(--orange); margin-bottom: 14px; }
   .stop span { display: block; font-family: var(--mono); font-size: 12px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--orange); margin-bottom: 10px; }
 
   /* Install and setup blocks */
@@ -432,17 +628,41 @@
   .boot-target.is-visible { animation: fade-up 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
 
   @media (prefers-reduced-motion: reduce) {
-    .fade-target, .boot-target {
+    .fade-target, .boot-target, .is-visible .chat.play > * {
       opacity: 1 !important;
       transform: none !important;
       animation: none !important;
     }
+    .flow-arrow::after, .working i { animation: none !important; }
+    .flow-arrow::after { display: none; }
   }
 </style>
 <noscript><style>.fade-target, .boot-target { opacity: 1; transform: none; }</style></noscript>
 <script src="/analytics.js" defer></script>
 </head>
 <body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-mail" viewBox="0 0 24 24"><path d="M3 6.5h18v11H3z"/><path d="m3 7 9 6.5L21 7"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M21 3 10 14"/><path d="M21 3 14 21l-4-7-7-4z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16v-5a6 6 0 1 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></symbol>
+  <symbol id="i-bubble" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+  <symbol id="i-sms" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/><path d="M8.5 10.5h.01M12 10.5h.01M15.5 10.5h.01"/></symbol>
+  <symbol id="i-round" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 0 0-7.3 12.8L3.5 20.5l4.3-1.1A8.5 8.5 0 1 0 12 3.5z"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><path d="M3 5h18v14H3z"/><path d="m7 10 3 2.5L7 15M12.5 15H16"/></symbol>
+  <symbol id="i-issue" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 21 19H3z"/><path d="M12 10v4M12 16.5h.01"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 19V5M4 19h16"/><path d="m7 15 4-4 3 3 5-6"/></symbol>
+  <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6H21"/></symbol>
+  <symbol id="i-checks" viewBox="0 0 24 24"><path d="m4 7 2 2 3.5-4M4 16l2 2 3.5-4M13 7h7M13 16h7"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M8 5 4 9l4 4"/><path d="M4 9h10a5.5 5.5 0 0 1 0 11h-3"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M3 13 6 5h12l3 8v6H3z"/><path d="M3 13h5l1.5 3h5L16 13h5"/></symbol>
+  <symbol id="i-reply" viewBox="0 0 24 24"><path d="M9 6 4 11l5 5"/><path d="M4 11h9a7 7 0 0 1 7 7v1"/></symbol>
+  <symbol id="i-person" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M15 5h6.5v6H18l-2 2v-2"/></symbol>
+  <symbol id="i-money" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M14.5 9.3c-.5-.8-1.4-1.3-2.5-1.3-1.5 0-2.6.8-2.6 2s1 1.7 2.6 2 2.7.8 2.7 2-1.2 2-2.7 2c-1.2 0-2.2-.5-2.7-1.3M12 6.5V8m0 8v1.5"/></symbol>
+  <symbol id="i-horn" viewBox="0 0 24 24"><path d="M4 10v4h3l8 4V6l-8 4z"/><path d="M18 9.5a4 4 0 0 1 0 5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path d="M6 11h12v9H6z"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></symbol>
+</svg>
 
 <header class="nav">
   <div class="wrap nav-inner">
@@ -478,27 +698,50 @@
           <p class="lede">
             Bugs from customers and from monitoring go to coding agents that fix them. CCC decides the small reversible things, messages you when it needs a real decision, and <span class="tag">takes your answer from the same thread.</span>
           </p>
+          <div class="chips" aria-label="Channels for alerts and replies">
+            <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-mail"/></svg>Email</span>
+            <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-send"/></svg>Telegram</span>
+            <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-bubble"/></svg>iMessage</span>
+            <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-sms"/></svg>SMS</span>
+            <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-round"/></svg>WhatsApp</span>
+            <span class="chip"><svg class="ico" aria-hidden="true"><use href="#i-bell"/></svg>ntfy</span>
+          </div>
         </div>
 
-        <div class="hero-thread thread fade-target" aria-label="A decision message from CCC and the reply, as plain message text">
-          <div class="thread-head">The message you get, and your reply</div>
-          <div class="thread-body">
-            <div class="msg">
-              <div class="msg-who">CCC to you</div>
-<pre>SHOP-12 needs a decision (#4)
+        <div class="hero-thread fade-target">
+          <div class="phone-wrap">
+            <div class="phone" role="img" aria-label="A chat thread on a phone. CCC asks for one decision about ticket SHOP-12, you reply keep it, and later CCC reports the fix and you reply yes to tell the customer.">
+              <div class="phone-screen">
+                <div class="phone-top">
+                  <span class="phone-avatar">CCC</span>
+                  <div>
+                    <div class="phone-name">CCC On-call</div>
+                    <div class="phone-sub">agents working</div>
+                  </div>
+                </div>
+                <div class="chat play">
+                  <div class="b in" style="--i:0"><b>SHOP-12 needs a decision (#4)</b>
 Checkout button does nothing on Safari
 
 Keep the old redirect as a fallback for one release, or remove it now?
 Agent recommends: keep it for one release.
 
-Reply with your answer.</pre>
+Reply with your answer.</div>
+                  <div class="b out" style="--i:2">keep it</div>
+                  <div class="b in" style="--i:3">Sent to the agent on SHOP-12.</div>
+                  <div class="chat-gap" style="--i:4">later</div>
+                  <div class="b in" style="--i:5"><b>Fixed: SHOP-12 (#7)</b>
+Checkout button does nothing on Safari
+The click handler was bound before the button rendered. Bound it after render and added a test.
+
+Reply yes to tell Dana it is fixed, or no to skip.</div>
+                  <div class="b out" style="--i:7">yes</div>
+                  <div class="b in" style="--i:8">Sent to Dana.</div>
+                </div>
+              </div>
             </div>
-            <div class="msg you">
-              <div class="msg-who">You, in the same thread</div>
-<pre>keep it</pre>
-            </div>
+            <p class="phone-cap">An illustration of the thread on your phone. The message text is what CCC sends. Example data.</p>
           </div>
-          <div class="thread-foot">Message text as CCC sends it. Example data. The agent resumes with your answer.</div>
         </div>
 
         <div class="hero-actions fade-target">
@@ -511,6 +754,52 @@ Reply with your answer.</pre>
             <a href="#install" data-ccc-cta="install_options" data-ccc-placement="hero">Homebrew, Linux, and Windows</a> &middot;
             <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md#landing-page-download-clicks">anonymous click count</a>
           </p>
+        </div>
+      </div>
+
+      <div class="flow-title fade-target">How a bug moves</div>
+      <div class="flow fade-target">
+        <div class="flow-col">
+          <div class="flow-label">1 &middot; Bugs come in</div>
+          <div class="flow-card">
+            <ul class="src-list">
+              <li><svg class="ico" aria-hidden="true"><use href="#i-mail"/></svg>Customer email, SMS, WhatsApp</li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-issue"/></svg>GitHub issues</li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-alert"/></svg>Sentry</li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg>PostHog exceptions</li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-pulse"/></svg>A URL that must stay up</li>
+              <li><svg class="ico" aria-hidden="true"><use href="#i-checks"/></svg>Your test suite</li>
+            </ul>
+          </div>
+        </div>
+        <div class="flow-arrow"></div>
+        <div class="flow-col">
+          <div class="flow-label">2 &middot; Agents fix them</div>
+          <div class="flow-card">
+            <div class="ticket">
+              <span class="ticket-ref">SHOP-12</span>
+              <span>Checkout button does nothing on Safari</span>
+              <span class="working">agent working <i></i><i></i><i></i></span>
+            </div>
+            <div class="auto-note"><svg class="ico" aria-hidden="true"><use href="#i-undo"/></svg><span>With one switch on, small reversible choices are decided and listed with an undo.</span></div>
+          </div>
+        </div>
+        <div class="flow-arrow you"></div>
+        <div class="flow-col">
+          <div class="flow-label you">3 &middot; Real decisions reach you</div>
+          <div class="flow-card flow-card--you">
+            <div class="b in"><b>SHOP-12 needs a decision (#4)</b></div>
+            <div class="b out">keep it</div>
+            <p>One numbered message. Your reply is the agent's answer.</p>
+          </div>
+        </div>
+        <div class="flow-arrow cust"></div>
+        <div class="flow-col">
+          <div class="flow-label cust">4 &middot; Your customer hears back</div>
+          <div class="flow-card">
+            <div class="b cust">The problem you reported is fixed: Checkout button does nothing on Safari. Reply to this message if you still see it.</div>
+            <p>Sent after your yes, on the channel they wrote in on.</p>
+          </div>
         </div>
       </div>
 
@@ -542,9 +831,16 @@ Reply with your answer.</pre>
         <p class="moment-text fade-target">
           A customer reports it. The fix is ten minutes for an agent, but only if someone starts it, answers its one question and tells the customer. <strong>That someone is you.</strong>
         </p>
-        <p class="moment-close fade-target">
-          You ship a product with real users. You are the support desk, the on-call engineer and the product owner at once.
-        </p>
+        <div class="moment-side fade-target">
+          <div class="roles" aria-hidden="true">
+            <div class="role"><svg class="ico" aria-hidden="true"><use href="#i-bubble"/></svg><b>Support desk</b><span>you</span></div>
+            <div class="role"><svg class="ico" aria-hidden="true"><use href="#i-pulse"/></svg><b>On-call engineer</b><span>you</span></div>
+            <div class="role"><svg class="ico" aria-hidden="true"><use href="#i-person"/></svg><b>Product owner</b><span>you</span></div>
+          </div>
+          <p class="moment-close">
+            You ship a product with real users. You are the support desk, the on-call engineer and the product owner at once.
+          </p>
+        </div>
       </div>
     </div>
   </section>
@@ -569,9 +865,20 @@ Reply with your answer.</pre>
               <h3>The report arrives.</h3>
               <span class="reach reach--no">Does not reach you</span>
             </div>
-            <div class="step-cols single">
+            <div class="step-cols">
               <div>
                 <p>Dana is on your customer list. She emails your support mailbox: the checkout button does nothing on Safari. The report becomes one ticket, SHOP-12, in a WatchTower queue, deduplicated.</p>
+              </div>
+              <div class="scene">
+                <div class="chat mini">
+                  <div class="chat-who cust">Dana, to your support mailbox</div>
+                  <div class="b cust">The checkout button does nothing on Safari.</div>
+                </div>
+                <div class="scene-arrow"></div>
+                <div class="ticket">
+                  <span class="ticket-ref">SHOP-12 &middot; filed once</span>
+                  <span>Checkout button does nothing on Safari</span>
+                </div>
               </div>
             </div>
           </div>
@@ -584,9 +891,16 @@ Reply with your answer.</pre>
               <h3>An agent starts.</h3>
               <span class="reach reach--no">Does not reach you</span>
             </div>
-            <div class="step-cols single">
+            <div class="step-cols">
               <div>
                 <p>A worker agent picks up the ticket and works on it in the repo you pointed it at. Nobody starts the fix by hand.</p>
+              </div>
+              <div class="scene">
+                <div class="ticket">
+                  <span class="ticket-ref">SHOP-12</span>
+                  <span>Checkout button does nothing on Safari</span>
+                  <span class="working">agent working <i></i><i></i><i></i></span>
+                </div>
               </div>
             </div>
           </div>
@@ -604,15 +918,15 @@ Reply with your answer.</pre>
                 <p>The agent hits a choice it cannot decide. You get one numbered message on your phone, on the channel you set up. It works with no browser open.</p>
                 <p>With the small-decisions switch on, minor reversible choices never get this far. The agent states its recommendation and how to undo it, and carries on.</p>
               </div>
-              <div class="msg">
-                <div class="msg-who">CCC to you</div>
-<pre>SHOP-12 needs a decision (#4)
+              <div class="chat mini">
+                <div class="chat-who">CCC to you</div>
+                <div class="b in"><b>SHOP-12 needs a decision (#4)</b>
 Checkout button does nothing on Safari
 
 Keep the old redirect as a fallback for one release, or remove it now?
 Agent recommends: keep it for one release.
 
-Reply with your answer.</pre>
+Reply with your answer.</div>
               </div>
             </div>
           </div>
@@ -629,9 +943,10 @@ Reply with your answer.</pre>
               <div>
                 <p>Plain words, in the same email, Telegram, iMessage, SMS or WhatsApp thread. The reply becomes the agent's answer and the agent resumes.</p>
               </div>
-              <div class="msg you" style="justify-self: stretch;">
-                <div class="msg-who" style="text-align: left;">You, in the same thread</div>
-<pre>keep it</pre>
+              <div class="chat mini">
+                <div class="chat-who right">You, in the same thread</div>
+                <div class="b out">keep it</div>
+                <div class="b in">Sent to the agent on SHOP-12.</div>
               </div>
             </div>
           </div>
@@ -649,18 +964,33 @@ Reply with your answer.</pre>
                 <p>You get one message when the fix lands. Reply yes and CCC tells Dana, on the channel she wrote in on.</p>
                 <p>You can switch the fixed notice off.</p>
               </div>
-              <div class="msg">
-                <div class="msg-who">CCC to you</div>
-<pre>Fixed: SHOP-12 (#7)
+              <div class="scene">
+                <div class="chat mini">
+                  <div class="chat-who">CCC to you</div>
+                  <div class="b in"><b>Fixed: SHOP-12 (#7)</b>
 Checkout button does nothing on Safari
 The click handler was bound before the button rendered. Bound it after render and added a test.
 
-Reply yes to tell Dana it is fixed, or no to skip.</pre>
+Reply yes to tell Dana it is fixed, or no to skip.</div>
+                  <div class="b out">yes</div>
+                </div>
+                <div class="scene-arrow"></div>
+                <div class="chat mini">
+                  <div class="chat-who cust">CCC to Dana</div>
+                  <div class="b cust">The problem you reported is fixed: Checkout button does nothing on Safari. Reply to this message if you still see it.</div>
+                </div>
               </div>
             </div>
           </div>
         </li>
       </ol>
+
+      <div class="score fade-target">
+        <div class="score-item"><b>2</b><span>messages reached you</span></div>
+        <div class="score-item"><b>3</b><span>words you typed: "keep it" and "yes"</span></div>
+        <div class="score-item calm"><b>0</b><span>browser tabs you had to open</span></div>
+      </div>
+      <p class="score-note fade-target">Counted from the example above. Your bugs will differ.</p>
     </div>
   </section>
 
@@ -675,7 +1005,7 @@ Reply yes to tell Dana it is fixed, or no to skip.</pre>
 
       <div class="claims">
         <div class="claim fade-target">
-          <div class="claim-num">01</div>
+          <div class="claim-num"><span class="claim-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-inbox"/></svg></span>01</div>
           <div class="claim-main">
             <h3>Bugs come in by themselves.</h3>
             <p>Reports arrive from GitHub issues, a support mailbox, Sentry, PostHog exceptions, a URL uptime check, any command you already run (a test suite, a health script) and <code>ccc oncall report</code>. Each becomes one ticket in a WatchTower queue, deduplicated, and a worker agent picks it up.</p>
@@ -683,15 +1013,15 @@ Reply yes to tell Dana it is fixed, or no to skip.</pre>
           <div class="claim-limit">
             <div class="limit-label">The limit</div>
             <p>Mail from someone not on your customer list waits for your go-ahead before an agent works on it. If Dana were not on your list, you would get this first:</p>
-<pre class="sample">New report from dana@example.com (#5)
+            <div class="chat mini"><div class="b in"><b>New report from dana@example.com (#5)</b>
 Checkout button does nothing on Safari
 
-Reply go to have an agent work on it, or no to drop it.</pre>
+Reply go to have an agent work on it, or no to drop it.</div></div>
           </div>
         </div>
 
         <div class="claim fade-target">
-          <div class="claim-num">02</div>
+          <div class="claim-num"><span class="claim-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-bell"/></svg></span>02</div>
           <div class="claim-main">
             <h3>You hear when an agent stops or needs you.</h3>
             <p>One numbered message when an agent asks a question it cannot decide, an agent session dies mid-task, a queue stops moving, or a bug is fixed. The fixed notice is optional. It works with no browser open.</p>
@@ -703,7 +1033,7 @@ Reply go to have an agent work on it, or no to drop it.</pre>
         </div>
 
         <div class="claim fade-target">
-          <div class="claim-num">03</div>
+          <div class="claim-num"><span class="claim-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-undo"/></svg></span>03</div>
           <div class="claim-main">
             <h3>Small reversible decisions do not reach you.</h3>
             <p>One switch. An agent that hits a minor, reversible choice states its recommendation and how to undo it, and carries on. Every such decision is listed with its undo.</p>
@@ -715,7 +1045,7 @@ Reply go to have an agent work on it, or no to drop it.</pre>
         </div>
 
         <div class="claim fade-target">
-          <div class="claim-num">04</div>
+          <div class="claim-num"><span class="claim-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-reply"/></svg></span>04</div>
           <div class="claim-main">
             <h3>Answer from the message.</h3>
             <p>Reply to the email, Telegram message, iMessage, SMS or WhatsApp message in plain words. The reply becomes the agent's answer and the agent resumes. The same thread also takes <code>status</code>, <code>pause</code> and <code>resume</code>.</p>
@@ -727,7 +1057,7 @@ Reply go to have an agent work on it, or no to drop it.</pre>
         </div>
 
         <div class="claim fade-target">
-          <div class="claim-num">05</div>
+          <div class="claim-num"><span class="claim-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-person"/></svg></span>05</div>
           <div class="claim-main">
             <h3>Agents can ask your customer.</h3>
             <p>An agent, or you, asks the person who reported the bug a question, or tells them it is fixed, on the channel they wrote in on. Their reply goes back onto the ticket and the agent resumes.</p>
@@ -735,11 +1065,11 @@ Reply go to have an agent work on it, or no to drop it.</pre>
           <div class="claim-limit">
             <div class="limit-label">The limit</div>
             <p>Agents never message a customer without your approval unless you turn that off. You see the wording first:</p>
-<pre class="sample">An agent wants to ask Dana (dana@example.com) about SHOP-12 (#6):
+            <div class="chat mini"><div class="b in"><b>An agent wants to ask Dana (dana@example.com) about SHOP-12 (#6):</b>
 
 Which Safari version are you on, and does it happen in a private window?
 
-Reply yes to send, no to drop, or reply with your own wording.</pre>
+Reply yes to send, no to drop, or reply with your own wording.</div></div>
           </div>
         </div>
       </div>
@@ -754,53 +1084,47 @@ Reply yes to send, no to drop, or reply with your own wording.</pre>
         Pick one channel or several. Replying there answers the agent.
       </p>
 
-      <div class="compare-wrap fade-target">
-        <table class="compare channels">
-          <thead>
-            <tr>
-              <th>Channel</th>
-              <th>Needs</th>
-              <th>Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>Email</td>
-              <td data-label="Needs">An address and an app password</td>
-              <td>Mail servers are detected from the address for Gmail, Outlook, iCloud, Yahoo, Fastmail, Zoho, AOL, GMX. Replies are matched by a private token in the thread.</td>
-            </tr>
-            <tr>
-              <td>Telegram</td>
-              <td data-label="Needs">A bot token</td>
-              <td>CCC finds your chat after you message the bot once.</td>
-            </tr>
-            <tr>
-              <td>ntfy</td>
-              <td data-label="Needs">Nothing</td>
-              <td>Phone push with answer buttons.</td>
-            </tr>
-            <tr>
-              <td>iMessage</td>
-              <td data-label="Needs">CCC running on a Mac signed in to Messages</td>
-              <td></td>
-            </tr>
-            <tr>
-              <td>SMS</td>
-              <td data-label="Needs">Your own Twilio number</td>
-              <td></td>
-            </tr>
-            <tr>
-              <td>WhatsApp</td>
-              <td data-label="Needs">Your own Twilio WhatsApp sender</td>
-              <td>WhatsApp only delivers free text within 24 hours of your last message to the number.</td>
-            </tr>
-            <tr>
-              <td>Your own command</td>
-              <td data-label="Needs">Any script</td>
-              <td>For Slack, Discord or anything else you can script.</td>
-            </tr>
-          </tbody>
-        </table>
+      <div class="chan-grid fade-target">
+        <div class="chan" style="--c: #8fb3ff;">
+          <div class="chan-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-mail"/></svg></div>
+          <h3>Email</h3>
+          <p class="chan-needs"><span>Needs</span>An address and an app password</p>
+          <p class="chan-note">Mail servers are detected from the address for Gmail, Outlook, iCloud, Yahoo, Fastmail, Zoho, AOL, GMX. Replies are matched by a private token in the thread.</p>
+        </div>
+        <div class="chan" style="--c: #5cc8ff;">
+          <div class="chan-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-send"/></svg></div>
+          <h3>Telegram</h3>
+          <p class="chan-needs"><span>Needs</span>A bot token</p>
+          <p class="chan-note">CCC finds your chat after you message the bot once.</p>
+        </div>
+        <div class="chan" style="--c: #f5a623;">
+          <div class="chan-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-bell"/></svg></div>
+          <h3>ntfy</h3>
+          <p class="chan-needs"><span>Needs</span>Nothing</p>
+          <p class="chan-note">Phone push with answer buttons.</p>
+        </div>
+        <div class="chan" style="--c: #4dd599;">
+          <div class="chan-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-bubble"/></svg></div>
+          <h3>iMessage</h3>
+          <p class="chan-needs"><span>Needs</span>CCC running on a Mac signed in to Messages</p>
+        </div>
+        <div class="chan" style="--c: #bd9bff;">
+          <div class="chan-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-sms"/></svg></div>
+          <h3>SMS</h3>
+          <p class="chan-needs"><span>Needs</span>Your own Twilio number</p>
+        </div>
+        <div class="chan" style="--c: #6ee7b7;">
+          <div class="chan-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-round"/></svg></div>
+          <h3>WhatsApp</h3>
+          <p class="chan-needs"><span>Needs</span>Your own Twilio WhatsApp sender</p>
+          <p class="chan-note">WhatsApp only delivers free text within 24 hours of your last message to the number.</p>
+        </div>
+        <div class="chan wide" style="--c: #ff7a66;">
+          <div class="chan-ico"><svg class="ico lg" aria-hidden="true"><use href="#i-term"/></svg></div>
+          <h3>Your own command</h3>
+          <p class="chan-needs"><span>Needs</span>Any script</p>
+          <p class="chan-note">For Slack, Discord or anything else you can script.</p>
+        </div>
       </div>
       <p class="table-note fade-target">No channel needs a public URL or a webhook. CCC polls from the machine it runs on.</p>
     </div>
@@ -815,10 +1139,10 @@ Reply yes to send, no to drop, or reply with your own wording.</pre>
       </p>
 
       <div class="stops fade-target">
-        <div class="stop"><span>Always you</span>Money</div>
-        <div class="stop"><span>Always you</span>Messages to customers</div>
-        <div class="stop"><span>Always you</span>Public posts</div>
-        <div class="stop"><span>Always you</span>Anything that cannot be undone</div>
+        <div class="stop"><svg class="ico" aria-hidden="true"><use href="#i-money"/></svg><span>Always you</span>Money</div>
+        <div class="stop"><svg class="ico" aria-hidden="true"><use href="#i-bubble"/></svg><span>Always you</span>Messages to customers</div>
+        <div class="stop"><svg class="ico" aria-hidden="true"><use href="#i-horn"/></svg><span>Always you</span>Public posts</div>
+        <div class="stop"><svg class="ico" aria-hidden="true"><use href="#i-lock"/></svg><span>Always you</span>Anything that cannot be undone</div>
       </div>
 
       <ul class="why-list plain fade-target" style="margin-top: 32px; max-width: 76ch;">

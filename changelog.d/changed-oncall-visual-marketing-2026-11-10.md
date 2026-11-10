@@ -1,0 +1,1 @@
+- The landing page and the README now show CCC On-call instead of describing it: a phone thread with the decision message and your reply, a four-stage picture of how a bug moves, the five-step story as chat scenes, and channel cards. The link preview image carries the new headline.

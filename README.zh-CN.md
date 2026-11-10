@@ -15,6 +15,10 @@
 客户和监控报来的 bug，会交给编程智能体去修。
 小而可撤销的事由 CCC 决定。真正需要你拍板时，它给你发消息，并从同一个对话里接收你的回复。
 
+![手机上的一段对话：CCC 就一个 bug 请你做一个决定，你回复“keep it”，之后它报告已修复，你回复“yes”](docs/images/oncall-hero.png)
+
+<sub>手机对话的示意图。消息文字是 CCC 实际发送的内容，数据为示例。</sub>
+
 CCC On-call 是预览功能，默认关闭，需要你手动开启。本项目与 Anthropic 无关联。
 
 ```bash
@@ -29,6 +33,16 @@ curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/mai
 晚上 11 点，客户反馈结账按钮点了没反应。智能体十分钟就能修好，前提是有人启动它、回答它的一个问题、再通知客户。这个人就是你。
 
 CCC 面向这样的人：产品已有真实用户，并且已经在用 Claude Code 或 Codex 的创始人、外包团队负责人和小团队。
+
+![bug 的流转：来自客户、GitHub issue、Sentry、PostHog、可用性检查或测试的 bug 进来，智能体去修，真正的决定才到你这里，客户收到结果](docs/images/oncall-flow.png)
+
+### 一个 bug，五步
+
+开启 On-call 后的同一个 bug。到你手上的消息有两条，你一共打了三个词。
+
+![一个 bug 的五步：报告到达，智能体开始，它问你一个真正的问题，你在对话里回复，客户被告知已修复](docs/images/oncall-story.png)
+
+<sub>手机对话的示意图。消息文字是 CCC 实际发送的内容，数据为示例。</sub>
 
 **1. bug 自己进来。** 来源包括 GitHub issue、客服邮箱、Sentry、PostHog 异常、URL 可用性检查、你本来就在跑的任何命令（测试套件、健康检查脚本），以及 `ccc oncall report "..."`。每条报告去重后成为 [WatchTower](https://github.com/amirfish1/watchtower) 队列里的一张工单，由一个工作智能体接手。智能体只修你指定仓库里的 bug，并按队列的设置提交改动（一次提交或一个 pull request）。部署什么由你决定。
 
@@ -77,6 +91,8 @@ ccc oncall tell REF "This is fixed. Reload the page."
 ```
 
 ## 渠道
+
+![渠道：Email、Telegram、ntfy、iMessage、SMS、WhatsApp 和你自己的命令，以及各自需要什么](docs/images/oncall-channels.png)
 
 | 渠道 | 需要 | 说明 |
 |---|---|---|
