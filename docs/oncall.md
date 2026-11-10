@@ -94,6 +94,34 @@ The same settings live in **Settings > On-call**. To turn only the preview on
 and set the rest up there: **Settings > Advanced > Preview features >
 On-call**, or start CCC with `CCC_FF_ONCALL=1`.
 
+## Automatic workers
+
+Setup enables WatchTower auto-drain for bug tickets, with one worker in the
+chosen folder. WatchTower must keep running. Enabling auto-drain starts its
+watcher if one is not already running. On a normal install, `wt start
+--auto-spawn` starts the managed service. For a foreground process under your
+own supervisor, use:
+
+```
+wt start --foreground --auto-spawn --host 127.0.0.1 --port 8787
+```
+
+Choose an unused port when running an isolated instance. Start the foreground
+watcher before setup to prevent setup from starting a managed service.
+`--auto-spawn` also enables stage supervision; omitting it does not disable
+configured queues' auto-drain.
+
+Choose the fixing agent with WatchTower's queue settings, for example:
+
+```
+wt config -q SHOP --engine codex --model gpt-6.1-terra --effort medium
+```
+
+The Codex CLI must be installed and logged in. Current WatchTower defaults to
+Codex's app-server transport. New tickets have a three-minute grace period
+before automatic work starts, plus the watcher interval. Setup does not remove
+that delay. A queued report is not proof that an agent has started.
+
 ## Where bugs come from
 
 | Source | Add it with | What gets filed |
@@ -303,9 +331,9 @@ reply releases it.
   On-call queue.
 - Agents fix bugs in the code folder you point them at, the way your queue is
   set up to (a commit or a pull request). You decide what deploys.
-- The local agent proof covers an explicit WatchTower drain-once launch with
-  Codex exec. It does not verify automatic dispatch, worker recovery, or the
-  default app-server transport.
+- The local agent proof now attempts automatic WatchTower dispatch using the
+  default Codex transport. The revised paid stage has not yet been verified
+  end to end. Worker recovery is not covered.
 - GitHub messaging needs a source that is still enabled and a user token that
   can post issue comments. Reply checks must be able to identify that token's
   account through `/user`; tokens that cannot do this cannot receive replies.
@@ -334,7 +362,8 @@ reply releases it.
 
 ## Local protocol proof
 
-Run `python3 scripts/oncall-proof.py` with Docker, OpenSSL and Python 3.
+Run `python3 scripts/oncall-proof.py` on Linux with Docker, OpenSSL and Python 3.
+Linux `/proc` is required to clean up workers that detach from the watcher.
 WatchTower is optional; without it the ticket check stops at that boundary.
 The script downloads pinned ntfy and GreenMail images, uses temporary state and
 a local TLS certificate, and removes its containers and network when done.
@@ -347,7 +376,7 @@ and store. It does not exercise the dashboard server's routing or preview gate.
 By default no agent session runs. Closing a fixture ticket proves notification
 routing, not that an agent fixed a bug.
 
-On POSIX systems, opt in to one paid agent run with:
+Opt in to one paid agent run with:
 
 ```
 python3 scripts/oncall-proof.py --with-agent
@@ -362,17 +391,36 @@ and ntfy stay local. If Codex renews its login during the run, the renewed
 login is discarded with the temporary home and the script says so; Codex may
 then ask you to sign in again.
 
-The extra stage sends an email reporting a seeded addition bug. It starts a
-real WatchTower drain-once worker for the resulting ticket, with auto-drain off
-and Codex's `exec` transport. This is an explicit worker start, not proof of
-automatic dispatch or the default app-server transport. The worker has four
-minutes to finish. The script checks the new commit, unchanged test file,
-passing test and ticket closure with the same commit. It then approves the
-fixed notice over local ntfy and checks the reporter mailbox before and after
-approval. It prints the report-to-notice time. It does not force an artificial
-code decision; the original protocol stage still checks decision replies.
-Missing Codex, login or an importable WatchTower is reported as a boundary. A worker failure fails the
-proof. Worker output is printed on failure; temporary state is removed.
+The agent stage uses a real foreground WatchTower watcher, started before
+setup with a temporary HOME and an OS-assigned local port. It uses the queue
+created by setup and the documented model selection command above. It leaves
+auto-drain, the grace period and the Codex transport at their defaults. An email
+reports a seeded addition bug. In automatic mode the script never starts a worker itself. The
+watcher and normal report dispatch are responsible for starting it.
+
+One bounded observer allows eight minutes for dispatch and the fix. It prints
+the report-to-observed-worker-start time (up to one second of observation
+latency) and the worker identity. It checks a new commit, an unchanged test,
+a passing test and ticket closure with that same commit. It then approves the
+fixed notice over local ntfy and checks the mailbox before and after approval.
+It also prints report-to-notice time. Protocol fixture tickets run only without
+`--with-agent`, so they cannot be picked up by the fixing worker.
+
+The previous explicit-start comparison remains available with
+`--with-agent --explicit-start`. It disables auto-drain and starts a single
+Codex exec worker directly. That comparison does not prove automatic dispatch.
+
+Missing Codex, login or an importable WatchTower is a boundary. A failed watcher,
+automatic dispatch timeout or failed fix fails the proof and prints local logs.
+The script stops its watcher and kills processes with its unique temporary HOME,
+including detached workers, on normal exit and parent-observed child failure or
+timeout. Containers and the local network are removed in the parent's cleanup.
+A host crash or uncatchable termination of the parent cannot run cleanup.
+
+The revised automatic paid stage has not yet been run end to end. Its
+app-server path is implemented but unverified, not a passing transport claim.
+Running it sends model requests through the copied Codex login, so it cannot
+be used under a rule that permits only local traffic and package downloads.
 
 `ccc oncall report` creates an owner report without a reporter address. The
 proof checks that command separately, then uses incoming email for the report

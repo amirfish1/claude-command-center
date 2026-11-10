@@ -1,0 +1,1 @@
+The opt-in On-call agent proof now observes automatic WatchTower dispatch with the default Codex transport. The proof starts a local foreground watcher before setup and cleans up detached processes. End-to-end paid-agent validation is still pending.
