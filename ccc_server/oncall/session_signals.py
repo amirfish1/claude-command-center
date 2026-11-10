@@ -1,20 +1,44 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
 # SPDX-License-Identifier: LicenseRef-CCC-Software-License
 """Conservative idle-turn questions, with bounded, persistent transcript caching."""
+import calendar
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 
+# A session must sit idle this long before its closing question is read. It
+# keeps a person who is at the keyboard from being messaged about every turn,
+# and it means one transcript lookup per idle period, not one per tick.
+GRACE_S = 120
+
+# CCC's own session footer names the step that needs the person, when any.
+_FOOTER_STEP = re.compile(r"^NEXT_STEP_USER[ \t]*:[ \t]*(.*?)[ \t]*$", re.M)
+_NO_STEP = re.compile(r"^(?:$|(?:none|nothing|no|neither|n/?a|null|nil|not (?:needed|required|applicable))\b)", re.I)
 _ASK = re.compile(r"\b(?:shall I|should I|should we|do you want|would you like|can you|could you|which .{0,80}(?:prefer|want|choose)|what do you (?:think|prefer))\b", re.I)
 
 
-def question(store, session_id, transcript):
+def _epoch(iso):
+    try:
+        return calendar.timegm(time.strptime(str(iso), "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def question(store, session_id, transcript, since=0):
+    """The closing question of an idle transcript, or None.
+
+    ``since`` (epoch seconds) drops a transcript last written before On-call
+    was turned on, so turning it on never replays old questions.
+    """
     if not transcript:
         return None
     path = Path(transcript)
     try:
         stat = path.stat()
+        if since and stat.st_mtime < since:
+            return None
         stamp = [str(path), stat.st_mtime_ns, stat.st_size]
         key = 'question-cache:' + session_id
         cached = store.kv_get(key) or {}
@@ -52,11 +76,19 @@ def question(store, session_id, transcript):
             last = ''
     # Ignore machine footers and quoted/code examples. Only a closing paragraph
     # explicitly addressed to the owner qualifies, not every question mark.
-    prose = last.split('<session-state>', 1)[0].strip()
+    prose, _, footer = last.partition('<session-state>')
+    prose = prose.strip()
     tail = prose.rsplit('\n\n', 1)[-1].strip()
+    steps = _FOOTER_STEP.findall(footer)
+    step = steps[-1].strip() if steps else ''
     signal = None
-    if (tail.endswith('?') and len(tail) <= 1200 and _ASK.search(tail)
-            and not any(x in tail for x in ('```', '> ', '`'))):
+    if not _NO_STEP.match(step):
+        tail = step[:1200]
+    elif steps or not (tail.endswith('?') and len(tail) <= 1200 and _ASK.search(tail)
+                       and not any(x in tail for x in ('```', '> ', '`'))):
+        # A footer that says nothing is needed outranks a question mark above it.
+        tail = ''
+    if tail:
         digest = hashlib.sha256((turn + last).encode()).hexdigest()[:24]
         signal = {'kind': 'plain_question', 'stamp': digest, 'body': tail, 'meta': {}}
     store.kv_set(key, {'stamp': stamp, 'signal': signal})
@@ -64,29 +96,49 @@ def question(store, session_id, transcript):
 
 
 def observe(eng, current):
-    """Only live idle/approval candidates reach the dependency adapters."""
+    """Raise and clear plain-question and permission alerts from session states.
+
+    A permission row is probed on every call (rare, and already in memory).
+    An idle row is probed once, after it has stayed idle for GRACE_S.
+    """
     if not eng.active() or eng.deps is None:
         return
+    from . import alerts
     with eng._lock:
-        live = set()
+        now = eng.clock()
         enabled = (eng.config().get("alerts") or {}).get("decisions", True)
+        idle = getattr(eng, "_idle_seen", None)
+        if idle is None:
+            idle = eng._idle_seen = {}
+        prompts, candidates = set(), set()
+
+        def raise_signal(sid, signal):
+            key = f"session:{sid}:{signal['kind']}:{signal['stamp']}"
+            if enabled:
+                alerts.raise_event(eng.store, kind=signal['kind'], key=key, session_id=sid,
+                                   title='Agent ' + sid[:8], body=signal['body'],
+                                   meta=signal['meta'], now=now)
+            return key
+
         for sid, row in (current or {}).items():
-            signal = None
             if row.get('needs_approval'):
                 signal = eng.deps.permission(sid)
+                if signal:
+                    prompts.add(raise_signal(sid, signal))
             elif row.get('state') == 'idle' and not row.get('question_waiting'):
-                signal = eng.deps.question(sid, eng.store)
-            if not signal:
-                continue
-            kind = signal['kind']
-            key = f"session:{sid}:{kind}:{signal['stamp']}"
-            live.add(key)
-            if not enabled:
-                continue
-            from . import alerts
-            alerts.raise_event(eng.store, kind=kind, key=key, session_id=sid,
-                               title='Agent ' + sid[:8], body=signal['body'],
-                               meta=signal['meta'], now=eng.clock())
+                candidates.add(sid)
+                seen = idle.setdefault(sid, {'at': now, 'done': False})
+                if seen['done'] or not enabled or now - seen['at'] < GRACE_S:
+                    continue
+                seen['done'] = True
+                signal = eng.deps.question(sid, eng.store, _epoch(eng.store.kv_get("enabled_at")))
+                if signal:
+                    raise_signal(sid, signal)
+        for sid in [s for s in idle if s not in candidates]:
+            del idle[sid]
         for alert in eng.store.alerts(state='open'):
-            if alert['kind'] in ('plain_question', 'permission') and alert['key'] not in live:
-                eng.store.alert_close(alert['id'], 'cleared', now=eng.clock())
+            gone = ((alert['kind'] == 'permission' and alert['key'] not in prompts)
+                    or (alert['kind'] == 'plain_question'
+                        and alert.get('session_id') not in candidates))
+            if gone:
+                eng.store.alert_close(alert['id'], 'cleared', now=now)

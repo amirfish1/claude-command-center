@@ -68,7 +68,8 @@ read access to issues.
 One numbered message when:
 
 - an agent asks a question it should not decide by itself
-- an idle Claude Code or Codex agent ends with an explicit question to you
+- a Claude Code or Codex agent ends its turn with an explicit question to you
+  and then sits idle for two minutes
 - an agent is waiting for tool permission
 - an agent session stopped in the middle of its work
 - a queue stopped moving
@@ -96,9 +97,9 @@ The reply becomes the agent's answer and the agent carries on. With several
 messages waiting, start with the number: `4 keep it`. Other words that work
 on any channel: `status`, `pause`, `resume`.
 
-For a permission alert, reply in its thread with exactly `allow` or `deny`.
-Capitalization and surrounding spaces do not matter. Other replies do not
-answer the prompt. CCC uses its existing approval handler and checks that the
+For a permission alert, reply with exactly `allow` or `deny` (after the
+number, if several messages are waiting: `4 allow`). Capitalization and
+surrounding spaces do not matter. Other replies do not answer the prompt. CCC uses its existing approval handler and checks that the
 same prompt is still pending. If the handler cannot answer it, use the
 session itself. Claude supports its permission hook, or its existing macOS
 live-terminal path. Codex needs an actionable app-server approval request.
@@ -215,11 +216,16 @@ reply releases it.
 
 - It is a preview. It is off until you turn it on.
 - Plain-text question detection covers idle Claude Code and Codex sessions.
+  A question is sent once the session has been idle for two minutes, so you
+  are not messaged while you are answering it at the keyboard. Questions
+  written before On-call was turned on are not sent.
   It reads at most the last 64 KiB of a changed transcript and caches results
-  on disk by modification time and size. It uses no model call. Only a closing
-  paragraph ending in a question mark with explicit wording such as "Should
-  I" or "Would you like" qualifies. Quoted examples and code are excluded.
-  Indirect requests, long messages and other engines can be missed.
+  on disk by modification time and size. It uses no model call. Two things
+  qualify: the step CCC's own session footer names for you (anything other
+  than "None"), or, without a footer, a closing paragraph ending in a
+  question mark with explicit wording such as "Should I" or "Would you
+  like". Quoted examples and code are excluded. Indirect requests, long
+  messages and other engines can be missed.
 - Permission alerts require a prompt identity and tool or command text in
   CCC's existing state. Unsupported approval paths do not fall back to sending
   text as a permission answer. Answer those prompts in the session.

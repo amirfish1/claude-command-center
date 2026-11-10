@@ -55,15 +55,6 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
     by_reply = store.delivery_alert(msg.channel, msg.reply_to) if msg.reply_to else None
     trusted = (not email) or by_token is not None
 
-    permission_target = by_token or by_reply
-    if permission_target is None and not email:
-        permission_target, _, _ = _resolve(store, text)
-    if (permission_target and permission_target["state"] == "open"
-            and permission_target["kind"] == "permission"
-            and text.lower() not in ("allow", "deny")):
-        say("Reply allow or deny.", permission_target)
-        return "unclear permission reply"
-
     if low in ("status", "help", "?"):
         say(HELP if low != "status" else status_text(cfg, store))
         return low

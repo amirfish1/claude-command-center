@@ -350,14 +350,16 @@ class _OncallDeps:
             return False, str(result.get("error") or "the session did not take the message")
         return True, ""
 
-    def question(self, sid, store):
+    def question(self, sid, store, since=0):
+        # Called once per idle period per session (session_signals.observe),
+        # never per tick: the Claude path lookup walks the projects folder.
         from ccc_server.oncall.session_signals import question
         engine = _detect_session_engine(sid)
         if engine not in ("claude", "codex"):
             return None
         transcript = (_resolve_codex_rollout_path(sid) if engine == "codex"
                       else _resolve_conversation_path(sid))
-        return question(store, sid, transcript)
+        return question(store, sid, transcript, since)
 
     def permission(self, sid):
         engine = _detect_session_engine(sid)

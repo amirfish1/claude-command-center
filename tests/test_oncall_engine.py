@@ -662,10 +662,22 @@ def test_plain_question_observation_cache_clear_and_reply(rig, engine, monkeypat
     row = ({'type': 'assistant', 'uuid': 'turn-1', 'message': message} if engine == 'claude'
            else {'type': 'response_item', 'timestamp': 'turn-1', 'payload': dict(message, type='message')})
     transcript.write_text(json.dumps(row) + '\n')
-    rig.deps.question = lambda sid, store: signals.question(store, sid, transcript)
+    probes = []
+    def probe(sid, store, since=0):
+        probes.append(sid)
+        return signals.question(store, sid, transcript)
+    rig.deps.question = probe
     rig.deps.permission = lambda sid: None
     idle = {'sess-1': {'state': 'idle'}}
+    # Nothing is read or sent until the session has stayed idle for the grace
+    # period: a person at the keyboard is not messaged about every turn.
     signals.observe(rig.eng, idle)
+    rig.clock.now += signals.GRACE_S - 1
+    signals.observe(rig.eng, idle)
+    assert not probes and not rig.eng.store.alerts()
+    rig.clock.now += 1
+    signals.observe(rig.eng, idle)
+    assert probes == ['sess-1']
     # A cache hit must not reopen the transcript, including with a fresh Store.
     original = Path.open
     def guarded(path, *args, **kwargs):
@@ -684,8 +696,18 @@ def test_plain_question_observation_cache_clear_and_reply(rig, engine, monkeypat
     assert rig.deps.injected == [('sess-1', 'keep it')]
     signals.observe(rig.eng, idle)
     assert len(rig.eng.store.alerts()) == 1
+    # One lookup per idle period, however many ticks pass.
+    assert probes == ['sess-1']
     # A new turn gets a new incident, which clears on activity.
     transcript.write_text(transcript.read_text().replace('turn-1', 'turn-2'))
+    signals.observe(rig.eng, {'sess-1': {'state': 'working'}})
+    signals.observe(rig.eng, idle)
+    rig.clock.now += signals.GRACE_S
+    signals.observe(rig.eng, idle)
+    assert probes == ['sess-1', 'sess-1']
+    assert len(rig.eng.store.alerts(state='open')) == 1
+    # A restart forgets the idle clock. The open alert must survive it.
+    rig.eng._idle_seen = {}
     signals.observe(rig.eng, idle)
     assert len(rig.eng.store.alerts(state='open')) == 1
     signals.observe(rig.eng, {'sess-1': {'state': 'working'}})
@@ -713,11 +735,15 @@ def test_permissions_strict_replies_clear_quiet_and_off(rig, engine, monkeypatch
     rig.tick()
     assert len(rig.chan('tg').sent) == 1
     token = rig.eng.store.alert(1)['token']
-    for text in ['yes', 'allow please', 'allow!', 'pause', 'deny this']:
+    for text in ['yes', 'allow please', 'allow!', 'deny this']:
         rig.msg('tg', text, '4242', thread=token)
         rig.tick()
         assert not approved and not rig.deps.injected
         assert rig.chan('tg').sent[-1].text == 'Reply allow or deny.'
+    # The words that work on any channel still work inside a permission thread.
+    rig.msg('tg', 'status', '4242', thread=token)
+    rig.tick()
+    assert not approved and rig.chan('tg').sent[-1].text != 'Reply allow or deny.'
     rig.msg('tg', ' ALLOW ', '4242', thread=token)
     rig.tick()
     assert approved[0][1] == 'allow'
@@ -727,8 +753,45 @@ def test_permissions_strict_replies_clear_quiet_and_off(rig, engine, monkeypatch
     rig.deps.permission = lambda sid: {'kind': 'permission', 'stamp': 'request-2',
         'body': 'Read: file', 'meta': {'engine': engine, 'prompt': 'request-2'}}
     signals.observe(rig.eng, waiting)
+    # Without a thread, the number picks the alert and the rest is the answer.
+    rig.tick()
+    rig.msg('tg', '2 deny', '4242')
+    rig.tick()
+    assert approved[-1][1] == 'deny'
+    assert rig.eng.store.alert(2)['state'] == 'answered'
     signals.observe(rig.eng, {})
     assert not rig.eng.store.alerts(state='open')
+
+
+def test_question_reads_the_session_footer(rig):
+    """CCC's own footer names the step that needs the person; it outranks prose."""
+    import json
+    from ccc_server.oncall.session_signals import question
+    transcript = rig.root / 'footer.jsonl'
+    def last(text):
+        transcript.write_text(json.dumps({'type': 'assistant', 'uuid': text, 'message': {
+            'content': [{'type': 'text', 'text': text}]}}) + '\n')
+        return question(rig.eng.store, 's', transcript)
+    foot = '\n\n<session-state>\nDID: x\nNEXT_STEP_USER: %s\n<!--\nNEXT_ACTION: null\n-->\n</session-state>'
+    assert last('Done.' + foot % 'Choose: keep the old client or drop it.')['body'] == \
+        'Choose: keep the old client or drop it.'
+    for nothing in ['None', 'None.', 'none', 'Nothing pending; the queue is drained.',
+                    'No decision is pending.', 'N/A', 'Neither card needs an answer.', '']:
+        assert last('Should I keep the old client?' + foot % nothing) is None, nothing
+
+
+def test_question_ignores_transcripts_older_than_turn_on(rig):
+    import json, os
+    from ccc_server.oncall.session_signals import question, _epoch
+    transcript = rig.root / 'old.jsonl'
+    transcript.write_text(json.dumps({'type': 'assistant', 'uuid': 't', 'message': {
+        'content': [{'type': 'text', 'text': 'Should I keep the old client?'}]}}) + '\n')
+    turned_on = _epoch('2026-11-10T10:00:00Z')
+    os.utime(transcript, (turned_on - 60, turned_on - 60))
+    assert question(rig.eng.store, 's', transcript, turned_on) is None
+    os.utime(transcript, (turned_on + 60, turned_on + 60))
+    assert question(rig.eng.store, 's', transcript, turned_on)['body'] == 'Should I keep the old client?'
+    assert _epoch('') == 0 and _epoch(None) == 0
 
 
 def test_question_rejects_examples_and_nonquestions(rig):

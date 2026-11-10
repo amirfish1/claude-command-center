@@ -5702,7 +5702,7 @@ def test_oncall_only_probes_idle_and_permission_candidates(tmp_path):
     class Deps:
         def __init__(self):
             self.calls = []
-        def question(self, sid, db):
+        def question(self, sid, db, since=0):
             self.calls.append(('question', sid))
         def permission(self, sid):
             self.calls.append(('permission', sid))
@@ -5714,8 +5714,20 @@ def test_oncall_only_probes_idle_and_permission_candidates(tmp_path):
     rows = {str(i): {'state': 'working'} for i in range(2000)}
     rows.update(idle={'state': 'idle'}, approval={'needs_approval': True},
                 formal={'state': 'idle', 'question_waiting': True})
+    now = [1_800_000_000.0]
+    eng.clock = lambda: now[0]
     session_signals.observe(eng, rows)
-    assert deps.calls == [('question', 'idle'), ('permission', 'approval')]
+    # Inside the idle grace period no transcript is looked up at all.
+    assert deps.calls == [('permission', 'approval')]
+    now[0] += session_signals.GRACE_S
+    session_signals.observe(eng, rows)
+    assert deps.calls == [('permission', 'approval'), ('question', 'idle'), ('permission', 'approval')]
+    # Later ticks never look the idle session up again.
+    for _ in range(50):
+        now[0] += 5
+        session_signals.observe(eng, rows)
+    assert [c for c in deps.calls if c[0] == 'question'] == [('question', 'idle')]
+    del deps.calls[2:]
     eng.flag_on = lambda: False
     session_signals.observe(eng, rows)
     assert len(deps.calls) == 2

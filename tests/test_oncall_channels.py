@@ -1429,7 +1429,8 @@ def test_idle_question_round_trip_over_local_ntfy(web, tmp_path):
                                        'server': web.base, 'topic': 'alerts'}])
     store.save_config(tmp_path / 'state', cfg)
     deps = Deps()
-    deps.question = lambda sid, db: session_signals.question(db, sid, transcript)
+    deps.question = lambda sid, db, since=0: session_signals.question(db, sid, transcript)
+    session_signals.GRACE_S, grace = 0, session_signals.GRACE_S
     eng = engine.Engine(tmp_path / 'state', wt=FakeWT(), deps=deps, flag_on=lambda: True)
     web.reply(200, b'')
     eng.tick(force=True)
@@ -1445,4 +1446,5 @@ def test_idle_question_round_trip_over_local_ntfy(web, tmp_path):
     assert deps.injected == [('local-session', 'keep it')]
     assert web.json()['message'] == 'Sent to the agent.'
     assert eng.store.alert(1)['state'] == 'answered'
+    session_signals.GRACE_S = grace
     eng.store.close()
