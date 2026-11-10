@@ -92,6 +92,8 @@ TOOL_NAMES = ("ccc_attention", "ccc_session", "ccc_sessions", "ccc_working", "cc
 AGENT_NAME = "Bob"
 DIRECT_POLL_SECONDS = 2.0
 DIRECT_SPEECH_MAX_CHARS = 1200
+# Speech arrives in fragments; wait for this much quiet, then send them as one message.
+DIRECT_SETTLE_SECONDS = 1.5
 # How far back a not-live session's unanswered ask still counts as waiting.
 WAITING_RECENT_SECONDS = 12 * 3600
 
@@ -625,6 +627,7 @@ class VoiceSession:
         self.direct = None            # {"sid", "title", "seen"} while a direct line is open
         self._direct_out = deque()    # user utterances waiting to reach the session
         self._direct_lock = threading.Lock()
+        self._direct_heard_at = 0.0
 
     # -- events ---------------------------------------------------------
 
@@ -1459,6 +1462,7 @@ class VoiceSession:
                              daemon=True).start()
             return
         self._direct_out.append(text)
+        self._direct_heard_at = time.monotonic()
 
     def _direct_close(self, reason="tool"):
         with self._direct_lock:
@@ -1487,11 +1491,15 @@ class VoiceSession:
                    "replies itself. Do not answer, do not delegate and do not call tools until CCC "
                    "tells you the direct line is closed.")
         while self.direct is line and self.state not in ("stopping", "closed", "error"):
-            while self.direct is line and self._direct_out:
-                try:
-                    text = self._direct_out.popleft()
-                except IndexError:
-                    break
+            settled = time.monotonic() - getattr(self, "_direct_heard_at", 0.0) >= DIRECT_SETTLE_SECONDS
+            if self.direct is line and self._direct_out and settled:
+                parts = []
+                while self._direct_out:
+                    try:
+                        parts.append(self._direct_out.popleft())
+                    except IndexError:
+                        break
+                text = " ".join(parts)
                 data = self._send_to_session(line["sid"], text)
                 if data.get("ok"):
                     line["seen"] = self._direct_snapshot(line["sid"])[0] or line["seen"]
@@ -1509,7 +1517,8 @@ class VoiceSession:
                 spoken = _speakable(text)
                 if spoken:
                     self._say(spoken)
-            if self._watchdog_stop.wait(DIRECT_POLL_SECONDS):
+            pause = min(0.5, DIRECT_POLL_SECONDS) if self._direct_out else DIRECT_POLL_SECONDS
+            if self._watchdog_stop.wait(pause):
                 return
 
 

@@ -963,6 +963,8 @@ def test_speakable_drops_footer_code_and_markdown():
 def test_direct_line_forwards_speech_speaks_replies_and_returns(voice_env, monkeypatch):
     monkeypatch.setenv("FAKE_VOICE_MODE", "direct_line")
     monkeypatch.setattr(rv, "DIRECT_POLL_SECONDS", 0.05)
+    monkeypatch.setattr(rv, "DIRECT_SETTLE_SECONDS", 0.3)
+    monkeypatch.setattr(rv, "HEARTBEAT_TIMEOUT_SECONDS", 30)   # this test outlives the fixture's 0.4s
     rows = [{"session_id": "sess_direct", "engine": "claude", "is_live": True, "state": "idle",
              "display_name": "Split work", "spawned_via": "ui"}]
     monkeypatch.setattr(server, "_archive_all_rows_cached", lambda opts: (rows, True))
@@ -978,6 +980,10 @@ def test_direct_line_forwards_speech_speaks_replies_and_returns(voice_env, monke
     sess = rv._session_by_id(sid)
     assert _wait(lambda: sent, 6), "the user's words never reached the session"
     assert sent == [{"session_id": "sess_direct", "text": "run the tests again"}]
+    # Fragments of one thought are held for a pause and sent as one message.
+    sess._on_notification("thread/realtime/transcript/done", {"role": "user", "text": "and then"})
+    sess._on_notification("thread/realtime/transcript/done", {"role": "user", "text": "push it"})
+    assert _wait(lambda: len(sent) == 2, 5) and sent[1]["text"] == "and then push it"
     assert sess.public()["direct"] == {"session_id": "sess_direct", "title": "Split work"}
     log = voice_env.log
     assert _wait(lambda: "DIRECT LINE OPEN" in log.read_text(), 5)
@@ -992,7 +998,7 @@ def test_direct_line_forwards_speech_speaks_replies_and_returns(voice_env, monke
     sess._on_notification("thread/realtime/transcript/done", {"role": "user", "text": "Bring me back, Bob."})
     assert _wait(lambda: sess.direct is None, 5)
     assert _wait(lambda: "back with Bob" in log.read_text() and "direct line to Split work is closed" in log.read_text(), 5)
-    assert len(sent) == 1
+    assert len(sent) == 2
     assert log.read_text().count('appendSpeech:"All 12 tests pass."') == 1
 
 
