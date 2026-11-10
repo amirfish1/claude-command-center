@@ -33,6 +33,17 @@ def run(*args, **kw):
     return proc.stdout.strip()
 
 
+AGENT_MODEL = 'gpt-6.1-terra'
+
+
+def _watchtower_workers():
+    try:
+        from watchtower import workers
+    except ImportError:
+        return None
+    return workers
+
+
 def seed_repo(project):
     """A real failing test, with no remote or inherited git hooks."""
     git = os.environ['PROOF_GIT']
@@ -209,12 +220,15 @@ def child(root, web, smtp, imap, with_agent=False):
             results.append(('agent execution', 'BOUNDARY: no agent session started'))
         elif not shutil.which('codex') or not (Path.home() / '.codex/auth.json').exists():
             results.append(('agent execution', 'BOUNDARY: Codex executable or login missing'))
+        elif not _watchtower_workers():
+            results.append(('agent execution', 'BOUNDARY: WatchTower is not importable from this Python'))
         else:
-            from watchtower import workers
+            workers = _watchtower_workers()
+            model = os.environ.get('PROOF_MODEL') or AGENT_MODEL
             baseline = seed_repo(project)
             queue_name = eng.config()['queue']
             eng.wt._ok('config', '-q', queue_name, '--auto-drain', 'off',
-                       '--engine', 'codex', '--model', 'gpt-6.1-terra', '--effort', 'medium')
+                       '--engine', 'codex', '--model', model, '--effort', 'medium')
             eng.wt._ok('config', '-q', queue_name, '--codex-transport', 'exec')
             before_mail = len(mailbox('reporter'))
             started = time.monotonic()
@@ -223,8 +237,8 @@ def child(root, web, smtp, imap, with_agent=False):
             report = next(r for r in eng.store.reports() if r.get('title') == 'Addition bug')
             agent_ref = report['ticket_ref']
             rec = workers.spawn_run_once_worker(queue_name, agent_ref, repo_path=str(project),
-                                                engine='codex', model='gpt-6.1-terra')
-            print('Worker model: gpt-6.1-terra; effort: medium; transport: exec', flush=True)
+                                                engine='codex', model=model)
+            print(f'Worker model: {model}; effort: medium; transport: exec', flush=True)
             try:
                 wait_worker(rec)
                 item = eng.wt.find(agent_ref)
@@ -269,8 +283,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--with-agent', action='store_true',
                         help='Run one paid Codex worker using an isolated copy of the login')
+    parser.add_argument('--model', default=AGENT_MODEL,
+                        help=f'Codex model for --with-agent (default {AGENT_MODEL})')
     args = parser.parse_args()
     containers = []
+    login_before = None
     with tempfile.TemporaryDirectory(prefix='ccc-oncall-proof-') as tmp:
         root = Path(tmp)
         # Only these executables are visible to the isolated child. In particular,
@@ -291,6 +308,7 @@ def main():
             if auth.is_file():
                 shutil.copyfile(auth, codex_home / 'auth.json')
                 (codex_home / 'auth.json').chmod(0o600)
+                login_before = auth.read_bytes()
         cert = root / 'cert.pem'
         run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
             '-keyout', str(root / 'key.pem'), '-out', str(cert), '-subj', '/CN=localhost',
@@ -342,9 +360,15 @@ def main():
                        WATCHTOWER_STORE=str(root / 'queues.json'), WT_NO_SELF_UPDATE='1',
                        WATCHTOWER_DELEGATE_URL='off', GIT_CONFIG_NOSYSTEM='1',
                        GIT_CONFIG_GLOBAL=os.devnull,
-                       SSL_CERT_FILE=str(trust), PROOF_GIT=shutil.which('git'))
+                       SSL_CERT_FILE=str(trust), PROOF_GIT=shutil.which('git'),
+                       PROOF_MODEL=args.model)
             proc = subprocess.run([sys.executable, __file__, '--child', tmp,
                                    f'http://127.0.0.1:{http}', str(smtp), str(imap), *(['--with-agent'] if args.with_agent else [])], env=env, timeout=360)
+            copied = root / '.codex' / 'auth.json'
+            if login_before is not None and copied.is_file() and copied.read_bytes() != login_before:
+                # The renewed login lives only in the temporary copy and is discarded.
+                print('Note: Codex renewed its login during the agent run. If Codex asks you to '
+                      'sign in again, run: codex login')
             if proc.returncode:
                 subprocess.run(["docker", "logs", mail_id], timeout=10)
             return proc.returncode

@@ -321,8 +321,11 @@ python3 scripts/oncall-proof.py --with-agent
 This requires WatchTower and a logged-in Codex CLI. It copies only `auth.json`
 from your Codex home into a temporary home. It does not copy your configuration,
 sessions or skills. Queue state, worker records, git configuration and the code
-repository are temporary. The agent uses `gpt-6.1-terra` at medium effort.
-The model connection uses your Codex account; mail and ntfy stay local.
+repository are temporary. The agent uses `gpt-6.1-terra` at medium effort;
+`--model` picks another. The model connection uses your Codex account; mail
+and ntfy stay local. If Codex renews its login during the run, the renewed
+login is discarded with the temporary home and the script says so; Codex may
+then ask you to sign in again.
 
 The extra stage sends an email reporting a seeded addition bug. It starts a
 real WatchTower drain-once worker for the resulting ticket, with auto-drain off
@@ -333,7 +336,7 @@ passing test and ticket closure with the same commit. It then approves the
 fixed notice over local ntfy and checks the reporter mailbox before and after
 approval. It prints the report-to-notice time. It does not force an artificial
 code decision; the original protocol stage still checks decision replies.
-Missing Codex or login is reported as a boundary. A worker failure fails the
+Missing Codex, login or an importable WatchTower is reported as a boundary. A worker failure fails the
 proof. Worker output is printed on failure; temporary state is removed.
 
 `ccc oncall report` creates an owner report without a reporter address. The
