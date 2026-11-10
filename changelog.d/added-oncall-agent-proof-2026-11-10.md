@@ -1,0 +1,1 @@
+- Add an opt-in local On-call proof that runs one Codex WatchTower worker and checks its commit, test, ticket closure and approved reporter notice.

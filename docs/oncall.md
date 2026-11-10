@@ -288,6 +288,9 @@ reply releases it.
   On-call queue.
 - Agents fix bugs in the code folder you point them at, the way your queue is
   set up to (a commit or a pull request). You decide what deploys.
+- The local agent proof covers an explicit WatchTower drain-once launch with
+  Codex exec. It does not verify automatic dispatch, worker recovery, or the
+  default app-server transport.
 - Status shows configured channels and their last delivery result. It does not
   prove that a worker is running or that a phone displayed a message.
 - ntfy decision replies use the separate `<topic>-reply` topic. Publish
@@ -306,8 +309,32 @@ It checks ntfy delivery and replies, SMTP delivery, IMAP replies, and, when
 WatchTower is installed, a real isolated ticket decision and a fixed notice to
 a local reporter mailbox. The HTTP adapter uses the real On-call API, engine
 and store. It does not exercise the dashboard server's routing or preview gate.
-No agent session runs. Closing a fixture ticket proves notification routing,
-not that an agent fixed a bug.
+By default no agent session runs. Closing a fixture ticket proves notification
+routing, not that an agent fixed a bug.
+
+On POSIX systems, opt in to one paid agent run with:
+
+```
+python3 scripts/oncall-proof.py --with-agent
+```
+
+This requires WatchTower and a logged-in Codex CLI. It copies only `auth.json`
+from your Codex home into a temporary home. It does not copy your configuration,
+sessions or skills. Queue state, worker records, git configuration and the code
+repository are temporary. The agent uses `gpt-6.1-terra` at medium effort.
+The model connection uses your Codex account; mail and ntfy stay local.
+
+The extra stage sends an email reporting a seeded addition bug. It starts a
+real WatchTower drain-once worker for the resulting ticket, with auto-drain off
+and Codex's `exec` transport. This is an explicit worker start, not proof of
+automatic dispatch or the default app-server transport. The worker has four
+minutes to finish. The script checks the new commit, unchanged test file,
+passing test and ticket closure with the same commit. It then approves the
+fixed notice over local ntfy and checks the reporter mailbox before and after
+approval. It prints the report-to-notice time. It does not force an artificial
+code decision; the original protocol stage still checks decision replies.
+Missing Codex or login is reported as a boundary. A worker failure fails the
+proof. Worker output is printed on failure; temporary state is removed.
 
 `ccc oncall report` creates an owner report without a reporter address. The
 proof checks that command separately, then uses incoming email for the report

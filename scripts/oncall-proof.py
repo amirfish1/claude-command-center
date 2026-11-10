@@ -4,12 +4,14 @@
 No live CCC server is used. The HTTP adapter below serves the production
 On-call API with its real engine/store; it does not emulate any channel.
 """
+import argparse
 import email
 import imaplib
 import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import ssl
 import subprocess
@@ -31,7 +33,54 @@ def run(*args, **kw):
     return proc.stdout.strip()
 
 
-def child(root, web, smtp, imap):
+def seed_repo(project):
+    """A real failing test, with no remote or inherited git hooks."""
+    git = os.environ['PROOF_GIT']
+    run(git, 'init', str(project))
+    run(git, '-C', str(project), 'config', 'user.name', 'Proof Worker')
+    run(git, '-C', str(project), 'config', 'user.email', 'worker@example.test')
+    (project / 'sum.py').write_text('def add(a, b):\n    return a - b\n')
+    (project / 'test_sum.py').write_text(
+        'import unittest\nfrom sum import add\n\n'
+        'class AdditionTest(unittest.TestCase):\n'
+        '    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n')
+    (project / 'AGENTS.md').write_text(
+        'Fix only sum.py. Do not modify tests. Run python3 -m unittest -v.\n'
+        'Commit locally and close the assigned ticket with that commit.\n'
+        'There is no remote; do not push. Do not delegate or use the network.\n'
+        'Use only this repository and the isolated queue. Stop after one ticket.\n')
+    run(git, '-C', str(project), 'add', 'sum.py', 'test_sum.py', 'AGENTS.md')
+    run(git, '-C', str(project), 'commit', '--only', 'sum.py', 'test_sum.py',
+        'AGENTS.md', '-m', 'test: seed addition bug')
+    failed = subprocess.run([sys.executable, '-B', '-m', 'unittest', '-v'],
+                            cwd=project, capture_output=True, text=True)
+    assert failed.returncode == 1 and 'AssertionError: -1 != 5' in failed.stderr
+    return run(git, '-C', str(project), 'rev-parse', 'HEAD')
+
+
+def wait_worker(rec, timeout=240):
+    """Wait on process completion, with a hard timeout and process-group cleanup."""
+    def expired(*_):
+        raise TimeoutError(f'WatchTower worker exceeded {timeout} seconds')
+    previous = signal.signal(signal.SIGALRM, expired)
+    signal.alarm(timeout)
+    try:
+        _, status = os.waitpid(rec['pid'], 0)
+        assert os.waitstatus_to_exitcode(status) == 0, 'Worker failed; see worker log'
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+        try:
+            os.killpg(rec['pid'], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            os.waitpid(rec['pid'], 0)
+        except ChildProcessError:
+            pass
+
+
+def child(root, web, smtp, imap, with_agent=False):
     sys.path.insert(0, str(REPO))
     from ccc_server.oncall import api, engine, wt
     eng = engine.Engine(Path(root) / 'oncall', wt=wt.WT(dispatch=False))
@@ -156,7 +205,55 @@ def child(root, web, smtp, imap):
         eng.tick(force=True)
         assert any('fixed' in str(m).lower() for m in mailbox('reporter')), 'fixed notice missing'
         results.append(('ticket / decision / fixed mailbox', 'PASS'))
-        results.append(('agent execution', 'BOUNDARY: no agent session started'))
+        if not with_agent:
+            results.append(('agent execution', 'BOUNDARY: no agent session started'))
+        elif not shutil.which('codex') or not (Path.home() / '.codex/auth.json').exists():
+            results.append(('agent execution', 'BOUNDARY: Codex executable or login missing'))
+        else:
+            from watchtower import workers
+            baseline = seed_repo(project)
+            queue_name = eng.config()['queue']
+            eng.wt._ok('config', '-q', queue_name, '--auto-drain', 'off',
+                       '--engine', 'codex', '--model', 'gpt-6.1-terra', '--effort', 'medium')
+            eng.wt._ok('config', '-q', queue_name, '--codex-transport', 'exec')
+            before_mail = len(mailbox('reporter'))
+            started = time.monotonic()
+            mail('reporter@example.test', 'Addition bug', 'add(2, 3) returns -1 instead of 5. See test_sum.py.')
+            eng.tick(force=True)
+            report = next(r for r in eng.store.reports() if r.get('title') == 'Addition bug')
+            agent_ref = report['ticket_ref']
+            rec = workers.spawn_run_once_worker(queue_name, agent_ref, repo_path=str(project),
+                                                engine='codex', model='gpt-6.1-terra')
+            print('Worker model: gpt-6.1-terra; effort: medium; transport: exec', flush=True)
+            try:
+                wait_worker(rec)
+                item = eng.wt.find(agent_ref)
+                assert item['status'] == 'closed', 'Worker did not close the ticket'
+                commit = run(os.environ['PROOF_GIT'], '-C', str(project), 'rev-parse', 'HEAD')
+                assert commit != baseline, 'No fix commit'
+                assert run(os.environ['PROOF_GIT'], '-C', str(project), 'diff',
+                           '--name-only', baseline, commit) == 'sum.py', 'Unexpected files changed'
+                run(os.environ['PROOF_GIT'], '-C', str(project), 'diff', '--exit-code', 'HEAD',
+                    '--', 'sum.py', 'test_sum.py', 'AGENTS.md')
+                run(sys.executable, '-B', '-m', 'unittest', '-v', cwd=project)
+                close_commits = [e.get('commit') for e in item.get('history', []) if e.get('event') == 'close']
+                assert commit in close_commits or (item.get('resolution') or {}).get('commit') == commit
+                eng.tick(force=True)
+                fixed = next(a for a in eng.store.alerts(state='open')
+                             if a['kind'] == 'fixed' and a['ref'] == agent_ref)
+                assert len(mailbox('reporter')) == before_mail, 'Notice sent before approval'
+                publish(f"{fixed['token']} yes")
+                eng.tick(force=True)
+                received = mailbox('reporter')
+                assert len(received) == before_mail + 1 and 'fixed' in str(received[-1]).lower()
+                print(f'Report to fixed notice: {time.monotonic() - started:.2f}s')
+                print(f'Observed fix commit: {commit}')
+                results.append(('agent execution / approved fixed notice', 'PASS (WatchTower drain once)'))
+            except Exception:
+                results.append(('agent execution / approved fixed notice', 'FAIL'))
+                print(f'Report to fixed notice: not completed ({time.monotonic() - started:.2f}s elapsed)')
+                print(Path(rec['log']).read_text()[-12000:] if 'log' in rec else str(rec))
+                raise
     except Exception as exc:
         results.append(('proof', 'FAIL: ' + str(exc)))
         raise
@@ -169,17 +266,31 @@ def child(root, web, smtp, imap):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--with-agent', action='store_true',
+                        help='Run one paid Codex worker using an isolated copy of the login')
+    args = parser.parse_args()
     containers = []
     with tempfile.TemporaryDirectory(prefix='ccc-oncall-proof-') as tmp:
         root = Path(tmp)
         # Only these executables are visible to the isolated child. In particular,
-        # macOS security cannot reach the user's Keychain, and agents cannot start.
+        # macOS security cannot reach the user's Keychain. Agent tools are opt-in.
         bins = root / 'bin'
         bins.mkdir()
-        for name in ('python3', 'wt'):
+        names = ['python3', 'wt']
+        if args.with_agent:
+            names += ['codex', 'git', 'bash', 'sh', 'env', 'cat', 'ls', 'rg', 'sed']
+        for name in names:
             executable = shutil.which(name)
             if executable:
                 (bins / name).symlink_to(executable)
+        if args.with_agent:
+            codex_home = root / '.codex'
+            codex_home.mkdir(mode=0o700)
+            auth = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'auth.json'
+            if auth.is_file():
+                shutil.copyfile(auth, codex_home / 'auth.json')
+                (codex_home / 'auth.json').chmod(0o600)
         cert = root / 'cert.pem'
         run('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
             '-keyout', str(root / 'key.pem'), '-out', str(cert), '-subj', '/CN=localhost',
@@ -222,13 +333,18 @@ def main():
                         if time.monotonic() >= deadline:
                             raise RuntimeError('Local server did not become ready')
                         threading.Event().wait(.2)
-            env = {k: v for k, v in os.environ.items() if not k.startswith(('CCC_', 'WT_', 'WATCHTOWER_', 'CODEX_', 'CLAUDE_'))}
+            trust = root / 'trust.pem'
+            system_ca = ssl.get_default_verify_paths().cafile
+            trust.write_bytes(cert.read_bytes() + (Path(system_ca).read_bytes() if system_ca else b''))
+            env = {k: os.environ[k] for k in ('LANG', 'LC_ALL', 'TMPDIR') if k in os.environ}
             env.update(HOME=tmp, XDG_CONFIG_HOME=tmp, XDG_DATA_HOME=tmp, PATH=str(bins),
                        PYTHONPATH=os.pathsep.join(sys.path), CCC_FF_ONCALL='1',
                        WATCHTOWER_STORE=str(root / 'queues.json'), WT_NO_SELF_UPDATE='1',
-                       SSL_CERT_FILE=str(cert), PROOF_GIT=shutil.which('git'))
+                       WATCHTOWER_DELEGATE_URL='off', GIT_CONFIG_NOSYSTEM='1',
+                       GIT_CONFIG_GLOBAL=os.devnull,
+                       SSL_CERT_FILE=str(trust), PROOF_GIT=shutil.which('git'))
             proc = subprocess.run([sys.executable, __file__, '--child', tmp,
-                                   f'http://127.0.0.1:{http}', str(smtp), str(imap)], env=env, timeout=180)
+                                   f'http://127.0.0.1:{http}', str(smtp), str(imap), *(['--with-agent'] if args.with_agent else [])], env=env, timeout=360)
             if proc.returncode:
                 subprocess.run(["docker", "logs", mail_id], timeout=10)
             return proc.returncode
@@ -240,6 +356,6 @@ def main():
 
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == '--child':
-        child(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]))
+        child(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), '--with-agent' in sys.argv[6:])
     else:
         sys.exit(main())
