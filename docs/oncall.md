@@ -118,9 +118,11 @@ wt config -q SHOP --engine codex --model gpt-6.1-terra --effort medium
 ```
 
 The Codex CLI must be installed and logged in. Current WatchTower defaults to
-Codex's app-server transport. New tickets have a three-minute grace period
-before automatic work starts, plus the watcher interval. Setup does not remove
-that delay. A queued report is not proof that an agent has started.
+Codex's app-server transport. On-call asks WatchTower to start work as it
+files a ticket; in the local proof below the worker started about seven
+seconds after the report. A ticket the watcher finds on its own waits out
+WatchTower's grace period first (three minutes by default), plus the watcher
+interval. A queued report is not proof that an agent has started.
 
 ## Where bugs come from
 
@@ -331,9 +333,9 @@ reply releases it.
   On-call queue.
 - Agents fix bugs in the code folder you point them at, the way your queue is
   set up to (a commit or a pull request). You decide what deploys.
-- The local agent proof now attempts automatic WatchTower dispatch using the
-  default Codex transport. The revised paid stage has not yet been verified
-  end to end. Worker recovery is not covered.
+- The local agent proof covers automatic WatchTower dispatch with the default
+  Codex transport, on Linux, for one small seeded bug. It does not cover
+  worker recovery, a watcher restart, or other agents.
 - GitHub messaging needs a source that is still enabled and a user token that
   can post issue comments. Reply checks must be able to identify that token's
   account through `/user`; tokens that cannot do this cannot receive replies.
@@ -362,8 +364,7 @@ reply releases it.
 
 ## Local protocol proof
 
-Run `python3 scripts/oncall-proof.py` on Linux with Docker, OpenSSL and Python 3.
-Linux `/proc` is required to clean up workers that detach from the watcher.
+Run `python3 scripts/oncall-proof.py` with Docker, OpenSSL and Python 3.
 WatchTower is optional; without it the ticket check stops at that boundary.
 The script downloads pinned ntfy and GreenMail images, uses temporary state and
 a local TLS certificate, and removes its containers and network when done.
@@ -376,7 +377,7 @@ and store. It does not exercise the dashboard server's routing or preview gate.
 By default no agent session runs. Closing a fixture ticket proves notification
 routing, not that an agent fixed a bug.
 
-Opt in to one paid agent run with:
+On Linux, opt in to one paid agent run with:
 
 ```
 python3 scripts/oncall-proof.py --with-agent
@@ -417,10 +418,10 @@ including detached workers, on normal exit and parent-observed child failure or
 timeout. Containers and the local network are removed in the parent's cleanup.
 A host crash or uncatchable termination of the parent cannot run cleanup.
 
-The revised automatic paid stage has not yet been run end to end. Its
-app-server path is implemented but unverified, not a passing transport claim.
-Running it sends model requests through the copied Codex login, so it cannot
-be used under a rule that permits only local traffic and package downloads.
+The automatic stage needs Linux: workers detach from the watcher, and the
+script finds them through `/proc` to stop them. Elsewhere it says so and runs
+the protocol checks only; `--explicit-start` still works there. Running the
+agent stage sends model requests through the copied Codex login.
 
 `ccc oncall report` creates an owner report without a reporter address. The
 proof checks that command separately, then uses incoming email for the report

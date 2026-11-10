@@ -129,6 +129,8 @@ def cleanup_isolated_processes(root):
     Workers create their own sessions, so killing the watcher's process group
     alone does not clean them up. This also covers a timed-out proof child.
     """
+    if not Path('/proc/self/environ').exists():
+        return
     marker = ('HOME=' + str(root)).encode()
     for entry in Path('/proc').iterdir():
         if not entry.name.isdigit() or int(entry.name) == os.getpid():
@@ -381,9 +383,11 @@ def main():
     parser.add_argument('--model', default=AGENT_MODEL,
                         help=f'Codex model for --with-agent (default {AGENT_MODEL})')
     args = parser.parse_args()
-    if not sys.platform.startswith('linux'):
-        print('BOUNDARY: this proof requires Linux /proc for detached-worker cleanup')
-        return 0
+    if args.with_agent and not args.explicit_start and not Path('/proc/self/environ').exists():
+        # An automatically started worker detaches; only /proc lets the proof find and stop it.
+        print('BOUNDARY: automatic agent start needs Linux /proc for cleanup. '
+              'Running the protocol checks only; use --explicit-start for the agent stage.')
+        args.with_agent = False
     containers = []
     login_before = None
     with tempfile.TemporaryDirectory(prefix='ccc-oncall-proof-') as tmp:
