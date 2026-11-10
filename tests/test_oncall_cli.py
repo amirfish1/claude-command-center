@@ -111,7 +111,7 @@ def test_setup_stays_off_when_the_test_message_fails(box, tmp_path, capsys):
     code = box.run("setup", "--yes", "--queue", "shop", "--repo", str(tmp_path), "--channel", "command",
                    "--set", "send=false")
     assert code == 1
-    assert "On-call stays off" in capsys.readouterr().err
+    assert "On-call is off" in capsys.readouterr().err
     assert not box.eng.active()
 
 
@@ -209,3 +209,14 @@ def test_ask_without_a_reporter_explains_itself(box, tmp_path, capsys):
     box.run("report", "It is broken")
     assert box.run("ask", "SHOP-1", "Which browser?") == 1
     assert "no reporter" in capsys.readouterr().err
+
+
+def test_failed_setup_turns_previously_enabled_oncall_off(box, tmp_path, capsys):
+    assert box.run("setup", "--yes", "--queue", "shop", "--repo", str(tmp_path),
+                   "--channel", "command", "--set", "send=true") == 0
+    cfg = box.eng.config()
+    cfg["channels"][0]["send"] = "false"
+    box.eng.save_config(cfg)
+    assert box.run("setup", "--yes") == 1
+    assert not box.eng.active()
+    assert "On-call is off" in capsys.readouterr().err

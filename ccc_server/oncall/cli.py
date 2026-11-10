@@ -413,7 +413,8 @@ def _setup(client, args, io):
     if not res.get("results"):
         raise Stop(str(res.get("error") or "No channel to test."))
     if not any(r["ok"] for r in res["results"]):
-        raise Stop("No test message got through, so On-call stays off. Fix the channel, then run setup again.")
+        client.must("config", {"enabled": False})
+        raise Stop("No test message got through. On-call is off. Fix the channel, then run ccc oncall setup again.")
 
     client.must("config", {"enabled": True})
     io.out("")
