@@ -201,6 +201,7 @@ html.mz-no-scroll, html.mz-no-scroll body {
   animation: mzBlink 1s steps(1) infinite;
 }
 @keyframes mzBlink { 50% { opacity: 0; } }
+#cccMomentZero .mz-kbd-hint a { color: var(--mz-free); text-underline-offset: 3px; }
 #cccMomentZero .mz-kbd-hint { color: var(--mz-muted); font-size: 12px; margin-top: 18px; }
 
 /* ── Buttons ── */

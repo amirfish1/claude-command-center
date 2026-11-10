@@ -7,8 +7,8 @@ computer with nothing installed, no terminal knowledge required.
 
 You'll see:
 
-1. **A welcome screen** — a little ceremony, a headline, and one big
-   button. Sounds and motion are on, unless your system asks for reduced
+1. **A welcome screen** with “Your agents are on call. You are not.”
+   Choose **Set up an agent** or explore on your own. On-call remains off. Sounds and motion are on, unless your system asks for reduced
    motion or you mute them.
 2. **A setup checklist** — everything a coding agent needs on your
    machine, checked live. Each step says what it will do and waits for
@@ -25,6 +25,19 @@ You'll see:
    would have cost $X."*
 
 After that you're on the dashboard with everything set up.
+
+## First-load notices
+
+Only the welcome opens automatically on a fresh browser's first load. Closing
+it does not open another setup screen. Agent config approval waits until a
+later load; you can review it immediately in Settings > Agent config access.
+Nothing is approved by dismissing the welcome. The tour remains in Settings,
+and What’s New remains in the app menu. The browser install banner waits for
+a later load. Promotional popups remain disabled by the popup approval list.
+
+The welcome links to [telemetry details and opt-out](telemetry.md). Reopen the
+welcome from Settings to reach that link again. This changes no telemetry
+collection or consent choices.
 
 ## Who sees it
 

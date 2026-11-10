@@ -85313,8 +85313,8 @@
         whatsNewVersion = String(d.version);
         const lastSeen = localStorage.getItem('ccc-last-seen-version');
         const dismissedVer = localStorage.getItem('ccc-whats-new-dismissed-version');
-        if (typeof isSimpleMode === 'function' && isSimpleMode()) {
-          // Simple mode: the changelog modal is jargon-heavy and covers the
+        if (window.cccFirstRunLoad || (typeof isSimpleMode === 'function' && isSimpleMode())) {
+          // First load and simple mode: the changelog modal is jargon-heavy and covers the
           // home screen. Mark the version seen silently instead of popping it.
           try { localStorage.setItem('ccc-last-seen-version', whatsNewVersion); } catch (_) {}
         } else if (lastSeen !== whatsNewVersion && dismissedVer !== whatsNewVersion && !CONV_POPOUT_MODE) {
@@ -98720,7 +98720,7 @@
   function maybeStartFirstFlight(attempt) {
     let done = null;
     try { done = localStorage.getItem(FFT_DONE_KEY); } catch (_) { return; }
-    if (done) return;
+    if (done || window.cccFirstRunLoad) return;
     // Never AUTO-start on small viewports. The tour's spotlight anchors
     // assume the desktop split layout, and its fixed welcome card sits on
     // top of the transcript swallowing every touch gesture — drag-to-scroll

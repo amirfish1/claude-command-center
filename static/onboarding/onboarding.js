@@ -373,7 +373,8 @@
       const steps = (plan && Array.isArray(plan.steps)) ? plan.steps : [];
       const status = (id) => (steps.find((st) => st.id === id) || {}).status;
       S.claudeFound = status('claude_cli') === 'ok' && status('free_router') !== 'ok';
-      if (S.claudeFound && S.open && S.scene === 'welcome') renderWelcome({ quiet: true });
+      S.agentMissing = status('claude_cli') === 'missing';
+      if (S.open && S.scene === 'welcome') renderWelcome({ quiet: true });
     }).catch(() => {});
   }
 
@@ -382,8 +383,8 @@
     const card = el('section', 'mz-card mz-welcome');
     card.innerHTML = logoSvg();
     const h = el('h1', 'mz-headline');
-    const line1 = own ? 'Claude Code found.' : 'Your own AI dev team.';
-    const line2 = own ? ' Try it here.' : ' Free.';
+    const line1 = 'Your agents are on call.';
+    const line2 = ' You are not.';
     h.setAttribute('aria-label', line1 + line2);
     const typed = el('span', 'mz-typed');
     const caret = el('span', 'mz-caret');
@@ -393,10 +394,11 @@
     card.appendChild(h);
     const sub = el('p', 'mz-sub', own
       ? 'Give it one small job in a practice folder and watch it work on your board. It uses your own Claude account and only touches ~/CCC-Playground.'
-      : 'Command Center hires a team of coding agents and runs them on $0 models. We will install everything together. About ten minutes on a new computer.');
+      : 'Coding agents on call for your product. On-call is a preview and stays off until you turn it on. Start by setting up an agent.');
     card.appendChild(sub);
+    if (S.agentMissing) card.appendChild(el('p', 'mz-sub', 'Claude Code is not installed or signed in. Choose Set up an agent to begin.'));
     const actions = el('div', 'mz-actions');
-    const go = el('button', 'mz-btn mz-btn-primary', own ? 'Run a first task' : 'Set up my team');
+    const go = el('button', 'mz-btn mz-btn-primary', own ? 'Run a first task' : 'Set up an agent');
     go.type = 'button';
     go.addEventListener('click', () => { sfx('whoosh'); if (own) goOwnClaudeTask(); else goSteps(); });
     const ghost = el('button', 'mz-btn mz-btn-ghost', 'I will explore on my own');
@@ -412,6 +414,9 @@
       card.appendChild(free);
     }
     const connect = engineConnectionAction(); if (connect) card.appendChild(connect);
+    const privacy = el('p', 'mz-kbd-hint');
+    privacy.innerHTML = 'CCC sends an anonymous daily ping. <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/telemetry.md" target="_blank" rel="noopener">What it sends and how to turn it off</a>.';
+    card.appendChild(privacy);
     const hint = el('p', 'mz-kbd-hint', 'Press Enter to begin');
     card.appendChild(hint);
 
@@ -1210,6 +1215,16 @@
     opts = opts || {};
     if (S.open) return;
     ensureRoot();
+    // Consume the installer shortcut so reloading does not replay the welcome.
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('onboarding') === '1') {
+        url.searchParams.delete('onboarding');
+        window.history.replaceState(window.history.state, '', url);
+      }
+    } catch (_) {}
+    markDone();
+    skipAutoTour();
     S.open = true;
     S.force = !!opts.force;
     S.prevFocus = document.activeElement;
@@ -1287,6 +1302,7 @@
   // app.js calls this before showing the engines first-run. Resolves true
   // when Moment Zero takes over the first-run slot.
   function claimFirstRun() {
+    if (S.open) return Promise.resolve(true);
     if (forcedByUrl()) {
       markDone();
       open();
@@ -1315,7 +1331,7 @@
     if (forcedByUrl()) { open(); return; }
     if (!autoEligible()) return;
     driver.freshInstall()
-      .then((d) => { if (d && d.fresh_install) open(); })
+      .then((d) => { if (d && d.fresh_install && autoEligible()) open(); })
       .catch(() => {});
   }
 

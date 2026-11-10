@@ -162,9 +162,9 @@ test('welcome -> steps -> key -> task -> finale happy path', async (t) => {
     await page.waitForSelector('#cccMomentZero .mz-welcome', { visible: true });
 
     const headline = await page.$eval('.mz-headline', (el) => el.getAttribute('aria-label'));
-    assert.equal(headline, 'Your own AI dev team. Free.');
+    assert.equal(headline, 'Your agents are on call. You are not.');
 
-    await page.click('.mz-btn-primary'); // "Set up my team"
+    await page.click('.mz-btn-primary'); // "Set up an agent"
     await page.waitForSelector('.mz-step-row', { visible: true });
 
     // clt is already ok; the first actionable step asks for consent.
@@ -224,9 +224,11 @@ test('claimFirstRun opens the shell on a fresh install and suppresses after', as
     // The engines first-run marker is set so the old screen cannot stack.
     const engDone = await page.evaluate(() => localStorage.getItem('ccc-engines-first-run-done'));
     assert.ok(engDone, 'engines first-run marker not set');
-    // Second claim: ccc-onboarded now set -> not eligible again.
+    // While open, keep ownership so a competing first-run screen cannot open.
     const again = await page.evaluate(() => window.cccOnboarding.claimFirstRun());
-    assert.equal(again, false);
+    assert.equal(again, true);
+    await page.evaluate(() => window.cccOnboarding.close());
+    assert.equal(await page.evaluate(() => window.cccOnboarding.claimFirstRun()), false);
   } finally {
     await page.close();
   }
@@ -581,6 +583,9 @@ test('?onboarding=1 force-opens even for a returning user', async () => {
   try {
     await page.evaluate(() => localStorage.setItem('ccc-onboarded', '1'));
     await page.waitForSelector('#cccMomentZero.open', { visible: true });
+    assert.equal(new URL(page.url()).searchParams.has('onboarding'), false);
+    await page.reload({ waitUntil: 'load' });
+    assert.equal(await page.evaluate(() => window.cccOnboarding.isOpen()), false);
   } finally {
     await page.close();
   }

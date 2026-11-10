@@ -267,21 +267,23 @@ reply releases it.
 
 ## Limits
 
-- It is a preview. It is off until you turn it on.
-- Plain-text question detection covers idle Claude Code and Codex sessions.
+- It is a preview. It is off until you turn it on. The first-run welcome
+  sets up an agent; it does not enable On-call or configure message channels.
+- Plain-text questions are found in idle Claude Code and Codex sessions only.
   A question is sent once the session has been idle for two minutes, so you
   are not messaged while you are answering it at the keyboard. Questions
   written before On-call was turned on are not sent.
-  It reads at most the last 64 KiB of a changed transcript and caches results
-  on disk by modification time and size. It uses no model call. Two things
-  qualify: the step CCC's own session footer names for you (anything other
-  than "None"), or, without a footer, a closing paragraph ending in a
-  question mark with explicit wording such as "Should I" or "Would you
-  like". Quoted examples and code are excluded. Indirect requests, long
-  messages and other engines can be missed.
-- Permission alerts require a prompt identity and tool or command text in
-  CCC's existing state. Unsupported approval paths do not fall back to sending
-  text as a permission answer. Answer those prompts in the session.
+- Two things count as a question: the step CCC's own session footer names
+  for you (anything other than "None"), or, without a footer, a closing
+  paragraph ending in a question mark with explicit wording such as "Should
+  I" or "Would you like". Quoted examples and code are excluded. Indirect
+  requests, long messages and other engines can be missed. No model call is
+  used; CCC reads at most the last 64 KiB of the transcript and caches the
+  result on disk by modification time and size.
+- A permission alert needs the prompt's identity and its tool or command
+  text. Where CCC has no way to answer a prompt (for Claude Code that means
+  no permission hook and not on a Mac terminal), `allow` and `deny` are
+  refused with the reason. Answer those prompts in the session.
 - Session alerts cover every agent session on the machine, not only the
   On-call queue.
 - Agents fix bugs in the code folder you point them at, the way your queue is
