@@ -90,4 +90,57 @@ def test_slim_copy_is_memoized_per_snapshot():
     snapshot = [_closed_row(), _open_row()]
     first = server._ux_fixes_slim_items(snapshot)
     assert server._ux_fixes_slim_items(snapshot) is first
-    assert server._ux_fixes_slim_items(list(snapshot)) is not first
+    second = server._ux_fixes_slim_items(list(snapshot))
+    assert second is not first
+    assert second[0] is first[0]
+
+
+def test_slim_memo_does_not_thrash_across_concurrent_scopes():
+    server = _load_server()
+    snapshot_a = [_closed_row(), _open_row()]
+    snapshot_b = [_closed_row()]
+    first_a = server._ux_fixes_slim_items(snapshot_a)
+    first_b = server._ux_fixes_slim_items(snapshot_b)
+    assert first_a is not first_b
+    assert server._ux_fixes_slim_items(snapshot_a) is first_a
+    assert server._ux_fixes_slim_items(snapshot_b) is first_b
+
+
+def test_queue_list_version_reuses_unchanged_digests_and_detects_mutations(monkeypatch):
+    from ccc_server import queue_events
+
+    server = _load_server()
+    scope = ("", "", True)
+    r1 = _closed_row()
+    r1["ref"] = "DEMO-1"
+    r2 = _open_row()
+    r2["ref"] = "DEMO-2"
+    v1_rows = [r1, r2]
+    v1_slim = server._ux_fixes_slim_items(v1_rows)
+
+    real_dumps = queue_events.json.dumps
+    dumps_calls = []
+
+    def counting_dumps(obj, *args, **kwargs):
+        dumps_calls.append(obj)
+        return real_dumps(obj, *args, **kwargs)
+
+    monkeypatch.setattr(queue_events.json, "dumps", counting_dumps)
+    v1, keys1, d1 = server._queue_list_version(scope, v1_rows, v1_slim)
+    assert len(dumps_calls) == 2
+
+    dumps_calls.clear()
+    r2_mutated = dict(r2, title="updated title")
+    v2_rows = [r1, r2_mutated]
+    v2_slim = server._ux_fixes_slim_items(v2_rows)
+    v2, keys2, d2 = server._queue_list_version(scope, v2_rows, v2_slim)
+
+    assert len(dumps_calls) == 1
+    assert dumps_calls[0] is r2_mutated
+    assert d2["DEMO-1"] == d1["DEMO-1"]
+    assert d2["DEMO-2"] != d1["DEMO-2"]
+
+    delta = server._queue_list_delta(scope, v1, v2_slim, v2, keys2, d2)
+    assert delta["delta"] is True
+    assert list(delta["changed"].keys()) == ["DEMO-2"]
+    assert delta["changed"]["DEMO-2"]["title"] == "updated title"

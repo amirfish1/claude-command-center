@@ -57,6 +57,19 @@ _last_scan = 0.0
 _SCAN_MIN_GAP = 60.0
 _SOURCES_TTL = 120.0  # new transcripts show up within this; growth of known files is stat-checked every scan
 _sources_memo: dict = {"at": 0.0, "key": None, "out": []}
+_index_memo: dict = {"sig": None, "questions": []}
+
+
+def _snapshot_files(d: dict) -> list[tuple[str, dict]]:
+    while True:
+        try:
+            return list(d.items())
+        except RuntimeError:
+            continue
+
+
+def _copy_questions(questions: list[dict]) -> list[dict]:
+    return [dict(q, first=dict(q["first"]), mentions=list(q["mentions"])) for q in questions]
 
 
 def _state_path() -> Path:
@@ -87,7 +100,7 @@ def _save_cache() -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".qtags-")
         with os.fdopen(fd, "w") as f:
-            json.dump({"v": 2, "files": _files}, f)
+            json.dump({"v": 2, "files": dict(_snapshot_files(_files))}, f)
         os.replace(tmp, p)
     except OSError:
         pass
@@ -375,20 +388,23 @@ def refresh(max_age: float = _SCAN_MIN_GAP, force: bool = False) -> bool:
             if kind in ("hermes", "devin"):
                 scan = scan_hermes_db if kind == "hermes" else scan_devin_db
                 ev, cur = scan(path, (rec or {}).get("cur", 0))
-                _files[key] = {"m": m, "s": sz, "cur": cur, "ev": ((rec or {}).get("ev") or []) + ev}
+                new_rec = {"m": m, "s": sz, "cur": cur, "ev": ((rec or {}).get("ev") or []) + ev}
             elif kind == "claude":
                 # Resume from the saved offset when the file only grew; caches
                 # written before offsets existed (no "o") rescan from the top.
                 grew = bool(rec) and "o" in rec and sz >= rec["s"]
                 ev, off = scan_file_from(path, rec["o"] if grew else 0)
-                _files[key] = {"m": m, "s": sz, "o": off, "ev": (rec["ev"] if grew else []) + ev}
+                new_rec = {"m": m, "s": sz, "o": off, "ev": (rec["ev"] if grew else []) + ev}
             else:
                 scan = {"codex": scan_codex_file, "kimi": scan_kimi_file}[kind]
-                _files[key] = {"m": m, "s": sz, "ev": scan(path)}
+                new_rec = {"m": m, "s": sz, "ev": scan(path)}
+            with _lock:
+                _files[key] = new_rec
             dirty = True
-        for key in [k for k in _files if k not in seen]:
-            del _files[key]
-            dirty = True
+        with _lock:
+            for key in [k for k in _files if k not in seen]:
+                del _files[key]
+                dirty = True
         if dirty:
             _save_cache()
         return True
@@ -401,9 +417,19 @@ def refresh(max_age: float = _SCAN_MIN_GAP, force: bool = False) -> bool:
 
 def build_index(files: dict | None = None) -> dict:
     """Fold events into questions; answers belong to question-bearing sessions."""
+    sig = None
+    if files is None:
+        with _lock:
+            items = _snapshot_files(_files)
+            sig = tuple((k, id(v), len(ev := (v.get("ev") or ())), id(ev[-1]) if ev else 0) for k, v in items)
+            if sig == _index_memo["sig"]:
+                return {"questions": _copy_questions(_index_memo["questions"])}
+        records = [v for _, v in items]
+    else:
+        records = [v for _, v in _snapshot_files(files)]
     events = []
-    for rec in (files if files is not None else _files).values():
-        events.extend(rec.get("ev") or [])
+    for rec in records:
+        events.extend(list(rec.get("ev") or ()))
     events.sort(key=lambda e: e.get("ts") or "")
     qs: dict[int, dict] = {}
     question_sessions: dict[int, set] = {}
@@ -435,7 +461,12 @@ def build_index(files: dict | None = None) -> dict:
                 if (q and not q["answered"] and e["ts"] >= q["first"]["ts"]
                         and e["sid"] in question_sessions.get(q["n"], set())):
                     q["answered"], q["answered_by"] = True, "owner"
-    return {"questions": [qs[n] for n in sorted(qs)]}
+    questions = [qs[n] for n in sorted(qs)]
+    if files is None:
+        with _lock:
+            _index_memo["sig"] = sig
+            _index_memo["questions"] = _copy_questions(questions)
+    return {"questions": questions}
 
 
 _links_memo: dict = {"items": None, "links": {}}

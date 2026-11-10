@@ -271,3 +271,81 @@ class IncrementalScanTest(unittest.TestCase):
             self.assertEqual([e["uuid"] for e in ev2], ["b", "c"])
         finally:
             os.unlink(f.name)
+
+
+class ConcurrencyAndMemoTest(unittest.TestCase):
+    def setUp(self):
+        self._saved_files = dict(qt._files)
+        self._saved_loaded = qt._loaded
+        self._saved_last_scan = qt._last_scan
+        qt._files.clear()
+        qt._loaded = True
+        qt._last_scan = 1e18
+
+    def tearDown(self):
+        qt._files.clear()
+        qt._files.update(self._saved_files)
+        qt._loaded = self._saved_loaded
+        qt._last_scan = self._saved_last_scan
+
+    def test_concurrent_files_mutation_never_raises_runtime_error(self):
+        import threading
+        stop = threading.Event()
+        errors = []
+
+        def writer():
+            i = 0
+            while not stop.is_set():
+                key = f"file-{i % 32}"
+                qt._files[key] = {"ev": [ev("assistant", "2026-01-01T00:00:01Z", f"[Q{(i % 5) + 1}:slug] ask?", f"u{i}")]}
+                if i % 3 == 0:
+                    qt._files.pop(f"file-{(i + 7) % 32}", None)
+                i += 1
+
+        t = threading.Thread(target=writer)
+        t.start()
+        try:
+            for _ in range(300):
+                try:
+                    res = qt.build_index()
+                    self.assertIn("questions", res)
+                except Exception as exc:
+                    errors.append(exc)
+                    break
+        finally:
+            stop.set()
+            t.join()
+        self.assertEqual(errors, [])
+
+    def test_memoized_index_reused_and_isolated_from_ticket_mutations(self):
+        from unittest import mock
+        qt._files["a"] = {"ev": [ev("assistant", "2026-01-01T00:00:01Z", "[Q7:publish] OK to publish?", "ask")]}
+        first = qt.build_index()
+        self.assertEqual(len(first["questions"]), 1)
+        self.assertFalse(first["questions"][0]["answered"])
+
+        # Subsequent call with unchanged _files uses the memo without re-running regex scans.
+        with mock.patch.object(qt, "_TAG") as tag_mock:
+            second = qt.build_index()
+            tag_mock.finditer.assert_not_called()
+        self.assertEqual(second["questions"][0]["n"], 7)
+
+        # payload() applying tickets must not leak ticket/answered state into the memoized index.
+        unblocked = ticket(needs_input=False, block_question="", history=[
+            {"event": "block", "at": "2026-01-01T00:00:01Z", "question": "[Q7:publish] OK?"}])
+        with_tickets = qt.payload(tickets=[unblocked])
+        self.assertTrue(with_tickets["questions"][0]["answered"])
+        self.assertEqual(with_tickets["questions"][0]["answered_by"], "ticket")
+        self.assertIn("ticket", with_tickets["questions"][0])
+
+        without_tickets = qt.build_index()
+        self.assertFalse(without_tickets["questions"][0]["answered"])
+        self.assertEqual(without_tickets["questions"][0]["answered_by"], "")
+        self.assertNotIn("ticket", without_tickets["questions"][0])
+
+        # Appending an answer event invalidates the memo automatically.
+        qt._files["a"]["ev"].append(ev("user", "2026-01-01T00:00:02Z", "[Q7] yes", "ans"))
+        updated = qt.build_index()
+        self.assertTrue(updated["questions"][0]["answered"])
+        self.assertEqual(updated["questions"][0]["answered_by"], "owner")
+

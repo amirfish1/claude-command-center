@@ -356,3 +356,64 @@ def test_native_title_lookup_releases_writer_and_rechecks_peer_rename(store, mon
                              (root,)).fetchone() == ('USER TOPIC', 1)
     finally:
         peer.close()
+
+
+def test_connection_skips_ddl_and_cached_attach_topics_invalidates_on_mutations(store):
+    store.execute('PRAGMA journal_mode=WAL')
+    topics.attach_topics([row('root-session', 'INITIAL TOPIC: first'),
+                          row('standalone-session', 'STANDALONE: task')], names={})
+    topics.record_continuation('root-session', 'child-session')
+    # First read-only projection warms the in-memory cache.
+    warm_rows = [row('child-session'), row('standalone-session', 'STANDALONE: task')]
+    topics.attach_topics(warm_rows, names={})
+    assert warm_rows[0]['continuation_topic_title'] == 'INITIAL TOPIC'
+    assert 'continuation_topic_title' not in warm_rows[1]
+
+    filename = store.execute('PRAGMA database_list').fetchone()[2]
+    writer = sqlite3.connect(filename)
+    reader = sqlite3.connect(filename, timeout=0.05)
+    queries = []
+    store.set_trace_callback(queries.append)
+    reader_queries = []
+    reader.set_trace_callback(reader_queries.append)
+    writer.execute('BEGIN IMMEDIATE')
+    try:
+        # _connection() on an already-initialized connection issues zero SQL;
+        # on a fresh connection to an initialized DB it avoids CREATE TABLE DDL.
+        assert topics._connection(store) is store
+        assert queries == []
+        assert topics._connection(reader) is reader
+        assert not any('CREATE TABLE' in q for q in reader_queries)
+        assert topics.revision() >= 0
+        assert queries == ['SELECT revision FROM continuation_topic_meta WHERE id=1']
+        queries.clear()
+        assert topics.revision() >= 0
+        assert queries == []
+        cached_rows = [row('child-session'), row('standalone-session', 'STANDALONE: task')]
+        topics.attach_topics(cached_rows, names={})
+        assert cached_rows[0]['continuation_topic_title'] == 'INITIAL TOPIC'
+        assert 'continuation_topic_title' not in cached_rows[1]
+        assert queries == []
+    finally:
+        writer.rollback()
+        writer.close()
+        reader.close()
+
+    # rename_topic invalidates the cache immediately.
+    topics.rename_topic('root-session', 'RENAMED TOPIC: updated')
+    renamed_rows = [row('child-session')]
+    topics.attach_topics(renamed_rows, names={})
+    assert renamed_rows[0]['continuation_topic_title'] == 'RENAMED TOPIC'
+
+    # Subsequent calls hit the refreshed cache with zero SQL queries.
+    queries.clear()
+    again_rows = [row('child-session')]
+    topics.attach_topics(again_rows, names={})
+    assert again_rows[0]['continuation_topic_title'] == 'RENAMED TOPIC'
+    assert queries == []
+
+    # record_continuation also invalidates the cache immediately for new edges.
+    topics.record_continuation('child-session', 'grandchild-session')
+    chain_rows = [row('child-session'), row('grandchild-session')]
+    topics.attach_topics(chain_rows, names={})
+    assert [item['continuation_topic_title'] for item in chain_rows] == ['RENAMED TOPIC', 'RENAMED TOPIC']

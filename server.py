@@ -1076,12 +1076,114 @@ _WT_HOME = Path(os.environ.get("WATCHTOWER_HOME") or (Path.home() / ".watchtower
 
 # Matches the "{ts} UTC  {queue:<14}  {verb:<9}{detail}" format written by
 # watchtower.queue._log(); group(1) is the queue column (or "reconciler").
-_WT_LOG_LINE_QUEUE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\s+(\S+)")
+_WT_LOG_LINE_QUEUE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\s+UTC\s+(\S+)")
 
 
 def _wt_log_line_queue(line):
+    if len(line) > 25 and line[19:23] == " UTC":
+        rest = line[23:].lstrip()
+        if rest:
+            return rest.split(None, 1)[0].upper()
     m = _WT_LOG_LINE_QUEUE_RE.match(line)
     return m.group(1).upper() if m else ""
+
+
+_WT_ACTIVITY_LOG_LOCK = threading.Lock()
+_WT_ACTIVITY_LOG_CACHE: dict[str, dict] = {}
+
+
+def _wt_activity_log_lines(log_path=None, queue_filter="", *, raise_missing=False):
+    """Return cached activity.log lines (stripped of trailing newline), updating incrementally on append."""
+    path = Path(log_path) if log_path is not None else (_WT_HOME / "activity.log")
+    path_str = str(path)
+    q_key = (queue_filter or "").strip().upper()
+    with _WT_ACTIVITY_LOG_LOCK:
+        try:
+            st = path.stat()
+        except FileNotFoundError:
+            _WT_ACTIVITY_LOG_CACHE.pop(path_str, None)
+            if raise_missing:
+                raise
+            return []
+        except OSError:
+            _WT_ACTIVITY_LOG_CACHE.pop(path_str, None)
+            if raise_missing:
+                raise FileNotFoundError(path_str)
+            return []
+
+        entry = _WT_ACTIVITY_LOG_CACHE.get(path_str)
+        if (
+            entry is not None
+            and entry["ino"] == st.st_ino
+            and entry["size"] == st.st_size
+            and entry["mtime_ns"] == st.st_mtime_ns
+        ):
+            return entry["by_queue"].get(q_key, []) if q_key else entry["lines"]
+
+        if (
+            entry is not None
+            and entry["ino"] == st.st_ino
+            and st.st_size > entry["size"]
+            and entry.get("ends_with_nl", True)
+        ):
+            try:
+                with open(path, "rb") as f:
+                    f.seek(entry["size"])
+                    chunk = f.read(st.st_size - entry["size"])
+            except FileNotFoundError:
+                _WT_ACTIVITY_LOG_CACHE.pop(path_str, None)
+                if raise_missing:
+                    raise
+                return []
+            except OSError:
+                _WT_ACTIVITY_LOG_CACHE.pop(path_str, None)
+                if raise_missing:
+                    raise FileNotFoundError(path_str)
+                return []
+            if chunk:
+                new_lines = chunk.decode("utf-8", errors="replace").splitlines()
+                lines = entry["lines"]
+                by_queue = entry["by_queue"]
+                lines.extend(new_lines)
+                for line in new_lines:
+                    q = _wt_log_line_queue(line)
+                    if q:
+                        by_queue.setdefault(q, []).append(line)
+                entry["size"] += len(chunk)
+                entry["ends_with_nl"] = chunk.endswith((b"\n", b"\r"))
+            entry["mtime_ns"] = st.st_mtime_ns
+            return entry["by_queue"].get(q_key, []) if q_key else entry["lines"]
+
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except FileNotFoundError:
+            _WT_ACTIVITY_LOG_CACHE.pop(path_str, None)
+            if raise_missing:
+                raise
+            return []
+        except OSError:
+            _WT_ACTIVITY_LOG_CACHE.pop(path_str, None)
+            if raise_missing:
+                raise FileNotFoundError(path_str)
+            return []
+
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+        by_queue: dict[str, list[str]] = {}
+        for line in lines:
+            q = _wt_log_line_queue(line)
+            if q:
+                by_queue.setdefault(q, []).append(line)
+        entry = {
+            "ino": st.st_ino,
+            "size": len(raw),
+            "mtime_ns": st.st_mtime_ns,
+            "ends_with_nl": (not raw) or raw.endswith((b"\n", b"\r")),
+            "lines": lines,
+            "by_queue": by_queue,
+        }
+        _WT_ACTIVITY_LOG_CACHE[path_str] = entry
+        return by_queue.get(q_key, []) if q_key else lines
 
 
 def _wt_config_path():
@@ -2771,9 +2873,9 @@ def _wt_diagnostic_events(queue_name, now=None, limit=20):
     """Return bounded lifecycle verbs/times, never raw WatchTower details."""
     now = time.time() if now is None else now
     try:
-        lines = (_WT_HOME / "activity.log").read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines()
+        lines = _wt_activity_log_lines(
+            _WT_HOME / "activity.log", queue_filter=queue_name
+        )
     except OSError:
         return []
     rows = []
@@ -29930,11 +30032,33 @@ _BACKGROUND_API_READ_PATHS = frozenset({
     "/api/background-runs",
     "/api/vercel-deploy",
     "/api/watchtower/service/status",
+    "/api/wt/activity-log",
+    "/api/wt/workers",
+    "/api/session-status",
+    "/api/decision-inbox/requests",
+    "/api/takeover/observe",
+    "/api/question-tags",
+    "/api/watchtower/alerts",
 })
 
 
 def _is_background_api_read(path, client_marked):
     return bool(client_marked or path in _BACKGROUND_API_READ_PATHS)
+
+
+_BG_ROUTE_MAX_KEYS = 256
+
+
+def _normalize_bg_route(path):
+    if not path:
+        return None
+    norm = _cpu_accounting.route_of(path.rstrip("/"))
+    if norm.startswith("/api/conversations/"):
+        parts = norm.split("/")
+        if len(parts) >= 4 and parts[3]:
+            parts[3] = ":id"
+            norm = "/".join(parts)
+    return norm
 
 
 # Background reads that are cheap skip the shared slots (CCC-142). After a
@@ -29966,6 +30090,8 @@ def _bg_route_is_cheap(route):
 
 def _bg_route_note_cpu(route, cpu_s):
     with _BG_ROUTE_GUARD:
+        if route not in _BG_ROUTE_CPU and len(_BG_ROUTE_CPU) >= _BG_ROUTE_MAX_KEYS:
+            _BG_ROUTE_CPU.pop(next(iter(_BG_ROUTE_CPU)), None)
         prev = _BG_ROUTE_CPU.get(route)
         _BG_ROUTE_CPU[route] = cpu_s if prev is None else 0.5 * prev + 0.5 * cpu_s
         _BG_ROUTE_CPU_STATE["dirty"] = True
@@ -29983,6 +30109,8 @@ def _load_bg_route_cpu():
     with _BG_ROUTE_GUARD:
         for route, cpu in routes.items():
             if isinstance(route, str) and isinstance(cpu, (int, float)) and 0 <= cpu < 3600:
+                if route not in _BG_ROUTE_CPU and len(_BG_ROUTE_CPU) >= _BG_ROUTE_MAX_KEYS:
+                    break
                 _BG_ROUTE_CPU.setdefault(route, float(cpu))
                 n += 1
     return n
@@ -30014,6 +30142,11 @@ def _run_api_request(is_background, callback, route=None):
         with _background_api_read_slots:
             return callback()
     with _BG_ROUTE_GUARD:
+        if route not in _BG_ROUTE_LOCKS and len(_BG_ROUTE_LOCKS) >= _BG_ROUTE_MAX_KEYS:
+            for k in list(_BG_ROUTE_LOCKS):
+                if not _BG_ROUTE_LOCKS[k].locked():
+                    _BG_ROUTE_LOCKS.pop(k, None)
+                    break
         route_lock = _BG_ROUTE_LOCKS.setdefault(route, threading.Lock())
     with route_lock:
         cheap = _bg_route_is_cheap(route)
@@ -30104,7 +30237,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         )
         return _run_api_request(
             is_background, self._do_GET,
-            route=path if path in _BACKGROUND_API_READ_PATHS else None,
+            route=_normalize_bg_route(path) if is_background else None,
         )
 
     def _do_GET(self):
@@ -30760,12 +30893,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             queue_filter = (qs.get("queue", [""])[0] or "").strip()
             log_path = _WT_HOME / "activity.log"
             try:
-                with open(log_path) as f:
-                    all_lines = f.readlines()
-                if queue_filter:
-                    all_lines = [l for l in all_lines if _wt_log_line_queue(l) == queue_filter.upper()]
-                tail = all_lines[-lines_cap:] if len(all_lines) > lines_cap else all_lines
-                self.send_json({"ok": True, "lines": [l.rstrip("\n") for l in tail],
+                all_lines = _wt_activity_log_lines(
+                    log_path, queue_filter=queue_filter, raise_missing=True,
+                )
+                tail = all_lines[-lines_cap:] if len(all_lines) > lines_cap else list(all_lines)
+                self.send_json({"ok": True, "lines": list(tail),
                                 "path": str(log_path), "total": len(all_lines)})
             except FileNotFoundError:
                 self.send_json({"ok": True, "lines": [], "path": str(log_path), "total": 0})

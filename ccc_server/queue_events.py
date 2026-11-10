@@ -1125,8 +1125,12 @@ def _ux_fixes_list_synced_at(status_filter=None, lane_filter=None):
 # Opt-in, so the default response shape is unchanged for external callers.
 _SLIM_TEXT_MAX = 240
 _SLIM_EVENT_TEXT_MAX = 120
+_SLIM_MEMO_MAX = 16
+_SLIM_ITEM_MEMO_MAX = 4096
 _slim_memo_lock = threading.Lock()
 _slim_memo = {"src": None, "items": None}
+_slim_memo_by_id = collections.OrderedDict()  # id(items) -> (items, slim_items)
+_slim_item_by_id = collections.OrderedDict()  # id(item) -> (item, slim_item)
 
 
 def _slim_clip(value, limit):
@@ -1174,14 +1178,47 @@ def _slim_item(item):
 
 def _ux_fixes_slim_items(items):
     """Trimmed copy of a list-memo result, memoized on the memo's identity so
-    concurrent polls of one snapshot build it once."""
+    concurrent polls across filter scopes build each snapshot once and reuse
+    unchanged closed ticket dicts across snapshots."""
+    items_id = id(items) if items is not None else None
     with _slim_memo_lock:
         if _slim_memo["src"] is items and _slim_memo["items"] is not None:
             return _slim_memo["items"]
-    slim = [_slim_item(it) for it in (items or [])]
+        if items_id is not None:
+            cached = _slim_memo_by_id.get(items_id)
+            if cached is not None and cached[0] is items:
+                _slim_memo_by_id.move_to_end(items_id)
+                _slim_memo["src"] = items
+                _slim_memo["items"] = cached[1]
+                return cached[1]
+    slim = []
+    new_closed = []
+    for it in (items or []):
+        if isinstance(it, dict) and str(it.get("status") or "") == "closed":
+            it_id = id(it)
+            with _slim_memo_lock:
+                cached_it = _slim_item_by_id.get(it_id)
+            if cached_it is not None and cached_it[0] is it and cached_it[0] == it:
+                slim.append(cached_it[1])
+            else:
+                slim_it = _slim_item(it)
+                slim.append(slim_it)
+                new_closed.append((it_id, it, slim_it))
+        else:
+            slim.append(_slim_item(it))
     with _slim_memo_lock:
+        for it_id, it, slim_it in new_closed:
+            _slim_item_by_id[it_id] = (it, slim_it)
+            _slim_item_by_id.move_to_end(it_id)
+        while len(_slim_item_by_id) > _SLIM_ITEM_MEMO_MAX:
+            _slim_item_by_id.popitem(last=False)
         _slim_memo["src"] = items
         _slim_memo["items"] = slim
+        if items_id is not None:
+            _slim_memo_by_id[items_id] = (items, slim)
+            _slim_memo_by_id.move_to_end(items_id)
+            while len(_slim_memo_by_id) > _SLIM_MEMO_MAX:
+                _slim_memo_by_id.popitem(last=False)
     return slim
 
 
@@ -1196,7 +1233,7 @@ def _ux_fixes_slim_items(items):
 _QUEUE_LIST_VERSIONS_MAX = 32
 _queue_list_versions_lock = threading.Lock()
 _queue_list_versions = collections.OrderedDict()  # token -> (scope, {key: digest})
-_queue_list_current = {}  # scope -> (memo identity, token, keys, digests)
+_queue_list_current = {}  # scope -> (memo identity, token, keys, digests, items_by_key)
 _queue_list_seq = [0]
 
 
@@ -1214,19 +1251,31 @@ def _queue_list_version(scope, memo_items, items):
         cur = _queue_list_current.get(scope)
         if cur is not None and cur[0] is memo_items:
             return cur[1], cur[2], cur[3]
+        prev_digests = cur[3] if cur is not None and len(cur) > 3 else None
+        prev_items_by_key = cur[4] if cur is not None and len(cur) > 4 else None
     import hashlib
-    keys, digests = [], {}
+    keys, digests, items_by_key = [], {}, {}
     for i, it in enumerate(items or []):
         k = _queue_list_item_key(it, i)
         if k in digests:
             k = "#%d" % i
         keys.append(k)
-        digests[k] = hashlib.blake2b(
-            json.dumps(it, sort_keys=True, default=str).encode(), digest_size=12).digest()
+        items_by_key[k] = it
+        if (
+            prev_items_by_key is not None
+            and prev_digests is not None
+            and k in prev_items_by_key
+            and k in prev_digests
+            and (prev_items_by_key[k] is it or prev_items_by_key[k] == it)
+        ):
+            digests[k] = prev_digests[k]
+        else:
+            digests[k] = hashlib.blake2b(
+                json.dumps(it, sort_keys=True, default=str).encode(), digest_size=12).digest()
     with _queue_list_versions_lock:
         _queue_list_seq[0] += 1
         token = "%x.%d" % (os.getpid(), _queue_list_seq[0])
-        _queue_list_current[scope] = (memo_items, token, keys, digests)
+        _queue_list_current[scope] = (memo_items, token, keys, digests, items_by_key)
         _queue_list_versions[token] = (scope, digests)
         while len(_queue_list_versions) > _QUEUE_LIST_VERSIONS_MAX:
             _queue_list_versions.popitem(last=False)

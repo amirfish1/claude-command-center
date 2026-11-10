@@ -5,38 +5,145 @@ session_meta rows. Ordinary spawn/report-to parent links are never consulted.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from contextlib import contextmanager
 import functools
+import os
 from pathlib import Path
 import re
 import sqlite3
+import threading
 
 from ccc_server import core as _core
 from ccc_server import ship_graph as _sg
 
 MAX_HOPS = 64
 _NATIVE_ID_RE = re.compile(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\Z')
+_ORIG_GET_CONNECTION = _sg._get_connection
+_CACHE_LOCK = threading.RLock()
+_INITIALIZED_CONNS: OrderedDict[int, tuple[sqlite3.Connection, str]] = OrderedDict()
+_CONN_CHANGES: dict[int, int] = {}
+_CACHE_GEN = 0
+_TOPIC_CACHE: dict[str, object] = {'token': None, 'entries': {}}
+_REVISION_CACHE: dict[str, object] = {'token': None, 'value': 0}
 
 
 def _topic(title):
     return ' '.join(str(title or '').split()).split(':', 1)[0].strip()[:240]
 
 
+def _file_stat_sig(db_path):
+    if not db_path:
+        return None
+    sig = []
+    for path in (db_path, f'{db_path}-wal', f'{db_path}-journal'):
+        try:
+            st = os.stat(path)
+            sig.append((st.st_ino, st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig.append((0, 0, 0))
+    return tuple(sig)
+
+
+def _external_title_cache_sig():
+    conv_meta = getattr(_core, '_conv_meta_cache', None)
+    codex_cache = getattr(_core, '_codex_titles_cache', None)
+    codex_data = codex_cache.get('data') if isinstance(codex_cache, dict) else None
+    codex_lookup = getattr(_core, '_codex_thread_row', None)
+    return (
+        id(conv_meta),
+        len(conv_meta) if isinstance(conv_meta, dict) else 0,
+        id(codex_data),
+        len(codex_data) if isinstance(codex_data, dict) else 0,
+        id(codex_lookup),
+    )
+
+
+def _db_state_token(conn=None):
+    global _CACHE_GEN
+    if conn is None:
+        if _sg._get_connection is not _ORIG_GET_CONNECTION:
+            conn = _sg._get_connection()
+        else:
+            conn = getattr(_sg._tls, 'conn', None)
+            if conn is None:
+                db_path = os.path.abspath(str(_sg._get_db_path()))
+                file_sig = _file_stat_sig(db_path)
+                if file_sig is None or file_sig[0] == (0, 0, 0):
+                    return None
+                with _CACHE_LOCK:
+                    gen = _CACHE_GEN
+                return (db_path, file_sig, gen, (), _external_title_cache_sig())
+    conn_id = id(conn)
+    with _CACHE_LOCK:
+        entry = _INITIALIZED_CONNS.get(conn_id)
+        if entry is None or entry[0] is not conn:
+            return None
+        db_path = entry[1]
+        changes = conn.total_changes
+        prev_changes = _CONN_CHANGES.get(conn_id)
+        if prev_changes != changes:
+            _CONN_CHANGES[conn_id] = changes
+            _CACHE_GEN += 1
+        gen = _CACHE_GEN
+    file_sig = _file_stat_sig(db_path) if db_path else (conn_id, changes)
+    tx_sig = (conn_id, changes) if conn.in_transaction else ()
+    return (db_path or conn_id, file_sig, gen, tx_sig, _external_title_cache_sig())
+
+
 def _connection(conn=None):
     conn = conn if conn is not None else _sg._get_connection()
-    conn.execute('''CREATE TABLE IF NOT EXISTS continuation_topics (
-        sid TEXT PRIMARY KEY, origin TEXT NOT NULL DEFAULT '',
-        root_sid TEXT NOT NULL DEFAULT '', topic_title TEXT NOT NULL DEFAULT '',
-        user_named INTEGER NOT NULL DEFAULT 0)''')
-    conn.execute('CREATE TABLE IF NOT EXISTS continuation_topic_meta (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL)')
+    conn_id = id(conn)
+    with _CACHE_LOCK:
+        entry = _INITIALIZED_CONNS.get(conn_id)
+        if entry is not None and entry[0] is conn:
+            _INITIALIZED_CONNS.move_to_end(conn_id)
+            return conn
+    db_row = conn.execute('PRAGMA database_list').fetchone()
+    raw_path = (db_row[2] if db_row and len(db_row) > 2 else '') or ''
+    db_path = os.path.abspath(raw_path) if raw_path else ''
+    has_tables = (
+        conn.execute('PRAGMA table_info(continuation_topics)').fetchone() is not None
+        and conn.execute('PRAGMA table_info(continuation_topic_meta)').fetchone() is not None
+    )
+    if not has_tables:
+        conn.execute('''CREATE TABLE IF NOT EXISTS continuation_topics (
+            sid TEXT PRIMARY KEY, origin TEXT NOT NULL DEFAULT '',
+            root_sid TEXT NOT NULL DEFAULT '', topic_title TEXT NOT NULL DEFAULT '',
+            user_named INTEGER NOT NULL DEFAULT 0)''')
+        conn.execute('CREATE TABLE IF NOT EXISTS continuation_topic_meta (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL)')
+    with _CACHE_LOCK:
+        for old_id, (old_conn, _) in list(_INITIALIZED_CONNS.items()):
+            try:
+                _ = old_conn.in_transaction
+            except sqlite3.ProgrammingError:
+                _INITIALIZED_CONNS.pop(old_id, None)
+                _CONN_CHANGES.pop(old_id, None)
+        _INITIALIZED_CONNS[conn_id] = (conn, db_path)
+        _INITIALIZED_CONNS.move_to_end(conn_id)
+        _CONN_CHANGES[conn_id] = conn.total_changes
+        while len(_INITIALIZED_CONNS) > 128:
+            old_id, _ = _INITIALIZED_CONNS.popitem(last=False)
+            _CONN_CHANGES.pop(old_id, None)
     return conn
 
 
 def revision():
     """Indexed cross-process cache token; changes only when topic data changes."""
+    token = _db_state_token(None)
+    if token is not None:
+        with _CACHE_LOCK:
+            if _REVISION_CACHE.get('token') == token:
+                return _REVISION_CACHE['value']
     conn = _connection()
     row = conn.execute('SELECT revision FROM continuation_topic_meta WHERE id=1').fetchone()
-    return row[0] if row else 0
+    val = row[0] if row else 0
+    token = _db_state_token(conn)
+    if token is not None:
+        with _CACHE_LOCK:
+            _REVISION_CACHE['token'] = token
+            _REVISION_CACHE['value'] = val
+    return val
 
 
 @contextmanager
@@ -156,6 +263,9 @@ class _Batch:
             self.records[sid] = value
 
     def flush(self):
+        global _CACHE_GEN
+        if not self.pending:
+            return
         for sid, value in self.pending.items():
             previous = self.conn.execute(
                 'SELECT origin, root_sid, topic_title, user_named FROM continuation_topics WHERE sid=?',
@@ -168,6 +278,12 @@ class _Batch:
             # corrections must invalidate cached projections in other processes.
             if previous and previous[1:] != value[1:]:
                 self.conn.execute('INSERT INTO continuation_topic_meta VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET revision=revision+1')
+        with _CACHE_LOCK:
+            _CACHE_GEN += 1
+            _CONN_CHANGES[id(self.conn)] = self.conn.total_changes
+            _TOPIC_CACHE['token'] = None
+            _TOPIC_CACHE['entries'] = {}
+            _REVISION_CACHE['token'] = None
 
     def indexed_origin(self, sid):
         if sid not in self.indexed_origins:
@@ -250,6 +366,76 @@ def _project_topics(batch, rows):
             row.pop('continuation_topic_session_id', None)
 
 
+def _try_attach_from_cache(rows, conn, names):
+    token = _db_state_token(conn)
+    if token is None:
+        return False
+    with _CACHE_LOCK:
+        if _TOPIC_CACHE.get('token') != token:
+            return False
+        entries = _TOPIC_CACHE.get('entries') or {}
+        if not entries:
+            return False
+        resolved_names = None
+        staged = []
+        for item in rows:
+            sid = _sid(item)
+            if not sid:
+                continue
+            entry = entries.get(sid)
+            if entry is None:
+                return False
+            cached_origin, has_persisted_title, root, topic_title = entry
+            if _origin(item) != cached_origin:
+                return False
+            if not has_persisted_title:
+                if resolved_names is None:
+                    resolved_names = _core._load_session_name_overrides() if names is None else names
+                candidate = (
+                    resolved_names.get(sid)
+                    or item.get('display_name')
+                    or item.get('custom_title')
+                    or item.get('ai_title')
+                )
+                if _topic(candidate):
+                    return False
+            staged.append((item, root, topic_title))
+    for item, root, topic_title in staged:
+        if root:
+            item['continuation_topic_title'] = topic_title
+            item['continuation_topic_root_session_id'] = root
+            item['continuation_topic_session_id'] = root
+        else:
+            item.pop('continuation_topic_title', None)
+            item.pop('continuation_topic_root_session_id', None)
+            item.pop('continuation_topic_session_id', None)
+    return True
+
+
+def _store_cache(conn, batch, rows):
+    token = _db_state_token(conn)
+    if token is None:
+        return
+    with _CACHE_LOCK:
+        if _TOPIC_CACHE.get('token') != token:
+            _TOPIC_CACHE['token'] = token
+            _TOPIC_CACHE['entries'] = {}
+        entries = _TOPIC_CACHE['entries']
+        for item in rows:
+            sid = _sid(item)
+            if not sid:
+                continue
+            origin, root, persisted_title, _ = batch.record(sid)
+            if origin and root:
+                topic_title = item.get('continuation_topic_title') or ''
+                if not topic_title:
+                    entries.pop(sid, None)
+                    continue
+                entries[sid] = (_origin(item), True, root, topic_title)
+            else:
+                entries[sid] = (_origin(item), bool(persisted_title), '', '')
+
+
 def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False):
     """Project topics without waiting behind the ship index's bulk writer.
 
@@ -259,16 +445,23 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False):
     """
     if not rows:
         return
+    rows = [row for row in rows if isinstance(row, dict)]
+    if not rows:
+        return
+    if not wait_for_writer and _try_attach_from_cache(rows, conn, names):
+        return
     conn = _connection(conn)
     names = _core._load_session_name_overrides() if names is None else names
-    rows = [row for row in rows if isinstance(row, dict)]
     batch = _Batch(conn, rows, names)
     batch.capture_root_titles = wait_for_writer
     # Native title reads may perform I/O. Never do them while holding the
     # shared index's writer lock, including on a cold archive projection.
     _project_topics(batch, rows)
     if not batch.pending:
+        if not wait_for_writer:
+            _store_cache(conn, batch, rows)
         return
+    flushed = False
     try:
         with _transaction(conn, wait=wait_for_writer):
             # Re-read after acquiring the lock so a concurrent explicit rename
@@ -279,9 +472,12 @@ def attach_topics(rows, *, conn=None, names=None, wait_for_writer=False):
             current.cached_titles = batch.cached_titles
             _project_topics(current, rows)
             current.flush()
+            flushed = True
     except sqlite3.OperationalError as exc:
         if wait_for_writer or getattr(exc, 'sqlite_errorcode', None) != sqlite3.SQLITE_BUSY:
             raise
+    if flushed and not wait_for_writer:
+        _store_cache(conn, current, rows)
 
 
 def record_continuation(origin, sid, *, title='', conn=None):
