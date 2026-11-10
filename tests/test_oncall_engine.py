@@ -936,16 +936,58 @@ def test_github_no_token_cannot_post(github_rig):
     rig = github_rig
     cfg = rig.eng.config()
     cfg["sources"][0].pop("token_vault")
-    cfg["customers"]["approve_sends"] = False
     rig.eng.save_config(cfg)
     result = rig.eng.request_message(rig.wt.added[0], "tell", "Update")
-    assert result["state"] == "failed" and not rig.gh["posts"]
+    rig.tick()
+    rig.msg("tg", "yes", "4242")
+    rig.tick()
+    message = rig.eng.store.customer_message(result["message"])
+    assert message["state"] == "failed" and not rig.gh["posts"]
 
 
-def test_github_existing_approval_off_setting(github_rig):
+def test_github_comment_waits_for_the_owner_with_approval_off(github_rig):
+    """A public comment is never posted on the setting alone."""
     rig = github_rig
     cfg = rig.eng.config()
     cfg["customers"]["approve_sends"] = False
     rig.eng.save_config(cfg)
-    assert rig.eng.request_message(rig.wt.added[0], "tell", "Update")["state"] == "sent"
-    assert len(rig.gh["posts"]) == 1
+    ref = rig.wt.added[0]
+    assert rig.eng.request_message(ref, "tell", "Update")["state"] == "pending"
+    rig.tick()
+    assert rig.gh["posts"] == []
+    rig.msg("tg", "yes", "4242")
+    rig.tick()
+    assert [body for _url, body in rig.gh["posts"]] == [{"body": "Update"}]
+    rig.wt.close(ref)
+    rig.tick()
+    assert len(rig.gh["posts"]) == 1  # the fixed notice waits too
+    rig.msg("tg", "yes", "4242")
+    rig.tick()
+    assert rig.gh["posts"][-1][1]["body"].startswith("The problem you reported is fixed:")
+
+
+def test_github_reply_check_overlaps_the_last_one(github_rig):
+    import time
+    rig = github_rig
+    first = rig.eng.store.kv_get("src:issues:comments")["since"]
+    rig.clock.now += 600
+    rig.tick()
+    later = rig.eng.store.kv_get("src:issues:comments")["since"]
+    assert first < later < time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(rig.clock()))
+
+
+def test_github_bad_comment_does_not_stop_the_page(github_rig, monkeypatch):
+    rig = github_rig
+    real, seen = customers.intake, []
+
+    def intake(cfg, store, wt, msg, **kw):
+        seen.append(msg.external_id)
+        if msg.external_id == "1":
+            raise RuntimeError("boom")
+        return real(cfg, store, wt, msg, **kw)
+
+    monkeypatch.setattr(customers, "intake", intake)
+    rig.gh["comments"][:] = [_github_comment(1), _github_comment(2)]
+    rig.tick()
+    assert seen == ["1", "2"] and "Safari 17.4" in rig.wt.comments[-1][1]
+    assert not rig.eng.store.kv_get("err:source:issues", "")

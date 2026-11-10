@@ -242,9 +242,9 @@ reporter's reply goes back onto the ticket and the agent resumes. You can
 turn the approval step off in Settings > On-call.
 
 For a ticket filed from a GitHub issue, `ask` and `tell` post comments on that
-issue. They use the same approval setting as email, SMS and WhatsApp. With
-approval enabled, no comment is posted until you approve it. If you turn
-approval off, these comments are sent without another prompt too.
+issue, under the account the token belongs to. A comment is public, so you
+always see it first: turning the approval step off does not apply to GitHub
+comments.
 
 Later comments by the issue author go onto the ticket. They answer a ticket
 waiting on the reporter, or add a comment if it is still active. Comments by
@@ -253,8 +253,8 @@ closed, an author reply follows the same new-report and unknown-customer
 approval rules as an email follow-up.
 
 When a reported bug is fixed, you are asked whether to tell the reporter.
-For GitHub reports, that notice is another comment behind the same approval
-setting. CCC does not close the GitHub issue.
+For GitHub reports, that notice is another comment, and it also always waits
+for your go. CCC does not close the GitHub issue.
 
 ## For agents
 
@@ -291,11 +291,14 @@ reply releases it.
   account identity. Larger backlogs take several checks. The cursor survives
   restarts. There is no per-ticket comment polling. Failed requests wait until
   the next source check; failed sends are recorded without an automatic retry.
-- GitHub reply checks start from the time of the first successful check, without
-  backfilling comment history. A later edit can bring an older comment into the
-  feed; each comment ID is routed at most once. Only issues filed with reporter details by this version can be messaged.
-  Older tickets are not migrated. Initial issue intake still reads only the
-  newest 25 open issues per check, with the configured label filter.
+- GitHub reply checks start about two minutes before the first successful
+  check, without backfilling older comment history. A later edit can bring an
+  older comment into the feed; each comment ID is routed at most once. Only
+  issues filed after this feature arrived can be messaged; older tickets are
+  not migrated. Issue intake still reads only the newest 25 open issues per
+  check, with the configured label filter.
+- If the token belongs to the same account that opened an issue, that
+  account's later comments on it are ignored, like every comment CCC posts.
 - The GitHub comment round trip has local transport tests, but has not been
   verified against a live GitHub account.
 

@@ -209,7 +209,11 @@ class Engine:
             return
         msg.raw["github"] = identity
         if self.store.inbound_claim(msg):
-            how = customers.intake(cfg, self.store, self.wt, msg, now=now)
+            try:
+                how = customers.intake(cfg, self.store, self.wt, msg, now=now)
+            except Exception as exc:  # one bad comment must not stop the rest of the page
+                how = f"error: {type(exc).__name__}: {exc}"
+                self.store.log("error", f"inbound on {msg.channel}: {how}", now=now)
             self.store.inbound_handled(msg, how)
 
     def _route(self, cfg, chans, entry, msg, now):

@@ -819,6 +819,7 @@ class CommandSource(Source):
 
 _GITHUB_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+")
 _GITHUB_INSIDERS = ("OWNER", "MEMBER", "COLLABORATOR")
+_GITHUB_OVERLAP_S = 120
 
 
 class GitHubSource(Source):
@@ -945,7 +946,9 @@ class GitHubSource(Source):
             if not own.get("login"):
                 raise _Problem("GitHub did not identify the posting account.")
             cursor = self._get("comments", {})
-            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._clock()))
+            # Start each scan a little before this machine's "now": its clock and
+            # GitHub's differ, and a repeated comment is dropped by its id anyway.
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._clock() - _GITHUB_OVERLAP_S))
             if not cursor:
                 self._set("comments", {"since": now, "page": 1})
                 return

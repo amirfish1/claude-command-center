@@ -76,10 +76,13 @@ def finding_ticket_text(source_cfg, finding):
         "----- end evidence -----",
     ]
     if getattr(finding, "reporter", {}):
-        lines += ["", 'To ask the reporter: ccc oncall ask <ref> "your question"',
-                  'To tell the reporter: ccc oncall tell <ref> "your message"',
-                  'After asking: wt block <ref> --kind awaiting-client --wait-on external '
-                  '--question "what you asked"']
+        lines += ["",
+                  "To ask the reporter a question:  ccc oncall ask <this ticket's ref> \"your question\"",
+                  "To tell the reporter something:  ccc oncall tell <this ticket's ref> \"your message\"",
+                  "Each message is posted as a public comment on the issue, after the owner approves "
+                  "it. Keep secrets, internal paths and other people's details out of it. After "
+                  "asking, park the ticket:",
+                  "  wt block <ref> --kind awaiting-client --wait-on external --question \"what you asked\""]
     if finding.url:
         lines += ["", f"Link: {finding.url}"]
     return "\n".join(lines)
@@ -262,6 +265,16 @@ def drop_report(store, report_id, *, now=None):
 
 # -- messages to a reporter -------------------------------------------------
 
+def needs_approval(cfg, channel):
+    """Whether the owner sees a message to a reporter before it goes out.
+
+    A GitHub comment is public and posted under the owner's account, so it
+    always waits, whatever the approval setting says.
+    """
+    return (bool((cfg.get("customers") or {}).get("approve_sends", True))
+            or str(channel or "").startswith("github:"))
+
+
 def request_message(cfg, store, chans, wt, *, ref, kind, text, now=None):
     """An agent (or the owner) wants to ask or tell the reporter of ``ref``.
 
@@ -286,7 +299,7 @@ def request_message(cfg, store, chans, wt, *, ref, kind, text, now=None):
         ref=ref, kind=kind, channel=report["reporter_channel"], address=report["reporter_address"],
         name=report.get("reporter_name") or "", text=text, subject=subject,
         thread=report.get("thread") or "", state="pending", now=now)
-    if (cfg.get("customers") or {}).get("approve_sends", True):
+    if needs_approval(cfg, report["reporter_channel"]):
         alert, _new = alerts.raise_event(
             store, kind="send", key=f"send:{message['id']}", ref=ref, title=subject, body=text,
             meta={"name": message["name"], "address": message["address"], "message_kind": kind,
@@ -381,7 +394,7 @@ def _closed_notice(cfg, store, chans, wt, report, item, now):
     has_reporter = bool(report.get("reporter_address"))
     notify = (fixed and has_reporter and bool(customers.get("notify_fixed", True))
               and report.get("reporter_channel") in chans)
-    approve = bool(customers.get("approve_sends", True))
+    approve = needs_approval(cfg, report.get("reporter_channel"))
     note = FIXED_NOTE.format(title=report.get("title") or ref)
     message = None
     if notify:

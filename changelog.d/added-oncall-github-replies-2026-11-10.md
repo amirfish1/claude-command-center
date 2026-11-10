@@ -1,1 +1,1 @@
-- On-call can send approved questions, updates and fixed notices as GitHub issue comments, and route later comments from the issue author back to the ticket.
+- On-call can post questions, updates and fixed notices as comments on the GitHub issue a bug came from, each one only after you approve it, and it routes later comments from the issue author back to the ticket.
