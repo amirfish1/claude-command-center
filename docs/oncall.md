@@ -110,7 +110,9 @@ Each problem is filed once. What is already open when you add a source is
 left alone unless you ask for it to be filed.
 
 A public GitHub repository needs no token. A private one needs a token with
-read access to issues.
+read access to issues. To post comments and read reporter replies, save a user
+token in that same source's `token_vault` entry with write access to issues.
+CCC uses the GitHub API, not `gh`, and adds no separate credential.
 
 ## What you get messaged about
 
@@ -239,7 +241,20 @@ You see each message first and reply `yes`, `no`, or your own wording. The
 reporter's reply goes back onto the ticket and the agent resumes. You can
 turn the approval step off in Settings > On-call.
 
+For a ticket filed from a GitHub issue, `ask` and `tell` post comments on that
+issue. They use the same approval setting as email, SMS and WhatsApp. With
+approval enabled, no comment is posted until you approve it. If you turn
+approval off, these comments are sent without another prompt too.
+
+Later comments by the issue author go onto the ticket. They answer a ticket
+waiting on the reporter, or add a comment if it is still active. Comments by
+other people, bots and the account used by CCC are ignored. If the ticket is
+closed, an author reply follows the same new-report and unknown-customer
+approval rules as an email follow-up.
+
 When a reported bug is fixed, you are asked whether to tell the reporter.
+For GitHub reports, that notice is another comment behind the same approval
+setting. CCC does not close the GitHub issue.
 
 ## For agents
 
@@ -266,6 +281,23 @@ reply releases it.
   Requests through phone access or a proxy are refused.
 
 ## Limits
+
+- GitHub messaging needs a source that is still enabled and a user token that
+  can post issue comments. Reply checks must be able to identify that token's
+  account through `/user`; tokens that cannot do this cannot receive replies.
+  Public issue intake still works without a token, but messaging does not.
+- GitHub reply checks share the source timer (300 seconds by default). Each
+  check reads one repository-wide page of up to 100 comments, plus the posting
+  account identity. Larger backlogs take several checks. The cursor survives
+  restarts. There is no per-ticket comment polling. Failed requests wait until
+  the next source check; failed sends are recorded without an automatic retry.
+- GitHub reply checks start from the time of the first successful check, without
+  backfilling comment history. A later edit can bring an older comment into the
+  feed; each comment ID is routed at most once. Only issues filed with reporter details by this version can be messaged.
+  Older tickets are not migrated. Initial issue intake still reads only the
+  newest 25 open issues per check, with the configured label filter.
+- The GitHub comment round trip has local transport tests, but has not been
+  verified against a live GitHub account.
 
 - It is a preview. It is off until you turn it on. The first-run welcome
   sets up an agent; it does not enable On-call or configure message channels.

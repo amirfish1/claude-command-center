@@ -104,7 +104,9 @@ class Engine:
                 except Exception as exc:  # a bad entry must not stop the others
                     self._note(f"channel:{entry.get('id')}", str(exc))
             self._chan_cache = (stamp, built)
-        return self._chan_cache[1]
+        return {**self._chan_cache[1], **{f"github:{sid}": source
+                for sid, (entry, source) in self.sources(cfg).items()
+                if entry.get("type") == "github"}}
 
     def sources(self, cfg=None):
         cfg = cfg or self.config()
@@ -179,6 +181,9 @@ class Engine:
                 for finding in findings:
                     if customers.file_finding(cfg, store, self.wt, entry, finding, now=now):
                         out["findings"] += 1
+                if entry.get("type") == "github" and not source.last_error:
+                    source.receive_replies(lambda msg: self._github_reply(cfg, msg, now))
+                    self._note(f"source:{sid}", source.last_error)
             if self._due("retry", RETRY_EVERY_S, now, force):
                 customers.retry_unfiled(cfg, store, self.wt, now=now)
 
@@ -191,6 +196,21 @@ class Engine:
             out["sent"] = alerts.deliver(cfg, store, chans, now=now)
             self.last_tick = out
             return out
+
+    def _github_reply(self, cfg, msg, now):
+        report = self.store.report_by_thread(msg.thread)
+        if not report or report["state"] == "dropped":
+            return
+        identity = (report.get("meta") or {}).get("github") or {}
+        if (msg.sender.lower() != report["reporter_address"].lower()
+                or (identity.get("author_id") is not None
+                    and identity["author_id"] != msg.raw.get("author_id"))
+                or identity.get("author_type") == "Bot"):
+            return
+        msg.raw["github"] = identity
+        if self.store.inbound_claim(msg):
+            how = customers.intake(cfg, self.store, self.wt, msg, now=now)
+            self.store.inbound_handled(msg, how)
 
     def _route(self, cfg, chans, entry, msg, now):
         """Handle one inbound message once. True when it was new."""

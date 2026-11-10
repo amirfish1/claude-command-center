@@ -1,0 +1,1 @@
+- On-call can send approved questions, updates and fixed notices as GitHub issue comments, and route later comments from the issue author back to the ticket.

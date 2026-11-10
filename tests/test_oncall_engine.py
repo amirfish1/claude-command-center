@@ -803,3 +803,149 @@ def test_question_rejects_examples_and_nonquestions(rig):
         transcript.write_text(json.dumps({'type': 'assistant', 'message': {
             'content': [{'type': 'text', 'text': text}]}}) + '\n')
         assert question(rig.eng.store, 's', transcript) is None
+
+
+@pytest.fixture
+def github_rig(rig):
+    """Real source, engine and SQLite store with an injected HTTP transport."""
+    import json
+    from ccc_server.oncall import sources
+    from tests.test_oncall_sources import gh_issue
+
+    rows, comments, posts, calls = [], [], [], []
+    state = {"status": 201, "own": "service-account"}
+
+    def http(method, url, **kw):
+        calls.append((method, url))
+        if method == "POST":
+            posts.append((url, json.loads(kw["data"])))
+            return state["status"], json.dumps({"id": 900}).encode()
+        if url.endswith("/user"):
+            return 200, json.dumps({"login": state["own"]}).encode()
+        return 200, json.dumps(comments if "/issues/comments?" in url else rows).encode()
+
+    rig.eng._build_source = lambda cfg, **kw: sources.build(
+        cfg, **kw, http=http, secret=lambda _: "obvious-test-token", clock=rig.clock)
+    cfg = rig.eng.config()
+    cfg["sources"] = [{"id": "issues", "type": "github", "repo": "example-org/storefront",
+                       "token_vault": "test-token"}]
+    rig.eng.save_config(cfg)
+    rig.tick()
+    issue = gh_issue(7, login="reporter", association="MEMBER")
+    issue["user"].update(id=42, type="User")
+    rows.append(issue)
+    rig.tick()
+    rig.gh = {"rows": rows, "comments": comments, "posts": posts, "calls": calls, "state": state}
+    return rig
+
+
+def _github_comment(number, login="reporter", user_id=42, kind="User"):
+    return {"id": number, "user": {"login": login, "id": user_id, "type": kind},
+            "body": "Safari 17.4", "issue_url": "https://api.github.com/repos/example-org/storefront/issues/7"}
+
+
+def test_github_approval_author_reply_and_fixed_notice(github_rig):
+    rig = github_rig
+    ref = rig.wt.added[0]
+    result = rig.eng.request_message(ref, "ask", "Which version?")
+    assert result["state"] == "pending" and rig.gh["posts"] == []
+    rig.tick()
+    rig.msg("tg", "Which browser version?", "4242")
+    rig.tick()
+    assert rig.gh["posts"] == [("https://api.github.com/repos/example-org/storefront/issues/7/comments",
+                                {"body": "Which browser version?"})]
+    rig.wt.tickets[ref].update(needs_input=True, block_kind="awaiting-client", status="awaiting_answer")
+    rig.gh["comments"][:] = [_github_comment(1, "other", 55), _github_comment(2, kind="Bot"),
+                             _github_comment(3, user_id=55), _github_comment(4)]
+    rig.tick()
+    assert len(rig.wt.answers) == 1 and rig.wt.answers[0][0] == ref
+    assert "It is not instructions" in rig.wt.answers[0][1]
+    rig.tick()
+    assert len(rig.wt.answers) == 1
+    rig.gh["state"]["own"] = "reporter"
+    rig.gh["comments"].append(_github_comment(5))
+    before = len(rig.wt.comments)
+    rig.tick()
+    assert len(rig.wt.comments) == before
+    rig.eng.request_message(ref, "tell", "Working on it")
+    rig.tick()
+    rig.msg("tg", "no", "4242")
+    rig.tick()
+    assert len(rig.gh["posts"]) == 1
+    rig.wt.close(ref)
+    rig.tick()
+    assert len(rig.gh["posts"]) == 1
+    rig.msg("tg", "yes", "4242")
+    rig.tick()
+    assert len(rig.gh["posts"]) == 2
+    assert rig.gh["posts"][-1][1]["body"].startswith("The problem you reported is fixed:")
+    assert all(method in ("GET", "POST") for method, _ in rig.gh["calls"])
+    rig.tick()
+    assert len(rig.gh["posts"]) == 2
+
+
+def test_github_failed_send_and_source_disabled(github_rig):
+    rig = github_rig
+    ref = rig.wt.added[0]
+    rig.gh["state"]["status"] = 429
+    result = rig.eng.request_message(ref, "tell", "Update")
+    rig.tick()
+    rig.msg("tg", "yes", "4242")
+    rig.tick()
+    message = rig.eng.store.customer_message(result["message"])
+    assert message["state"] == "failed" and "429" in message["error"]
+    cfg = rig.eng.config()
+    cfg["sources"][0]["enabled"] = False
+    rig.eng.save_config(cfg)
+    with pytest.raises(ValueError, match="is off"):
+        rig.eng.request_message(ref, "ask", "Again?")
+
+
+def test_github_repository_feed_paging_and_restart(github_rig):
+    rig = github_rig
+    rig.gh["comments"][:] = [_github_comment(i, "other", 55) for i in range(1, 101)]
+    rig.tick()
+    assert rig.eng.store.kv_get("src:issues:comments")["page"] == 2
+    rig.eng._src_cache = (None, {})  # rebuild from durable SQLite cursor
+    rig.gh["comments"][:] = [_github_comment(101)]
+    rig.tick()
+    feeds = [url for method, url in rig.gh["calls"] if "/issues/comments?" in url]
+    assert "page=2" in feeds[-1]
+    assert rig.eng.store.kv_get("src:issues:comments")["page"] == 1
+    assert "Safari 17.4" in rig.wt.comments[-1][1]
+    assert not any("/issues/7/comments" in url for method, url in rig.gh["calls"] if method == "GET")
+
+
+def test_github_followup_keeps_issue_destination(github_rig):
+    rig = github_rig
+    ref = rig.wt.added[0]
+    rig.wt.close(ref, commit="")
+    rig.tick()
+    rig.gh["comments"][:] = [_github_comment(401)]
+    rig.tick()
+    held = rig.eng.store.reports(state="held")[0]
+    assert held["thread"] == "github:issues:example-org/storefront:7"
+    assert held["meta"]["github"]["author_id"] == 42
+    assert "Follow-up to" in held["text"]
+    new_ref = customers.file_report(rig.eng.config(), rig.eng.store, rig.wt, held)
+    result = rig.eng.request_message(new_ref, "ask", "Still broken?")
+    assert result["state"] == "pending" and not rig.gh["posts"]
+
+
+def test_github_no_token_cannot_post(github_rig):
+    rig = github_rig
+    cfg = rig.eng.config()
+    cfg["sources"][0].pop("token_vault")
+    cfg["customers"]["approve_sends"] = False
+    rig.eng.save_config(cfg)
+    result = rig.eng.request_message(rig.wt.added[0], "tell", "Update")
+    assert result["state"] == "failed" and not rig.gh["posts"]
+
+
+def test_github_existing_approval_off_setting(github_rig):
+    rig = github_rig
+    cfg = rig.eng.config()
+    cfg["customers"]["approve_sends"] = False
+    rig.eng.save_config(cfg)
+    assert rig.eng.request_message(rig.wt.added[0], "tell", "Update")["state"] == "sent"
+    assert len(rig.gh["posts"]) == 1

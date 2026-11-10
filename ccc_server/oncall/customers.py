@@ -75,6 +75,11 @@ def finding_ticket_text(source_cfg, finding):
         _quoted(finding.text),
         "----- end evidence -----",
     ]
+    if getattr(finding, "reporter", {}):
+        lines += ["", 'To ask the reporter: ccc oncall ask <ref> "your question"',
+                  'To tell the reporter: ccc oncall tell <ref> "your message"',
+                  'After asking: wt block <ref> --kind awaiting-client --wait-on external '
+                  '--question "what you asked"']
     if finding.url:
         lines += ["", f"Link: {finding.url}"]
     return "\n".join(lines)
@@ -126,10 +131,13 @@ def file_finding(cfg, store, wt, source_cfg, finding, *, now=None):
     if hold and len(_held_today(store, now)) >= HELD_PER_DAY:
         store.log("report", f"too many unknown reports today; ignored one from {sender}", now=now)
         return None
+    reporter = getattr(finding, "reporter", {})
     report, created = store.report_upsert(
         f"source:{source_cfg.get('id')}", finding.fingerprint, title=finding.title,
         text=finding.text, queue=str(source_cfg.get("queue") or ""), state="held",
-        meta={"auto": not hold, "url": finding.url, "severity": finding.severity,
+        reporter_channel=reporter.get("channel", ""), reporter_address=reporter.get("address", ""),
+        reporter_name=reporter.get("address", ""), thread=reporter.get("thread", ""),
+        meta={"github": reporter, "auto": not hold, "url": finding.url, "severity": finding.severity,
               "ticket_text": finding_ticket_text(source_cfg, finding)}, now=now)
     if not created:
         return report.get("ticket_ref") or None
@@ -226,7 +234,8 @@ def _new_report(cfg, store, wt, msg, now, follows=""):
         queue=str((known or {}).get("queue") or ""), state="held",
         reporter_channel=msg.channel, reporter_address=msg.sender,
         reporter_name=msg.sender_name or str((known or {}).get("name") or ""),
-        subject=msg.subject, meta={"message_id": msg.external_id}, now=now)
+        subject=msg.subject, thread=msg.thread if msg.channel.startswith("github:") else "",
+        meta={"message_id": msg.external_id, "github": msg.raw.get("github", {})}, now=now)
     if not created:
         return f"already have report {report['id']}"
     if hold:
@@ -267,7 +276,7 @@ def request_message(cfg, store, chans, wt, *, ref, kind, text, now=None):
     report = store.report_by_ref(ref)
     if not report or not report.get("reporter_address"):
         raise ValueError(f"{ref} has no reporter On-call can message. Only reports that came in "
-                         "through a message channel have one.")
+                         "through a message channel or a GitHub issue have one.")
     if report["reporter_channel"] not in chans:
         raise ValueError(f"The channel {report['reporter_channel']!r} this report came in on is off.")
     subject = report.get("subject") or report.get("title") or "your report"

@@ -31,7 +31,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from . import store as _store
 
@@ -56,6 +56,7 @@ class Finding:
     severity: str = ""   # "", "low", "high"
     sender: str = ""     # set when a person wrote the text (a GitHub issue)
     hold: bool = False   # written by a stranger: wait for the owner's go
+    reporter: dict = field(default_factory=dict)
 
 
 class _Problem(Exception):
@@ -904,8 +905,79 @@ class GitHubSource(Source):
         if body:
             lines += ["", body]
         insider = str(issue.get("author_association") or "").upper() in _GITHUB_INSIDERS
-        return _finding(f"github:{self.repo}#{number}", issue.get("title") or f"Issue #{number}",
+        finding = _finding(f"github:{self.repo}#{number}", issue.get("title") or f"Issue #{number}",
                         "\n".join(lines), url=link, sender=f"{login} on GitHub", hold=not insider)
+        finding.reporter = {"channel": f"github:{self.id}", "address": login,
+                            "thread": f"github:{self.id}:{self.repo}:{number}",
+                            "author_id": user.get("id"), "author_type": user.get("type", "User")}
+        return finding
+
+    def send(self, msg):
+        """Reporter transport; called only by the existing customer send path."""
+        prefix = f"github:{self.id}:{self.repo}:"
+        number = msg.thread.removeprefix(prefix)
+        if not msg.thread.startswith(prefix) or not number.isdigit():
+            return _store.Receipt(ok=False, error="The GitHub issue destination is invalid.")
+        try:
+            token = self._maybe_token()
+            if not token:
+                raise _Problem("Save a GitHub token with write access to issues before sending.")
+            row = self._api("GitHub", "POST",
+                            f"{self.base}/repos/{self.repo}/issues/{number}/comments",
+                            token=token, data=json.dumps({"body": msg.text}).encode(),
+                            hint="The token needs write access to issues.")
+            return _store.Receipt(ok=True, external_id=str(row["id"]))
+        except (_Problem, KeyError, TypeError) as exc:
+            return _store.Receipt(ok=False, error=self._safe(exc))
+
+    def receive_replies(self, deliver):
+        """One repository-wide comment page per source tick, with a durable cursor.
+
+        Keep the scan's since value fixed while paging. Advance it only after
+        the last page; overlapping scans are deduped by the engine's store.
+        """
+        try:
+            token = self._maybe_token()
+            if not token:
+                return
+            # Fail closed if the posting account cannot be identified.
+            own = self._api("GitHub", "GET", f"{self.base}/user", token=token)
+            if not own.get("login"):
+                raise _Problem("GitHub did not identify the posting account.")
+            cursor = self._get("comments", {})
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._clock()))
+            if not cursor:
+                self._set("comments", {"since": now, "page": 1})
+                return
+            start = cursor.get("start") or now
+            params = urllib.parse.urlencode({"since": cursor["since"], "sort": "created",
+                                            "direction": "asc", "per_page": 100,
+                                            "page": cursor.get("page", 1)})
+            rows = self._api("GitHub", "GET",
+                             f"{self.base}/repos/{self.repo}/issues/comments?{params}", token=token)
+            if not isinstance(rows, list):
+                raise _Problem("GitHub sent comments in an unexpected shape.")
+            for row in rows:
+                user = row.get("user") or {}
+                login = str(user.get("login") or "")
+                if (not login or user.get("type") != "User" or login.lower().endswith("[bot]")
+                        or login.lower() == str(own.get("login") or "").lower()):
+                    continue
+                prefix = f"{self.base}/repos/{self.repo}/issues/"
+                issue = str(row.get("issue_url") or "")
+                number = issue.removeprefix(prefix)
+                if not issue.startswith(prefix) or not number.isdigit() or not row.get("id"):
+                    continue
+                deliver(_store.Inbound(channel=f"github:{self.id}",
+                        external_id=str(row["id"]), sender=login, text=str(row.get("body") or ""),
+                        thread=f"github:{self.id}:{self.repo}:{number}", raw={"author_id": user.get("id")}))
+            self._set("comments", {"since": cursor["since"], "start": start,
+                                    "page": cursor.get("page", 1) + 1} if len(rows) == 100 else
+                                   {"since": start, "page": 1})
+        except _Problem as exc:
+            self.last_error = self._safe(exc)
+        except Exception as exc:
+            self.last_error = self._safe(f"Comment check failed ({type(exc).__name__}).")
 
 
 # -- registry ---------------------------------------------------------------
