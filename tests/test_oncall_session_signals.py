@@ -28,3 +28,16 @@ def test_approval_adapter_routes_and_refuses_stale(monkeypatch, engine, decision
     assert calls == [('s', expected)]
     assert not deps.approve('s', decision, {'engine': engine, 'prompt': 'old'})[0]
     assert len(calls) == 1
+
+
+def test_ephemeral_background_loop_requires_explicit_opt_in(monkeypatch):
+    monkeypatch.delenv('CCC_ONCALL_DISABLED', raising=False)
+    monkeypatch.delenv('CCC_EPHEMERAL', raising=False)
+    monkeypatch.delenv('CCC_ONCALL_EPHEMERAL', raising=False)
+    assert server._oncall_background_enabled()
+    monkeypatch.setenv('CCC_EPHEMERAL', '1')
+    assert not server._oncall_background_enabled()
+    monkeypatch.setenv('CCC_ONCALL_EPHEMERAL', '1')
+    assert server._oncall_background_enabled()
+    monkeypatch.setenv('CCC_ONCALL_DISABLED', '1')
+    assert not server._oncall_background_enabled()

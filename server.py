@@ -443,6 +443,13 @@ def _oncall_stuck_queues(eng):
         pass
 
 
+def _oncall_background_enabled():
+    """Ephemeral servers need an explicit opt-in to exercise real messaging."""
+    return not os.environ.get("CCC_ONCALL_DISABLED") and (
+        not os.environ.get("CCC_EPHEMERAL")
+        or os.environ.get("CCC_ONCALL_EPHEMERAL") == "1")
+
+
 def _oncall_loop():
     """Run On-call with no browser open. Idle (one stat per pass) while it is off.
 
@@ -47820,8 +47827,8 @@ def main():
         threading.Thread(target=_prewarm_throughput, daemon=True, name="ccc-throughput-prewarm").start()
     # On-call (preview flag `oncall`): message channels, monitoring sources and
     # the alert/reply loop. The thread idles until the flag and the feature's
-    # own switch are both on. Never in ephemeral verification instances.
-    if not os.environ.get("CCC_EPHEMERAL") and not os.environ.get("CCC_ONCALL_DISABLED"):
+    # own switch are both on. Ephemeral proofs must opt in separately.
+    if _oncall_background_enabled():
         threading.Thread(target=_oncall_loop, daemon=True, name="ccc-oncall").start()
     # Scheduled notifications: the 6pm daily digest and savings milestones.
     # Emitted on the dashboard event hub and, on macOS, as an osascript banner
