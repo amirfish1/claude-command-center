@@ -5,12 +5,15 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 SPEC = importlib.util.spec_from_file_location(
     'session_proof', Path(__file__).resolve().parents[1] / 'scripts/oncall-session-proof.py')
 proof = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(proof)
 
 
+@pytest.mark.skipif(not Path('/proc/self/environ').exists(), reason='Linux process cleanup')
 def test_cleanup_reaps_owned_process(tmp_path):
     proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
                             env={'HOME': str(tmp_path)}, start_new_session=True)

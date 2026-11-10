@@ -1,1 +1,1 @@
-- Add an opt-in isolated dashboard and Codex session proof for On-call question delivery, deduplication and replies over local ntfy, with explicit permission-test boundaries.
+- Add an opt-in proof that starts an isolated dashboard and a real Codex session, and checks that a closing question reaches a local ntfy topic once after the idle wait and that the reply reaches the session.

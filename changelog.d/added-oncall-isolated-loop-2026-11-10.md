@@ -1,1 +1,0 @@
-- Allow isolated On-call protocol proofs to opt into the background alert loop with CCC_ONCALL_EPHEMERAL=1. Ephemeral servers still skip the loop by default.

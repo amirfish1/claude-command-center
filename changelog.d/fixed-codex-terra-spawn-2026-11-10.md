@@ -1,1 +1,1 @@
-- Accept gpt-6.1-terra in the Codex spawn model catalog.
+- Starting a Codex session with the `gpt-6.1-terra` model no longer fails as an unknown model.
