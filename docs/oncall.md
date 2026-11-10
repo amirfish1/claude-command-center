@@ -329,6 +329,11 @@ reply releases it.
   text. Where CCC has no way to answer a prompt (for Claude Code that means
   no permission hook and not on a Mac terminal), `allow` and `deny` are
   refused with the reason. Answer those prompts in the session.
+- The real-session proof covers Codex plain questions through the dashboard
+  and local ntfy. It does not verify Claude Code session alerts. The normal
+  Codex spawn path sets `approvalPolicy=never` and `dangerFullAccess`, so the
+  proof reports permission allow and deny as boundaries. It does not inject
+  a fake approval or change that policy to manufacture one.
 - Session alerts cover every agent session on the machine, not only the
   On-call queue.
 - Agents fix bugs in the code folder you point them at, the way your queue is
@@ -427,6 +432,49 @@ agent stage sends model requests through the copied Codex login.
 proof checks that command separately, then uses incoming email for the report
 that receives the fixed notice. It does not attach a fabricated reporter to an
 owner report.
+
+### Real dashboard session proof
+
+On Linux, with Docker and a logged-in Codex CLI:
+
+```
+python3 scripts/oncall-session-proof.py --with-agent
+```
+
+This is a separate, paid model run. It starts the real dashboard and its
+control-plane worker on private state, plus a pinned local ntfy container.
+It copies only Codex `auth.json`, uses an allow-listed environment and tool
+path, and creates a temporary git repository. It does not use the running
+install's port, settings, sessions or queues. Telemetry is disabled for this
+run and background engine maintenance is deferred beyond the proof deadline.
+Only the Codex model connection uses the copied account; ntfy stays local.
+
+The script configures On-call through HTTP and spawns `gpt-6.1-terra` at
+medium effort through `/api/sessions/spawn`. It waits for an explicit closing
+question that also names the needed answer in any session footer, then checks
+delivery after the unchanged 120-second idle grace. A footer saying no answer
+is needed fails the proof before the grace wait.
+It reports time from the final transcript message and from first observed
+idle. ntfy timestamps have one-second precision. It checks for one message,
+observes another 20 seconds without a duplicate, publishes a numbered reply
+to the reply topic, and checks the spawned session's transcript for that
+answer as a user turn and the API for alert closure. This is a bounded
+observation of deduplication, not proof that a duplicate can never occur.
+No On-call internal method or forced tick is called.
+
+Ephemeral dashboards normally skip the On-call loop entirely. This script
+sets `CCC_ONCALL_EPHEMERAL=1` alongside `CCC_EPHEMERAL=1` to run that loop.
+The preview flag and On-call enabled setting are still required.
+`CCC_ONCALL_DISABLED` still takes precedence.
+
+The output lists pass, fail and boundary rows with timings. Permission allow
+and deny are boundaries for the reason above. Readiness, idle, notification
+and reply waits have deadlines, with a ten-minute overall limit. On failure
+or interruption, the script kills
+its processes (including detached children identified by the exact temporary
+HOME), removes its named container and deletes temporary state. Linux `/proc`
+is required for that cleanup. If the copied login renews, it is discarded;
+a later Codex sign-in may be needed.
 
 ## Commands
 

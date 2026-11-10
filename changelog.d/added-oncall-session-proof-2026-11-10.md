@@ -1,0 +1,1 @@
+- Add an opt-in isolated dashboard and Codex session proof for On-call question delivery, deduplication and replies over local ntfy, with explicit permission-test boundaries.
