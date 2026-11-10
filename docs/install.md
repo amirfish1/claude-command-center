@@ -32,13 +32,16 @@ From an existing clone, use `./scripts/install.sh --from=readme` instead.
 
 ### Python runners (preview)
 
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first.
 Build a wheel with `uv build --wheel` from a source checkout, then try it
 without a permanent CCC install. This preview is not on PyPI yet.
 
 ```bash
-uvx --from dist/claude_command_center-5.37.0-py3-none-any.whl claude-command-center
-# Or, with pipx:
-pipx run --spec dist/claude_command_center-5.37.0-py3-none-any.whl claude-command-center
+uv build --wheel
+ccc_wheel=$(ls -t dist/claude_command_center-*.whl | head -n 1)
+uvx --from "$ccc_wheel" claude-command-center
+# Or, with pipx installed:
+pipx run --spec "$ccc_wheel" claude-command-center
 ```
 
 Open `http://localhost:8090` and leave the terminal open. Press Ctrl+C to stop.
@@ -149,7 +152,15 @@ or `yad` when available. On a headless box, Browse falls back to an in-browser
 picker for the server's files. macOS-only screenshots, jump-to-terminal, and
 desktop deep links are hidden.
 
-Install Python, Git, and your agent CLIs inside the Linux machine or WSL distro:
+On Ubuntu or Debian, install these prerequisites first:
+
+```bash
+sudo apt-get update
+sudo apt-get install git python3 curl ca-certificates
+```
+
+The dashboard does not need an agent CLI to start. Setup helps you install
+one. Run CCC as your normal user, inside the Linux machine or WSL distro:
 
 ```bash
 git clone https://github.com/amirfish1/claude-command-center

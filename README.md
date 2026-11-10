@@ -17,7 +17,7 @@ CCC On-call is a preview. It is off until you turn it on. Not affiliated with An
 curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_FROM=readme bash
 ```
 
-<sub>Needs Git and Python 3.9+ (macOS or Linux; [Windows](#running-on-windows)). Opens http://localhost:8090 and asks before installing a background service. Sends one anonymous daily ping; `CCC_TELEMETRY_DISABLED=1` turns it off ([what it sends](docs/telemetry.md)).</sub>
+<sub>Needs curl, Git and Python 3.9+ (macOS or Linux; [Windows](#running-on-windows)). Opens http://localhost:8090 and asks before installing a background service. Sends one anonymous daily ping; `CCC_TELEMETRY_DISABLED=1` turns it off ([what it sends](docs/telemetry.md)).</sub>
 
 Or `brew install amirfish1/tap/ccc && ccc`, or grab the [macOS DMG](https://github.com/amirfish1/claude-command-center/releases/latest).
 
@@ -223,8 +223,9 @@ All captures use seeded demo data. [Full feature guide](docs/features.md).
 
 ## Quickstart
 
-You need Git and Python 3.9+ to run CCC. To launch agents, use an
-installed agent CLI or let the first-run wizard help set one up. `gh` is
+You need Git and Python 3.9+ to run CCC, plus curl for the install line above.
+On Ubuntu or Debian: `sudo apt-get install git python3 curl ca-certificates`.
+To launch agents, use an installed agent CLI or let the first-run wizard help set one up. `gh` is
 optional for GitHub features.
 
 Prefer Python tools? [Build and run a wheel with uvx or pipx](docs/install.md#python-runners-preview).
