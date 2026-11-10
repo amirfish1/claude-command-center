@@ -425,13 +425,13 @@ function renderOverview(d) {
 
 function versionsCard(d) {
   const rows = d.opens_versions_week;
+  // The field is additive: an older Worker does not send it. Show nothing then.
+  if (!Array.isArray(rows)) return "";
   return `
     <div class="card wide" id="versions-week">
       <h2>Versions on active installs</h2>
-      ${Array.isArray(rows) ? `
-        <p class="muted">${escapeHtml(isoWeekRangeLabel(d.geo_week?.week_start))}. Same week as the location counts: the previous complete week if it has data, otherwise this week so far. Counts each install's first weekly beacon, excluding dev installs. This is the version at that beacon, not a live inventory. Versions with fewer than 3 installs are grouped as "Other (small buckets)".</p>
-        ${geoTable(rows, r => r.version === "other" ? "Other (small buckets)" : r.version)}
-      ` : '<p class="muted">Version counts are not yet available from the Worker.</p>'}
+      <p class="muted">${escapeHtml(isoWeekRangeLabel(d.geo_week?.week_start))}. Same week as the location counts: the previous complete week if it has data, otherwise this week so far. Counts each install's first weekly beacon, excluding dev installs. This is the version at that beacon, not a live inventory. Versions with fewer than 3 installs are grouped as "Other (small buckets)".</p>
+      ${geoTable(rows, r => r.version === "other" ? "Other (small buckets)" : r.version)}
     </div>
   `;
 }
