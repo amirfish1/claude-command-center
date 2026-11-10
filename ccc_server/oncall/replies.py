@@ -55,6 +55,15 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
     by_reply = store.delivery_alert(msg.channel, msg.reply_to) if msg.reply_to else None
     trusted = (not email) or by_token is not None
 
+    permission_target = by_token or by_reply
+    if permission_target is None and not email:
+        permission_target, _, _ = _resolve(store, text)
+    if (permission_target and permission_target["state"] == "open"
+            and permission_target["kind"] == "permission"
+            and text.lower() not in ("allow", "deny")):
+        say("Reply allow or deny.", permission_target)
+        return "unclear permission reply"
+
     if low in ("status", "help", "?"):
         say(HELP if low != "status" else status_text(cfg, store))
         return low
@@ -135,7 +144,16 @@ def _apply(cfg, store, chans, wt, alert, text, deps, now):
         wt.answer(ref, text)
         store.alert_close(alert["id"], "answered", text, now=now)
         return f"answered {ref}", f"Sent to the agent on {ref}."
-    if kind in ("question", "stopped"):
+    if kind == "permission":
+        if text.strip().lower() not in ("allow", "deny"):
+            return "unclear", "Reply allow or deny."
+        ok, detail = (deps.approve(alert["session_id"], text.strip().lower(), meta)
+                      if deps is not None else (False, "CCC is not running"))
+        if not ok:
+            raise wtmod.WTError(detail)
+        store.alert_close(alert["id"], "answered", text, now=now)
+        return "permission answered", "Sent to the agent."
+    if kind in ("question", "plain_question", "stopped"):
         body = text
         if kind == "stopped" and _is(RESTART_WORDS, text):
             body = "Continue where you left off."

@@ -5695,3 +5695,28 @@ def test_refresh_that_changes_row_count_tells_dashboards(
     )
     server._archive_serve_refresh(_ALL_KEY, _ALL_OPTS, 0, 1.0)
     assert invalidated == []
+
+
+def test_oncall_only_probes_idle_and_permission_candidates(tmp_path):
+    from ccc_server.oncall import engine, session_signals, store
+    class Deps:
+        def __init__(self):
+            self.calls = []
+        def question(self, sid, db):
+            self.calls.append(('question', sid))
+        def permission(self, sid):
+            self.calls.append(('permission', sid))
+    cfg = store.default_config()
+    cfg['enabled'] = True
+    store.save_config(tmp_path, cfg)
+    deps = Deps()
+    eng = engine.Engine(tmp_path, deps=deps, flag_on=lambda: True)
+    rows = {str(i): {'state': 'working'} for i in range(2000)}
+    rows.update(idle={'state': 'idle'}, approval={'needs_approval': True},
+                formal={'state': 'idle', 'question_waiting': True})
+    session_signals.observe(eng, rows)
+    assert deps.calls == [('question', 'idle'), ('permission', 'approval')]
+    eng.flag_on = lambda: False
+    session_signals.observe(eng, rows)
+    assert len(deps.calls) == 2
+    eng.store.close()

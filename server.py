@@ -309,6 +309,7 @@ def _dashboard_session_watch_tick(previous):
             _notify.observe_session_states(None, current)
         except Exception:
             pass
+        _oncall_observe_sessions(None, current)
         return current
     previous = previous or {}
     for sid, fields in current.items():
@@ -349,6 +350,46 @@ class _OncallDeps:
             return False, str(result.get("error") or "the session did not take the message")
         return True, ""
 
+    def question(self, sid, store):
+        from ccc_server.oncall.session_signals import question
+        engine = _detect_session_engine(sid)
+        if engine not in ("claude", "codex"):
+            return None
+        transcript = (_resolve_codex_rollout_path(sid) if engine == "codex"
+                      else _resolve_conversation_path(sid))
+        return question(store, sid, transcript)
+
+    def permission(self, sid):
+        engine = _detect_session_engine(sid)
+        if engine == "codex":
+            state = _codex_thread_state_resolved(sid)
+            pending = _codex_app_server_pending_approval_item(state) or {}
+            identity = pending.get("request_id") or pending.get("id")
+            detail = pending.get("command") or pending.get("approval_message")
+            body = (str(pending.get("tool") or "Tool") + ": " + str(detail)) if detail else ""
+        elif engine == "claude":
+            pending = _read_notification_state(sid) or {}
+            if not _notification_is_blocking(pending):
+                return None
+            identity = pending.get("started_at") or pending.get("timestamp")
+            body = pending.get("message")
+        else:
+            return None
+        if not identity or not body:
+            return None
+        return {"kind": "permission", "stamp": str(identity),
+                "body": " ".join(str(body).split())[:500],
+                "meta": {"engine": engine, "prompt": str(identity)}}
+
+    def approve(self, sid, decision, meta):
+        current = self.permission(sid)
+        if not current or current["meta"] != meta:
+            return False, "That permission prompt is no longer pending."
+        action = "accept" if decision == "allow" else "decline"
+        result = (_codex_app_server_resolve_approval(sid, action)
+                  if meta["engine"] == "codex" else respond_claude_permission(sid, action))
+        return bool(result.get("ok")), result.get("error") or ""
+
 
 def _oncall_engine():
     from ccc_server.oncall import engine as _oncall_engine_mod
@@ -379,7 +420,10 @@ def _oncall_observe_sessions(previous, current):
         if not _feature_flag("oncall"):
             return
         from ccc_server.oncall import api as _oncall_api
-        _oncall_api.observe_sessions(previous, current, _oncall_describe_session, eng=_oncall_engine())
+        eng = _oncall_engine()
+        _oncall_api.observe_sessions(previous, current, _oncall_describe_session, eng=eng)
+        from ccc_server.oncall.session_signals import observe
+        observe(eng, current)
     except Exception:
         pass
 

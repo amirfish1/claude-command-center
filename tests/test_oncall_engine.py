@@ -649,3 +649,94 @@ def test_full_walk_on_a_real_watchtower_queue(tmp_path):
     eng.tick(force=True)
     assert built["tg"].sent[-1].text.startswith(f"Closed without a code change: {ref} (#2)")
     assert eng.store.reports()[0]["state"] == "closed"
+
+
+@pytest.mark.parametrize('engine', ['claude', 'codex'])
+def test_plain_question_observation_cache_clear_and_reply(rig, engine, monkeypatch):
+    import json
+    from pathlib import Path
+    from ccc_server.oncall import session_signals as signals
+    transcript = rig.root / 'turn.jsonl'
+    message = {'role': 'assistant', 'content': [{'type': 'text' if engine == 'claude' else 'output_text',
+                                               'text': 'Should I keep the old client?'}]}
+    row = ({'type': 'assistant', 'uuid': 'turn-1', 'message': message} if engine == 'claude'
+           else {'type': 'response_item', 'timestamp': 'turn-1', 'payload': dict(message, type='message')})
+    transcript.write_text(json.dumps(row) + '\n')
+    rig.deps.question = lambda sid, store: signals.question(store, sid, transcript)
+    rig.deps.permission = lambda sid: None
+    idle = {'sess-1': {'state': 'idle'}}
+    signals.observe(rig.eng, idle)
+    # A cache hit must not reopen the transcript, including with a fresh Store.
+    original = Path.open
+    def guarded(path, *args, **kwargs):
+        assert path != transcript, 'unchanged transcript was reread'
+        return original(path, *args, **kwargs)
+    with monkeypatch.context() as m:
+        m.setattr(Path, 'open', guarded)
+        signals.observe(rig.eng, idle)
+        other = st.Store(rig.root)
+        assert signals.question(other, 'sess-1', transcript)
+        other.close()
+    rig.tick()
+    assert len(rig.eng.store.alerts()) == 1
+    rig.msg('tg', 'keep it', '4242', thread=rig.eng.store.alert(1)['token'])
+    rig.tick()
+    assert rig.deps.injected == [('sess-1', 'keep it')]
+    signals.observe(rig.eng, idle)
+    assert len(rig.eng.store.alerts()) == 1
+    # A new turn gets a new incident, which clears on activity.
+    transcript.write_text(transcript.read_text().replace('turn-1', 'turn-2'))
+    signals.observe(rig.eng, idle)
+    assert len(rig.eng.store.alerts(state='open')) == 1
+    signals.observe(rig.eng, {'sess-1': {'state': 'working'}})
+    assert not rig.eng.store.alerts(state='open')
+
+
+@pytest.mark.parametrize('engine', ['claude', 'codex'])
+def test_permissions_strict_replies_clear_quiet_and_off(rig, engine, monkeypatch):
+    from ccc_server.oncall import session_signals as signals
+    approved = []
+    rig.deps.permission = lambda sid: {'kind': 'permission', 'stamp': 'request-1',
+        'body': 'Bash: echo hello', 'meta': {'engine': engine, 'prompt': 'request-1'}}
+    rig.deps.approve = lambda sid, decision, meta: (approved.append((sid, decision, meta)) is None, '')
+    waiting = {'sess-1': {'state': 'waiting', 'needs_approval': True}}
+    rig.eng.flag_on = lambda: False
+    signals.observe(rig.eng, waiting)
+    assert not rig.eng.store.alerts()
+    rig.eng.flag_on = lambda: True
+    signals.observe(rig.eng, waiting)
+    signals.observe(rig.eng, waiting)
+    monkeypatch.setattr(alerts, 'in_quiet_hours', lambda *a: True)
+    rig.tick()
+    assert not rig.chan('tg').sent
+    monkeypatch.setattr(alerts, 'in_quiet_hours', lambda *a: False)
+    rig.tick()
+    assert len(rig.chan('tg').sent) == 1
+    token = rig.eng.store.alert(1)['token']
+    for text in ['yes', 'allow please', 'allow!', 'pause', 'deny this']:
+        rig.msg('tg', text, '4242', thread=token)
+        rig.tick()
+        assert not approved and not rig.deps.injected
+        assert rig.chan('tg').sent[-1].text == 'Reply allow or deny.'
+    rig.msg('tg', ' ALLOW ', '4242', thread=token)
+    rig.tick()
+    assert approved[0][1] == 'allow'
+    assert rig.chan('tg').sent[-1].text == 'Sent to the agent.'
+    signals.observe(rig.eng, waiting)
+    assert len(rig.eng.store.alerts()) == 1
+    rig.deps.permission = lambda sid: {'kind': 'permission', 'stamp': 'request-2',
+        'body': 'Read: file', 'meta': {'engine': engine, 'prompt': 'request-2'}}
+    signals.observe(rig.eng, waiting)
+    signals.observe(rig.eng, {})
+    assert not rig.eng.store.alerts(state='open')
+
+
+def test_question_rejects_examples_and_nonquestions(rig):
+    import json
+    from ccc_server.oncall.session_signals import question
+    transcript = rig.root / 'turn.jsonl'
+    for text in ['Done.', 'Why is the sky blue?', '> Should I proceed?',
+                 'Example:\n```\nShould I proceed?\n```', 'Should I proceed?\n\nNo action needed.']:
+        transcript.write_text(json.dumps({'type': 'assistant', 'message': {
+            'content': [{'type': 'text', 'text': text}]}}) + '\n')
+        assert question(rig.eng.store, 's', transcript) is None

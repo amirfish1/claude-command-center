@@ -233,6 +233,8 @@ class Engine:
     def inbound(self, channel_id, msg):
         """A message handed in by the local API (the command channel's inbound)."""
         with self._lock:
+            if not self.active():
+                return False
             cfg = self.config()
             entry = st.channel_by_id(cfg, channel_id)
             if entry is None:

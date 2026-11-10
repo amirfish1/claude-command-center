@@ -1415,3 +1415,34 @@ def test_module_header_and_plain_strings():
     assert lines[1] == "# SPDX-License-Identifier: LicenseRef-CCC-Software-License"
     assert "—" not in source and "–" not in source
     assert "from __future__ import annotations" in source
+
+
+def test_idle_question_round_trip_over_local_ntfy(web, tmp_path):
+    """Real HTTP and SQLite, with a synthetic idle transcript and inject sink."""
+    from ccc_server.oncall import engine, session_signals
+    from tests.test_oncall_engine import FakeWT, Deps
+    transcript = tmp_path / 'idle.jsonl'
+    transcript.write_text(json.dumps({'type': 'assistant', 'uuid': 'turn-local',
+        'message': {'content': [{'type': 'text', 'text': 'Should I keep the old client?'}]}}) + '\n')
+    cfg = store.default_config()
+    cfg.update(enabled=True, channels=[{'id': 'push', 'type': 'ntfy',
+                                       'server': web.base, 'topic': 'alerts'}])
+    store.save_config(tmp_path / 'state', cfg)
+    deps = Deps()
+    deps.question = lambda sid, db: session_signals.question(db, sid, transcript)
+    eng = engine.Engine(tmp_path / 'state', wt=FakeWT(), deps=deps, flag_on=lambda: True)
+    web.reply(200, b'')
+    eng.tick(force=True)
+    session_signals.observe(eng, {'local-session': {'state': 'idle'}})
+    web.replies[:] = [(200, b''), (200, b'{"id":"sent-1"}')]
+    eng.tick(force=True)
+    sent = web.json()
+    assert 'Should I keep the old client?' in sent['message']
+    token = eng.store.alert(1)['token']
+    web.replies[:] = [(200, ndjson({'id': 'reply-1', 'time': 2_000_000_000,
+        'event': 'message', 'message': token + ' keep it'})), (200, b'{"id":"ack-1"}')]
+    eng.tick(force=True)
+    assert deps.injected == [('local-session', 'keep it')]
+    assert web.json()['message'] == 'Sent to the agent.'
+    assert eng.store.alert(1)['state'] == 'answered'
+    eng.store.close()

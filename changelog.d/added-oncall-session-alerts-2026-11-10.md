@@ -1,0 +1,1 @@
+- On-call can alert on explicit closing questions and tool permission prompts in Claude Code and Codex sessions. Question replies go to the agent; permission replies accept only allow or deny through existing approval handlers.
