@@ -282,26 +282,6 @@ reply releases it.
 
 ## Limits
 
-- GitHub messaging needs a source that is still enabled and a user token that
-  can post issue comments. Reply checks must be able to identify that token's
-  account through `/user`; tokens that cannot do this cannot receive replies.
-  Public issue intake still works without a token, but messaging does not.
-- GitHub reply checks share the source timer (300 seconds by default). Each
-  check reads one repository-wide page of up to 100 comments, plus the posting
-  account identity. Larger backlogs take several checks. The cursor survives
-  restarts. There is no per-ticket comment polling. Failed requests wait until
-  the next source check; failed sends are recorded without an automatic retry.
-- GitHub reply checks start about two minutes before the first successful
-  check, without backfilling older comment history. A later edit can bring an
-  older comment into the feed; each comment ID is routed at most once. Only
-  issues filed after this feature arrived can be messaged; older tickets are
-  not migrated. Issue intake still reads only the newest 25 open issues per
-  check, with the configured label filter.
-- If the token belongs to the same account that opened an issue, that
-  account's later comments on it are ignored, like every comment CCC posts.
-- The GitHub comment round trip has local transport tests, but has not been
-  verified against a live GitHub account.
-
 - It is a preview. It is off until you turn it on. The first-run welcome
   sets up an agent; it does not enable On-call or configure message channels.
 - Plain-text questions are found in idle Claude Code and Codex sessions only.
@@ -326,6 +306,26 @@ reply releases it.
 - The local agent proof covers an explicit WatchTower drain-once launch with
   Codex exec. It does not verify automatic dispatch, worker recovery, or the
   default app-server transport.
+- GitHub messaging needs a source that is still enabled and a user token that
+  can post issue comments. Reply checks must be able to identify that token's
+  account through `/user`; tokens that cannot do this cannot receive replies.
+  Public issue intake still works without a token, but messaging does not.
+- GitHub reply checks share the source timer (300 seconds by default). Each
+  check reads one repository-wide page of up to 100 comments, plus the posting
+  account identity. Larger backlogs take several checks. The cursor survives
+  restarts. There is no per-ticket comment polling. Failed requests wait until
+  the next source check; failed sends are recorded without an automatic retry.
+- GitHub reply checks start about two minutes before the first successful
+  check, without backfilling older comment history. A later edit can bring an
+  older comment into the feed; each comment ID is routed at most once. Only
+  issues filed after this feature arrived can be messaged; older tickets are
+  not migrated. Issue intake still reads only the newest 25 open issues per
+  check, with the configured label filter.
+- If the token belongs to the same account that opened an issue, that
+  account's later comments on it are ignored, like every comment CCC posts.
+- Reading issue comments was checked against a live public repository.
+  Posting a comment, and the full round trip with a reporter's reply, have
+  local transport tests only.
 - Status shows configured channels and their last delivery result. It does not
   prove that a worker is running or that a phone displayed a message.
 - ntfy decision replies use the separate `<topic>-reply` topic. Publish
