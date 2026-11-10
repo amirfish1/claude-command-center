@@ -2142,6 +2142,32 @@ def voice_heartbeat(session_id, audio_ms=None, connected=False):
     return {"ok": True}, 200
 
 
+def voice_text(session_id, text):
+    """A typed message during a call. It is handled exactly like a finished
+    spoken utterance: on a direct line it goes to the session, otherwise the
+    voice agent gets it as a user turn."""
+    sess = _session_by_id(session_id)
+    if not sess or sess.state in ("closed", "error", "stopping"):
+        return {"ok": False, "error": "no such voice session", "code": "voice_no_session"}, 404
+    text = " ".join(str(text or "").split()) if isinstance(text, str) else ""
+    if not text or len(text) > 4000:
+        return {"ok": False, "error": "text must be 1 to 4000 characters",
+                "code": "voice_bad_request"}, 400
+    entry = {"role": "user", "text": text, "ts": time.time()}
+    sess.transcript.append(entry)
+    sess.emit("transcript", entry)
+    sess.touch()
+    if sess.direct:
+        sess._direct_heard(text)
+        return {"ok": True, "direct": True}, 200
+    _, error = sess.call("thread/realtime/appendText",
+                         {"threadId": sess.thread_id, "role": "user", "text": text}, timeout=15)
+    if error:
+        return {"ok": False, "error": _redact(str(error.get("message") or "send failed")[:200], sess._key),
+                "code": "voice_start_failed"}, 502
+    return {"ok": True, "direct": False}, 200
+
+
 def voice_audio_append(session_id, data, sample_rate, num_channels):
     """Mic chunk for the websocket-transport fallback. The browser posts
     base64 PCM16; CCC forwards it as thread/realtime/appendAudio."""

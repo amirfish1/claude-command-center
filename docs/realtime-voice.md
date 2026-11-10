@@ -55,6 +55,9 @@ or ask Bob to put you straight through to a session and talk to it directly.
 5. Press **END CALL** (or close the tab) to end the session. The red dot on
    the mic button means a session is live.
 
+During a call you can also type: the box above **END CALL** sends your text
+exactly as if you had said it (to Bob, or to the session on a direct line).
+
 Hide the panel to keep using the dashboard during a call. The floating
 button then says **IN CALL**; tapping it reopens the panel.
 
@@ -138,6 +141,7 @@ reports priorities. It starts only after you press **Confirm** on its card.
 | `POST /api/voice/start` | Start a session. Body: `sdp_offer` (WebRTC offer), optional `transport` (`auto`|`webrtc`|`websocket`), `voice`, `profile`. Returns `session_id`, `transport`, `billing` (`subscription`|`api_key`), and `sdp_answer` for WebRTC. |
 | `POST /api/voice/stop` | Stop the active session (`session_id`, `reason`). |
 | `POST /api/voice/heartbeat` | Browser liveness check-in (`session_id`, optional `audio_ms`). Set `connected: true` after audio connects to request the one-time welcome. |
+| `POST /api/voice/text` | A typed message for the live call (`session_id`, `text` up to 4000 characters), handled like a finished spoken utterance. |
 | `POST /api/voice/audio` | Mic chunk for the websocket fallback only: base64 PCM16, `sampleRate`, `numChannels`. |
 | `GET /api/voice/status` | Active/last session, config, which BYOK profiles hold an OpenAI key. |
 | `GET /api/voice/events?session_id=…&after=N` | SSE: `state`, `transcript_delta`, `transcript`, `action`, `tool`, `audio` (websocket only), `error`, `closed`. |

@@ -89039,6 +89039,8 @@
       $voiceMobileBtn.setAttribute('aria-label', live ? 'Return to voice call' : 'Call voice assistant');
       document.getElementById('voiceMobileLabel').textContent = live ? 'IN CALL' : 'CALL';
     }
+    const $textForm = document.getElementById('voiceTextForm');
+    if ($textForm) $textForm.hidden = !['listening', 'thinking', 'speaking'].includes(state);
     if ($voiceTalkBtn) {
       const label = document.getElementById('voiceTalkLabel');
       if (label) label.textContent = live ? 'END CALL' : 'CALL';
@@ -89826,6 +89828,25 @@
   voiceApplyCallButtonPref();
   if ($voicePanelHideBtn) $voicePanelHideBtn.addEventListener('click', voiceHidePanel);
   if ($voicePanelStopBtn) $voicePanelStopBtn.addEventListener('click', () => voiceStop('user'));
+  // Typed messages ride the live call: same handling as a spoken utterance.
+  (function () {
+    const form = document.getElementById('voiceTextForm');
+    const input = document.getElementById('voiceTextInput');
+    if (!form || !input) return;
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text || !Voice.sessionId) return;
+      input.value = '';
+      fetch('/api/voice/text', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({session_id: Voice.sessionId, text}),
+      }).then(r => r.json()).then(d => {
+        if (!d || !d.ok) input.value = text;   // keep the words if it did not send
+      }).catch(() => { input.value = text; });
+    });
+  })();
   if ($voiceTalkBtn) $voiceTalkBtn.addEventListener('click', () => {
     if (Voice.sessionId || Voice.state === 'connecting') voiceStop('user');
     else voiceStart();

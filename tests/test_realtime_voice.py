@@ -994,3 +994,20 @@ def test_direct_line_forwards_speech_speaks_replies_and_returns(voice_env, monke
     assert _wait(lambda: "back with Bob" in log.read_text() and "direct line to Split work is closed" in log.read_text(), 5)
     assert len(sent) == 1
     assert log.read_text().count('appendSpeech:"All 12 tests pass."') == 1
+
+
+def test_typed_message_reaches_the_agent_or_the_direct_line(voice_env, monkeypatch):
+    res, _ = _start()
+    sid = _sess_id((res, 200))
+    sess = rv._session_by_id(sid)
+    assert _wait(lambda: sess.state == "listening", 5)
+    assert rv.voice_text(sid, "what is working?") == ({"ok": True, "direct": False}, 200)
+    assert _wait(lambda: 'appendText:"what is working?"' in voice_env.log.read_text(), 5)
+    assert [e for e in _events(sid)[0] if e["type"] == "transcript" and e["data"]["text"] == "what is working?"]
+    assert rv.voice_text(sid, "   ")[1] == 400
+    assert rv.voice_text("voice_nope", "hi")[1] == 404
+    # On a direct line the typed words go to the session, not to the agent.
+    sess.direct = {"sid": "s1", "title": "T", "seen": ""}
+    assert rv.voice_text(sid, "run it")[0]["direct"] is True
+    assert list(sess._direct_out) == ["run it"]
+    assert 'appendText:"run it"' not in voice_env.log.read_text()

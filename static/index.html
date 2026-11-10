@@ -3931,6 +3931,10 @@
     <div id="voiceActions" class="voice-actions"></div>
     <div id="voiceTranscript" class="voice-transcript" aria-live="polite"></div>
     <div class="voice-panel-foot">
+      <form id="voiceTextForm" class="voice-text-form" hidden>
+        <input type="text" id="voiceTextInput" class="bug-input" maxlength="4000" autocomplete="off" placeholder="Type instead" aria-label="Type a message">
+        <button type="submit" class="upd-btn" aria-label="Send typed message">Send</button>
+      </form>
       <button type="button" id="voiceTalkBtn" class="upd-btn voice-call-btn" aria-label="Call voice agent">
         <svg class="voice-call-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.57 2.79.69A2 2 0 0 1 22 16.92Z"></path></svg>
         <span id="voiceTalkLabel">CALL</span>

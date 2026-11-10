@@ -35500,6 +35500,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json(result, status)
             return
 
+        if path == "/api/voice/text":
+            try:
+                content_len = int(self.headers.get("Content-Length", 0) or 0)
+                if content_len > 64 * 1024:
+                    raise ValueError("body too large")
+                data = json.loads(self.rfile.read(content_len)) if content_len else {}
+                if not isinstance(data, dict):
+                    raise ValueError("expected object")
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid JSON body",
+                                "code": "voice_bad_request"}, 400)
+                return
+            result, status = voice_text(str(data.get("session_id") or "").strip(), data.get("text"))
+            self.send_json(result, status)
+            return
+
         if path == "/api/voice/audio":
             # Mic chunks for the websocket-transport fallback (the WebRTC
             # path sends audio straight to the voice host and never posts

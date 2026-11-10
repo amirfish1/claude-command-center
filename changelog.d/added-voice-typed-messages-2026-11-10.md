@@ -1,0 +1,1 @@
+- Voice mode: type a message during a call instead of saying it; on a direct line it goes straight to the session.

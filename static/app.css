@@ -13356,7 +13356,10 @@
   .voice-action-btns { display: flex; gap: 8px; margin-top: 8px; }
   .voice-action-btns .upd-btn { font-size: 12px; padding: 3px 12px; }
   .voice-panel-foot { padding: 10px 12px; border-top: 1px solid var(--border);
-    display: flex; justify-content: center; }
+    display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .voice-text-form { display: flex; gap: 6px; width: 100%; }
+  .voice-text-form[hidden] { display: none; }
+  .voice-text-form .bug-input { flex: 1; min-width: 0; }
   .voice-call-btn.upd-btn { display: inline-flex; align-items: center; justify-content: center;
     gap: 10px; min-width: 140px; padding: 10px 24px; border-radius: 999px;
     background: #238636; border-color: #2ea043; color: #fff; font-weight: 700;
