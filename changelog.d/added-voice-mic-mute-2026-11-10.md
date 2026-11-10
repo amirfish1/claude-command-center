@@ -1,0 +1,1 @@
+- Voice mode: a microphone button in the call panel mutes your mic without ending the call.

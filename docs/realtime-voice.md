@@ -61,6 +61,10 @@ exactly as if you had said it (to Bob, or to the session on a direct line).
 The chevron in the panel header collapses it to a small bar showing the
 state, the timer and the mute and end buttons; the choice is remembered.
 
+The microphone button mutes your mic without ending the call, so room
+conversation is not picked up (useful on a direct line, where everything
+heard is forwarded). Each new call starts with the mic on.
+
 Hide the panel to keep using the dashboard during a call. The floating
 button then says **IN CALL**; tapping it reopens the panel.
 

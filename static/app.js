@@ -89398,6 +89398,7 @@
       return;
     }
     Voice.micStream = mic;
+    voiceSetMicMuted(false);
     const pc = new RTCPeerConnection();
     Voice.pc = pc;
     try {
@@ -89874,6 +89875,23 @@
     $voiceMuteBtn.classList.toggle('muted', Voice.audioMuted);
     $voiceMuteBtn.setAttribute('aria-pressed', Voice.audioMuted ? 'true' : 'false');
   });
+  // Mic mute: stops sending your audio (room talk, side conversations) without
+  // ending the call. Each new call starts with the mic on.
+  function voiceSetMicMuted(on) {
+    Voice.micMuted = !!on;
+    if (Voice.micStream) {
+      for (const t of Voice.micStream.getAudioTracks()) t.enabled = !Voice.micMuted;
+    }
+    const btn = document.getElementById('voiceMicBtn');
+    if (btn) {
+      btn.classList.toggle('muted', Voice.micMuted);
+      btn.setAttribute('aria-pressed', Voice.micMuted ? 'true' : 'false');
+    }
+  }
+  (function () {
+    const btn = document.getElementById('voiceMicBtn');
+    if (btn) btn.addEventListener('click', () => voiceSetMicMuted(!Voice.micMuted));
+  })();
   if ($voiceSettingsBtn) $voiceSettingsBtn.addEventListener('click', () => {
     closeSettingsModal();
     openVoiceModal();
