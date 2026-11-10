@@ -403,9 +403,7 @@ async function handleStats(_request, env) {
       `WHERE ${REAL} AND ${NODEV} GROUP BY version ORDER BY installs DESC`
     ).all()).results;
 
-    // Version mix of installs active in the last 7 days. The overview view
-    // needs it to say how far the fleet has rolled onto the daily-beacon
-    // build, which decides how much the anonymous count can be trusted.
+    // Legacy opt-in version mix, retained for API compatibility.
     const versions7d = (await env.DB.prepare(
       "SELECT version, COUNT(DISTINCT install_id) AS installs FROM pings " +
       `WHERE ${REAL} AND ${NODEV} AND received_at >= date('now','-6 days') ` +
@@ -479,6 +477,13 @@ async function handleStats(_request, env) {
     const geoWeekEndClause = usePrevWeek ? "AND received_at < ?" : "";
     const geoWeekEndParams = usePrevWeek ? [thisMonday] : [];
 
+    // One version per install's first beacon of the selected ISO week.
+    const opensVersionsRaw = (await env.DB.prepare(
+      "SELECT version, COUNT(*) AS installs FROM opens " +
+      `WHERE first_this_week = 1 AND received_at >= ? ${geoWeekEndClause} AND ${NODEV} ` +
+      "GROUP BY version ORDER BY installs DESC"
+    ).bind(geoWeekStart, ...geoWeekEndParams).all()).results;
+
     const countriesRaw = (await env.DB.prepare(
       "SELECT country, COUNT(*) AS installs FROM opens " +
       `WHERE first_this_week = 1 AND received_at >= ? ${geoWeekEndClause} AND country IS NOT NULL AND ${NODEV} ` +
@@ -504,6 +509,7 @@ async function handleStats(_request, env) {
       downloads_by_day: downloadsByDay,
       versions,
       versions_7d: versions7d,
+      opens_versions_week: suppressSmallBuckets(opensVersionsRaw, ["version"], "installs", 3),
       platforms,
       geo_week: {
         week_start: geoWeekStart,

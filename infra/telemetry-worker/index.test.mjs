@@ -294,6 +294,15 @@ test("stats exposes weekly/monthly active installs at the exact ISO-week boundar
             return { total_opens: 1, total_pings: 1, distinct_installs: 1, distinct_installs_all: 1, total_downloads: 1 };
           },
           all: async () => {
+            if (sql.includes("FROM opens") && sql.includes("GROUP BY version")) {
+              assert.deepEqual(stmt._values, [PREV_MONDAY, THIS_MONDAY]);
+              return { results: [
+                { version: "5.40.0", installs: 4 },
+                { version: "5.34.0", installs: 3 },
+                { version: "5.39.0", installs: 2 },
+                { version: "5.38.0", installs: 1 },
+              ] };
+            }
             if (sql.includes("GROUP BY country, region")) {
               return { results: [
                 { country: "US", region: "California", installs: 4 },
@@ -340,6 +349,18 @@ test("stats exposes weekly/monthly active installs at the exact ISO-week boundar
 
   // Previous complete week had data (n=9), so geo uses it, not the
   // still-in-progress current week.
+  assert.deepEqual(payload.opens_versions_week, [
+    { version: "5.40.0", installs: 4 },
+    { version: "5.34.0", installs: 3 },
+    { version: "other", installs: 3 },
+  ]);
+  const versionQueries = queries.filter(sql => sql.includes("FROM opens") && sql.includes("GROUP BY version"));
+  assert.equal(versionQueries.length, 1, "only one grouped query added");
+  assert.match(versionQueries[0], /COUNT\(\*\) AS installs/);
+  assert.match(versionQueries[0], /first_this_week = 1/);
+  assert.match(versionQueries[0], /received_at < \?/);
+  assert.match(versionQueries[0], /COALESCE\(is_dev, 0\) = 0/);
+  assert.doesNotMatch(versionQueries[0], /LIMIT|country IS NOT NULL/);
   assert.deepEqual(payload.geo_week, {
     week_start: PREV_MONDAY,
     countries: [
@@ -380,7 +401,13 @@ test("stats falls back to the current ISO week for geo when the previous week is
             if (sql.includes("SUM(CASE WHEN country = 'US'")) return { us: 0, intl: 0 };
             return { total_opens: 0, total_pings: 0, distinct_installs: 0, distinct_installs_all: 0, total_downloads: 0 };
           },
-          all: async () => ({ results: [] }),
+          all: async () => {
+            if (sql.includes("FROM opens") && sql.includes("GROUP BY version")) {
+              assert.deepEqual(stmt._values, [THIS_MONDAY]);
+              assert.doesNotMatch(sql, /received_at < /);
+            }
+            return { results: [] };
+          },
         };
         return stmt;
       },
@@ -390,6 +417,7 @@ test("stats falls back to the current ISO week for geo when the previous week is
   const response = await worker.fetch(new Request("https://telemetry.example/v1/stats"), env);
   const payload = await response.json();
 
+  assert.deepEqual(payload.opens_versions_week, []);
   assert.equal(payload.geo_week.week_start, THIS_MONDAY);
   assert.deepEqual(payload.geo_week.countries, []);
   assert.deepEqual(payload.geo_week.regions, []);

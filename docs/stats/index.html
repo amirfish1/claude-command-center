@@ -148,7 +148,7 @@
     Numbers come from <a href="https://github.com/amirfish1/claude-command-center/blob/main/infra/telemetry-worker/">our public Cloudflare Worker</a> over a public D1 aggregate query.
     The raw source IP is never stored; the worker computes <code>SHA-256(utc_date || daily_secret || ip)</code> at the edge so we can count distinct IPs per day without being able to link the same machine across days.
     Download-click events do not read or store IP or any other request metadata.
-    Cached at the edge for 5 minutes.
+    Stats are cached for one hour in KV; responses allow 5 minutes of HTTP caching.
   </p>
 </footer>
 
@@ -187,21 +187,6 @@ function renderActiveTab() {
 // what it counts, whether it includes the maintainer, and whether it is a
 // floor, a ceiling, or an estimate.
 // ---------------------------------------------------------------------------
-
-// The build where the anonymous beacon became once-per-day instead of
-// once-per-boot. Installs older than this are invisible in the daily
-// anonymous count unless they happen to restart.
-const DAILY_BEACON_SINCE = "5.24.0";
-
-function semverGte(a, b) {
-  const pa = String(a).split(/[-+]/)[0].split(".").map(Number);
-  const pb = String(b).split(/[-+]/)[0].split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    const x = pa[i] || 0, y = pb[i] || 0;
-    if (x !== y) return x > y;
-  }
-  return true;
-}
 
 function renderOverview(d) {
   const t = d.totals || {};
@@ -247,15 +232,6 @@ function renderOverview(d) {
   // ever reaches the browser.
   const geoWeek = d.geo_week;
 
-  // How far the fleet has rolled onto the daily-beacon build. Until this is
-  // high, the anonymous daily number is still mostly measuring restarts.
-  const v7 = d.versions_7d || [];
-  const v7Total = v7.reduce((a, r) => a + (r.installs || 0), 0);
-  const v7New = v7.filter(r => semverGte(r.version, DAILY_BEACON_SINCE))
-    .reduce((a, r) => a + (r.installs || 0), 0);
-  const rolloutPct = v7Total ? Math.round(100 * v7New / v7Total) : 0;
-  const anonTrusted = rolloutPct >= 80;
-
   const rows = [
     {
       name: "Opt-in daily installs",
@@ -290,10 +266,8 @@ function renderOverview(d) {
       withMe: openToday.boots_all ?? anonToday,
       kind: "best estimate",
       what: "Installs that ran today and sent the anonymous daily beacon. No opt-in needed, so it sees every install that has not set the kill switch.",
-      trust: anonTrusted ? "high" : "medium",
-      why: anonTrusted
-        ? "Most of the fleet is on the daily beacon, so this is the closest thing to true daily usage."
-        : `${rolloutPct}% of opt-in installs are on ${DAILY_BEACON_SINCE}+. Older builds beacon once per restart instead of once per day, which can add a few extra counts (restarts) or miss a long-running install. Those errors pull in opposite directions; the distinct-IP count (${anonIpsToday}) is a sanity check from below.`,
+      trust: "medium",
+      why: "Current builds send one beacon per UTC day. Older builds can count restarts instead. The kill switch and failed sends leave installs out; distinct IPs are only a network count.",
     },
     {
       name: "Active this week (since Monday)",
@@ -379,9 +353,6 @@ function renderOverview(d) {
         <p class="muted headline-note">
           The best estimate is the <strong>anonymous daily beacon</strong>: every running install sends it once per UTC day, with no install id and no consent step, so it covers people who never clicked <em>Enable</em>.
           The opt-in count (${dailyFloor}) is only the subset that said yes, so it is a hard floor, not the answer.
-          ${anonTrusted
-            ? ""
-            : `Caveat: ${100 - rolloutPct}% of installs are still on builds older than ${DAILY_BEACON_SINCE}, which beacon per restart instead of per day, so the estimate can wobble by a few either way.`}
         </p>
       </div>
 
@@ -423,7 +394,7 @@ function renderOverview(d) {
           </div>
           <div class="counter-box">
             <h3>Anonymous beacon <span class="pill">no consent needed</span></h3>
-            <p class="muted">Three fields, no install id, so it cannot dedupe machines — only count events and distinct hashed IPs per day. Fires once per UTC day from <strong>every</strong> running install. Should be a superset of the opt-in count once the fleet is updated.</p>
+            <p class="muted">No install id. Daily totals count beacons and distinct hashed IPs; weekly and monthly flags count each install once per period. Fires once per UTC day from <strong>every</strong> running install. Should be a superset of the opt-in count once the fleet is updated.</p>
             <p class="muted">Today: <strong>${anonToday}</strong> beacons from <strong>${anonIpsToday}</strong> distinct IPs.</p>
           </div>
         </div>
@@ -444,9 +415,23 @@ function renderOverview(d) {
         </ul>
       </div>
 
+      ${versionsCard(d)}
       ${geoCard(geoWeek)}
 
-      <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Cached at the edge for 5 minutes.</div>
+      <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Stats are cached for one hour in KV; responses allow 5 minutes of HTTP caching.</div>
+    </div>
+  `;
+}
+
+function versionsCard(d) {
+  const rows = d.opens_versions_week;
+  return `
+    <div class="card wide" id="versions-week">
+      <h2>Versions on active installs</h2>
+      ${Array.isArray(rows) ? `
+        <p class="muted">${escapeHtml(isoWeekRangeLabel(d.geo_week?.week_start))}. Same week as the location counts: the previous complete week if it has data, otherwise this week so far. Counts each install's first weekly beacon, excluding dev installs. This is the version at that beacon, not a live inventory. Versions with fewer than 3 installs are grouped as "Other (small buckets)".</p>
+        ${geoTable(rows, r => r.version === "other" ? "Other (small buckets)" : r.version)}
+      ` : '<p class="muted">Version counts are not yet available from the Worker.</p>'}
     </div>
   `;
 }
@@ -547,7 +532,7 @@ function renderOptIn(d) {
   return `
     <p class="tab-intro">
       <strong>Legacy — retired 2026-09-28.</strong> No CCC build made after that date sends this ping;
-      the numbers below are frozen at whatever the fleet reported before then. The anonymous beacon
+      older builds can still send it. These counts do not cover current builds. The anonymous beacon
       tab is now the primary daily/weekly/monthly usage estimate for every install, not just the ones
       that opted in.
       <br>Richer payload — install id, version, engines on PATH, last-active date, sessions in last 24h.
@@ -592,7 +577,8 @@ function renderOptIn(d) {
       </div>
 
       <div class="card">
-        <h2>Versions in the wild</h2>
+        <h2>Legacy versions: installs from before v5.34</h2>
+        <p class="muted">All-time opt-in ping counts. These do not show the current beacon version mix.</p>
         ${rankTable(versions, "version", "installs")}
       </div>
       <div class="card">
@@ -627,7 +613,7 @@ function renderOptIn(d) {
         <p class="muted">Only the first 8 chars of the install id are shown. Active time = dashboard tab visible time today (30s granularity). Lifetime sessions = all-time JSONL count on that machine. Empty cells mean the install is on an older schema (pre-4.10.0 for sessions, pre-this-release for active/lifetime).</p>
       </div>
 
-      <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Cached at the edge for 5 minutes.</div>
+      <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Stats are cached for one hour in KV; responses allow 5 minutes of HTTP caching.</div>
     </div>
   `;
 }
@@ -642,12 +628,13 @@ function renderBeacon(d) {
   const opens30 = sumBuckets(opens.slice(0, 30), "boots");
   return `
     <p class="tab-intro">
-      Fires at most <strong>once per UTC day</strong> from any running CCC install. Three fields total — schema, version, platform — <strong>no install id</strong>.
+      Fires at most <strong>once per UTC day</strong> from any running CCC install. The payload includes schema, version, platform, dev status, and weekly/monthly flags. It has <strong>no install id</strong>.
       We persist a daily-rotated <code>SHA-256(date || secret || ip)</code> so we can count distinct IPs per day without storing the raw IP or linking the same machine across days.
       Not gated on opt-in (because no identifier). <code>CCC_TELEMETRY_DISABLED=1</code> kills it.
       <br><strong>Before 2026-08-12</strong> this beacon fired once per <em>server boot</em> instead, so earlier days count restarts, not installs — one machine restarting 20 times looked like 20 events, and an install left running for a week looked like none at all. Days from 2026-08-12 onward are one event per install per day.
     </p>
     <div class="grid">
+      ${versionsCard(d)}
       <div class="card">
         <h2>Installs that ran today</h2>
         <div class="stat-big">${opensToday}</div>
@@ -697,7 +684,7 @@ function renderBeacon(d) {
         </details>
       </div>
 
-      <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Cached at the edge for 5 minutes.</div>
+      <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Stats are cached for one hour in KV; responses allow 5 minutes of HTTP caching.</div>
     </div>
   `;
 }
@@ -734,7 +721,7 @@ function renderDownloads(d) {
         ${timelineChart(rows90, "download_clicks", { stroke: "#ffd266", fill: "rgba(255,210,102,0.18)", tip: r => `${r.download_clicks ?? 0} download clicks` })}
         <div style="margin-top:10px">${dayBars(rows, "download_clicks")}</div>
       </div>
-      <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Cached at the edge for 5 minutes.</div>
+      <div class="card wide muted">Updated ${escapeHtml(d.generated_at)}. Stats are cached for one hour in KV; responses allow 5 minutes of HTTP caching.</div>
     </div>
   `;
 }

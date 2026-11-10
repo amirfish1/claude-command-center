@@ -183,6 +183,19 @@ existing ones are never renamed or removed. Beyond the existing totals and
 - `totals.monthly_active_installs` / `_all` — same idea, scoped to the
   current UTC calendar month exactly; `totals.monthly_active_installs_prev`
   / `_all` is the previous complete calendar month.
+- `opens_versions_week` is `[{version, installs}, ...]` from `opens`,
+  grouped by version over non-dev rows with `first_this_week = 1`.
+  It uses the same week as `geo_week.week_start`: the previous complete
+  ISO week if it has qualifying non-dev rows, otherwise the current week
+  so far. Each count records the version at the install's first weekly
+  beacon, so upgrades later that week are not reflected. Versions with
+  fewer than 3 installs are folded into one `{version: "other", installs}`
+  row using the geo suppression helper; that combined count may be below 3.
+  Empty results are `[]`. This adds one grouped D1 query and shares the
+  existing stats KV cache. Client payloads and collection are unchanged.
+  The legacy `versions` and `versions_7d` fields still use opt-in pings
+  from builds before v5.34.0; they do not describe current beacon installs.
+
 - `geo_week` — `{week_start, countries, regions, us, intl}`, one full ISO
   week of coarse geo, counting **installs**, not beacons: only rows with
   `first_this_week = 1` are included, so an install beaconing every day

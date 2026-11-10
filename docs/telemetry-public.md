@@ -42,7 +42,7 @@ beacon, which needs no opt-in. The kill switch in
 
 ## Live aggregate
 
-`GET /v1/stats` returns totals and 30-day daily buckets, and is additive-only
+`GET /v1/stats` returns totals and 90-day daily buckets, and is additive-only
 — new fields are added over time, existing ones are never renamed or
 removed. As of the migration above it also returns:
 
@@ -54,16 +54,29 @@ removed. As of the migration above it also returns:
   bound to the exact ISO week (Monday-Sunday UTC), not a trailing 7-day
   window, so an install active across a week boundary is never counted
   twice.
+- `opens_versions_week` is `[{version, installs}, ...]` from `opens`,
+  grouped by version over non-dev rows with `first_this_week = 1`.
+  It uses the same week as `geo_week.week_start`: the previous complete
+  ISO week if it has qualifying non-dev rows, otherwise the current week
+  so far. Each count records the version at the install's first weekly
+  beacon, so upgrades later that week are not reflected. Versions with
+  fewer than 3 installs are folded into one `{version: "other", installs}`
+  row using the geo suppression helper; that combined count may be below 3.
+  Empty results are `[]`. This adds one grouped D1 query and shares the
+  existing stats KV cache. Client payloads and collection are unchanged.
+  The legacy `versions` and `versions_7d` fields still use opt-in pings
+  from builds before v5.34.0; they do not describe current beacon installs.
+
 - `geo_week` — one ISO week of country/region breakdown, counted per
   **install** (only `first_this_week = 1` rows), with any country or
   region under 3 installs folded into `"other"`. `week_start` says which
   Monday the numbers cover.
 
 Legacy opt-in install counts use `COUNT(DISTINCT install_id)` and only cover
-activity from before the retirement. Download clicks use simple counts
-because no identifier is collected; repeated clicks count again. The
-endpoint never returns raw timestamps, request metadata, or individual
-event rows.
+pings from older builds, which can still report after retirement. Download clicks use simple counts
+because no identifier is collected; repeated clicks count again. Beacon and download results are aggregates, without individual event rows.
+The legacy `sessions_today_per_install` field still includes truncated
+install IDs and last-seen timestamps from opt-in pings.
 
 ## When this changes
 

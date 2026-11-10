@@ -1,0 +1,1 @@
+- Show weekly beacon version counts on the public stats page, with small version buckets grouped as other and legacy ping versions labeled separately.
