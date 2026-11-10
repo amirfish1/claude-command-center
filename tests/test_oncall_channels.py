@@ -1448,3 +1448,15 @@ def test_idle_question_round_trip_over_local_ntfy(web, tmp_path):
     assert eng.store.alert(1)['state'] == 'answered'
     session_signals.GRACE_S = grace
     eng.store.close()
+
+
+def test_email_implicit_tls_on_custom_port(box):
+    ch = make(dict(EMAIL_CFG, smtp_port="3465", smtp_security="tls"))
+    assert ch.send(Outbound(text="Local TLS proof")).ok
+    assert box.smtp == [("FakeSMTPSSL", "smtp.gmail.com", 3465)]
+    assert box.starttls == 0
+
+
+def test_email_rejects_insecure_smtp_mode():
+    with pytest.raises(ValueError, match="SMTP security"):
+        make(dict(EMAIL_CFG, smtp_security="none"))

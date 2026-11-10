@@ -335,6 +335,7 @@ _FIELDS = {
         _field("owner", "Your email", placeholder="you@example.com"),
         _field("smtp_host", "SMTP server", optional=True, placeholder="smtp.example.com"),
         _field("smtp_port", "SMTP port", optional=True, placeholder="465"),
+        _field("smtp_security", "SMTP security", optional=True, placeholder="tls"),
         _field("imap_host", "IMAP server", optional=True, placeholder="imap.example.com"),
         _field("imap_port", "IMAP port", optional=True, placeholder="993"),
         _field("username", "Login name", optional=True, placeholder="oncall@example.com"),
@@ -564,6 +565,9 @@ class EmailChannel(Channel):
         self.username = self._opt("username", self.address)
         self.smtp_host = self._opt("smtp_host", preset.get("smtp_host", ""))
         self.smtp_port = _int(self.cfg.get("smtp_port"), preset.get("smtp_port", 587))
+        self.smtp_security = self._opt("smtp_security", "tls" if self.smtp_port == 465 else "starttls")
+        if self.smtp_security not in ("tls", "starttls"):
+            raise ValueError("SMTP security must be tls or starttls. Set smtp_security to one of these.")
         self.imap_host = self._opt("imap_host", preset.get("imap_host", ""))
         self.imap_port = _int(self.cfg.get("imap_port"), preset.get("imap_port", 993))
         self.from_name = self._opt("from_name", "CCC On-call")
@@ -584,12 +588,12 @@ class EmailChannel(Channel):
         if not password:
             raise OSError("No password is saved for this mailbox.")
         context = ssl.create_default_context()
-        if self.smtp_port == 465:
+        if self.smtp_security == "tls":
             conn = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, timeout=20, context=context)
         else:
             conn = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=20)
         try:
-            if self.smtp_port != 465:
+            if self.smtp_security == "starttls":
                 conn.ehlo()
                 conn.starttls(context=context)
                 conn.ehlo()
