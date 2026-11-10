@@ -172,6 +172,26 @@ def test_gate_note_is_worded_for_a_person(rig):
         "Needs you because: Major: live-product. every shopper sees it\n\nReply with your answer.")
 
 
+def test_a_question_parked_in_the_same_second_as_the_last_answer_still_reaches_the_owner(rig):
+    # WatchTower stamps answers to the second and parks to the microsecond.
+    ref = _park(rig)
+    rig.wt.tickets[ref].update(answered_at="2030-01-01T00:00:07Z", blocked_at="2030-01-01T00:00:07.955390Z")
+    rig.tick()
+    assert rig.chan("tg").sent[0].text.startswith(f"{ref} needs a decision (#1)")
+    rig.wt.tickets[ref].update(answered_at="2030-01-01T00:00:08Z")
+    assert not wtmod.waits_on_owner(rig.wt.tickets[ref])
+
+
+def test_owner_alerts_stay_off_a_customer_only_channel():
+    cfg = {"channels": [
+        {"id": "slack", "type": "command"},                                   # a script that posts to the owner
+        {"id": "support", "type": "command", "intake": True},                 # a bridge to customers, no owner
+        {"id": "both", "type": "command", "intake": True, "owner": "me@example.com"},
+        {"id": "mail", "type": "email", "owner": "me@example.com"}]}
+    chans = {c["id"]: c["id"] for c in cfg["channels"]}
+    assert alerts.alert_channels(cfg, chans) == ["slack", "both", "mail"]
+
+
 def test_chat_reply_answers_the_only_waiting_ticket(rig):
     ref = _park(rig)
     rig.tick()

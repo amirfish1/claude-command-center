@@ -198,6 +198,10 @@ def alert_channels(cfg, chans):
     for entry in cfg.get("channels") or []:
         if not entry.get("enabled", True) or entry.get("alerts") is False:
             continue
+        # A channel set to read customer reports, with no address for the owner,
+        # is a line to customers only. An owner alert never goes out on it.
+        if entry.get("intake") is True and not str(entry.get("owner") or "").strip():
+            continue
         chan = chans.get(entry.get("id"))
         if chan is not None:
             out.append(chan)

@@ -157,6 +157,18 @@ class WT:
         return rows
 
 
+def decision_details(item):
+    """What an agent decided without the owner, oldest first: [{question, recommend, undo}]."""
+    out, question = [], ""
+    for event in (item or {}).get("history") or []:
+        if event.get("event") == "block":
+            question = str(event.get("question") or "")
+        elif event.get("event") == "auto_decision":
+            out.append({"question": question, "recommend": str(event.get("recommend") or ""),
+                        "undo": str(event.get("undo") or "")})
+    return out
+
+
 def _last_line(text):
     lines = [ln.strip() for ln in str(text or "").splitlines() if ln.strip()]
     line = lines[-1] if lines else ""
@@ -180,8 +192,15 @@ def waits_on_owner(item):
     wait = item.get("wait") if isinstance(item.get("wait"), dict) else {}
     if str(wait.get("on") or "owner") not in ("owner", ""):
         return False
-    answered, blocked = str(item.get("answered_at") or ""), str(item.get("blocked_at") or "")
-    return not (answered and blocked and answered >= blocked)
+    # WatchTower stamps an answer to the second and a park to the microsecond.
+    # Compare whole seconds; a park in the same second as an answer came after it.
+    answered, blocked = _second(item.get("answered_at")), _second(item.get("blocked_at"))
+    return not (answered and blocked and answered > blocked)
+
+
+def _second(stamp):
+    """'2026-11-10T20:02:33.955390Z' -> '2026-11-10T20:02:33'."""
+    return str(stamp or "")[:19]
 
 
 def waits_on_customer(item):

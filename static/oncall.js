@@ -366,7 +366,10 @@
     for (const item of waiting) p.waiting.append(listRow('#' + item.id, item.line).node);
     p.decisions.replaceChildren();
     for (const decision of decisions) {
-      p.decisions.append(listRow(decision.ref, [decision.state, decision.reason].filter(Boolean).join(' · ')).node);
+      const parts = decision.recommend
+        ? ['Decided: ' + decision.recommend, decision.undo && 'Undo: ' + decision.undo]
+        : [decision.state, decision.reason];
+      p.decisions.append(listRow(decision.ref, parts.filter(Boolean).join(' · ')).node);
     }
   }
 

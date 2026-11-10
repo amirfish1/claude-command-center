@@ -111,6 +111,24 @@ class IO:
 
 # -- parsing ----------------------------------------------------------------
 
+def _decision_state(row):
+    """WatchTower's follow-through word for a decision, in plain words."""
+    state, reason = str(row.get("state") or ""), str(row.get("reason") or "")
+    if state.endswith(" reversed"):
+        return "Undone."
+    if state == "pending":
+        return "Waiting for an agent to pick it up."
+    if state == "consumed":
+        return "An agent is applying it."
+    if state == "applied":
+        return "Applied."
+    if state == "verified":
+        return f"Done: {reason}" if reason else "Done."
+    if state == "failed":
+        return f"Did not finish: {reason}" if reason else "Did not finish."
+    return f"{state}  {reason}".strip()
+
+
 def _pairs(items, what):
     out = {}
     for item in items or []:
@@ -504,7 +522,14 @@ def _run(args, client, io):
             raise Stop(str(res.get("error") or f"CCC answered HTTP {code}."))
         rows = res.get("decisions") or []
         for row in rows:
-            io.out(f"{row['ref']}  {row['state']}  {row.get('reason') or ''}".rstrip())
+            if not row.get("recommend"):
+                io.out(f"{row['ref']}  {row['state']}  {row.get('reason') or ''}".rstrip())
+                continue
+            io.out(f"{row['ref']}  {row.get('question') or 'A small decision'}")
+            io.out(f"  Decided: {row['recommend']}")
+            if row.get("undo"):
+                io.out(f"  Undo: {row['undo']}")
+            io.out(f"  {_decision_state(row)}")
         if not rows:
             io.out("Agents have not decided anything without you.")
         return 0

@@ -185,6 +185,12 @@ def test_day_two_commands(box, tmp_path):
     assert ("SHOP", True) in box.wt.policies
     assert box.run("decisions") == 0
     assert box.lines[-1] == "SHOP-3  applied  git revert abc1234"
+    box.wt.find = lambda ref: {"history": [
+        {"event": "block", "question": "Name it bindCheckout or attachCheckoutHandler?"},
+        {"event": "auto_decision", "recommend": "bindCheckout", "undo": "git revert abc1234"}]}
+    assert box.run("decisions") == 0
+    assert box.lines[-4:] == ["SHOP-3  Name it bindCheckout or attachCheckoutHandler?",
+                              "  Decided: bindCheckout", "  Undo: git revert abc1234", "  Applied."]
 
     box.lines.clear()
     assert box.run("status") == 0

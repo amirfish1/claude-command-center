@@ -106,7 +106,14 @@ ccc oncall decisions
 
 With this on, an agent that hits a small, reversible choice states what it
 recommends and how to undo it, and carries on. `ccc oncall decisions` lists
-each one with its undo.
+each one with its undo:
+
+```
+SHOP-12  Name the new helper bindCheckout or attachCheckoutHandler?
+  Decided: bindCheckout. It matches the other helpers in this file.
+  Undo: git revert 4ff30e8de6
+  Applied.
+```
 
 These always come to you, whatever the switch says: sending to customers, a
 production change, money or prices, ad spend or a public post, and anything
@@ -134,6 +141,9 @@ ccc oncall test
 Your own command receives the message on standard input, with
 `CCC_ONCALL_TO`, `CCC_ONCALL_SUBJECT` and `CCC_ONCALL_THREAD` in its
 environment.
+
+A command channel added with `--intake` and no recipient of its own is a line
+to customers only. Your alerts do not go out on it.
 
 Secrets are saved in the CCC Vault. The On-call settings file holds only the
 name of the Vault entry.

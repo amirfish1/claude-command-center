@@ -23,6 +23,7 @@ from . import wt as wtmod
 _CONFIG_KEYS = ("enabled", "queue", "repo", "quiet_hours", "alerts", "customers", "hourly_cap",
                 "watch", "ack")
 _ID_CLEAN = re.compile(r"[^a-z0-9_-]")
+DECISIONS_DETAILED = 20     # tickets read for "what was decided", newest last
 
 
 class ApiError(Exception):
@@ -77,6 +78,19 @@ def decisions(eng):
     rows = []
     for queue in alerts.watched_queues(cfg):
         rows += [dict(row, queue=queue) for row in eng.wt.decisions(queue)]
+    # WatchTower's list says how far each decision got. What was decided and
+    # how to undo it are on the ticket, so read the newest few tickets once each.
+    seen, tickets = {}, {}
+    for row in rows:
+        row["nth"] = seen[row["ref"]] = seen.get(row["ref"], -1) + 1
+    for row in rows[-DECISIONS_DETAILED:]:
+        if row["ref"] not in tickets:
+            tickets[row["ref"]] = wtmod.decision_details(eng.wt.find(row["ref"]))
+        details = tickets[row["ref"]]
+        if row["nth"] < len(details):
+            row.update(details[row["nth"]])
+    for row in rows:
+        del row["nth"]
     return rows
 
 

@@ -281,6 +281,17 @@ def test_minor_decision_switch_sets_the_queue_policy(rig):
                                  "reason": "git revert abc1234", "queue": "SHOP"}]
 
 
+def test_decisions_say_what_was_decided_and_how_to_undo_it(rig):
+    rig.post("config", {"queue": "SHOP"})
+    rig.wt.find = lambda ref: {"history": [
+        {"event": "block", "question": "Name it bindCheckout or attachCheckoutHandler?"},
+        {"event": "auto_decision", "recommend": "bindCheckout", "undo": "git revert abc1234"}]}
+    assert rig.get("decisions")[1]["decisions"] == [{
+        "ref": "SHOP-3", "state": "applied", "reason": "git revert abc1234", "queue": "SHOP",
+        "question": "Name it bindCheckout or attachCheckoutHandler?",
+        "recommend": "bindCheckout", "undo": "git revert abc1234"}]
+
+
 def test_inbound_is_for_command_channels_only(rig, tmp_path):
     code, res = rig.post("inbound", {"channel": "nope", "text": "hi"})
     assert code == 400
