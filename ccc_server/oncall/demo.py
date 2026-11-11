@@ -13,6 +13,7 @@ import time
 import webbrowser
 
 from .demo_phone import Phone
+from .demo_output import Output
 from .demo_ticket import DemoTickets
 from .demo_wt import RealTickets, installed
 from .engine import Engine
@@ -45,14 +46,14 @@ def agent_fix(project, env, auth, answer):
     """Explicit paid opt-in; only Codex file credentials are supported."""
     home = Path(env['CODEX_HOME'])
     home.mkdir(mode=0o700)
-    shutil.copyfile(auth, home / 'auth.json')
-    (home / 'auth.json').chmod(0o600)
     prompt = ('Fix cart.py so test_cart.py passes. Owner chose ' + answer + '. '
               'Only edit cart.py. Do not use network, delegates, background processes or git. '
               'Do not read outside this workspace. Run python3 test_cart.py.')
     proc = None
     started = time.monotonic()
     try:
+        shutil.copyfile(auth, home / 'auth.json')
+        (home / 'auth.json').chmod(0o600)
         with (project / 'agent.log').open('w') as log:
             proc = subprocess.Popen(['codex', 'exec', '--skip-git-repo-check',
                                      '--sandbox', 'workspace-write', '-m', 'gpt-6.1-terra',
@@ -133,20 +134,23 @@ def walkthrough(root, args, emit, lines):
         run('git', 'add', 'cart.py', 'test_cart.py')
         run('git', '-c', 'user.name=Demo', '-c', 'user.email=demo@example.test',
             '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'test: reproduce empty cart crash')
-        emit('Report arrives: My empty cart crashes instead of showing a total.')
+        phone.state = 'Reported'
+        emit('Customer: Report arrives: My empty cart crashes instead of showing a total.')
         phone.receive('My empty cart crashes instead of showing a total.', 'reporter@example.test')
         engine.tick(force=True)
         reports = engine.store.reports(state='filed')
         if len(reports) != 1:
             raise RuntimeError('Report was not filed.')
         ref = reports[0]['ticket_ref']
-        emit('Ticket filed: ' + ref + '.')
+        emit('On-call: Ticket filed: ' + ref + '.')
+        phone.state = 'Agent working'
         tickets.start()
-        emit('Worker starts. Running the real sample test.')
+        emit('Agent: Worker starts. Running the real sample test.')
         before = run(sys.executable, '-S', 'test_cart.py', check=False)
         if before.returncode == 0 or 'ZeroDivisionError' not in before.stderr:
             raise RuntimeError('Expected the empty-cart regression to fail.')
-        emit('Test fails: ZeroDivisionError for an empty cart.')
+        emit('Agent: Test fails: ZeroDivisionError for an empty cart.')
+        phone.state = 'Waiting for you'
         tickets.block()
         engine.tick(force=True)
         while True:
@@ -158,6 +162,7 @@ def walkthrough(root, args, emit, lines):
         engine.tick(force=True)
         if not tickets.answered(answer):
             raise RuntimeError('Reply did not reach the worker.')
+        phone.state = 'Agent working'
         expected = '0' if answer == 'zero' else 'None'
         (project / 'test_cart.py').write_text(
             f'from cart import total\nassert total([]) == {expected}\nassert total([2, 4]) == 3\n')
@@ -181,12 +186,13 @@ def walkthrough(root, args, emit, lines):
             '-c', 'core.hooksPath=/dev/null', 'commit', '--only', 'cart.py', 'test_cart.py', '-qm', 'fix: handle empty cart')
         commit = head_commit()
         tickets.close(commit)
-        emit('Fix committed locally. The test passes.')
+        phone.state = 'Fixed'
+        emit('Agent: Fix committed locally. The test passes.')
         engine.tick(force=True)
         pending = engine.store.customer_messages(state='pending')
         if len(pending) != 1 or any(m['to'] for m in phone.messages):
             raise RuntimeError('Reporter notice did not wait for approval.')
-        emit('Reporter notice is waiting. Reply yes to send locally, or no to drop it.')
+        emit('On-call: Reporter notice is waiting. Reply yes to send locally, or no to drop it.')
         while engine.store.customer_messages(state='pending'):
             approval = reply('yes')
             if approval.lower() not in ('yes', 'no'):
@@ -194,6 +200,8 @@ def walkthrough(root, args, emit, lines):
                 continue
             phone.receive(approval)
             engine.tick(force=True)
+        phone.state = ('Reporter told' if engine.store.customer_messages()[0]['state'] == 'sent'
+                       else 'Fixed · reporter notice skipped')
         # The demonstration worker owns this low-risk local decision.
         (project / '.gitignore').write_text('__pycache__/\n')
         run('git', 'add', '.gitignore')
@@ -207,8 +215,10 @@ def walkthrough(root, args, emit, lines):
             from .api import decisions
             decision = decisions(engine)[-1]
         engine.store.log('minor', json.dumps(decision))
-        emit('Decided without you: ' + decision['recommend'] + '\nUndo: ' + decision['undo'])
+        emit('Agent: Decided without you: ' + decision['recommend'] + '\nUndo: ' + decision['undo'])
         emit('Try the real setup (requires a running CCC and WatchTower):\nccc oncall setup\nccc oncall minor on')
+        phone.done = True
+        phone.choices = []
         return dict(ok=True, worker='codex' if args.agent else 'scripted', ticket=ref,
                     backend=tickets.backend, commit=commit, test_before=before.returncode, test_after=0,
                     reporter_state=engine.store.customer_messages()[0]['state'],
@@ -223,6 +233,7 @@ def walkthrough(root, args, emit, lines):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='ccc oncall demo', description=__doc__)
     parser.add_argument('--terminal', action='store_true')
+    parser.add_argument('--fast', action='store_true', help='skip presentation pauses')
     parser.add_argument('--keep', action='store_true')
     parser.add_argument('--agent', action='store_true', help='use logged-in Codex (paid, up to three minutes)')
     parser.add_argument('--record', nargs='?', const='oncall-demo.txt', metavar='FILE')
@@ -233,13 +244,9 @@ def main(argv=None):
     args.terminal |= not sys.stdout.isatty() or os.environ.get('TERM') in (None, '', 'dumb') or 'NO_COLOR' in os.environ
     root = Path(tempfile.mkdtemp(prefix='ccc-oncall-demo-'))
     start = time.monotonic()
-    lines, events = [], []
-
-    def emit(text):
-        lines.append(text)
-        events.append([round(time.monotonic() - start, 3), 'o', text + '\r\n'])
-        if not args.json:
-            print(text, flush=True)
+    colour = sys.stdout.isatty() and os.environ.get('TERM') not in (None, '', 'dumb') and 'NO_COLOR' not in os.environ
+    emit = Output(quiet=args.json, fast=args.fast or args.json or not sys.stdout.isatty(), colour=colour)
+    lines, events = emit.lines, emit.events
 
     result = {}
     def interrupted(signum, frame):

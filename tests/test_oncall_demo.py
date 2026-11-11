@@ -95,7 +95,8 @@ def test_phone_boundary_and_reply():
         headers = {'X-Demo-Key': phone.key, 'Origin': phone.base}
         request = urllib.request.Request(phone.base + '/messages', headers=headers)
         with urllib.request.urlopen(request) as response:
-            assert json.load(response) == lines
+            payload = json.load(response)
+            assert payload['state'] == 'Reported' and payload['messages'] == []
         for origin, status in [('https://example.test', 403), (phone.base, 200)]:
             request = urllib.request.Request(phone.base + '/reply', data=b'{"text":"hide"}',
                                              headers={**headers, 'Origin': origin})
@@ -147,6 +148,12 @@ def test_real_watchtower_policy(tmp_path):
         minor = next(i for i in items if i['ref'] == result['decision']['ref'])
         assert any(h['event'] == 'auto_decision' for h in minor['history'])
         assert result['decision']['undo'].startswith('git revert ')
+        undo = result['decision']['undo'].split()[-1]
+        subprocess.run(['git', '-C', str(root / 'project'), '-c', 'core.hooksPath=/dev/null',
+                        'revert', '--no-commit', undo], check=True, capture_output=True,
+                       env=dict(PATH=os.defpath, HOME=str(root), GIT_CONFIG_NOSYSTEM='1',
+                                GIT_CONFIG_GLOBAL=os.devnull))
+        assert not (root / 'project/.gitignore').exists()
         assert not (tmp_path / 'real-state').exists()
     finally:
         import shutil
@@ -169,3 +176,32 @@ def test_same_second_fractional_block_is_delivered(tmp_path):
         assert not store.alerts()[0]['sent_at']
     finally:
         store.close()
+
+
+def test_fast_terminal_phone_box(tmp_path):
+    proc = demo(tmp_path, '--terminal', '--fast', input='hide\nno\n')
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert '| PHONE' in proc.stdout and 'Agent: Worker starts' in proc.stdout
+    assert '\x1b[' not in proc.stdout
+
+
+def test_phone_choices_preserve_message():
+    from ccc_server.oncall.store import Outbound
+    lines = []
+    phone = Phone(lines.append)
+    text = 'An empty cart crashes. Reply zero or hide.'
+    phone.send(Outbound(text=text))
+    assert phone.choices == ['zero', 'hide']
+    assert phone.thread_messages[-1]['text'] == text
+    phone.receive('zero')
+    assert phone.choices == []
+    assert phone.thread_messages[-1] == {'sender': 'You', 'text': 'zero'}
+
+
+def test_watchtower_cli_interpreter_discovery(monkeypatch):
+    import shutil
+    from ccc_server.oncall import demo_wt
+    if not shutil.which('wt'):
+        pytest.skip('wt CLI is not installed')
+    monkeypatch.setattr(demo_wt.importlib.util, 'find_spec', lambda name: None)
+    assert demo_wt.interpreter()
