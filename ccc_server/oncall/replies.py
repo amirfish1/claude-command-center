@@ -53,7 +53,7 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
 
     by_token = store.alert_by_token(msg.thread) if msg.thread else None
     by_reply = store.delivery_alert(msg.channel, msg.reply_to) if msg.reply_to else None
-    trusted = (not email) or by_token is not None
+    trusted = (not email) or (by_token is not None and by_token["state"] == "open")
 
     if low in ("status", "help", "?"):
         say(HELP if low != "status" else status_text(cfg, store))
@@ -70,7 +70,7 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
     if not text:
         return "empty"
 
-    alert, rest = by_token or by_reply, text
+    alert, rest = (by_token if email else by_token or by_reply), text
     if alert is None:
         if email:
             say("I could not match that to an alert. Reply inside the alert's own email thread.")
