@@ -21,9 +21,9 @@ _ASK = re.compile(r"\b(?:shall I|should I|should we|do you want|would you like|c
 
 
 def _choices(footer):
-    """Up to three (label, reply) answer choices from the footer's NEXT_ACTION.
+    """Up to twelve (label, reply) answer choices from the footer's NEXT_ACTION.
 
-    Anything malformed, empty or longer than three yields no choices.
+    Anything malformed, empty or longer than twelve yields no choices.
     """
     found = _FOOTER_ACTION.findall(footer)
     try:
@@ -32,7 +32,7 @@ def _choices(footer):
         return []
     if isinstance(data, dict):
         data = [data]
-    if not isinstance(data, list) or not 1 <= len(data) <= 3:
+    if not isinstance(data, list) or not 1 <= len(data) <= 12:
         return []
     out = []
     for item in data:
@@ -53,57 +53,118 @@ def _epoch(iso):
         return 0
 
 
-def question(store, session_id, transcript, since=0, notify_idle=False):
-    """The closing question of an idle transcript, or None.
-
-    ``since`` (epoch seconds) drops a transcript last written before On-call
-    was turned on, so turning it on never replays old questions.
-    """
+def context(store, session_id, transcript):
+    """Bounded head/tail read, persisted by path, mtime and size across restarts."""
     if not transcript:
-        return None
+        return {}
     path = Path(transcript)
     try:
         stat = path.stat()
-        if since and stat.st_mtime < since:
-            return None
-        stamp = [str(path), stat.st_mtime_ns, stat.st_size, notify_idle]
-        key = 'question-cache:' + session_id
+        stamp = [str(path), stat.st_mtime_ns, stat.st_size]
+        key = 'context-cache:' + session_id
         cached = store.kv_get(key) or {}
         if cached.get('stamp') == stamp:
-            return cached.get('signal')
+            return cached.get('context') or {}
         with path.open('rb') as stream:
+            head = stream.read(65536).splitlines()
             start = max(0, stat.st_size - 65536)
             stream.seek(start)
             if start:
                 stream.readline()
-            lines = stream.read(65536).splitlines()
+            tail = stream.read(65536).splitlines()
     except OSError:
-        return None
-    last, turn = '', ''
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except (ValueError, UnicodeError):
-            continue
-        if not isinstance(row, dict):
-            continue
-        payload = row.get('payload') or {}
-        message = row.get('message') or {}
-        if row.get('type') == 'response_item':
-            message = payload
-        role = message.get('role') or row.get('type')
-        if role == 'user':
-            last = ''
-        elif role == 'assistant':
+        return {}
+    first, last, structured, structured_id = '', '', None, ''
+    for lines, is_head in ((head, True), (tail, False)):
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except (ValueError, UnicodeError):
+                continue
+            if not isinstance(row, dict):
+                continue
+            payload = row.get('payload') or {}
+            message = payload if row.get('type') == 'response_item' else row.get('message') or {}
+            if not isinstance(message, dict) or not isinstance(payload, dict):
+                continue
+            role = message.get('role') or row.get('type')
             content = message.get('content') or []
-            last = content if isinstance(content, str) else '\n'.join(
-                str(c.get('text') or '') for c in content if c.get('type') in ('text', 'output_text'))
-            turn = str(row.get('uuid') or row.get('timestamp') or '')
-        elif row.get('type') == 'event_msg' and payload.get('type') == 'user_message':
-            last = ''
-    signal = from_message(last, turn, notify_idle=notify_idle)
-    store.kv_set(key, {'stamp': stamp, 'signal': signal})
-    return signal
+            text = content if isinstance(content, str) else '\n'.join(
+                str(c.get('text') or '') for c in content
+                if isinstance(c, dict) and c.get('type') in ('text', 'input_text', 'output_text')) if isinstance(content, list) else ''
+            if row.get('type') == 'event_msg' and payload.get('type') == 'user_message':
+                role, text = 'user', str(payload.get('message') or '')
+            if is_head:
+                if role == 'user' and text and not first:
+                    first = ' '.join(text.split())[:160]
+                continue
+            if role == 'user':
+                # Tool results do not start a new human turn.
+                if text:
+                    last, structured = '', None
+            elif role == 'assistant' and text:
+                last, structured = text, None
+            if payload.get('type') == 'function_call_output' and payload.get('call_id') == structured_id:
+                structured = None
+            blocks = content if isinstance(content, list) else []
+            for block in blocks + ([payload] if row.get('type') == 'response_item' else []):
+                if not isinstance(block, dict):
+                    continue
+                if block.get('type') == 'tool_result' and block.get('tool_use_id') == structured_id:
+                    structured = None
+                if str(block.get('name') or '').split('.')[-1] not in ('AskUserQuestion', 'request_user_input'):
+                    continue
+                data = block.get('input') or block.get('arguments') or {}
+                if isinstance(data, str):
+                    try:
+                        data = json.loads(data)
+                    except ValueError:
+                        continue
+                if isinstance(data, dict):
+                    structured = structured_question(data)
+                    structured_id = block.get('id') or block.get('call_id') or ''
+    result = {'first': first, 'last': last[-12000:], 'structured': structured, 'mtime': stat.st_mtime}
+    store.kv_set(key, {'stamp': stamp, 'context': result})
+    return result
+
+
+def structured_question(data):
+    from .clarity import choices
+    questions = data.get('questions') or []
+    if not isinstance(questions, list) or not questions:
+        return None
+    bodies, options = [], []
+    for q in questions:
+        if not isinstance(q, dict) or not isinstance(q.get('question'), str):
+            return None
+        bodies.append(q['question'])
+        opts = choices(q.get('options'))
+        if len(questions) == 1 and not q.get('multiSelect'):
+            options = opts
+            for i, opt in enumerate(q.get('options') or [], 1):
+                if isinstance(opt, dict) and opt.get('description'):
+                    bodies.append(f"{i}. {opt.get('label', '')} — {opt['description']}")
+        elif opts:
+            bodies.extend(f'{i}. {name}' for i, (name, _) in enumerate(opts, 1))
+    meta = {'choices': options} if options else {}
+    if len(questions) != 1 or any(q.get('multiSelect') for q in questions):
+        meta = {'at_keyboard': True}
+    return {'body': '\n'.join(bodies), 'meta': meta}
+
+
+def question(store, session_id, transcript, since=0, notify_idle=False):
+    info = context(store, session_id, transcript)
+    if since and info.get('mtime', 0) < since:
+        return None
+    if info.get('structured'):
+        return structured_signal(info['structured'])
+    return from_message(info.get('last', ''), notify_idle=notify_idle)
+
+
+def structured_signal(signal):
+    """Use the same stable incident identity for native and transcript questions."""
+    digest = hashlib.sha256(json.dumps(signal, sort_keys=True).encode()).hexdigest()[:24]
+    return {'kind': 'plain_question', 'stamp': digest, **signal}
 
 
 def from_message(last, turn='', notify_idle=False):
@@ -113,12 +174,16 @@ def from_message(last, turn='', notify_idle=False):
     prose, _, footer = last.partition('<session-state>')
     prose = prose.strip()
     tail = prose.rsplit('\n\n', 1)[-1].strip()
+    from .clarity import numbered
+    numbered_choices = numbered(prose)
+    if numbered_choices:
+        tail = prose
     steps = _FOOTER_STEP.findall(footer)
     step = steps[-1].strip() if steps else ''
     signal = None
     if not _NO_STEP.match(step):
-        tail = step[:1200]
-    elif steps or not (tail.endswith('?') and len(tail) <= 1200 and _ASK.search(tail)
+        tail = ((prose[-1200:] + '\n\n' + step) if prose and step not in prose else step)[:1800]
+    elif steps or not ((tail.endswith('?') or numbered_choices) and len(tail) <= 1800 and (_ASK.search(tail) or numbered_choices)
                        and not any(x in tail for x in ('```', '> ', '`'))):
         # A footer that says nothing is needed outranks a question mark above it.
         tail = ''
@@ -128,7 +193,7 @@ def from_message(last, turn='', notify_idle=False):
         # Keyed on the question text alone: the same session repeating an
         # unchanged question (a stale footer) must not alert again each turn.
         digest = hashlib.sha256(tail.encode()).hexdigest()[:24]
-        choices = _choices(footer) if not _NO_STEP.match(step) else []
+        choices = (_choices(footer) if not _NO_STEP.match(step) else []) or numbered_choices
         signal = {'kind': 'plain_question', 'stamp': digest, 'body': tail,
                   'meta': {'choices': choices} if choices else {}}
     return signal
@@ -146,19 +211,16 @@ def observe(eng, current):
     with eng._lock:
         now = eng.clock()
         enabled = (eng.config().get("alerts") or {}).get("decisions", True)
+        if not enabled:
+            return
         idle = getattr(eng, "_idle_seen", None)
         if idle is None:
             idle = eng._idle_seen = {}
         prompts, candidates = set(), set()
+        missing = getattr(eng, '_permission_missing', {})
+        eng._permission_missing = missing
 
-        def label(sid):
-            # Display name and project folder, from the cached census map only.
-            try:
-                name, folder = eng.deps.label(sid)
-            except Exception:
-                name = folder = ''
-            parts = [p for p in dict.fromkeys(str(x or '').strip() for x in (name, folder)) if p]
-            return ' · '.join(parts) or 'Agent ' + sid[:8]
+        from .clarity import label, unreadable
 
         def raise_signal(sid, signal):
             key = f"session:{sid}:{signal['kind']}:{signal['stamp']}"
@@ -171,7 +233,7 @@ def observe(eng, current):
                 key = f"{base}:{n}"
             if enabled:
                 alerts.raise_event(eng.store, kind=signal['kind'], key=key, session_id=sid,
-                                   title=label(sid), body=signal['body'],
+                                   title=label(eng.deps, sid), body=signal['body'],
                                    needs_reply=not (signal['meta'] or {}).get('at_keyboard'),
                                    meta=signal['meta'], now=now)
             return key
@@ -183,9 +245,16 @@ def observe(eng, current):
                 continue
             if row.get('needs_approval'):
                 signal = eng.deps.permission(sid)
-                if signal:
-                    prompts.add(raise_signal(sid, signal))
-            elif row.get('state') == 'idle' and not row.get('question_waiting'):
+                if not signal:
+                    if sid not in missing:
+                        missing[sid] = now
+                        continue
+                    signal = {'kind': 'permission', 'stamp': 'unreadable:' + str(missing[sid]),
+                              'body': unreadable('permission prompt'), 'meta': {'at_keyboard': True}}
+                else:
+                    missing.pop(sid, None)
+                prompts.add(raise_signal(sid, signal))
+            elif row.get('state') in ('idle', 'waiting') and not row.get('question_waiting'):
                 candidates.add(sid)
                 seen = idle.setdefault(sid, {'at': now, 'done': False})
                 if seen['done'] or not enabled or now - seen['at'] < GRACE_S:
@@ -194,6 +263,9 @@ def observe(eng, current):
                 signal = eng.deps.question(sid, eng.store, _epoch(eng.store.kv_get("enabled_at")))
                 if signal:
                     raise_signal(sid, signal)
+        for sid in list(missing):
+            if not (current or {}).get(sid, {}).get('needs_approval'):
+                del missing[sid]
         for sid in [s for s in idle if s not in candidates]:
             del idle[sid]
         for alert in eng.store.alerts(state='open'):

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from . import alerts
 from . import replies
+from . import secret_filter
 from . import wt as wtmod
 
 WEEK = 7 * 86400
@@ -33,9 +34,9 @@ def _plain(alert):
     head, text, _choices = alerts.render(alert)
     headline = head.replace(" (#%d)" % alert["id"], "").rstrip(":")
     parts = [p.strip() for p in text.split("\n", 1)[-1].strip().split("\n\n")] if "\n" in text else []
-    if parts and parts[-1].startswith("Reply "):
+    if parts and parts[-1].startswith(("Reply ", "No reply action", "Answer it in the session.", "Answer in the session.")):
         parts.pop()
-    return headline, alerts._clip("\n\n".join(p for p in parts if p), 700)
+    return headline, alerts._clip("\n\n".join(p for p in parts if p), 1800)
 
 
 def _choices(alert):
@@ -66,16 +67,30 @@ def summary(eng):
     if not eng.flag_on() or not cfg.get("enabled"):
         return {"enabled": False}
     store, now = eng.store, eng.clock()
-    waiting = [a for a in store.alerts(state="open", needs_reply=True, limit=50)
-               if not (a["kind"] == "fixed" and not (a.get("meta") or {}).get("notify"))]
+    waiting = [a for a in store.alerts(state="open", limit=50)
+               if (a["needs_reply"] or a["kind"] == "stuck" or (a.get("meta") or {}).get("at_keyboard"))
+               and not (a["kind"] == "fixed" and not (a.get("meta") or {}).get("notify"))]
     needs = []
     for alert in sorted(waiting, key=lambda a: a["created_at"]):   # oldest first: answer in the order asked
-        headline, detail = _plain(alert)
-        session_only = alert["kind"] == "permission"
+        session_only = alert['kind'] == 'permission' or bool((alert.get('meta') or {}).get('at_keyboard'))
+        home_alert = alert
+        if session_only:
+            home_alert = {**alert, 'meta': {**(alert.get('meta') or {}), 'at_keyboard': True}}
+        headline, detail = _plain(home_alert)
+        _head, message, _options = alerts.render(home_alert)
+        reply_help = ('Open this session in CCC to read the prompt and answer there.' if session_only
+                      else message.rsplit('\n\n', 1)[-1])
+        headline, detail, message, reply_help, _hit = secret_filter.mask(headline, detail, message, reply_help)
+        safe_choices = []
+        for option in ([] if session_only else _choices(alert)):
+            name, reply, hit = secret_filter.mask(option['label'], option['reply'])
+            if not hit:
+                safe_choices.append({'label': name, 'reply': reply})
         needs.append({
             "id": alert["id"], "kind": alert["kind"], "headline": headline, "detail": detail,
-            "choices": [] if session_only else _choices(alert),
-            "free_text": alert["kind"] in _FREE_TEXT, "session_only": session_only,
+            "choices": safe_choices, "message": message,
+            "reply_help": reply_help,
+            "free_text": not session_only and alert["kind"] in _FREE_TEXT, "session_only": session_only,
             "session_id": alert.get("session_id") or "", "ref": alert.get("ref") or "",
             "created_at": alert["created_at"],
         })
@@ -130,6 +145,8 @@ def answer(eng, body):
             raise ValueError("That one was already handled.")
         if alert["kind"] == "permission":
             raise ValueError("Answer a permission prompt in its session.")
+        if (alert.get("meta") or {}).get("at_keyboard"):
+            raise ValueError("Answer this prompt in its session.")
         if not store.reply_action_claim(alert_id):
             raise ValueError("An earlier answer may have been applied. Check the ticket or session directly.")
         from . import escalation

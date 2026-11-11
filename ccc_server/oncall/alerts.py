@@ -34,10 +34,12 @@ def render(alert):
     """(subject, text, choices) for one alert. Plain text; works on any channel."""
     n, kind, ref = alert["id"], alert["kind"], alert.get("ref") or ""
     title, body, meta = alert.get("title") or "", alert.get("body") or "", alert.get("meta") or {}
-    choices = ()
+    from .clarity import offered
+    choices = tuple(tuple(c) for c in offered(alert))
     if kind == "decision":
-        head = f"{ref} needs a decision (#{n})"
-        lines = [head, title, "", body]
+        context = " — ".join(x for x in (ref, title if title != ref else "") if x)
+        head = f"{context or 'A ticket'} needs a decision (#{n})"
+        lines = [head, "", body]
         if meta.get("recommend"):
             lines.append(f"Agent recommends: {meta['recommend']}")
         if meta.get("why"):
@@ -45,9 +47,6 @@ def render(alert):
         lines += ["", "Reply with your answer."]
     elif kind in ("question", "plain_question"):
         head = f"Question from {title or 'an agent'} (#{n})"
-        if kind == "plain_question":
-            choices = tuple((c[0], c[1]) for c in meta.get("choices") or ()
-                            if isinstance(c, (list, tuple)) and len(c) == 2)[:3]
         asks = choices or body.rstrip().endswith("?")
         lines = [head, body, "", "Reply with your answer." if asks
                  else "Reply here when done, or with a question."]
@@ -56,32 +55,34 @@ def render(alert):
         if meta.get("at_keyboard"):
             lines = [head, body, "", "Answer it in the session. It cannot be approved from here."]
         else:
-            lines = [head, body, "", "Reply allow or deny. If unavailable, answer in the session."]
+            lines = [head, body, "", "Reply allow or deny (1 = allow, 2 = deny). If unavailable, answer in the session."]
             choices = ("allow", "deny")
     elif kind == "stopped":
-        head = f"An agent stopped (#{n})"
-        lines = [head, title]
+        name = re.sub(r"(?:\s+stopped)+$", "", title, flags=re.I).strip()
+        head = f"{name or 'An unnamed session'} stopped (#{n})"
+        lines = [head]
         if body:
             lines += ["", body]
         lines += ["", "Reply continue to restart it, or reply with instructions."]
         choices = ("continue",)
     elif kind == "stuck":
         head = f"{ref or 'A queue'} is not moving (#{n})"
-        lines = [head, body]
+        lines = [head, title, body, "", "No reply action is available here. Open the queue in CCC to investigate."]
     elif kind == "report":
         head = f"New report from {meta.get('sender') or 'an unknown sender'} (#{n})"
         lines = [head, title]
         if body and _clip(body, 200) != _clip(title, 200):
             lines += ["", _clip(body, 700)]
-        lines += ["", "Reply go to have an agent work on it, or no to drop it."]
+        lines += ["", "Reply go (1) to have an agent work on it, or no (2) to drop it."]
         choices = ("go", "no")
     elif kind == "send":
         who = meta.get("name") or meta.get("address") or "the reporter"
         addr = f" ({meta['address']})" if meta.get("name") and meta.get("address") else ""
         verb = "ask" if meta.get("message_kind") == "ask" else "tell"
         about = f" about {ref}" if ref else ""
-        head = f"An agent wants to {verb} {who}{addr}{about} (#{n}):"
-        lines = [head, "", body, "", "Reply yes to send, no to drop, or reply with your own wording."]
+        context = f" — {title}" if title and title != ref else ""
+        head = f"An agent wants to {verb} {who}{addr}{about}{context} (#{n}):"
+        lines = [head, "", body, "", "Reply yes (1) to send, no (2) to drop, or reply with your own wording."]
         choices = ("yes", "no")
     elif kind == "fixed":
         label = "Fixed" if meta.get("outcome", "fixed") == "fixed" else "Closed without a code change"
@@ -103,6 +104,16 @@ def render(alert):
     else:
         head = f"{title or 'CCC On-call'} (#{n})"
         lines = [head, body]
+    if meta.get('at_keyboard') and kind != 'permission':
+        lines = [head, body, '', 'Answer in the session. No reply is accepted here.']
+        choices = ()
+    elif choices and kind in ('question', 'plain_question', 'decision'):
+        # Buttons are optional. Every channel receives the same answer contract.
+        lines = lines[:-1] + ['Accepted replies:']
+        for i, (name, reply) in enumerate(choices, 1):
+            lines.append(f'{i}. {name}' + (f' — sends: {reply}' if reply != name else ''))
+        lines += ['', 'Reply with an option number, its wording, or your own answer. '
+                  f'With several alerts waiting, use: {n} your answer.']
     text = "\n".join(line for line in lines if line is not None).strip()
     return head, text, choices
 
@@ -143,6 +154,8 @@ def collect_decisions(cfg, store, wt, *, now=None, silent_before=""):
         return 0
     now = time.time() if now is None else now
     created, live_keys, failed = 0, set(), set()
+    pending = store.kv_get("decision_content_pending", {})
+    still_pending = {}
     for queue in watched_queues(cfg):
         try:
             items = wt.blocked(queue)
@@ -158,6 +171,12 @@ def collect_decisions(cfg, store, wt, *, now=None, silent_before=""):
             key = f"wt:{ref}:{blocked_at}"
             live_keys.add(key)
             question, why = _gate_note(item.get("block_question"))
+            if not question:
+                still_pending[key] = queue
+                if key not in pending:
+                    continue
+                question = (f"On-call could not read the decision question for {ref or 'this ticket'}. "
+                            "Open the ticket in WatchTower to read the request before answering.")
             report = store.report_by_ref(ref)
             ci_source = bool(report and any(
                 source.get('type') == 'ci' and report['source'] == 'source:' + source.get('id', '')
@@ -165,13 +184,15 @@ def collect_decisions(cfg, store, wt, *, now=None, silent_before=""):
             row, new = store.alert_upsert(
                 key, kind="decision", ref=ref,
                 title=_clip(item.get("title") or item.get("note") or ref, 160),
-                body=_clip(question or "The agent needs a decision.", 1800),
+                body=_clip(question, 1800),
                 meta={"queue": queue, "call_kind": "ci_failed" if ci_source else "decision", "recommend": _clip(wtmod.recommendation(item), 400),
                       "why": _clip(why, 300)}, now=now)
             if new:
                 created += 1
                 if silent_before and blocked_at and blocked_at[:19] < silent_before[:19]:
                     store.alert_mark_sent(row["id"], now=now)
+    still_pending.update({key: queue for key, queue in pending.items() if queue in failed})
+    store.kv_set("decision_content_pending", still_pending)
     for alert in store.alerts(state="open"):
         if alert["kind"] != "decision" or alert["key"] in live_keys:
             continue
@@ -295,6 +316,17 @@ def send_alert(store, targets, alert, *, now=None, cap=HOURLY_CAP):
     now = time.time() if now is None else now
     subject, text, choices = render(alert)
     subject, text, _hit = secret_filter.mask(subject, text)
+    safe_choices = []
+    for choice in choices:
+        if isinstance(choice, (tuple, list)):
+            name, reply, hit = secret_filter.mask(*choice)
+            if not hit:
+                safe_choices.append((name, reply))
+        else:
+            value, hit = secret_filter.mask(choice)
+            if not hit:
+                safe_choices.append(value)
+    choices = tuple(safe_choices)
     ok_any = False
     for chan in targets:
         previous = store.delivery_latest(alert["id"], chan.id)

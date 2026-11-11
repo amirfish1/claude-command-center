@@ -5732,3 +5732,25 @@ def test_oncall_only_probes_idle_and_permission_candidates(tmp_path):
     session_signals.observe(eng, rows)
     assert len(deps.calls) == 2
     eng.store.close()
+
+
+def test_oncall_formal_questions_probe_only_new_or_missing_candidates(tmp_path):
+    from ccc_server.oncall import api, engine, store
+    cfg = store.default_config()
+    cfg['enabled'] = True
+    store.save_config(tmp_path, cfg)
+    eng = engine.Engine(tmp_path, flag_on=lambda: True, clock=lambda: 1000)
+    calls = []
+    rows = {str(i): {'state': 'working'} for i in range(2000)}
+    rows['candidate'] = {'question_waiting': True}
+    def describe(sid):
+        calls.append(sid)
+        return 'Fix checkout', ''
+    api.observe_sessions({}, rows, describe, eng=eng)
+    assert calls == ['candidate']
+    api.observe_sessions(rows, rows, describe, eng=eng)
+    assert calls == ['candidate', 'candidate']
+    for _ in range(50):
+        api.observe_sessions(rows, rows, describe, eng=eng)
+    assert len(calls) == 2, 'Unreadable questions must not trigger repeated scans'
+    eng.store.close()

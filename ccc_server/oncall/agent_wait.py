@@ -75,10 +75,13 @@ def register(eng, body):
             # Never replace a permission hook or guess which simultaneous call
             # a session-level answer refers to. Each prompt gets its own ID.
             key, token = secrets.token_hex(16), secrets.token_urlsafe(32)
+            from .clarity import label
+            from .session_signals import from_message
+            parsed = from_message(text) if kind == 'Stop' else None
             alert, _ = alerts.raise_event(eng.store,
                 kind='permission' if kind == 'PermissionRequest' else 'plain_question',
-                key='hook:' + key, session_id=sid, title='Agent ' + sid[:8], body=text,
-                meta={'hook_wait': key}, now=eng.clock())
+                key='hook:' + key, session_id=sid, title=label(eng.deps, sid), body=text,
+                meta={**((parsed or {}).get('meta') or {}), 'hook_wait': key}, now=eng.clock())
             if kind == 'Stop':
                 eng.store.kv_set('hook-last:' + sid, hashlib.sha256(text.encode()).hexdigest())
             box.rows[key] = {'sid': sid, 'kind': kind, 'digest': hashlib.sha256(token.encode()).digest(),

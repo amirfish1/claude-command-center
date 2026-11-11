@@ -180,11 +180,29 @@ One numbered message when:
 - a queue stopped moving
 - a bug was fixed (you can switch this one off)
 
-It works with no browser open.
+It works with no browser open. Session alerts use the display name, or the
+first readable request when the session has no name, plus the project folder.
+If neither is readable, they say “An unnamed session”; session IDs remain
+routing identifiers rather than message titles. Question alerts include the
+question, permission alerts include the tool or command, and stopped alerts
+include the last readable assistant message alongside the stop reason.
+
+Each message says which replies it accepts. Queue-stuck notices have no reply
+action and direct you to the queue. Reports accept `go` / `no`; proposed sends
+accept `yes` / `no` or replacement wording; stopped sessions accept `continue`
+or instructions. Permission prompts without a bound approval handler explicitly
+require answering in the session.
+
+When a waiting question or permission prompt has no readable content, On-call
+waits one more observation before raising an honest unreadable-content notice
+with instructions to open that session in CCC. It never invents the question or
+offers remote approval for an unreadable permission prompt. A stopped session
+without a readable last message also waits for the next session observation.
+A decision ticket without a readable question waits one collection cycle, then
+names the ticket and explains what could not be read.
 
 ```
-SHOP-12 needs a decision (#4)
-Checkout button does nothing on Safari
+SHOP-12 — Checkout button does nothing on Safari needs a decision (#4)
 
 Keep the old redirect as a fallback for one release, or remove it now?
 Agent recommends: keep it for one release.
@@ -200,14 +218,36 @@ keep it
 
 The reply becomes the agent's answer and the agent carries on. With several
 messages waiting, start with the number: `4 keep it`. Other words that work
-on any channel: `status`, `pause`, `resume`.
+on any channel: `status`, `pause`, `resume`. When an unambiguous waiting
+question offers one of those exact words as a choice, the choice takes precedence.
 
-For a permission alert, reply with exactly `allow` or `deny` (after the
-number, if several messages are waiting: `4 allow`). Capitalization and
-surrounding spaces do not matter. Other replies do not answer the prompt. CCC uses its existing approval handler and checks that the
+For an actionable permission alert, reply `allow` or `deny`; `1` / `2` also
+work. With several messages waiting, include the alert number: `4 allow`.
+Capitalization and surrounding spaces do not matter. Other replies do not
+answer the prompt. CCC uses its existing approval handler and checks that the
 same prompt is still pending. If the handler cannot answer it, use the
-session itself. Claude supports its permission hook, or its existing macOS
-live-terminal path. Codex needs an actionable app-server approval request.
+session itself. On-call requires Claude's bound permission hook or an actionable
+Codex app-server approval request; keyboard-only prompts stay in the session.
+The request identity and nonce checks still apply to translated numeric replies.
+Punctuation does not turn other replies into permission approval (`allow!` is
+not `allow`).
+
+Structured Claude `AskUserQuestion` and Codex `request_user_input` choices, footer
+`NEXT_ACTION` choices, and contiguous trailing numbered options after a question
+are included in the message text as well as available buttons. Reply with a
+number or an exact option label to send its associated answer; other wording
+remains a free-text answer. With several alerts waiting, use `4 2` to choose
+option 2 of alert 4. Alert routing happens before option translation, so a number
+cannot redirect a threaded answer to another alert. Multi-question and
+multi-select structured prompts are shown with guidance to answer in the session.
+
+Home cards carry the same context and choices, including unreadable-content
+notices. Their API also includes the complete masked `message` and `reply_help`.
+Single structured questions use the parked Claude nonce or the Codex request
+key and connection generation; changed or unavailable requests are refused.
+Structured prompts without an actionable native request stay in the session.
+Home continues to require permission answers in the session. Secret-bearing
+choice buttons are omitted, and message text is masked before delivery or display.
 
 Quiet hours hold messages until the window ends. At most 12 messages go out
 per hour.
@@ -358,10 +398,14 @@ reply releases it.
 - Two things count as a question: the step CCC's own session footer names
   for you (anything other than "None"), or, without a footer, a closing
   paragraph ending in a question mark with explicit wording such as "Should
-  I" or "Would you like". Quoted examples and code are excluded. Indirect
-  requests, long messages and other engines can be missed. No model call is
-  used; CCC reads at most the last 64 KiB of the transcript and caches the
-  result on disk by modification time and size.
+  I" or "Would you like", or a trailing numbered choice list after a question.
+  Quoted examples and code are excluded. Indirect requests, long messages and
+  other engines can be missed. No model call is
+  used; only candidate sessions are read. CCC reads at most the first 64 KiB
+  (for the initial request) and last 64 KiB (for current content), and persists
+  the result keyed by path, modification time and size. Unchanged transcripts
+  are not reopened after a restart. A first request outside the bounded head,
+  or a last message outside the bounded tail, may be unreadable.
 - A permission alert needs the prompt's identity and its tool or command
   text. Where CCC has no way to answer a prompt (for Claude Code that means
   no permission hook and not on a Mac terminal), `allow` and `deny` are
