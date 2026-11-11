@@ -128,11 +128,6 @@ def file_report(cfg, store, wt, report, *, now=None):
     return ref
 
 
-def _held_today(store, now):
-    return [r for r in store.reports(state="held", limit=200)
-            if now - (r.get("created_at") or 0) < 86400 and not (r.get("meta") or {}).get("auto")]
-
-
 def file_finding(cfg, store, wt, source_cfg, finding, *, now=None):
     """One monitoring finding -> one ticket, once per fingerprint.
 
@@ -147,9 +142,6 @@ def file_finding(cfg, store, wt, source_cfg, finding, *, now=None):
     hold = hit or (bool(getattr(finding, "hold", False))
             and bool((cfg.get("customers") or {}).get("hold_unknown", True)))
     sender = getattr(finding, "sender", "") or "an unknown sender"
-    if hold and not hit and len(_held_today(store, now)) >= HELD_PER_DAY:
-        store.log("report", f"too many unknown reports today; ignored one from {sender}", now=now)
-        return None
     reporter = getattr(finding, "reporter", {})
     report, created = store.report_upsert(
         f"source:{source_cfg.get('id')}", finding.fingerprint, title=finding.title,
@@ -157,7 +149,11 @@ def file_finding(cfg, store, wt, source_cfg, finding, *, now=None):
         reporter_channel=reporter.get("channel", ""), reporter_address=reporter.get("address", ""),
         reporter_name=reporter.get("address", ""), thread=reporter.get("thread", ""),
         meta={"github": reporter, "auto": not hold, "url": finding.url, "severity": finding.severity,
-              "ticket_text": finding_ticket_text(source_cfg, finding), "secret_redacted": hit}, now=now)
+              "ticket_text": finding_ticket_text(source_cfg, finding), "secret_redacted": hit}, now=now,
+        initially_held=hold and bool(getattr(finding, "hold", False)), held_limit=HELD_PER_DAY)
+    if report is None:
+        store.log("report", f"too many unknown reports today; ignored one from {sender}", now=now)
+        return None
     if not created:
         return report.get("ticket_ref") or None
     if hold:
@@ -255,10 +251,6 @@ def _new_report(cfg, store, wt, msg, now, follows=""):
     unverified = _unverified_email(cfg, msg)
     known = None if unverified else known_customer(cfg, msg.channel, msg.sender)
     hold = unverified or (bool(customers.get("hold_unknown", True)) and not known)
-    if hold:
-        if len(_held_today(store, now)) >= HELD_PER_DAY:
-            store.log("report", f"too many unknown reports today; ignored one from {msg.sender}", now=now)
-            return "ignored: too many unknown reports today"
     first_line = next((ln.strip() for ln in msg.text.splitlines() if ln.strip()), "")
     title = (msg.subject or first_line or "Report").strip()[:120]
     text = msg.text if not follows else f"(Follow-up to {follows}, which is closed.)\n\n{msg.text}"
@@ -268,7 +260,11 @@ def _new_report(cfg, store, wt, msg, now, follows=""):
         reporter_channel=msg.channel, reporter_address=msg.sender,
         reporter_name=msg.sender_name or str((known or {}).get("name") or ""),
         subject=msg.subject, thread=msg.thread if msg.channel.startswith("github:") else "",
-        meta={"message_id": msg.external_id, "github": msg.raw.get("github", {})}, now=now)
+        meta={"message_id": msg.external_id, "github": msg.raw.get("github", {})}, now=now,
+        initially_held=hold, held_limit=HELD_PER_DAY)
+    if report is None:
+        store.log("report", f"too many unknown reports today; ignored one from {msg.sender}", now=now)
+        return "ignored: too many unknown reports today"
     if not created:
         return f"already have report {report['id']}"
     if hold:

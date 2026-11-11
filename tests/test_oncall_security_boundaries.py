@@ -54,11 +54,11 @@ def test_config_cannot_be_changed_through_foreign_origin_or_proxy(port, monkeypa
     assert _call(port, 'GET', '/api/oncall/status')[1]['queue'] == ''
 
 
-def test_hourly_cap_does_not_bound_acknowledgements(rig):
-    # Explicit remaining budget boundary: status replies bypass alert delivery.
+def test_hourly_cap_bounds_acknowledgements(rig):
+    # Status replies share the owner message budget.
     for i in range(15):
         rig.eng.inbound('tg', Inbound('tg', str(i), '4242', 'status'))
-    assert len(rig.chan('tg').sent) == 15
+    assert len(rig.chan('tg').sent) == 12
 
 
 def test_body_marker_spoof_remains_inside_quoted_report():

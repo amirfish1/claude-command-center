@@ -406,6 +406,10 @@ class Store:
             self._db.executescript(_SCHEMA)
             if "message_kind" not in {r[1] for r in self._db.execute("PRAGMA table_info(deliveries)")}:
                 self._db.execute("ALTER TABLE deliveries ADD COLUMN message_kind TEXT NOT NULL DEFAULT 'unknown'")
+            report_columns = {r[1] for r in self._db.execute("PRAGMA table_info(reports)")}
+            if "initially_held" not in report_columns:
+                self._db.execute("ALTER TABLE reports ADD COLUMN initially_held INTEGER NOT NULL DEFAULT 1")
+                self._db.execute("UPDATE reports SET initially_held=0 WHERE json_extract(meta, '$.auto') = 1")
             columns = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
             if "owner_action_at" not in columns:
                 self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action_at REAL")
@@ -504,6 +508,40 @@ class Store:
             "SELECT DISTINCT alert_id FROM deliveries WHERE sent_at>=? "
             "AND ok=1 AND alert_id IS NOT NULL LIMIT ?", (since, limit))}
 
+    def owner_deliveries_in_hour(self, now):
+        row = self._one("SELECT COUNT(*) AS n FROM deliveries WHERE sent_at>? "
+                        "AND message_kind!='reporter' AND (ok=1 OR error=?)",
+                        (now - 3600, "Delivery interrupted; outcome unknown. No automatic retry."))
+        return row["n"]
+
+    def owner_delivery_claim(self, alert_id, channel, recipient, now, cap):
+        """Reserve a possible send atomically across processes sharing this store."""
+        uncertain = "Delivery interrupted; outcome unknown. No automatic retry."
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                count = self._db.execute(
+                    "SELECT COUNT(*) FROM deliveries WHERE sent_at>? "
+                    "AND message_kind!='reporter' AND (ok=1 OR error=?)",
+                    (now - 3600, uncertain)).fetchone()[0]
+                if count >= cap:
+                    self._db.execute("INSERT INTO kv(key,value) VALUES('owner_cap_waiting','true') "
+                                     "ON CONFLICT(key) DO UPDATE SET value='true'")
+                    self._db.commit()
+                    return None
+                row = self._db.execute(
+                    "INSERT INTO deliveries(alert_id,channel,recipient,ok,error,sent_at,message_kind) "
+                    "VALUES(?,?,?,0,?,?,'direct')", (alert_id, channel, recipient, uncertain, now))
+                self._db.commit()
+                return row.lastrowid
+            except BaseException:
+                self._db.rollback()
+                raise
+
+    def unsent_alert_count(self, exclude=None):
+        return self._one("SELECT COUNT(*) AS n FROM alerts WHERE state='open' AND sent_at IS NULL "
+                         "AND id!=?", (exclude or 0,))["n"]
+
     def alert_mark_sent(self, alert_id, now=None):
         self._run("UPDATE alerts SET sent_at=? WHERE id=? AND sent_at IS NULL",
                   (time.time() if now is None else now, alert_id))
@@ -585,21 +623,38 @@ class Store:
     # -- reports --
     def report_upsert(self, source, fingerprint, *, title, text, queue="", state="held",
                       reporter_channel="", reporter_address="", reporter_name="",
-                      thread="", subject="", meta=None, now=None):
+                      thread="", subject="", meta=None, now=None, initially_held=False, held_limit=None):
         """Create a report once per (source, fingerprint). Returns (row, created)."""
-        existing = self._one("SELECT * FROM reports WHERE source=? AND fingerprint=?",
-                             (source, fingerprint))
-        if existing:
-            return _meta_row(existing), False
         now = time.time() if now is None else now
-        cur = self._run(
-            "INSERT INTO reports(source,fingerprint,state,queue,title,text,reporter_channel,"
-            "reporter_address,reporter_name,thread,subject,created_at,updated_at,meta)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (source, fingerprint, state, queue, title[:300], text[:20000], reporter_channel,
-             normalize_address(reporter_address), reporter_name[:200], thread or new_token(),
-             subject[:300], now, now, json.dumps(meta or {})))
-        return self.report(cur.lastrowid), True
+        # Serialize the count and insertion across independent Store connections.
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._db.execute("SELECT * FROM reports WHERE source=? AND fingerprint=?",
+                                            (source, fingerprint)).fetchone()
+                if existing:
+                    self._db.commit()
+                    return _meta_row(dict(existing)), False
+                if initially_held and held_limit is not None:
+                    count = self._db.execute(
+                        "SELECT COUNT(*) FROM reports WHERE initially_held=1 AND created_at>?",
+                        (now - 86400,)).fetchone()[0]
+                    if count >= held_limit:
+                        self._db.commit()
+                        return None, False
+                cur = self._db.execute(
+                    "INSERT INTO reports(source,fingerprint,state,queue,title,text,reporter_channel,"
+                    "reporter_address,reporter_name,thread,subject,created_at,updated_at,meta,initially_held)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (source, fingerprint, state, queue, title[:300], text[:20000], reporter_channel,
+                     normalize_address(reporter_address), reporter_name[:200], thread or new_token(),
+                     subject[:300], now, now, json.dumps(meta or {}), int(initially_held)))
+                row = self._db.execute("SELECT * FROM reports WHERE id=?", (cur.lastrowid,)).fetchone()
+                self._db.commit()
+                return _meta_row(dict(row)), True
+            except BaseException:
+                self._db.rollback()
+                raise
 
     def report(self, report_id):
         row = self._one("SELECT * FROM reports WHERE id=?", (report_id,))

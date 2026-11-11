@@ -270,7 +270,8 @@ class Engine:
                 ref = self.report(m.group(1).strip())
                 chan = chans.get(entry["id"])
                 if chan is not None:
-                    alerts.say(self.store, chan, f"Filed as {ref}. An agent will pick it up.", now=now)
+                    alerts.say(self.store, chan, f"Filed as {ref}. An agent will pick it up.", now=now,
+                               cap=int(cfg.get("hourly_cap") or alerts.HOURLY_CAP))
                 return f"owner filed {ref}"
             return replies.handle(cfg, self.store, chans, self.wt, entry, msg, deps=self.deps, now=now)
         if customers.intake_enabled(entry):
@@ -368,7 +369,8 @@ class Engine:
                         "question arrives here." +
                         (" Reply to it and your reply becomes the answer."
                          if getattr(chan, "can_receive", False) else ""))
-                receipt = alerts.say(self.store, chan, text, subject="CCC On-call test", now=self.clock())
+                receipt = alerts.say(self.store, chan, text, subject="CCC On-call test", now=self.clock(),
+                                     cap=int(cfg.get("hourly_cap") or alerts.HOURLY_CAP))
                 results.append({"channel": cid, "ok": receipt.ok, "error": receipt.error})
             return results
 

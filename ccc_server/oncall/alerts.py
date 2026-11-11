@@ -221,27 +221,30 @@ def deliver(cfg, store, chans, *, now=None):
     if not targets or in_quiet_hours(cfg, now):
         return 0
     cap = int(cfg.get("hourly_cap") or HOURLY_CAP)
-    recent = store.recent_alert_ids(now - 3600, cap)
     sent = 0
     for alert in pending:
-        if len(recent) >= cap:
-            if not store.kv_get("cap_noted", 0) or now - store.kv_get("cap_noted", 0) > 3600:
-                store.kv_set("cap_noted", now)
-                store.log("alert", f"hourly cap of {cap} reached; the rest wait", now=now)
-            break
         tries = store.kv_get(f"try:{alert['id']}", {"n": 0, "at": 0})
         if tries["n"] and 0 <= now - tries["at"] < RETRY_AFTER_S:
             continue
-        if send_alert(store, targets, alert, now=now):
+        if send_alert(store, targets, alert, now=now, cap=cap):
             store.alert_mark_sent(alert["id"], now=now)
-            recent.add(alert["id"])
             sent += 1
+        elif store.owner_deliveries_in_hour(now) >= cap:
+            break
         else:
             store.kv_set(f"try:{alert['id']}", {"n": tries["n"] + 1, "at": now})
     return sent
 
 
-def send_alert(store, targets, alert, *, now=None):
+def _waiting_notice(store, text, exclude=None):
+    if not store.kv_get("owner_cap_waiting", False):
+        return text
+    count = store.unsent_alert_count(exclude=exclude)
+    return text + f"\n\n{count} other alert(s) waiting."
+
+
+def send_alert(store, targets, alert, *, now=None, cap=HOURLY_CAP):
+    now = time.time() if now is None else now
     subject, text, choices = render(alert)
     ok_any = False
     for chan in targets:
@@ -254,24 +257,36 @@ def send_alert(store, targets, alert, *, now=None):
             store.log("send", f"#{alert['id']} via {chan.id}: {uncertain}", now=now)
             continue
         # Commit the intent before the provider can accept the message.
-        store.delivery_add(alert["id"], chan.id, getattr(chan, "owner", "") or "",
-                           Receipt(ok=False, error=uncertain), now=now)
-        attempt = store.delivery_latest(alert["id"], chan.id)
-        receipt = chan.send(Outbound(text=text, subject=subject, thread=alert["token"],
+        attempt = store.owner_delivery_claim(alert["id"], chan.id,
+                                             getattr(chan, "owner", "") or "", now, cap)
+        if attempt is None:
+            return False
+        outgoing = _waiting_notice(store, text, exclude=alert["id"])
+        receipt = chan.send(Outbound(text=outgoing, subject=subject, thread=alert["token"],
                                      choices=choices if alert.get("needs_reply") else ()))
         if receipt.uncertain:
             receipt = Receipt(ok=False, error=uncertain, uncertain=True)
-        store.delivery_finish(attempt["id"], receipt)
+        store.delivery_finish(attempt, receipt)
         if receipt.ok:
+            store.kv_set("owner_cap_waiting", False)
             ok_any = True
         else:
             store.log("send", f"#{alert['id']} via {chan.id} failed: {receipt.error}", now=now)
     return ok_any
 
 
-def say(store, chan, text, *, to="", subject="", thread="", reply_to="", now=None):
+def say(store, chan, text, *, to="", subject="", thread="", reply_to="", now=None, cap=HOURLY_CAP):
     """A short direct reply on one channel (an ack, a list, a status)."""
-    receipt = chan.send(Outbound(text=text, to=to, subject=subject or text.splitlines()[0][:80],
+    now = time.time() if now is None else now
+    attempt = store.owner_delivery_claim(None, chan.id, to or getattr(chan, "owner", "") or "", now, cap)
+    if attempt is None:
+        return Receipt(ok=False, error="Hourly owner message cap reached.")
+    outgoing = _waiting_notice(store, text)
+    receipt = chan.send(Outbound(text=outgoing, to=to, subject=subject or text.splitlines()[0][:80],
                                  thread=thread, reply_to=reply_to))
-    store.delivery_add(None, chan.id, to or getattr(chan, "owner", "") or "", receipt, now=now)
+    if receipt.uncertain:
+        receipt = Receipt(ok=False, error="Delivery interrupted; outcome unknown. No automatic retry.", uncertain=True)
+    store.delivery_finish(attempt, receipt)
+    if receipt.ok:
+        store.kv_set("owner_cap_waiting", False)
     return receipt

@@ -51,7 +51,8 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
             return
         alerts.say(store, chan, reply, subject=(msg.subject or "CCC On-call"),
                    thread=(alert or {}).get("token", "") or msg.thread,
-                   reply_to=msg.external_id if email else "", now=now)
+                   reply_to=msg.external_id if email else "", now=now,
+                   cap=int(cfg.get("hourly_cap") or alerts.HOURLY_CAP))
 
     by_token = store.alert_by_token(msg.thread) if msg.thread else None
     by_reply = store.delivery_alert(msg.channel, msg.reply_to) if msg.reply_to else None
