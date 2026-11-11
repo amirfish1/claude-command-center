@@ -1,5 +1,6 @@
 """Stdlib orchestration and artifacts, independent of the model engine."""
 import base64
+from contextlib import ExitStack
 import hashlib
 import html
 import json
@@ -39,8 +40,12 @@ def normalize(value):
 
 
 def finding_key(finding):
-    url = urlsplit(finding["page"])
-    page = urlunsplit((url.scheme.lower(), url.netloc.lower(), url.path.rstrip("/") or "/", "", ""))
+    try:
+        url = urlsplit(finding["page"])
+        page = urlunsplit((url.scheme.lower(), url.netloc.lower(), url.path.rstrip("/") or "/", "", ""))
+    except ValueError:
+        # Redacted or app-provided display URLs must not discard a whole round.
+        page = str(finding["page"])
     key = [page, normalize(finding["control"]), normalize(finding["symptom"])]
     return hashlib.sha256(json.dumps(key).encode()).hexdigest()[:24]
 
@@ -105,6 +110,85 @@ def make_plan(url, goals, people=4, device=None, hosts=(), risky=False, model="g
                        for i in range(people)]}
 
 
+def validate_plan(plan):
+    """Validate input before writing artifacts or starting a browser/model."""
+    try:
+        _validate_plan(plan)
+    except (KeyError, TypeError, AttributeError, OSError, OverflowError):
+        raise ValueError("Invalid UX lab plan") from None
+    return plan
+
+
+def _validate_plan(plan):
+    if type(plan.get("version")) is not int or plan["version"] != 1:
+        raise ValueError("Unsupported plan version")
+    if set(plan) - {"version", "url", "goals", "safety", "model", "timeout", "steps",
+                    "browser_sandbox", "people", "authentication"}:
+        raise ValueError("Unknown plan setting")
+    safety = plan["safety"]
+    if set(safety) - {"hosts", "allow_risky", "read_only", "origins", "blocked_paths"}:
+        raise ValueError("Unknown safety setting")
+    if not isinstance(safety["hosts"], list) or not safety["hosts"]:
+        raise ValueError("Expected exact host list")
+    for host in safety["hosts"]:
+        if host != "::1" and not re.fullmatch(r"[a-z0-9.-]+", host):
+            raise ValueError("Expected exact lowercase hosts")
+    for value in (safety.get("allow_risky", False), safety.get("read_only", False), plan.get("browser_sandbox", True)):
+        if type(value) is not bool:
+            raise ValueError("Safety settings must be booleans")
+    for origin in safety.get("origins", []):
+        validate_url(origin, safety["hosts"])
+        parsed = urlsplit(origin)
+        if parsed.path or parsed.query or parsed.fragment:
+            raise ValueError("Safety origins must be exact scheme/host/port origins")
+    for prefix in safety.get("blocked_paths", []):
+        if not isinstance(prefix, str) or not prefix.startswith("/"):
+            raise ValueError("Blocked paths must be absolute path prefixes")
+    validate_url(plan["url"], safety["hosts"])
+    if (type(plan["timeout"]) is not int or type(plan["steps"]) is not int or
+            not 10 <= plan["timeout"] <= 1800 or not 1 <= plan["steps"] <= 200):
+        raise ValueError("Invalid saved plan budgets")
+    if not isinstance(plan["model"], str) or not plan["model"].strip():
+        raise ValueError("Invalid model")
+    people = plan["people"]
+    if not isinstance(people, list) or not people or len(people) > 16 or len({p["id"] for p in people}) != len(people):
+        raise ValueError("Saved plan has invalid tester identities")
+    profiles = plan.get("authentication", {})
+    if not isinstance(profiles, dict):
+        raise ValueError("Invalid authentication profiles")
+    for person in people:
+        if set(person) - {"id", "device", "persona", "goal", "start_path", "auth"}:
+            raise ValueError("Unknown tester setting")
+        if not re.fullmatch(r"tester-\d+", person["id"]) or person["device"] not in ("phone", "desktop"):
+            raise ValueError("Saved plan has an invalid tester or device")
+        if not all(isinstance(person.get(k), str) and person[k].strip() for k in ("persona", "goal")):
+            raise ValueError("Each tester needs a persona and goal")
+        start = person.get("start_path", "/")
+        if (not isinstance(start, str) or not start.startswith("/") or start.startswith("//") or
+                "\\" in start or any(ord(c) <= 32 for c in start) or urlsplit(start).fragment):
+            raise ValueError("start_path must be an absolute same-origin path without a fragment")
+        if "auth" in person and (not isinstance(person["auth"], str) or person["auth"] not in profiles):
+            raise ValueError("Unknown authentication profile")
+    for name, auth in profiles.items():
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name) or set(auth) != {"script", "sha256", "requests"}:
+            raise ValueError("Authentication requires only script, sha256 and requests")
+        script = Path(auth["script"])
+        if not script.is_absolute() or not script.is_file() or script.is_symlink():
+            raise ValueError("Authentication helper must be an absolute regular file")
+        if hashlib.sha256(script.read_bytes()).hexdigest() != auth["sha256"]:
+            raise ValueError("Authentication helper changed; explicitly review and update its digest")
+        if not isinstance(auth["requests"], list) or not 1 <= len(auth["requests"]) <= 16:
+            raise ValueError("Authentication requires bounded exact endpoint exceptions")
+        for request in auth["requests"]:
+            if set(request) != {"method", "url"}:
+                raise ValueError("Invalid bootstrap endpoint")
+            validate_url(request["url"], safety["hosts"])
+            parsed = urlsplit(request["url"])
+            if (parsed.fragment or not parsed.path or request["method"] != "POST" or
+                    any(ord(c) <= 32 for c in request["url"]) or "\\" in request["url"]):
+                raise ValueError("Bootstrap exceptions must be exact POST endpoints without a fragment")
+
+
 def brief(plan, person, earlier):
     return (f"You are an interactive usability tester. {person['persona']}\n"
             f"Your ONLY goal: {person['goal']}\nDevice: {person['device']}. "
@@ -118,7 +202,9 @@ def brief(plan, person, earlier):
             "(blocked/confusing/slow/ugly). Record immediately so the screenshot shows the problem. "
             "Use only enumerated fake form values; never submit real data or attempt risky actions. "
             "Finish with whether the goal succeeded and what worked. Report safety blocks honestly in the outcome, "
-            "not as app findings. Tool errors do not prove an app defect. "
+            "not as app findings. Tool errors do not prove an app defect. Policy blocks can cause "
+            "missing images and network-error UI; do not report those induced symptoms as product defects. "
+            "When remaining_seconds is 15 or less, or remaining calls are 3 or less, call finish now with an honest partial outcome. "
             "Do not infer bugs from this brief. You have a bounded tool budget.\n"
             "For a rerun, replay every following earlier reproduction from the initial page (use restart "
             "between replays), then explicitly record present or absent using replay; absence requires "
@@ -126,7 +212,33 @@ def brief(plan, person, earlier):
             + json.dumps(earlier, ensure_ascii=False))
 
 
-def codex_config(spec_file):
+def token_usage(folder):
+    """Keep original engine events; summarize only reported per-turn counters."""
+    totals = {}
+    source = Path(folder) / "engine.jsonl"
+    if source.exists():
+        with source.open() as stream:
+            for line in stream:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if event.get("type") == "turn.completed":
+                    for key, value in event.get("usage", {}).items():
+                        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                            totals[key] = totals.get(key, 0) + value
+    return {"reported": bool(totals), "tokens": totals}
+
+
+def finished_before_teardown(folder):
+    try:
+        result = json.loads((Path(folder) / "result.json").read_text())
+        return result.get("status") == "finished" and token_usage(folder)["reported"]
+    except (OSError, ValueError):
+        return False
+
+
+def codex_config(spec_file, socket_file=None):
     """No user/project configuration or connector definitions are interpolated."""
     return '\n'.join([
         'model_reasoning_effort = "medium"', 'web_search = "disabled"',
@@ -138,7 +250,7 @@ def codex_config(spec_file):
         '[mcp_servers.uxlab]', 'command = "node"',
         'default_tools_approval_mode = "approve"',
         'env = { PUPPETEER_CACHE_DIR = ' + json.dumps(os.environ.get("PUPPETEER_CACHE_DIR", str(Path.home() / ".cache/puppeteer"))) + ' }',
-        'args = ' + json.dumps([str(ROOT / "uxlab/browser.js"), str(spec_file)]),
+        'args = ' + json.dumps([str(ROOT / "uxlab/browser.js"), "--connect", str(socket_file)] if socket_file else [str(ROOT / "uxlab/browser.js"), str(spec_file)]),
         'required = true', 'startup_timeout_sec = 45', 'tool_timeout_sec = 30',
     ]) + '\n'
 
@@ -146,6 +258,7 @@ def codex_config(spec_file):
 class CodexEngine:
     """One persistent exec session per person, with a single narrow stdio MCP."""
     def run(self, plan, person, folder, earlier):
+        deadline = time.monotonic() + plan["timeout"]
         if not getattr(self, "browser_executable", None):
             # Resolve using this checkout's normal Puppeteer config before the
             # engine moves into an empty working directory and temporary home.
@@ -154,7 +267,7 @@ class CodexEngine:
             self.browser_executable = probe.stdout.strip()
             if not os.access(self.browser_executable, os.X_OK):
                 raise RuntimeError("Chromium executable is missing; install Puppeteer's browser first")
-        with tempfile.TemporaryDirectory(prefix="ccc-uxlab-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="ccc-uxlab-") as temporary, ExitStack() as cleanup:
             sandbox = Path(temporary)
             home, work = sandbox / "home", sandbox / "work"
             home.mkdir(mode=0o700)
@@ -167,7 +280,25 @@ class CodexEngine:
             spec = dict(plan, person=person, earlier=earlier, output=str(folder.resolve()),
                         profile_root=str(sandbox), browser_executable=self.browser_executable)
             save_json(sandbox / "spec.json", spec)
-            (home / "config.toml").write_text(codex_config(sandbox / "spec.json"))
+            socket_file = sandbox / "browser.sock" if person.get("auth") else None
+            browser_process = None
+            if socket_file:
+                browser_process = subprocess.Popen(
+                    ["node", str(ROOT / "uxlab/browser.js"), str(sandbox / "spec.json"), "--serve", str(socket_file)],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    start_new_session=True)
+                cleanup.callback(self._stop, browser_process)
+                try:
+                    ready = sandbox / "browser.ready"
+                    until = min(deadline, time.monotonic() + 45)
+                    while not ready.exists():
+                        if browser_process.poll() is not None or time.monotonic() >= until:
+                            raise RuntimeError("Authentication bootstrap failed")
+                        time.sleep(0.05)
+                except BaseException:
+                    self._stop(browser_process)
+                    raise
+            (home / "config.toml").write_text(codex_config(sandbox / "spec.json", socket_file))
             env = {k: v for k, v in os.environ.items() if k in (
                 "PATH", "LANG", "LC_ALL", "DISPLAY", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR")}
             env.update(CODEX_HOME=str(home), HOME=str(home))
@@ -176,18 +307,30 @@ class CodexEngine:
             command = ["codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check",
                        "--ignore-rules", "--ephemeral", "--json", "-C", str(work), "-m", plan["model"], "-"]
             with (folder / "engine.jsonl").open("w") as log, (folder / "engine.stderr").open("w") as err:
-                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=log, stderr=err,
-                                           cwd=work, env=env, start_new_session=True, text=True)
+                process = None
                 try:
-                    process.communicate(brief(plan, person, earlier), timeout=plan["timeout"])
+                    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=log, stderr=err,
+                                               cwd=work, env=env, start_new_session=True, text=True)
+                    process.communicate(brief(plan, person, earlier), timeout=max(1, deadline - time.monotonic()))
                     if process.returncode:
                         raise RuntimeError(f"Codex exited {process.returncode}; see engine.stderr")
-                except BaseException:
+                except subprocess.TimeoutExpired:
                     self._stop(process)
+                    if not finished_before_teardown(folder):
+                        raise
+                    # The tool saved finish and the engine emitted turn.completed;
+                    # only transport teardown exceeded the remaining budget.
+                    saved = json.loads((folder / "result.json").read_text())
+                    saved["warning"] = "Engine teardown reached timeout after a completed turn"
+                    save_json(folder / "result.json", saved)
+                except BaseException:
+                    if process:
+                        self._stop(process)
                     raise
                 finally:
                     # Includes MCP and Chromium children, even after a normal CLI exit.
-                    self._stop(process)
+                    if process:
+                        self._stop(process)
         result = json.loads((folder / "result.json").read_text())
         if result.get("status") != "finished":
             errors = [entry.get("message", "") for entry in result.get("trace", []) if entry.get("kind") == "error"]
@@ -287,13 +430,7 @@ def file_queue(folder, queue, findings, submit=None):
 
 
 def run_round(plan, folder, engine=None, previous=(), queue=None, queue_submit=None):
-    validate_url(plan["url"], plan["safety"]["hosts"])
-    people = plan["people"]
-    if not people or len(people) > 16 or len({p["id"] for p in people}) != len(people):
-        raise ValueError("Saved plan has invalid tester identities")
-    for person in people:
-        if not re.fullmatch(r"tester-\d+", person["id"]) or person["device"] not in ("phone", "desktop"):
-            raise ValueError("Saved plan has an invalid tester or device")
+    validate_plan(plan)
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=False)
     save_json(folder / "plan.json", plan)
@@ -317,6 +454,7 @@ def run_round(plan, folder, engine=None, previous=(), queue=None, queue_submit=N
             except (ValueError, OSError):
                 result = {}
             result.update(id=person["id"], status="failed", success=False, error=str(exc) or "Interrupted")
+        result["usage"] = token_usage(tester_folder)
         save_json(tester_folder / "result.json", result)
         results.append(result)
         save_json(folder / "results.json", results)
@@ -333,6 +471,14 @@ def run_round(plan, folder, engine=None, previous=(), queue=None, queue_submit=N
         replay_findings[finding["key"]] = finding
     save_json(folder / "replay-findings.json", list(replay_findings.values()))
     save_json(folder / "comparison.json", comparison)
+    # Additive, versioned export: the original array artifacts and replay keys
+    # remain unchanged for existing consumers.
+    save_json(folder / "findings.v1.json", {
+        "schema_version": 1, "findings": findings, "comparison": comparison,
+        "review_required": True,
+        "testers": [{"person": p, "status": r.get("status"), "success": r.get("success"),
+                     "usage": r["usage"]} for p, r in zip(plan["people"], results)],
+    })
     render_report(folder, plan, results, findings, comparison)
     filing = file_queue(folder, queue, findings, submit=queue_submit) if queue else []
     return {"folder": str(folder), "results": results, "findings": findings, "comparison": comparison,

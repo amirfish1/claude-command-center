@@ -26,7 +26,11 @@ function fakeValue(kind, field = {}) {
 }
 function requestAllowed({url, method = 'GET', body = '', resource = ''}, safety) {
   if (!allowedURL(url, safety.hosts) || ['websocket', 'eventsource'].includes(resource)) return false;
+  const target = new URL(url);
+  if (safety.origins && !safety.origins.includes(target.origin)) return false;
+  if ((safety.blocked_paths || []).some(prefix => target.pathname.startsWith(prefix))) return false;
   if (cardlike(url) || cardlike(body)) return false;
+  if (safety.read_only && !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) return false;
   const addresses = decodeURIComponentSafe(url + ' ' + body).match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
   if (addresses.some(address => !address.toLowerCase().endsWith('@example.com'))) return false;
   if (!safety.allow_risky && (risky(new URL(url).pathname + new URL(url).search) || risky(body))) return false;
@@ -54,4 +58,16 @@ function requestAllowed({url, method = 'GET', body = '', resource = ''}, safety)
   }
   return true;
 }
-module.exports = {RISK, FAKE, allowedURL, risky, cardlike, fakeValue, requestAllowed};
+// A trusted operator supplies exact endpoints, never the tester. This exception
+// exists only while the bootstrap callback runs. Redirects, other ports, query
+// variants, risky endpoints and non-login requests retain the normal deny layer.
+function bootstrapAllowed(request, safety, authentication, bootstrapping) {
+  if (!bootstrapping || !authentication || !['POST', 'OPTIONS'].includes(request.method) ||
+      !['document', 'fetch', 'xhr', 'other'].includes(request.resource) ||
+      !allowedURL(request.url, safety.hosts) || risky(new URL(request.url).pathname) ||
+      cardlike(request.url) || cardlike(request.body)) return false;
+  // Exceptions never authorize financial/identity fields.
+  if (/card|credit|debit|cc-|cvv|cvc|iban|routing|bank|social.security/i.test(decodeURIComponentSafe(request.body || ''))) return false;
+  return (authentication.requests || []).some(rule => rule.method === 'POST' && rule.url === request.url);
+}
+module.exports = {RISK, FAKE, allowedURL, risky, cardlike, fakeValue, requestAllowed, bootstrapAllowed};

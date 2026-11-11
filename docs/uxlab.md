@@ -15,11 +15,11 @@ ccc uxlab run --again ./trial
 
 `ccc uxlab --help` and `ccc uxlab run --help` show options. Goals can repeat;
 people cycle through goals in order. Default: four people, alternating desktop
-(1365×900) and phone (390×844). `--phone` or `--desktop` sets all people to that
+(1365×900) and phone (390×844, touch, mobile user agent and 3× device scale). `--phone` or `--desktop` sets all people to that
 device. People run serially, with one browser and one persistent `codex exec`
 per person. Default engine: `gpt-6.1-sol`, medium reasoning. `--model` changes
 the model; `--timeout` (default 240 seconds) and `--steps` (default 45 tool
-calls) bound each tester. Failed testers preserve partial evidence and do not
+calls) bound each tester, including authentication setup. Tools report the remaining time; testers are instructed to finish before the deadline. Failed testers preserve partial evidence and do not
 prevent the other testers from running. Ctrl-C stops the active engine and
 writes an incomplete report. No automatic fixes or dashboard screen.
 
@@ -91,6 +91,8 @@ needed before using this with untrusted apps or sensitive machine state.
 
 ## Artifacts and replay
 
+Blocked requests are reported to testers as policy limits without request bodies or URLs. Phone scrolling uses a touch gesture inside the visible viewport.
+
 A new output directory contains `plan.json`, per-person `result.json`,
 `trace.jsonl`, `engine.jsonl`, stderr and screenshots, plus merged
 `findings.json`, `comparison.json` and `report.html`. Default output is a new
@@ -134,3 +136,86 @@ is for reviewers only and is never served or included in tester prompts.
 
 See [the measured sample trial](uxlab-trial.md) for detections, false findings,
 setup failures and verification limits.
+
+## Authenticated plans
+
+`ccc uxlab run --plan ./plan.json --output ./trial` accepts a version 1 JSON
+plan. Use the fields from a generated `plan.json`; per-person entries may add
+`start_path` (an absolute same-origin path, optionally with a query) and `auth`
+(the name of an authentication profile). Reruns preserve these settings and
+revalidate every helper digest. Plan input rejects unknown settings, unsafe
+paths, invalid budgets and missing profiles before creating output.
+
+Add an `authentication` object with named profiles of this form:
+
+```json
+{
+  "shop": {
+    "script": "/absolute/operator-owned/login.cjs",
+    "sha256": "REPLACE_WITH_REVIEWED_SCRIPT_SHA256",
+    "requests": [{"method": "POST", "url": "http://127.0.0.1:8000/session"}]
+  }
+}
+```
+
+The script must be a regular file, not a symlink. Review its entire source,
+then compute SHA-256 over its exact bytes. The browser rechecks those same bytes
+immediately before executing them. Do not put credentials in plans, personas,
+goals, helper paths, endpoint URLs or reproduction steps. Keep helper files
+outside the output directory and version control. Credentials belong only in
+the trusted operator-owned helper, using a disposable fixture account.
+
+The helper exports an asynchronous CommonJS function taking `{page, origin, person, readFile}`.
+It uses Puppeteer's page API to open the login page, fill credentials, submit,
+and verify authenticated state. It must return exactly `true` on verified
+success; returning false, throwing, timing out, or causing a denied authentication request
+fails closed and closes the browser. Example for the bundled sample shop:
+
+```js
+module.exports = async ({page, origin}) => {
+  await page.goto(origin + '/login');
+  await page.type('[name=email]', 'fixture@example.com');
+  await page.type('[name=password]', 'fixture-only-password');
+  await Promise.all([page.waitForNavigation(), page.click('button')]);
+  return (await page.evaluate(() => document.body.innerText)).includes('Account details');
+};
+```
+
+Helpers are trusted executable operator code, not tester instructions or a
+sandbox. They receive no `require` or `process` binding; console methods are
+silent. `readFile(absolutePath)` reads a trusted local UTF-8 credential file;
+its contents must never be returned or added to a plan. `person` identifies the
+selected profile. Do not import dependencies, create background tasks, log credentials,
+write artifacts or take screenshots in a helper. Review is essential: the page
+object is powerful enough for a malicious helper to bypass these conventions.
+
+For authenticated runs, the browser bootstraps before starting Codex and then
+serves MCP over a temporary owner-only local socket. All tester tools and
+observations are disabled during bootstrap. There are no bootstrap screenshots,
+page-text captures or request traces, and errors are generic. POST body values
+observed during bootstrap are redacted from subsequent DOM text/attributes,
+input values and textual artifacts. This cannot sanitize arbitrary images or
+secrets the application independently displays; use a trusted disposable app.
+
+Only the listed exact POST URLs (including any reviewed query string) and their
+OPTIONS preflights get a bootstrap exception to fake-value and
+read-only body restrictions. Host checks, financial digit checks and risky
+endpoint checks remain in force. Wrong paths, ports, unlisted query variants and off-host
+requests do not inherit the exception. Every redirect is checked separately.
+The exceptions expire before navigating to `start_path`, and login endpoints
+stay blocked afterward. Optional `safety.read_only: true` blocks other write
+methods throughout testing. Optional `safety.origins` restricts ordinary requests
+to exact scheme/host/port origins; explicitly listed bootstrap endpoints remain
+separate exceptions. `safety.blocked_paths` denies absolute path prefixes.
+Unrelated blocked app traffic does not fail a verified login; denied
+authentication requests do. Such traffic is still blocked, including writes.
+Service-worker registration and EventSource have inert, non-networking API
+shapes so optional background features do not crash the app merely on setup. After login the login DOM is discarded; `restart`
+returns to `start_path` in the authenticated session. `back` is disabled for
+authenticated sessions to avoid returning to login history.
+
+`findings.v1.json` is an additive export with `schema_version: 1`, `findings`,
+`comparison`, `review_required: true` and per-tester `person`, `status`, `success`
+and `usage`. Usage contains only nonnegative integer counters reported in
+`turn.completed` events; absent counters are marked `reported: false`. Existing
+array exports, replay identity and report files retain their original shapes.

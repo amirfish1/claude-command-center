@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const {FAKE, allowedURL, risky, cardlike, fakeValue, requestAllowed} = require('./safety');
+const {FAKE, allowedURL, risky, cardlike, fakeValue, requestAllowed, bootstrapAllowed} = require('./safety');
 
 const objectSchema = (properties, required = []) => ({type: 'object', properties, required, additionalProperties: false});
 const str = {type: 'string', maxLength: 2000};
@@ -45,6 +45,10 @@ class BrowserSession {
     this.spec = spec;
     this.output = spec.output;
     this.result = {id: spec.person.id, status: 'running', findings: [], replays: [], trace: [], success: false};
+    this.bootstrapping = false;
+    this.authReady = !spec.person.auth;
+    this.secrets = new Set();
+    this.blockedRequests = [];
     this.controls = [];
     this.calls = 0;
     this.shots = 0;
@@ -52,16 +56,56 @@ class BrowserSession {
     this.save();
   }
   save() {
-    fs.writeFileSync(path.join(this.output, 'result.json.tmp'), JSON.stringify(this.result, null, 2));
+    fs.writeFileSync(path.join(this.output, 'result.json.tmp'), this.sanitize(JSON.stringify(this.result, null, 2)));
     fs.renameSync(path.join(this.output, 'result.json.tmp'), path.join(this.output, 'result.json'));
   }
+  sanitize(text) {
+    const cleanText = text => {
+      for (const secret of [...this.secrets].sort((a, b) => b.length - a.length)) {
+        for (const encoded of [encodeURIComponent(secret), secret])
+          if (encoded) text = text.split(encoded).join('[REDACTED]');
+      }
+      return text;
+    };
+    const clean = value => {
+      if (typeof value === 'string') {
+        // Tool text may itself contain serialized observations. Preserve JSON keys.
+        if (/^\s*[\[{]/.test(value)) {
+          try { return JSON.stringify(clean(JSON.parse(value))); } catch {}
+        }
+        return cleanText(value);
+      }
+      if (Array.isArray(value)) return value.map(clean);
+      if (value && typeof value === 'object') return Object.fromEntries(
+        Object.entries(value).map(([key, val]) => [key, key === 'data' ? val : clean(val)]));
+      return value;
+    };
+    try { return JSON.stringify(clean(JSON.parse(text))); } catch { return cleanText(text); }
+  }
+
   trace(kind, detail) {
-    const entry = {time: new Date().toISOString(), kind, ...detail};
+    if (this.bootstrapping) return;
+    const entry = JSON.parse(this.sanitize(JSON.stringify({time: new Date().toISOString(), kind, ...detail})));
     this.result.trace.push(entry);
     fs.appendFileSync(path.join(this.output, 'trace.jsonl'), JSON.stringify(entry) + '\n');
     this.save();
   }
   async start() {
+    try { await this.startBrowser(); } catch (error) {
+      this.bootstrapping = false;
+      this.authReady = false;
+      this.result.status = 'failed';
+      this.save();
+      await this.close();
+      throw Error(this.spec.person.auth ? 'Authentication bootstrap failed' : 'Browser startup failed');
+    }
+  }
+  async startBrowser() {
+    this.authentication = this.spec.person.auth ? this.spec.authentication?.[this.spec.person.auth] : null;
+    if (this.spec.person.auth && !this.authentication) throw Error('Missing authentication');
+    this.bootstrapping = !!this.authentication;
+    this.startURL = new URL(this.spec.person.start_path || this.spec.url, this.spec.url).href;
+    if (new URL(this.startURL).origin !== new URL(this.spec.url).origin) throw Error('Invalid start path');
     const puppeteer = require('../require-puppeteer');
     this.profile = fs.mkdtempSync(path.join(this.spec.profile_root || require('os').tmpdir(), 'ccc-uxlab-browser-'));
     this.browser = await puppeteer.launch({headless: true, userDataDir: this.profile,
@@ -80,8 +124,9 @@ class BrowserSession {
       }
     });
     const phone = this.spec.person.device === 'phone';
-    this.viewport = {width: phone ? 390 : 1365, height: phone ? 844 : 900, isMobile: phone, hasTouch: phone};
+    this.viewport = {width: phone ? 390 : 1365, height: phone ? 844 : 900, isMobile: phone, hasTouch: phone, deviceScaleFactor: phone ? 3 : 1};
     await this.page.setViewport(this.viewport);
+    if (phone) await this.page.setUserAgent('Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36');
     this.page.setDefaultTimeout(5000);
     this.page.setDefaultNavigationTimeout(15000);
     await this.page.setBypassServiceWorker(true);
@@ -92,20 +137,53 @@ class BrowserSession {
     // This is a deny layer for every frame's request, including redirects.
     await this.page.setRequestInterception(true);
     this.page.on('request', request => {
-      const allowed = requestAllowed({url: request.url(), method: request.method(), body: request.postData() || '', resource: request.resourceType()}, this.spec.safety);
-      if (!allowed) this.trace('request_blocked', {url: request.url(), method: request.method()});
+      const data = {url: request.url(), method: request.method(), body: request.postData() || '', resource: request.resourceType()};
+      // An auth endpoint is never a normal fake-data write, even after login.
+      const authEndpoint = (this.authentication?.requests || []).some(rule => rule.url === data.url);
+      if (this.bootstrapping && authEndpoint && data.body) this.rememberSecrets(data.body);
+      const redirected = request.redirectChain().length > 0;
+      const allowed = (!authEndpoint && requestAllowed(data, this.spec.safety)) ||
+        (!redirected && bootstrapAllowed(data, this.spec.safety, this.authentication, this.bootstrapping));
+      if (!allowed) {
+        if (this.bootstrapping && authEndpoint) this.bootstrapDenied = true;
+        const block = {method: request.method(), resource: data.resource, external: new URL(data.url).origin !== new URL(this.spec.url).origin};
+        if (!this.bootstrapping) this.blockedRequests.push(block);
+        this.trace('request_blocked', block);
+      }
       (allowed ? request.continue() : request.abort('blockedbyclient')).catch(() => {});
+    });
+    this.page.on('response', response => {
+      if (!this.bootstrapping) return;
+      const cookies = response.headers()['set-cookie'] || '';
+      for (const match of cookies.matchAll(/(?:^|[\n,])\s*[^=;,]+=([^;\n,]+)/g)) this.secrets.add(match[1]);
     });
     this.page.on('dialog', d => d.dismiss().catch(() => {}));
     // Runs in every new frame before app scripts. Browser flags and request
     // interception are independent layers; none make hostile JS safe.
     await this.page.evaluateOnNewDocument(safety => {
       const blocked = () => { throw new Error('Unavailable in UX lab'); };
-      for (const key of ['open', 'WebSocket', 'EventSource', 'RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport', 'Worker', 'SharedWorker']) {
+      for (const key of ['open', 'WebSocket', 'RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport', 'Worker', 'SharedWorker']) {
         try { Object.defineProperty(window, key, {value: blocked, configurable: false, writable: false}); } catch {}
       }
+      // No connection is opened. Apps may install optional live-update streams
+      // without treating an unavailable stream as a fatal rendering exception.
+      class DisabledEventSource extends EventTarget {
+        static CONNECTING = 0; static OPEN = 1; static CLOSED = 2;
+        constructor() { super(); this.readyState = 2; queueMicrotask(() => {
+          const event = new Event('error'); this.dispatchEvent(event); this.onerror?.(event);
+        }); }
+        close() { this.readyState = 2; }
+      }
+      try { Object.defineProperty(window, 'EventSource', {value: DisabledEventSource, configurable: false, writable: false}); } catch {}
       try { Object.defineProperty(navigator, 'sendBeacon', {value: () => false}); } catch {}
-      try { Object.defineProperty(navigator, 'serviceWorker', {value: undefined}); } catch {}
+      // Preserve feature-detection shape without allowing a worker to register.
+      // Setting this to undefined leaves `'serviceWorker' in navigator` true
+      // and makes ordinary register(...).catch(...) code throw synchronously.
+      try { Object.defineProperty(navigator, 'serviceWorker', {value: Object.freeze({
+        register: () => Promise.reject(new Error('Unavailable in UX lab')),
+        getRegistration: () => Promise.resolve(undefined), getRegistrations: () => Promise.resolve([]),
+        addEventListener() {}, removeEventListener() {}, controller: null,
+      })}); } catch {}
       const pattern = /\b(pay(?:ment)?|purchase|buy|checkout|subscribe|delete\s*(?:my\s*)?account|send|message|invite|real\s+people|transfer|donate|charge)\b/i;
       const safeURL = raw => { try { const u = new URL(raw, location.href); return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password && safety.hosts.includes(u.hostname.replace(/^\[|\]$/g, '').toLowerCase()); } catch { return false; } };
       const stop = event => {event.preventDefault(); event.stopImmediatePropagation();};
@@ -122,7 +200,56 @@ class BrowserSession {
       }, true);
       document.addEventListener('keydown', event => { if (event.key === 'Enter') stop(event); }, true);
     }, this.spec.safety);
-    await this.page.goto(this.spec.url, {waitUntil: 'domcontentloaded'});
+    if (this.authentication) {
+      const crypto = require('crypto');
+      const helper = this.authentication;
+      const stat = fs.lstatSync(helper.script);
+      if (!stat.isFile() || stat.isSymbolicLink()) throw Error('Invalid helper');
+      const source = fs.readFileSync(helper.script);
+      if (crypto.createHash('sha256').update(source).digest('hex') !== helper.sha256) throw Error('Helper changed');
+      // Trusted operator code, not a sandbox. No inherited require/process or
+      // console output is provided; helper errors are never returned verbatim.
+      const context = {module: {exports: {}}, console: {log() {}, error() {}, warn() {}, info() {}, debug() {}}};
+      require('vm').runInNewContext(source.toString(), context, {timeout: 1000});
+      if (typeof context.module.exports !== 'function') throw Error('Invalid helper');
+      let timer;
+      try {
+        const ok = await Promise.race([
+          context.module.exports({page: this.page, origin: new URL(this.spec.url).origin, person: this.spec.person, readFile: file => fs.readFileSync(file, 'utf8')}),
+          new Promise((_, reject) => {timer = setTimeout(() => reject(Error('Timeout')), Math.min(30000, this.spec.timeout * 1000));}),
+        ]);
+        if (ok !== true || this.bootstrapDenied) throw Error('Login failed');
+      } finally { clearTimeout(timer); this.bootstrapping = false; }
+      // Destroy login DOM/history and revoke exceptions before any observation.
+      await this.page.goto('about:blank');
+    }
+    await this.page.goto(this.startURL, {waitUntil: 'domcontentloaded'});
+    this.authReady = true;
+    await this.redactPage();
+  }
+  rememberSecrets(body) {
+    const collect = (value, key = '') => {
+      if (value && typeof value === 'object') Object.entries(value).forEach(([k, v]) => collect(v, k));
+      else if (typeof value === 'string' && value && /password|passwd|email|token|secret|authorization|cookie/i.test(key)) this.secrets.add(value);
+    };
+    this.secrets.add(body);
+    try { collect(JSON.parse(body)); } catch { for (const [key, value] of new URLSearchParams(body)) collect(value, key); }
+  }
+  async redactPage() {
+    if (!this.secrets.size) return;
+    const values = [...this.secrets];
+    await this.page.evaluate(values => {
+      const clean = text => values.reduce((out, value) => out.split(value).join('[REDACTED]'), text);
+      const walker = document.createTreeWalker(document, NodeFilter.SHOW_TEXT);
+      let node; while ((node = walker.nextNode())) node.textContent = clean(node.textContent);
+      for (const el of document.querySelectorAll('*')) {
+        for (const attr of [...el.attributes]) if (clean(attr.value) !== attr.value) el.setAttribute(attr.name, clean(attr.value));
+        if ('value' in el && typeof el.value === 'string') el.value = clean(el.value);
+      }
+    }, values);
+  }
+  assertReady() {
+    if (this.bootstrapping || !this.authReady) throw Error('Authentication is not ready');
   }
   async tap(x, y) {
     if (this.viewport.hasTouch) await this.page.touchscreen.tap(x, y);
@@ -133,11 +260,15 @@ class BrowserSession {
     this.controls = [];
   }
   async shot() {
+    this.assertReady();
+    await this.redactPage();
     const name = `shot-${++this.shots}.png`;
     await this.page.screenshot({path: path.join(this.output, name)});
     return name;
   }
   async look() {
+    this.assertReady();
+    await this.redactPage();
     await this.clearControls();
     if (!allowedURL(this.page.url(), this.spec.safety.hosts)) throw Error('Page left allowed hosts');
     // Only top-frame visible, hit-testable controls. Iframes are not exposed as controls.
@@ -181,9 +312,9 @@ class BrowserSession {
     const screenshot = await this.shot();
     this.lastLookScreenshot = screenshot;
     this.trace('look', {page: this.page.url(), text, controls: this.controls.map((c, i) => ({number: i + 1, ...c.info})), screenshot});
-    return [{type: 'text', text: JSON.stringify({page: this.page.url(), viewport: this.viewport, text,
+    return [{type: 'text', text: this.sanitize(JSON.stringify({page: this.page.url(), viewport: this.viewport, text,
       controls: this.controls.map((c, i) => ({number: i + 1, ...c.info})),
-      remaining: Math.max(0, this.spec.steps - this.calls), fake_values: FAKE})},
+      remaining: Math.max(0, this.spec.steps - this.calls), remaining_seconds: Math.max(0, Math.floor((this.deadline - Date.now()) / 1000)), policy_blocks: this.blockedRequests.splice(0), fake_values: FAKE}))},
     {type: 'image', mimeType: 'image/png', data: fs.readFileSync(path.join(this.output, screenshot)).toString('base64')}];
   }
   async control(number) {
@@ -214,6 +345,7 @@ class BrowserSession {
     return {control, data};
   }
   async call(name, args) {
+    this.assertReady();
     const tool = TOOLS.find(t => t.name === name);
     if (!tool) throw Error('Unknown tool');
     validate(tool.inputSchema, args);
@@ -277,11 +409,27 @@ class BrowserSession {
       this.beforeWaitScreenshot = this.lastLookScreenshot;
       await new Promise(resolve => setTimeout(resolve, args.seconds * 1000));
     } else if (name === 'scroll') {
-      await this.page.mouse.wheel({deltaY: args.direction === 'down' ? this.viewport.height * .75 : -this.viewport.height * .75});
+      // Touch taps do not move the mouse cursor; a wheel at (0,0) can miss
+      // an open modal's scroll container entirely.
+      const x = this.viewport.width / 2;
+      const from = this.viewport.height * (args.direction === 'down' ? .85 : .35);
+      const to = this.viewport.height * (args.direction === 'down' ? .3 : .85);
+      if (this.viewport.hasTouch) {
+        const cdp = await this.page.createCDPSession();
+        try {
+          await cdp.send('Input.dispatchTouchEvent', {type:'touchStart', touchPoints:[{x,y:from}]});
+          for (let i=1;i<=6;i++) await cdp.send('Input.dispatchTouchEvent', {type:'touchMove', touchPoints:[{x,y:from+(to-from)*i/6}]});
+          await cdp.send('Input.dispatchTouchEvent', {type:'touchEnd', touchPoints:[]});
+        } finally { await cdp.detach(); }
+      } else {
+        await this.page.mouse.move(x, this.viewport.height * .7);
+        await this.page.mouse.wheel({deltaY: args.direction === 'down' ? this.viewport.height * .75 : -this.viewport.height * .75});
+      }
     } else if (name === 'back') {
+      if (this.authentication) throw Error('Back is unavailable in authenticated sessions; use restart');
       await this.page.goBack({waitUntil: 'domcontentloaded'});
     } else if (name === 'restart') {
-      await this.page.goto(this.spec.url, {waitUntil: 'domcontentloaded'});
+      await this.page.goto(this.startURL, {waitUntil: 'domcontentloaded'});
     }
     await this.clearControls();
     // Short bounded settle, not a scripted test flow; next actions remain model choices.
@@ -300,40 +448,68 @@ async function protocolReply(message, session, start) {
   let result;
   if (message.method === 'initialize') result = {protocolVersion: '2024-11-05', capabilities: {tools: {}}, serverInfo: {name: 'uxlab', version: '1.0.0'}};
   else if (message.method === 'ping') result = {};
-  else if (message.method === 'tools/list') result = {tools: TOOLS};
+  else if (message.method === 'tools/list') result = {tools: session.bootstrapping ? [] : TOOLS};
   else if (message.method === 'tools/call') {
     try {
       await start();
       result = {content: await session.call(message.params.name, message.params.arguments || {})};
     } catch (error) {
-      session.trace('error', {message: error.message});
-      result = {isError: true, content: [{type: 'text', text: error.message}]};
+      session.trace('error', {message: session.spec?.person.auth ? 'Authenticated browser operation failed' : error.message});
+      result = {isError: true, content: [{type: 'text', text: session.spec?.person.auth ? 'Authenticated browser operation failed' : error.message}]};
     }
   } else throw Error('Unsupported MCP method');
   return {jsonrpc: '2.0', id: message.id, result};
 }
 
 async function main() {
+  if (process.argv[2] === '--connect') {
+    const socket = require('net').createConnection(process.argv[3]);
+    socket.on('error', () => { process.stderr.write('Browser connection failed\n'); process.exitCode = 1; process.stdin.destroy(); });
+    process.stdin.pipe(socket); socket.pipe(process.stdout);
+    socket.on('close', () => process.stdin.destroy());
+    return;
+  }
   const spec = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
   if (!allowedURL(spec.url, spec.safety.hosts)) throw Error('Initial host prohibited');
   const session = new BrowserSession(spec);
   let starting;
+  let server, input = process.stdin, output = process.stdout;
+  let lines, deadline;
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     await session.close();
     clearTimeout(deadline);
-    lines.close();
-    process.stdin.destroy();
+    if (lines) lines.close();
+    input.destroy();
+    if (server) server.close();
     // Let the stdout pipe drain; process.exit() can truncate MCP responses.
     process.exitCode = 0;
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
-  const deadline = setTimeout(shutdown, spec.timeout * 1000 + 2000);
+  deadline = setTimeout(shutdown, spec.timeout * 1000 + 2000);
   deadline.unref();
-  const lines = readline.createInterface({input: process.stdin, crlfDelay: Infinity});
+  if (process.argv[3] === '--serve') {
+    try {
+      await session.start();
+      starting = Promise.resolve();
+      server = require('net').createServer();
+      await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(process.argv[4], resolve);
+      });
+      fs.chmodSync(process.argv[4], 0o600);
+      fs.writeFileSync(path.join(path.dirname(process.argv[4]), 'browser.ready'), 'ready', {mode: 0o600});
+      input = output = await new Promise(resolve => server.once('connection', resolve));
+      server.close();
+    } catch {
+      await shutdown();
+      throw Error('Authentication bootstrap failed');
+    }
+  }
+  lines = readline.createInterface({input, crlfDelay: Infinity});
   let chain = Promise.resolve();
   lines.on('line', line => {
     chain = chain.then(async () => {
@@ -341,13 +517,13 @@ async function main() {
       try {
         message = JSON.parse(line);
         const reply = await protocolReply(message, session, () => (starting = starting || session.start()));
-        if (reply) process.stdout.write(JSON.stringify(reply) + '\n');
+        if (reply) output.write(session.sanitize(JSON.stringify(reply)) + '\n');
       } catch (error) {
-        process.stdout.write(JSON.stringify({jsonrpc: '2.0', id: message?.id ?? null, error: {code: -32600, message: error.message}}) + '\n');
+        output.write(JSON.stringify({jsonrpc: '2.0', id: message?.id ?? null, error: {code: -32600, message: session.spec?.person.auth ? 'Authenticated browser operation failed' : error.message}}) + '\n');
       }
-    }).catch(error => process.stderr.write(error.message + '\n'));
+    }).catch(() => process.stderr.write('Browser protocol failed\n'));
   });
   lines.on('close', () => chain.finally(shutdown));
 }
-if (require.main === module) main().catch(error => {process.stderr.write(error.stack + '\n'); process.exitCode = 1;});
+if (require.main === module) main().catch(() => {process.stderr.write('Browser startup failed\n'); process.exitCode = 1;});
 module.exports = {BrowserSession, TOOLS, validate, protocolReply};

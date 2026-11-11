@@ -1,82 +1,190 @@
 #!/usr/bin/env python3
-"""Inventory saved assets and pad available real captures to 1270x760.
-
-Never turn unrelated still images into a purported screen recording.
-"""
-from html import escape
-from pathlib import Path
+"""Inventory EVERY image/video, including actual source frames, without inventing provenance."""
+import argparse
 import hashlib
+from html import escape
 import json
+from pathlib import Path
 import struct
 import subprocess
 
-OUTPUT = Path(__file__).resolve().parents[1] / '.claude/screenshots/launch-captures'
-SCREENS = [
-    ('session-alert-phone.png', 'Real ntfy alert from a local session-proof attempt.'),
-    ('session-reply-typed-phone.png', 'Reply typed in real ntfy during a local session-proof attempt.'),
-    ('session-reply-sent-phone.png', 'Reply published in real ntfy; session receipt is not established by this image.'),
-    ('ccc-session-question.png', 'Real CCC question view from a local session-proof attempt.'),
-    ('mail-fixed-desktop.png', 'Decoded real mailbox message. Read its in-frame fixture/agent label.'),
-]
+OUTPUT = Path(__file__).resolve().parents[1]/'.claude/screenshots/launch-captures'
+IMAGES={'.png','.jpg','.jpeg','.webp','.gif'}
+VIDEOS={'.mp4','.webm','.mov'}
 
 
-def describe(name):
-    if name.startswith(('try-it-', 'independent-')):
-        return 'Landing-page illustration verification. Sample data, scripted fix. node scripts/test-oncall-try.cjs; independent images came from the separate browser review.'
-    if name.startswith('session-gallery-'):
-        return 'Product Hunt layout: existing capture scaled to fit and padded with ffmpeg. No UI was added. See gallery-provenance.json for the source.'
-    if name.startswith(('session-', 'ccc-session-')):
-        return 'Real local ntfy/CCC capture from scripts/oncall-session-proof.py --with-agent --capture. Pixel dimensions are listed below. A screenshot alone does not establish proof completion or next-turn receipt.'
-    if name.startswith('cli-'):
-        return 'Actual scripts/oncall-proof.py --capture CLI output rendered as text. Paths/server redacted. This is not a terminal recording; sample minor decisions are submitted by the harness to the real gate, not by an agent.'
-    if name.startswith('fixture-ticket-'):
-        return 'Real isolated WatchTower UI from scripts/oncall-proof.py --capture. The harness reports and closes a protocol fixture. No agent ran.'
-    if name.startswith('ticket-'):
-        return 'Real isolated WatchTower page from scripts/oncall-proof.py --with-agent --capture. The saved reported state does not establish a fix.'
+def dimensions(file):
+    data=file.read_bytes()
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return list(struct.unpack('>II',data[16:24]))
+    if data[:2]==b'\xff\xd8':
+        pos=2
+        while pos<len(data):
+            if data[pos]!=255:
+                pos+=1
+                continue
+            marker=data[pos+1]
+            pos+=2
+            if marker in (0xD8,0xD9) or 0xD0<=marker<=0xD7:
+                continue
+            length=int.from_bytes(data[pos:pos+2],'big')
+            if marker in (0xC0,0xC1,0xC2):
+                h,w=struct.unpack('>HH',data[pos+3:pos+7])
+                return [w,h]
+            pos+=length
+    return None
+
+
+def provenance(directory):
+    """Index explicit sidecars first; filenames alone never establish success."""
+    index={}
+    for file in sorted(directory.rglob('*provenance.json')):
+        if file.name == 'mail-provenance.json':
+            data=json.loads(file.read_text())
+            for asset in file.parent.glob('mail-fixed-*.png'):
+                index[asset]={'caption':data['description'] + (' Actual agent fix verified by the proof.' if data.get('agent') else ' Harness-closed protocol fixture; no agent fix.'),
+                              'kind':'scripted-source-render','source':str(file.relative_to(directory))}
+        elif file.name == 'cli-provenance.json':
+            data=json.loads(file.read_text())
+            for asset in file.parent.glob('cli-*.png'):
+                index[asset]={'caption':data['description']+' Text rendering, not a terminal recording.',
+                              'kind':'scripted-source-render','source':str(file.relative_to(directory))}
+        elif file.name.startswith(('ticket-','fixture-ticket-')):
+            data=json.loads(file.read_text())
+            for asset in file.parent.glob(file.name.replace('-provenance.json','-*.png')):
+                index[asset]={'caption':f"Real isolated WatchTower UI, state {data['state']}. "+
+                    ('Harness fixture closure, no agent fix.' if data.get('fixture') else 'Actual agent run; completion is established only by its proof JSON/log.'),
+                    'kind':'real-ui-fixture' if data.get('fixture') else 'real-ui-proof-still',
+                    'source':str(file.relative_to(directory))}
+    for file in sorted(directory.rglob('browser-provenance.json')):
+        data=json.loads(file.read_text())
+        for shot in data.get('screenshots',[]):
+            index[file.parent/shot['file']]={**shot,'source':str(file.relative_to(directory))}
+    for file in sorted(directory.rglob('recording.json')):
+        data=json.loads(file.read_text())
+        for frame in data.get('frames',[]):
+            index[file.parent/frame['file']]={'caption':'Actual timed browser source frame; not a staged slide.',
+                'run_id':data.get('run_id'),'utc':frame.get('utc'),'seconds':frame['seconds'],
+                'kind':data.get('kind'),'failure':data.get('failure'),'source':str(file.relative_to(directory))}
+    for file in sorted(directory.rglob('gallery-provenance.json')):
+        for row in json.loads(file.read_text()):
+            index[file.parent/row['file']]={**row, 'kind':'gallery-layout', 'source':str(file.relative_to(directory)), 'capture':row['source']}
+    for file in sorted(directory.rglob('launch-pack.json')):
+        pack=json.loads(file.read_text())
+        for video in pack['assets']:
+            index[file.parent/video['file']]={**video,'kind':'edited-real-browser-recording','status':pack['status'],
+                'source':str(file.relative_to(directory))}
+            # Root stills are byte-identical copies of known proof screenshots.
+        for asset in file.parent.glob('*.png'):
+            for role in ('agent','session'):
+                original=file.parent/role/asset.name
+                if original in index and original.read_bytes()==asset.read_bytes():
+                    index[asset]={**index[original],'copy_of':str(original.relative_to(directory))}
+        for review in ('review', 'review-v2'):
+            for asset in (file.parent/review).glob('*.png'):
+                index[asset]={'caption':'Frame decoded from the completed real browser film; see launch-pack.json for clip boundaries and speed.',
+                              'kind':'decoded-review-frame','source':str(file.relative_to(directory))}
+        for asset in (file.parent/'edits').glob('*.mp4'):
+            index[asset]={'caption':'Intermediate edited clip of actual browser frames. See launch-pack.json for source run, speed and boundaries.',
+                          'kind':'edited-real-browser-clip','source':str(file.relative_to(directory))}
+    return index
+
+
+def fallback(asset, directory):
+    name=asset.name
     if name.startswith('mail-'):
-        return 'Actual local GreenMail message from scripts/oncall-proof.py --capture. Decoded source rendering, not webmail. Read mail-provenance.json and the in-frame label for whether the harness or an agent closed the ticket.'
-    return 'Saved supporting file from capture attempts. Consult its contents; presence is not proof of a completed run.'
+        return {'caption':'Decoded real local RFC822 email rendered by the harness; NOT webmail or screen-recording footage. Agent/fixture status is in mail-provenance.json.', 'kind':'scripted-source-render'}
+    if name.startswith('cli-'):
+        return {'caption':'CLI output rendered as text by the harness; NOT a terminal recording.', 'kind':'scripted-source-render'}
+    if name.startswith(('try-it-','hero-layout-','independent-')):
+        return {'caption':'Landing-page illustration/layout verification with sample/scripted data; NOT real product footage.', 'kind':'sample-ui-verification'}
+    if name.startswith('fixture-ticket-'):
+        return {'caption':'Isolated real WatchTower UI, protocol fixture closed by harness; no agent fix.', 'kind':'real-ui-fixture'}
+    if name.startswith('ticket-'):
+        return {'caption':'Isolated WatchTower UI still; consult matching proof log for actual agent outcome. No light theme is supported by this WatchTower UI.', 'kind':'real-ui-proof-still'}
+    return {'caption':'Unattributed saved asset. No claim of successful proof, real recording, or agent reply receipt; inspect original evidence before use.', 'kind':'unverified'}
+
+
+def gallery_layouts(directory):
+    """Pad real captures for a gallery; never manufacture product pixels."""
+    names = ['session-alert-phone.png', 'session-reply-sent-phone.png',
+             'ccc-session-question.png', 'ccc-session-reply.png',
+             'report-fixed-desktop.png', 'fixed-result-phone.png']
+    rows = []
+    for number, name in enumerate(names, 1):
+        source = directory / name
+        if not source.is_file():
+            continue
+        dest = directory / f'session-gallery-{number}.png'
+        subprocess.run(['/usr/bin/nice', '-n', '15', 'ffmpeg', '-hide_banner',
+            '-loglevel', 'error', '-y', '-i', str(source), '-vf',
+            'scale=1270:760:force_original_aspect_ratio=decrease,pad=1270:760:(ow-iw)/2:(oh-ih)/2:color=0xf3f5f7',
+            '-frames:v', '1', '-threads', '1', str(dest)], check=True, timeout=60)
+        rows.append({'file': dest.name, 'source': name,
+            'caption': 'Real capture scaled and padded to 1270x760. No product UI was added.'})
+    if rows:
+        (directory / 'gallery-provenance.json').write_text(json.dumps(rows, indent=2))
+
+
+def inventory(directory):
+    sources=provenance(directory)
+    entries=[]
+    for asset in sorted(directory.rglob('*')):
+        if not asset.is_file() or asset.is_symlink() or asset.suffix.lower() not in IMAGES|VIDEOS:
+            continue
+        entry={'file':str(asset.relative_to(directory)), 'bytes':asset.stat().st_size,
+               'sha256':hashlib.sha256(asset.read_bytes()).hexdigest(),
+               **sources.get(asset,fallback(asset,directory))}
+        # Sidecar screenshot names are local, inventory names must be root-relative.
+        entry['file']=str(asset.relative_to(directory))
+        if asset.suffix.lower() in IMAGES:
+            entry['pixels']=dimensions(asset)
+        else:
+            result=subprocess.run(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(asset)],
+                                  check=True,text=True,capture_output=True,timeout=30)
+            media=json.loads(result.stdout)
+            video=next((s for s in media['streams'] if s['codec_type']=='video'),{})
+            entry.update(seconds=float(media['format']['duration']),pixels=[video.get('width'),video.get('height')],
+                         audio=any(s['codec_type']=='audio' for s in media['streams']))
+        entries.append(entry)
+    return entries
 
 
 def main():
-    OUTPUT.mkdir(parents=True, exist_ok=True)
-    gallery = []
-    for number, (name, caption) in enumerate(SCREENS, 1):
-        if not (OUTPUT / name).is_file():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output',type=Path,default=OUTPUT)
+    args=parser.parse_args()
+    directory=args.output.resolve()
+    if not directory.is_relative_to(OUTPUT.resolve()):
+        parser.error('Gallery must stay in launch-captures')
+    directory.mkdir(parents=True,exist_ok=True)
+    gallery_layouts(directory)
+    entries=inventory(directory)
+    (directory/'capture-manifest.json').write_text(json.dumps(entries,indent=2))
+    entries.sort(key=lambda item: (0 if item.get('kind')=='edited-real-browser-recording' else 1 if '/' not in item['file'] else 2, item['file']))
+    figures=[]
+    frame_groups={}
+    for entry in entries:
+        # Thousands of source frames remain inventoried but are grouped as links
+        # rather than decoded into the gallery page all at once.
+        name=escape(entry['file'],quote=True)
+        caption=escape(entry['caption'])
+        if '/frame-' in name:
+            frame_groups.setdefault(str(Path(entry['file']).parent), []).append(
+                f'<figure><img src="{name}" loading="lazy" alt="{caption}"><figcaption>{name}<p>{caption}</p><p>Source time: {entry.get("seconds")} seconds. Run: {escape(str(entry.get("run_id")))}</p></figcaption></figure>')
             continue
-        dest = f'session-gallery-{number}.png'
-        subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y', '-i', str(OUTPUT / name),
-                        '-vf', 'scale=1270:760:force_original_aspect_ratio=decrease,pad=1270:760:(ow-iw)/2:(oh-ih)/2:color=0x111b22',
-                        '-frames:v', '1', '-threads', '1', str(OUTPUT / dest)], check=True)
-        gallery.append({'file':dest, 'source':name, 'caption':caption})
-    (OUTPUT / 'gallery-provenance.json').write_text(json.dumps(gallery, indent=2))
-    entries, figures = [], []
-    for asset in sorted(OUTPUT.iterdir()):
-        if not asset.is_file() or asset.name in ('index.html', 'capture-manifest.json'):
-            continue
-        caption = describe(asset.name)
-        entry = {'file':asset.name, 'caption':caption,
-                 'sha256':hashlib.sha256(asset.read_bytes()).hexdigest(), 'bytes':asset.stat().st_size}
-        name = escape(asset.name, quote=True)
-        if asset.suffix == '.png':
-            entry['pixels'] = list(struct.unpack('>II', asset.read_bytes()[16:24]))
-            media = f'<img src="{name}" alt="{escape(caption, quote=True)}" loading="lazy">'
-            caption += ' Pixels: ' + ' × '.join(map(str, entry['pixels'])) + '.'
-        elif asset.suffix in ('.mp4', '.webm'):
-            media = f'<video src="{name}" controls preload="metadata"></video>'
+        if Path(name).suffix.lower() in VIDEOS:
+            media=f'<video src="{name}" controls preload="metadata"></video>'
         else:
-            media = f'<a href="{name}">{name}</a>'
-        figures.append(f'<figure>{media}<figcaption><b>{name}</b><p>{escape(caption)}</p></figcaption></figure>')
-        entries.append(entry)
-    (OUTPUT / 'capture-manifest.json').write_text(json.dumps(entries, indent=2))
-    (OUTPUT / 'index.html').write_text('''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>On-call capture evidence</title>
-<style>body{font:16px/1.5 system-ui;margin:24px;background:#111;color:#eee}a{color:#9df}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:20px}figure{margin:0;background:#222;padding:16px;overflow-wrap:anywhere}img,video{max-width:100%;max-height:600px}figcaption{padding-top:12px}</style>
-<h1>On-call capture evidence: partial pack</h1>
-<p>Unpublished local evidence. These assets come from separate runs. No continuous screen recording was saved. No 40-second film or 12-second loop is supplied. Read the pixel dimensions and proof results before use. A no-agent protocol run does not establish an automatic code fix.</p>
-<p>This tool does not create a continuous film or a terminal recording. Images of the landing-page illustration are verification evidence only, not product screenshots.</p>
-<p><a href="capture-manifest.json">Asset hashes, dimensions and provenance</a></p><main>''' + '\n'.join(figures) + '</main></html>')
-    print(f'Inventoried {len(entries)} assets; generated {len(gallery)} gallery layouts. Pack remains partial.')
+            media=f'<img src="{name}" loading="lazy" alt="{caption}">'
+        figures.append(f'<figure>{media}<figcaption><b>{name}</b><p>{caption}</p><p>{escape(str(entry.get("pixels")))}</p></figcaption></figure>')
+    pack_links=''.join('<p><a href="'+escape(str(p.parent.relative_to(directory)/'index.html'),quote=True)+'">Open '+escape(str(p.parent.relative_to(directory)))+' capture pack</a></p>' for p in sorted(directory.rglob('launch-pack.json')) if p.parent!=directory)
+    frame_html=''.join('<details><summary>'+escape(group)+' source frames</summary><main>'+''.join(items)+'</main></details>' for group,items in frame_groups.items())
+    pack=directory/'launch-pack.json'
+    status='40-second film and 12-second loop passed media/proof checks. Review decoded film frames before sharing.' if pack.is_file() and json.loads(pack.read_text()).get('status')=='verified-media' else 'Evidence inventory. Each asset has its own status and provenance; a saved image alone does not establish a successful proof.'
+    (directory/'index.html').write_text('''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>On-call real capture evidence</title><style>body{font:16px/1.5 system-ui;margin:24px;background:#f3f5f7;color:#162332}main{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:20px}figure{margin:0;background:white;padding:16px;overflow-wrap:anywhere}img,video{max-width:100%;max-height:600px}</style><h1>On-call real capture evidence</h1><p>'''+escape(status)+'</p>'+pack_links+'''<p>Real local services with seeded reports and scripted test inputs. Separate proof runs are identified in the film. Rendered CLI/email sources and sample landing-page illustrations are labelled individually and excluded from film footage.</p><p><a href="capture-manifest.json">Every image/video: hashes, dimensions, precise available provenance (including all source frames)</a></p><main>'''+''.join(figures)+'</main>'+frame_html+'</html>')
+    print(f'Inventoried every image/video: {len(entries)} assets in {directory}')
 
 
-if __name__ == '__main__':
+if __name__=='__main__':
     main()

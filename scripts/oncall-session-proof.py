@@ -19,10 +19,27 @@ import threading
 import time
 import urllib.request
 import urllib.error
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from oncall_capture import Capture, output_dir, cleanup_receipt, reply_body
 
 REPO = Path(__file__).resolve().parents[1]
 MODEL = 'gpt-6.1-terra'
 GRACE = 120
+
+
+def new_reply_turn(turns, baseline_count, answer, sent_at):
+    """Only the next new user message, after the phone send, can prove receipt."""
+    for index, row in enumerate(turns[baseline_count:], baseline_count):
+        payload = row.get('payload', {})
+        if row.get('type') != 'response_item' or payload.get('role') != 'user':
+            continue
+        text = '\n'.join(item.get('text', '') for item in payload.get('content', [])
+                         if item.get('type') in ('input_text', 'text'))
+        stamp = datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00')).timestamp()
+        if reply_body(text) == 'Owner answer: ' + answer and stamp >= sent_at:
+            return {'ordinal': index, 'timestamp': row['timestamp'], 'role': 'user', 'text': text, 'body': reply_body(text), 'answer': answer}
+        raise AssertionError('Next new user turn did not exactly match the post-send phone answer: ' + repr(text))
+    return None
 
 
 def run(*argv, **kwargs):
@@ -79,7 +96,7 @@ def cleanup(home, processes):
         proc.wait(timeout=10)
 
 
-def proof(root, rows, capture=False):
+def proof(root, rows, capture=False, model=MODEL):
     processes = []
     recorder = None
     container_name = root.name + '-ntfy'
@@ -108,6 +125,11 @@ def proof(root, rows, capture=False):
                WATCHTOWER_STORE=str(root / 'queues.json'), WT_NO_SELF_UPDATE='1',
                WATCHTOWER_DELEGATE_URL='off', GIT_CONFIG_NOSYSTEM='1',
                GIT_CONFIG_GLOBAL=os.devnull)
+    env['PYTHONPATH'] = os.pathsep.join(sys.path)
+    for key in ('PROOF_CAPTURE_DIR', 'PROOF_RUN_ID'):
+        if key in os.environ:
+            env[key] = os.environ[key]
+    env['PROOF_MODEL'] = model
     run('git', 'init', str(project), env=env)
     (project / 'AGENTS.md').write_text('Use no tools, network, or delegation. Answer only the prompt.\n')
     with socket.socket() as sock:
@@ -136,27 +158,18 @@ def proof(root, rows, capture=False):
             'type': 'ntfy', 'server': web, 'topic': topic}})
         request(base + '/api/oncall/config', {'queue': 'PROOF', 'repo': str(project), 'enabled': True})
         if capture:
-            browser = sorted((Path.home() / '.cache/puppeteer/chrome').glob('*/chrome-linux64/chrome'))
+            browser = run(shutil.which('node'), '-e', "console.log(require('./puppeteer-browser-config.js').findChromePath() || '')", cwd=REPO)
             if not browser:
                 raise RuntimeError('Puppeteer Chrome not found in the host cache')
-            capture_env = dict(env, PUPPETEER_EXECUTABLE_PATH=str(browser[-1]))
-            recorder = subprocess.Popen([shutil.which('node'), str(REPO / 'scripts/oncall-capture.cjs'), web, topic],
-                                        env=capture_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE, text=True, start_new_session=True)
-            def capture_step(step, **values):
-                recorder.stdin.write(json.dumps(dict(step=step, **values)) + '\n')
-                recorder.stdin.flush()
-                result = recorder.stdout.readline()
-                if not result:
-                    raise RuntimeError('Capture process stopped: ' + recorder.stderr.read())
-                result = json.loads(result)
-                if not result.get('ok'):
-                    raise RuntimeError('Capture failed: ' + result.get('error', 'unknown error'))
+            capture_env = dict(env, PUPPETEER_EXECUTABLE_PATH=browser)
+            capture_env['PROOF_NODE'] = shutil.which('node')
+            recorder = Capture(web, topic, env=capture_env)
+            capture_step = recorder.step
             capture_step('open')
-        print('Dashboard and ntfy ready; model=' + MODEL + '; effort=medium; grace=120s (unchanged)', flush=True)
+        print('Dashboard and ntfy ready; model=' + model + '; effort=medium; grace=120s (unchanged)', flush=True)
         started = time.monotonic()
         spawn = request(base + '/api/sessions/spawn', {
-            'engine': 'codex', 'model': MODEL, 'reasoning_effort': 'medium',
+            'engine': 'codex', 'model': model, 'reasoning_effort': 'medium',
             'cwd': str(project), 'prompt': 'Ask me to choose blue or green before proceeding. Use no tools. '
                       'Ask: Should I use the blue option? If a session-state footer is required, '
                       'set NEXT_STEP_USER to that question. After my answer, acknowledge it '
@@ -175,7 +188,10 @@ def proof(root, rows, capture=False):
             if time.monotonic() - event_checked < 3:
                 return event_cache
             with urllib.request.urlopen(web + '/' + topic + '/json?poll=1&since=all', timeout=10) as res:
-                event_cache = [json.loads(line) for line in res if line.strip()]
+                all_events = [json.loads(line) for line in res if line.strip()]
+                # Capture primes the actual reply topic with a help command.
+                # Its acknowledgement is not a plain_question notification.
+                event_cache = [e for e in all_events if 'Should I use the blue option?' in e.get('message', '')]
             event_checked = time.monotonic()
             return event_cache
 
@@ -190,6 +206,9 @@ def proof(root, rows, capture=False):
         assert len(transcripts) == 1, 'Expected one transcript for the spawned session'
         transcript = transcripts[0]
         turns = [json.loads(line) for line in transcript.read_text().splitlines()]
+        observed_models = {row.get('payload', {}).get('model') for row in turns
+                           if row.get('type') == 'turn_context'}
+        assert model in observed_models, 'Requested model not established by real transcript turn_context'
         final = next(row for row in reversed(turns) if row.get('type') == 'response_item'
                      and row.get('payload', {}).get('role') == 'assistant')
         assert 'Should I use the blue option?' in json.dumps(final)
@@ -220,48 +239,53 @@ def proof(root, rows, capture=False):
             assert len(events()) == 1, 'Alert repeated'
             return time.monotonic() >= until
         wait_for(no_repeat, 25, 'deduplication observation')
-        rows.append(('plain_question deduplication', 'PASS', '20s, one ntfy message'))
+        rows.append(('plain_question deduplication', 'PASS', '20s, one ntfy question message (help acknowledgements excluded)'))
         if capture:
             capture_step('session', base=base, sid=sid)
-        token = alert.get('token') or str(alert['id'])
-        answer = 'proof-answer-blue-accepted'
+        token = str(alert['id'])
+        answer = 'blue'
+        baseline_count = len(transcript.read_text().splitlines())
         reply_at = time.monotonic()
         if capture:
-            capture_step('reply', text=f'{token} {answer}')
+            sent = capture_step('reply', text=f'{token} {answer}')
+            sent_at = datetime.fromisoformat(sent['sent_at'].replace('Z', '+00:00')).timestamp()
         else:
+            sent_at = time.time()
             with urllib.request.urlopen(urllib.request.Request(web + '/' + topic + '-reply',
                     data=f'{token} {answer}'.encode()), timeout=10) as response:
                 json.load(response)
         def user_turn():
-            for transcript in transcripts:
-                for line in transcript.read_text().splitlines():
-                    row = json.loads(line)
-                    payload = row.get('payload', {})
-                    if row.get('type') == 'response_item' and payload.get('role') == 'user':
-                        if answer in json.dumps(payload):
-                            return True
-            return False
-        wait_for(user_turn, 90, 'ntfy reply did not reach a user turn')
+            return new_reply_turn([json.loads(line) for line in transcript.read_text().splitlines()],
+                                  baseline_count, answer, sent_at)
+        receipt = wait_for(user_turn, 90, 'ntfy reply did not reach a new post-send user turn')
         wait_for(lambda: not any(a['id'] == alert['id'] for a in
                  request(base + '/api/oncall/status')['waiting']), 30, 'alert did not close')
         rows.append(('reply user turn / close', 'PASS', f'{time.monotonic() - reply_at:.2f}s'))
         if capture:
-            capture_step('session_reply', text=answer)
+            (output_dir() / 'reply-receipt.json').write_text(json.dumps({'next_user_turn':receipt,'send_at':sent_at,'baseline_rows':baseline_count},indent=2))
+            capture_step('session_reply', text=receipt['body'], timestamp=receipt['timestamp'])
             capture_step('finish')
+            (output_dir() / 'session-proof.json').write_text(json.dumps({
+                'status': 'PASS', 'run_id': os.environ.get('PROOF_RUN_ID'), 'model': model,
+                'effort': 'medium', 'question_completed_at': completed_at,
+                'transcript_model_verified': model,
+                'alert_at': seen[0]['time'], 'grace_seconds': GRACE,
+                'send_at': sent_at, 'baseline_rows': baseline_count, 'next_user_turn': receipt,
+                'alert_closed': True, 'checks': rows}, indent=2))
     finally:
-        if recorder is not None:
-            try:
-                os.killpg(recorder.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            recorder.wait(timeout=10)
         try:
-            cleanup(root, processes)
+            if recorder is not None:
+                recorder.close()
         finally:
-            removed = subprocess.run(['docker', 'rm', '-f', container_name],
-                                     capture_output=True, text=True, timeout=30)
-            if removed.returncode and 'No such container' not in removed.stderr:
-                raise RuntimeError('Could not remove proof container: ' + removed.stderr)
+            try:
+                cleanup(root, processes)
+            finally:
+                removed = subprocess.run(['docker', 'rm', '-f', container_name],
+                                         capture_output=True, text=True, timeout=30)
+                if removed.returncode and 'No such container' not in removed.stderr:
+                    raise RuntimeError('Could not remove proof container: ' + removed.stderr)
+                if capture:
+                    cleanup_receipt(root, containers_removed=1)
         if (root / '.codex/auth.json').read_bytes() != original_auth:
             print('Copied login renewed; discarded. A later Codex login may be needed.')
 
@@ -269,7 +293,8 @@ def proof(root, rows, capture=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--with-agent', action='store_true', help='Allow one paid Codex session')
-    parser.add_argument('--capture', action='store_true', help='Capture the real local ntfy web reply')
+    parser.add_argument('--capture', action='store_true', help='Save actual timed ntfy/CCC browser frames and stills')
+    parser.add_argument('--model', default=MODEL, help='Codex model (medium effort)')
     args = parser.parse_args()
     if not args.with_agent:
         parser.error('--with-agent is required; this proof uses your Codex model connection')
@@ -285,7 +310,7 @@ def main():
     signal.alarm(600)
     try:
         with tempfile.TemporaryDirectory(prefix='ccc-session-proof-') as tmp:
-            proof(Path(tmp), rows, capture=args.capture)
+            proof(Path(tmp), rows, capture=args.capture, model=args.model)
     except Exception as exc:
         rows.append(('session proof', 'FAIL', str(exc)))
         code = 1

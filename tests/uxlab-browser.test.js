@@ -94,3 +94,71 @@ test('phone actions tap while desktop actions click', async () => {
   session.viewport = {hasTouch: false}; await session.tap(40, 50);
   assert.deepEqual(calls, [['tap', 20, 30], ['click', 40, 50]]);
 });
+
+test('bootstrap exceptions are exact, temporary and retain safety restrictions', () => {
+  const {bootstrapAllowed} = require('../uxlab/safety');
+  const auth = {requests: [{method: 'POST', url: 'http://localhost:8000/session'}]};
+  const req = {method: 'POST', url: auth.requests[0].url, resource: 'fetch', body: 'email=fixture%40mail.test&password=fixture-only-password'};
+  assert(bootstrapAllowed(req, {...safe, read_only: true}, auth, true));
+  assert(!requestAllowed(req, safe));
+  assert(!bootstrapAllowed(req, safe, auth, false));
+  for (const change of [{url: req.url + '?x=1'}, {url: 'http://localhost:8001/session'}, {url: 'http://localhost:8000/other'},
+    {url: 'http://offhost.test/session'}, {method: 'GET'}, {resource: 'websocket'}, {body: 'card=0000111111111111'}])
+    assert(!bootstrapAllowed({...req, ...change}, safe, auth, true));
+  assert(!requestAllowed({url: 'http://localhost/data', method: 'POST'}, {...safe, read_only: true}));
+});
+
+test('bootstrap hides tool list and blocks calls, observations and evidence', async () => {
+  const {protocolReply} = require('../uxlab/browser');
+  const output = fs.mkdtempSync(path.join(os.tmpdir(), 'uxlab-gate-'));
+  try {
+    const session = new BrowserSession({person: {id: 'tester-1', auth: 'shop'}, output, timeout: 30});
+    session.bootstrapping = true;
+    assert.deepEqual((await protocolReply({id: 1, method: 'tools/list'}, session, async () => {})).result.tools, []);
+    for (const name of TOOLS.map(t => t.name)) await assert.rejects(session.call(name, {}), /not ready/);
+    await assert.rejects(session.look(), /not ready/);
+    await assert.rejects(session.shot(), /not ready/);
+    assert.equal(session.result.trace.length, 0);
+  } finally {fs.rmSync(output, {recursive: true, force: true});}
+});
+
+
+test('credential redaction handles JSON escaping and URL encoding', () => {
+  const session = Object.create(BrowserSession.prototype);
+  session.secrets = new Set(['fixture"quoted-password', 'fixture@example.com']);
+  const value = JSON.parse(session.sanitize(JSON.stringify({message: 'fixture"quoted-password', url: 'fixture%40example.com'})));
+  assert.deepEqual(value, {message: '[REDACTED]', url: '[REDACTED]'});
+});
+
+
+test('origin and path restrictions retain exact auth preflight exception', () => {
+  const {requestAllowed, bootstrapAllowed} = require('../uxlab/safety');
+  const safety = {hosts:['localhost'], origins:['http://localhost:8000'], blocked_paths:['/telemetry'], read_only:true};
+  assert(!requestAllowed({url:'http://localhost:8001/data'},safety));
+  assert(!requestAllowed({url:'http://localhost:8000/telemetry/event'},safety));
+  assert(requestAllowed({url:'http://localhost:8000/data'},safety));
+  const auth={requests:[{method:'POST',url:'http://localhost:8001/token?grant_type=password'}]};
+  const req={url:auth.requests[0].url,method:'OPTIONS',resource:'other',body:''};
+  assert(bootstrapAllowed(req,safety,auth,true));
+  assert(!bootstrapAllowed(req,safety,auth,false));
+  assert(!bootstrapAllowed({...req,url:req.url+'&extra=1'},safety,auth,true));
+});
+
+
+test('redaction preserves JSON-RPC version and numeric-looking text', () => {
+ const {BrowserSession}=require('../uxlab/browser');
+ const sanitize=BrowserSession.prototype.sanitize.bind({secrets:new Set(['fixture-password'])});
+ const value={jsonrpc:'2.0',result:{text:'1.00',content:'{"password":"fixture-password"}'}};
+ const output=JSON.parse(sanitize(JSON.stringify(value)));
+ assert.equal(output.jsonrpc,'2.0');assert.equal(output.result.text,'1.00');
+ assert(!JSON.stringify(output).includes('fixture-password'));
+});
+
+
+test('credential collection does not redact nonsecret routing fields', () => {
+ const {BrowserSession}=require('../uxlab/browser');
+ const state={secrets:new Set()};
+ BrowserSession.prototype.rememberSecrets.call(state,JSON.stringify({password:'fixture-secret',email:'fixture@example.com',redirect_to:'/account',action:'login'}));
+ assert(state.secrets.has('fixture-secret'));assert(state.secrets.has('fixture@example.com'));
+ assert(!state.secrets.has('/account'));assert(!state.secrets.has('login'));
+});

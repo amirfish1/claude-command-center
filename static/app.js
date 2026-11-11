@@ -94033,6 +94033,9 @@
     pane.style.setProperty('--conv-user-text', vars.userText);
     pane.style.setProperty('--conv-shadow', vars.shadow);
     pane.classList.add('has-conv-bg');
+    // Codex/Kimi panes carry their own dark palette; on a light background
+    // their text must follow the derived colours or it washes out.
+    pane.classList.toggle('conv-bg-light', relLuminance(hexToRgb(vars.text)) < 0.5);
   }
 
   function updateConversationBackgroundPaletteState(pane, colorId) {
