@@ -448,10 +448,14 @@ class Channel:
         self.last_error = receipt.error
         return receipt
 
+    @property
+    def durable_poll(self):
+        return self.kv is not None and hasattr(self.kv, "stage_poll")
+
     def poll(self):
         """New inbound messages since the last poll. Never raises."""
         self._note = ""
-        durable = self.kv is not None and hasattr(self.kv, "stage_poll")
+        durable = self.durable_poll
         self._poll_updates = {} if durable else None
         try:
             out = list(self._poll() or [])

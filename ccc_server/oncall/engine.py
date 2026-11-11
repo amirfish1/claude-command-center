@@ -171,7 +171,7 @@ class Engine:
                 self._note(f"channel:{chan.id}", getattr(chan, "last_error", ""))
                 # Production channels stage a durable inbox with their cursors.
                 # Constructor-injected channels may still return messages directly.
-                if not hasattr(chan, "_poll_updates"):
+                if not getattr(chan, "durable_poll", False):
                     for msg in messages:
                         if self._route(cfg, chans, entry, msg, now):
                             out["inbound"] += 1

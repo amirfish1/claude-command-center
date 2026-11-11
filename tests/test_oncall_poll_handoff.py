@@ -82,3 +82,23 @@ def test_github_cursor_waits_for_durable_callback(tmp_path):
     store.park_unhandled_inbound()
     assert store.alerts()[0]['kind'] == 'reply_problem'
     store.close()
+
+
+def test_interrupted_claim_keeps_thread_context(tmp_path):
+    import json
+    from ccc_server.oncall.store import Inbound
+    store = Store(tmp_path)
+    msg = Inbound(channel='mail', external_id='reply', sender='owner@example.test', text='yes',
+                  subject='Re: decision', thread='fixture-thread', reply_to='fixture-message')
+    store.stage_poll([msg], {'ch:mail:cursor': 2})
+    row_id, pending = store.polled_messages()[0]
+    assert store.inbound_claim(pending)
+    store.close()
+    store = Store(tmp_path)
+    assert not store.inbound_claim(pending)
+    store.polled_handled(row_id)
+    saved = json.loads(store._one('SELECT payload FROM inbound')['payload'])
+    assert saved['thread'] == msg.thread and saved['reply_to'] == msg.reply_to
+    store.park_unhandled_inbound()
+    assert store.alerts()[0]['kind'] == 'reply_problem'
+    store.close()

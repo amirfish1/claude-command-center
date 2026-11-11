@@ -339,6 +339,7 @@ CREATE TABLE IF NOT EXISTS inbound (
     text TEXT NOT NULL DEFAULT '',
     received_at REAL NOT NULL,
     handled TEXT NOT NULL DEFAULT '',
+    payload TEXT NOT NULL DEFAULT '{}',
     UNIQUE(channel, external_id)
 );
 CREATE INDEX IF NOT EXISTS inbound_unhandled ON inbound(id) WHERE handled='';
@@ -413,6 +414,8 @@ class Store:
             self._db.executescript(_SCHEMA)
             if "message_kind" not in {r[1] for r in self._db.execute("PRAGMA table_info(deliveries)")}:
                 self._db.execute("ALTER TABLE deliveries ADD COLUMN message_kind TEXT NOT NULL DEFAULT 'unknown'")
+            if "payload" not in {r[1] for r in self._db.execute("PRAGMA table_info(inbound)")}:
+                self._db.execute("ALTER TABLE inbound ADD COLUMN payload TEXT NOT NULL DEFAULT '{}'")
             columns = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
             if "owner_action_at" not in columns:
                 self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action_at REAL")
@@ -566,7 +569,7 @@ class Store:
         with self._lock, self._db:
             for msg in messages:
                 self._db.execute("INSERT OR IGNORE INTO poll_inbox(channel,external_id,payload) VALUES(?,?,?)",
-                                 (msg.channel, msg.external_id, json.dumps(asdict(msg))))
+                                 (msg.channel, msg.external_id, _inbound_payload(msg)))
             for key, value in updates.items():
                 self._db.execute("INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) "
                                  "DO UPDATE SET value=excluded.value", (key, json.dumps(value)))
@@ -588,9 +591,9 @@ class Store:
     def inbound_claim(self, msg):
         """Record an inbound message once. False when it was already seen."""
         try:
-            self._run("INSERT INTO inbound(channel,external_id,sender,text,received_at) VALUES(?,?,?,?,?)",
+            self._run("INSERT INTO inbound(channel,external_id,sender,text,received_at,payload) VALUES(?,?,?,?,?,?)",
                       (msg.channel, msg.external_id, msg.sender, msg.text[:8000],
-                       msg.received_at or time.time()))
+                       msg.received_at or time.time(), _inbound_payload(msg)))
             return True
         except sqlite3.IntegrityError:
             return False
@@ -762,3 +765,10 @@ def _alert_row(row):
     out = _meta_row(row)
     out["needs_reply"] = bool(out.get("needs_reply"))
     return out
+
+
+def _inbound_payload(msg):
+    data = asdict(msg)
+    data["text"] = data["text"][:8000]
+    data["subject"] = data["subject"][:300]
+    return json.dumps(data)
