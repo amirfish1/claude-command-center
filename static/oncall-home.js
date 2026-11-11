@@ -206,6 +206,12 @@
         card.append(form);
       }
     }
+    if (!item.session_only && item.session_id && typeof window.cccOpenSession === 'function') {
+      const look = el('button', 'oncall-home-look', 'Open the session');
+      look.type = 'button';
+      look.addEventListener('click', () => { close(false); window.cccOpenSession(item.session_id); });
+      card.append(look);
+    }
     card.append(say);
     return card;
   }

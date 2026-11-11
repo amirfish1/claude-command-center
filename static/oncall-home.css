@@ -66,6 +66,11 @@ body.ccc-oncall-home-open .pwa-install-banner { display: none !important; }
   background: var(--bg); color: var(--text); font: inherit; font-size: 13.5px;
 }
 .oncall-home-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.oncall-home-look {
+  margin-top: 10px; padding: 0; border: 0; background: none; color: var(--accent);
+  font: inherit; font-size: 13px; cursor: pointer;
+}
+.oncall-home-look:hover { text-decoration: underline; }
 .oncall-home-said:empty { display: none; }
 .oncall-home-said { margin-top: 8px; font-size: 13px; color: var(--text-muted); }
 .oncall-home-said.is-error { color: var(--red); }
