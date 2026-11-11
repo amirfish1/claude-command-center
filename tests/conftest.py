@@ -209,3 +209,10 @@ os.environ.setdefault("CCC_CODEX_ACCOUNTS_DIR", tempfile.mkdtemp(prefix="ccc-tes
 def _isolate_codex_connected_accounts(monkeypatch):
     from ccc_server import codex_accounts
     monkeypatch.setattr(codex_accounts, "configured", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def isolated_vault_state(tmp_path, monkeypatch):
+    """Outgoing On-call checks must never enumerate the developer's real Vault."""
+    from ccc_server import vault
+    monkeypatch.setattr(vault, '_vault_state_dir', lambda: tmp_path / 'vault')
