@@ -401,8 +401,9 @@ def test_fixed_ticket_tells_owner_then_customer_after_yes(rig):
     rig.wt.close(ref, summary="Bound the click handler after render and added a test.")
     rig.tick()
     note = rig.chan("tg").sent[-1].text
-    assert note == (f"Fixed: {ref} (#1)\nCheckout button does nothing on Safari\n"
-                    "Bound the click handler after render and added a test.\n\n"
+    assert note == ("Fixed: Checkout button does nothing on Safari (#1)\n"
+                    "Bound the click handler after render and added a test.\n"
+                    f"Ticket {ref}.\n\n"
                     "Reply yes to tell Dana it is fixed, or no to skip.")
     assert not [m for m in rig.chan("mail").sent if m.to == "dana@example.com"]
     rig.msg("tg", "yes", "4242")
@@ -418,7 +419,7 @@ def test_closed_without_a_commit_is_not_called_fixed(rig):
     rig.wt.close(ref, summary="Could not reproduce.", commit="")
     rig.tick()
     note = rig.chan("tg").sent[-1].text
-    assert note.startswith(f"Closed without a code change: {ref} (#1)")
+    assert note.startswith("Closed without a code change: Checkout button does nothing on Safari (#1)")
     assert "Reply yes" not in note
 
 
@@ -648,7 +649,7 @@ def test_full_walk_on_a_real_watchtower_queue(tmp_path):
                   "--no-code", "--force").returncode == 0
     clock.now += 61
     eng.tick(force=True)
-    assert built["tg"].sent[-1].text.startswith(f"Closed without a code change: {ref} (#2)")
+    assert built["tg"].sent[-1].text.startswith("Closed without a code change: ")
     assert eng.store.reports()[0]["state"] == "closed"
 
 

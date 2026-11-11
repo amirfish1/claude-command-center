@@ -80,12 +80,15 @@ def render(alert):
         choices = ("yes", "no")
     elif kind == "fixed":
         label = "Fixed" if meta.get("outcome", "fixed") == "fixed" else "Closed without a code change"
-        head = f"{label}: {ref} (#{n})"
-        lines = [head, title]
+        name = _clip(" ".join(title.split()), 80) if title.strip() else ref
+        head = f"{label}: {name} (#{n})"
+        lines = [head]
         # Only the outcome paragraph: the per-file detail stays on the ticket.
         first = body.strip().split("\n\n")[0].strip()
         if first:
             lines.append(_clip(first, 300))
+        if ref:
+            lines.append(f"Ticket {ref}.")
         if not meta.get("notify"):
             lines += ["", "No action needed."]
         else:

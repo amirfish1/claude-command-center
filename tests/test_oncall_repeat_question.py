@@ -178,7 +178,9 @@ def test_ntfy_cards_for_each_wording_case():
     summary = 'Fixed the crash.\n\n- a.py: one\n- b.py: two'
     fixed = _ntfy_card({'id': 2, 'kind': 'fixed', 'ref': 'SHOP-1', 'title': 'Crash on save',
                         'body': summary, 'meta': {}})
-    assert fixed['title'] == 'Fixed: SHOP-1 (#2)'
-    assert fixed['message'] == 'Crash on save\nFixed the crash.\n\nNo action needed.'
+    assert fixed['title'] == 'Fixed: Crash on save (#2)'
+    assert fixed['message'] == 'Fixed the crash.\nTicket SHOP-1.\n\nNo action needed.'
+    bare = _ntfy_card({'id': 3, 'kind': 'fixed', 'ref': 'SHOP-2', 'title': '', 'body': '', 'meta': {}})
+    assert bare['title'] == 'Fixed: SHOP-2 (#3)'
     for card in (q, task, perm, fixed):
         assert card['title'] not in card['message']
