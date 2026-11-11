@@ -179,17 +179,44 @@ def collect(eng, *, since=None, weeks=2, detail=False, now=None):
                 basis='Reports and filed/open tickets use report cohorts; fixes and closures use closure time.')
 
 
+def span(seconds):
+    """A duration in plain words: 40 s, 12 min, 3 h 20 min, 2 d 4 h."""
+    if seconds is None:
+        return 'not recorded'
+    seconds = int(round(seconds))
+    if seconds < 90:
+        return f'{seconds} s'
+    minutes = seconds // 60
+    if minutes < 90:
+        return f'{minutes} min'
+    hours, minutes = divmod(minutes, 60)
+    if hours < 48:
+        return f'{hours} h {minutes} min' if minutes else f'{hours} h'
+    days, hours = divmod(hours, 24)
+    return f'{days} d {hours} h' if hours else f'{days} d'
+
+
 def render(data, markdown=False):
+    """The week as lines of fixed labels and numbers: no source names, no addresses."""
     lines = []
+    bullet = '- ' if markdown else ''
     for p in data['periods']:
+        r, t, m = p['reports'], p['tickets'], p['reporter_messages']
+        fix, d = p['report_to_fix_seconds'], p['decisions']
         lines.append(('## ' if markdown else '') + datetime.fromtimestamp(p['start']).strftime('%Y-%m-%d') +
                      ' to ' + datetime.fromtimestamp(p['end']).strftime('%Y-%m-%d'))
-        # Export only fixed labels and numeric values, never source names or addresses.
-        for group in ('reports', 'tickets', 'report_to_fix_seconds', 'replies', 'decisions', 'reporter_messages'):
-            values = ', '.join(f'{k.replace("_", " ")}: {v if v is not None else "not recorded"}'
-                               for k, v in p[group].items() if not isinstance(v, dict))
-            lines.append(('- ' if markdown else '') + group.replace('_',' ') + ': ' + values)
-        lines.append(f'Owner messages: {sum(p["owner_messages"].values())}; failed deliveries: {p["failed_deliveries"]}')
+        lines += [
+            f"{bullet}Reports: {r['received']} received, {r['held']} held for you"
+            f" ({r['released']} let through, {r['dropped']} dropped)",
+            f"{bullet}Tickets: {t['filed']} filed, {t['fixed']} fixed, {t['closed_without_fix']} closed without a fix,"
+            f" {t['still_open']} still open" + (f", {t['unknown']} unknown" if t['unknown'] else ''),
+            f"{bullet}Report to fix: median {span(fix['median'])}, worst {span(fix['worst'])}",
+            f"{bullet}Messages to you: {sum(p['owner_messages'].values())}, failed deliveries: {p['failed_deliveries']}",
+            f"{bullet}Your replies: {p['replies']['received']}, median time to reply {span(p['replies']['median_seconds'])}",
+            f"{bullet}Decided without you: {d['made']} ({d['undone']} undone)",
+            f"{bullet}Messages to reporters: {m['asked']} asked, {m['approved']} approved,"
+            f" {m['reworded']} reworded, {m['refused']} refused",
+        ]
     return '\n'.join(lines)
 
 
@@ -220,8 +247,9 @@ def daily(eng, now):
             or p['failed_deliveries'] or waiting or held or p['decisions']['made']
             or p['replies']['received'] or any(p['reporter_messages'].values())):
         body = (f"Yesterday: {p['reports']['received']} reports, {p['tickets']['fixed']} fixed.\n"
-                f"{waiting} questions and {held} reports waiting.\n"
-                f"{sum(p['owner_messages'].values())} owner messages; {p['failed_deliveries']} failed deliveries.")
+                f"Decided without you: {p['decisions']['made']}.\n"
+                f"Waiting for you: {waiting} questions, {held} reports.\n"
+                f"Messages to you: {sum(p['owner_messages'].values())}, failed deliveries: {p['failed_deliveries']}.")
         if data['limits']:
             body += '\nQueue counts are incomplete.'
         store.alert_upsert('summary:'+day, kind='summary', title='On-call daily summary',

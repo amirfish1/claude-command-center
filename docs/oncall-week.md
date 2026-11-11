@@ -64,8 +64,9 @@ queue results. Retained records cannot recover deleted history.
 Settings > On-call has one **Daily summary** switch and one time field. It is
 off by default. The time uses the server's local timezone. With On-call enabled,
 the next tick at or after that time creates at most one summary for that date.
-It gives yesterday's reports and fixes, owner messages, failed deliveries, and the
-current number of waiting questions and held reports, in four short lines.
+It gives yesterday's reports and fixes, what agents decided without you, the
+current number of waiting questions and held reports, and messages sent to you
+with failed deliveries, in at most five short lines.
 
 It uses the existing alert channels, quiet hours, pause control, hourly cap and
 retry rules. An unsent summary expires when the next day's summary is prepared.

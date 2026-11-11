@@ -229,3 +229,15 @@ def test_approval_count_survives_failed_delivery(eng):
     assert p['reporter_messages']['reworded'] == 1
     assert p['replies']['received'] == 0
     assert p['failed_deliveries'] == 1
+
+
+def test_week_reads_in_plain_words(eng):
+    at = eng.clock() - 10000
+    r = report(eng, 1, at)
+    eng.store.report_update(r['id'], ticket_ref='TEST-1')
+    eng.tickets.append(dict(ref='TEST-1', status='closed', closed_at=at + 5400, resolution={'commit': 'test-commit'}))
+    text = week.render(week.collect(eng))
+    assert 'Tickets: 1 filed, 1 fixed, 0 closed without a fix, 0 still open' in text
+    assert 'Report to fix: median 1 h 30 min, worst 1 h 30 min' in text
+    assert 'median time to reply not recorded' in text
+    assert [week.span(n) for n in (40, 600, 7200, 200000)] == ['40 s', '10 min', '2 h', '2 d 7 h']
