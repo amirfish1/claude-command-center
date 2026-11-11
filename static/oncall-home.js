@@ -23,7 +23,7 @@
   const OPEN_MS = 10000, IDLE_MS = 60000, WIDE_PX = 1200;
   const CHANNELS = {email: 'email', telegram: 'Telegram', ntfy: 'your phone (ntfy)', imessage: 'iMessage',
     sms: 'text message', whatsapp: 'WhatsApp', command: 'your own command', slack: 'Slack',
-    discord: 'Discord', matrix: 'Matrix', mattermost: 'Mattermost'};
+    discord: 'Discord', matrix: 'Matrix', mattermost: 'Mattermost', call: 'a phone call'};
   const SOURCES = {github: 'GitHub issues', ci: 'failed builds', sentry: 'Sentry', posthog: 'PostHog',
     http: 'a URL check', command: 'a command check', docker: 'containers', logs: 'log files',
     alertmanager: 'Alertmanager', glitchtip: 'GlitchTip'};
