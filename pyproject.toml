@@ -44,6 +44,7 @@ Issues = "https://github.com/amirfish1/claude-command-center/issues"
 
 [project.scripts]
 claude-command-center = "ccc_server.launcher:main"
+ccc = "ccc_server.launcher:cli_main"
 
 # Build a wheel locally with `uv build --wheel`; no PyPI publication needed.
 # `./run.sh` and `python3 server.py` remain supported from a source checkout.
@@ -54,7 +55,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = [
-    "/*.py", "/ccc_server/**", "/_history_index/**", "/static/**",
+    "/ccc", "/*.py", "/ccc_server/**", "/_history_index/**", "/static/**",
     "/hooks/**", "/skills/**", "/resources/**", "/scripts/install-watchtower.sh",
     "/pyproject.toml", "/README.md", "/LICENSE", "/LICENSE-MIT", "/NOTICE",
 ]
@@ -62,7 +63,7 @@ exclude = ["**/__pycache__/**", "**/*.pyc", "**/.DS_Store", "/static/morning/**"
 
 [tool.hatch.build.targets.wheel]
 only-include = [
-    "server.py", "ccc_worker.py", "ccc_acp.py", "ccc_peer_inbound.py",
+    "ccc", "server.py", "ccc_worker.py", "ccc_acp.py", "ccc_peer_inbound.py",
     "ccc_peer_uds.py", "control_plane.py", "fcntl.py", "federation.py",
     "objects_store.py", "productivity.py", "ssh_multiplexer.py", "worker_engines.py",
     "sender_envelope.py",
