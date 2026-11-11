@@ -1,0 +1,19 @@
+{
+  "started_utc": "2026-11-11T00:18:14.182662+00:00",
+  "network": "none",
+  "source": "tracked working-tree snapshot",
+  "results": [
+    {
+      "image": "ubuntu:24.04",
+      "environment": "clean",
+      "route": "curl",
+      "command": "set -o pipefail; curl -fsSL file:///fixture/source/scripts/install.sh | CCC_FROM=readme bash",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 10.265,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: curl: command not found\n"
+    }
+  ],
+  "source_head": "a4d9e604aad96a725bab4684266c00373cf95a9b",
+  "installer_sha256": "9ea75df9982a8334643983696b50d11bd3a50cfa1f71647d02839323d0f87707"
+}
