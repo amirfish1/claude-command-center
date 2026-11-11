@@ -49,3 +49,26 @@ def test_recheck_green_cancels_candidate():
     src.poll()
     rows[:] = [run(3, sha='same')]
     assert src.poll() == []
+
+
+def test_setup_offers_one_ci_question_and_does_not_repeat(tmp_path, monkeypatch):
+    from tests.test_oncall_cli import Box
+    from ccc_server.oncall import ci_source
+    box = Box(tmp_path / 'state', monkeypatch)
+    box.flag = True
+    monkeypatch.setattr(ci_source, 'setup_candidate', lambda folder: {'repo': 'example/demo'})
+    monkeypatch.setattr(CISource, '_check', lambda self: 'Connected')
+    args = ('setup', '--repo', str(tmp_path), '--channel', 'command', '--set', 'send=cat')
+    assert box.run(*args, interactive=True, answers=['y']) == 0
+    assert len(box.asked) == 1 and 'CI' in box.asked[0]
+    assert box.eng.config()['sources'][0]['type'] == 'ci'
+    box.asked.clear()
+    assert box.run('setup', '--repo', str(tmp_path), interactive=True) == 0
+    assert box.asked == []
+
+
+def test_actions_policy_disabled_message():
+    src = CISource({'id': 'ci', 'repo': 'example/demo'})
+    src._credential = lambda: 'test-only'
+    src.request = lambda url, headers: (200, json.dumps({'enabled': False} if url.endswith('/permissions') else {'default_branch': 'main'}).encode(), {})
+    assert src.check()[1] == 'Actions is disabled for this repository.'

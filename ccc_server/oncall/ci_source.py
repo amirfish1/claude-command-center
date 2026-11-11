@@ -1,4 +1,4 @@
-"""Bounded Actions intake. State contains cursors and episode IDs, never logs."""
+"""Bounded CI intake with a durable journal and scrubbed pending findings."""
 from __future__ import annotations
 
 import copy
@@ -46,6 +46,14 @@ def transport(url, headers):
         return response.code, response.read(1024 * 1024), dict(response.headers)
 
 
+def normalize_forgejo_run(row):
+    status = row.get('status')
+    return {**row, 'name': row.get('workflow_id'), 'head_sha': row.get('commit_sha'),
+            'head_branch': row.get('prettyref'), 'created_at': row.get('created'),
+            'status': 'completed' if status in ('success', 'failure', 'cancelled', 'skipped') else status,
+            'conclusion': status}
+
+
 class CISource(Source):
     type = 'ci'
 
@@ -64,6 +72,10 @@ class CISource(Source):
         if len(self.branches) > 10:
             raise ValueError('Use at most ten branches.')
         self.recheck = _bool(cfg, 'recheck')
+        self.pull_requests = _bool(cfg, 'pull_requests')
+        self.pr_allowlist = {a.strip().lower() for a in _text(cfg, 'pr_allowlist').split(',') if a.strip()}
+        if self.pull_requests and (not self.pr_allowlist or self.provider == 'gitlab'):
+            raise ValueError('pull_requests needs pr_allowlist and an Actions provider.')
         self.request = transport
 
     def _get(self, name, default=None):
@@ -134,7 +146,18 @@ class CISource(Source):
             if tag:
                 cache[path] = tag
                 self._set('etags', cache)
-        return body.decode('utf-8', 'replace') if raw else _json(body)
+        if raw:
+            return body.decode('utf-8', 'replace')
+        payload = _json(body)
+        if self.provider == 'forgejo':
+            if '/actions/runs' in path and '/jobs' not in path:
+                if isinstance(payload, dict) and 'workflow_runs' in payload:
+                    payload['workflow_runs'] = [normalize_forgejo_run(r) for r in payload['workflow_runs']]
+                else:
+                    payload = normalize_forgejo_run(payload)
+            elif '/jobs' in path and isinstance(payload, list):
+                payload = {'jobs': [{**j, 'conclusion': j.get('status')} for j in payload]}
+        return payload
 
     def _check(self):
         token = self._credential()
@@ -144,6 +167,14 @@ class CISource(Source):
         if repo.get('has_actions') is False or repo.get('builds_access_level') == 'disabled':
             raise _Problem('Actions is disabled for this repository.')
         if self.base == 'https://api.github.com':
+            # This endpoint needs more access than reading runs. A read-only
+            # login can still connect when it cannot inspect repository policy.
+            try:
+                policy = self._fetch('/actions/permissions', token)
+            except _Problem:
+                policy = {}
+            if policy.get('enabled') is False:
+                raise _Problem('Actions is disabled for this repository.')
             workflows = self._fetch('/actions/workflows?per_page=100', token).get('workflows') or []
             if not workflows:
                 raise _Problem('No CI workflows found in this repository.')
@@ -168,6 +199,9 @@ class CISource(Source):
         return 'Actions connected. Existing red runs are left alone.'
 
     def _poll(self):
+        pending = self._get('outbox', [])
+        if pending:
+            return [Finding(**item) for item in pending[:3]]
         try:
             return self._atomic_poll(self._credential())
         except Exception:
@@ -190,16 +224,23 @@ class CISource(Source):
         states = self._get('episodes', {})
         findings = []
         remaining = []
+        pull_requests = self._allowed_pulls(token) if self.pull_requests else {}
         for row in sorted(rows, key=lambda r: int(r['id'])):
             if len(findings) >= 3:
                 remaining.append(row)
                 continue
-            if row.get('head_branch') not in branches or row.get('status') != 'completed':
+            branch = row.get('head_branch')
+            pull = pull_requests.get((branch, row.get('head_sha'))) if branch != default else None
+            if (branch not in branches and not pull) or row.get('status') != 'completed':
+                continue
+            if row.get('event') == 'pull_request_target':
+                continue
+            if row.get('event') == 'pull_request' and not pull:
                 continue
             workflow = row.get('workflow_id') or row.get('path') or row.get('name')
             if not workflow:
                 continue
-            key = str(workflow) + ':' + row['head_branch']
+            key = str(workflow) + ':' + row['head_branch'] + (':pr:' + str(pull['number']) if pull else '')
             state = states.get(key, {})
             if int(row['id']) < state.get('run_id', 0):
                 continue
@@ -238,10 +279,18 @@ class CISource(Source):
                 if not prior or prior == observation:
                     candidates[fingerprint] = observation
                     self._set('candidates', candidates)
+                    active = self._get('active_runs', [])
+                    if int(row['id']) not in active:
+                        active.append(int(row['id']))
+                    self._set('active_runs', active)
                     continue
             details = self._evidence(row, token)
             findings.append(_finding(fingerprint, 'CI failed: ' + str(row.get('name') or key),
-                RULES + '\n\n' + scrub(f"Repository: {self.repo}\nBranch: {row['head_branch']}\n"
+                RULES + (f"\nPull request #{pull['number']}. Push only to origin refs/heads/{branch}. "
+                         f"Never push to the default branch {default}. Do not merge or close the pull request. "
+                         f"Allowed PR authors: {', '.join(sorted(self.pr_allowlist))}. "
+                         'Before pushing, verify the PR remains open, its author remains allowed, and its head branch still matches.'
+                         if pull else '') + '\n\n' + scrub(f"Repository: {self.repo}\nBranch: {row['head_branch']}\n"
                 f"Commit range: {state.get('green') or 'unknown'}..{sha}\nRun: {row['id']}\n" + details,
                 self._redact)))
             states[key] = {'red': True, 'green': state.get('green', ''), 'fingerprint': fingerprint, 'run_id': int(row['id'])}
@@ -255,6 +304,21 @@ class CISource(Source):
         self._set('baselined', True)
         self._set('backlog', remaining)
         return findings
+
+    def _allowed_pulls(self, token):
+        pulls = self._fetch('/pulls?state=open&per_page=100&limit=100', token)
+        allowed = {}
+        for pull in pulls if isinstance(pulls, list) else []:
+            head = pull.get('head') or {}
+            branch = str(head.get('ref') or '')
+            if (pull.get('state') != 'open'
+                    or str((pull.get('user') or {}).get('login') or '').lower() not in self.pr_allowlist
+                    or str((head.get('repo') or {}).get('full_name') or '').lower() != self.repo.lower()
+                    or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._/-]*', branch)
+                    or '..' in branch or '//' in branch or branch.endswith(('.lock', '/', '.'))):
+                continue
+            allowed[(branch, head.get('sha'))] = {'number': int(pull['number'])}
+        return allowed
 
     def acknowledge(self, fingerprint):
         self._set('outbox', [f for f in self._get('outbox', [])
@@ -274,7 +338,13 @@ class CISource(Source):
         active = self._get('active_runs', [])
         completed = []
         for run_id in active[:2]:
-            row = self._fetch(f'/actions/runs/{run_id}', token)
+            try:
+                row = self._fetch(f'/actions/runs/{run_id}', token)
+            except _Problem as exc:
+                if 'HTTP 404' not in str(exc):
+                    raise
+                active.remove(run_id)  # A deleted run must not block new runs.
+                continue
             active.remove(run_id)
             if row.get('status') == 'completed':
                 completed.append(row)
@@ -296,6 +366,9 @@ class CISource(Source):
                 self._set('watermark', scan['high'])
                 return rows
             for row in rows:
+                row = {k: v for k, v in row.items() if k in (
+                    'id', 'workflow_id', 'path', 'name', 'head_branch', 'head_sha',
+                    'status', 'conclusion', 'created_at', 'run_attempt', 'event')}
                 rid = int(row['id'])
                 # Re-read visible reruns as well as new IDs; fingerprint dedupe
                 # keeps repeat observations from filing twice.
@@ -334,6 +407,8 @@ class CISource(Source):
             item = wt.find(ref)
             if not item:
                 continue
+            if item.get('status') != 'closed' and item.get('claimed_by'):
+                continue  # Let the active worker record its fix and validation.
             if item.get('status') != 'closed':
                 # Do not bypass another worker's claim. A rejected close retries.
                 wt._ok('close', ref, '--no-code', '--summary',

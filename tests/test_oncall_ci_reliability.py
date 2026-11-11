@@ -110,3 +110,44 @@ def test_log_redirect_does_not_forward_token():
             server.shutdown()
             server.server_close()
         for thread in threads: thread.join()
+
+
+def test_green_preserves_active_worker_claim():
+    source, rows, calls = fixture()
+    rows[:] = [run(1)]
+    finding = source.poll()[0]
+    source.acknowledge(finding.fingerprint)
+    rows[:] = [run(2, 'success')]
+    source.poll()
+    class Store:
+        def reports(self, **kwargs):
+            return [{'source': 'source:ci', 'fingerprint': finding.fingerprint, 'ticket_ref': 'PROOF-1'}]
+    class WT:
+        def find(self, ref):
+            return {'status': 'open', 'claimed_by': 'active-worker'}
+        def _ok(self, *args):
+            raise AssertionError('Must not close an active worker claim')
+    source.reconcile(Store(), WT())
+    assert finding.fingerprint in source._get('recovered')
+
+
+def test_deleted_inflight_run_does_not_block_new_failures():
+    source, rows, calls = fixture()
+    source._set('active_runs', [1])
+    original = source.request
+    source.request = lambda url, headers: (404, b'', {}) if url.endswith('/actions/runs/1') else original(url, headers)
+    rows[:] = [run(2)]
+    assert len(source.poll()) == 1
+    assert source._get('active_runs') == []
+
+
+def test_recheck_refreshes_candidate_after_it_leaves_first_page():
+    source, rows, calls = fixture()
+    source.recheck = True
+    rows[:] = [run(1, sha='same')]
+    assert source.poll() == []
+    assert source._get('active_runs') == [1]
+    original = source.request
+    source.request = lambda url, headers: (200, json.dumps(dict(run(1, sha='same'), run_attempt=2)).encode(), {}) if url.endswith('/actions/runs/1') else original(url, headers)
+    rows[:] = []  # the candidate is no longer on the runs page
+    assert len(source.poll()) == 1

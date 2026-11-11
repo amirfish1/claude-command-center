@@ -1044,9 +1044,11 @@ def _field(name, label, placeholder="", *, secret=False, optional=False):
 
 _FIELDS = {
     "ci": [
-        _field("provider", "CI provider", "github", optional=True),
-        _field("recheck", "Wait for a second failing run", "no", optional=True),
         _field("repo", "Repository", "example-org/storefront"),
+        _field("pull_requests", "Watch pull requests", "no", optional=True),
+        _field("pr_allowlist", "Allowed PR authors", optional=True),
+        _field("provider", "CI provider", "github", optional=True),
+        _field("recheck", "Recheck failures", "no", optional=True),
         _field("token_vault", "Token", secret=True, optional=True),
         _field("base", "API address", "https://api.github.com", optional=True),
         _field("branches", "Branches (comma separated)", optional=True),
