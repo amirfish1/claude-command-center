@@ -135,6 +135,16 @@ class LogsSource(Source):
             self.target = os.path.expanduser(self.target)
 
     def _check(self):
+        if self._get('baselined'):
+            # A connection recheck must not move the intake cursor past new errors.
+            if self.kind == 'path':
+                self._read_file()
+            elif self.kind == 'unit':
+                self._journal(self._get('cursor', ''))
+            else:
+                old = self._get('docker', {})
+                self._docker(old.get('since'), seen=old.get('seen'))
+            return 'Log source connected; intake cursor preserved.'
         if self.kind == 'path':
             try:
                 with _open_file(self.target) as handle:

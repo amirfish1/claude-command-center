@@ -70,6 +70,9 @@ class AlertmanagerSource(Source):
             raise _Problem('Alertmanager response unavailable or exceeds supported limits.')
 
     def _check(self):
+        if self._get('baselined', False):
+            self._groups()
+            return 'Alertmanager connected; intake state preserved.'
         self._update(baseline=True)
         return 'Alertmanager connected. Existing active groups are left alone.'
 
