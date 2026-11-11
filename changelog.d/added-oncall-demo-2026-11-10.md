@@ -1,0 +1,1 @@
+- Add a local On-call walkthrough with a scripted worker and demo tickets, real message routing, terminal replies and optional Codex fixes.

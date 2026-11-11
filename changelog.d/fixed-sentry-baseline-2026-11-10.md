@@ -1,0 +1,1 @@
+- Keep older Sentry issues out of the queue when they move onto the first page after setup.

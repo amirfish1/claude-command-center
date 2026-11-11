@@ -97,6 +97,9 @@ Reply yes to tell Dana it is fixed, or no to skip.
 
 ## Set it up
 
+Try without an account: `ccc oncall demo` ([details](docs/oncall-demo.md)).
+The default worker is scripted; messages use real On-call code and tickets use installed WatchTower, with a built-in fallback when it is absent.
+
 On-call is a preview and it is off by default. Install CCC with the line above, then:
 
 1. Run `ccc oncall setup`. It turns the preview on, asks a few questions and sends you a test message. If the test message does not arrive, On-call stays off.

@@ -1,0 +1,1 @@
+- On-call shows an owner alert for replies whose delivery failed or was interrupted, without applying them twice.
