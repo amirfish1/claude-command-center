@@ -28,3 +28,10 @@ def test_reject_ambiguous_blocks(body):
 def test_reject_unclosed_block():
     with pytest.raises(ValueError):
         guides.extract('```console checked\n$ command\nout\n')
+
+
+def test_shell_continuation_belongs_to_command_not_expected_output():
+    text = '```console checked\n$ ccc oncall setup \\\n    --channel ntfy\nOn-call is on.\n```\n'
+    check, = guides.extract(text)
+    assert check.command == 'ccc oncall setup \\\n    --channel ntfy'
+    assert check.expected == ['On-call is on.']

@@ -1,22 +1,33 @@
 # Answer a Codex question from your phone
 
-Use an On-call channel that can receive replies. Subscribe to its ntfy topic. When a numbered question arrives, publish the number and your answer to the topic with `-reply` appended. The following command runs that round trip locally with a real Codex session.
+Try answering the demo question first: type `zero`, then `yes`. For your own agent sessions, set up a channel that receives replies.
 
-```console checked slow
-$ python3 scripts/oncall-session-proof.py --with-agent
-plain_question deduplication | PASS | 20s, one ntfy message
+```console checked
+$ ccc oncall demo
+Agent: Fix committed locally. The test passes.
 ```
 
-![Checked terminal output](img/answer-codex-from-phone.png)
+Run these from the code folder you want agents to fix, with CCC and WatchTower installed and the dashboard running. Set `NTFY_SERVER` to your ntfy server URL and `NTFY_TOPIC` to a private topic name. Subscribe to that server and topic in the ntfy app. The setup command enables the preview and On-call; it also configures a worker for this folder.
 
-Terminal capture rendered from the checked output above, with lines wrapped.
+```console checked
+$ ccc oncall setup --yes --queue SHOP --repo . \
+    --channel ntfy --set server="$NTFY_SERVER" \
+    --set topic="$NTFY_TOPIC"
+On-call is on: alerts and replies are enabled. Turn it off: ccc oncall off
+```
 
 ## What you will see
 
-The agent asks whether to use blue. The proof waits through the unchanged two-minute idle grace, receives one notification, replies, and checks that the answer becomes a user turn in the same session.
+When Codex ends a turn with an explicit question and stays idle for two minutes, On-call sends a numbered message. Publish `NUMBER your answer` to the same ntfy server on the topic whose name is your topic plus `-reply`. For example, reply `1 use blue`. The reply returns to the same session.
+
+![Result from the local run](img/answer-codex-from-phone.png)
 
 ## Limits
 
-This checks local ntfy, not a phone display. It covers Codex only. Claude Code question detection has tests but was not run with a real Claude session. Indirect questions can be missed. Old questions from before enablement are ignored.
+The demo question is a ticket decision, not a live Codex session question. The paid session proof checks that separate path. Indirect questions can be missed. Questions from before enablement are ignored. Delivery to ntfy does not prove a phone displayed it. Normal Codex spawn does not offer tool permission prompts.
 
-[Guide setup and verification](README.md)
+## How we checked this
+
+The commands ran locally. The capture is an actual ntfy decision message from a seeded private ticket. A separate real Codex proof waited through the unchanged idle grace, received a local ntfy question, replied and checked the transcript for the answer.
+
+[Run the guide checks and see prerequisites](README.md#repeat-the-checks).

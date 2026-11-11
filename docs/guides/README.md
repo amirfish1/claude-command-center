@@ -1,70 +1,112 @@
 # Coding agent how-to guides
 
-Start with the problem you want to solve. On-call is a preview and stays off
-until you enable it. You need CCC, WatchTower and a machine that stays on.
-See [On-call setup](../oncall.md#turn-it-on) for installation and channel setup.
+Start with a problem. Each page gives the commands to use, the result to look
+for, and the limits. On-call is a preview and stays off until setup enables it.
 
-1. [Answer a Codex question from your phone](answer-codex-from-phone.md)
+1. [Try coding agent bug fixes without an account](try-oncall.md)
 2. [Let an agent fix bugs reported by email](fix-email-reports.md)
-3. [Turn GitHub issues into work for a coding agent](github-issues.md)
-4. [Send Sentry errors to a coding agent](sentry-errors.md)
-5. [Stop coding agents asking about small reversible decisions](small-decisions.md)
-6. [Give a coding agent a bug to fix from your terminal](report-a-bug.md)
-7. [Tell a customer their bug is fixed after approval](approve-fixed-message.md)
-8. [Have a coding agent investigate a failing command](failed-checks.md)
-9. [Stop coding agent notifications while you work](stop-notifications.md)
-10. [Self-host coding agent notifications with ntfy](self-host-ntfy.md)
-11. [What coding agents still need your approval for](approval-boundaries.md)
-12. [Let known customers report bugs without approving every report](trusted-reporters.md)
+3. [Answer a Codex question from your phone](answer-codex-from-phone.md)
+4. [Turn GitHub issues into fixes](github-issues.md)
+5. [Have an agent fix Sentry errors](sentry-errors.md)
+6. [Fix a red build on main](fix-red-build.md)
+7. [Stop agents asking about small reversible decisions](small-decisions.md)
+8. [Tell a customer their bug is fixed after approval](approve-fixed-message.md)
+9. [Self-host notifications with ntfy](self-host-ntfy.md)
+10. [Get a daily summary](daily-summary.md)
+11. [See what your agents did this week](agents-this-week.md)
+12. [Keep approval for money and customer messages](approval-boundaries.md)
 
-## Read the evidence correctly
+## Before using the commands
 
-Every `console checked` block contains a command we ran and selected exact
-output lines. Omitted lines are not assertions. Run commands from the repository
-root. A block is a terminal capture, not invented example output.
+The demo needs Python and Git. It does not need a dashboard, account or Docker.
+The other guides assume a running CCC dashboard and WatchTower. Run setup from
+the code folder agents should change. A real fixing worker also needs an
+installed, logged-in agent. See [installation](../install.md) and
+[On-call setup](../oncall.md#turn-it-on).
 
-The fast CLI examples use the checker's private HOME, state directory, local
-On-call API and real WatchTower queue named GUIDE. No worker runs there. They
-start from an enabled configuration with no channels. This is a test fixture,
-not instructions to enable a real installation without a channel. SOURCE_URL
-is the local fixture address supplied by the checker. Its GitHub and Sentry
-endpoints return an empty issue list. The Sentry command receives the fake
-value `test-only` on stdin. Do not put real secrets in command arguments.
+The shell variables in the examples hold your own service addresses:
 
-The slow blocks run existing proof scripts. They use Docker, local ntfy and
-TLS mail servers, and a real Codex gpt-6.1-terra session at medium effort.
-They copy only Codex auth.json into a temporary home and make paid model
-requests. They do not use Claude credentials or send to external accounts.
-The email proof checks a real fix; the session proof checks a real reply.
-A local push receipt does not establish that a phone showed a notification.
+| Variable | Your value |
+|---|---|
+| NTFY_SERVER | Your ntfy server URL |
+| NTFY_TOPIC | A private topic you subscribe to |
+| MAIL_HOST | Your mail server hostname |
+| SMTP_PORT | Your implicit-TLS SMTP port, usually 465 |
+| IMAP_PORT | Your implicit-TLS IMAP port, usually 993 |
+| SOURCE_URL | The GitHub or Sentry API address named in that guide |
+| CCC_SERVER | Your local dashboard URL |
+| TICKET | The customer-originated ticket to message |
+
+Set these in your shell before running the relevant commands. Replace
+example.test addresses, repository names, organization and project slugs with
+yours. Do not use the example addresses for real mail. Store mailbox and source
+secrets in CCC Vault under the entry names used in the guide. Never put real
+secrets in command arguments.
+
+The checked output is trimmed to stable lines from real runs. Your queue
+references, counts, dates and service addresses will differ. Some results are
+seeded to make them repeatable; each page says which ones.
 
 ## Repeat the checks
 
-Run `python3 scripts/check-guides.py --quick` for the CLI checks without Docker
-or model requests. WatchTower must be installed. Run
-`python3 scripts/check-guides.py` for all checks, including the two paid proofs.
-Shared proof commands run once, even when several guides cite them. Allow up
-to twelve minutes per proof after image downloads; missing tools, failed checks and output drift fail
-the command. Quick mode explicitly reports that it skipped the slow proofs.
+From this repository, run `python3 scripts/check-guides.py --quick` for the fast
+check. It parses every guide and replays the standalone demo and weekly-count
+commands, reusing the result of identical demo commands. It needs WatchTower
+for the seeded weekly result, but no Docker or model login. Each guide prints
+which transport commands it skipped. It does not validate network setup.
 
-The checker uses temporary HOME, CCC_STATE_DIR, WATCHTOWER_STORE, an allow-listed
-environment and a foreground watcher on port zero. WT_NO_AUTOSTART is set.
-Cleanup kills processes carrying that exact temporary HOME marker and deletes
-state. The slow proofs remove their Docker containers too. An uncatchable host
-or parent-process failure cannot run cleanup. Use Linux for detached-process
-cleanup. No real service needs a restart to run these checks.
+Run `python3 scripts/check-guides.py --commands-only` to replay every documented
+command against disposable local ntfy, TLS mail and WatchTower. This needs
+Docker and OpenSSL. Each guide prints one result line. Commands run in temporary
+code folders. Dispatch is disabled before fixture reports are introduced.
 
-## Topics we could not promise
+Run `python3 scripts/check-guides.py` for those checks plus real model proofs
+for email, Codex questions, Sentry-compatible monitoring and CI. Full mode copies
+only Codex auth.json to temporary homes and uses gpt-6.1-terra at medium effort.
+It can incur model charges. Allow several minutes plus image-download time.
+It does not read Claude credentials or contact external message accounts.
+The CI check calls only the existing proof's local Gitea stage, not its public
+GitHub probe.
 
-There is no On-call overnight digest command. The command-monitoring guide
-replaces that proposed topic. A ten-minute stuck-alert guide was dropped because there is no universal
-alert deadline; queue health depends on WatchTower and delivery limits. The phone-question guide uses Codex because only that engine
-was run in the real session proof. The phone-permission guide was dropped because normal Codex spawn uses
-approvalPolicy=never and dangerFullAccess. A real permission round trip was
-not verified. Supported approval handlers still have strict allow/deny tests.
-Manual bug reporting and turning On-call off replace these two topics.
+Add `--capture` to the full or commands-only run to save real browser result captures in img/. This requires
+Node and the repository's Puppeteer setup. Use `--guide SLUG --commands-only --capture`
+to recapture one page. The ntfy captures use its real web app at phone size.
+The mail image renders the MIME message fetched from the local reporter inbox.
+The weekly image renders the actual CLI result. The decisions image uses the
+real On-call settings component backed by the isolated API. The demo image uses
+its real local phone page. None are drawings of expected messages.
 
-Telegram, SMS, WhatsApp, iMessage and hosted Sentry need accounts or devices
-that were not used. GitHub configuration was checked locally only. Account
-steps are labeled in the relevant guides. See each guide's limits before
-turning a local proof into a production expectation.
+The shared local ntfy container allows a burst of 1,000 requests so twelve
+concurrent guide checks and browser subscribers do not exhaust its default
+60-request allowance. On-call delivery limits are unchanged.
+
+The checker uses a temporary HOME, CCC_STATE_DIR, WATCHTOWER_STORE, an allow-listed
+environment and a foreground watcher on port zero. Cleanup removes containers,
+processes marked with that temporary HOME, and temporary files. Uncatchable host
+or process termination can prevent cleanup. Linux is required for the detached
+process cleanup used by the agent proofs. Real services are never restarted.
+
+Extractor tests run with `python3 -m pytest tests/test_guides.py -q`.
+
+## Current boundaries
+
+Daily summaries now exist, but they do not replace decision alerts with one
+message a day. There is no universal ten-minute stuck-alert guarantee. Normal
+Codex spawn uses approvalPolicy=never and dangerFullAccess, so the guides do not
+promise a real phone permission round trip through that path. Real Claude
+session questions were not exercised. The Codex question guide covers the
+engine that was run.
+
+Hosted Sentry, private GitHub permissions, Telegram, SMS, WhatsApp and iMessage
+need accounts or devices not used here. The account-dependent sections identify
+those limits. Local fixtures are labeled separately from real fixing agents.
+
+## Recorded verification boundary
+
+The latest command replay passed all 30 documented commands across twelve
+guides. Local CI and Sentry-compatible monitoring also passed separate real
+agent proofs. The latest combined full run stopped in the email proof when
+GreenMail rejected its SMTP login; it did not reach the later model proofs.
+Earlier email-fix and Codex-question proofs passed, but the combined run needs
+to be repeated before treating it as a current full pass. The checker reports
+that failure rather than accepting partial proof output.

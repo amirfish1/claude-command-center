@@ -1,22 +1,31 @@
 # Self-host coding agent notifications with ntfy
 
-Run the local protocol example to try self-hosted ntfy without any external message service:
+Run an ntfy server reachable from your computer and phone, then point On-call at it. Set `NTFY_SERVER` to its URL and `NTFY_TOPIC` to a private topic. Run from the code folder agents should fix:
 
-```console checked slow
-$ python3 scripts/oncall-proof.py --with-agent
-ntfy send / subscribe / reply          PASS
+```console checked
+$ ccc oncall setup --yes --queue SHOP --repo . \
+    --channel ntfy --set server="$NTFY_SERVER" \
+    --set topic="$NTFY_TOPIC"
+On-call is on: alerts and replies are enabled. Turn it off: ccc oncall off
 ```
 
-![Checked terminal output](img/self-host-ntfy.png)
-
-Terminal capture rendered from the checked output above, with lines wrapped.
+```console checked
+$ ccc oncall test ntfy
+ntfy: sent.
+```
 
 ## What you will see
 
-The script starts pinned ntfy and mail containers on random loopback ports, configures On-call with that ntfy address, tests delivery, and publishes replies to the separate reply topic. It removes its containers and temporary state afterward.
+Subscribe to the printed server and topic in the ntfy app. You should see a test message. Replies go to the separate topic ending in `-reply`, with the alert number before your answer.
+
+![Result from the local run](img/self-host-ntfy.png)
 
 ## Limits
 
-For your installation, set the ntfy server address in Settings > On-call and subscribe to the printed topic. The phone must reach that address; loopback in this proof is reachable only on the test machine. Keep topic names private. The proof does not set up remote networking, TLS termination or ntfy authentication.
+A loopback server works only on the same machine. Your phone needs a reachable address. Keep topic names private and configure ntfy access controls as needed. This guide does not set up remote networking or TLS termination. Server acceptance does not prove phone display.
 
-[Guide setup and verification](README.md)
+## How we checked this
+
+The setup and test commands ran against pinned local ntfy. Puppeteer subscribed through its real web app at phone size and captured the received message. The full protocol proof also checks reply routing.
+
+[Run the guide checks and see prerequisites](README.md#repeat-the-checks).

@@ -1,1 +1,1 @@
-- Add twelve On-call guides with checked command output, explicit verification limits, and an isolated replay checker.
+- Add twelve command-first On-call guides with real local result captures, fast checks, and full isolated command and agent proofs.
