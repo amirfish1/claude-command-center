@@ -23,6 +23,9 @@ import urllib.request
 from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from oncall_capture import Capture, output_dir, cleanup_receipt
+
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -33,7 +36,7 @@ def run(*args, **kw):
     return proc.stdout.strip()
 
 
-AGENT_MODEL = 'gpt-6.1-terra'
+AGENT_MODEL = 'gpt-6.1-sol'
 
 
 def _watchtower_workers():
@@ -169,7 +172,7 @@ def cleanup_isolated_processes(root):
             pass
 
 
-def wait_automatic_worker(root, ref, wt, watcher, started, timeout=480):
+def wait_automatic_worker(root, ref, wt, watcher, started, timeout=480, observed=None):
     """One bounded observer; it never dispatches, claims or changes policy."""
     record_file = Path(root) / '.watchtower/workers.json'
     deadline = time.monotonic() + timeout
@@ -181,6 +184,8 @@ def wait_automatic_worker(root, ref, wt, watcher, started, timeout=480):
             records = json.loads(record_file.read_text()).get('workers', [])
             if records:
                 rec = records[0]
+                if observed:
+                    observed(rec)
                 print(f'Report to observed worker start: {time.monotonic() - started:.2f}s', flush=True)
                 print(f"Observed worker: {rec.get('worker_id')}; pid: {rec.get('pid')}; "
                       f"engine: {rec.get('engine')}; model: {rec.get('model')}", flush=True)
@@ -223,6 +228,8 @@ def child(root, web, smtp, imap, with_agent=False):
     os.environ['CCC_SERVER'] = f'http://127.0.0.1:{server.server_port}'
     results = []
     watcher = None
+    recorder = None
+    dashboard = None
 
     def cli(*args, input=''):
         return run(sys.executable, str(REPO / 'ccc'), 'oncall', *args, input=input)
@@ -277,11 +284,11 @@ def child(root, web, smtp, imap, with_agent=False):
         start = time.monotonic()
         if eng.wt.available():
             watcher = start_watcher(root, eng.wt.argv(), capture=os.environ.get('PROOF_CAPTURE') == '1')
-        output = cli('setup', '--set', 'server=' + web, input='\n\n')
+        output = cli('setup', '--repo', str(project), '--channel', 'ntfy', '--set', 'server=' + web)
         topic = eng.config()["channels"][0]["topic"]
         assert topic.startswith("ccc-oncall-")
-        assert output.count("Folder of the code agents should fix") == 1
-        assert output.count("Pick a number") == 1
+        assert eng.config()["repo"] == str(project)
+        assert "On-call is on." in output
         print(output)
         if os.environ.get('PROOF_CAPTURE') == '1':
             if not with_agent:
@@ -293,7 +300,7 @@ def child(root, web, smtp, imap, with_agent=False):
             capture = {'setup': rendered, 'minor': minor, 'decisions': decisions, 'agent': with_agent}
             subprocess.run([os.environ['PROOF_NODE'], str(REPO / 'scripts/oncall-cli-capture.cjs')],
                            input=json.dumps(capture), text=True, check=True, timeout=60)
-        print(f'Setup: {time.monotonic() - start:.2f}s; 2 prompts (folder, channel; preview supplied by environment).')
+        print(f'Setup: {time.monotonic() - start:.2f}s; explicit folder and ntfy channel; preview supplied by environment.')
         assert any('This is a test' in e.get('message', '') for e in events()), 'ntfy test missing'
         eng.tick(force=True)  # establish inbound cursors before phone replies
         publish('pause')
@@ -379,14 +386,44 @@ def child(root, web, smtp, imap, with_agent=False):
                 transport = 'exec'
             eng.wt._dispatch = not explicit
             before_mail = len(mailbox('reporter'))
+            if os.environ.get('PROOF_CAPTURE') == '1':
+                # A real dashboard reads the same isolated store. Ephemeral mode
+                # leaves ticking to this existing protocol proof's engine.
+                with socket.socket() as sock:
+                    sock.bind(('127.0.0.1', 0))
+                    dashboard_port = sock.getsockname()[1]
+                log = (Path(root) / 'capture-dashboard.log').open('w')
+                try:
+                    dashboard = subprocess.Popen([sys.executable, str(REPO / 'server.py'), '--port', str(dashboard_port)],
+                        env=dict(os.environ, CCC_EPHEMERAL='1', CCC_TELEMETRY_DISABLED='1',
+                                 CCC_AUTO_UPDATE='0', CCC_BG_HELPER='0', CCC_CONV_READER='0',
+                                 CCC_BOOT_WARM_DELAY_S='86400'), stdout=log, stderr=log,
+                        cwd=project, start_new_session=True)
+                finally:
+                    log.close()
+                deadline = time.monotonic() + 90
+                while True:
+                    if dashboard.poll() is not None:
+                        raise RuntimeError('Isolated capture dashboard exited: ' + (Path(root) / 'capture-dashboard.log').read_text()[-3000:])
+                    try:
+                        port = listener_port(dashboard.pid)
+                        with urllib.request.urlopen(f'http://127.0.0.1:{port}/api/oncall/status', timeout=2):
+                            break
+                    except (OSError, RuntimeError):
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError('Capture dashboard not ready')
+                        threading.Event().wait(.5)
+                recorder = Capture(web, topic)
+                recorder.step('open')
+                recorder.step('report_open', base=f'http://127.0.0.1:{port}')
             started = time.monotonic()
+            report_at = time.time()
             mail('reporter@example.test', 'Addition bug', 'add(2, 3) returns -1 instead of 5. See test_sum.py.')
             eng.tick(force=True)
             report = next(r for r in eng.store.reports() if r.get('title') == 'Addition bug')
             agent_ref = report['ticket_ref']
-            if os.environ.get('PROOF_CAPTURE') == '1':
-                subprocess.run([os.environ['PROOF_NODE'], str(REPO / 'scripts/oncall-ticket-capture.cjs'),
-                                watcher.proof_url, queue_name, agent_ref, 'reported'], check=True, timeout=60)
+            if recorder:
+                recorder.step('mark', kind='report-filed', details={'ticket': agent_ref, 'at': report_at})
             rec = None
             print(f'Worker model: {model}; effort: medium; transport: {transport}', flush=True)
             try:
@@ -396,7 +433,11 @@ def child(root, web, smtp, imap, with_agent=False):
                                                         engine='codex', model=model)
                     wait_worker(rec)
                 else:
-                    rec = wait_automatic_worker(root, agent_ref, eng.wt, watcher, started)
+                    rec = wait_automatic_worker(root, agent_ref, eng.wt, watcher, started,
+                        observed=(lambda rec: recorder.step('mark', kind='worker-observed',
+                            details={'at': time.time(), 'engine': rec.get('engine'),
+                                     'model': rec.get('model')})) if recorder else None)
+                assert rec.get('engine') == 'codex' and rec.get('model') == model, 'Observed worker engine/model differs from requested Codex model'
                 item = eng.wt.find(agent_ref)
                 assert item['status'] == 'closed', 'Worker did not close the ticket'
                 commit = run(os.environ['PROOF_GIT'], '-C', str(project), 'rev-parse', 'HEAD')
@@ -408,19 +449,41 @@ def child(root, web, smtp, imap, with_agent=False):
                 run(sys.executable, '-B', '-m', 'unittest', '-v', cwd=project)
                 close_commits = [e.get('commit') for e in item.get('history', []) if e.get('event') == 'close']
                 assert commit in close_commits or (item.get('resolution') or {}).get('commit') == commit
-                if os.environ.get('PROOF_CAPTURE') == '1':
-                    subprocess.run([os.environ['PROOF_NODE'], str(REPO / 'scripts/oncall-ticket-capture.cjs'),
-                                    watcher.proof_url, queue_name, agent_ref, 'fixed'], check=True, timeout=60)
+                fixed_at = time.time()
                 eng.tick(force=True)
+                if recorder:
+                    recorder.step('mark', kind='fix-verified', details={'commit': commit, 'at': fixed_at})
+                    recorder.step('report_fixed')
                 fixed = next(a for a in eng.store.alerts(state='open')
                              if a['kind'] == 'fixed' and a['ref'] == agent_ref)
                 assert len(mailbox('reporter')) == before_mail, 'Notice sent before approval'
-                publish(f"{fixed['token']} yes")
+                before_approval_at = time.time()
+                if recorder:
+                    assert any('fixed' in e.get('message', '').lower() for e in events()), 'Fixed alert absent from ntfy: ' + json.dumps({'events': events(), 'status': eng.status()})
+                    sent = recorder.step('fixed_reply', text=f"{fixed['id']} yes")
+                    approved_at = sent['sent_at']
+                else:
+                    approved_at = time.time()
+                    publish(f"{fixed['token']} yes")
                 eng.tick(force=True)
                 received = mailbox('reporter')
                 assert len(received) == before_mail + 1 and 'fixed' in str(received[-1]).lower()
+                delivered_at = time.time()
                 if os.environ.get('PROOF_CAPTURE') == '1':
+                    recorder.step('fixed_result')
+                    recorder.step('finish')
+                    recorder.close()
+                    recorder = None
                     capture_mail(received[-1], True)
+                    (output_dir() / 'agent-proof.json').write_text(json.dumps({
+                        'status': 'PASS', 'run_id': os.environ.get('PROOF_RUN_ID'),
+                        'model': model, 'effort': 'medium', 'automatic_dispatch': not explicit,
+                        'observed_worker_model': rec.get('model'), 'observed_worker_engine': rec.get('engine'),
+                        'ticket': agent_ref, 'report_at': report_at, 'fix_verified_at': fixed_at,
+                        'commit': commit, 'changed_files': ['sum.py'], 'unchanged_test_passed': True,
+                        'mailbox_before_approval_at': before_approval_at, 'mailbox_before_count': before_mail,
+                        'phone_approval_sent_at': approved_at, 'mailbox_received_at': delivered_at,
+                        'mailbox_after_count': len(received), 'notice_held_until_approval': True}, indent=2))
                 print(f'Report to fixed notice: {time.monotonic() - started:.2f}s')
                 print(f'Observed fix commit: {commit}')
                 results.append(('agent execution / approved fixed notice', 'PASS (explicit drain once)' if explicit else 'PASS (automatic WatchTower dispatch)'))
@@ -433,6 +496,8 @@ def child(root, web, smtp, imap, with_agent=False):
         results.append(('proof', 'FAIL: ' + str(exc)))
         raise
     finally:
+        if recorder:
+            recorder.close()
         print('\nCheck                                  Result')
         for name, result in results:
             print(f'{name:38} {result}')
@@ -448,7 +513,7 @@ def main():
                         help='Run one paid Codex worker using an isolated copy of the login')
     parser.add_argument('--explicit-start', action='store_true',
                         help='With --with-agent, retain the explicit exec drain-once comparison')
-    parser.add_argument('--capture', action='store_true', help='Capture real local UI and labelled CLI/mail output; no film is generated')
+    parser.add_argument('--capture', action='store_true', help='Save real local timed browser frames and labelled CLI/mail stills')
     parser.add_argument('--model', default=AGENT_MODEL,
                         help=f'Codex model for --with-agent (default {AGENT_MODEL})')
     args = parser.parse_args()
@@ -495,14 +560,16 @@ def main():
             '-out', str(root / 'mail.p12'), '-passout', 'pass:changeit')
         (root / 'mail.p12').chmod(0o644)
         network = 'ccc-proof-' + root.name
-        run('docker', 'network', 'create', network)
         try:
+            run('docker', 'network', 'create', network)
             def container(image, ports, extra=(), command=()):
-                args = ['docker', 'run', '-d', '--network', network]
+                name = network + '-' + str(len(containers))
+                # Register before docker run, including download/start failures.
+                containers.append(name)
+                args = ['docker', 'run', '--name', name, '-d', '--network', network]
                 for port in ports:
                     args += ['-p', f'127.0.0.1::{port}']
                 cid = run(*args, *extra, image, *command)
-                containers.append(cid)
                 bound = json.loads(run('docker', 'inspect', cid))[0]['NetworkSettings']['Ports']
                 return cid, [int(bound[f'{p}/tcp'][0]['HostPort']) for p in ports]
             _, (http,) = container('binwiederhier/ntfy:v2.17.0', [80], command=('serve',))
@@ -532,8 +599,10 @@ def main():
             trust = root / 'trust.pem'
             system_ca = ssl.get_default_verify_paths().cafile
             trust.write_bytes(cert.read_bytes() + (Path(system_ca).read_bytes() if system_ca else b''))
-            env = {k: os.environ[k] for k in ('LANG', 'LC_ALL', 'TMPDIR') if k in os.environ}
-            env.update(HOME=tmp, XDG_CONFIG_HOME=tmp, XDG_DATA_HOME=tmp, PATH=str(bins),
+            (root / 'tmp').mkdir(exist_ok=True)
+            env = {k: os.environ[k] for k in ('LANG', 'LC_ALL') if k in os.environ}
+            env.update(HOME=tmp, TMPDIR=str(root / 'tmp'), XDG_CONFIG_HOME=tmp, XDG_DATA_HOME=tmp, PATH=str(bins),
+                       CCC_TELEMETRY_DISABLED='1', CCC_AUTO_UPDATE='0',
                        PYTHONPATH=os.pathsep.join(sys.path), CCC_FF_ONCALL='1',
                        WATCHTOWER_STORE=str(root / 'queues.json'), WT_NO_SELF_UPDATE='1',
                        # The proof runs its own foreground watcher; newer WatchTower
@@ -543,15 +612,19 @@ def main():
                        GIT_CONFIG_GLOBAL=os.devnull,
                        SSL_CERT_FILE=str(trust), PROOF_GIT=shutil.which('git'),
                        PROOF_MODEL=args.model, PROOF_EXPLICIT_START='1' if args.explicit_start else '0')
+            env.update(CCC_STATE_DIR=str(root / 'state'), CCC_ONCALL_STATE_DIR=str(root / 'oncall'))
+            for key in ('PROOF_CAPTURE_DIR', 'PROOF_RUN_ID'):
+                if key in os.environ:
+                    env[key] = os.environ[key]
             if args.capture:
-                chrome = sorted((Path.home() / '.cache/puppeteer/chrome').glob('*/chrome-linux64/chrome'))
                 node = shutil.which('node')
+                chrome = run(node, '-e', "console.log(require('./puppeteer-browser-config.js').findChromePath() || '')", cwd=REPO) if node else ''
                 if not chrome or not node:
                     raise RuntimeError('Capture requires Node and cached Puppeteer Chrome')
                 env.update(PROOF_CAPTURE='1', PROOF_NODE=node,
                            PROOF_WITH_AGENT='1' if args.with_agent else '0',
                            WATCHTOWER_MACHINE='proof',
-                           PUPPETEER_EXECUTABLE_PATH=str(chrome[-1]))
+                           PUPPETEER_EXECUTABLE_PATH=chrome)
             proc = subprocess.run([sys.executable, __file__, '--child', tmp,
                                    f'http://127.0.0.1:{http}', str(smtp), str(imap), *(['--with-agent'] if args.with_agent else [])], env=env, timeout=600)
             copied = root / '.codex' / 'auth.json'
@@ -564,9 +637,23 @@ def main():
             return proc.returncode
         finally:
             cleanup_isolated_processes(root)
+            errors = []
             for cid in containers:
-                run('docker', 'rm', '-f', cid)
-            run('docker', 'network', 'rm', network)
+                try:
+                    run('docker', 'rm', '-f', cid)
+                except RuntimeError as exc:
+                    if 'No such container' not in str(exc):
+                        errors.append(str(exc))
+            try:
+                run('docker', 'network', 'rm', network)
+            except RuntimeError as exc:
+                if 'not found' not in str(exc) and 'No such network' not in str(exc):
+                    errors.append(str(exc))
+            if args.capture:
+                cleanup_receipt(root, containers_removed=len(containers), networks_removed=1,
+                                docker_cleanup_errors=errors)
+            if errors:
+                raise RuntimeError('Private Docker cleanup failed: ' + '; '.join(errors))
 
 
 if __name__ == '__main__':
