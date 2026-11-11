@@ -6639,11 +6639,12 @@ def _codex_app_server_approval_result_payload(method, decision, pending):
     return None, f"unsupported approval method: {method}"
 
 
-def _codex_app_server_resolve_approval(session_id, decision):
+def _codex_app_server_resolve_approval(session_id, decision, expected_request_id=None):
     routed = _core._control_plane_engine_call(
         "codex", "approval", {
             "session_id": session_id,
             "decision": decision,
+            "expected_request_id": expected_request_id,
         },
     )
     if routed is not None:
@@ -6665,6 +6666,11 @@ def _codex_app_server_resolve_approval(session_id, decision):
         if request_id is None:
             request_id = pending.get("request_id")
         method = pending.get("approval_method") or ""
+        if expected_request_id is not None and (not str(expected_request_id).strip()
+                or str(request_id) != str(expected_request_id)):
+            return {"ok": False, "via": "codex-approval",
+                    "code": "codex_approval_changed",
+                    "error": "That permission prompt is no longer pending."}
         if request_id is None or (isinstance(request_id, str) and not request_id.strip()):
             return {
                 "ok": False,
@@ -6713,12 +6719,14 @@ def _codex_app_server_resolve_approval(session_id, decision):
                 or str(current.get("request_id") or "") == str(request_id)
             ):
                 state.pop("pending_approval_request", None)
-            flags = [
-                flag for flag in (state.get("active_flags") or [])
-                if not _codex_app_server_flags_need_approval([flag])
-            ]
-            state["active_flags"] = flags
-            state["thread_needs_approval"] = False
+            remaining = _codex_app_server_pending_approval_item(state)
+            if not remaining or str(remaining.get("request_id")) == str(request_id):
+                flags = [
+                    flag for flag in (state.get("active_flags") or [])
+                    if not _codex_app_server_flags_need_approval([flag])
+                ]
+                state["active_flags"] = flags
+                state["thread_needs_approval"] = False
             now = time.time()
             for key in ("active_item", "last_item"):
                 item = state.get(key)

@@ -5320,7 +5320,7 @@ def _answer_via_approval_hook(session_id, decision):
     return {"ok": True, "decision": decision, "via": "hook"}
 
 
-def respond_claude_permission(session_id, decision):
+def respond_claude_permission(session_id, decision, expected_hook_sha=None):
     """Answer a pending Claude Code permission prompt from the dashboard.
 
     Claude has no approval API the way Codex does — a permission prompt reaches
@@ -5339,6 +5339,18 @@ def respond_claude_permission(session_id, decision):
     decision = (decision or "accept").strip().lower()
     if decision not in ("accept", "decline"):
         return {"ok": False, "error": f"unknown decision: {decision}"}
+    if expected_hook_sha is not None:
+        # On-call must answer only the hook named in its alert, never the TTY.
+        from ccc_server import approval_hook as _ah
+        if not isClaudeSource_backend(session_id) or not _ah.waiting(session_id, expected_hook_sha):
+            return {"ok": False, "error": "That permission prompt is no longer pending."}
+        try:
+            outcome = _ah.deliver(session_id, expected_hook_sha,
+                                  "allow" if decision == "accept" else "deny")
+        except (OSError, ValueError):
+            outcome = "unclaimed"
+        return {"ok": outcome == "applied", "via": "hook",
+                "error": "" if outcome == "applied" else "That permission prompt is no longer pending."}
     if isClaudeSource_backend(session_id):
         hooked = _answer_via_approval_hook(session_id, decision)
         if hooked:

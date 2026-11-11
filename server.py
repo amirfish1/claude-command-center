@@ -366,14 +366,17 @@ class _OncallDeps:
         if engine == "codex":
             state = _codex_thread_state_resolved(sid)
             pending = _codex_app_server_pending_approval_item(state) or {}
-            identity = pending.get("request_id") or pending.get("id")
+            identity = pending.get("request_id")
             detail = pending.get("command") or pending.get("approval_message")
             body = (str(pending.get("tool") or "Tool") + ": " + str(detail)) if detail else ""
         elif engine == "claude":
             pending = _read_notification_state(sid) or {}
             if not _notification_is_blocking(pending):
                 return None
-            identity = pending.get("started_at") or pending.get("timestamp")
+            from ccc_server import approval_hook
+            identity = pending.get("sha256")
+            if not approval_hook.waiting(sid, identity):
+                return None
             body = pending.get("message")
         else:
             return None
@@ -388,8 +391,9 @@ class _OncallDeps:
         if not current or current["meta"] != meta:
             return False, "That permission prompt is no longer pending."
         action = "accept" if decision == "allow" else "decline"
-        result = (_codex_app_server_resolve_approval(sid, action)
-                  if meta["engine"] == "codex" else respond_claude_permission(sid, action))
+        result = (_codex_app_server_resolve_approval(sid, action, expected_request_id=meta["prompt"])
+                  if meta["engine"] == "codex" else
+                  respond_claude_permission(sid, action, expected_hook_sha=meta["prompt"]))
         return bool(result.get("ok")), result.get("error") or ""
 
 

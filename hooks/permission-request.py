@@ -148,7 +148,7 @@ def raise_badge(sid, tool, tin=None):
                        "message": "Claude needs your permission to use %s%s" % (
                            tool, (": " + describe_call(tool, tin)) if describe_call(tool, tin) else ""),
                        "started_at": time.time(), "source": "permission-request",
-                       "pid": os.getpid()}, f)
+                       "pid": os.getpid(), "sha256": input_sha256(tool, tin)}, f)
         os.replace(tmp, path)
         return path
     except OSError:

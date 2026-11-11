@@ -605,7 +605,8 @@ class EngineHost:
                 )
             if operation == "approval":
                 return legacy._codex_app_server_resolve_approval(
-                    args.get("session_id"), args.get("decision")
+                    args.get("session_id"), args.get("decision"),
+                    expected_request_id=args.get("expected_request_id")
                 )
             if operation == "status":
                 return {
