@@ -87,3 +87,71 @@ the local-only handler with the preview off.
 a local fixture API in Puppeteer. It checks the default, switch and time field.
 An optional file argument saves a screenshot. This checks component behavior,
 not a live dashboard or delivery to an external account.
+
+## Cards and a page to share
+
+```
+ccc oncall week --card week.svg
+ccc oncall week --card week.png --theme dark
+ccc oncall week --card square.svg --square --theme light
+ccc oncall week --page weeks.html
+```
+
+Cards are 1200 by 675 pixels, or 1080 by 1080 with `--square`. Light is the
+default; `--theme dark` works for both cards and pages. SVG and HTML use only
+Python's standard library. PNG needs Node and the repository's Puppeteer and
+Chromium setup. If those are unavailable, the command says to export SVG.
+No font download, external request, model call or hosted service is used.
+System sans-serif fonts may look slightly different on different machines.
+
+These exports request eight weeks, regardless of `--weeks`. The card leads
+with the newest period and adds a report-count bar strip if an older period
+has activity. `--since` can select a starting date; if it leaves fewer than
+eight periods before now, only those periods appear. The page lists all
+returned periods, newest first, and needs no scripts to read. It works at
+390 pixels wide. Files are local exports; this command does not publish them.
+
+The four numbers are reports received, tickets closed with a recorded commit,
+distinct reply-required alerts successfully sent, and recorded automatic
+decisions. “Questions that reached you” includes permission and reporter-send
+approvals and other reply-required alerts. Sending one alert on two channels
+counts once. It means provider acceptance, not proof that you read it.
+“Fixed by agents” uses the queue's commit-bearing closure count; the store
+does not prove the commit's author, deployment or correctness.
+
+Dates on cards and pages are in UTC. The counts retain the API's interval
+boundaries. Medians use the same recorded durations as the text export. Zero
+means no matching stored records, including periods before On-call was set up;
+it does not prove monitoring was running. A missing median says “not recorded”.
+
+The renderer accepts only numeric fields and fixed labels. It ignores names,
+addresses, source identifiers, ticket references and arbitrary metadata even
+with `--detail`. Incomplete queue counts, unknown ticket outcomes, missing
+fields or invalid numbers refuse the export. A failed render leaves an existing
+destination unchanged. The output folder must already exist.
+
+### WatchTower window reads
+
+Newer WatchTower versions support `wt ls --closed-since`, `--event`, `--ref`
+and a completeness envelope. Weekly counts use one union read per queue:
+closures and decision events in the requested interval, plus tickets referenced
+by reports in that interval. The response must be complete and contain at most
+2,000 tickets. Older versions fall back to the existing capped all-ticket read.
+
+These filters reduce returned data but currently filter in memory inside
+WatchTower. The full-store scan is not removed. A persistent time index is still needed.
+CCC does not pretend that a row cap bounds WatchTower's internal scan.
+
+### Visual proof
+
+```
+python3 scripts/oncall-week-visual-proof.py
+```
+
+This uses temporary stores seeded with four weeks, an empty first week, and a
+12,345-report week. It requires pytest for the shared fixture. It generates
+both themes and shapes, an actual PNG export, and HTML pages. Puppeteer checks
+all variants at 390 and 1200 pixels, records page errors and requests, checks
+for overflow, and captures the results. The proof uses no live store or account.
+Temporary databases and browser processes are removed. Exports and screenshots
+are kept under the gitignored `.claude/screenshots/week/` directory for review.
