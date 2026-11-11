@@ -708,7 +708,7 @@ class PostHogSource(Source):
             f"WHERE event = '$exception' AND timestamp >= now() - INTERVAL {int(self.window_min)} MINUTE "
             "GROUP BY group_key "
             f"HAVING count() >= {int(self.min_events)} "
-            "ORDER BY event_count DESC, group_key "
+            "ORDER BY group_key "
             "LIMIT 100"
         )
 
@@ -739,8 +739,10 @@ class PostHogSource(Source):
     def _poll(self):
         token = self._token("PostHog")
         sql = self.hogql()
-        rows = self._query(token, sql, "ccc on-call exceptions")
-        if not self._get("baselined") and not self.backfill:
+        baseline = not self._get("baselined") and not self.backfill
+        offset = 0 if baseline else _as_int(self._get("scan_offset"))
+        rows = self._query(token, sql + (f" OFFSET {offset}" if offset else ""), "ccc on-call exceptions")
+        if baseline:
             page = list(rows)
             while len(page) == 100:
                 if len(rows) > FILED_KEEP:
@@ -751,6 +753,16 @@ class PostHogSource(Source):
             if len(rows) > FILED_KEEP:
                 raise _Problem("PostHog has too many existing groups to baseline safely. "
                                "Narrow window_min or raise min_events.")
+        next_offset = 0
+        if not baseline:
+            page = list(rows)
+            for _ in range(PAGES_PER_POLL - 1):
+                if len(page) < 100:
+                    break
+                page = self._query(token, sql + f" OFFSET {offset + len(rows)}", "ccc on-call exceptions")
+                rows += page
+            if len(page) == 100:
+                next_offset = offset + len(rows)
         day = time.strftime("%Y%m%d", time.gmtime(float(self._clock())))
         groups = []
         for row in rows:
@@ -772,6 +784,7 @@ class PostHogSource(Source):
             fresh.append(fingerprint)
             findings.append(self._to_finding(fingerprint, row))
         self._mark_filed(fresh)
+        self._set("scan_offset", next_offset)
         if not self._get("baselined"):
             self._set("baselined", True)
         return findings
