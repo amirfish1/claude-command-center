@@ -11,7 +11,7 @@ const menuStart = app.indexOf('  function _wireSimpleActionsMenu() {');
 const menuEnd = app.indexOf('\n  _wireSimpleActionsMenu();', menuStart);
 assert.ok(menuStart >= 0 && menuEnd > menuStart);
 const menuFunction = app.slice(menuStart, menuEnd);
-let status, home, history, testFails, configFails, answerFails;
+let status, home, history, testFails, configFails, answerFails, historyFails;
 let answers = [];
 let channelAdds = [];
 function reset() {
@@ -29,7 +29,7 @@ function reset() {
   home = {ok: true, enabled: true, needs_you: [{id: 1, headline: 'Export question', detail: 'Keep the button?',
     choices: [{label: 'Keep it', reply: 'Keep it'}], free_text: true}],
     working: [], fixed: [], working_count: 0, fixed_count: 0, channels: [], sources: []};
-  testFails = configFails = answerFails = false;
+  testFails = configFails = answerFails = historyFails = false;
   answers = [];
   channelAdds = [];
 }
@@ -44,7 +44,10 @@ const server = http.createServer(async (req, res) => {
     return res.end(fs.readFileSync(path.join(root, 'static', name)));
   }
   if (req.url === '/api/oncall/status') return json(status);
-  if (req.url === '/api/oncall/decisions') return json({ok: true, decisions: history});
+  if (req.method === 'GET' && req.url === '/api/oncall/decisions') {
+    return historyFails ? json({ok: false, error: 'History fixture unavailable.'}, 500)
+      : json({ok: true, decisions: history});
+  }
   if (req.url === '/api/oncall/home') return json(home);
   let body = '';
   for await (const part of req) body += part;
@@ -77,6 +80,8 @@ const server = http.createServer(async (req, res) => {
     browser = await puppeteer.launch({headless: true, executablePath: findChromePath(), args: ['--no-sandbox']});
     for (const width of [390, 1440]) for (const theme of ['light', 'dark']) {
       reset();
+      status.minor_decisions = false;
+      historyFails = true;
       const context = await browser.createBrowserContext();
       const page = await context.newPage();
       const errors = [];
@@ -89,14 +94,42 @@ const server = http.createServer(async (req, res) => {
         if (theme === 'light') document.addEventListener('DOMContentLoaded', () => document.documentElement.dataset.theme = 'light');
       }, theme);
       await page.goto(base + '/?ccc_settings=oncall');
-      await page.waitForFunction(() => document.querySelector('#settingsSection-oncall')?.textContent.includes('SHOP-5'));
+      await page.waitForFunction(() => document.querySelector('#settingsSection-oncall')?.textContent.includes('Decision history is unavailable.'));
       // The fixture has no full-app Settings router; expose the component it mounted.
       await page.$eval('#settingsSection-oncall', el => el.classList.add('is-active-section'));
       const section = '#settingsSection-oncall';
+      const unavailable = /Decision history is unavailable\. Try again later\./;
+      assert.match(await page.$eval(section, el => el.innerText), unavailable);
+      assert.doesNotMatch(await page.$eval(section, el => el.innerText), /No decisions recorded\./);
+      assert.equal(await page.$eval(section + ' [aria-label="Queue for bug tickets"]', el => el.value), 'SHOP');
+      assert.equal(await page.$eval(section + ' [aria-label="On-call"]', el => el.getAttribute('aria-checked')), 'true');
+      assert.equal(await page.$eval(section + ' [aria-label="Agents decide small reversible things"]', el => el.getAttribute('aria-checked')), 'false');
+      checked++;
+      await page.click(section + ' [aria-label="On-call"]');
+      await page.waitForFunction(() => {
+        const toggle = document.querySelector('#settingsSection-oncall [aria-label="On-call"]');
+        return toggle.getAttribute('aria-checked') === 'false' && !toggle.disabled;
+      });
+      assert.equal(status.enabled, false);
+      assert.equal(status.minor_decisions, false);
+      assert.match(await page.$eval(section, el => el.innerText), unavailable);
+      checked++;
+      historyFails = false;
+      await page.evaluate(() => window.cccOncallSettings.refresh());
+      assert.match(await page.$eval(section, el => el.innerText), /SHOP-5/);
+      assert.doesNotMatch(await page.$eval(section, el => el.innerText), unavailable);
+      assert.equal(await page.$eval(section + ' [aria-label="On-call"]', el => el.getAttribute('aria-checked')), 'false');
+      assert.equal(await page.$eval(section + ' [aria-label="Agents decide small reversible things"]', el => el.getAttribute('aria-checked')), 'false');
+      checked++;
+      status.enabled = status.minor_decisions = true;
+      await page.evaluate(() => window.cccOncallSettings.refresh());
       assert.match(await page.$eval(section, el => el.innerText), /Which helper name\?[\s\S]*Applied\./);
       checked++;
       await page.click('[aria-label="Agents decide small reversible things"]');
-      await page.waitForFunction(() => document.querySelector('[aria-label="Agents decide small reversible things"]').getAttribute('aria-checked') === 'false');
+      await page.waitForFunction(() => {
+        const toggle = document.querySelector('[aria-label="Agents decide small reversible things"]');
+        return toggle.getAttribute('aria-checked') === 'false' && !toggle.disabled;
+      });
       assert.match(await page.$eval(section, el => el.innerText), /SHOP-5/);
       checked++;
       history[0].state = 'applied reversed';

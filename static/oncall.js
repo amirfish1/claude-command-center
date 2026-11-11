@@ -25,7 +25,8 @@
     ['notify_fixed', 'Tell the reporter when it is fixed']];
   const REFRESH_MS = 10000;
 
-  let section = null, parts = null, state = null, decisions = [], timer = null, loading = false, retries = 0;
+  let section = null, parts = null, state = null, decisions = null, timer = null, loading = false, retries = 0;
+  let decisionsUnavailable = false;
   const channelFeedback = new Map();
 
   const flagOn = () => { try { return !!(window.__CCC_FLAGS__ || {}).oncall; } catch (_) { return false; } };
@@ -418,8 +419,12 @@
     p.waiting.replaceChildren();
     for (const item of waiting) p.waiting.append(listRow('#' + item.id, item.line).node);
     p.decisions.replaceChildren();
-    if (!decisions.length) p.decisions.append(el('div', 'settings-empty', 'No decisions recorded.'));
-    for (const decision of decisions) {
+    if (decisionsUnavailable) {
+      p.decisions.append(el('div', 'settings-empty', 'Decision history is unavailable. Try again later.'));
+    } else if (decisions === null) {
+      p.decisions.append(el('div', 'settings-empty', 'Loading decision history…'));
+    } else if (!decisions.length) p.decisions.append(el('div', 'settings-empty', 'No decisions recorded.'));
+    for (const decision of (decisionsUnavailable ? [] : decisions || [])) {
       const detail = decision.recommend
         ? ['Decided: ' + decision.recommend, decision.undo && 'Undo: ' + decision.undo, decisionState(decision)]
         : [decision.state, decision.reason];
@@ -472,7 +477,13 @@
       state = await api('GET', 'status');
       const ids = new Set((state.channels || []).map(channel => channel.id));
       for (const id of channelFeedback.keys()) if (!ids.has(id)) channelFeedback.delete(id);
-      decisions = (await api('GET', 'decisions')).decisions || [];
+      draw();
+      try {
+        decisions = (await api('GET', 'decisions')).decisions || [];
+        decisionsUnavailable = false;
+      } catch (_) {
+        decisionsUnavailable = true;
+      }
       draw();
     } catch (error) {
       if (parts) {
