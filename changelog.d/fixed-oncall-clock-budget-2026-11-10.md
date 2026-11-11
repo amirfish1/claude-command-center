@@ -1,0 +1,1 @@
+- On-call keeps the hourly alert budget across backward clock changes without holding messages until the old wall time returns.

@@ -221,10 +221,12 @@ def deliver(cfg, store, chans, *, now=None):
     if not targets or in_quiet_hours(cfg, now):
         return 0
     cap = int(cfg.get("hourly_cap") or HOURLY_CAP)
-    recent = store.recent_alert_ids(now - 3600, cap)
+    from . import rate_limit
+    budget = rate_limit.load(store, now, cap)
+    recent = {int(key) for key in budget["entries"]}
     sent = 0
     for alert in pending:
-        if len(recent) >= cap:
+        if len(recent) >= cap and alert["id"] not in recent:
             if not store.kv_get("cap_noted", 0) or now - store.kv_get("cap_noted", 0) > 3600:
                 store.kv_set("cap_noted", now)
                 store.log("alert", f"hourly cap of {cap} reached; the rest wait", now=now)
@@ -235,6 +237,7 @@ def deliver(cfg, store, chans, *, now=None):
         if send_alert(store, targets, alert, now=now):
             store.alert_mark_sent(alert["id"], now=now)
             recent.add(alert["id"])
+            rate_limit.record(store, budget, alert["id"])
             sent += 1
         else:
             store.kv_set(f"try:{alert['id']}", {"n": tries["n"] + 1, "at": now})
