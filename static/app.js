@@ -45209,6 +45209,18 @@
     // (continuations and children inherit the ticket server-side). Ticketless
     // Coding rows go to Other while the flag is on.
     const _ideaTicketsOn = ideaTicketsOn();
+    const _ideaTicketFor = (c) => {
+      const seen = new Set();
+      while (c) {
+        const id = _allTabSessionId(c);
+        if (seen.has(id)) break;
+        seen.add(id);
+        const ticket = c.idea_ticket;
+        if (ticket && (ticket.ref || ticket.pending)) return ticket;
+        c = _allTabById.get(_allTabParentId(c));
+      }
+      return null;
+    };
     const _ideaTicketLane = (c) => {
       const t = _ideaTicketsOn && c && c.idea_ticket;
       // A UI spawn still waiting for its first reply sits in Ideas until
@@ -45266,7 +45278,10 @@
       const members = new Map();
       candidates.forEach(c => {
         if (laneOf(c) !== lane || !inWindow(c)) return;
-        const ticket = c.idea_ticket || {};
+        // A newly discovered helper may not have a server-enriched ticket
+        // yet. Group it with its ancestor rather than making a standalone
+        // session row that causes family dedup to delete the nested copy.
+        const ticket = _ideaTicketFor(c) || {};
         const ref = ticket.ref || (ticket.pending && 'pending:' + _allTabSessionId(c))
           || (lane === 'alltickets' && 'session:' + _allTabSessionId(c));
         if (!ref) return;

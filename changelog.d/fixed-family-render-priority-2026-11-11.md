@@ -1,1 +1,1 @@
-Keep unticketed child sessions in their ticketed parent's render lane and retain loaded ancestors within the row budget so the All tab can build complete nested family rows.
+Keep unticketed child sessions in their parent's ticket group and render lane, retaining loaded ancestors within the row budget so the All tab builds complete nested family rows without duplicate standalone helpers.
