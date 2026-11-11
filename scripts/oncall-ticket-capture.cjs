@@ -9,7 +9,7 @@ const url = new URL(base);
 if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !/^[A-Z0-9_-]+$/.test(queue) || !/^[A-Z0-9_-]+-\d+$/.test(ref) || !['reported','fixed'].includes(state)) throw Error('Invalid isolated queue capture');
 const fixture = process.argv.includes('--fixture');
 const prefix = fixture ? 'fixture-ticket-' : 'ticket-';
-const output = path.join(__dirname, '../.claude/screenshots/launch-captures');
+const output = require('./oncall-real-recording.cjs').outputDir();
 (async () => {
   const browser = await puppeteer.launch({headless:true, executablePath:process.env.PUPPETEER_EXECUTABLE_PATH,
     args:['--no-sandbox','--disable-background-networking','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1']});
