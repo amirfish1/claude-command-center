@@ -151,3 +151,28 @@ def test_recheck_refreshes_candidate_after_it_leaves_first_page():
     source.request = lambda url, headers: (200, json.dumps(dict(run(1, sha='same'), run_attempt=2)).encode(), {}) if url.endswith('/actions/runs/1') else original(url, headers)
     rows[:] = []  # the candidate is no longer on the runs page
     assert len(source.poll()) == 1
+
+
+def test_poll_call_budget_includes_inflight_pages_and_log_enrichment():
+    source, rows, calls = fixture()
+    source._set('active_runs', list(range(1000, 1010)))
+    rows[:] = [dict(run(i), workflow_id=i) for i in range(350, 0, -1)]
+    original = source.request
+    def request(url, headers):
+        if '/actions/runs/' in url and '/jobs?' not in url:
+            calls.append(url)
+            return 200, json.dumps({'id': int(url.rsplit('/', 1)[1]), 'status': 'in_progress'}).encode(), {}
+        if '/jobs?' in url:
+            calls.append(url)
+            return 200, json.dumps({'jobs': [{'id': 1, 'name': 'unit', 'conclusion': 'failure'}]}).encode(), {}
+        if '/logs' in url:
+            calls.append(url)
+            return 200, b'AssertionError', {}
+        return original(url, headers)
+    source.request = request
+    before = len(calls)
+    assert source.poll() == []
+    assert len(calls) - before == 4
+    before = len(calls)
+    assert len(source.poll()) == 3
+    assert len(calls) - before == 10

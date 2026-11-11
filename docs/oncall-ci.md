@@ -107,7 +107,7 @@ key reuses a ticket created before the crash. The journal stores run metadata
 and scrubbed pending excerpts; it never stores credentials or raw log bodies.
 
 An arrival rate above scan and enrichment capacity delays intake. Deleted
-runs, server retention limits and changing page order cannot be recovered.
+runs, server retention limits and arbitrary server reordering cannot be recovered.
 The source does not verify commit ancestry through the API. A live proof's
 ancestor check is a separate observation.
 
@@ -184,24 +184,24 @@ start after the isolated dashboard became ready.
 
 | Event | Gitea 1.25.1 PR, runner 0.2.13 | Forgejo 17.0.1, runner 13.2.1 |
 |---|---|---|
-| Initial green | 00:51:51.601, 20.08 s | 00:45:44.498, 53.81 s |
-| Source configured | 00:51:57.144, 25.62 s | 00:45:52.557, 61.87 s |
-| Red run | 00:52:24.204, 52.69 s | 00:46:39.004, 108.32 s |
-| Ticket reference recorded | 00:52:40.256, 68.74 s | Not separately timed |
-| Dashboard restarted | 00:52:43.063, 71.54 s | 00:47:04.011, 133.33 s |
-| Worker observed | 00:52:43.064, 71.54 s | 00:47:05.014, 134.33 s |
-| Ticket closed after green | 00:53:58.126, 146.61 s | 00:51:59.468, 428.78 s |
-| Fix and owner notice verified | 00:53:59.187, 147.67 s | 00:52:01.094, 430.41 s |
+| Initial green | 01:02:10.573, 6.78 s | 00:59:20.818, 13.46 s |
+| Source configured | 01:02:17.776, 13.98 s | 00:59:28.277, 20.92 s |
+| Red run | 01:02:23.224, 19.43 s | 00:59:43.792, 36.44 s |
+| Ticket reference recorded | 01:03:00.803, 57.01 s | 01:00:26.061, 78.71 s |
+| Dashboard restarted | 01:03:09.683, 65.89 s | 01:00:50.371, 103.02 s |
+| Worker observed | 01:03:09.726, 65.93 s | 01:00:25.055, 77.70 s |
+| Ticket closed after green | 01:04:21.717, 137.92 s | 01:02:04.659, 177.30 s |
+| Fix and owner notice verified | 01:04:24.291, 140.50 s | 01:02:05.897, 178.54 s |
 
-The Gitea fix was `cf09ee39a06e479d1fd9af37acb2fc3a5263a2ec` on
+The Gitea fix was `36b473676f47304c29a14944b00ce1834d078e08` on
 `deps/update`. The default branch stayed unchanged and the PR stayed open.
-The Forgejo fix was `7c1cac48f10bc93083db3469a13437032889700f` on main.
+The Forgejo fix was `1a556b8ffa9ba7ea4151dc633a46dd5bd9abdd3d` on main.
 Both preserved the workflow and test file and delivered a local ntfy notice.
 All proof containers and homes were removed.
 
-The first Forgejo observer labeled a persisted report as filed before its
-ticket reference appeared. The final checks passed, but that filing timestamp
-is not claimed above. The observer now requires a reference before restarting.
+An earlier Forgejo observer labeled a persisted report as filed before its
+ticket reference appeared. The observer was corrected and the full proof was
+rerun; the table above records that final run.
 Earlier attempts also exposed null Gitea steps, a forbidden config-field name,
 Forgejo's different response shapes, slow server initialization and a noexec
 temporary mount. The implementation or proof was corrected for each.

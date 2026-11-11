@@ -56,9 +56,9 @@ def main():
         env.update(HOME=temp, XDG_CONFIG_HOME=temp, XDG_DATA_HOME=temp,
                    CCC_STATE_DIR=str(root / 'state'), WATCHTOWER_STORE=str(root / 'queues.json'),
                    WT_NO_AUTOSTART='1', WT_NO_SELF_UPDATE='1', WATCHTOWER_DELEGATE_URL='off')
-        first = subprocess.run([sys.executable, __file__, '--child', temp, 'crash'], env=env, timeout=60)
+        first = subprocess.run([sys.executable, __file__, '--child', temp, 'crash'], env=env, cwd=root, timeout=60)
         assert first.returncode == 73, first.returncode
-        subprocess.run([sys.executable, __file__, '--child', temp, 'recover'], env=env, timeout=60, check=True)
+        subprocess.run([sys.executable, __file__, '--child', temp, 'recover'], env=env, cwd=root, timeout=60, check=True)
 
 
 if __name__ == '__main__':
