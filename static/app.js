@@ -89010,7 +89010,7 @@
     }
   }
   if ($carModeMenuBtn) $carModeMenuBtn.addEventListener('click', () => {
-    closeSettingsModal();
+    if (!document.getElementById('carModeModal')?.classList.contains('settings-inline-dialog')) closeSettingsModal();
     openCarModeModal();
   });
   if ($carModeBackdrop) $carModeBackdrop.addEventListener('click', closeCarModeModal);
@@ -90237,7 +90237,7 @@
   }
 
   if ($networkBtn) $networkBtn.addEventListener('click', () => {
-    closeSettingsModal();
+    if (!document.getElementById('networkModal')?.classList.contains('settings-inline-dialog')) closeSettingsModal();
     networkOpen();
   });
   // Phone access wizard (static/phone-access.js, preview flag phone_access).
@@ -90530,7 +90530,7 @@
   }
 
   if ($fedBtn) $fedBtn.addEventListener('click', () => {
-    closeSettingsModal();
+    if (!document.getElementById('fedPeersModal')?.classList.contains('settings-inline-dialog')) closeSettingsModal();
     openFederationPeersModal();
   });
   if ($fedBackdrop) $fedBackdrop.addEventListener('click', fedClose);
@@ -96253,7 +96253,13 @@
     if (event.key === 'Escape' && _aoPopup) { event.stopPropagation(); event.preventDefault(); closeSectionPopup(); }
   }, true);
   function openEngineSetupPopup(engine) {
-    if (_aoPopup?.kind === 'engines') { aoSelectSetupEngine(engine); return; }
+    if (_aoPopup?.kind === 'engines') {
+      // Same engine's button again closes its setup; another engine swaps it.
+      if (_aoPopup.engine === engine) { closeSectionPopup(); return; }
+      _aoPopup.engine = engine; aoSelectSetupEngine(engine);
+      _aoPopup.overlay.scrollIntoView({block: 'nearest'});
+      return;
+    }
     const header = document.getElementById('engineConnection');
     const list = document.getElementById('engList');
     if (!header || !list) return;
@@ -96261,8 +96267,12 @@
     const wasOpen = details?.open;
     if (details) details.open = true;   // keeps the hub's visibility gate (and polling) on
     if (!openSectionPopup('engines', 'Engine setup', [header, list], () => { if (details) details.open = !!wasOpen; })) return;
-    _aoPopup.kind = 'engines';
+    _aoPopup.kind = 'engines'; _aoPopup.engine = engine;
+    // Setup opens on the Engines page itself, under the list: not a pop-up.
+    _aoPopup.overlay.classList.add('ao-setup-inline');
+    _aoPopup.overlay.querySelector('.ao-setup-card')?.removeAttribute('aria-modal');
     aoSelectSetupEngine(engine);
+    _aoPopup.overlay.scrollIntoView({block: 'nearest'});
     if (!_engHubData) refreshEnginesHub({fresh: true});
   }
   function aoSelectSetupEngine(engine) {
@@ -96909,15 +96919,17 @@
   // with its avatar and inline Upload / Auto controls.
   const repoAvatarModes = new Map();
   let repoSettingsAddOpen = false;
+  let repoSettingsKnown = [];
   function repoSettingsOptions() {
-    try { if (!spawnCwdOptions.length) populateSpawnCwdPicker(); } catch (_) {}
+    let picker = [];
+    try { if (!spawnCwdOptions.length) populateSpawnCwdPicker(); picker = spawnCwdOptions; } catch (_) {}
     const seen = new Set(), out = [];
     const add = (path, label) => {
       if (!path || seen.has(path)) return;
       seen.add(path); out.push({ path, label: label || path.split('/').filter(Boolean).pop() || path });
     };
-    (spawnCwdOptions || []).forEach(o => add(o.value, o.label));
-    (repoListState.repos || []).forEach(r => add(r.path, r.label));
+    picker.forEach(o => add(o.value, o.label));
+    repoSettingsKnown.forEach(r => add(r.path, r.label));
     return out.slice(0, 60);
   }
   function drawRepoSettingsList() {
@@ -96952,7 +96964,10 @@
   }
   async function renderRepoSettingsList() {
     drawRepoSettingsList();
-    try { await loadRepoList({ foreground: true }); } catch (_) {}
+    try {
+      const state = await loadRepoList({ foreground: true });
+      repoSettingsKnown = [...(state.repos || []), ...(state.suggested || [])];
+    } catch (_) {}
     drawRepoSettingsList();
     const pending = repoSettingsOptions().filter(repo => !repoAvatarModes.has(repo.path));
     const worker = async () => {
@@ -96986,8 +97001,7 @@
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result.ok) throw new Error(result.error || 'Could not add repository');
-      if (Array.isArray(result.repos)) repoListState.repos = result.repos;
-      try { populateSpawnCwdPicker(); } catch (_) {}
+      try { if (Array.isArray(result.repos)) repoListState.repos = result.repos; populateSpawnCwdPicker(); } catch (_) {}
       repoSettingsAddOpen = false; input.blur();
       showOpToast('Repository added.', 'success');
       void renderRepoSettingsList();
@@ -97051,6 +97065,41 @@
     reader.readAsDataURL(file);
   });
 
+  // Settings never stacks a pop-up over itself: these dialogs render in place
+  // under their own row, and go back to their dialog home when closed.
+  const SETTINGS_INLINE_DIALOGS = {
+    networkAccessBtn: 'networkModal', federationPeersBtn: 'fedPeersModal',
+    carModeMenuBtn: 'carModeModal', voiceSettingsBtn: 'voiceModal',
+  };
+  document.addEventListener('click', event => {
+    const button = event.target.closest?.('#settingsPane button[id]');
+    const modal = button && document.getElementById(SETTINGS_INLINE_DIALOGS[button.id] || '');
+    const row = modal && button.closest('.settings-row');
+    if (!row) return;
+    if (modal.classList.contains('settings-inline-dialog')) {
+      // Second press closes it through the dialog's own close path.
+      if (modal.classList.contains('open')) { event.stopImmediatePropagation(); modal.querySelector('.upd-backdrop')?.click(); }
+      return;
+    }
+    const home = {parent: modal.parentNode, next: modal.nextSibling};
+    modal.classList.add('settings-inline-dialog');
+    modal.removeAttribute('aria-modal');
+    row.after(modal);
+    const observer = new MutationObserver(() => {
+      if (modal.classList.contains('open')) { modal.scrollIntoView({block: 'nearest'}); return; }
+      observer.disconnect();
+      modal.classList.remove('settings-inline-dialog');
+      modal.setAttribute('aria-modal', 'true');
+      home.parent.insertBefore(modal, home.next);
+    });
+    observer.observe(modal, {attributes: true, attributeFilter: ['class']});
+    // A dialog that never opened must not stay parked here.
+    setTimeout(() => {
+      if (modal.classList.contains('open') || !modal.classList.contains('settings-inline-dialog')) return;
+      observer.disconnect(); modal.classList.remove('settings-inline-dialog'); modal.setAttribute('aria-modal', 'true');
+      home.parent.insertBefore(modal, home.next);
+    }, 4000);
+  }, true);
   let settingsSearchFocusTimer;
   var choiceEligibilityReturn;
   function openSettingsModal({ focusSearch = true, cachedOnly = false } = {}) {

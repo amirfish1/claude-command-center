@@ -34617,3 +34617,14 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 /* Settings shows controls, not collapsed explanations. */
 #settingsPane[data-settings-flat] details.choice-eligibility,
 #settingsPane[data-settings-flat] #capabilityRows details { display: none; }
+
+/* Engine setup opens in place on the Engines page, not as a pop-up. */
+.ao-setup-overlay.ao-setup-inline { position: static; inset: auto; display: block; background: none; padding: 12px 0 0; }
+.ao-setup-overlay.ao-setup-inline .ao-setup-card { width: auto; max-height: none; box-shadow: none; }
+.ao-setup-overlay.ao-setup-inline .ao-setup-body { overflow: visible; }
+#settingsPane[data-settings-flat] .settings-row:has(> .settings-row-control > #configConsentBtn), #settingsPane[data-settings-flat] .settings-row:has(#configConsentBtn):not(:has([data-cfgc-group])) { display: none; }
+
+/* Dialogs opened from Settings render in place under their row. */
+.upd-overlay.settings-inline-dialog.open { position: static; inset: auto; z-index: auto; display: block; }
+.upd-overlay.settings-inline-dialog .upd-backdrop { display: none; }
+.upd-overlay.settings-inline-dialog .upd-dialog { width: auto !important; max-height: none !important; overflow: visible !important; box-shadow: none; margin: 8px 0 12px; }
