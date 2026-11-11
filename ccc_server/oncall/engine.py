@@ -148,6 +148,9 @@ class Engine:
     def tick(self, force=False):
         with self._lock:
             now = self.clock()
+            from .agent_wait import sweep
+            if self._store is not None:
+                sweep(self._store)
             cfg = self.config()
             if not self.flag_on() or not cfg.get("enabled"):
                 if self._store is not None and self.store.kv_get("enabled_at"):
@@ -169,9 +172,23 @@ class Engine:
                     continue
                 messages = chan.poll()
                 self._note(f"channel:{chan.id}", getattr(chan, "last_error", ""))
-                for msg in messages:
-                    if self._route(cfg, chans, entry, msg, now):
-                        out["inbound"] += 1
+                # Production channels stage a durable inbox with their cursors.
+                # Constructor-injected channels may still return messages directly.
+                if not getattr(chan, "durable_poll", False):
+                    for msg in messages:
+                        if self._route(cfg, chans, entry, msg, now):
+                            out["inbound"] += 1
+                    if hasattr(chan, "ack_poll"):
+                        chan.ack_poll(messages)
+
+            for row_id, msg in store.polled_messages():
+                entry = st.channel_by_id(cfg, msg.channel)
+                if entry is None:
+                    # Preserve already received messages if a channel was removed.
+                    store.inbound_claim(msg)
+                elif self._route(cfg, chans, entry, msg, now):
+                    out["inbound"] += 1
+                store.polled_handled(row_id)
 
             for sid, (entry, source) in self.sources(cfg).items():
                 if not (force or source.due()):
@@ -181,11 +198,13 @@ class Engine:
                 for finding in findings:
                     if customers.file_finding(cfg, store, self.wt, entry, finding, now=now):
                         out["findings"] += 1
-                if entry.get("type") == "ci" and not source.last_error:
+                        if entry.get("type") == "ci":
+                            source.acknowledge(finding.fingerprint)
+                if entry.get("type") in ("ci", "alertmanager") and not source.last_error:
                     try:
                         source.reconcile(store, self.wt)
                     except Exception as exc:
-                        self._note(f"source:{sid}", f"CI recovery could not close its ticket ({type(exc).__name__}).")
+                        self._note(f"source:{sid}", f"Monitoring recovery could not update its ticket ({type(exc).__name__}).")
                 if entry.get("type") == "github" and not source.last_error:
                     source.receive_replies(lambda msg: self._github_reply(cfg, msg, now))
                     self._note(f"source:{sid}", source.last_error)
@@ -198,6 +217,9 @@ class Engine:
             if self._due("closed", CLOSED_EVERY_S, now, force):
                 customers.collect_closed(cfg, store, chans, self.wt, now=now)
 
+            if self._due("health", 60, now):
+                from .health import collect
+                collect(cfg, store, self.wt, now)
             store.park_unhandled_inbound(now=now)
             customers.collect_delivery_problems(store, now=now)
             from .week import daily
@@ -205,6 +227,9 @@ class Engine:
                 daily(self, now)
             except (ValueError, wtmod.WTError) as exc:
                 self._note("summary", str(exc))
+            if self._due("retention", 60, now):
+                from .retention import prune
+                prune(store, now)
             out["sent"] = alerts.deliver(cfg, store, chans, now=now)
             self.last_tick = out
             return out
@@ -390,9 +415,13 @@ class Engine:
             "last_poll": store.kv_get(f"src:{s.get('id')}:last_poll"),
         } for s in cfg.get("sources") or []]
         waiting = [{"id": a["id"], "kind": a["kind"], "ref": a["ref"], "needs_reply": a["needs_reply"],
-                    "line": alerts.render(a)[0], "created_at": a["created_at"], "sent_at": a["sent_at"]}
+                    "line": alerts.render(a)[0], "created_at": a["created_at"], "sent_at": a["sent_at"],
+                    "session_id": a.get("session_id", ""),
+                    "phone_wait": bool((a.get("meta") or {}).get("hook_wait"))}
                    for a in store.alerts(state="open", limit=50)]
+        from .escalation import who
         return {
+            "oncall_now": who(cfg, self.clock()),
             "flag": bool(self.flag_on()), "enabled": bool(cfg.get("enabled")),
             "paused": bool(store.kv_get("paused", False)), "queue": cfg.get("queue") or "",
             "wt": self.wt.available(), "channels": channel_rows, "sources": source_rows,

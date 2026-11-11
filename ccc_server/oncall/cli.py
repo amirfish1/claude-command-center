@@ -22,17 +22,21 @@ import secrets as _secrets
 import sys
 
 CHANNEL_NAMES = {
+    "slack": "Slack", "discord": "Discord", "matrix": "Matrix", "mattermost": "Mattermost",
     "email": "Email", "telegram": "Telegram", "ntfy": "ntfy (phone push, no account)",
     "imessage": "iMessage (this Mac)", "sms": "SMS (your Twilio number)",
     "whatsapp": "WhatsApp (your Twilio sender)", "command": "Your own command",
 }
 SOURCE_NAMES = {
+    "alertmanager": "Prometheus Alertmanager",
+    "docker": "Docker container health",
+    "logs": "Application logs",
     "ci": "Failed CI runs",
     "github": "GitHub issues", "sentry": "Sentry", "posthog": "PostHog",
     "http": "A URL that must stay up",
     "command": "A command that must keep passing",
 }
-PREVIEW_OFF = "On-call is a preview and it is off. Turn it on with: ccc oncall setup"
+PREVIEW_OFF = "On-call is a preview and it is off. Try ccc oncall demo, or turn it on with ccc oncall setup"
 NOT_RUNNING = "CCC is not running. Start it with `ccc`, then run this again."
 
 
@@ -168,6 +172,7 @@ def build_parser():
 
     p = sub.add_parser("test", help="send a test message to every channel, or to one")
     p.add_argument("channel", nargs="?", default="")
+    p.add_argument("--roundtrip", action="store_true", help="wait for a team chat test reply")
 
     sub.add_parser("on", help="turn On-call on")
     sub.add_parser("off", help="turn On-call off")
@@ -187,6 +192,8 @@ def build_parser():
     ssub = p.add_subparsers(dest="what", required=True)
     s = ssub.add_parser("add")
     s.add_argument("type", choices=sorted(SOURCE_NAMES))
+    for option in ("path", "unit", "container"):
+        s.add_argument("--" + option, help="Log file, journal unit or Docker container")
     _entry_flags(s)
     ssub.add_parser("list")
     s = ssub.add_parser("rm")
@@ -201,7 +208,7 @@ def build_parser():
     u.add_argument("address")
     usub.add_parser("list")
 
-    p = sub.add_parser("report", help="report a bug yourself; an agent picks it up")
+    p = sub.add_parser("report", help="file a bug in the configured queue")
     p.add_argument("text")
     p.add_argument("--title", default="")
 
@@ -219,7 +226,12 @@ def build_parser():
     p.add_argument("--since")
     p.add_argument("--weeks", type=int, default=2)
     p.add_argument("--detail", action="store_true")
-    p.add_argument("--post", nargs="?", const="text", choices=("text", "markdown"))
+    output = p.add_mutually_exclusive_group()
+    output.add_argument("--card", metavar="FILE", help="save a private SVG or PNG card")
+    output.add_argument("--page", metavar="FILE", help="save a private eight-week HTML page")
+    p.add_argument("--square", action="store_true", help="make the card 1080 by 1080")
+    p.add_argument("--theme", choices=("light", "dark"), default="light")
+    output.add_argument("--post", nargs="?", const="text", choices=("text", "markdown"))
     sub.add_parser("decisions", help="what agents decided without you, each with its undo")
     return parser
 
@@ -235,6 +247,14 @@ def _collect(kind, etype, fields, args, io):
             raise Stop(f"{etype} has no setting called {key}. It has: "
                        + ", ".join(sorted(n for n in names if not n.endswith("_vault"))) + ".")
         entry[key] = value
+    for key in ("path", "unit", "container"):
+        value = getattr(args, key, None)
+        if value is not None:
+            if key not in names:
+                raise Stop(f"{etype} does not accept --{key}.")
+            if key in entry and entry[key] != value:
+                raise Stop(f"Give {key} once, using --{key} or --set {key}=...")
+            entry[key] = value
     for key, value in _pairs(args.vault, "--vault").items():
         field = key if key.endswith("_vault") else key + "_vault"
         if field not in names:
@@ -281,6 +301,8 @@ def _collect(kind, etype, fields, args, io):
         value = io.prompt(field["label"] + hint, default)
         if value:
             entry[name] = value
+    if kind == "source" and etype == "logs" and entry.get("path"):
+        entry["path"] = os.path.abspath(os.path.expanduser(entry["path"]))
     return entry, typed
 
 
@@ -300,6 +322,12 @@ def _add_channel(client, etype, args, io, types):
             io.out(f"Added {CHANNEL_NAMES.get(etype, etype)}"
                    + (f" ({saved.get('owner')})" if saved.get("owner") else "") + "."
                    + (f" {res['note']}" if res.get("note") else ""))
+            if etype in ("slack", "discord", "matrix", "mattermost"):
+                io.out("Reply ready in the test message thread. Waiting up to 90 seconds.")
+                result = client.must("test", {"channel": saved["id"], "roundtrip": True})
+                if not result.get("ok"):
+                    raise Stop(result.get("error", "Reply check failed. The channel is saved."))
+                io.out("Reply round trip confirmed.")
             return saved
         error = str(res.get("error") or f"CCC answered HTTP {code}.")
         if code == 404 and "preview" in error.lower():
@@ -337,6 +365,8 @@ def _print_status(status, io):
     if status.get("enabled") and status.get("paused"):
         state = "paused"
     io.out(f"On-call is {state}." + (f" Queue: {status['queue']}." if status.get("queue") else ""))
+    if "oncall_now" in status:
+        io.out("On call now: " + status["oncall_now"])
     if not status.get("wt"):
         io.out("WatchTower is not installed, so no agent will pick tickets up.")
     channels = status.get("channels") or []
@@ -430,12 +460,22 @@ def _setup(client, args, io):
 
     code, res = client.post("test")
     for row in res.get("results") or []:
-        io.out(f"Test message to {row['channel']}: " + ("sent." if row["ok"] else f"failed. {row['error']}"))
+        io.out(f"Test message to {row['channel']}: " + ("reply confirmed." if row["ok"] and getattr(args, "roundtrip", False) else "sent." if row["ok"] else f"failed. {row['error']}"))
     if not res.get("results"):
         raise Stop(str(res.get("error") or "No channel to test."))
     if not any(r["ok"] for r in res["results"]):
         client.must("config", {"enabled": False})
         raise Stop("No test message got through. On-call is off. Fix the channel, then run ccc oncall setup again.")
+
+    if not any(s.get("type") == "ci" for s in status.get("config", {}).get("sources", [])):
+        from .ci_source import setup_candidate
+        detected = setup_candidate(repo)
+        if detected and io.interactive and io.yes("Watch failed CI runs for this repository?"):
+            source_code, source_result = client.post("source", {"source": {"type": "ci", **detected}})
+            if source_code != 200:
+                io.out(str(source_result.get("error") or "CI source could not connect."))
+            else:
+                io.out("CI monitoring added.")
 
     client.must("config", {"enabled": True})
     io.out("")
@@ -454,7 +494,10 @@ def run(argv, *, base, get, post, io=None):
     """Run one ``ccc oncall ...`` command. Returns the exit code."""
     if argv[:1] == ["demo"]: return __import__("ccc_server.oncall.demo", fromlist=["main"]).main(argv[1:])
     io = io or IO()
-    args = build_parser().parse_args(argv)
+    if argv[:1] and argv[0] in ("escalate", "person", "rota"):
+        from .escalation_cli import run
+        return run(argv, Client(base, get, post), io)
+    args = build_parser().parse_args(argv or ["status"])
     if args.action == "setup" and (args.yes or args.secret_stdin):
         io.interactive = False
     client = Client(base, get, post)
@@ -470,12 +513,21 @@ def _run(args, client, io):
     if action == "week":
         from urllib.parse import urlencode
         from .week import render
-        query = {"weeks": args.weeks, "detail": "1" if args.detail and not args.post else "0"}
+        visual = bool(args.card or args.page)
+        query = {"weeks": 8 if visual else args.weeks, "detail": "1" if args.detail and not (args.post or visual) else "0"}
         if args.since:
             query["since"] = args.since
         code, data = client.get("week?" + urlencode(query))
         if code != 200 or not data.get("ok"):
             raise Stop(data.get("error", "Could not read the week."))
+        if visual:
+            from .week_visual import write_export
+            try:
+                write_export(data, args.card or args.page, square=args.square, theme=args.theme, html=bool(args.page))
+            except (ValueError, OSError) as exc:
+                raise Stop(str(exc)) from exc
+            io.out("Saved " + (args.card or args.page))
+            return 0
         if data.get("limits") and args.post:
             raise Stop("Export unavailable: " + " ".join(data["limits"]))
         if args.post:
@@ -504,11 +556,11 @@ def _run(args, client, io):
             _print_status(status, io)
         return 0
     if action == "test":
-        code, res = client.post("test", {"channel": args.channel})
+        code, res = client.post("test", {"channel": args.channel, "roundtrip": args.roundtrip})
         if not res.get("results"):
             raise Stop(PREVIEW_OFF if code == 404 else str(res.get("error") or f"CCC answered HTTP {code}."))
         for row in res["results"]:
-            io.out(f"{row['channel']}: " + ("sent." if row["ok"] else f"failed. {row['error']}"))
+            io.out(f"{row['channel']}: " + ("reply confirmed." if row["ok"] and getattr(args, "roundtrip", False) else "sent." if row["ok"] else f"failed. {row['error']}"))
         return 0 if res.get("ok") else 1
     if action in ("on", "off"):
         res = client.must("config", {"enabled": action == "on"})
@@ -554,7 +606,7 @@ def _run(args, client, io):
         return 0
     if action == "report":
         res = client.must("report", {"text": args.text, "title": args.title})
-        io.out(f"Filed as {res.get('ref')}. An agent will pick it up.")
+        io.out(f"Filed as {res.get('ref')}. Worker start is not confirmed.")
         return 0
     if action in ("ask", "tell"):
         res = client.must("customer", {"action": action, "ref": args.ref, "kind": action, "text": args.text})

@@ -1,0 +1,1 @@
+- Drain new PostHog exception groups beyond the first page with at most four queries per poll.

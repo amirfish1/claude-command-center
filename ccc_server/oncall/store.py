@@ -24,7 +24,7 @@ import sqlite3
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 CONFIG_VERSION = 1
@@ -32,8 +32,8 @@ CONFIG_NAME = "config.json"
 DB_NAME = "oncall.sqlite3"
 LOG_KEEP = 500
 
-CHANNEL_TYPES = ("email", "telegram", "ntfy", "imessage", "sms", "whatsapp", "command")
-SOURCE_TYPES = ("ci", "github", "sentry", "posthog", "http", "command")
+CHANNEL_TYPES = ("email", "telegram", "ntfy", "imessage", "sms", "whatsapp", "command", "slack", "discord", "matrix", "mattermost")
+SOURCE_TYPES = ("alertmanager", "docker", "logs", "ci", "github", "sentry", "posthog", "http", "command")
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _QUEUE_RE = re.compile(r"^[A-Z][A-Z0-9_-]{0,31}$")
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -176,7 +176,8 @@ def validate_config(cfg):
         if (not isinstance(quiet, dict) or not _HHMM_RE.match(str(quiet.get("start") or ""))
                 or not _HHMM_RE.match(str(quiet.get("end") or ""))):
             problems.append("Quiet hours need a start and an end as HH:MM.")
-    return problems
+    from .escalation import validate
+    return problems + validate(cfg)
 
 
 _SECRET_WORDS = ("password", "token", "secret", "api_key", "auth")
@@ -324,6 +325,13 @@ CREATE TABLE IF NOT EXISTS deliveries (
 CREATE INDEX IF NOT EXISTS deliveries_ext ON deliveries(channel, external_id);
 CREATE INDEX IF NOT EXISTS deliveries_alert_channel ON deliveries(alert_id, channel, id);
 CREATE INDEX IF NOT EXISTS deliveries_time ON deliveries(sent_at, alert_id, ok);
+CREATE TABLE IF NOT EXISTS poll_inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    UNIQUE(channel, external_id)
+);
 CREATE TABLE IF NOT EXISTS inbound (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
@@ -332,6 +340,7 @@ CREATE TABLE IF NOT EXISTS inbound (
     text TEXT NOT NULL DEFAULT '',
     received_at REAL NOT NULL,
     handled TEXT NOT NULL DEFAULT '',
+    payload TEXT NOT NULL DEFAULT '{}',
     UNIQUE(channel, external_id)
 );
 CREATE INDEX IF NOT EXISTS inbound_unhandled ON inbound(id) WHERE handled='';
@@ -373,9 +382,11 @@ CREATE TABLE IF NOT EXISTS customer_messages (
     external_id TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS customer_messages_ref_state ON customer_messages(ref,state);
 CREATE INDEX IF NOT EXISTS customer_messages_state ON customer_messages(state, id);
 CREATE INDEX IF NOT EXISTS reports_created ON reports(created_at);
 CREATE INDEX IF NOT EXISTS reports_state ON reports(state);
+CREATE INDEX IF NOT EXISTS reports_state_queue ON reports(state,queue);
 CREATE INDEX IF NOT EXISTS alerts_created ON alerts(created_at);
 CREATE INDEX IF NOT EXISTS alerts_kind_state ON alerts(kind,state);
 CREATE INDEX IF NOT EXISTS alerts_closed ON alerts(closed_at);
@@ -402,13 +413,19 @@ class Store:
         self._db.row_factory = sqlite3.Row
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+            from .escalation import init
+            init(self)
             if "message_kind" not in {r[1] for r in self._db.execute("PRAGMA table_info(deliveries)")}:
                 self._db.execute("ALTER TABLE deliveries ADD COLUMN message_kind TEXT NOT NULL DEFAULT 'unknown'")
+            if "payload" not in {r[1] for r in self._db.execute("PRAGMA table_info(inbound)")}:
+                self._db.execute("ALTER TABLE inbound ADD COLUMN payload TEXT NOT NULL DEFAULT '{}'")
             columns = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
             if "owner_action_at" not in columns:
                 self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action_at REAL")
                 self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action TEXT NOT NULL DEFAULT ''")
             self._db.execute("CREATE INDEX IF NOT EXISTS alerts_owner_action ON alerts(owner_action_at)")
+            from .retention import initialize
+            initialize(self._db)
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -523,6 +540,13 @@ class Store:
                   (alert_id, channel, recipient, receipt.external_id, 1 if receipt.ok else 0,
                    receipt.error[:500], time.time() if now is None else now, message_kind))
 
+    def claim_once(self, key):
+        return self._run("INSERT OR IGNORE INTO kv(key,value) VALUES(?, 'true')", (key,)).rowcount == 1
+
+    def owner_repeat_claim(self, alert_id, channel):
+        return self._run("INSERT OR IGNORE INTO kv(key,value) VALUES(?, 'true')",
+                         (f"owner-repeat:{alert_id}:{channel}",)).rowcount == 1
+
     def delivery_latest(self, alert_id, channel):
         return self._one("SELECT * FROM deliveries WHERE alert_id=? AND channel=? "
                          "ORDER BY id DESC LIMIT 1", (alert_id, channel))
@@ -546,6 +570,23 @@ class Store:
         return self._one("SELECT * FROM deliveries WHERE channel=? ORDER BY id DESC LIMIT 1", (channel,))
 
     # -- inbound --
+    def stage_poll(self, messages, updates):
+        """Commit messages and cursor changes together, before provider acknowledgement."""
+        with self._lock, self._db:
+            for msg in messages:
+                self._db.execute("INSERT OR IGNORE INTO poll_inbox(channel,external_id,payload) VALUES(?,?,?)",
+                                 (msg.channel, msg.external_id, _inbound_payload(msg)))
+            for key, value in updates.items():
+                self._db.execute("INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) "
+                                 "DO UPDATE SET value=excluded.value", (key, json.dumps(value)))
+
+    def polled_messages(self, limit=100):
+        return [(row["id"], Inbound(**json.loads(row["payload"]))) for row in
+                self._all("SELECT * FROM poll_inbox ORDER BY id LIMIT ?", (limit,))]
+
+    def polled_handled(self, row_id):
+        self._run("DELETE FROM poll_inbox WHERE id=?", (row_id,))
+
     def reply_action_claim(self, alert_id):
         return self._run("INSERT OR IGNORE INTO kv(key,value) VALUES(?, 'true')",
                          (f"reply-action:{alert_id}",)).rowcount == 1
@@ -556,9 +597,9 @@ class Store:
     def inbound_claim(self, msg):
         """Record an inbound message once. False when it was already seen."""
         try:
-            self._run("INSERT INTO inbound(channel,external_id,sender,text,received_at) VALUES(?,?,?,?,?)",
+            self._run("INSERT INTO inbound(channel,external_id,sender,text,received_at,payload) VALUES(?,?,?,?,?,?)",
                       (msg.channel, msg.external_id, msg.sender, msg.text[:8000],
-                       msg.received_at or time.time()))
+                       msg.received_at or time.time(), _inbound_payload(msg)))
             return True
         except sqlite3.IntegrityError:
             return False
@@ -625,6 +666,20 @@ class Store:
         sql += " ORDER BY id DESC LIMIT ?"
         args.append(int(limit))
         return [_meta_row(r) for r in self._all(sql, args)]
+
+    def filed_queues(self, limit=16):
+        after = self.kv_get("closed_queue_cursor", "")
+        queues = [""] if self._one("SELECT id FROM reports WHERE state='filed' AND queue='' LIMIT 1") else []
+        for _ in range(limit):
+            row = self._one("SELECT queue FROM reports WHERE state='filed' AND queue>? "
+                            "ORDER BY queue LIMIT 1", (after,))
+            if not row:
+                after = ""
+                break
+            after = row["queue"]
+            queues.append(after)
+        self.kv_set("closed_queue_cursor", after)
+        return queues
 
     def report_update(self, report_id, **fields):
         allowed = {"state", "queue", "ticket_ref", "title", "text", "meta"}
@@ -696,7 +751,8 @@ class Store:
     def log(self, kind, detail, now=None):
         self._run("INSERT INTO log(at,kind,detail) VALUES(?,?,?)",
                   (time.time() if now is None else now, kind, str(detail)[:1000]))
-        self._run("DELETE FROM log WHERE id <= (SELECT MAX(id) FROM log) - ?", (LOG_KEEP,))
+        self._run("DELETE FROM log WHERE id IN (SELECT id FROM log "
+                  "WHERE id <= (SELECT MAX(id) FROM log) - ? ORDER BY id LIMIT 100)", (LOG_KEEP,))
 
     def recent_log(self, limit=50):
         return self._all("SELECT at,kind,detail FROM log ORDER BY id DESC LIMIT ?", (int(limit),))
@@ -715,3 +771,10 @@ def _alert_row(row):
     out = _meta_row(row)
     out["needs_reply"] = bool(out.get("needs_reply"))
     return out
+
+
+def _inbound_payload(msg):
+    data = asdict(msg)
+    data["text"] = data["text"][:8000]
+    data["subject"] = data["subject"][:300]
+    return json.dumps(data)

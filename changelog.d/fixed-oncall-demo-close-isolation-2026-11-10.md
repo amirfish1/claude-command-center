@@ -1,0 +1,1 @@
+- Keep demo ticket closure inside the temporary store, without running WatchTower's installed-checkout deployment sync.

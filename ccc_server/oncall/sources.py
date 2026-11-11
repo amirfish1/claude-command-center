@@ -33,6 +33,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 from . import store as _store
 
@@ -41,6 +42,7 @@ FILED_KEEP = 2000
 ENRICH_MAX = 5          # latest-event lookups per Sentry poll
 STACK_LINES = 30
 PAGE_LIMIT = 25
+PAGES_PER_POLL = 4
 MAX_BODY = 4 * 1024 * 1024
 USER_AGENT = "ccc-oncall/1"
 
@@ -226,6 +228,14 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
         return new
 
 
+class HttpReply(tuple):
+    """Two-value transport result with optional response metadata."""
+    def __new__(cls, status, body, headers=None):
+        result = super().__new__(cls, (status, body))
+        result.headers = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
+        return result
+
+
 def _default_http(method, url, *, headers=None, data=None, timeout=20):
     """``(status, body)`` for any HTTP answer; OSError when there is none."""
     if urllib.parse.urlsplit(url).scheme.lower() not in ("http", "https"):
@@ -234,13 +244,13 @@ def _default_http(method, url, *, headers=None, data=None, timeout=20):
         req = urllib.request.Request(url, data=data, method=method, headers=dict(headers or {}))
         opener = urllib.request.build_opener(_SafeRedirect())
         with opener.open(req, timeout=timeout) as resp:
-            return int(resp.status), resp.read(MAX_BODY)
+            return HttpReply(int(resp.status), resp.read(MAX_BODY), dict(resp.headers))
     except urllib.error.HTTPError as exc:
         try:
             body = exc.read(MAX_BODY)
         except Exception:
             body = b""
-        return int(exc.code), body
+        return HttpReply(int(exc.code), body, dict(exc.headers))
     except OSError:
         raise
     except (http.client.HTTPException, ValueError) as exc:
@@ -318,15 +328,42 @@ class Source:
         self._redact.add(value)
         return value
 
+    def _request(self, method, url, **kwargs):
+        reply = self._http(method, url, **kwargs)
+        self._response_headers = getattr(reply, "headers", {})
+        status, body = reply
+        if int(status) in (429, 503):
+            value = self._response_headers.get("retry-after", "")
+            try:
+                if value.isdigit():
+                    delay = int(value)
+                else:
+                    target = parsedate_to_datetime(value).timestamp()
+                    server_date = self._response_headers.get("date")
+                    origin = parsedate_to_datetime(server_date).timestamp() if server_date else self._clock()
+                    delay = max(0, target - origin)
+                self._set("retry_at", float(self._clock()) + delay)
+            except (ValueError, TypeError, OverflowError):
+                pass
+        return status, body
+
+    def _cooling_down(self):
+        try:
+            return float(self._get("retry_at", 0) or 0) > float(self._clock())
+        except Exception:
+            return False
+
     def _api(self, label, method, url, *, token, data=None, hint=""):
         """One authenticated JSON call. Returns the parsed body or raises _Problem."""
+        if self._cooling_down():
+            raise _Problem(f"{label} asked to wait before the next request (Retry-After).")
         headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
         if token:
             headers["Authorization"] = f"Bearer {token}"
         if data is not None:
             headers["Content-Type"] = "application/json"
         try:
-            status, body = self._http(method, url, headers=headers, data=data, timeout=20)
+            status, body = self._request(method, url, headers=headers, data=data, timeout=20)
             status = int(status)
         except _Problem:
             raise
@@ -348,6 +385,8 @@ class Source:
 
     # -- public --
     def due(self):
+        if self._cooling_down():
+            return False
         try:
             last = self._get("last_poll")
         except Exception:
@@ -368,6 +407,8 @@ class Source:
             return False, self._safe(f"Check failed ({type(exc).__name__}).")
 
     def poll(self):
+        if self._cooling_down():
+            return []
         try:
             self._last_poll = float(self._clock())
             self._set("last_poll", self._last_poll)
@@ -442,12 +483,14 @@ class SentrySource(Source):
     def _org_url(self):
         return f"{self.base}/api/0/organizations/{urllib.parse.quote(self.org, safe='')}"
 
-    def _list(self, token, limit):
+    def _list(self, token, limit, cursor=""):
         """Unresolved issues, newest first, one page."""
         params = [("query", "is:unresolved"), ("sort", "new"), ("limit", str(limit)),
                   ("statsPeriod", "14d")]
         if self.environment:
             params.append(("environment", self.environment))
+        if cursor:
+            params.append(("cursor", cursor))
         query = urllib.parse.urlencode([("project", self.project)] + params)
         try:
             rows = self._api("Sentry", "GET", f"{self._org_url()}/issues/?{query}",
@@ -464,6 +507,18 @@ class SentrySource(Source):
             rows = self._api("Sentry", "GET",
                              f"{self.base}/api/0/projects/{path}/issues/?{urllib.parse.urlencode(params)}",
                              token=token, hint=self._hint)
+        self._next_cursor = ""
+        for part in getattr(self, "_response_headers", {}).get("link", "").split(","):
+            if 'rel="next"' not in part or 'results="false"' in part:
+                continue
+            match = re.search(r'<([^>]+)>', part)
+            if match:
+                # Extract only the opaque cursor. Never follow a supplied host
+                # or path with the bearer token.
+                values = urllib.parse.parse_qs(urllib.parse.urlsplit(match[1]).query)
+                candidate = (values.get("cursor") or [""])[0]
+                if len(candidate) <= 1000 and candidate != cursor:
+                    self._next_cursor = candidate
         if not isinstance(rows, list):
             raise _Problem("Sentry sent an answer in an unexpected shape.")
         issues = []
@@ -483,25 +538,47 @@ class SentrySource(Source):
 
     def _poll(self):
         token = self._token("Sentry")
-        issues = self._list(token, PAGE_LIMIT)
-        ids = [str(i["id"]).strip() for i in issues]
+        cursor = str(self._get("scan_cursor", "") or "")
+        issues = self._list(token, PAGE_LIMIT, cursor)
         if not self._get("baselined") and not self.backfill:
-            self._mark_filed(ids)
             if len(issues) >= PAGE_LIMIT:
-                # Older issues can move onto this page as newer ones resolve.
-                # Retain a cutoff instead of treating those unseen IDs as new.
-                self._set("baseline_before", float(self._clock()))
+                # Compare server timestamps with server timestamps, not the
+                # host clock. The latest observed issue is a safe fallback for
+                # compatible servers that omit Date.
+                stamps = []
+                for issue in issues:
+                    try:
+                        stamps.append(datetime.fromisoformat(str(issue.get("firstSeen", "")).replace("Z", "+00:00")).timestamp())
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+                try:
+                    stamps.append(parsedate_to_datetime(self._response_headers.get("date", "")).timestamp())
+                except (ValueError, TypeError, AttributeError, OverflowError):
+                    pass
+                if not stamps:
+                    raise _Problem("Sentry did not provide a server date or first-seen timestamps. "
+                                   "Cannot safely baseline a full page.")
+                self._set("baseline_before", max(stamps))
+            self._mark_filed([str(i["id"]).strip() for i in issues])
             self._set("baselined", True)
             return []
+        for _ in range(PAGES_PER_POLL - 1):
+            cursor = self._next_cursor
+            if not cursor:
+                break
+            issues += self._list(token, PAGE_LIMIT, cursor)
+        next_cursor = self._next_cursor
         filed = set(self._filed())
         fresh = [i for i in issues
                  if str(i["id"]).strip() not in filed and self._events(i) >= self.min_events
                  and not self._before_baseline(i)]
+        fresh = list({str(issue["id"]): issue for issue in fresh}.values())
         findings = []
         for index, issue in enumerate(fresh):
             stack = self._latest_event(token, str(issue["id"]).strip()) if index < ENRICH_MAX else []
             findings.append(self._to_finding(issue, stack))
         self._mark_filed([str(i["id"]).strip() for i in fresh])
+        self._set("scan_cursor", next_cursor)
         if not self._get("baselined"):
             self._set("baselined", True)
         return findings
@@ -631,7 +708,7 @@ class PostHogSource(Source):
             f"WHERE event = '$exception' AND timestamp >= now() - INTERVAL {int(self.window_min)} MINUTE "
             "GROUP BY group_key "
             f"HAVING count() >= {int(self.min_events)} "
-            "ORDER BY event_count DESC, group_key "
+            "ORDER BY group_key "
             "LIMIT 100"
         )
 
@@ -662,8 +739,10 @@ class PostHogSource(Source):
     def _poll(self):
         token = self._token("PostHog")
         sql = self.hogql()
-        rows = self._query(token, sql, "ccc on-call exceptions")
-        if not self._get("baselined") and not self.backfill:
+        baseline = not self._get("baselined") and not self.backfill
+        offset = 0 if baseline else _as_int(self._get("scan_offset"))
+        rows = self._query(token, sql + (f" OFFSET {offset}" if offset else ""), "ccc on-call exceptions")
+        if baseline:
             page = list(rows)
             while len(page) == 100:
                 if len(rows) > FILED_KEEP:
@@ -674,6 +753,16 @@ class PostHogSource(Source):
             if len(rows) > FILED_KEEP:
                 raise _Problem("PostHog has too many existing groups to baseline safely. "
                                "Narrow window_min or raise min_events.")
+        next_offset = 0
+        if not baseline:
+            page = list(rows)
+            for _ in range(PAGES_PER_POLL - 1):
+                if len(page) < 100:
+                    break
+                page = self._query(token, sql + f" OFFSET {offset + len(rows)}", "ccc on-call exceptions")
+                rows += page
+            if len(page) == 100:
+                next_offset = offset + len(rows)
         day = time.strftime("%Y%m%d", time.gmtime(float(self._clock())))
         groups = []
         for row in rows:
@@ -695,6 +784,7 @@ class PostHogSource(Source):
             fresh.append(fingerprint)
             findings.append(self._to_finding(fingerprint, row))
         self._mark_filed(fresh)
+        self._set("scan_offset", next_offset)
         if not self._get("baselined"):
             self._set("baselined", True)
         return findings
@@ -745,7 +835,7 @@ class HttpSource(Source):
     def _probe(self):
         """``(ok, what was received)`` for one request. Never raises."""
         try:
-            status, body = self._http("GET", self.url, headers={"User-Agent": USER_AGENT},
+            status, body = self._request("GET", self.url, headers={"User-Agent": USER_AGENT},
                                       timeout=self.timeout_s)
             status = int(status)
         except Exception as exc:
@@ -1029,9 +1119,18 @@ def build(cfg, **kw):
     if not isinstance(cfg, dict):
         raise ValueError("A source must be an object.")
     kind = str(cfg.get("type") or "").strip()
+    if kind == "alertmanager":
+        from .alertmanager_source import AlertmanagerSource
+        return AlertmanagerSource(cfg, **kw)
+    if kind == "docker":
+        from .docker_source import DockerSource
+        return DockerSource(cfg, **kw)
+    if kind == "logs":
+        from .logs_source import LogsSource
+        return LogsSource(cfg, **kw)
     if kind == "ci":
-        from .ci_source import CISource
-        return CISource(cfg, **kw)
+        from .ci_source import CISource, GitLabSource
+        return (GitLabSource if cfg.get("provider") == "gitlab" else CISource)(cfg, **kw)
     if kind not in _TYPES:
         raise ValueError(f"Unknown source type: {kind or '(none)'}. Use one of: {', '.join(_store.SOURCE_TYPES)}.")
     return _TYPES[kind](cfg, **kw)
@@ -1045,6 +1144,10 @@ def _field(name, label, placeholder="", *, secret=False, optional=False):
 _FIELDS = {
     "ci": [
         _field("repo", "Repository", "example-org/storefront"),
+        _field("pull_requests", "Watch pull requests", "no", optional=True),
+        _field("pr_allowlist", "Allowed PR authors", optional=True),
+        _field("provider", "CI provider", "github", optional=True),
+        _field("recheck", "Recheck failures", "no", optional=True),
         _field("token_vault", "Token", secret=True, optional=True),
         _field("base", "API address", "https://api.github.com", optional=True),
         _field("branches", "Branches (comma separated)", optional=True),
@@ -1099,6 +1202,15 @@ _FIELDS = {
 def required_fields(source_type):
     """The fields a setup form asks for, in order. Optional ones come last."""
     kind = str(source_type or "").strip()
+    if kind == "alertmanager":
+        from .alertmanager_source import FIELDS
+        return [dict(f) for f in FIELDS]
+    if kind == "docker":
+        from .docker_source import FIELDS
+        return [dict(f) for f in FIELDS]
+    if kind == "logs":
+        from .logs_source import FIELDS
+        return [dict(f) for f in FIELDS]
     if kind not in _FIELDS:
         raise ValueError(f"Unknown source type: {kind or '(none)'}.")
     return [dict(f) for f in _FIELDS[kind]]

@@ -10,10 +10,8 @@
 # run.sh and scripts/install.sh both call this script and get the same chain.
 #
 # WatchTower is CCC's queue engine, not an optional extra: without it the
-# dashboard silently loses worker dispatch (filed tickets never spawn
-# anything), plan-to-fleet import, WT-tracked drain and delivery receipts.
-# Default installs remain best-effort. A caller that supplies WATCHTOWER_REF
-# explicitly requests a reproducible dependency and fails closed on mismatch.
+# dashboard cannot start. Failed bootstrap returns a nonzero status so callers
+# can stop before starting background workers.
 #
 # Usage:
 #   ./scripts/install-watchtower.sh        # run the chain
@@ -470,7 +468,8 @@ ccc_install_watchtower() {
   # A previous attempt failed within the last day. Retrying every launch would
   # just re-run the same doomed pip resolve, slowly, in front of the user.
   if wt_marker_fresh "$WT_FAIL_MARKER"; then
-    return 0
+    wt_say "WatchTower setup previously failed; check your connection and retry with CCC_WATCHTOWER_FORCE=1."
+    return 1
   fi
 
   wt_say "not installed — bootstrapping CCC's queue engine…"
@@ -526,11 +525,9 @@ ccc_install_watchtower() {
 
   # 7. Loud, with the exact command to retry. The tarball is the current
   #    source, so that is what we hand the user — not the stale PyPI release.
-  wt_say "WARNING: could not install WatchTower. CCC falls back to its built-in"
-  wt_say "  queue engine — tickets can be filed, but no worker is dispatched."
-  wt_say "  Retry manually:  $WT_PYTHON -m pip install --user $WATCHTOWER_TARBALL_URL"
+  wt_say "Could not install the required WatchTower package; check your connection and retry with CCC_WATCHTOWER_FORCE=1."
   wt_touch_marker "$WT_FAIL_MARKER"
-  return 0
+  return 1
 }
 
 # Only auto-run when executed, not when sourced (tests source us to call the

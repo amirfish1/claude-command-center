@@ -386,6 +386,16 @@ _FIELDS = {
 }
 
 
+for _kind in ('slack', 'discord', 'matrix', 'mattermost'):
+    _FIELDS[_kind] = [
+        _field('token_vault', 'Bot access token', secret=True),
+        _field('owner', 'Your user ID'),
+    ]
+    if _kind != 'slack':
+        _FIELDS[_kind].append(_field('channel_id', 'Channel ID'))
+    _FIELDS[_kind].append(_field('api_base', 'Server URL', optional=_kind in ('slack', 'discord')))
+
+
 def required_fields(channel_type):
     """The fields a setup form asks for, in order. Unknown type: []."""
     return copy.deepcopy(_FIELDS.get(str(channel_type or ""), []))
@@ -408,6 +418,7 @@ class Channel:
         self.run = run or subprocess.run
         self.last_error = ""
         self._mem = {}
+        self._poll_updates = None
         self._secret_values = set()
         self._note = ""
 
@@ -447,16 +458,26 @@ class Channel:
         self.last_error = receipt.error
         return receipt
 
+    @property
+    def durable_poll(self):
+        return self.kv is not None and hasattr(self.kv, "stage_poll")
+
     def poll(self):
         """New inbound messages since the last poll. Never raises."""
         self._note = ""
+        durable = self.durable_poll
+        self._poll_updates = {} if durable else None
         try:
             out = list(self._poll() or [])
+            if durable:
+                self.kv.stage_poll(out, self._poll_updates)
             self.last_error = self._scrub(self._note)
             return out
         except Exception as exc:
             self.last_error = self._scrub(_describe(exc)) or "Poll failed."
             return []
+        finally:
+            self._poll_updates = None
 
     # -- subclass hooks --
     def _check(self):
@@ -501,13 +522,17 @@ class Channel:
 
     def _get(self, name, default=None):
         key = self._key(name)
+        if self._poll_updates is not None and key in self._poll_updates:
+            return self._poll_updates[key]
         if self.kv is None:
             return self._mem.get(key, default)
         return self.kv.kv_get(key, default)
 
     def _set(self, name, value):
         key = self._key(name)
-        if self.kv is None:
+        if self._poll_updates is not None:
+            self._poll_updates[key] = value
+        elif self.kv is None:
             self._mem[key] = value
         else:
             self.kv.kv_set(key, value)
@@ -989,18 +1014,21 @@ class NtfyChannel(Channel):
             now = int(self.clock())
             events = self._fetch(now)
             newest = events[-1] if events else {}
+            self._set("baseline", now)
             self._set("cursor", {"id": str(newest.get("id") or ""),
                                  "time": _int(newest.get("time"), now)})
             self._set("seen", [str(e["id"]) for e in events][-50:])
             return []
         last_id, last_time = str(cursor.get("id") or ""), _int(cursor.get("time"))
+        baseline = self._get("baseline", last_time)
+        self._set("baseline", baseline)
         events = self._fetch(last_id or last_time)
         seen = list(self._get("seen", []) or [])
         out = []
         for event in events:
             event_id, when = str(event["id"]), _int(event.get("time"))
             # A server that no longer knows our cursor id replays its whole cache.
-            if event_id in seen or (last_id and when < last_time):
+            if event_id in seen or when < baseline:
                 continue
             seen.append(event_id)
             last_id, last_time = event_id, max(last_time, when)
@@ -1280,6 +1308,15 @@ class TwilioChannel(Channel):
             self._set("pending", pending[-10:])
         return receipt
 
+    def _template_problem(self, item, error):
+        self._note = error
+        if self.kv is not None and hasattr(self.kv, "alert_upsert"):
+            self.kv.alert_upsert(
+                f"whatsapp-template-problem:{self.id}:{item['sid']}", kind="delivery_problem",
+                title="WhatsApp delivery needs review", needs_reply=False,
+                body=f"Fallback for message {item['sid']}: {error}. No automatic retry."
+                     f"\n\nOriginal message:\n{item['text']}", now=self.clock())
+
     def _follow_up(self):
         """Retry accepted WhatsApp messages that later failed the 24 hour rule."""
         pending = list(self._get("pending", []) or [])
@@ -1294,9 +1331,31 @@ class TwilioChannel(Channel):
                 status, data = self._call("GET", f"/Messages/{sid}.json")
                 if _int(data.get("error_code")) == _TWILIO_WINDOW_CODE:
                     if self.template_sid:
-                        receipt = self._template(item["to"], item["text"])
-                        if not receipt.ok:
-                            self._note = receipt.error
+                        key = f"whatsapp-template:{self.id}:{item['sid']}"
+                        if self.kv is not None and hasattr(self.kv, "claim_once"):
+                            claimed = self.kv.claim_once(key)
+                            previous = self.kv.kv_get(key)
+                        else:
+                            claimed = key not in self._mem
+                            previous = self._mem.setdefault(key, True)
+                        if not claimed:
+                            if previous != "sent":
+                                self._template_problem(item, "The fallback outcome is unknown")
+                            continue
+                        try:
+                            receipt = self._template(item["to"], item["text"])
+                        except Exception:
+                            self._template_problem(item, "The fallback outcome is unknown")
+                            continue
+                        if receipt.ok:
+                            # Commit outside the polling cursor buffer: this is an
+                            # outbound side effect, not part of receiving a page.
+                            if self.kv is not None:
+                                self.kv.kv_set(key, "sent")
+                            else:
+                                self._mem[key] = "sent"
+                        else:
+                            self._template_problem(item, receipt.error)
                     else:
                         self._note = WHATSAPP_WINDOW_ERROR
                 elif status == 200 and data.get("status") in ("accepted", "scheduled", "queued", "sending"):
@@ -1372,7 +1431,7 @@ class CommandChannel(Channel):
         if proc.returncode == 0:
             return Receipt(ok=True, external_id="")
         detail = str(proc.stderr or "").strip().splitlines()
-        return Receipt(ok=False, error=f"Command exited {proc.returncode}."
+        return Receipt(ok=False, uncertain=True, error=f"Command exited {proc.returncode}."
                        + (f" {detail[-1]}" if detail else ""))
 
 
@@ -1393,7 +1452,12 @@ def build(cfg, **kw):
     """The channel object for one config entry. ValueError names what is wrong."""
     cfg = cfg if isinstance(cfg, dict) else {}
     ctype = str(cfg.get("type") or "")
-    cls = _CLASSES.get(ctype)
+    if ctype in ('slack', 'discord', 'matrix', 'mattermost'):
+        from importlib import import_module
+        module = import_module('.' + ctype, __package__)
+        cls = getattr(module, ctype.capitalize() + 'Channel')
+    else:
+        cls = _CLASSES.get(ctype)
     if cls is None:
         raise ValueError(f"Unknown channel type {ctype!r}.")
     missing = cls.missing(cfg)

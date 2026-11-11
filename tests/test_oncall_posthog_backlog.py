@@ -19,7 +19,7 @@ def test_baseline_reads_all_500_groups_before_marking_ready():
     assert len(calls) == 6
     groups.reverse()
     assert source.poll() == []
-    assert len(calls) == 7
+    assert len(calls) == 10  # bounded steady scan now reads four pages
 
 
 def test_failed_baseline_page_is_not_saved():

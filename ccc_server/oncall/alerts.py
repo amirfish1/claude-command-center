@@ -215,16 +215,22 @@ def deliver(cfg, store, chans, *, now=None):
     """Send every open alert that has not gone out. Returns how many were sent."""
     now = time.time() if now is None else now
     pending = store.unsent_alerts()
+    from . import escalation
+    escalated = escalation.deliver(cfg, store, chans, pending, now)
+    if cfg.get("escalation"):
+        pending = [a for a in pending if not a["needs_reply"]]
     if not pending or store.kv_get("paused", False):
-        return 0
+        return escalated
     targets = alert_channels(cfg, chans)
     if not targets or in_quiet_hours(cfg, now):
-        return 0
+        return escalated
     cap = int(cfg.get("hourly_cap") or HOURLY_CAP)
-    recent = store.recent_alert_ids(now - 3600, cap)
-    sent = 0
+    from . import rate_limit
+    budget = rate_limit.load(store, now, cap)
+    recent = {int(key) for key in budget["entries"]}
+    sent = escalated
     for alert in pending:
-        if len(recent) >= cap:
+        if len(recent) >= cap and alert["id"] not in recent:
             if not store.kv_get("cap_noted", 0) or now - store.kv_get("cap_noted", 0) > 3600:
                 store.kv_set("cap_noted", now)
                 store.log("alert", f"hourly cap of {cap} reached; the rest wait", now=now)
@@ -235,6 +241,7 @@ def deliver(cfg, store, chans, *, now=None):
         if send_alert(store, targets, alert, now=now):
             store.alert_mark_sent(alert["id"], now=now)
             recent.add(alert["id"])
+            rate_limit.record(store, budget, alert["id"])
             sent += 1
         else:
             store.kv_set(f"try:{alert['id']}", {"n": tries["n"] + 1, "at": now})
@@ -242,6 +249,7 @@ def deliver(cfg, store, chans, *, now=None):
 
 
 def send_alert(store, targets, alert, *, now=None):
+    now = time.time() if now is None else now
     subject, text, choices = render(alert)
     ok_any = False
     for chan in targets:
@@ -249,15 +257,21 @@ def send_alert(store, targets, alert, *, now=None):
         if previous and previous["ok"]:
             ok_any = True
             continue
-        uncertain = "Delivery interrupted; outcome unknown. No automatic retry."
-        if previous and previous["error"] == uncertain:
-            store.log("send", f"#{alert['id']} via {chan.id}: {uncertain}", now=now)
+        uncertain = "Delivery interrupted; outcome unknown."
+        if previous and store.kv_get(f"owner-repeat:{alert['id']}:{chan.id}", False):
             continue
+        repeat = bool(previous and previous["error"] in (
+            uncertain, "Delivery interrupted; outcome unknown. No automatic retry."))
+        if repeat:
+            if now - previous["sent_at"] < RETRY_AFTER_S:
+                continue
+            if not store.owner_repeat_claim(alert["id"], chan.id):
+                continue
         # Commit the intent before the provider can accept the message.
         store.delivery_add(alert["id"], chan.id, getattr(chan, "owner", "") or "",
                            Receipt(ok=False, error=uncertain), now=now)
         attempt = store.delivery_latest(alert["id"], chan.id)
-        receipt = chan.send(Outbound(text=text, subject=subject, thread=alert["token"],
+        receipt = chan.send(Outbound(text=("This may be a repeat.\n\n" if repeat else "") + text, subject=subject, thread=alert["token"],
                                      choices=choices if alert.get("needs_reply") else ()))
         if receipt.uncertain:
             receipt = Receipt(ok=False, error=uncertain, uncertain=True)

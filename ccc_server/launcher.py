@@ -90,3 +90,10 @@ def main(argv=None):
     if args.host is not None:
         command.extend(["--host", args.host])
     os.execv(sys.executable, command)
+
+
+def cli_main():
+    """Expose the same On-call and dashboard client in wheel installs."""
+    import runpy
+    client = ROOT / "ccc"
+    return runpy.run_path(str(client))["main"]()

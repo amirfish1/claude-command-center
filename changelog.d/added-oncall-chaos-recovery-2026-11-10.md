@@ -1,0 +1,1 @@
+- The On-call chaos proof adds a simulated month, reporter restart checks, and optional isolated worker and watcher fault stages.

@@ -11,6 +11,11 @@
       "name": "ccc-dashboard",
       "source": "./plugin",
       "description": "Skills for running a fleet of coding-agent sessions through Claude Command Center (CCC). Needs CCC running locally."
+    },
+    {
+      "name": "oncall",
+      "source": "./plugins/oncall",
+      "description": "Manage CCC On-call from your agent."
     }
   ]
 }

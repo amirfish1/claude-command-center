@@ -48,7 +48,7 @@ def test_scripted_full_loop_and_perf(tmp_path):
 
 @pytest.mark.parametrize('answer,expected', [('zero', '0'), ('hide', 'None')])
 def test_terminal_choice_and_no_send(tmp_path, answer, expected):
-    proc = demo(tmp_path, '--terminal', '--keep', input=answer + '\nno\n')
+    proc = demo(tmp_path, '--terminal', '--keep', input=answer + '\ndecline\nno\n')
     assert proc.returncode == 0, proc.stderr + proc.stdout
     root = Path(proc.stdout.split('Kept workspace: ')[1].strip())
     try:
@@ -77,6 +77,15 @@ def test_record(tmp_path):
     transcript = tmp_path / 'record.txt'
     proc = demo(tmp_path, '--json', '--record', str(transcript))
     assert proc.returncode == 0, proc.stdout
+    result = json.loads(proc.stdout)
+    transcript = Path(result['transcript'])
+    assert transcript.parent == tmp_path / '.claude/screenshots/demo'
+    cast = Path(result['cast'])
+    assert cast.exists()
+    rows = [json.loads(line) for line in cast.read_text().splitlines()]
+    assert rows[0]['version'] == 2
+    assert all('\n' not in row[2].replace('\r\n', '') for row in rows[1:])
+    assert json.loads((transcript.parent / 'recording.json').read_text())['ok']
     text = transcript.read_text()
     assert 'needs a decision' in text and 'Reporter notice is waiting' in text
     assert 'scripted worker' in text and 'ccc oncall setup' in text
@@ -179,7 +188,7 @@ def test_same_second_fractional_block_is_delivered(tmp_path):
 
 
 def test_fast_terminal_phone_box(tmp_path):
-    proc = demo(tmp_path, '--terminal', '--fast', input='hide\nno\n')
+    proc = demo(tmp_path, '--terminal', '--fast', input='hide\ndecline\nno\n')
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert '| PHONE' in proc.stdout and 'Agent: Worker starts' in proc.stdout
     assert '\x1b[' not in proc.stdout

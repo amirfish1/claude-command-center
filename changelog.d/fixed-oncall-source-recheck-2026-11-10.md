@@ -1,0 +1,1 @@
+- Rechecking logs and Alertmanager connections preserves new errors for the next poll.

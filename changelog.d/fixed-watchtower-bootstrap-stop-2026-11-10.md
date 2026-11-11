@@ -1,0 +1,1 @@
+- Failed WatchTower setup stops installation with a retry step instead of a queue fallback promise or startup traceback.

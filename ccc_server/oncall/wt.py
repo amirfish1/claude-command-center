@@ -91,9 +91,44 @@ class WT:
         data = self._json("blocked", "-q", queue, "--json")
         return [t for t in data if isinstance(t, dict)] if isinstance(data, list) else []
 
-    def ls(self, queue, status="active", limit=200):
-        data = self._json("ls", "-q", queue, "--status", status, "--limit", limit, "--json")
+    def ls(self, queue, status="active", limit=200, *, offset=None):
+        extra = ["--offset", offset] if offset is not None else []
+        data = self._json("ls", "-q", queue, "--status", status, "--limit", limit, "--json", *extra)
         return [t for t in data if isinstance(t, dict)] if isinstance(data, list) else []
+
+    def week_window(self, queue, start, end, refs, limit=2000):
+        """Recent closures/decisions plus report references, one bounded response.
+
+        Older installations keep the conservative all-ticket cap. A partial
+        window is never returned as a complete count.
+        """
+        from datetime import datetime, timezone
+        iso = lambda value: datetime.fromtimestamp(value, timezone.utc).isoformat()
+        args = ["ls", "-q", queue, "--status", "all", "--json", "--limit", limit,
+                "--closed-since", iso(start), "--closed-until", iso(end),
+                "--event", "auto_decision", "--event", "auto_decision_reversed",
+                "--event-since", iso(start), "--event-until", iso(end)]
+        for ref in sorted(refs):
+            args += ["--ref", ref]
+        code, out, err = self._call(*args)
+        if code and "unrecognized arguments" in err:
+            return self.ls(queue, status="all", limit=limit + 1)
+        if code:
+            raise WTError("WatchTower weekly read failed.")
+        try:
+            result = json.loads(out)
+        except ValueError as exc:
+            raise WTError("WatchTower weekly read returned invalid JSON.") from exc
+        if not isinstance(result, dict) or result.get("complete") is not True:
+            raise WTError("WatchTower weekly read is incomplete.")
+        rows = result.get("items")
+        if not isinstance(rows, list) or len(rows) > limit:
+            raise WTError("WatchTower weekly read exceeded its limit.")
+        return rows
+
+    def health(self, queue):
+        rows = self._json("status", "-q", queue, "--json")
+        return next((row for row in rows if isinstance(row, dict) and row.get("queue") == queue), {})
 
     def find(self, ref):
         code, out, _err = self._call("find", ref, "--json")

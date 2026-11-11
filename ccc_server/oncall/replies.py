@@ -61,6 +61,10 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
         say(HELP if low != "status" else status_text(cfg, store))
         return low
     if low in ("pause", "resume"):
+        from .escalation import person
+        if person(cfg, entry["id"]):
+            say("Only the first owner can pause or resume On-call.")
+            return "refused: backup service control"
         if not trusted:
             say("By email, pause and resume only work as a reply to one of my alerts.")
             return "refused: untrusted pause"
@@ -93,9 +97,14 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
     if alert["state"] != "open":
         say(f"#{alert['id']} was already handled.", alert)
         return f"#{alert['id']} already handled"
+    from . import escalation
+    if not escalation.authorized(cfg, entry["id"], alert):
+        say("This answer needs the first owner or a person with explicit permission.", alert)
+        return "refused: person lacks permission"
     try:
         if not store.reply_action_claim(alert["id"]):
             raise wtmod.WTError("An earlier answer may have been applied. Check the ticket or session directly; it will not be applied again.")
+        escalation.answered(cfg, store, chans, alert, entry["id"], now)
         note, ack = _apply(cfg, store, chans, wt, alert, rest.strip(), deps, now)
     except wtmod.WTError as exc:
         say(f"That did not go through: {exc}", alert)
@@ -149,6 +158,15 @@ def _is(word_list, text):
 def _apply(cfg, store, chans, wt, alert, text, deps, now):
     """Carry out the answer. Returns (log note, ack text or '')."""
     kind, ref, meta = alert["kind"], alert.get("ref") or "", alert.get("meta") or {}
+    if meta.get("hook_wait"):
+        if kind == "permission" and text.strip().lower() not in ("allow", "deny"):
+            return "unclear", "Reply allow or deny."
+        from .agent_wait import answer
+        value = text.strip().lower() if kind == "permission" else text
+        if not answer(store, alert, value):
+            store.alert_close(alert["id"], "cleared", now=now)
+            raise wtmod.WTError("That hook is no longer waiting; answer in the session.")
+        return "queued for hook", "Received for the waiting session hook."
     if kind == "decision":
         wt.answer(ref, text)
         store.alert_close(alert["id"], "answered", text, now=now)

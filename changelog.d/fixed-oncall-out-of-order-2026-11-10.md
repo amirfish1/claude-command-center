@@ -1,0 +1,1 @@
+- On-call accepts late ntfy replies newer than its initial baseline even when a newer reply arrived first.

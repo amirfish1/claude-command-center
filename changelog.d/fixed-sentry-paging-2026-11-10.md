@@ -1,0 +1,1 @@
+- Read Sentry issue bursts across bounded page scans and compare baseline dates using the server's clock.
