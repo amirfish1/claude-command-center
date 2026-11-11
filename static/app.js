@@ -40794,12 +40794,27 @@
 
   // Idea tickets: spend the render budget on rows whose ticket is in the
   // open tab's queue, so an older ticketed session isn't crowded out.
-  function _sidebarBudgetIdeaLane(row, tab) {
+  function _sidebarBudgetIdeaLane(row, tab, byId, seen) {
     const t = row && row.idea_ticket;
-    if (!t || (!t.ref && !t.pending) || t.closed) return false;
-    // CCC-285: All tickets = Features + Small bugs.
-    if (tab === 'alltickets') return true;
-    return (t.queue === 'SMALL-BUGS') === (tab === 'smallbugs');
+    if (t && (t.ref || t.pending)) {
+      if (t.closed) return false;
+      // CCC-285: All tickets = Features + Small bugs.
+      if (tab === 'alltickets') return true;
+      return (t.queue === 'SMALL-BUGS') === (tab === 'smallbugs');
+    }
+    // The ticket's family renders inside its row. Unticketed helpers must
+    // compete in the same lane, or the budget silently removes their rows
+    // before the family renderer can see them.
+    if (!row || !byId) return false;
+    const id = String(row.session_id || row.id || '').trim();
+    const parentId = String(row.parent_session_id || row.hermes_parent_session_id
+      || continuationParentId(row) || row.continued_from_session_id || '').trim();
+    if (!parentId || parentId === id || (seen && seen.has(parentId))) return false;
+    const parent = byId.get(parentId);
+    if (!parent) return false;
+    if (!seen) seen = new Set();
+    if (id) seen.add(id);
+    return _sidebarBudgetIdeaLane(parent, tab, byId, seen);
   }
   function _boundSidebarRowsForRender(rows, limit, tab) {
     const source = Array.isArray(rows) ? rows : [];
@@ -40818,7 +40833,7 @@
       .map(row => ({
         row,
         inLane: (tab === 'coding' || tab === 'workers') ? (_sidebarBudgetLaneGuess(row, byId) === tab)
-          : (tab === 'ideas' || tab === 'smallbugs' || tab === 'alltickets') ? _sidebarBudgetIdeaLane(row, tab)
+          : (tab === 'ideas' || tab === 'smallbugs' || tab === 'alltickets') ? _sidebarBudgetIdeaLane(row, tab, byId)
           : true,
         inWindow: _archiveWindowAllowsRow(row, cutoff),
         ts: _archiveWindowRowTs(row),
