@@ -1,0 +1,1 @@
+- Record the customer demo as a terminal cast and, with Puppeteer and ffmpeg, an 800-pixel browser MP4 and GIF under 4 MB each.

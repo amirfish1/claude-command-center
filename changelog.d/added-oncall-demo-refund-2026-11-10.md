@@ -1,0 +1,1 @@
+- Show a refund hard stop in the customer demo using WatchTower policy, with a simulated local ledger that waits for an explicit answer.

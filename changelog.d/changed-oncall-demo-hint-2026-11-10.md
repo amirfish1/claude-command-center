@@ -1,0 +1,1 @@
+- Mention the local demo when On-call status is requested with the preview off, and make plain ccc oncall show status.

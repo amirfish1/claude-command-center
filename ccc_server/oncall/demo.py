@@ -1,5 +1,6 @@
 """A local On-call walkthrough, with production routing and demo tickets."""
 import argparse
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ from .demo_ticket import DemoTickets
 from .demo_wt import RealTickets, installed
 from .engine import Engine
 from .store import default_config
+from .demo_scenes import SCENES, Scene
 
 SCRIPTED = 'This run used a scripted worker. With Codex or Claude Code installed, a real agent does this step.'
 BROKEN = 'def total(items):\n    return sum(items) / len(items)\n'
@@ -74,26 +76,62 @@ def agent_fix(project, env, auth, answer):
 
 
 def walkthrough(root, args, emit, lines):
+    # Production HTTP adapters must reach the local stand-ins directly, even
+    # when the caller has a system proxy. Restore the caller's environment.
+    previous = {key: os.environ.get(key) for key in ('no_proxy', 'NO_PROXY')}
+    try:
+        os.environ.update(no_proxy='127.0.0.1', NO_PROXY='127.0.0.1')
+        with ExitStack() as cleanup:
+            return _walkthrough(root, args, emit, lines, cleanup)
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _walkthrough(root, args, emit, lines, cleanup):
     env = isolated_env(root)
     project = root / 'project'
     project.mkdir()
     (project / 'cart.py').write_text(BROKEN)
     (project / 'test_cart.py').write_text('from cart import total\nassert total([]) == 0\nassert total([2, 4]) == 3\n')
+    scene_name = getattr(args, 'scene', 'customer')
+    scene = Scene(scene_name, project, env) if scene_name != 'customer' else None
+    if scene:
+        cleanup.callback(scene.close)
     phone = Phone(emit)
+    cleanup.callback(phone.close)
+    recorder = None
     tickets = RealTickets(root, env) if installed() else DemoTickets(root)
+    cleanup.callback(tickets.shutdown)
     engine = Engine(root / 'oncall', wt=tickets, flag_on=lambda: True,
-                    build_channel=lambda entry, **kw: phone)
+                    build_channel=lambda entry, **kw: phone,
+                    build_source=scene.build if scene else None)
+    cleanup.callback(engine.store.close)
     cfg = default_config()
     cfg.update(enabled=True, queue='DEMO', repo=str(project), channels=[dict(
         id='demo', type='command', owner=phone.owner, intake=True)])
     cfg['customers']['known'] = [{'address': 'reporter@example.test'}]
     # The walkthrough drives its own worker, not an unattended queue.
     cfg['alerts']['stuck'] = False
+    if scene:
+        cfg['sources'] = scene.entries()
     engine.save_config(cfg)
 
     def run(*argv, check=True):
         return subprocess.run(argv, cwd=project, env=env, capture_output=True,
                               text=True, timeout=15, check=check)
+
+    def tick(check_sources=False):
+        if scene and not check_sources:
+            # Advance message/alert work without repeatedly running expensive
+            # monitors while the worker is still fixing the same incident.
+            for name in ('poll:demo', 'decisions', 'closed'):
+                engine.store.kv_set('due:' + name, 0)
+            return engine.tick()
+        return engine.tick(force=True)
 
     def head_commit():
         # This fresh repository has only loose refs, created by git above.
@@ -101,7 +139,7 @@ def walkthrough(root, args, emit, lines):
         return (project / '.git' / ref).read_text().strip()
 
     def reply(default):
-        if args.json:
+        if args.json or getattr(args, 'auto_reply', False):
             text = default
             emit('Demo auto-reply: ' + text)
         elif args.terminal:
@@ -117,80 +155,119 @@ def walkthrough(root, args, emit, lines):
         emit('You: ' + text)
         return text
 
-    try:
-        if not args.terminal and not args.json:
-            url = phone.start(lines)
-            emit('Local phone: ' + url)
-            try:
+    if not args.terminal and not args.json:
+        url = phone.start(lines)
+        emit('Local phone: ' + url)
+        try:
+            if getattr(args, 'capture', None):
+                from .demo_record import Recorder
+                recorder = Recorder(url, args.capture)
+                cleanup.callback(recorder.close)
+                opened = True
+            else:
                 opened = webbrowser.open(url)
-            except webbrowser.Error:
-                opened = False
-            if not opened:
-                emit('No browser available. Continuing in the terminal.')
-                args.terminal = True
-        emit('Tickets: real WatchTower in a temporary store.' if tickets.backend == 'watchtower'
-             else 'Tickets: built-in fixture because WatchTower is not installed.')
-        if not args.agent and shutil.which('codex'):
-            emit('To try a real Codex worker with an existing login, rerun with --agent.')
-        run('git', 'init', '-q')
-        run('git', 'add', 'cart.py', 'test_cart.py')
-        run('git', '-c', 'user.name=Demo', '-c', 'user.email=demo@example.test',
-            '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'test: reproduce empty cart crash')
-        phone.state = 'Reported'
+        except webbrowser.Error:
+            opened = False
+        if not opened:
+            emit('No browser available. Continuing in the terminal.')
+            args.terminal = True
+    emit('Tickets: real WatchTower in a temporary store.' if tickets.backend == 'watchtower'
+         else 'Tickets: built-in fixture because WatchTower is not installed.')
+    if not args.agent and shutil.which('codex'):
+        emit('To try a real Codex worker with an existing login, rerun with --agent.')
+    run('git', 'init', '-q', '-b', 'main')
+    run('git', 'add', 'cart.py', 'test_cart.py')
+    run('git', '-c', 'user.name=Demo', '-c', 'user.email=demo@example.test',
+        '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'test: reproduce empty cart crash')
+    phone.state = 'Reported'
+    if scene:
+        tick(True)  # establish an empty/healthy source baseline
+        scene.fail(head_commit())
+        emit('CI: The build on main is red.' if scene_name == 'ci' else
+             'Monitoring: An error appeared in application.log; the health URL returns 503.')
+        phone.thread_messages.append(dict(sender='CI' if scene_name == 'ci' else 'Monitoring',
+                                         text='The sample test failed on main.' if scene_name == 'ci' else
+                                         'ERROR: ZeroDivisionError in application.log. Health check: HTTP 503.'))
+    else:
         emit('Customer: Report arrives: My empty cart crashes instead of showing a total.')
         phone.receive('My empty cart crashes instead of showing a total.', 'reporter@example.test')
-        engine.tick(force=True)
-        reports = engine.store.reports(state='filed')
-        if len(reports) != 1:
-            raise RuntimeError('Report was not filed.')
-        ref = reports[0]['ticket_ref']
-        emit('On-call: Ticket filed: ' + ref + '.')
-        phone.state = 'Agent working'
-        tickets.start()
-        emit('Agent: Worker starts. Running the real sample test.')
-        before = run(sys.executable, '-S', 'test_cart.py', check=False)
-        if before.returncode == 0 or 'ZeroDivisionError' not in before.stderr:
-            raise RuntimeError('Expected the empty-cart regression to fail.')
-        emit('Agent: Test fails: ZeroDivisionError for an empty cart.')
+    tick(True)
+    reports = engine.store.reports(state='filed')
+    if not reports:
+        raise RuntimeError('Report was not filed.')
+    ref = reports[0]['ticket_ref']
+    tickets.ref = ref
+    extra_refs = [r['ticket_ref'] for r in reports[1:]]
+    emit('On-call: Ticket filed: ' + ref + '.')
+    phone.state = 'Agent working'
+    tickets.start()
+    emit('Agent: Worker starts. Running the real sample test.')
+    before = run(sys.executable, '-S', 'test_cart.py', check=False)
+    if before.returncode == 0 or 'ZeroDivisionError' not in before.stderr:
+        raise RuntimeError('Expected the empty-cart regression to fail.')
+    emit('Agent: Test fails: ZeroDivisionError for an empty cart.')
+    answer = 'zero'
+    if not scene:
         phone.state = 'Waiting for you'
         tickets.block()
-        engine.tick(force=True)
+        tick()
         while True:
             answer = reply('zero').lower()
             if answer in ('zero', 'hide'):
                 break
             emit('Choose zero or hide so the worker knows what to build.')
         phone.receive(answer)
-        engine.tick(force=True)
+        tick()
         if not tickets.answered(answer):
             raise RuntimeError('Reply did not reach the worker.')
-        phone.state = 'Agent working'
-        expected = '0' if answer == 'zero' else 'None'
-        (project / 'test_cart.py').write_text(
-            f'from cart import total\nassert total([]) == {expected}\nassert total([2, 4]) == 3\n')
-        if args.agent:
-            auth = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'auth.json'
-            if not shutil.which('codex') or not auth.is_file():
-                raise RuntimeError('--agent needs Codex with an existing auth.json login. Retry without --agent.')
-            emit('Codex is fixing the sample with your existing login. This can take longer than a minute.')
-            test_source = (project / 'test_cart.py').read_bytes()
-            agent_seconds = agent_fix(project, env, auth, answer)
-            emit(f'Codex finished in {agent_seconds:.1f} seconds.')
-            if (project / 'test_cart.py').read_bytes() != test_source:
-                raise RuntimeError('Agent changed the test instead of preserving it.')
-        else:
-            (project / 'cart.py').write_text(
-                f'def total(items):\n    return sum(items) / len(items) if items else {expected}\n')
-            emit(SCRIPTED)
-        run(sys.executable, '-S', 'test_cart.py')
-        # A real local commit, never pushed. No repository hooks or global config.
-        run('git', '-c', 'user.name=Demo', '-c', 'user.email=demo@example.test',
-            '-c', 'core.hooksPath=/dev/null', 'commit', '--only', 'cart.py', 'test_cart.py', '-qm', 'fix: handle empty cart')
-        commit = head_commit()
-        tickets.close(commit)
-        phone.state = 'Fixed'
-        emit('Agent: Fix committed locally. The test passes.')
-        engine.tick(force=True)
+    refund = None
+    if not scene:
+        from .demo_refund import run as refund_step
+        refund = refund_step(engine, tickets, phone, project, head_commit(), reply, tick, emit)
+    phone.state = 'Agent working'
+    expected = '0' if answer == 'zero' else 'None'
+    (project / 'test_cart.py').write_text(
+        f'from cart import total\nassert total([]) == {expected}\nassert total([2, 4]) == 3\n')
+    if args.agent:
+        auth = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex'))) / 'auth.json'
+        if not shutil.which('codex') or not auth.is_file():
+            raise RuntimeError('--agent needs Codex with an existing auth.json login. Retry without --agent.')
+        emit('Codex is fixing the sample with your existing login. This can take longer than a minute.')
+        test_source = (project / 'test_cart.py').read_bytes()
+        agent_seconds = agent_fix(project, env, auth, answer)
+        emit(f'Codex finished in {agent_seconds:.1f} seconds.')
+        if (project / 'test_cart.py').read_bytes() != test_source:
+            raise RuntimeError('Agent changed the test instead of preserving it.')
+    else:
+        (project / 'cart.py').write_text(
+            f'def total(items):\n    return sum(items) / len(items) if items else {expected}\n')
+        emit(SCRIPTED)
+    run(sys.executable, '-S', 'test_cart.py')
+    # A real local commit, never pushed. No repository hooks or global config.
+    run('git', '-c', 'user.name=Demo', '-c', 'user.email=demo@example.test',
+        '-c', 'core.hooksPath=/dev/null', 'commit', '--only', 'cart.py', 'test_cart.py', '-qm', 'fix: handle empty cart')
+    commit = head_commit()
+    tickets.close(commit)
+    phone.state = 'Fixed'
+    emit('Agent: Fix committed locally. The test passes.')
+    tick()
+    if scene:
+        for extra in extra_refs:
+            tickets.ref = extra
+            tickets.close(commit)
+        scene.recover(commit)
+        tick(True)
+        for entry, source in engine.sources().values():
+            if (source.last_error
+                    or (source.type == 'ci' and not source._get('confirmed', []))
+                    or (source.type in ('command', 'http') and source._get('state', {}).get('down'))):
+                raise RuntimeError('Source did not recover.')
+        emit('CI: The same build is green.' if scene_name == 'ci' else
+             'Monitoring: The log is clear and the health URL returns 200.')
+        phone.state = 'Build green' if scene_name == 'ci' else 'Application healthy'
+        phone.thread_messages.append(dict(sender='CI' if scene_name == 'ci' else 'Monitoring',
+                                         text=phone.state + '. The sample test passes.'))
+    else:
         pending = engine.store.customer_messages(state='pending')
         if len(pending) != 1 or any(m['to'] for m in phone.messages):
             raise RuntimeError('Reporter notice did not wait for approval.')
@@ -201,9 +278,11 @@ def walkthrough(root, args, emit, lines):
                 emit('Reply yes or no.')
                 continue
             phone.receive(approval)
-            engine.tick(force=True)
+            tick()
         phone.state = ('Reporter told' if engine.store.customer_messages()[0]['state'] == 'sent'
                        else 'Fixed · reporter notice skipped')
+    decision = None
+    if not scene:
         # The demonstration worker owns this low-risk local decision.
         (project / '.gitignore').write_text('__pycache__/\n')
         run('git', 'add', '.gitignore')
@@ -217,37 +296,64 @@ def walkthrough(root, args, emit, lines):
             from .api import decisions
             decision = decisions(engine)[-1]
         engine.store.log('minor', json.dumps(decision))
-        emit('Agent: Decided without you: ' + decision['recommend'] + '\nUndo: ' + decision['undo'])
-        emit('Try the real setup (requires a running CCC and WatchTower):\nccc oncall setup\nccc oncall minor on')
-        phone.done = True
-        phone.choices = []
-        return dict(ok=True, worker='codex' if args.agent else 'scripted', ticket=ref,
-                    backend=tickets.backend, commit=commit, test_before=before.returncode, test_after=0,
-                    reporter_state=engine.store.customer_messages()[0]['state'],
-                    decision=decision, messages=phone.messages,
-                    commands=['ccc oncall setup', 'ccc oncall minor on'])
-    finally:
-        tickets.shutdown()
-        phone.close()
-        engine.store.close()
-
+        decision_text = 'Decided without you: ' + decision['recommend'] + '\nUndo: ' + decision['undo']
+        phone.thread_messages.append(dict(sender='Agent', text=decision_text))
+        emit('Agent: ' + decision_text)
+    emit('Try the real setup (requires a running CCC and WatchTower):\nccc oncall setup\nccc oncall minor on')
+    phone.done = True
+    phone.choices = []
+    recording = recorder.finish() if recorder else None
+    return dict(ok=True, recording=recording, worker='codex' if args.agent else 'scripted', ticket=ref,
+                backend=tickets.backend, commit=commit, test_before=before.returncode, test_after=0,
+                reporter_state=engine.store.customer_messages()[0]['state'] if not scene else 'not applicable',
+                scene=scene_name, refund=refund, source_requests=scene.requests if scene else [],
+                decision=decision, messages=phone.messages,
+                commands=['ccc oncall setup', 'ccc oncall minor on'])
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='ccc oncall demo', description=__doc__)
+    parser.add_argument('--scene', choices=(*SCENES, 'all'))
     parser.add_argument('--terminal', action='store_true')
     parser.add_argument('--fast', action='store_true', help='skip presentation pauses')
     parser.add_argument('--keep', action='store_true')
     parser.add_argument('--agent', action='store_true', help='use logged-in Codex (paid, up to three minutes)')
-    parser.add_argument('--record', nargs='?', const='oncall-demo.txt', metavar='FILE')
+    parser.add_argument('--record', nargs='?', const='customer', metavar='NAME')
     parser.add_argument('--json', action='store_true', help='automatic scripted replies and JSON result')
     args = parser.parse_args(argv)
     if args.json and args.agent:
         parser.error('--json runs the scripted worker; use --agent interactively')
+    if args.scene is None:
+        if sys.stdin.isatty() and not args.json and not args.record:
+            print('Pick a scene: [1] Customer  [2] CI  [3] Monitoring  [4] All')
+            from .demo_select import pick
+            args.scene = pick()
+        else:
+            args.scene = 'customer'
+    record_browser = not args.terminal
     args.terminal |= not sys.stdout.isatty() or os.environ.get('TERM') in (None, '', 'dumb') or 'NO_COLOR' in os.environ
+    args.capture = None
+    args.auto_reply = False
+    record_dir = None
+    if args.record:
+        if args.scene != 'customer' or args.agent:
+            parser.error('--record captures the scripted customer scene; use --scene customer without --agent')
+        args.auto_reply = True
+        record_dir = Path.cwd() / '.claude/screenshots/demo'
+        record_dir.mkdir(parents=True, exist_ok=True)
+        args.record = str(record_dir / (Path(args.record).stem + '.txt'))
+        if record_browser and not args.fast and not args.json:
+            from .demo_record import available
+            if available():
+                args.capture = record_dir
+                args.auto_reply = False
+                args.terminal = False
+            else:
+                args.auto_reply = True
+                print('Browser video tools are unavailable. Recording the terminal cast only.')
     root = Path(tempfile.mkdtemp(prefix='ccc-oncall-demo-'))
     start = time.monotonic()
     colour = sys.stdout.isatty() and os.environ.get('TERM') not in (None, '', 'dumb') and 'NO_COLOR' not in os.environ
-    emit = Output(quiet=args.json, fast=args.fast or args.json or not sys.stdout.isatty(), colour=colour)
+    emit = Output(quiet=args.json, fast=args.fast or args.json or (not sys.stdout.isatty() and not args.record), colour=colour)
     lines, events = emit.lines, emit.events
 
     result = {}
@@ -255,7 +361,19 @@ def main(argv=None):
         raise KeyboardInterrupt()
     previous = signal.signal(signal.SIGTERM, interrupted)
     try:
-        result = walkthrough(root, args, emit, lines)
+        if args.record:
+            emit('Recording uses automatic demo replies: zero, decline the refund, then yes to the local notice.')
+        if args.scene == 'all':
+            results = []
+            for name in SCENES:
+                args.scene = name
+                folder = root / name
+                folder.mkdir()
+                emit('Scene: ' + name)
+                results.append(walkthrough(folder, args, emit, lines))
+            result = dict(ok=True, scenes=results)
+        else:
+            result = walkthrough(root, args, emit, lines)
     except (Exception, KeyboardInterrupt) as exc:
         result = dict(ok=False, error=str(exc) or 'Interrupted')
         emit('Demo stopped: ' + result['error'])
@@ -265,13 +383,12 @@ def main(argv=None):
                 record = Path(args.record).expanduser().resolve()
                 record.write_text('\n\n'.join(lines) + '\n')
                 result['transcript'] = str(record)
-                if shutil.which('asciinema'):
-                    cast = record.with_suffix('.cast')
-                    if cast == record:
-                        cast = Path(str(record) + '.cast')
-                    cast.write_text(json.dumps(dict(version=2, width=100, height=30)) + '\n' +
-                                    '\n'.join(json.dumps(event) for event in events) + '\n')
-                    result['cast'] = str(cast)
+                cast = record.with_suffix('.cast')
+                if cast == record:
+                    cast = Path(str(record) + '.cast')
+                cast.write_text(json.dumps(dict(version=2, width=100, height=30)) + '\n' +
+                                '\n'.join(json.dumps(event) for event in events) + '\n')
+                result['cast'] = str(cast)
         except OSError as exc:
             result.update(ok=False, error='Could not save recording: ' + str(exc))
         result.update(elapsed_seconds=round(time.monotonic() - start, 3), kept=args.keep)
@@ -282,6 +399,10 @@ def main(argv=None):
         else:
             shutil.rmtree(root)
         signal.signal(signal.SIGTERM, previous)
+        if args.record:
+            (record_dir / 'recording.json').write_text(json.dumps(result, indent=2) + '\n')
+            if not args.json:
+                print('Recording outputs: ' + str(record_dir))
         if args.json:
             print(json.dumps(result))
     return 0 if result.get('ok') else 1

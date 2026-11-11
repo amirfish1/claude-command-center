@@ -1,0 +1,1 @@
+- Let the demo phone recover from a failed refresh without losing its reply buttons.

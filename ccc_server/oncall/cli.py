@@ -36,7 +36,7 @@ SOURCE_NAMES = {
     "http": "A URL that must stay up",
     "command": "A command that must keep passing",
 }
-PREVIEW_OFF = "On-call is a preview and it is off. Turn it on with: ccc oncall setup"
+PREVIEW_OFF = "On-call is a preview and it is off. Try ccc oncall demo, or turn it on with ccc oncall setup"
 NOT_RUNNING = "CCC is not running. Start it with `ccc`, then run this again."
 
 
@@ -495,7 +495,7 @@ def run(argv, *, base, get, post, io=None):
     if argv[:1] and argv[0] in ("escalate", "person", "rota"):
         from .escalation_cli import run
         return run(argv, Client(base, get, post), io)
-    args = build_parser().parse_args(argv)
+    args = build_parser().parse_args(argv or ["status"])
     if args.action == "setup" and not args.yes and not args.secret_stdin:
         io.interactive = True
     client = Client(base, get, post)
