@@ -21,6 +21,29 @@ document.querySelector('#colors').onclick = () => { setTimeout(() => { document.
 }
 const server = http.createServer((request, response) => {
   const route = new URL(request.url, 'http://localhost').pathname;
+  if (route === '/login') {
+    response.writeHead(200, {'Content-Type': 'text/html'});
+    response.end('<h1>Shop login</h1><form method="post" action="/session"><label>Email<input name="email"></label><label>Password<input name="password" type="password"></label><button>Log in</button></form>'); return;
+  }
+  if (route === '/session' && request.method === 'POST') {
+    let body = '';
+    request.on('data', chunk => {body += chunk;});
+    request.on('end', () => {
+      const data = new URLSearchParams(body);
+      if (data.get('email') !== 'fixture@example.com' || data.get('password') !== 'fixture-only-password') {
+        response.writeHead(401); response.end('Login failed'); return;
+      }
+      response.writeHead(303, {'Set-Cookie': 'fixture_session=fixture-only-cookie; HttpOnly; SameSite=Strict; Path=/', Location: '/account'});
+      response.end();
+    }); return;
+  }
+  if (route === '/account' || route === '/account/details') {
+    if (!(request.headers.cookie || '').includes('fixture_session=fixture-only-cookie')) {
+      response.writeHead(401); response.end('Login required'); return;
+    }
+    response.writeHead(200, {'Content-Type': 'text/html'});
+    response.end('<h1>Account details</h1><p>Authenticated sample shop</p><a href="/help">Help</a>'); return;
+  }
   if (!['/', '/help', '/availability'].includes(route)) { response.writeHead(404); response.end('Not found'); return; }
   response.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'});
   response.end(page(route));

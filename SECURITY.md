@@ -150,3 +150,16 @@ If you're adding a new endpoint:
 3. **Don't introduce wildcard CORS or weaken the same-origin check.** If you need cross-origin access, propose it in an issue first.
 4. **Don't spawn subprocesses on attacker-controlled paths.** Use caution when allowing operations on unbounded file paths.
 5. **Treat anything in a log file as potentially containing secrets.** Don't log raw request bodies or shell-out output if it's user-supplied.
+
+## UX lab authentication bootstrap
+
+UX lab uses fresh disposable browser profiles. Authenticated plans opt into
+operator-reviewed, SHA-256-pinned login scripts, verified again at execution.
+Bootstrap completes before the model tester starts. Tester tools, page captures
+and request traces are disabled during login; helper failures close the browser
+and report a generic error. Exact POST exceptions apply only during bootstrap
+and retain host, risky-endpoint and financial-digit restrictions. Login endpoints
+are denied after bootstrap. Login helpers are trusted executable code, not a
+sandbox; review their source and use disposable accounts. See
+[UX lab authentication](docs/uxlab.md#authenticated-plans) for the helper contract,
+artifact redaction limits and the temporary local MCP socket.
