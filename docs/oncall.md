@@ -501,5 +501,5 @@ ccc oncall decisions             what agents decided, each with its undo
 - [Weekly counts and the daily summary](oncall-week.md): `ccc oncall week`.
 - [What On-call does when things break](oncall-reliability.md).
 - [Security review and limits](oncall-security.md).
-
-[Escalation steps, people and rotations](oncall-escalation.md).
+- [Escalation steps, people and rotations](oncall-escalation.md).
+- [Team chat alerts and reply checks](oncall-team-chat.md).

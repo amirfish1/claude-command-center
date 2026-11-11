@@ -22,6 +22,7 @@ import secrets as _secrets
 import sys
 
 CHANNEL_NAMES = {
+    "slack": "Slack", "discord": "Discord", "matrix": "Matrix", "mattermost": "Mattermost",
     "email": "Email", "telegram": "Telegram", "ntfy": "ntfy (phone push, no account)",
     "imessage": "iMessage (this Mac)", "sms": "SMS (your Twilio number)",
     "whatsapp": "WhatsApp (your Twilio sender)", "command": "Your own command",
@@ -171,6 +172,7 @@ def build_parser():
 
     p = sub.add_parser("test", help="send a test message to every channel, or to one")
     p.add_argument("channel", nargs="?", default="")
+    p.add_argument("--roundtrip", action="store_true", help="wait for a team chat test reply")
 
     sub.add_parser("on", help="turn On-call on")
     sub.add_parser("off", help="turn On-call off")
@@ -320,6 +322,12 @@ def _add_channel(client, etype, args, io, types):
             io.out(f"Added {CHANNEL_NAMES.get(etype, etype)}"
                    + (f" ({saved.get('owner')})" if saved.get("owner") else "") + "."
                    + (f" {res['note']}" if res.get("note") else ""))
+            if etype in ("slack", "discord", "matrix", "mattermost"):
+                io.out("Reply ready in the test message thread. Waiting up to 90 seconds.")
+                result = client.must("test", {"channel": saved["id"], "roundtrip": True})
+                if not result.get("ok"):
+                    raise Stop(result.get("error", "Reply check failed. The channel is saved."))
+                io.out("Reply round trip confirmed.")
             return saved
         error = str(res.get("error") or f"CCC answered HTTP {code}.")
         if code == 404 and "preview" in error.lower():
@@ -450,7 +458,7 @@ def _setup(client, args, io):
 
     code, res = client.post("test")
     for row in res.get("results") or []:
-        io.out(f"Test message to {row['channel']}: " + ("sent." if row["ok"] else f"failed. {row['error']}"))
+        io.out(f"Test message to {row['channel']}: " + ("reply confirmed." if row["ok"] and getattr(args, "roundtrip", False) else "sent." if row["ok"] else f"failed. {row['error']}"))
     if not res.get("results"):
         raise Stop(str(res.get("error") or "No channel to test."))
     if not any(r["ok"] for r in res["results"]):
@@ -546,11 +554,11 @@ def _run(args, client, io):
             _print_status(status, io)
         return 0
     if action == "test":
-        code, res = client.post("test", {"channel": args.channel})
+        code, res = client.post("test", {"channel": args.channel, "roundtrip": args.roundtrip})
         if not res.get("results"):
             raise Stop(PREVIEW_OFF if code == 404 else str(res.get("error") or f"CCC answered HTTP {code}."))
         for row in res["results"]:
-            io.out(f"{row['channel']}: " + ("sent." if row["ok"] else f"failed. {row['error']}"))
+            io.out(f"{row['channel']}: " + ("reply confirmed." if row["ok"] and getattr(args, "roundtrip", False) else "sent." if row["ok"] else f"failed. {row['error']}"))
         return 0 if res.get("ok") else 1
     if action in ("on", "off"):
         res = client.must("config", {"enabled": action == "on"})

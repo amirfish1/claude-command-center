@@ -386,6 +386,16 @@ _FIELDS = {
 }
 
 
+for _kind in ('slack', 'discord', 'matrix', 'mattermost'):
+    _FIELDS[_kind] = [
+        _field('token_vault', 'Bot access token', secret=True),
+        _field('owner', 'Your user ID'),
+    ]
+    if _kind != 'slack':
+        _FIELDS[_kind].append(_field('channel_id', 'Channel ID'))
+    _FIELDS[_kind].append(_field('api_base', 'Server URL', optional=_kind in ('slack', 'discord')))
+
+
 def required_fields(channel_type):
     """The fields a setup form asks for, in order. Unknown type: []."""
     return copy.deepcopy(_FIELDS.get(str(channel_type or ""), []))
@@ -1393,7 +1403,12 @@ def build(cfg, **kw):
     """The channel object for one config entry. ValueError names what is wrong."""
     cfg = cfg if isinstance(cfg, dict) else {}
     ctype = str(cfg.get("type") or "")
-    cls = _CLASSES.get(ctype)
+    if ctype in ('slack', 'discord', 'matrix', 'mattermost'):
+        from importlib import import_module
+        module = import_module('.' + ctype, __package__)
+        cls = getattr(module, ctype.capitalize() + 'Channel')
+    else:
+        cls = _CLASSES.get(ctype)
     if cls is None:
         raise ValueError(f"Unknown channel type {ctype!r}.")
     missing = cls.missing(cfg)

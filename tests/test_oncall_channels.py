@@ -256,6 +256,10 @@ def test_required_fields_shape():
 
 
 MINIMAL = {
+    "slack": {"token_vault": "test-token", "owner": "OWNER"},
+    "discord": {"token_vault": "test-token", "owner": "OWNER", "channel_id": "ROOM"},
+    "matrix": {"token_vault": "test-token", "owner": "OWNER", "channel_id": "ROOM", "api_base": "http://localhost"},
+    "mattermost": {"token_vault": "test-token", "owner": "OWNER", "channel_id": "ROOM", "api_base": "http://localhost"},
     "email": {"address": "oncall@gmail.com", "password_vault": "mail-pw", "owner": "sam@example.com"},
     "telegram": {"token_vault": "tg-token"},
     "ntfy": {"topic": "alerts"},

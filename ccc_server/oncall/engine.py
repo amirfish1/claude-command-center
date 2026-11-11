@@ -172,6 +172,8 @@ class Engine:
                 for msg in messages:
                     if self._route(cfg, chans, entry, msg, now):
                         out["inbound"] += 1
+                if hasattr(chan, "ack_poll"):
+                    chan.ack_poll(messages)
 
             for sid, (entry, source) in self.sources(cfg).items():
                 if not (force or source.due()):
