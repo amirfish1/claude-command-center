@@ -13812,7 +13812,7 @@
           payload.presentation_mode3 = true;
         }
         if (announcedFrom) payload.announced_from = announcedFrom;
-        res = await fetch('/api/inject-input', {
+        res = await fetchInjectWithRetry('/api/inject-input', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload),
@@ -13829,7 +13829,7 @@
           // Retry with force_terminal — route to the terminal via osascript.
           payload.force_terminal = true;
           try {
-            res = await fetch('/api/inject-input', {
+            res = await fetchInjectWithRetry('/api/inject-input', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify(payload),
@@ -13844,7 +13844,7 @@
           // Retry with force_headless — skip the soft-block and deliver.
           payload.force_headless = true;
           try {
-            res = await fetch('/api/inject-input', {
+            res = await fetchInjectWithRetry('/api/inject-input', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify(payload),
@@ -17338,6 +17338,19 @@
     _ttsPerfTarget = _ttsSel ? 'selection' : 'last';
     _ttsSelectionReadText = _ttsSel ? data.text.trim() : '';
     _ttsStartChunkedSpeech(textToSpeak, paneId, 0, false);
+  }
+
+  // A gateway can fail while a dormant session wakes. Keep the exact body
+  // (including its idempotency key) so a lost response cannot double-send.
+  async function fetchInjectWithRetry(url, options) {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(url, options);
+      if (response.status !== 502 || attempt >= 2) return response;
+      if (response.body) {
+        try { await response.body.cancel(); } catch (_) {}
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
   }
 
   function formatInjectFailure(data, status) {
@@ -83144,7 +83157,7 @@
             idempotency_key: idempotencyKey,
           };
           if (announcedFrom) payload.announced_from = announcedFrom;
-          res = await fetch('/api/inject-input', {
+          res = await fetchInjectWithRetry('/api/inject-input', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload),
