@@ -223,6 +223,9 @@ def child(root, web, smtp, imap, with_agent=False):
         msg['From'], msg['To'], msg['Subject'] = sender, 'oncall@example.test', subject
         if reply_to:
             msg['In-Reply-To'] = reply_to
+        # GreenMail does not perform DMARC. This is trusted receiver evidence
+        # supplied by the local protocol fixture, not a DNS authentication proof.
+        msg['Authentication-Results'] = 'fixture-mail; dmarc=pass header.from=example.test'
         msg.set_content(text)
         with smtplib.SMTP_SSL('localhost', smtp, context=ssl.create_default_context()) as conn:
             conn.login('oncall', 'test-password')
@@ -252,7 +255,7 @@ def child(root, web, smtp, imap, with_agent=False):
         assert eng.store.kv_get('paused') is False
         results.append(('ntfy send / subscribe / reply', 'PASS'))
         cli('channel', 'add', 'email', '--intake', '--set', 'address=oncall@example.test',
-            '--set', 'owner=owner@example.test', '--set', 'username=oncall',
+            '--set', 'owner=owner@example.test', '--set', 'authserv_id=fixture-mail', '--set', 'username=oncall',
             '--set', 'smtp_host=localhost', '--set', f'smtp_port={smtp}', '--set', 'smtp_security=tls',
             '--set', 'imap_host=localhost', '--set', f'imap_port={imap}',
             '--secret-stdin', 'password', input='test-password\n')

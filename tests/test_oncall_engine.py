@@ -135,6 +135,10 @@ def rig(tmp_path):
 
     def msg(cid, text, sender, **kw):
         r.n = getattr(r, "n", 0) + 1
+        # This routing fixture represents a trusted adapter result. Raw-mail
+        # authentication attacks use EmailChannel in the security tests.
+        if cid == "mail":
+            kw.setdefault("raw", {"email_auth": {"verified": True}})
         built[cid].inbox.append(Inbound(channel=cid, external_id=kw.pop("eid", f"in-{r.n}"),
                                         sender=sender, text=text, **kw))
     r.msg = msg

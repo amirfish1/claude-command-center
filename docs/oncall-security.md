@@ -51,8 +51,9 @@ measured attack rate. High means a simple payload was enough in a local test.
 Telegram, SMS, WhatsApp, iMessage and command intake. It verifies repeated and
 concurrent replies answer one alert once, using the engine's lock and inbound
 message IDs. It checks foreign POST origins and three proxy headers over real
-loopback HTTP. It also records the known-email, ntfy and acknowledgement-limit
-risks below as explicit tests of current behavior, not as security successes.
+loopback HTTP. It records ntfy and acknowledgement-limit risks below as explicit tests of
+current behavior, not as security successes. The known-email attack now verifies
+that unverified mail is held.
 
 The existing On-call suites cover email parsing and thread extraction,
 Telegram cursors, Twilio directions and recipients, the local iMessage database,
@@ -92,15 +93,33 @@ These are not fixed by the commits above. They affect the trust model or need
 changes beyond the report router. They block a claim that arbitrary hostile
 reports are safely contained.
 
-1. **High: known email is forgeable.** Anyone who can deliver mail can put a
-   known customer address or domain in From. The adapter does not establish
-   sender authentication. The local regression demonstrates that this starts
-   agent work. Sender-only conversation matching can also attach an unthreaded
-   forged follow-up to an active report. Proposal: hold all new email reports
-   unless an authenticated provider integration supplies verified identity;
-   require the private report token for email continuation. Do not trust an
-   arbitrary `Authentication-Results` header supplied in the message. This
-   changes the promise that known email always goes straight to an agent.
+1. **Email trust now depends on the receiving server's header boundary.**
+   New email reports receive known-customer treatment only when the first
+   Authentication-Results field names the pinned `authserv_id` and reports
+   DMARC pass, or DKIM/SPF pass aligned exactly with the From domain. No pass,
+   an untrusted hop, malformed results, duplicate From addresses, or different
+   domains leave the report held with "The sender could not be verified."
+   This hold also applies when general unknown-sender holding is off.
+   Email continuation additionally requires the private report token and the
+   same sender and channel. Sender-only email conversation matching is gone.
+   Set `authserv_id` by hand at channel setup, or let the first aligned owner
+   reply carrying a live private alert token pin it. Untokened or closed-token
+   messages cannot bootstrap that trust. This bootstrap proves possession of
+   the alert, not an independent DNS authentication check.
+
+   The mailbox server must remove forged headers bearing its own identity and
+   put its own result first. A pinned string alone cannot distinguish a forged
+   header if the receiving server preserves it as authoritative. Do not enable
+   automatic email intake on a provider whose header handling is unknown.
+   Strict domain equality is intentional: relaxed organizational-domain
+   alignment, ARC, mailing-list forwarding, DKIM `header.i` without `header.d`,
+   and nonstandard header syntax can be held rather than accepted. We have not
+   tested the header ordering or stripping rules of real mailbox providers.
+   `scripts/oncall-email-auth-proof.py` uses local TLS SMTP/IMAP and crafted
+   results: missing and untrusted-hop results were held, the pinned aligned
+   pass was filed, and only the verified token-bearing continuation attached.
+   GreenMail does not perform DNS authentication; the pass is trusted receiver
+   fixture evidence, not proof of cryptographic DKIM or real-provider DMARC.
 2. **High: the agent shares the owner's authority.** A successful injection
    can run commands, read files available to the account, access the local API,
    change settings, and potentially approve its own outbound message. Quoted
@@ -241,10 +260,10 @@ The Astra guardrail injection is already present in `server.py`; it was inspecte
 and not rebuilt. It is a spend guard, not a defense against hostile report text.
 
 On-call is still a local operator tool that hands untrusted text to a powerful
-agent. It does not isolate that agent from owner authority. It does not prove
-email sender identity, provide comprehensive rate limits, prevent all secret
+agent. It does not isolate that agent from owner authority. It relies on a pinned mailbox server for
+email sender evidence, and does not yet provide comprehensive rate limits, prevent all secret
 leaks, or guarantee exactly-once delivery. Do not read the successful injection
 fixtures as a general security guarantee. Before exposing an automatic worker
-to arbitrary reports, resolve the email and worker-authority proposals, keep
+to arbitrary reports, verify the mailbox server trust boundary and resolve worker authority, keep
 send approval enabled, and choose credentials and repositories with limited
 consequences if an agent follows a hostile instruction.

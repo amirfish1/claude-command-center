@@ -244,6 +244,18 @@ class Engine:
         return True
 
     def _dispatch(self, cfg, chans, entry, msg, now):
+        if entry.get("type") == "email" and replies.is_owner(entry, msg):
+            # A live private token proves access to an owner alert. Only that
+            # bootstrap may pin an aligned mailbox authentication service.
+            evidence = msg.raw.get("email_auth") or {}
+            alert = self.store.alert_by_token(msg.thread) if msg.thread else None
+            key = f"ch:{entry['id']}:authserv_id"
+            if (not entry.get("authserv_id") and not self.store.kv_get(key)
+                    and alert and alert["state"] == "open"
+                    and evidence.get("aligned") and evidence.get("authserv_id")):
+                self.store.kv_set(key, evidence["authserv_id"])
+                evidence["verified"] = True
+                self.store.log("email", f"learned authentication server for {entry['id']}", now=now)
         if replies.is_owner(entry, msg):
             low = " ".join(str(msg.text or "").lower().split()).strip(" .!")
             if entry.get("type") == "email" and not msg.thread and low not in _COMMANDS:

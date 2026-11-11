@@ -187,6 +187,8 @@ def _secret_fields(entry):
     out = []
     for key, value in entry.items():
         low = key.lower()
+        if low == "authserv_id":  # public receiver identity, not a credential
+            continue
         if low.endswith("_vault") or not isinstance(value, str) or not value:
             continue
         if any(word in low for word in _SECRET_WORDS):

@@ -173,15 +173,24 @@ def retry_unfiled(cfg, store, wt, *, now=None):
 
 # -- intake -----------------------------------------------------------------
 
+def _unverified_email(cfg, msg):
+    entry = next((ch for ch in cfg.get("channels", []) if ch.get("id") == msg.channel), {})
+    return entry.get("type") == "email" and not (msg.raw.get("email_auth") or {}).get("verified")
+
+
 def intake(cfg, store, wt, msg, *, now=None):
     """Route one message from someone who is not the owner. Returns what happened."""
     now = time.time() if now is None else now
+    if _unverified_email(cfg, msg):
+        return _new_report(cfg, store, wt, msg, now)
     report = store.report_by_thread(msg.thread) if msg.thread else None
     if report is not None and (
             report["reporter_channel"] != msg.channel or
             normalize_address(report["reporter_address"]) != normalize_address(msg.sender)):
         return "ignored: reporter identity does not match thread"
-    if report is None:
+    is_email = any(ch.get("id") == msg.channel and ch.get("type") == "email"
+                   for ch in cfg.get("channels", []))
+    if report is None and not is_email:
         report = _open_conversation(store, msg, now)
     if report is not None:
         return _reporter_reply(cfg, store, wt, report, msg, now)
@@ -232,8 +241,9 @@ def _reporter_reply(cfg, store, wt, report, msg, now):
 
 def _new_report(cfg, store, wt, msg, now, follows=""):
     customers = cfg.get("customers") or {}
-    known = known_customer(cfg, msg.channel, msg.sender)
-    hold = bool(customers.get("hold_unknown", True)) and not known
+    unverified = _unverified_email(cfg, msg)
+    known = None if unverified else known_customer(cfg, msg.channel, msg.sender)
+    hold = unverified or (bool(customers.get("hold_unknown", True)) and not known)
     if hold:
         if len(_held_today(store, now)) >= HELD_PER_DAY:
             store.log("report", f"too many unknown reports today; ignored one from {msg.sender}", now=now)
@@ -255,7 +265,8 @@ def _new_report(cfg, store, wt, msg, now, follows=""):
         if msg.sender_name:
             sender = f"{msg.sender_name} ({msg.sender})"
         alerts.raise_event(store, kind="report", key=f"report:{report['id']}", title=title,
-                           body=msg.text, meta={"sender": sender, "report_id": report["id"]}, now=now)
+                           body=(("The sender could not be verified.\n\n" if unverified else "") + msg.text),
+                           meta={"sender": sender, "report_id": report["id"]}, now=now)
         return f"held report {report['id']}"
     try:
         ref = file_report(cfg, store, wt, report, now=now)

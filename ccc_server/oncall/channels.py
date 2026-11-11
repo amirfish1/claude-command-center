@@ -355,6 +355,7 @@ _FIELDS = {
         _field("username", "Login name", optional=True, placeholder="oncall@example.com"),
         _field("from_name", "Sender name", optional=True, placeholder="CCC On-call"),
         _field("folder", "Folder", optional=True, placeholder="INBOX"),
+        _field("authserv_id", "Authentication server ID", optional=True, placeholder="mx.example.com"),
     ],
     "telegram": [
         _field("token_vault", "Bot token", secret=True),
@@ -588,6 +589,10 @@ class EmailChannel(Channel):
         self.imap_port = _int(self.cfg.get("imap_port"), preset.get("imap_port", 993))
         self.from_name = self._opt("from_name", "CCC On-call")
         self.folder = self._opt("folder", "INBOX")
+        from .email_auth import domain
+        authserv = self._opt("authserv_id")
+        if authserv and ("@" in authserv or domain(authserv) != authserv.lower().rstrip(".")):
+            raise ValueError("Authentication server ID must be the mailbox server's host name.")
 
     @classmethod
     def missing(cls, cfg):
@@ -776,12 +781,15 @@ class EmailChannel(Channel):
             received = email.utils.parsedate_to_datetime(_header(msg, "Date")).timestamp()
         except Exception:
             received = self.clock()
+        from . import email_auth
+        authentication = email_auth.inspect(
+            msg, sender, self._opt("authserv_id") or self._get("authserv_id", ""))
         first_ref = re.search(r"<[^<>\s]+>", in_reply_to)
         return Inbound(
             channel=self.id, external_id=message_id or f"uid:{uidvalidity}:{uid}", sender=sender,
             text=text, subject=subject, thread=thread,
             reply_to=first_ref.group(0) if first_ref else in_reply_to,
-            received_at=received, sender_name=name, raw={"uid": uid})
+            received_at=received, sender_name=name, raw={"uid": uid, "email_auth": authentication})
 
 
 def _quiet(fn):
