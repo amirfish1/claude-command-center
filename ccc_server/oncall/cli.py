@@ -38,6 +38,7 @@ SOURCE_NAMES = {
 }
 PREVIEW_OFF = "On-call is a preview and it is off. Try ccc oncall demo, or turn it on with ccc oncall setup"
 NOT_RUNNING = "CCC is not running. Start it with `ccc`, then run this again."
+STILL_WORKING = "CCC is still working on this. Check ccc oncall status in a minute before running it again."
 
 
 class Stop(Exception):
@@ -70,7 +71,9 @@ class Client:
         self._need_server()
         try:
             return self._post(self.base, path or f"/api/oncall/{name}", body or {}, timeout=120)
-        except OSError:
+        except OSError as exc:
+            if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+                raise Stop(STILL_WORKING)
             raise Stop(NOT_RUNNING)
 
     def must(self, name, body=None):

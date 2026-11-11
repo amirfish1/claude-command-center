@@ -12,8 +12,10 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
 
 _FILED_RE = re.compile(r"^FILED:\s+(\S+)", re.M)
+STAFF_TIMEOUT = 900
 REF_RE = re.compile(r"\b([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-\d+)\b")
 MINOR_CLASS = "code-change-revertable"
 
@@ -27,10 +29,23 @@ def _argv():
     return assistant_actions.wt_argv()
 
 
+def _staff_detached(argv, env):
+    def work():
+        try:
+            subprocess.run(argv, capture_output=True, timeout=STAFF_TIMEOUT, env=env)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    threading.Thread(target=work, name="oncall-wt-staff", daemon=True).start()
+
+
 class WT:
-    def __init__(self, argv=None, *, run=None, timeout=60, env=None, dispatch=True):
+    def __init__(self, argv=None, *, run=None, timeout=60, env=None, dispatch=True, staff=None):
         self._argv = list(argv) if argv else None
         self._dispatch = dispatch
+        # Staffing a queue can start a worker, which takes minutes. It runs apart
+        # from filing, so the ticket's ref comes back in seconds. An injected
+        # ``run`` keeps everything in one call unless it injects ``staff`` too.
+        self._staff = staff or (None if run else _staff_detached)
         self._run = run or subprocess.run
         self._timeout = timeout
         self._env = env
@@ -78,12 +93,18 @@ class WT:
             args += ["--dedupe-key", dedupe_key]
         if url:
             args += ["--url", url]
-        if not self._dispatch:
-            args.append("--no-dispatch")
-        out = self._ok(*args)
+        # The dedupe key makes the second call return this same ticket, so it
+        # only staffs the queue. Without a key that call would file a duplicate.
+        apart = bool(self._dispatch and dedupe_key and self._staff)
+        out = self._ok(*args, *([] if self._dispatch and not apart else ["--no-dispatch"]))
         m = _FILED_RE.search(out)
         if not m:
             raise WTError("WatchTower filed the ticket but did not print its ref.")
+        if apart:
+            try:
+                self._staff(self.argv() + [str(a) for a in args], self._env)
+            except OSError:
+                pass  # WatchTower's own next pass staffs the queue
         return m.group(1)
 
     def blocked(self, queue):

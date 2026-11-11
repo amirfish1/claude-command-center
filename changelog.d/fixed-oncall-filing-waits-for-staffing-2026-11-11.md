@@ -1,0 +1,1 @@
+- On-call: a report or monitoring finding is now linked to its ticket in seconds. Filing used to wait for WatchTower to start a worker, could time out after the ticket existed, and then no "fixed" notice was sent for it. A slow answer is no longer reported as "CCC is not running".
