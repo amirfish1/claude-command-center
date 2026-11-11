@@ -12,6 +12,9 @@ import tempfile
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from ccc_server.paths import _is_pid_alive
 
 
 def main():
@@ -23,7 +26,8 @@ def main():
     pids = state / 'oncall-service-pids.json'
     if args.health:
         for pid in json.loads(pids.read_text()):
-            os.kill(pid, 0)
+            if not _is_pid_alive(pid):
+                return 1
         with urllib.request.urlopen(f'http://127.0.0.1:{args.port}/api/health', timeout=5) as response:
             return 0 if response.status == 200 else 1
     state.mkdir(parents=True, exist_ok=True)

@@ -83,7 +83,12 @@ def test_plugin_wrapper_ships_skills_with_actual_license_and_version():
     assert set(manifest["author"]) == {"name"}
     assert not (ROOT / ".claude-plugin" / "plugin.json").exists()
     market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
-    assert [(p["name"], p["source"]) for p in market["plugins"]] == [("ccc-dashboard", "./plugin")]
+    entries = {p["name"]: p["source"] for p in market["plugins"]}
+    assert entries[manifest["name"]] == "./plugin"
+    assert len(entries) == len(market["plugins"])
+    for name, source in entries.items():
+        bundled = json.loads((ROOT / source / ".claude-plugin" / "plugin.json").read_text())
+        assert bundled["name"] == name
 
 
 def test_plugin_bundle_matches_skills_sources():

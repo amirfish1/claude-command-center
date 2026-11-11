@@ -11,6 +11,8 @@ import time
 import urllib.request
 from urllib.parse import urlsplit
 
+from ccc_server.paths import _is_pid_alive
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -45,7 +47,8 @@ def owned_service(state):
         pid = int(record['pid'])
         if pid <= 1 or not local_url(record['url']):
             return None
-        os.kill(pid, 0)
+        if not _is_pid_alive(pid):
+            return None
         proc = Path('/proc') / str(pid) / 'cmdline'
         if proc.exists():
             argv = proc.read_bytes().decode().split('\0')
