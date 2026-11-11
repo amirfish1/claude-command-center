@@ -588,6 +588,12 @@ class Store:
         args.append(int(limit))
         return self._all(sql, args)
 
+    def customer_message_claim(self, message_id):
+        """Reserve a send before touching the provider; an uncertain send is not retried."""
+        return self._run("UPDATE customer_messages SET state='uncertain', "
+                         "error='Delivery may have started; not retried.' "
+                         "WHERE id=? AND state='pending'", (message_id,)).rowcount == 1
+
     def customer_message_update(self, message_id, **fields):
         allowed = {"state", "text", "alert_id", "sent_at", "external_id", "error"}
         sets, args = [], []

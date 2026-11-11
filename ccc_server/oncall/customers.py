@@ -315,7 +315,7 @@ def send_message(store, chans, wt, message_id, *, text=None, now=None):
     """Send an approved message to the reporter and note it on the ticket."""
     now = time.time() if now is None else now
     message = store.customer_message(message_id)
-    if not message or message["state"] not in ("pending", "failed"):
+    if not message or message["state"] != "pending":
         return Receipt(ok=False, error="That message was already handled.")
     chan = chans.get(message["channel"])
     if chan is None:
@@ -323,6 +323,8 @@ def send_message(store, chans, wt, message_id, *, text=None, now=None):
         return Receipt(ok=False, error="The channel this report came in on is off.")
     body = str(text or message["text"]).strip()
     report = store.report_by_ref(message["ref"]) or {}
+    if not store.customer_message_claim(message_id):
+        return Receipt(ok=False, error="That message was already handled.")
     receipt = chan.send(Outbound(text=body, to=message["address"], subject=message["subject"],
                                  thread=message["thread"],
                                  reply_to=str((report.get("meta") or {}).get("message_id") or "")))
@@ -416,3 +418,15 @@ def _closed_notice(cfg, store, chans, wt, report, item, now):
             store.customer_message_update(message["id"], alert_id=alert["id"])
     if message and not approve:
         send_message(store, chans, wt, message["id"], now=now)
+
+
+def collect_delivery_problems(store, *, now=None):
+    """Keep ambiguous and failed customer sends visible to the owner without replay."""
+    for state in ("uncertain", "failed"):
+        for message in store.customer_messages(state=state, limit=100):
+            alerts.raise_event(
+                store, kind="delivery_problem", key=f"delivery-problem:{message['id']}",
+                ref=message["ref"], title="Reporter message needs review",
+                body=f"Message {message['id']} for {message['ref']}: {message['error']} "
+                     "No automatic retry. Check delivery before requesting another message.",
+                needs_reply=False, now=now)
