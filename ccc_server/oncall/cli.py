@@ -471,7 +471,21 @@ def _run(args, client, io):
             raise Stop(data.get("error", "Could not read the week."))
         if data.get("limits") and args.post:
             raise Stop("Export unavailable: " + " ".join(data["limits"]))
-        io.out(render(data, args.post == "markdown") if args.post else json.dumps(data, indent=2))
+        if args.post:
+            io.out(render(data, args.post == "markdown"))
+        elif args.json:
+            io.out(json.dumps(data, indent=2))
+        else:
+            for period in data["periods"]:
+                io.out(render({"periods": [period]}))
+                for label, counts in (("Sources", period["reports"]["by_source"]),
+                                      ("Channels", period["reports"]["by_channel"]),
+                                      ("Owner message kinds", period["owner_messages"])):
+                    io.out(label + ": " + (", ".join(f"{k}: {v}" for k, v in counts.items()) or "none"))
+                if args.detail:
+                    io.out("Reporters: " + ", ".join(period.get("reporters", [])))
+            for limit in data.get("limits", []):
+                io.out("Incomplete: " + limit)
         return 0
     if action == "setup":
         return _setup(client, args, io)
