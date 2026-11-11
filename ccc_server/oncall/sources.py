@@ -32,6 +32,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from . import store as _store
 
@@ -482,11 +483,16 @@ class SentrySource(Source):
         ids = [str(i["id"]).strip() for i in issues]
         if not self._get("baselined") and not self.backfill:
             self._mark_filed(ids)
+            if len(issues) >= PAGE_LIMIT:
+                # Older issues can move onto this page as newer ones resolve.
+                # Retain a cutoff instead of treating those unseen IDs as new.
+                self._set("baseline_before", float(self._clock()))
             self._set("baselined", True)
             return []
         filed = set(self._filed())
         fresh = [i for i in issues
-                 if str(i["id"]).strip() not in filed and self._events(i) >= self.min_events]
+                 if str(i["id"]).strip() not in filed and self._events(i) >= self.min_events
+                 and not self._before_baseline(i)]
         findings = []
         for index, issue in enumerate(fresh):
             stack = self._latest_event(token, str(issue["id"]).strip()) if index < ENRICH_MAX else []
@@ -495,6 +501,19 @@ class SentrySource(Source):
         if not self._get("baselined"):
             self._set("baselined", True)
         return findings
+
+    def _before_baseline(self, issue):
+        cutoff = self._get("baseline_before")
+        if cutoff is None:
+            return False
+        try:
+            first = datetime.fromisoformat(str(issue.get("firstSeen", "")).replace("Z", "+00:00"))
+            if first.tzinfo is None:
+                first = first.replace(tzinfo=timezone.utc)
+            return first.timestamp() <= float(cutoff)
+        except (ValueError, TypeError, OverflowError):
+            # Without a timestamp we cannot safely label an unseen issue new.
+            return True
 
     @staticmethod
     def _events(issue):
