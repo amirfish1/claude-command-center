@@ -488,7 +488,13 @@ def _oncall_request(handler, method, path, payload=None):
     if not _feature_flag("oncall"):
         handler.send_json({"ok": False, "error": "On-call is a preview and it is off. Turn it on with: ccc oncall setup"}, 404)
         return
-    if phone_access.is_remote_request(handler.client_address[0], handler.headers):
+    origin = (handler.headers.get("Origin") or "").strip()
+    port = handler.server.server_address[1]
+    local_origins = {f"{scheme}://{host}:{port}"
+                     for scheme in ("http", "https")
+                     for host in ("localhost", "127.0.0.1", "[::1]")}
+    if ((origin and origin not in local_origins)
+            or phone_access.is_remote_request(handler.client_address[0], handler.headers)):
         handler.send_json({"ok": False, "error": "On-call settings are local-only"}, 403)
         return
     from ccc_server.oncall import api as _oncall_api
