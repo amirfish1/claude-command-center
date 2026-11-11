@@ -1129,8 +1129,8 @@ def build(cfg, **kw):
         from .logs_source import LogsSource
         return LogsSource(cfg, **kw)
     if kind == "ci":
-        from .ci_source import CISource
-        return CISource(cfg, **kw)
+        from .ci_source import CISource, GitLabSource
+        return (GitLabSource if cfg.get("provider") == "gitlab" else CISource)(cfg, **kw)
     if kind not in _TYPES:
         raise ValueError(f"Unknown source type: {kind or '(none)'}. Use one of: {', '.join(_store.SOURCE_TYPES)}.")
     return _TYPES[kind](cfg, **kw)
@@ -1144,6 +1144,10 @@ def _field(name, label, placeholder="", *, secret=False, optional=False):
 _FIELDS = {
     "ci": [
         _field("repo", "Repository", "example-org/storefront"),
+        _field("pull_requests", "Watch pull requests", "no", optional=True),
+        _field("pr_allowlist", "Allowed PR authors", optional=True),
+        _field("provider", "CI provider", "github", optional=True),
+        _field("recheck", "Recheck failures", "no", optional=True),
         _field("token_vault", "Token", secret=True, optional=True),
         _field("base", "API address", "https://api.github.com", optional=True),
         _field("branches", "Branches (comma separated)", optional=True),

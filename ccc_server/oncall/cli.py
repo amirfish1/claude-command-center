@@ -457,6 +457,16 @@ def _setup(client, args, io):
         client.must("config", {"enabled": False})
         raise Stop("No test message got through. On-call is off. Fix the channel, then run ccc oncall setup again.")
 
+    if not any(s.get("type") == "ci" for s in status.get("config", {}).get("sources", [])):
+        from .ci_source import setup_candidate
+        detected = setup_candidate(repo)
+        if detected and io.interactive and io.yes("Watch failed CI runs for this repository?"):
+            source_code, source_result = client.post("source", {"source": {"type": "ci", **detected}})
+            if source_code != 200:
+                io.out(str(source_result.get("error") or "CI source could not connect."))
+            else:
+                io.out("CI monitoring added.")
+
     client.must("config", {"enabled": True})
     io.out("")
     io.out("On-call is on.")
