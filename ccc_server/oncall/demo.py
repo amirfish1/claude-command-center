@@ -14,6 +14,7 @@ import webbrowser
 
 from .demo_phone import Phone
 from .demo_ticket import DemoTickets
+from .demo_wt import RealTickets, installed
 from .engine import Engine
 from .store import default_config
 
@@ -76,7 +77,7 @@ def walkthrough(root, args, emit, lines):
     (project / 'cart.py').write_text(BROKEN)
     (project / 'test_cart.py').write_text('from cart import total\nassert total([]) == 0\nassert total([2, 4]) == 3\n')
     phone = Phone(emit)
-    tickets = DemoTickets(root)
+    tickets = RealTickets(root, env) if installed() else DemoTickets(root)
     engine = Engine(root / 'oncall', wt=tickets, flag_on=lambda: True,
                     build_channel=lambda entry, **kw: phone)
     cfg = default_config()
@@ -88,6 +89,11 @@ def walkthrough(root, args, emit, lines):
     def run(*argv, check=True):
         return subprocess.run(argv, cwd=project, env=env, capture_output=True,
                               text=True, timeout=15, check=check)
+
+    def head_commit():
+        # This fresh repository has only loose refs, created by git above.
+        ref = (project / '.git/HEAD').read_text().strip().removeprefix('ref: ')
+        return (project / '.git' / ref).read_text().strip()
 
     def reply(default):
         if args.json:
@@ -117,6 +123,8 @@ def walkthrough(root, args, emit, lines):
             if not opened:
                 emit('No browser available. Continuing in the terminal.')
                 args.terminal = True
+        emit('Tickets: real WatchTower in a temporary store.' if tickets.backend == 'watchtower'
+             else 'Tickets: built-in fixture because WatchTower is not installed.')
         if not args.agent and shutil.which('codex'):
             emit('To try a real Codex worker with an existing login, rerun with --agent.')
         run('git', 'init', '-q')
@@ -130,10 +138,10 @@ def walkthrough(root, args, emit, lines):
         if len(reports) != 1:
             raise RuntimeError('Report was not filed.')
         ref = reports[0]['ticket_ref']
-        emit('Ticket filed: ' + ref + ' (isolated demo ticket backend).')
+        emit('Ticket filed: ' + ref + '.')
         tickets.start()
         emit('Worker starts. Running the real sample test.')
-        before = run(sys.executable, 'test_cart.py', check=False)
+        before = run(sys.executable, '-S', 'test_cart.py', check=False)
         if before.returncode == 0 or 'ZeroDivisionError' not in before.stderr:
             raise RuntimeError('Expected the empty-cart regression to fail.')
         emit('Test fails: ZeroDivisionError for an empty cart.')
@@ -146,7 +154,7 @@ def walkthrough(root, args, emit, lines):
             emit('Choose zero or hide so the worker knows what to build.')
         phone.receive(answer)
         engine.tick(force=True)
-        if tickets.item.get('answer') != answer:
+        if not tickets.answered(answer):
             raise RuntimeError('Reply did not reach the worker.')
         expected = '0' if answer == 'zero' else 'None'
         (project / 'test_cart.py').write_text(
@@ -164,13 +172,11 @@ def walkthrough(root, args, emit, lines):
             (project / 'cart.py').write_text(
                 f'def total(items):\n    return sum(items) / len(items) if items else {expected}\n')
             emit(SCRIPTED)
-        run(sys.executable, 'test_cart.py')
+        run(sys.executable, '-S', 'test_cart.py')
         # A real local commit, never pushed. No repository hooks or global config.
-        run('git', 'init', '-q')
-        run('git', 'add', 'cart.py', 'test_cart.py')
         run('git', '-c', 'user.name=Demo', '-c', 'user.email=demo@example.test',
-            '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'fix: handle empty cart')
-        commit = run('git', 'rev-parse', 'HEAD').stdout.strip()
+            '-c', 'core.hooksPath=/dev/null', 'commit', '--only', 'cart.py', 'test_cart.py', '-qm', 'fix: handle empty cart')
+        commit = head_commit()
         tickets.close(commit)
         emit('Fix committed locally. The test passes.')
         engine.tick(force=True)
@@ -187,19 +193,26 @@ def walkthrough(root, args, emit, lines):
             engine.tick(force=True)
         # The demonstration worker owns this low-risk local decision.
         (project / '.gitignore').write_text('__pycache__/\n')
-        decision = dict(question='Ignore Python cache files?', recommend='Ignore __pycache__/',
-                        undo='Delete project/.gitignore from the kept demo workspace.')
-        tickets.item['history'].append(dict(event='auto_decision', **decision))
-        tickets.save()
+        run('git', 'add', '.gitignore')
+        run('git', '-c', 'user.name=Demo', '-c', 'user.email=demo@example.test',
+            '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'chore: ignore Python cache files')
+        minor_commit = head_commit()
+        from .api import save_config
+        save_config(engine, {'minor_decisions': {'enabled': True}})
+        decision = tickets.minor(minor_commit)
+        if tickets.backend == 'watchtower':
+            from .api import decisions
+            decision = decisions(engine)[-1]
         engine.store.log('minor', json.dumps(decision))
         emit('Decided without you: ' + decision['recommend'] + '\nUndo: ' + decision['undo'])
         emit('Try the real setup (requires a running CCC and WatchTower):\nccc oncall setup\nccc oncall minor on')
         return dict(ok=True, worker='codex' if args.agent else 'scripted', ticket=ref,
-                    backend='demo', commit=commit, test_before=before.returncode, test_after=0,
+                    backend=tickets.backend, commit=commit, test_before=before.returncode, test_after=0,
                     reporter_state=engine.store.customer_messages()[0]['state'],
                     decision=decision, messages=phone.messages,
                     commands=['ccc oncall setup', 'ccc oncall minor on'])
     finally:
+        tickets.shutdown()
         phone.close()
         engine.store.close()
 

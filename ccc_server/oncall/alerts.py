@@ -150,7 +150,7 @@ def collect_decisions(cfg, store, wt, *, now=None, silent_before=""):
                       "why": _clip(why, 300)}, now=now)
             if new:
                 created += 1
-                if silent_before and blocked_at and blocked_at < silent_before:
+                if silent_before and blocked_at and blocked_at[:19] < silent_before[:19]:
                     store.alert_mark_sent(row["id"], now=now)
     for alert in store.alerts(state="open"):
         if alert["kind"] != "decision" or alert["key"] in live_keys:

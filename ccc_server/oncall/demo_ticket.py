@@ -7,6 +7,24 @@ from datetime import datetime, timezone
 
 
 class DemoTickets:
+    backend = 'fixture'
+
+    def answered(self, answer):
+        return self.item.get('answer') == answer
+
+    def shutdown(self):
+        pass
+
+    def policy_set(self, queue, enabled):
+        pass
+
+    def minor(self, commit):
+        decision = dict(question='Ignore Python cache files?', recommend='Ignore generated Python cache files.',
+                        undo='git revert ' + commit)
+        self.item['history'].append(dict(event='auto_decision', **decision))
+        self.save()
+        return decision
+
     def __init__(self, root):
         self.path = root / 'tickets.json'
         self.item = None
