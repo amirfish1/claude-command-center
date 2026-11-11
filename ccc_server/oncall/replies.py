@@ -81,6 +81,15 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
         if problem:
             say(problem)
             return "unmatched"
+    numbered = _NUM_RE.match(rest) if by_token or by_reply else None
+    word_numbered = _WORD_NUM_RE.match(rest) if by_token or by_reply else None
+    explicit = (int(word_numbered.group(2)) if word_numbered else
+                int(numbered.group(1)) if numbered and numbered.group(2).strip() else None)
+    if explicit is not None:
+        if explicit != alert["id"]:
+            say("The reply number does not match this alert. Reply in the correct thread.")
+            return "refused: conflicting alert number"
+        rest = word_numbered.group(1) if word_numbered else numbered.group(2)
     if alert["state"] != "open":
         say(f"#{alert['id']} was already handled.", alert)
         return f"#{alert['id']} already handled"
@@ -104,9 +113,12 @@ def _resolve(store, text):
         alert = store.alert(int(m.group(2)))
         if alert:
             return alert, m.group(1), ""
+        return None, text, "That alert number was not found."
     m = _NUM_RE.match(text)
     if m and (m.group(2).strip() or len(waiting) != 1):
         alert = store.alert(int(m.group(1)))
+        if alert is None:
+            return None, text, "That alert number was not found."
         if alert and m.group(2).strip():
             return alert, m.group(2), ""
         if alert and not m.group(2).strip():
