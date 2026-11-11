@@ -120,6 +120,22 @@ def file_report(cfg, store, wt, report, *, now=None):
         _title, _text, _url, hit = secret_filter.mask(report.get("title"), text, meta.get("url"))
         if hit:
             raise wtmod.WTError("Possible secret found in evidence; filing stopped for review.")
+    if (cfg.get("minor_decisions") or {}).get("enabled"):
+        text += ("\n\nSmall reversible code choices may be decided locally. This policy applies "
+                 "only to genuine discretionary small choices; it is not an extra approval gate "
+                 "for a specified bug fix or an action the owner already answered. Make and test the "
+                 "change, then commit it locally before recording the decision. Use wt block "
+                 "with --class code-change-revertable --weight minor, a truthful numeric --confidence "
+                 "in 0..1, "
+                 "--recommend, --commit <verified full commit SHA>, and --undo 'git revert <same SHA>'. "
+                 "Supply truthful values in one comma-separated --attest argument, for example "
+                 "--attest 'money=no,customer-sends=no,public-posts=no,ad-spend=no,irreversible=no' "
+                 "only when all five statements are true. This single comma-separated argument "
+                 "also works on older WatchTower versions. Check the result and continue only if automatically "
+                 "approved. A future commit or vague undo cannot qualify. "
+                 "This does not authorize money, customer messages, production changes, public "
+                 "posts, ad spend or irreversible actions. Ask the owner before those actions "
+                 "or when a required preference is unknown.")
     ref = wt.add(queue, title=report.get("title") or "Report", text=text,
                  dedupe_key=f"oncall:{report['source']}:{report['fingerprint']}",
                  url=meta.get("url") or "")

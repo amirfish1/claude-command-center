@@ -329,7 +329,16 @@ def test_session_questions_become_alerts_and_clear(rig, tmp_path):
     assert "Question from checkout fix (#1)" in text and "Keep the old redirect" in text
     api.observe_sessions(waiting, {"s1": {"question_waiting": False}}, describe, eng=rig.eng)
     assert rig.eng.store.alerts(state="open") == []
-    assert api.session_stopped("s2", "checkout fix", "It died mid-task.", "99", eng=rig.eng)["kind"] == "stopped"
+    assert api.session_stopped("s2", "checkout fix", "It died mid-task.", "99", eng=rig.eng) is None
+    assert rig.eng.store.alerts(state="open") == []
+    assert api.observe_sessions({}, {}, describe, eng=rig.eng) == 0
+    stopped, = rig.eng.store.alerts(state="open")
+    assert stopped["kind"] == "stopped" and stopped["session_id"] == "s2"
+    assert stopped["body"] == (
+        "It died mid-task.\n\nOn-call could not read the last assistant message. "
+        "Open this session in CCC for its history before continuing.")
+    assert api.observe_sessions({}, {}, describe, eng=rig.eng) == 0
+    assert rig.eng.store.alerts(state="open") == [stopped]
 
 
 def test_nothing_is_raised_while_it_is_off(rig):

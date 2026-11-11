@@ -63,9 +63,9 @@ def test_alert_label_named_unnamed_and_layout(tmp_path):
     lines = _label_alert(tmp_path / 'a', lambda sid: ('Fix login', 'webapp'))
     assert lines[:2] == ['Question from Fix login · webapp (#1)', q]
     lines = _label_alert(tmp_path / 'b', lambda sid: ('', ''))
-    assert lines[:2] == ['Question from Agent 9977c333 (#1)', q]
+    assert lines[:2] == ['Question from An unnamed session (#1)', q]
     lines = _label_alert(tmp_path / 'c', None)
-    assert lines[0] == 'Question from Agent 9977c333 (#1)'
+    assert lines[0] == 'Question from An unnamed session (#1)'
     lines = _label_alert(tmp_path / 'd', lambda sid: ('webapp', 'webapp'))
     assert lines[0] == 'Question from webapp (#1)'
 
@@ -85,11 +85,11 @@ def _choices(n):
 
 
 @pytest.mark.parametrize('action,expected', [
-    (_choices(1), 1), (_choices(3), 3), (_choices(4), 0), ('null', 0),
+    (_choices(1), 1), (_choices(3), 3), (_choices(4), 4), (_choices(13), 0), ('null', 0),
     ('[{"label": "x"', 0), ('[{"label": "x"}]', 0), ('{"label":"A","reply":"b"}', 1)])
 def test_footer_choices_become_ntfy_buttons(action, expected):
     signal = signals.from_message(_footer(action), 't')
-    assert signal and signal['body'] == 'Pick one'
+    assert signal and signal['body'] == 'Which one?\n\nPick one'
     alert = {'id': 7, 'kind': 'plain_question', 'title': 'x', 'body': signal['body'],
              'meta': signal['meta']}
     choices = alerts.render(alert)[2]

@@ -1,0 +1,1 @@
+- Clarify that minor decisions are for discretionary choices, not another approval step for routine fixes or an answered owner request.

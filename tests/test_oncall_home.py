@@ -87,11 +87,13 @@ def test_the_three_lists_read_like_the_phone_without_numbers_or_instructions(eng
     assert res["enabled"] is True and res["paused"] is False
     q, d, p = res["needs_you"]
     assert q["headline"] == "Question from Export fix"
-    assert q["detail"] == "The old export button is unused. Remove it, or keep it?"
+    assert q["detail"].startswith("The old export button is unused. Remove it, or keep it?")
+    assert "Accepted replies:" in q["detail"]
+    assert "option number" in q["reply_help"]
     assert q["choices"] == [{"label": "Remove it", "reply": "Remove the button."},
                             {"label": "Keep it", "reply": "Keep the button."}]
     assert q["free_text"] is True
-    assert d["headline"] == "SHOP-1 needs a decision" and "Agent recommends: Keep the name" in d["detail"]
+    assert d["headline"] == "SHOP-1 — Rename the column? needs a decision" and "Agent recommends: Keep the name" in d["detail"]
     assert d["choices"] == [] and d["free_text"] is True
     # A permission prompt is shown but only its session can answer it.
     assert p["session_only"] is True and p["choices"] == [] and p["session_id"] == "s1"

@@ -350,23 +350,36 @@ class _OncallDeps:
             return False, str(result.get("error") or "the session did not take the message")
         return True, ""
 
+    def context(self, sid, store):
+        from ccc_server.oncall.session_signals import context
+        paths = getattr(self, '_oncall_paths', None)
+        if paths is None:
+            paths = self._oncall_paths = {}
+        engine = _detect_session_engine(sid)
+        if engine not in ('claude', 'codex'):
+            return {}
+        if not paths.get(sid):
+            paths[sid] = (_resolve_codex_rollout_path(sid) if engine == 'codex'
+                          else _resolve_conversation_path(sid))
+        return context(store, sid, paths[sid])
+
     def label(self, sid):
-        """(display name, project folder) from the cached census map; no I/O."""
+        """Candidate-only identity lookup, with a cached first-request fallback."""
         from ccc_server import notify as _notify
+        from ccc_server.oncall.clarity import useful_name
         ident = _notify._session_identity(sid)
-        name = str(ident.get("name") or "").strip()[:60]
-        folder = os.path.basename(str(ident.get("repo_path") or "").rstrip("/"))
-        return name, folder
+        name = useful_name(ident.get('name'), sid)
+        if not name:
+            name = self.context(sid, _oncall_engine().store).get('first', '')
+        folder = os.path.basename(str(ident.get('repo_path') or '').rstrip('/'))
+        return name[:160], folder
 
     def question(self, sid, store, since=0):
         # Called once per idle period per session (session_signals.observe),
         # never per tick: the Claude path lookup walks the projects folder.
-        from ccc_server.oncall.session_signals import question
         engine = _detect_session_engine(sid)
         if engine not in ("claude", "codex"):
             return None
-        transcript = (_resolve_codex_rollout_path(sid) if engine == "codex"
-                      else _resolve_conversation_path(sid))
         # Only sessions using the optional agent plugin request every idle turn.
         try:
             marker = json.loads((SIDECAR_STATE_DIR / (sid + ".json")).read_text())
@@ -376,8 +389,72 @@ class _OncallDeps:
         except (OSError, ValueError, AttributeError):
             notify_idle = False
         from ccc_server.oncall.agent_wait import handled
-        signal = question(store, sid, transcript, since, notify_idle=notify_idle)
+        from ccc_server.oncall.session_signals import from_message, structured_signal
+        info = self.context(sid, store)
+        signal = None
+        if not since or info.get('mtime', 0) >= since:
+            if info.get('structured'):
+                native = self.waiting_question(sid, store)
+                signal = structured_signal(native) if native else None
+            else:
+                signal = from_message(info.get('last', ''), notify_idle=notify_idle)
         return None if handled(store, sid, signal) else signal
+
+    def waiting_question(self, sid, store):
+        """Read only a formal-question candidate; keep its native reply identity."""
+        from ccc_server.oncall.session_signals import structured_question
+        engine = _detect_session_engine(sid)
+        if engine == 'claude':
+            request = _read_question_request(sid)
+            if request:
+                signal = structured_question(request)
+                if signal and not signal['meta'].get('at_keyboard'):
+                    signal['meta']['question_binding'] = {'engine': engine, 'nonce': request['nonce']}
+                return signal
+        elif engine == 'codex':
+            from ccc_server.codex_client import codex_client_call
+            from ccc_server import notify as _notify
+            context = {'thread_id': sid, 'repo_path': (_notify._session_identity(sid) or {}).get('repo_path') or ''}
+            state = codex_client_call('state', {'context': context})
+            pending = [r for r in state.get('requests', [])
+                       if r.get('method') == 'item/tool/requestUserInput' and r.get('state') == 'pending']
+            if len(pending) == 1:
+                request = pending[0]
+                signal = structured_question(request.get('params') or {})
+                if signal and not signal['meta'].get('at_keyboard'):
+                    questions = request['params']['questions']
+                    if not questions[0].get('id'):
+                        signal['meta'] = {'at_keyboard': True}
+                    else:
+                        signal['meta']['question_binding'] = {
+                            'engine': engine, 'key': request['key'], 'generation': request['generation'],
+                            'question_id': questions[0]['id'], 'context': context}
+                return signal
+        # A transcript is evidence of the question, never authority to answer
+        # an interactive tool whose parked request cannot be found.
+        signal = self.context(sid, store).get('structured')
+        if signal:
+            return {'body': signal['body'], 'meta': {'at_keyboard': True}}
+        return None
+
+    def answer_question(self, sid, text, meta):
+        binding = meta.get('question_binding') or {}
+        if binding.get('engine') == 'claude':
+            if not binding.get('nonce'):
+                return False, 'That question has no reply identity. Answer in the session.'
+            result = _write_question_answer(sid, [{'index': -1, 'text': text}],
+                                            expected_nonce=binding.get('nonce'))
+        elif binding.get('engine') == 'codex':
+            from ccc_server.codex_client import codex_client_call
+            if (binding.get('context') or {}).get('thread_id') != sid:
+                return False, 'That question belongs to a different session.'
+            result = codex_client_call('respond', {
+                'context': binding['context'], 'key': binding.get('key'),
+                'generation': binding.get('generation'),
+                'result': {'answers': {binding['question_id']: {'answers': [text]}}}})
+        else:
+            return False, 'Answer this question in the session.'
+        return bool(result.get('ok')), result.get('error') or ''
 
     def permission(self, sid):
         engine = _detect_session_engine(sid)
@@ -436,17 +513,11 @@ def _oncall_engine():
 
 def _oncall_describe_session(sid):
     """(display name, pending question) for a session that is waiting."""
-    question = ""
-    try:
-        question = str(((build_live_sessions_activity() or {}).get(sid) or {}).get("question_text") or "")
-    except Exception:
-        pass
-    try:
-        from ccc_server import notify as _notify
-        name = _notify._display_name(sid, _notify._session_identity(sid))
-    except Exception:
-        name = "agent " + str(sid)[:8]
-    return name, question
+    from ccc_server.oncall.clarity import label, excerpt
+    eng = _oncall_engine()
+    info = eng.deps.context(sid, eng.store)
+    structured = info.get('structured') or {}
+    return label(eng.deps, sid), structured or excerpt(info.get('last', ''))
 
 
 def _oncall_observe_sessions(previous, current):
@@ -1146,7 +1217,7 @@ def _read_question_request(session_id):
     return data
 
 
-def _write_question_answer(session_id, answers):
+def _write_question_answer(session_id, answers, *, expected_nonce=None):
     """Drop the user's AskUserQuestion picks for the blocking hook to consume.
 
     `answers` is aligned to the request's questions; each entry is
@@ -1157,6 +1228,8 @@ def _write_question_answer(session_id, answers):
     req = _read_question_request(session_id)
     if not req:
         return {"ok": False, "error": "no pending question for this session"}
+    if expected_nonce is not None and req.get("nonce") != expected_nonce:
+        return {"ok": False, "error": "That question is no longer pending. Answer the current prompt in the session."}
     if not isinstance(answers, list) or not answers:
         return {"ok": False, "error": "answers must be a non-empty list"}
     # CCC-46: the blocking PreToolUse hook (in the headless `claude -p` process)

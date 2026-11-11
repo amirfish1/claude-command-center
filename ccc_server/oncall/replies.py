@@ -58,10 +58,19 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
     by_reply = store.delivery_alert(msg.channel, msg.reply_to) if msg.reply_to else None
     trusted = (not email) or (by_token is not None and by_token["state"] == "open")
 
-    if low in ("status", "help", "?"):
+    # A displayed option wins over a global command when the reply has an
+    # unambiguous alert target. Otherwise "Status" could never be selected.
+    from .clarity import offered
+    target = by_token if email else by_token or by_reply
+    if target is None and not email:
+        waiting = store.alerts(state="open", needs_reply=True, delivered=True)
+        target = waiting[0] if len(waiting) == 1 else None
+    option_reply = bool(target and target.get('state') == 'open' and any(
+        text.casefold() in (name.casefold(), answer.casefold()) for name, answer in offered(target)))
+    if not option_reply and low in ("status", "help", "?"):
         say(HELP if low != "status" else status_text(cfg, store))
         return low
-    if low in ("pause", "resume"):
+    if not option_reply and low in ("pause", "resume"):
         from .escalation import person
         if person(cfg, entry["id"]):
             say("Only the first owner can pause or resume On-call.")
@@ -158,7 +167,21 @@ def _is(word_list, text):
 
 def _apply(cfg, store, chans, wt, alert, text, deps, now):
     """Carry out the answer. Returns (log note, ack text or '')."""
+    from .clarity import translate
+    try:
+        text = translate(alert, text)
+    except ValueError as exc:
+        return "unclear", str(exc)
     kind, ref, meta = alert["kind"], alert.get("ref") or "", alert.get("meta") or {}
+    if meta.get("at_keyboard"):
+        return "unclear", "This prompt can only be answered in the session."
+    if meta.get('question_binding'):
+        ok, detail = (deps.answer_question(alert['session_id'], text, meta)
+                      if deps is not None else (False, 'CCC is not running'))
+        if not ok:
+            raise wtmod.WTError(detail or 'That question is no longer waiting; open the session.')
+        store.alert_close(alert['id'], 'answered', text, now=now)
+        return 'question answered', 'Sent to the agent.'
     if meta.get("hook_wait"):
         if kind == "permission" and text.strip().lower() not in ("allow", "deny"):
             return "unclear", "Reply allow or deny."
