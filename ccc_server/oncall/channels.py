@@ -426,7 +426,9 @@ class Channel:
         try:
             receipt = self._send(msg)
         except Exception as exc:
-            receipt = Receipt(ok=False, error=_describe(exc))
+            reason = getattr(exc, "reason", exc)
+            receipt = Receipt(ok=False, error=_describe(exc),
+                              uncertain=not isinstance(reason, ConnectionRefusedError))
         receipt.error = "" if receipt.ok else (self._scrub(receipt.error) or "Send failed.")
         self.last_error = receipt.error
         return receipt

@@ -57,6 +57,7 @@ class Receipt:
     ok: bool
     external_id: str = ""  # the provider's id for the sent message
     error: str = ""
+    uncertain: bool = False  # provider may have accepted before the error
 
 
 @dataclass

@@ -16,7 +16,6 @@ from . import wt as wtmod
 from .store import Outbound, Receipt
 
 HOURLY_CAP = 12
-MAX_ATTEMPTS = 5
 RETRY_AFTER_S = 120
 GO_WORDS = ("go", "yes", "y", "ok", "okay", "sure", "do it", "approve", "approved", "send", "send it")
 NO_WORDS = ("no", "n", "drop", "drop it", "skip", "ignore", "spam", "stop", "cancel", "don't", "dont")
@@ -231,7 +230,7 @@ def deliver(cfg, store, chans, *, now=None):
                 store.log("alert", f"hourly cap of {cap} reached; the rest wait", now=now)
             break
         tries = store.kv_get(f"try:{alert['id']}", {"n": 0, "at": 0})
-        if tries["n"] >= MAX_ATTEMPTS or (tries["n"] and now - tries["at"] < RETRY_AFTER_S):
+        if tries["n"] and 0 <= now - tries["at"] < RETRY_AFTER_S:
             continue
         if send_alert(store, targets, alert, now=now):
             store.alert_mark_sent(alert["id"], now=now)
@@ -260,6 +259,8 @@ def send_alert(store, targets, alert, *, now=None):
         attempt = store.delivery_latest(alert["id"], chan.id)
         receipt = chan.send(Outbound(text=text, subject=subject, thread=alert["token"],
                                      choices=choices if alert.get("needs_reply") else ()))
+        if receipt.uncertain:
+            receipt = Receipt(ok=False, error=uncertain, uncertain=True)
         store.delivery_finish(attempt["id"], receipt)
         if receipt.ok:
             ok_any = True
