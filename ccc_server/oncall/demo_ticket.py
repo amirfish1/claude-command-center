@@ -56,8 +56,10 @@ class DemoTickets:
     def blocked(self, queue):
         return [self.item] if self.item and self.item['needs_input'] else []
 
-    def ls(self, queue, status='active', limit=0):
-        return [self.item] if self.item and self.item['status'] != 'closed' else []
+    def ls(self, queue, status='active', limit=0, *, offset=None):
+        matches = self.item and ((self.item['status'] == 'closed') if status == 'closed'
+                                 else self.item['status'] != 'closed')
+        return [self.item] if matches and not offset else []
 
     def find(self, ref):
         return self.item if self.item and self.item['ref'] == ref else None

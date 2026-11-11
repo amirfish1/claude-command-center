@@ -87,6 +87,8 @@ def walkthrough(root, args, emit, lines):
     cfg.update(enabled=True, queue='DEMO', repo=str(project), channels=[dict(
         id='demo', type='command', owner=phone.owner, intake=True)])
     cfg['customers']['known'] = [{'address': 'reporter@example.test'}]
+    # The walkthrough drives its own worker, not an unattended queue.
+    cfg['alerts']['stuck'] = False
     engine.save_config(cfg)
 
     def run(*argv, check=True):
