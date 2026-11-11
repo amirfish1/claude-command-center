@@ -75,6 +75,13 @@ _OUR_MESSAGE_ID_RE = re.compile(r"ccc-oncall\.([0-9a-f]{16})\.")
 
 # -- small helpers ----------------------------------------------------------
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A channel endpoint must not forward credentials or message text elsewhere."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def http_request(method, url, *, headers=None, data=None, timeout=20):
     """The default HTTP seam: ``(status, body)``, also for 4xx and 5xx.
 
@@ -84,7 +91,7 @@ def http_request(method, url, *, headers=None, data=None, timeout=20):
         raise OSError("Only http and https addresses are supported.")
     try:
         req = urllib.request.Request(url, data=data, headers=dict(headers or {}), method=method)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.build_opener(_NoRedirect()).open(req, timeout=timeout) as resp:
             return resp.status, resp.read()
     except urllib.error.HTTPError as exc:
         try:
