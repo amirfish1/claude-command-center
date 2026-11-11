@@ -30,6 +30,12 @@ class GitHub:
     def __init__(self, cache, base="https://api.github.com"):
         self.cache, self.base = Path(cache), base.rstrip("/")
         self.cache.mkdir(parents=True, exist_ok=True)
+        self.gh_ready = False
+        if self.base == "https://api.github.com" and shutil.which("gh"):
+            try:
+                self.gh_ready = subprocess.run(["gh", "auth", "status"], capture_output=True, timeout=10).returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                pass
 
     def get(self, path):
         url = self.base + path
@@ -38,7 +44,7 @@ class GitHub:
             return json.loads(key.read_text())
         req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "ccc-oncall-replay"})
         try:
-            if self.base == "https://api.github.com" and shutil.which("gh"):
+            if self.gh_ready:
                 completed = subprocess.run(["gh", "api", "--method", "GET", path], capture_output=True, text=True, timeout=30)
                 if completed.returncode:
                     raise ReplayError("GitHub GET failed: " + completed.stderr[-1000:])
@@ -56,7 +62,7 @@ class GitHub:
 
     def closing_pr(self, repo, number):
         # REST closed events often omit commit_id for PR closures.
-        if self.base != "https://api.github.com" or not shutil.which("gh"):
+        if not self.gh_ready:
             return None
         owner, name = repo.split("/")
         query = ('{repository(owner:' + json.dumps(owner) + ',name:' + json.dumps(name) + '){issue(number:' + str(int(number)) + '){timelineItems(last:1,itemTypes:[CLOSED_EVENT]){nodes{... on ClosedEvent{closer{__typename ... on PullRequest{number merged mergeCommit{oid} repository{nameWithOwner}}}}}}}}}')

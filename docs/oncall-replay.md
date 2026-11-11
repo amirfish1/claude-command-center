@@ -82,7 +82,7 @@ and tests execute repository code; use a disposable machine for untrusted repos.
 
 GitHub REST access uses GET only, with a one-hour disk cache under
 `~/.cache/ccc/oncall-replay`. The GraphQL fallback uses a read-only query sent by `gh api graphql`, also
-cached for one hour. Git fetch is read-only and its objects are cached there too. When installed,
+cached for one hour. Git fetch is read-only and its objects are cached there too. When signed in,
 `gh api --method GET` supplies GitHub access; otherwise HTTPS GET is used. Rate-limit and access-denial
 responses stop selection; the runner does not retry in a loop. It never forks,
 pushes, comments, opens an issue or opens a pull request. Package installation
