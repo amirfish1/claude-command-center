@@ -336,3 +336,5 @@ contributions stay MIT (see [NOTICE](NOTICE)).
 
 Built on [Claude Code](https://docs.claude.com/en/docs/claude-code).
 The `gh` and Vercel CLIs provide optional integrations.
+
+[How-to guides for coding agent notifications and bug reports](docs/guides/README.md)

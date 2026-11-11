@@ -1,0 +1,1 @@
+- Add twelve On-call guides with checked command output, explicit verification limits, and an isolated replay checker.

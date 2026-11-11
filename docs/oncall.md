@@ -492,3 +492,5 @@ ccc oncall tell REF "TEXT"       tell them something
 ccc oncall minor on | off        let agents decide small reversible things
 ccc oncall decisions             what agents decided, each with its undo
 ```
+
+[Step-by-step guides with checked terminal output](guides/README.md)
