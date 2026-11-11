@@ -149,3 +149,26 @@ def test_real_test_processes_distinguish_before_wrong_and_fixed(tmp_path):
     (tmp_path / 'value.py').write_text('value = 1\n')
     fixed, _ = r.run(command, tmp_path)
     assert r.judge(['value.py'], 0, before, 0, fixed) == 'fixed'
+
+
+def test_reclosed_issue_does_not_reuse_old_closing_commit(api):
+    client, routes, calls = api
+    routes['/repos/example/library'] = {'private': False}
+    routes['/repos/example/library/issues'] = [{'number': 1, 'title': 'Bug', 'closed_at': '2026-11-10T00:00:00Z', 'html_url': 'https://github.com/example/library/issues/1'}]
+    routes['/repos/example/library/issues/1/events'] = [
+        {'event': 'closed', 'commit_id': 'a' * 40},
+        {'event': 'reopened'}, {'event': 'closed', 'commit_id': None},
+    ]
+    assert r.select_cases(client, 'example/library', 30, 1, dt.datetime(2026, 11, 11, tzinfo=dt.timezone.utc)) == []
+    assert not any('/commits/' in call for call in calls)
+
+
+def test_explicit_features_are_not_bug_evidence(api):
+    client, routes, calls = api
+    routes['/repos/example/library'] = {'private': False}
+    routes['/repos/example/library/issues'] = [
+        {'number': 1, 'title': 'Feature request: add a method', 'closed_at': '2026-11-10T00:00:00Z'},
+        {'number': 2, 'title': 'Add a method', 'labels': [{'name': 'enhancement'}], 'closed_at': '2026-11-10T00:00:00Z'},
+    ]
+    assert r.select_cases(client, 'example/library', 30, 3, dt.datetime(2026, 11, 11, tzinfo=dt.timezone.utc)) == []
+    assert not any('/events' in call for call in calls)

@@ -23,8 +23,9 @@ closing commit, a read-only GraphQL timeline query through a signed-in `gh`
 identifies the closing pull request. Without `gh`, those cases are skipped. The closing commit
 must be the pull request's merge commit. At least one added or modified path
 must match common test naming conventions. Duplicate merge commits count once.
-This can miss real fixes, especially issues closed manually or without a closing
-commit event. It does not classify issue labels as proof of a bug.
+Explicit feature requests and enhancement labels are excluded unless also
+labeled as bugs. This is a conservative filter, not proof that every remaining
+issue describes a bug. It can miss real fixes, especially issues closed manually.
 
 The checkout starts at the merge commit's first parent. The runner exports
 that tree and creates a new local git history. There are no later objects,

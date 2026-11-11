@@ -99,16 +99,21 @@ def select_cases(api, repo, days, maximum, now=None):
     metadata = api.get(f"/repos/{repo}")
     if metadata.get("private") is not False:
         raise ReplayError("Replay requires a public repository.")
-    issues = api.pages(f"/repos/{repo}/issues?state=closed&sort=updated&direction=desc&since={since}")
+    issues = api.pages(f"/repos/{repo}/issues?state=closed&sort=updated&direction=desc&since={since[:10]}")
     selected, seen = [], set()
     for issue in issues:
+        labels = [str(label.get("name", "")).lower() for label in issue.get("labels", []) if isinstance(label, dict)]
+        explicit_feature = any(re.search(r"feature|enhancement", label) for label in labels)
+        explicit_feature |= bool(re.match(r"\[?(?:feature(?: request)?|enhancement)\b", issue.get("title", ""), re.I))
+        if explicit_feature and not any("bug" in label for label in labels):
+            continue
         closed = issue.get("closed_at")
         if "pull_request" in issue or not closed or not since <= closed <= now.isoformat().replace("+00:00", "Z"):
             continue
         # A cross-reference alone is not ground truth. Require the closing event's commit.
         events = list(api.pages(f"/repos/{repo}/issues/{issue['number']}/events"))
-        closing = [e for e in events if e.get("event") == "closed" and e.get("commit_id")]
-        if closing:
+        closing = [e for e in events if e.get("event") == "closed"]
+        if closing and closing[-1].get("commit_id"):
             sha = closing[-1]["commit_id"]
             pulls = api.pages(f"/repos/{repo}/commits/{sha}/pulls")
         else:
