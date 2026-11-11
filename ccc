@@ -92,7 +92,7 @@ PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
 SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "question", "brief", "where",
-               "brain", "consent", "jobs", "vault", "secret", "remind", "oncall")
+               "brain", "consent", "jobs", "vault", "secret", "remind", "oncall", "service")
 
 RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
 
@@ -2773,6 +2773,9 @@ def main(argv=None):
         script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "astra-check")
         os.execv(script, [script] + argv[1:])
     # `ccc oncall ...` has its own nested parser (ccc_server/oncall/cli.py).
+    if argv[:1] == ["service"]:
+        from ccc_server.service import main as service_main
+        return service_main(argv[1:])
     if argv[:1] == ["oncall"]:
         return cmd_oncall(argv[1:])
     if argv[:1] == ["--server"] and argv[2:3] == ["oncall"]:
@@ -3143,6 +3146,8 @@ def main(argv=None):
     p.set_defaults(func=cmd_rebind_report_to)
 
     # Listed here so `ccc --help` shows it; main() hands it off before parsing.
+    sub.add_parser("service", add_help=False,
+                   help="install, inspect or remove the native On-call user service")
     sub.add_parser("oncall", add_help=False,
                    help="agents fix reported bugs and message you only for real decisions (preview)")
 

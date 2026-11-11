@@ -62,3 +62,7 @@ ingesters
 Dockerfile
 docker-compose.yml
 .dockerignore
+.ccc
+.agents
+.codex
+CLAUDE.local.md

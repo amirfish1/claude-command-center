@@ -1,0 +1,24 @@
+# Linux host networking preserves CCC's loopback and local-only checks.
+services:
+  ccc:
+    build:
+      context: .
+      dockerfile: Dockerfile.oncall
+    image: ccc-oncall:local
+    network_mode: host
+    volumes:
+      - state:/state
+    restart: unless-stopped
+  ntfy:
+    profiles: [ntfy]
+    depends_on:
+      - ccc
+    image: binwiederhier/ntfy:v2.17.0
+    command: serve --cache-file /var/cache/ntfy/cache.db
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - state:/var/cache/ntfy
+    restart: unless-stopped
+volumes:
+  state:

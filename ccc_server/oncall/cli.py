@@ -384,6 +384,8 @@ def _print_status(status, io):
 def _setup(client, args, io):
     code, status = client.get("status")
     if code == 404:
+        if not io.interactive and not args.yes:
+            raise Stop("On-call is a preview. Pass --yes to enable it without a terminal.")
         if not (args.yes or io.yes("On-call is a preview. Turn it on for this machine?")):
             raise Stop("Left off.")
         fcode, fres = client.post("", {"name": "oncall", "on": True}, path="/api/features/flag")
@@ -453,8 +455,8 @@ def run(argv, *, base, get, post, io=None):
     if argv[:1] == ["demo"]: return __import__("ccc_server.oncall.demo", fromlist=["main"]).main(argv[1:])
     io = io or IO()
     args = build_parser().parse_args(argv)
-    if args.action == "setup" and not args.yes and not args.secret_stdin:
-        io.interactive = True
+    if args.action == "setup" and (args.yes or args.secret_stdin):
+        io.interactive = False
     client = Client(base, get, post)
     try:
         return _run(args, client, io) or 0

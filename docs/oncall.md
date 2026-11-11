@@ -501,3 +501,5 @@ ccc oncall decisions             what agents decided, each with its undo
 - [Weekly counts and the daily summary](oncall-week.md): `ccc oncall week`.
 - [What On-call does when things break](oncall-reliability.md).
 - [Security review and limits](oncall-security.md).
+
+For an always-on Linux machine, see [On-call on a server](oncall-server.md).
