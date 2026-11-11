@@ -32,6 +32,8 @@ def is_owner(entry, msg):
     """Whether this inbound message is from the person the channel alerts."""
     if entry.get("type") == "ntfy":
         return True   # the reply topic is the secret
+    if entry.get("type") == "telegram" and msg.raw.get("chat_type", "private") != "private":
+        return False
     owner = normalize_address(entry.get("owner"))
     return bool(owner) and normalize_address(msg.sender) == owner
 
