@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime, timezone
 
 from . import wt as wtmod
 from . import secret_filter
@@ -158,6 +159,24 @@ def collect_decisions(cfg, store, wt, *, now=None, silent_before=""):
             key = f"wt:{ref}:{blocked_at}"
             live_keys.add(key)
             question, why = _gate_note(item.get("block_question"))
+            proposal = item.get("block_proposal")
+            if ((cfg.get("minor_decisions") or {}).get("enabled")
+                    and isinstance(proposal, dict)
+                    and proposal.get("class") == "code-change-revertable"
+                    and proposal.get("weight") == "minor"
+                    and not _GATE_NOTE.search(str(item.get("block_question") or "").strip())):
+                # WatchTower saves the block before applying its automatic decision.
+                # Invalid or future times must still reach the owner immediately.
+                try:
+                    stamp = datetime.fromisoformat(blocked_at.replace("Z", "+00:00"))
+                    if stamp.tzinfo is None:
+                        stamp = stamp.replace(tzinfo=timezone.utc)
+                    age = now - stamp.timestamp()
+                except (ValueError, OverflowError, OSError):
+                    pass
+                else:
+                    if 0 <= age < 5:
+                        continue
             report = store.report_by_ref(ref)
             ci_source = bool(report and any(
                 source.get('type') == 'ci' and report['source'] == 'source:' + source.get('id', '')

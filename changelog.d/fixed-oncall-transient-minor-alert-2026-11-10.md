@@ -1,0 +1,1 @@
+- Give a pending minor decision five seconds to settle before alerting, while explicit refusals and owner questions still arrive immediately.
