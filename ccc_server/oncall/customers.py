@@ -172,6 +172,10 @@ def intake(cfg, store, wt, msg, *, now=None):
     """Route one message from someone who is not the owner. Returns what happened."""
     now = time.time() if now is None else now
     report = store.report_by_thread(msg.thread) if msg.thread else None
+    if report is not None and (
+            report["reporter_channel"] != msg.channel or
+            normalize_address(report["reporter_address"]) != normalize_address(msg.sender)):
+        return "ignored: reporter identity does not match thread"
     if report is None:
         report = _open_conversation(store, msg, now)
     if report is not None:
