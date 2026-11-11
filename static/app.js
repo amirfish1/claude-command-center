@@ -22678,8 +22678,11 @@
         // computed from the button's live rect every time it opens.
         const r = btn.getBoundingClientRect();
         menu.style.top = `${Math.round(r.bottom + 4)}px`;
-        menu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
         _syncSessionMenuItems(menu);
+        menu.hidden = false;
+        const width = menu.getBoundingClientRect().width;
+        const right = Math.min(window.innerWidth - r.right, window.innerWidth - width - 8);
+        menu.style.right = `${Math.round(Math.max(8, right))}px`;
       }
       menu.hidden = open;
       btn.setAttribute('aria-expanded', open ? 'false' : 'true');
