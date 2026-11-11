@@ -27,7 +27,12 @@ class DemoTickets:
 
     def __init__(self, root):
         self.path = root / 'tickets.json'
-        self.item = None
+        self.items = []
+        self.ref = ''
+
+    @property
+    def item(self):
+        return self.find(self.ref)
 
     def save(self):
         self.path.write_text(json.dumps(self.item, indent=2) + '\n')
@@ -36,10 +41,12 @@ class DemoTickets:
         return True
 
     def add(self, queue, *, title, text, **kwargs):
-        self.item = dict(ref=f'{queue}-1', project=queue, title=title, text=text,
+        item = dict(ref=f'{queue}-{len(self.items) + 1}', project=queue, title=title, text=text,
                          status='open', history=[], needs_input=False)
+        self.items.append(item)
+        self.ref = item['ref']
         self.save()
-        return self.item['ref']
+        return self.ref
 
     def start(self):
         self.item['status'] = 'claimed'
@@ -54,21 +61,21 @@ class DemoTickets:
         self.save()
 
     def blocked(self, queue):
-        return [self.item] if self.item and self.item['needs_input'] else []
+        return [item for item in self.items if item['needs_input'] and item['status'] != 'closed']
 
     def ls(self, queue, status='active', limit=0):
-        return [self.item] if self.item and self.item['status'] != 'closed' else []
+        return [item for item in self.items if item['status'] != 'closed']
 
     def find(self, ref):
-        return self.item if self.item and self.item['ref'] == ref else None
+        return next((item for item in self.items if item['ref'] == ref), None)
 
     def answer(self, ref, text):
-        self.item.update(needs_input=False, answer=text)
-        self.item['history'].append(dict(event='answer', text=text))
+        self.find(ref).update(needs_input=False, answer=text)
+        self.find(ref)['history'].append(dict(event='answer', text=text))
         self.save()
 
     def comment(self, ref, text):
-        self.item['history'].append(dict(event='comment', text=text))
+        self.find(ref)['history'].append(dict(event='comment', text=text))
         self.save()
 
     def close(self, commit):

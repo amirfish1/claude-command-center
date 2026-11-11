@@ -18,6 +18,7 @@ from .demo_ticket import DemoTickets
 from .demo_wt import RealTickets, installed
 from .engine import Engine
 from .store import default_config
+from .demo_scenes import SCENES, Scene
 
 SCRIPTED = 'This run used a scripted worker. With Codex or Claude Code installed, a real agent does this step.'
 BROKEN = 'def total(items):\n    return sum(items) / len(items)\n'
@@ -79,19 +80,33 @@ def walkthrough(root, args, emit, lines):
     project.mkdir()
     (project / 'cart.py').write_text(BROKEN)
     (project / 'test_cart.py').write_text('from cart import total\nassert total([]) == 0\nassert total([2, 4]) == 3\n')
+    scene_name = getattr(args, 'scene', 'customer')
+    scene = Scene(scene_name, project, env) if scene_name != 'customer' else None
     phone = Phone(emit)
     tickets = RealTickets(root, env) if installed() else DemoTickets(root)
     engine = Engine(root / 'oncall', wt=tickets, flag_on=lambda: True,
-                    build_channel=lambda entry, **kw: phone)
+                    build_channel=lambda entry, **kw: phone,
+                    build_source=scene.build if scene else None)
     cfg = default_config()
     cfg.update(enabled=True, queue='DEMO', repo=str(project), channels=[dict(
         id='demo', type='command', owner=phone.owner, intake=True)])
     cfg['customers']['known'] = [{'address': 'reporter@example.test'}]
+    if scene:
+        cfg['sources'] = scene.entries()
     engine.save_config(cfg)
 
     def run(*argv, check=True):
         return subprocess.run(argv, cwd=project, env=env, capture_output=True,
                               text=True, timeout=15, check=check)
+
+    def tick(check_sources=False):
+        if scene and not check_sources:
+            # Advance message/alert work without repeatedly running expensive
+            # monitors while the worker is still fixing the same incident.
+            for name in ('poll:demo', 'decisions', 'closed'):
+                engine.store.kv_set('due:' + name, 0)
+            return engine.tick()
+        return engine.tick(force=True)
 
     def head_commit():
         # This fresh repository has only loose refs, created by git above.
@@ -135,13 +150,24 @@ def walkthrough(root, args, emit, lines):
         run('git', '-c', 'user.name=Demo', '-c', 'user.email=demo@example.test',
             '-c', 'core.hooksPath=/dev/null', 'commit', '-qm', 'test: reproduce empty cart crash')
         phone.state = 'Reported'
-        emit('Customer: Report arrives: My empty cart crashes instead of showing a total.')
-        phone.receive('My empty cart crashes instead of showing a total.', 'reporter@example.test')
-        engine.tick(force=True)
+        if scene:
+            tick(True)  # establish an empty/healthy source baseline
+            scene.fail(head_commit())
+            emit('CI: The build on main is red.' if scene_name == 'ci' else
+                 'Monitoring: An error appeared in application.log; the health URL returns 503.')
+            phone.thread_messages.append(dict(sender='CI' if scene_name == 'ci' else 'Monitoring',
+                                             text='The sample test failed on main.' if scene_name == 'ci' else
+                                             'ERROR: ZeroDivisionError in application.log. Health check: HTTP 503.'))
+        else:
+            emit('Customer: Report arrives: My empty cart crashes instead of showing a total.')
+            phone.receive('My empty cart crashes instead of showing a total.', 'reporter@example.test')
+        tick(True)
         reports = engine.store.reports(state='filed')
-        if len(reports) != 1:
+        if not reports:
             raise RuntimeError('Report was not filed.')
         ref = reports[0]['ticket_ref']
+        tickets.ref = ref
+        extra_refs = [r['ticket_ref'] for r in reports[1:]]
         emit('On-call: Ticket filed: ' + ref + '.')
         phone.state = 'Agent working'
         tickets.start()
@@ -152,14 +178,14 @@ def walkthrough(root, args, emit, lines):
         emit('Agent: Test fails: ZeroDivisionError for an empty cart.')
         phone.state = 'Waiting for you'
         tickets.block()
-        engine.tick(force=True)
+        tick()
         while True:
             answer = reply('zero').lower()
             if answer in ('zero', 'hide'):
                 break
             emit('Choose zero or hide so the worker knows what to build.')
         phone.receive(answer)
-        engine.tick(force=True)
+        tick()
         if not tickets.answered(answer):
             raise RuntimeError('Reply did not reach the worker.')
         phone.state = 'Agent working'
@@ -188,20 +214,36 @@ def walkthrough(root, args, emit, lines):
         tickets.close(commit)
         phone.state = 'Fixed'
         emit('Agent: Fix committed locally. The test passes.')
-        engine.tick(force=True)
-        pending = engine.store.customer_messages(state='pending')
-        if len(pending) != 1 or any(m['to'] for m in phone.messages):
-            raise RuntimeError('Reporter notice did not wait for approval.')
-        emit('On-call: Reporter notice is waiting. Reply yes to send locally, or no to drop it.')
-        while engine.store.customer_messages(state='pending'):
-            approval = reply('yes')
-            if approval.lower() not in ('yes', 'no'):
-                emit('Reply yes or no.')
-                continue
-            phone.receive(approval)
-            engine.tick(force=True)
-        phone.state = ('Reporter told' if engine.store.customer_messages()[0]['state'] == 'sent'
-                       else 'Fixed · reporter notice skipped')
+        tick()
+        if scene:
+            for extra in extra_refs:
+                tickets.ref = extra
+                tickets.close(commit)
+            scene.recover(commit)
+            tick(True)
+            for entry, source in engine.sources().values():
+                ok, detail = source.check()
+                if not ok:
+                    raise RuntimeError('Source did not recover: ' + detail)
+            emit('CI: The same build is green.' if scene_name == 'ci' else
+                 'Monitoring: The log is clear and the health URL returns 200.')
+            phone.state = 'Build green' if scene_name == 'ci' else 'Application healthy'
+            phone.thread_messages.append(dict(sender='CI' if scene_name == 'ci' else 'Monitoring',
+                                             text=phone.state + '. The sample test passes.'))
+        else:
+            pending = engine.store.customer_messages(state='pending')
+            if len(pending) != 1 or any(m['to'] for m in phone.messages):
+                raise RuntimeError('Reporter notice did not wait for approval.')
+            emit('On-call: Reporter notice is waiting. Reply yes to send locally, or no to drop it.')
+            while engine.store.customer_messages(state='pending'):
+                approval = reply('yes')
+                if approval.lower() not in ('yes', 'no'):
+                    emit('Reply yes or no.')
+                    continue
+                phone.receive(approval)
+                tick()
+            phone.state = ('Reporter told' if engine.store.customer_messages()[0]['state'] == 'sent'
+                           else 'Fixed · reporter notice skipped')
         # The demonstration worker owns this low-risk local decision.
         (project / '.gitignore').write_text('__pycache__/\n')
         run('git', 'add', '.gitignore')
@@ -221,10 +263,13 @@ def walkthrough(root, args, emit, lines):
         phone.choices = []
         return dict(ok=True, worker='codex' if args.agent else 'scripted', ticket=ref,
                     backend=tickets.backend, commit=commit, test_before=before.returncode, test_after=0,
-                    reporter_state=engine.store.customer_messages()[0]['state'],
+                    reporter_state=engine.store.customer_messages()[0]['state'] if not scene else 'not applicable',
+                    scene=scene_name, source_requests=scene.requests if scene else [],
                     decision=decision, messages=phone.messages,
                     commands=['ccc oncall setup', 'ccc oncall minor on'])
     finally:
+        if scene:
+            scene.close()
         tickets.shutdown()
         phone.close()
         engine.store.close()
@@ -232,6 +277,7 @@ def walkthrough(root, args, emit, lines):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='ccc oncall demo', description=__doc__)
+    parser.add_argument('--scene', choices=(*SCENES, 'all'))
     parser.add_argument('--terminal', action='store_true')
     parser.add_argument('--fast', action='store_true', help='skip presentation pauses')
     parser.add_argument('--keep', action='store_true')
@@ -241,6 +287,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.json and args.agent:
         parser.error('--json runs the scripted worker; use --agent interactively')
+    if args.scene is None:
+        if sys.stdin.isatty() and not args.json:
+            print('Pick a scene: [1] Customer  [2] CI  [3] Monitoring  [4] All')
+            from .demo_select import pick
+            args.scene = pick()
+        else:
+            args.scene = 'customer'
     args.terminal |= not sys.stdout.isatty() or os.environ.get('TERM') in (None, '', 'dumb') or 'NO_COLOR' in os.environ
     root = Path(tempfile.mkdtemp(prefix='ccc-oncall-demo-'))
     start = time.monotonic()
@@ -253,7 +306,17 @@ def main(argv=None):
         raise KeyboardInterrupt()
     previous = signal.signal(signal.SIGTERM, interrupted)
     try:
-        result = walkthrough(root, args, emit, lines)
+        if args.scene == 'all':
+            results = []
+            for name in SCENES:
+                args.scene = name
+                folder = root / name
+                folder.mkdir()
+                emit('Scene: ' + name)
+                results.append(walkthrough(folder, args, emit, lines))
+            result = dict(ok=True, scenes=results)
+        else:
+            result = walkthrough(root, args, emit, lines)
     except (Exception, KeyboardInterrupt) as exc:
         result = dict(ok=False, error=str(exc) or 'Interrupted')
         emit('Demo stopped: ' + result['error'])
