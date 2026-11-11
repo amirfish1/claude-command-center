@@ -107,8 +107,10 @@ persist_channel() {
   local channel="$1"
   local dir
   dir="$(dirname "$SOURCE_FILE")"
-  mkdir -p "$dir"
-  printf '%s\n' "$channel" > "$SOURCE_FILE"
+  if ! { mkdir -p "$dir" && printf '%s\n' "$channel" > "$SOURCE_FILE"; } 2>/dev/null; then
+    err "Cannot write CCC settings in HOME; use a writable home directory and run the installer again."
+    exit 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
