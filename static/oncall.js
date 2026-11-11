@@ -20,7 +20,7 @@
   const INTAKE_TYPES = ['email', 'sms', 'whatsapp'];
   const ALERT_SWITCHES = [['decisions', 'An agent needs a decision'], ['stopped', 'An agent stopped'],
     ['stuck', 'A queue stopped moving'], ['fixed', 'A bug was fixed']];
-  const CUSTOMER_SWITCHES = [['approve_sends', 'Approve each message to a customer'],
+  const CUSTOMER_SWITCHES = [['approve_sends', 'Approve reporter messages (off: non-GitHub messages send immediately unless a possible secret is detected; GitHub comments always need approval)'],
     ['hold_unknown', 'Hold reports from people not listed'],
     ['notify_fixed', 'Tell the reporter when it is fixed']];
   const REFRESH_MS = 10000;

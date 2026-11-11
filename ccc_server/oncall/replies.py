@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 import time
 
-from . import alerts, customers
+from . import alerts, customers, secret_filter
 from . import wt as wtmod
 from .store import normalize_address
 
@@ -191,6 +191,12 @@ def _apply(cfg, store, chans, wt, alert, text, deps, now):
         if kind == "fixed" and not meta.get("notify"):
             store.alert_close(alert["id"], "cleared", text, now=now)
             return "noted", ""
+        if not _is(alerts.NO_WORDS, text):
+            message = store.customer_message(message_id)
+            candidate = ((message or {}).get("text") or "") if _is(alerts.GO_WORDS, text) else text
+            _body, _subject, hit = secret_filter.mask(candidate, (message or {}).get("subject") or "")
+            if hit:
+                return "unclear", "Possible secret detected. Nothing was sent; reply with wording that omits it, or no to drop."
         action = "refused" if _is(alerts.NO_WORDS, text) else "approved" if _is(alerts.GO_WORDS, text) else "reworded"
         store.alert_owner_action(alert["id"], action, now=now)
         if _is(alerts.NO_WORDS, text):

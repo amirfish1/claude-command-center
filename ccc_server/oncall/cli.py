@@ -211,6 +211,9 @@ def build_parser():
         p.add_argument("ref", help="the ticket, for example SHOP-12")
         p.add_argument("text")
 
+    p = sub.add_parser("approve-sends", help="choose whether reporter messages need approval")
+    p.add_argument("state", choices=("on", "off"))
+
     p = sub.add_parser("minor", help="let agents decide small reversible things without stopping")
     p.add_argument("state", choices=("on", "off"))
 
@@ -337,6 +340,10 @@ def _print_status(status, io):
     if status.get("enabled") and status.get("paused"):
         state = "paused"
     io.out(f"On-call is {state}." + (f" Queue: {status['queue']}." if status.get("queue") else ""))
+    approval = (status.get("config", {}).get("customers") or {}).get("approve_sends", True)
+    io.out("Reporter messages: " + ("owner approval required." if approval else
+           "non-GitHub messages send immediately unless a possible secret is detected."))
+    io.out("GitHub comments always require owner approval.")
     if not status.get("wt"):
         io.out("WatchTower is not installed, so no agent will pick tickets up.")
     channels = status.get("channels") or []
@@ -560,6 +567,13 @@ def _run(args, client, io):
             io.out(f"Sent to {res.get('to') or 'the reporter'}.")
         else:
             io.out("Waiting for the owner to approve the message. The reply will land on the ticket.")
+        return 0
+    if action == "approve-sends":
+        if args.state == "off":
+            if not io.interactive or not io.yes("Non-GitHub reporter messages will send immediately unless a possible secret is detected. Turn approval off?", default=False):
+                raise Stop("Approval remains on.")
+        client.must("config", {"customers": {"approve_sends": args.state == "on"}})
+        io.out("Reporter message approval is " + args.state + "; GitHub comments always require approval.")
         return 0
     if action == "minor":
         res = client.must("config", {"minor_decisions": {"enabled": args.state == "on"}})
