@@ -1119,6 +1119,9 @@ def build(cfg, **kw):
     if not isinstance(cfg, dict):
         raise ValueError("A source must be an object.")
     kind = str(cfg.get("type") or "").strip()
+    if kind == "alertmanager":
+        from .alertmanager_source import AlertmanagerSource
+        return AlertmanagerSource(cfg, **kw)
     if kind == "docker":
         from .docker_source import DockerSource
         return DockerSource(cfg, **kw)
@@ -1195,6 +1198,9 @@ _FIELDS = {
 def required_fields(source_type):
     """The fields a setup form asks for, in order. Optional ones come last."""
     kind = str(source_type or "").strip()
+    if kind == "alertmanager":
+        from .alertmanager_source import FIELDS
+        return [dict(f) for f in FIELDS]
     if kind == "docker":
         from .docker_source import FIELDS
         return [dict(f) for f in FIELDS]

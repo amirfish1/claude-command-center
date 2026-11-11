@@ -27,6 +27,7 @@ CHANNEL_NAMES = {
     "whatsapp": "WhatsApp (your Twilio sender)", "command": "Your own command",
 }
 SOURCE_NAMES = {
+    "alertmanager": "Prometheus Alertmanager",
     "docker": "Docker container health",
     "logs": "Application logs",
     "ci": "Failed CI runs",
