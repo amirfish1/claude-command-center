@@ -77,6 +77,15 @@ def test_record(tmp_path):
     transcript = tmp_path / 'record.txt'
     proc = demo(tmp_path, '--json', '--record', str(transcript))
     assert proc.returncode == 0, proc.stdout
+    result = json.loads(proc.stdout)
+    transcript = Path(result['transcript'])
+    assert transcript.parent == tmp_path / '.claude/screenshots/demo'
+    cast = Path(result['cast'])
+    assert cast.exists()
+    rows = [json.loads(line) for line in cast.read_text().splitlines()]
+    assert rows[0]['version'] == 2
+    assert all('\n' not in row[2].replace('\r\n', '') for row in rows[1:])
+    assert json.loads((transcript.parent / 'recording.json').read_text())['ok']
     text = transcript.read_text()
     assert 'needs a decision' in text and 'Reporter notice is waiting' in text
     assert 'scripted worker' in text and 'ccc oncall setup' in text

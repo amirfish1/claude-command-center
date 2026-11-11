@@ -12,9 +12,14 @@ from ccc_server.oncall import demo
 from ccc_server.oncall.demo_wt import installed
 
 
+@pytest.mark.parametrize('platform', ['linux', 'darwin'])
 @pytest.mark.parametrize('scene', ['customer', 'ci', 'monitoring'])
 @pytest.mark.parametrize('backend', ['fixture', 'watchtower'])
-def test_scene(tmp_path, monkeypatch, scene, backend):
+def test_scene(tmp_path, monkeypatch, scene, backend, platform):
+    monkeypatch.setattr(sys, 'platform', platform)
+    monkeypatch.setenv('http_proxy', 'http://127.0.0.1:1')
+    monkeypatch.setenv('no_proxy', '')
+    monkeypatch.setenv('NO_PROXY', '')
     if backend == 'watchtower' and not installed():
         pytest.skip('WatchTower is absent')
     monkeypatch.setattr(demo, 'installed', lambda: backend == 'watchtower')
@@ -24,6 +29,7 @@ def test_scene(tmp_path, monkeypatch, scene, backend):
     result = demo.walkthrough(tmp_path, args, lines.append, lines)
     assert time.monotonic() - start < 2
     assert result['backend'] == backend and result['scene'] == scene
+    assert os.environ['no_proxy'] == os.environ['NO_PROXY'] == ''
     assert result['test_before'] != 0 and result['test_after'] == 0
     if scene == 'ci':
         assert any('/logs' in url for url in result['source_requests'])
@@ -69,3 +75,16 @@ def test_refund_needs_a_real_reply(tmp_path, monkeypatch, backend, refund):
     if backend == 'watchtower':
         assert 'money' in result['refund']['evidence'].lower()
     assert json.loads((tmp_path / 'project/refund.json').read_text())['simulated']
+
+
+def test_all_scenes(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run([sys.executable, str(root / 'ccc'), 'oncall', 'demo',
+                           '--scene', 'all', '--json'], cwd=tmp_path,
+                          env=dict(os.environ, HOME=str(tmp_path), TMPDIR=str(tmp_path)),
+                          capture_output=True, text=True, timeout=15)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    result = json.loads(proc.stdout)
+    assert [scene['scene'] for scene in result['scenes']] == ['customer', 'ci', 'monitoring']
+    assert all(scene['ok'] for scene in result['scenes'])
+    assert not list(tmp_path.iterdir())
