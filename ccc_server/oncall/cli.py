@@ -201,7 +201,7 @@ def build_parser():
     u.add_argument("address")
     usub.add_parser("list")
 
-    p = sub.add_parser("report", help="report a bug yourself; an agent picks it up")
+    p = sub.add_parser("report", help="file a bug in the configured queue")
     p.add_argument("text")
     p.add_argument("--title", default="")
 
@@ -552,7 +552,7 @@ def _run(args, client, io):
         return 0
     if action == "report":
         res = client.must("report", {"text": args.text, "title": args.title})
-        io.out(f"Filed as {res.get('ref')}. An agent will pick it up.")
+        io.out(f"Filed as {res.get('ref')}. Worker start is not confirmed.")
         return 0
     if action in ("ask", "tell"):
         res = client.must("customer", {"action": action, "ref": args.ref, "kind": action, "text": args.text})
