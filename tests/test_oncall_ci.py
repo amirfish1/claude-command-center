@@ -177,7 +177,7 @@ def test_closed_notice_waits_for_observed_green(monkeypatch):
     class Store:
         confirmed = []
         def filed_queues(self):
-            return []
+            return ['DEMO']
         def report_by_ref(self, ref):
             return {'id': 1, 'state': 'filed', 'source': 'source:ci', 'fingerprint': 'failure', 'ticket_ref': 'DEMO-1'}
         def kv_set(self, *args):

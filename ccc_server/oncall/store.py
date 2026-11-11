@@ -666,7 +666,7 @@ class Store:
 
     def filed_queues(self, limit=16):
         after = self.kv_get("closed_queue_cursor", "")
-        queues = []
+        queues = [""] if self._one("SELECT id FROM reports WHERE state='filed' AND queue='' LIMIT 1") else []
         for _ in range(limit):
             row = self._one("SELECT queue FROM reports WHERE state='filed' AND queue>? "
                             "ORDER BY queue LIMIT 1", (after,))

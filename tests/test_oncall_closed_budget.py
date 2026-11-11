@@ -37,3 +37,12 @@ def test_closed_batch_does_not_scan_retired_reports(tmp_path):
     assert len(steps) < 10
     store._db.set_progress_handler(None, 0)
     store.close()
+
+
+def test_no_listing_without_filed_reports(tmp_path):
+    store = Store(tmp_path)
+    class Queue:
+        def ls(self, *args, **kwargs):
+            raise AssertionError('An empty On-call backlog must not list queue history')
+    assert customers.collect_closed({'queue': 'DEMO'}, store, {}, Queue()) == 0
+    store.close()

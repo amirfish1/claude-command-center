@@ -372,7 +372,7 @@ FIXED_NOTE = "The problem you reported is fixed: {title}. Reply to this message 
 def collect_closed(cfg, store, chans, wt, *, now=None):
     """A filed report whose ticket closed -> a fixed notice, once per ticket."""
     now = time.time() if now is None else now
-    queues = list(dict.fromkeys([cfg.get("queue") or "", *store.filed_queues()]))
+    queues = list(dict.fromkeys(q or cfg.get("queue") or "" for q in store.filed_queues()))
     done = 0
     for queue in queues:
         if not queue:
