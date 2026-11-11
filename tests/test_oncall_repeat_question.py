@@ -108,3 +108,44 @@ def test_ntfy_button_publishes_reply_text():
     ch.send(Outbound(text='q', thread='TOK', choices=(('Keep', 'keep the old one'),)))
     action = payloads[0]['actions'][0]
     assert action['label'] == 'Keep' and action['body'] == 'TOK keep the old one'
+
+
+def _rig(tmp_path):
+    clock = type('C', (), {'now': 1000.0})()
+    eng = Engine(tmp_path, flag_on=lambda: True, clock=lambda: clock.now)
+    cfg = eng.config()
+    cfg.update(enabled=True, queue='TEST')
+    eng.save_config(cfg)
+    transcript = tmp_path / 't.jsonl'
+    eng.deps = type('D', (), {})()
+    eng.deps.permission = lambda sid: None
+    eng.deps.question = lambda sid, store, since=0: signals.question(store, sid, transcript)
+
+    def period(uuid):
+        _turn(transcript, uuid, 'Should I approve the deploy?')
+        idle = {'s1': {'state': 'idle'}}
+        signals.observe(eng, idle)
+        clock.now += signals.GRACE_S
+        signals.observe(eng, idle)
+    return eng, period, lambda: signals.observe(eng, {'s1': {'state': 'working'}})
+
+
+def test_same_question_after_owner_answered_alerts_again(tmp_path):
+    eng, period, busy = _rig(tmp_path)
+    period('u1')
+    assert eng.store.alert_close(eng.store.alerts()[0]['id'], 'answered', 'not yet')
+    busy()
+    period('u2')
+    assert len(eng.store.alerts()) == 2
+    busy()
+    period('u3')  # the second one was cleared, not answered
+    assert len(eng.store.alerts()) == 2
+
+
+def test_cleared_without_answer_then_repeated_gives_none(tmp_path):
+    eng, period, busy = _rig(tmp_path)
+    period('u1')
+    busy()  # clears the open alert unanswered
+    assert eng.store.alerts()[0]['state'] == 'cleared'
+    period('u2')
+    assert len(eng.store.alerts()) == 1

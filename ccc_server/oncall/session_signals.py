@@ -162,6 +162,13 @@ def observe(eng, current):
 
         def raise_signal(sid, signal):
             key = f"session:{sid}:{signal['kind']}:{signal['stamp']}"
+            # The same words asked again after the owner answered are a new
+            # question; one that only cleared unanswered is the same incident.
+            base, n = key, 0
+            while (signal['kind'] == 'plain_question' and (prior := eng.store.alert_by_key(key))
+                   and prior['state'] == 'answered'):
+                n += 1
+                key = f"{base}:{n}"
             if enabled:
                 alerts.raise_event(eng.store, kind=signal['kind'], key=key, session_id=sid,
                                    title=label(sid), body=signal['body'],
