@@ -1,0 +1,1 @@
+- On-call holds unverified email and requires a verified sender and private thread token for email follow-ups.

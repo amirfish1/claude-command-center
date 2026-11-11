@@ -27,8 +27,13 @@ def _call(port, method, path, body=None, headers=None):
 
 @pytest.fixture
 def port(tmp_path, monkeypatch):
+    from ccc_server import log_parse
+    monkeypatch.setattr(log_parse, "FEATURE_FLAGS_FILE", tmp_path / "feature-flags.json")
     monkeypatch.setenv("CCC_ONCALL_STATE_DIR", str(tmp_path / "oncall"))
     monkeypatch.delenv("CCC_FF_ONCALL", raising=False)
+    # This machine's own preview switches must not decide the result.
+    from ccc_server import log_parse
+    monkeypatch.setattr(log_parse, "_load_feature_flag_overrides", lambda: {})
     monkeypatch.delenv("CCC_PROXY_SECRET", raising=False)
     monkeypatch.delenv("CCC_PROXY_SECRET_FILE", raising=False)
     monkeypatch.setattr(engine_mod, "_ENGINE", None)

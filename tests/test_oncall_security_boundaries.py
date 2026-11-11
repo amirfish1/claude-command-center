@@ -27,14 +27,13 @@ def test_replayed_and_concurrent_replies_answer_once(rig):
     assert rig.deps.injected == [('test', 'yes')]
 
 
-def test_known_email_is_an_unresolved_forgery_boundary(rig):
+def test_known_email_without_authentication_is_held(rig):
     cfg = rig.eng.config()
     cfg['customers']['known'] = [{'address': 'customer@example.test'}]
     rig.eng.save_config(cfg)
-    rig.msg('mail', 'Attacker-controlled report', 'customer@example.test')
+    rig.msg('mail', 'Attacker-controlled report', 'customer@example.test', raw={})
     rig.tick()
-    # This proves the current risk. From is not authenticated by this adapter.
-    assert len(rig.wt.added) == 1
+    assert not rig.wt.added
 
 
 def test_approve_sends_off_excludes_github():
@@ -55,11 +54,11 @@ def test_config_cannot_be_changed_through_foreign_origin_or_proxy(port, monkeypa
     assert _call(port, 'GET', '/api/oncall/status')[1]['queue'] == ''
 
 
-def test_hourly_cap_does_not_bound_acknowledgements(rig):
-    # Explicit remaining budget boundary: status replies bypass alert delivery.
+def test_hourly_cap_bounds_acknowledgements(rig):
+    # Status replies share the owner message budget.
     for i in range(15):
         rig.eng.inbound('tg', Inbound('tg', str(i), '4242', 'status'))
-    assert len(rig.chan('tg').sent) == 15
+    assert len(rig.chan('tg').sent) == 12
 
 
 def test_body_marker_spoof_remains_inside_quoted_report():

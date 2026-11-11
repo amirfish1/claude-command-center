@@ -9,7 +9,8 @@ Claude Code runs this when a permission dialog would open. The hook:
      ccc_server/relay_context.canonical_input);
   3. parks for a short window, watching for a decision file the relay writes
      after the cloud approved/denied that exact hash;
-  4. returns allow/deny only when the decision's hash equals its own hash, it
+  4. checks the invocation nonce on bound decisions, and returns allow/deny
+     only when the decision's hash equals its own hash, it
      has not expired (120 s) and it can be claimed atomically (single use);
   5. stops parking as soon as the prompt is answered some other way (the
      transcript gets the tool_result for this call) or the session exits.
@@ -32,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import time
 
@@ -134,7 +136,7 @@ def describe_call(tool, tin, limit=240):
     return ""
 
 
-def raise_badge(sid, tool, tin=None):
+def raise_badge(sid, tool, tin=None, nonce=None):
     """Write the `_needs_approval` marker the dashboard and relay read, unless
     one is already there. Returns the marker path when this hook owns it."""
     path = os.path.join(live_dir(), "%s_needs_approval.json" % sid)
@@ -148,7 +150,7 @@ def raise_badge(sid, tool, tin=None):
                        "message": "Claude needs your permission to use %s%s" % (
                            tool, (": " + describe_call(tool, tin)) if describe_call(tool, tin) else ""),
                        "started_at": time.time(), "source": "permission-request",
-                       "pid": os.getpid()}, f)
+                       "pid": os.getpid(), "sha256": input_sha256(tool, tin), "nonce": nonce}, f)
         os.replace(tmp, path)
         return path
     except OSError:
@@ -182,7 +184,7 @@ def _unlink(path):
         pass
 
 
-def take_decision(path, want_sha, now):
+def take_decision(path, want_sha, now, nonce=None):
     """Claim the decision file atomically. Returns "allow"/"deny" or None.
     A file whose hash differs from `want_sha` is left alone (it is not ours to
     consume); an expired or unreadable one is removed."""
@@ -206,12 +208,21 @@ def take_decision(path, want_sha, now):
         return None
     if doc.get("sha256") != want_sha or doc.get("decision") not in ("allow", "deny"):
         return None
+    if doc.get("nonce") is not None and doc.get("nonce") != nonce:
+        return None
     claim = "%s.claim.%d" % (path, os.getpid())
     try:
         os.rename(path, claim)          # atomic: exactly one claimant wins
     except OSError:
         return None
+    try:
+        with open(claim) as f:
+            claimed = json.load(f)
+    except (OSError, ValueError):
+        claimed = {}
     _unlink(claim)
+    if claimed != doc:
+        return None
     return doc["decision"]
 
 
@@ -293,15 +304,16 @@ class PromptWatch:
 
 
 def wait_for_decision(base, sid, sha, deadline, sleep=time.sleep, clock=time.time,
-                      watch=None):
+                      watch=None, nonce=None):
     name = "%s.%s.json" % (sid, sha[:16])
     wpath = os.path.join(base, "waiting", name)
     dpath = os.path.join(base, "decisions", name)
+    bound_path = os.path.join(base, "decisions", "%s.%s.%s.json" % (sid, sha[:16], nonce)) if nonce else None
     try:
         os.makedirs(os.path.dirname(wpath), mode=0o700, exist_ok=True)
         tmp = "%s.%d.tmp" % (wpath, os.getpid())
         with open(tmp, "w") as f:
-            json.dump({"sha256": sha, "pid": os.getpid(), "ts": clock()}, f)
+            json.dump({"sha256": sha, "pid": os.getpid(), "ts": clock(), "nonce": nonce}, f)
         os.replace(tmp, wpath)
     except OSError:
         return None
@@ -309,7 +321,9 @@ def wait_for_decision(base, sid, sha, deadline, sleep=time.sleep, clock=time.tim
     try:
         while True:
             now = clock()
-            decision = take_decision(dpath, sha, now)
+            decision = (take_decision(bound_path, sha, now, nonce) if bound_path else None)
+            if not decision:
+                decision = take_decision(dpath, sha, now, nonce)
             if decision:
                 return decision
             if now >= deadline:
@@ -326,7 +340,13 @@ def wait_for_decision(base, sid, sha, deadline, sleep=time.sleep, clock=time.tim
                 last_beat = now
             sleep(POLL_S)
     finally:
-        _unlink(wpath)
+        try:
+            with open(wpath) as f:
+                owned = json.load(f).get("nonce") == nonce
+            if owned:
+                _unlink(wpath)
+        except (OSError, ValueError, AttributeError):
+            pass
 
 
 def record_ask(sid, tool, tin, transcript_path):
@@ -362,10 +382,11 @@ def main():
         if wait <= 0:
             return
         watch = PromptWatch(str(data.get("transcript_path") or ""), tool, tin)
-        badge = raise_badge(sid, tool, tin)
+        nonce = secrets.token_hex(16)
+        badge = raise_badge(sid, tool, tin, nonce)
         try:
             decision = wait_for_decision(base, sid, input_sha256(tool, tin),
-                                         now + wait, watch=watch)
+                                         now + wait, watch=watch, nonce=nonce)
         finally:
             drop_badge(badge, base, sid)
         if decision:

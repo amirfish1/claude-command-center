@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 import time
 
-from . import alerts, customers
+from . import alerts, customers, secret_filter
 from . import wt as wtmod
 from .store import normalize_address
 
@@ -51,7 +51,8 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
             return
         alerts.say(store, chan, reply, subject=(msg.subject or "CCC On-call"),
                    thread=(alert or {}).get("token", "") or msg.thread,
-                   reply_to=msg.external_id if email else "", now=now)
+                   reply_to=msg.external_id if email else "", now=now,
+                   cap=int(cfg.get("hourly_cap") or alerts.HOURLY_CAP))
 
     by_token = store.alert_by_token(msg.thread) if msg.thread else None
     by_reply = store.delivery_alert(msg.channel, msg.reply_to) if msg.reply_to else None
@@ -120,7 +121,7 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
 
 def _resolve(store, text):
     """(alert, remaining text, problem). ``problem`` is a message for the owner."""
-    waiting = [a for a in store.alerts(state="open", needs_reply=True) if a.get("sent_at")]
+    waiting = store.alerts(state="open", needs_reply=True, delivered=True)
     m = _WORD_NUM_RE.match(text)
     if m:
         alert = store.alert(int(m.group(2)))
@@ -172,6 +173,8 @@ def _apply(cfg, store, chans, wt, alert, text, deps, now):
         store.alert_close(alert["id"], "answered", text, now=now)
         return f"answered {ref}", f"Sent to the agent on {ref}."
     if kind == "permission":
+        if meta.get("at_keyboard"):
+            return "unclear", "This prompt can only be answered in the session."
         if text.strip().lower() not in ("allow", "deny"):
             return "unclear", "Reply allow or deny."
         ok, detail = (deps.approve(alert["session_id"], text.strip().lower(), meta)
@@ -209,6 +212,12 @@ def _apply(cfg, store, chans, wt, alert, text, deps, now):
         if kind == "fixed" and not meta.get("notify"):
             store.alert_close(alert["id"], "cleared", text, now=now)
             return "noted", ""
+        if not _is(alerts.NO_WORDS, text):
+            message = store.customer_message(message_id)
+            candidate = ((message or {}).get("text") or "") if _is(alerts.GO_WORDS, text) else text
+            _body, _subject, hit = secret_filter.mask(candidate, (message or {}).get("subject") or "")
+            if hit:
+                return "unclear", "Possible secret detected. Nothing was sent; reply with wording that omits it, or no to drop."
         action = "refused" if _is(alerts.NO_WORDS, text) else "approved" if _is(alerts.GO_WORDS, text) else "reworded"
         store.alert_owner_action(alert["id"], action, now=now)
         if _is(alerts.NO_WORDS, text):
@@ -227,7 +236,7 @@ def _apply(cfg, store, chans, wt, alert, text, deps, now):
 
 
 def status_text(cfg, store):
-    waiting = [a for a in store.alerts(state="open", needs_reply=True) if a.get("sent_at")]
+    waiting = store.alerts(state="open", needs_reply=True, delivered=True)
     head = "On-call is paused." if store.kv_get("paused", False) else "On-call is on."
     if not waiting:
         return head + " Nothing is waiting on you."

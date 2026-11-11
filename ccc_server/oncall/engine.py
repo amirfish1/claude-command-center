@@ -100,7 +100,8 @@ class Engine:
             built = {}
             for entry in entries:
                 try:
-                    built[entry["id"]] = build(entry, kv=self.store)
+                    from .calls import resolve
+                    built[entry["id"]] = build(resolve(entry, cfg), kv=self.store)
                 except Exception as exc:  # a bad entry must not stop the others
                     self._note(f"channel:{entry.get('id')}", str(exc))
             self._chan_cache = (stamp, built)
@@ -269,6 +270,18 @@ class Engine:
         return True
 
     def _dispatch(self, cfg, chans, entry, msg, now):
+        if entry.get("type") == "email" and replies.is_owner(entry, msg):
+            # A live private token proves access to an owner alert. Only that
+            # bootstrap may pin an aligned mailbox authentication service.
+            evidence = msg.raw.get("email_auth") or {}
+            alert = self.store.alert_by_token(msg.thread) if msg.thread else None
+            key = f"ch:{entry['id']}:authserv_id"
+            if (not entry.get("authserv_id") and not self.store.kv_get(key)
+                    and alert and alert["state"] == "open"
+                    and evidence.get("aligned") and evidence.get("authserv_id")):
+                self.store.kv_set(key, evidence["authserv_id"])
+                evidence["verified"] = True
+                self.store.log("email", f"learned authentication server for {entry['id']}", now=now)
         if replies.is_owner(entry, msg):
             low = " ".join(str(msg.text or "").lower().split()).strip(" .!")
             if entry.get("type") == "email" and not msg.thread and low not in _COMMANDS:
@@ -283,7 +296,8 @@ class Engine:
                 ref = self.report(m.group(1).strip())
                 chan = chans.get(entry["id"])
                 if chan is not None:
-                    alerts.say(self.store, chan, f"Filed as {ref}. An agent will pick it up.", now=now)
+                    alerts.say(self.store, chan, f"Filed as {ref}. An agent will pick it up.", now=now,
+                               cap=int(cfg.get("hourly_cap") or alerts.HOURLY_CAP))
                 return f"owner filed {ref}"
             return replies.handle(cfg, self.store, chans, self.wt, entry, msg, deps=self.deps, now=now)
         if customers.intake_enabled(entry):
@@ -362,7 +376,7 @@ class Engine:
                 title=f"{queue} is not moving", body=detail, needs_reply=False, now=self.clock())
             return row
 
-    def test(self, channel_id=""):
+    def test(self, channel_id="", *, call=False):
         """Send a test message. Returns [{channel, ok, error}]."""
         with self._lock:
             cfg = self.config()
@@ -370,6 +384,8 @@ class Engine:
             results = []
             for entry in cfg.get("channels") or []:
                 cid = entry.get("id")
+                if (entry.get("type") == "call") != call:
+                    continue
                 if channel_id and cid != channel_id:
                     continue
                 chan = chans.get(cid)
@@ -381,7 +397,8 @@ class Engine:
                         "question arrives here." +
                         (" Reply to it and your reply becomes the answer."
                          if getattr(chan, "can_receive", False) else ""))
-                receipt = alerts.say(self.store, chan, text, subject="CCC On-call test", now=self.clock())
+                receipt = alerts.say(self.store, chan, text, subject="CCC On-call test", now=self.clock(),
+                                     cap=int(cfg.get("hourly_cap") or alerts.HOURLY_CAP))
                 results.append({"channel": cid, "ok": receipt.ok, "error": receipt.error})
             return results
 
