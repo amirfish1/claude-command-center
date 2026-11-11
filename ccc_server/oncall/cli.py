@@ -337,6 +337,8 @@ def _print_status(status, io):
     if status.get("enabled") and status.get("paused"):
         state = "paused"
     io.out(f"On-call is {state}." + (f" Queue: {status['queue']}." if status.get("queue") else ""))
+    if "oncall_now" in status:
+        io.out("On call now: " + status["oncall_now"])
     if not status.get("wt"):
         io.out("WatchTower is not installed, so no agent will pick tickets up.")
     channels = status.get("channels") or []
@@ -452,6 +454,9 @@ def run(argv, *, base, get, post, io=None):
     """Run one ``ccc oncall ...`` command. Returns the exit code."""
     if argv[:1] == ["demo"]: return __import__("ccc_server.oncall.demo", fromlist=["main"]).main(argv[1:])
     io = io or IO()
+    if argv[:1] and argv[0] in ("escalate", "person", "rota"):
+        from .escalation_cli import run
+        return run(argv, Client(base, get, post), io)
     args = build_parser().parse_args(argv)
     if args.action == "setup" and not args.yes and not args.secret_stdin:
         io.interactive = True

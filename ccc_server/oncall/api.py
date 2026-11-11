@@ -50,6 +50,10 @@ def handle(method, path, body=None, *, eng=None):
             return 200, status(eng)
         if method == "GET" and name == "decisions":
             return 200, {"ok": True, "decisions": decisions(eng)}
+        if method == "POST" and name == "escalation":
+            from .escalation_cli import command
+            with eng._lock:
+                return 200, command(eng, body)
         if method == "POST":
             fn = {"config": save_config, "channel": channel, "source": source, "test": test,
                   "customer": customer, "report": report, "inbound": inbound, "tick": tick}.get(name)

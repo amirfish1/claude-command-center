@@ -215,14 +215,18 @@ def deliver(cfg, store, chans, *, now=None):
     """Send every open alert that has not gone out. Returns how many were sent."""
     now = time.time() if now is None else now
     pending = store.unsent_alerts()
+    from . import escalation
+    escalated = escalation.deliver(cfg, store, chans, pending, now)
+    if cfg.get("escalation"):
+        pending = [a for a in pending if not a["needs_reply"]]
     if not pending or store.kv_get("paused", False):
-        return 0
+        return escalated
     targets = alert_channels(cfg, chans)
     if not targets or in_quiet_hours(cfg, now):
-        return 0
+        return escalated
     cap = int(cfg.get("hourly_cap") or HOURLY_CAP)
     recent = store.recent_alert_ids(now - 3600, cap)
-    sent = 0
+    sent = escalated
     for alert in pending:
         if len(recent) >= cap:
             if not store.kv_get("cap_noted", 0) or now - store.kv_get("cap_noted", 0) > 3600:

@@ -176,7 +176,8 @@ def validate_config(cfg):
         if (not isinstance(quiet, dict) or not _HHMM_RE.match(str(quiet.get("start") or ""))
                 or not _HHMM_RE.match(str(quiet.get("end") or ""))):
             problems.append("Quiet hours need a start and an end as HH:MM.")
-    return problems
+    from .escalation import validate
+    return problems + validate(cfg)
 
 
 _SECRET_WORDS = ("password", "token", "secret", "api_key", "auth")
@@ -402,6 +403,8 @@ class Store:
         self._db.row_factory = sqlite3.Row
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+            from .escalation import init
+            init(self)
             if "message_kind" not in {r[1] for r in self._db.execute("PRAGMA table_info(deliveries)")}:
                 self._db.execute("ALTER TABLE deliveries ADD COLUMN message_kind TEXT NOT NULL DEFAULT 'unknown'")
             columns = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}

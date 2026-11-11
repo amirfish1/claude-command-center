@@ -392,7 +392,9 @@ class Engine:
         waiting = [{"id": a["id"], "kind": a["kind"], "ref": a["ref"], "needs_reply": a["needs_reply"],
                     "line": alerts.render(a)[0], "created_at": a["created_at"], "sent_at": a["sent_at"]}
                    for a in store.alerts(state="open", limit=50)]
+        from .escalation import who
         return {
+            "oncall_now": who(cfg, self.clock()),
             "flag": bool(self.flag_on()), "enabled": bool(cfg.get("enabled")),
             "paused": bool(store.kv_get("paused", False)), "queue": cfg.get("queue") or "",
             "wt": self.wt.available(), "channels": channel_rows, "sources": source_rows,

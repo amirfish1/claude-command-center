@@ -61,6 +61,10 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
         say(HELP if low != "status" else status_text(cfg, store))
         return low
     if low in ("pause", "resume"):
+        from .escalation import person
+        if person(cfg, entry["id"]):
+            say("Only the first owner can pause or resume On-call.")
+            return "refused: backup service control"
         if not trusted:
             say("By email, pause and resume only work as a reply to one of my alerts.")
             return "refused: untrusted pause"
@@ -93,9 +97,14 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
     if alert["state"] != "open":
         say(f"#{alert['id']} was already handled.", alert)
         return f"#{alert['id']} already handled"
+    from . import escalation
+    if not escalation.authorized(cfg, entry["id"], alert):
+        say("This answer needs the first owner or a person with explicit permission.", alert)
+        return "refused: person lacks permission"
     try:
         if not store.reply_action_claim(alert["id"]):
             raise wtmod.WTError("An earlier answer may have been applied. Check the ticket or session directly; it will not be applied again.")
+        escalation.answered(cfg, store, chans, alert, entry["id"], now)
         note, ack = _apply(cfg, store, chans, wt, alert, rest.strip(), deps, now)
     except wtmod.WTError as exc:
         say(f"That did not go through: {exc}", alert)
