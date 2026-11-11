@@ -1,0 +1,1 @@
+- On-call accepts a plain reply after the first channel receives an alert, even when the message cap holds delivery to another channel.

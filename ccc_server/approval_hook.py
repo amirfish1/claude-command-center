@@ -15,6 +15,9 @@ Files:
                               created, expires}. Single use: the hook claims it
                               with an atomic rename.
 
+Bound On-call decisions use a nonce-specific filename and include that nonce.
+Legacy callers can still use the hash-only handshake.
+
 The hash is the sha256 of the canonical tool input (relay_context.
 canonical_input). The hook builds the same text from its own stdin, so a
 decision applies only to the exact tool call Claude Code is about to run.
@@ -47,6 +50,14 @@ def _name(session_id, sha):
     return f"{session_id}.{sha[:16]}.json"
 
 
+def _decision_name(session_id, sha, nonce=None):
+    if nonce is not None:
+        if not re.fullmatch(r"[0-9a-f]{32}", str(nonce)):
+            raise ValueError("invalid nonce")
+        return f"{session_id}.{sha[:16]}.{nonce}.json"
+    return _name(session_id, sha)
+
+
 def _valid(session_id, sha):
     return bool(_SID_RE.fullmatch(str(session_id or ""))
                 and _SHA_RE.fullmatch(str(sha or "")))
@@ -71,7 +82,7 @@ def touch_enabled():
         pass
 
 
-def waiting(session_id, sha, now=None):
+def waiting(session_id, sha, now=None, nonce=None):
     """True when a hook for exactly this tool call is parked right now."""
     if not _valid(session_id, sha):
         return False
@@ -80,26 +91,27 @@ def waiting(session_id, sha, now=None):
         if (now or time.time()) - os.stat(path).st_mtime > WAITING_FRESH_S:
             return False
         with open(path) as f:
-            return json.load(f).get("sha256") == sha
+            doc = json.load(f)
+            return doc.get("sha256") == sha and (nonce is None or (bool(nonce) and doc.get("nonce") == nonce))
     except (OSError, ValueError, AttributeError):
         return False
 
 
-def post_decision(session_id, sha, decision, now=None):
+def post_decision(session_id, sha, decision, now=None, nonce=None):
     """Write a single-use decision for the hook parked on (session, sha)."""
     if not _valid(session_id, sha) or decision not in ("allow", "deny"):
         raise ValueError("invalid decision")
     now = now or time.time()
-    _write_atomic(os.path.join(base_dir(), "decisions", _name(session_id, sha)),
+    _write_atomic(os.path.join(base_dir(), "decisions", _decision_name(session_id, sha, nonce)),
                   {"sha256": sha, "decision": decision, "created": now,
-                   "expires": now + DECISION_TTL_S})
+                   "expires": now + DECISION_TTL_S, **({"nonce": nonce} if nonce is not None else {})})
 
 
-def withdraw(session_id, sha):
+def withdraw(session_id, sha, nonce=None):
     """Take back a decision. True = nobody consumed it (safe to fall back);
     False = the hook already claimed it (it WILL be applied)."""
     try:
-        os.unlink(os.path.join(base_dir(), "decisions", _name(session_id, sha)))
+        os.unlink(os.path.join(base_dir(), "decisions", _decision_name(session_id, sha, nonce)))
         return True
     except FileNotFoundError:
         return False
@@ -107,14 +119,14 @@ def withdraw(session_id, sha):
         return True
 
 
-def deliver(session_id, sha, decision, ack_s=None, sleep=time.sleep):
+def deliver(session_id, sha, decision, ack_s=None, sleep=time.sleep, nonce=None):
     """Post a decision and wait briefly for the hook to claim it. Returns
     "applied" or "unclaimed" (decision withdrawn; caller may fall back)."""
-    post_decision(session_id, sha, decision)
-    path = os.path.join(base_dir(), "decisions", _name(session_id, sha))
+    post_decision(session_id, sha, decision, nonce=nonce)
+    path = os.path.join(base_dir(), "decisions", _decision_name(session_id, sha, nonce))
     deadline = time.time() + (ACK_WAIT_S if ack_s is None else ack_s)
     while time.time() < deadline:
         if not os.path.exists(path):
             return "applied"
         sleep(0.1)
-    return "unclaimed" if withdraw(session_id, sha) else "applied"
+    return "unclaimed" if withdraw(session_id, sha, nonce=nonce) else "applied"

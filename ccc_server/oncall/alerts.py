@@ -13,9 +13,11 @@ import re
 import time
 
 from . import wt as wtmod
+from . import secret_filter
 from .store import Outbound, Receipt
 
 HOURLY_CAP = 12
+DIRECT_PER_DAY = 20
 RETRY_AFTER_S = 120
 GO_WORDS = ("go", "yes", "y", "ok", "okay", "sure", "do it", "approve", "approved", "send", "send it")
 NO_WORDS = ("no", "n", "drop", "drop it", "skip", "ignore", "spam", "stop", "cancel", "don't", "dont")
@@ -51,8 +53,11 @@ def render(alert):
                  else "Reply here when done, or with a question."]
     elif kind == "permission":
         head = f"Permission needed: {title or 'an agent'} (#{n})"
-        lines = [head, body, "", "Reply allow or deny. If unavailable, answer in the session."]
-        choices = ("allow", "deny")
+        if meta.get("at_keyboard"):
+            lines = [head, body, "", "Answer it in the session. It cannot be approved from here."]
+        else:
+            lines = [head, body, "", "Reply allow or deny. If unavailable, answer in the session."]
+            choices = ("allow", "deny")
     elif kind == "stopped":
         head = f"An agent stopped (#{n})"
         lines = [head, title]
@@ -153,11 +158,15 @@ def collect_decisions(cfg, store, wt, *, now=None, silent_before=""):
             key = f"wt:{ref}:{blocked_at}"
             live_keys.add(key)
             question, why = _gate_note(item.get("block_question"))
+            report = store.report_by_ref(ref)
+            ci_source = bool(report and any(
+                source.get('type') == 'ci' and report['source'] == 'source:' + source.get('id', '')
+                for source in cfg.get('sources', [])))
             row, new = store.alert_upsert(
                 key, kind="decision", ref=ref,
                 title=_clip(item.get("title") or item.get("note") or ref, 160),
                 body=_clip(question or "The agent needs a decision.", 1800),
-                meta={"queue": queue, "recommend": _clip(wtmod.recommendation(item), 400),
+                meta={"queue": queue, "call_kind": "ci_failed" if ci_source else "decision", "recommend": _clip(wtmod.recommendation(item), 400),
                       "why": _clip(why, 300)}, now=now)
             if new:
                 created += 1
@@ -217,10 +226,12 @@ def _minutes(hhmm):
     return int(hours) * 60 + int(mins or 0)
 
 
-def alert_channels(cfg, chans):
+def alert_channels(cfg, chans, *, include_calls=False):
     """Channels that carry owner alerts: enabled, built, not marked intake-only."""
     out = []
     for entry in cfg.get("channels") or []:
+        if entry.get("type") == "call" and not include_calls:
+            continue
         if not entry.get("enabled", True) or entry.get("alerts") is False:
             continue
         # A channel set to read customer reports, with no address for the owner,
@@ -240,7 +251,8 @@ def deliver(cfg, store, chans, *, now=None):
     from . import escalation
     escalated = escalation.deliver(cfg, store, chans, pending, now)
     if cfg.get("escalation"):
-        pending = [a for a in pending if not a["needs_reply"]]
+        from .calls import escalates
+        pending = [a for a in pending if not escalates(cfg, a)]
     if not pending or store.kv_get("paused", False):
         return escalated
     targets = alert_channels(cfg, chans)
@@ -260,19 +272,29 @@ def deliver(cfg, store, chans, *, now=None):
         tries = store.kv_get(f"try:{alert['id']}", {"n": 0, "at": 0})
         if tries["n"] and 0 <= now - tries["at"] < RETRY_AFTER_S:
             continue
-        if send_alert(store, targets, alert, now=now):
+        if send_alert(store, targets, alert, now=now, cap=cap):
             store.alert_mark_sent(alert["id"], now=now)
             recent.add(alert["id"])
             rate_limit.record(store, budget, alert["id"])
             sent += 1
+        elif store.owner_deliveries_in_hour(now) >= cap:
+            break
         else:
             store.kv_set(f"try:{alert['id']}", {"n": tries["n"] + 1, "at": now})
     return sent
 
 
-def send_alert(store, targets, alert, *, now=None):
+def _waiting_notice(store, text, exclude=None):
+    if not store.kv_get("owner_cap_waiting", False):
+        return text
+    count = store.unsent_alert_count(exclude=exclude)
+    return text + f"\n\n{count} other alert(s) waiting."
+
+
+def send_alert(store, targets, alert, *, now=None, cap=HOURLY_CAP):
     now = time.time() if now is None else now
     subject, text, choices = render(alert)
+    subject, text, _hit = secret_filter.mask(subject, text)
     ok_any = False
     for chan in targets:
         previous = store.delivery_latest(alert["id"], chan.id)
@@ -290,24 +312,41 @@ def send_alert(store, targets, alert, *, now=None):
             if not store.owner_repeat_claim(alert["id"], chan.id):
                 continue
         # Commit the intent before the provider can accept the message.
-        store.delivery_add(alert["id"], chan.id, getattr(chan, "owner", "") or "",
-                           Receipt(ok=False, error=uncertain), now=now)
-        attempt = store.delivery_latest(alert["id"], chan.id)
-        receipt = chan.send(Outbound(text=("This may be a repeat.\n\n" if repeat else "") + text, subject=subject, thread=alert["token"],
+        # The claim is one transaction: the shared hourly cap holds across processes.
+        attempt = store.owner_delivery_claim(alert["id"], chan.id,
+                                             getattr(chan, "owner", "") or "", now, cap)
+        if attempt is None:
+            # Not sent everywhere yet: the alert stays unsent and resumes when the cap frees.
+            return False
+        outgoing = _waiting_notice(store, ("This may be a repeat.\n\n" if repeat else "") + text,
+                                   exclude=alert["id"])
+        receipt = chan.send(Outbound(text=outgoing, subject=subject, thread=alert["token"],
                                      choices=choices if alert.get("needs_reply") else ()))
         if receipt.uncertain:
             receipt = Receipt(ok=False, error=uncertain, uncertain=True)
-        store.delivery_finish(attempt["id"], receipt)
+        store.delivery_finish(attempt, receipt)
         if receipt.ok:
+            store.kv_set("owner_cap_waiting", False)
             ok_any = True
         else:
             store.log("send", f"#{alert['id']} via {chan.id} failed: {receipt.error}", now=now)
     return ok_any
 
 
-def say(store, chan, text, *, to="", subject="", thread="", reply_to="", now=None):
+def say(store, chan, text, *, to="", subject="", thread="", reply_to="", now=None, cap=HOURLY_CAP):
     """A short direct reply on one channel (an ack, a list, a status)."""
-    receipt = chan.send(Outbound(text=text, to=to, subject=subject or text.splitlines()[0][:80],
+    now = time.time() if now is None else now
+    text, subject, _hit = secret_filter.mask(text, subject)
+    attempt = store.owner_delivery_claim(None, chan.id, to or getattr(chan, "owner", "") or "", now, cap,
+                                         direct_daily_cap=DIRECT_PER_DAY)
+    if attempt is None:
+        return Receipt(ok=False, error="Owner message cap reached (hourly or daily direct replies).")
+    outgoing = _waiting_notice(store, text)
+    receipt = chan.send(Outbound(text=outgoing, to=to, subject=subject or text.splitlines()[0][:80],
                                  thread=thread, reply_to=reply_to))
-    store.delivery_add(None, chan.id, to or getattr(chan, "owner", "") or "", receipt, now=now)
+    if receipt.uncertain:
+        receipt = Receipt(ok=False, error="Delivery interrupted; outcome unknown. No automatic retry.", uncertain=True)
+    store.delivery_finish(attempt, receipt)
+    if receipt.ok:
+        store.kv_set("owner_cap_waiting", False)
     return receipt

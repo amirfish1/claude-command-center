@@ -241,7 +241,8 @@ def channel(eng, body):
             raise ApiError("I do not know the mail servers for that address. Add the SMTP and IMAP server names.")
         entry.setdefault("owner", entry.get("address", ""))
     try:
-        chan = chmod.build(entry, kv=eng.store)
+        from .calls import resolve
+        chan = chmod.build(resolve(entry, cfg), kv=eng.store)
     except ValueError as exc:
         raise ApiError(str(exc))
     note = ""
@@ -309,7 +310,7 @@ def test(eng, body):
         from .chat_setup import roundtrip
         result = roundtrip(eng, str(body.get("channel") or ""))
         return dict(result, results=[dict(result, channel=body.get("channel", ""))])
-    results = eng.test(str(body.get("channel") or ""))
+    results = eng.test(str(body.get("channel") or ""), call=body.get("call") is True)
     if not results:
         raise ApiError("Add a message channel first.")
     return {"results": results, "ok": all(r["ok"] for r in results)}

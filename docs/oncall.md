@@ -7,6 +7,8 @@ has stopped, and your reply from the same thread is the agent's answer.
 On-call is a preview. It is off until you turn it on, and nothing is created
 on disk before that.
 
+[Planned call escalation contract](oncall-calls.md).
+
 ## What it needs
 
 - CCC running on a machine that stays on: your Mac, a Linux box or a small VM.
@@ -541,3 +543,5 @@ For an always-on Linux machine, see [On-call on a server](oncall-server.md).
 - [Step-by-step guides with checked terminal output](guides/README.md).
 
 See [replaying closed reports](oncall-replay.md) for a local trial on a public repository.
+
+Make a local replay with [On-call film](oncall-film.md).

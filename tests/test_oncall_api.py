@@ -50,7 +50,7 @@ class FakeWT:
 
 
 class Vault:
-    """The three Vault calls On-call makes, held in memory."""
+    """The Vault interface used by On-call, held in memory."""
 
     class VaultError(ValueError):
         pass
@@ -69,6 +69,9 @@ class Vault:
 
     def vault_get_value(self, name):
         return self.entries.get(name, "")
+
+    def vault_list_entries(self):
+        return [{"name": name} for name in self.entries]
 
 
 class _Telegram(BaseHTTPRequestHandler):

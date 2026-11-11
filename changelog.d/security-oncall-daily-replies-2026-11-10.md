@@ -1,0 +1,1 @@
+- On-call limits direct owner replies to 20 per day across channels while keeping decision alerts queued under the shared hourly cap.

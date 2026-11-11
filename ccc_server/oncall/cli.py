@@ -22,6 +22,7 @@ import secrets as _secrets
 import sys
 
 CHANNEL_NAMES = {
+    "call": "Phone call (answer by SMS)",
     "slack": "Slack", "discord": "Discord", "matrix": "Matrix", "mattermost": "Mattermost",
     "email": "Email", "telegram": "Telegram", "ntfy": "ntfy (phone push, no account)",
     "imessage": "iMessage (this Mac)", "sms": "SMS (your Twilio number)",
@@ -176,6 +177,7 @@ def build_parser():
 
     p = sub.add_parser("test", help="send a test message to every channel, or to one")
     p.add_argument("channel", nargs="?", default="")
+    p.add_argument("--call", action="store_true", help="place a real paid phone call; answer by SMS")
     p.add_argument("--roundtrip", action="store_true", help="wait for a team chat test reply")
 
     sub.add_parser("on", help="turn On-call on")
@@ -222,6 +224,9 @@ def build_parser():
         p.add_argument("ref", help="the ticket, for example SHOP-12")
         p.add_argument("text")
 
+    p = sub.add_parser("approve-sends", help="choose whether reporter messages need approval")
+    p.add_argument("state", choices=("on", "off"))
+
     p = sub.add_parser("minor", help="let agents decide small reversible things without stopping")
     p.add_argument("state", choices=("on", "off"))
 
@@ -230,6 +235,7 @@ def build_parser():
     p.add_argument("end", nargs="?", help="HH:MM")
     p.add_argument("--tz", help="IANA zone name such as America/Los_Angeles (default: this machine's zone)")
 
+    sub.add_parser("film", help="make an offline film of a fixed report")
     p = sub.add_parser("week", help="counts from stored On-call activity")
     p.add_argument("--json", action="store_true")
     p.add_argument("--since")
@@ -381,6 +387,10 @@ def _print_status(status, io):
     if status.get("enabled") and status.get("paused"):
         state = "paused"
     io.out(f"On-call is {state}." + (f" Queue: {status['queue']}." if status.get("queue") else ""))
+    approval = (status.get("config", {}).get("customers") or {}).get("approve_sends", True)
+    io.out("Reporter messages: " + ("owner approval required." if approval else
+           "non-GitHub messages send immediately unless a possible secret is detected."))
+    io.out("GitHub comments always require owner approval.")
     quiet = (status.get("config") or {}).get("quiet_hours")
     if isinstance(quiet, dict) and quiet.get("start") and quiet.get("end"):
         io.out(f"Quiet hours: {quiet['start']} to {quiet['end']}, {_quiet_zone(quiet.get('tz'))}.")
@@ -511,6 +521,9 @@ def _setup(client, args, io):
 
 def run(argv, *, base, get, post, io=None):
     """Run one ``ccc oncall ...`` command. Returns the exit code."""
+    if argv[:1] == ["film"]:
+        from .film import main
+        return main(argv[1:])
     if argv[:1] == ["demo"]: return __import__("ccc_server.oncall.demo", fromlist=["main"]).main(argv[1:])
     io = io or IO()
     if argv[:1] and argv[0] in ("escalate", "person", "rota"):
@@ -575,7 +588,7 @@ def _run(args, client, io):
             _print_status(status, io)
         return 0
     if action == "test":
-        code, res = client.post("test", {"channel": args.channel, "roundtrip": args.roundtrip})
+        code, res = client.post("test", {"channel": args.channel, "roundtrip": args.roundtrip, "call": args.call})
         if not res.get("results"):
             raise Stop(PREVIEW_OFF if code == 404 else str(res.get("error") or f"CCC answered HTTP {code}."))
         for row in res["results"]:
@@ -633,6 +646,13 @@ def _run(args, client, io):
             io.out(f"Sent to {res.get('to') or 'the reporter'}.")
         else:
             io.out("Waiting for the owner to approve the message. The reply will land on the ticket.")
+        return 0
+    if action == "approve-sends":
+        if args.state == "off":
+            if not io.interactive or not io.yes("Non-GitHub reporter messages will send immediately unless a possible secret is detected. Turn approval off?", default=False):
+                raise Stop("Approval remains on.")
+        client.must("config", {"customers": {"approve_sends": args.state == "on"}})
+        io.out("Reporter message approval is " + args.state + "; GitHub comments always require approval.")
         return 0
     if action == "quiet":
         if args.start.lower() == "off" and not args.end and not args.tz:

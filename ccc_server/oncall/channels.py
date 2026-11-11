@@ -355,6 +355,7 @@ _FIELDS = {
         _field("username", "Login name", optional=True, placeholder="oncall@example.com"),
         _field("from_name", "Sender name", optional=True, placeholder="CCC On-call"),
         _field("folder", "Folder", optional=True, placeholder="INBOX"),
+        _field("authserv_id", "Authentication server ID", optional=True, placeholder="mx.example.com"),
     ],
     "telegram": [
         _field("token_vault", "Bot token", secret=True),
@@ -371,6 +372,11 @@ _FIELDS = {
         _field("owner", "Phone or email", placeholder="+15550100"),
         _field("db_path", "Messages database", optional=True,
                placeholder="~/Library/Messages/chat.db"),
+    ],
+    "call": [
+        _field("sms_channel", "SMS reply channel"),
+        *[_field(n, n.replace("_", " "), optional=True) for n in
+          ("kinds", "after_minutes", "hourly_cap", "during_quiet")],
     ],
     "sms": _TWILIO_FIELDS + [
         _field("api_base", "API address", optional=True, placeholder="https://api.twilio.com"),
@@ -613,6 +619,10 @@ class EmailChannel(Channel):
         self.imap_port = _int(self.cfg.get("imap_port"), preset.get("imap_port", 993))
         self.from_name = self._opt("from_name", "CCC On-call")
         self.folder = self._opt("folder", "INBOX")
+        from .email_auth import domain
+        authserv = self._opt("authserv_id")
+        if authserv and ("@" in authserv or domain(authserv) != authserv.lower().rstrip(".")):
+            raise ValueError("Authentication server ID must be the mailbox server's host name.")
 
     @classmethod
     def missing(cls, cfg):
@@ -801,12 +811,15 @@ class EmailChannel(Channel):
             received = email.utils.parsedate_to_datetime(_header(msg, "Date")).timestamp()
         except Exception:
             received = self.clock()
+        from . import email_auth
+        authentication = email_auth.inspect(
+            msg, sender, self._opt("authserv_id") or self._get("authserv_id", ""))
         first_ref = re.search(r"<[^<>\s]+>", in_reply_to)
         return Inbound(
             channel=self.id, external_id=message_id or f"uid:{uidvalidity}:{uid}", sender=sender,
             text=text, subject=subject, thread=thread,
             reply_to=first_ref.group(0) if first_ref else in_reply_to,
-            received_at=received, sender_name=name, raw={"uid": uid})
+            received_at=received, sender_name=name, raw={"uid": uid, "email_auth": authentication})
 
 
 def _quiet(fn):
@@ -1403,6 +1416,25 @@ class TwilioChannel(Channel):
         return out
 
 
+class CallChannel(TwilioChannel):
+    """Speak only. Answers arrive on the linked SMS channel."""
+    type = "call"
+    can_receive = False
+
+    def _send(self, msg):
+        from .calls import spoken
+        twiml = '<Response><Say>' + _html.escape(spoken(msg.text, msg.choices)) + '</Say><Hangup/></Response>'
+        status, data = self._call('POST', '/Calls.json', form={
+            'To': self.owner, 'From': self._address(self.cfg.get('from')),
+            'Twiml': twiml, 'Timeout': '30'})
+        if 200 <= status < 300 and data.get('sid'):
+            return Receipt(True, external_id=str(data['sid']))
+        return Receipt(False, error=f'Call request failed (HTTP {status}).', uncertain=status >= 500)
+
+    def _poll(self):
+        return []
+
+
 # -- command ----------------------------------------------------------------
 
 class CommandChannel(Channel):
@@ -1448,6 +1480,7 @@ _CLASSES = {
     "ntfy": NtfyChannel,
     "imessage": IMessageChannel,
     "sms": TwilioChannel,
+    "call": CallChannel,
     "whatsapp": TwilioChannel,
     "command": CommandChannel,
 }

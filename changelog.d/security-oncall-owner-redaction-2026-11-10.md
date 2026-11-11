@@ -1,0 +1,1 @@
+- On-call masks detected secrets in owner alerts and acknowledgements as well as reporter messages.

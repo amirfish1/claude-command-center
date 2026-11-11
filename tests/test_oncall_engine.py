@@ -136,6 +136,10 @@ def rig(tmp_path):
 
     def msg(cid, text, sender, **kw):
         r.n = getattr(r, "n", 0) + 1
+        # This routing fixture represents a trusted adapter result. Raw-mail
+        # authentication attacks use EmailChannel in the security tests.
+        if cid == "mail":
+            kw.setdefault("raw", {"email_auth": {"verified": True}})
         built[cid].inbox.append(Inbound(channel=cid, external_id=kw.pop("eid", f"in-{r.n}"),
                                         sender=sender, text=text, **kw))
     r.msg = msg
@@ -540,14 +544,14 @@ def test_hourly_cap_and_quiet_hours_hold_messages(rig, monkeypatch):
     for i in range(4):
         _park(rig, title=f"T{i}")
     rig.tick()
-    assert len(rig.chan("tg").sent) == 2
+    assert len(rig.chan("tg").sent) == 1
     rig.clock.now += 3700
     monkeypatch.setattr(alerts, "in_quiet_hours", lambda cfg, now=None: True)
     rig.tick()
-    assert len(rig.chan("tg").sent) == 2
+    assert len(rig.chan("tg").sent) == 1
     monkeypatch.setattr(alerts, "in_quiet_hours", lambda cfg, now=None: False)
     rig.tick()
-    assert len(rig.chan("tg").sent) == 4
+    assert len(rig.chan("tg").sent) == 2
 
 
 def test_quiet_hours_window_wraps_midnight():

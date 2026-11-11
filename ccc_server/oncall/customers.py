@@ -13,8 +13,9 @@ owner turned that off.
 from __future__ import annotations
 
 import time
+from copy import copy
 
-from . import alerts
+from . import alerts, secret_filter
 from . import wt as wtmod
 from .store import Outbound, Receipt, known_customer, normalize_address
 
@@ -44,7 +45,7 @@ def intake_enabled(entry):
 
 # -- ticket text ------------------------------------------------------------
 
-def report_ticket_text(report):
+def report_ticket_text(report, cfg=None):
     who = report.get("reporter_name") or ""
     addr = report.get("reporter_address") or ""
     label = f"{who} <{addr}>" if who and addr else (addr or who or "unknown")
@@ -54,7 +55,9 @@ def report_ticket_text(report):
         f"Reporter: {_label(label)} via {_label(report.get('reporter_channel') or 'a message')}",
         "To ask the reporter a question:  ccc oncall ask <this ticket's ref> \"your question\"",
         "To tell the reporter something:  ccc oncall tell <this ticket's ref> \"your message\"",
-        "The owner sees each message before it is sent. After asking, park the ticket:",
+        ("The owner approves each message before it is sent. After asking, park the ticket:"
+         if needs_approval(cfg or {}, report.get("reporter_channel")) else
+         "Messages to this reporter send immediately without owner approval unless a possible secret is detected. After asking, park the ticket:"),
         "  wt block <ref> --kind awaiting-client --wait-on external --question \"what you asked\"",
         "",
         "----- report -----",
@@ -112,18 +115,17 @@ def file_report(cfg, store, wt, report, *, now=None):
     if not queue:
         raise wtmod.WTError("On-call has no queue yet. Run ccc oncall setup.")
     meta = report.get("meta") or {}
-    text = meta.get("ticket_text") or report_ticket_text(report)
+    text = meta.get("ticket_text") or report_ticket_text(report, cfg)
+    if str(report.get("source") or "").startswith("source:"):
+        _title, _text, _url, hit = secret_filter.mask(report.get("title"), text, meta.get("url"))
+        if hit:
+            raise wtmod.WTError("Possible secret found in evidence; filing stopped for review.")
     ref = wt.add(queue, title=report.get("title") or "Report", text=text,
                  dedupe_key=f"oncall:{report['source']}:{report['fingerprint']}",
                  url=meta.get("url") or "")
     store.report_update(report["id"], state="filed", ticket_ref=ref, queue=queue)
     store.log("report", f"filed {ref} from {report['source']}", now=now)
     return ref
-
-
-def _held_today(store, now):
-    return [r for r in store.reports(state="held", limit=200)
-            if now - (r.get("created_at") or 0) < 86400 and not (r.get("meta") or {}).get("auto")]
 
 
 def file_finding(cfg, store, wt, source_cfg, finding, *, now=None):
@@ -133,12 +135,13 @@ def file_finding(cfg, store, wt, source_cfg, finding, *, now=None):
     same as mail from someone who is not a known customer.
     """
     now = time.time() if now is None else now
-    hold = (bool(getattr(finding, "hold", False))
+    title, evidence, url, sender, hit = secret_filter.mask(
+        finding.title, finding.text, finding.url, getattr(finding, "sender", ""))
+    finding = copy(finding)
+    finding.title, finding.text, finding.url, finding.sender = title, evidence, url, sender
+    hold = hit or (bool(getattr(finding, "hold", False))
             and bool((cfg.get("customers") or {}).get("hold_unknown", True)))
     sender = getattr(finding, "sender", "") or "an unknown sender"
-    if hold and len(_held_today(store, now)) >= HELD_PER_DAY:
-        store.log("report", f"too many unknown reports today; ignored one from {sender}", now=now)
-        return None
     reporter = getattr(finding, "reporter", {})
     report, created = store.report_upsert(
         f"source:{source_cfg.get('id')}", finding.fingerprint, title=finding.title,
@@ -146,12 +149,16 @@ def file_finding(cfg, store, wt, source_cfg, finding, *, now=None):
         reporter_channel=reporter.get("channel", ""), reporter_address=reporter.get("address", ""),
         reporter_name=reporter.get("address", ""), thread=reporter.get("thread", ""),
         meta={"github": reporter, "auto": not hold, "url": finding.url, "severity": finding.severity,
-              "ticket_text": finding_ticket_text(source_cfg, finding)}, now=now)
+              "ticket_text": finding_ticket_text(source_cfg, finding), "secret_redacted": hit}, now=now,
+        initially_held=hold and bool(getattr(finding, "hold", False)), held_limit=HELD_PER_DAY)
+    if report is None:
+        store.log("report", f"too many unknown reports today; ignored one from {sender}", now=now)
+        return None
     if not created:
         return report.get("ticket_ref") or None
     if hold:
         alerts.raise_event(store, kind="report", key=f"report:{report['id']}", title=finding.title,
-                           body=finding.text, meta={"sender": sender, "report_id": report["id"]},
+                           body=("Possible secret redacted; approve filing the masked evidence.\n\n" if hit else "") + finding.text, meta={"sender": sender, "report_id": report["id"]},
                            now=now)
         return None
     try:
@@ -173,15 +180,24 @@ def retry_unfiled(cfg, store, wt, *, now=None):
 
 # -- intake -----------------------------------------------------------------
 
+def _unverified_email(cfg, msg):
+    entry = next((ch for ch in cfg.get("channels", []) if ch.get("id") == msg.channel), {})
+    return entry.get("type") == "email" and not (msg.raw.get("email_auth") or {}).get("verified")
+
+
 def intake(cfg, store, wt, msg, *, now=None):
     """Route one message from someone who is not the owner. Returns what happened."""
     now = time.time() if now is None else now
+    if _unverified_email(cfg, msg):
+        return _new_report(cfg, store, wt, msg, now)
     report = store.report_by_thread(msg.thread) if msg.thread else None
     if report is not None and (
             report["reporter_channel"] != msg.channel or
             normalize_address(report["reporter_address"]) != normalize_address(msg.sender)):
         return "ignored: reporter identity does not match thread"
-    if report is None:
+    is_email = any(ch.get("id") == msg.channel and ch.get("type") == "email"
+                   for ch in cfg.get("channels", []))
+    if report is None and not is_email:
         report = _open_conversation(store, msg, now)
     if report is not None:
         return _reporter_reply(cfg, store, wt, report, msg, now)
@@ -232,12 +248,9 @@ def _reporter_reply(cfg, store, wt, report, msg, now):
 
 def _new_report(cfg, store, wt, msg, now, follows=""):
     customers = cfg.get("customers") or {}
-    known = known_customer(cfg, msg.channel, msg.sender)
-    hold = bool(customers.get("hold_unknown", True)) and not known
-    if hold:
-        if len(_held_today(store, now)) >= HELD_PER_DAY:
-            store.log("report", f"too many unknown reports today; ignored one from {msg.sender}", now=now)
-            return "ignored: too many unknown reports today"
+    unverified = _unverified_email(cfg, msg)
+    known = None if unverified else known_customer(cfg, msg.channel, msg.sender)
+    hold = unverified or (bool(customers.get("hold_unknown", True)) and not known)
     first_line = next((ln.strip() for ln in msg.text.splitlines() if ln.strip()), "")
     title = (msg.subject or first_line or "Report").strip()[:120]
     text = msg.text if not follows else f"(Follow-up to {follows}, which is closed.)\n\n{msg.text}"
@@ -247,7 +260,11 @@ def _new_report(cfg, store, wt, msg, now, follows=""):
         reporter_channel=msg.channel, reporter_address=msg.sender,
         reporter_name=msg.sender_name or str((known or {}).get("name") or ""),
         subject=msg.subject, thread=msg.thread if msg.channel.startswith("github:") else "",
-        meta={"message_id": msg.external_id, "github": msg.raw.get("github", {})}, now=now)
+        meta={"message_id": msg.external_id, "github": msg.raw.get("github", {})}, now=now,
+        initially_held=hold, held_limit=HELD_PER_DAY)
+    if report is None:
+        store.log("report", f"too many unknown reports today; ignored one from {msg.sender}", now=now)
+        return "ignored: too many unknown reports today"
     if not created:
         return f"already have report {report['id']}"
     if hold:
@@ -255,7 +272,8 @@ def _new_report(cfg, store, wt, msg, now, follows=""):
         if msg.sender_name:
             sender = f"{msg.sender_name} ({msg.sender})"
         alerts.raise_event(store, kind="report", key=f"report:{report['id']}", title=title,
-                           body=msg.text, meta={"sender": sender, "report_id": report["id"]}, now=now)
+                           body=(("The sender could not be verified.\n\n" if unverified else "") + msg.text),
+                           meta={"sender": sender, "report_id": report["id"]}, now=now)
         return f"held report {report['id']}"
     try:
         ref = file_report(cfg, store, wt, report, now=now)
@@ -302,15 +320,16 @@ def request_message(cfg, store, chans, wt, *, ref, kind, text, now=None):
     if report["reporter_channel"] not in chans:
         raise ValueError(f"The channel {report['reporter_channel']!r} this report came in on is off.")
     subject = report.get("subject") or report.get("title") or "your report"
+    text, subject, secret_hit = secret_filter.mask(text, subject)
     if not subject.lower().startswith("re:"):
         subject = "Re: " + subject
     message = store.customer_message_add(
         ref=ref, kind=kind, channel=report["reporter_channel"], address=report["reporter_address"],
         name=report.get("reporter_name") or "", text=text, subject=subject,
         thread=report.get("thread") or "", state="pending", now=now)
-    if needs_approval(cfg, report["reporter_channel"]):
+    if secret_hit or needs_approval(cfg, report["reporter_channel"]):
         alert, _new = alerts.raise_event(
-            store, kind="send", key=f"send:{message['id']}", ref=ref, title=subject, body=text,
+            store, kind="send", key=f"send:{message['id']}", ref=ref, title=subject, body=("Possible secret redacted; approval sends only the masked message.\n\n" if secret_hit else "") + text,
             meta={"name": message["name"], "address": message["address"], "message_kind": kind,
                   "message_id": message["id"]}, now=now)
         store.customer_message_update(message["id"], alert_id=alert["id"])
@@ -331,10 +350,13 @@ def send_message(store, chans, wt, message_id, *, text=None, now=None):
         store.customer_message_update(message_id, state="failed", error="channel is off")
         return Receipt(ok=False, error="The channel this report came in on is off.")
     body = str(text or message["text"]).strip()
+    body, subject, hit = secret_filter.mask(body, message["subject"])
+    if hit:
+        return Receipt(ok=False, error="Possible secret found; message was not sent. Submit masked wording for approval.")
     report = store.report_by_ref(message["ref"]) or {}
     if not store.customer_message_claim(message_id):
         return Receipt(ok=False, error="That message was already handled.")
-    receipt = chan.send(Outbound(text=body, to=message["address"], subject=message["subject"],
+    receipt = chan.send(Outbound(text=body, to=message["address"], subject=subject,
                                  thread=message["thread"],
                                  reply_to=str((report.get("meta") or {}).get("message_id") or "")))
     store.delivery_add(None, chan.id, message["address"], receipt, now=now, message_kind="reporter")
@@ -414,9 +436,11 @@ def _closed_notice(cfg, store, chans, wt, report, item, now):
               and report.get("reporter_channel") in chans)
     approve = needs_approval(cfg, report.get("reporter_channel"))
     note = FIXED_NOTE.format(title=report.get("title") or ref)
+    note, safe_subject, hit = secret_filter.mask(note, report.get("subject") or report.get("title") or "your report")
+    approve = approve or hit
     message = None
     if notify:
-        subject = report.get("subject") or report.get("title") or "your report"
+        subject = safe_subject
         if not subject.lower().startswith("re:"):
             subject = "Re: " + subject
         message = store.customer_message_add(
@@ -424,9 +448,11 @@ def _closed_notice(cfg, store, chans, wt, report, item, now):
             address=report["reporter_address"], name=report.get("reporter_name") or "",
             text=note, subject=subject, thread=report.get("thread") or "", state="pending", now=now)
     if (cfg.get("alerts") or {}).get("fixed", True) or (notify and approve):
+        safe_title, safe_resolution, _ = secret_filter.mask(report.get("title") or "", wtmod.resolution_text(item))
         alert, _new = alerts.raise_event(
-            store, kind="fixed", key=f"fixed:{ref}", ref=ref, title=report.get("title") or "",
-            body=wtmod.resolution_text(item), needs_reply=bool(notify and approve),
+            store, kind="fixed", key=f"fixed:{ref}", ref=ref, title=safe_title,
+            body=(("Possible secret redacted; approving sends this masked notice: " + note + "\n\n") if hit else "") + safe_resolution,
+            needs_reply=bool(notify and approve),
             meta={"outcome": "fixed" if fixed else "closed", "notify": bool(notify and approve),
                   "name": report.get("reporter_name") or "", "address": report.get("reporter_address") or "",
                   "message_id": message["id"] if message else None}, now=now)

@@ -3,7 +3,7 @@ import json
 import re
 from datetime import datetime, timezone
 
-from . import alerts
+from . import alerts, calls
 from .store import Outbound, Receipt
 
 BATCH = 50
@@ -89,6 +89,8 @@ def authorized(cfg, cid, alert):
 
 def init(store):
     store._db.executescript('''
+    CREATE TABLE IF NOT EXISTS oncall_call_attempts (at REAL NOT NULL);
+    CREATE INDEX IF NOT EXISTS oncall_call_time ON oncall_call_attempts(at);
     CREATE TABLE IF NOT EXISTS escalation_jobs (
       alert_id INTEGER PRIMARY KEY, plan TEXT NOT NULL, step INTEGER NOT NULL DEFAULT 0,
       due REAL NOT NULL, origin REAL NOT NULL, done INTEGER NOT NULL DEFAULT 0);
@@ -107,7 +109,7 @@ def init(store):
 
 def enroll(cfg, store, pending, now):
     for a in pending:
-        if not a['needs_reply']:
+        if not calls.escalates(cfg, a):
             continue
         plan = []
         for step in cfg.get('escalation', []):
@@ -133,6 +135,8 @@ def enroll(cfg, store, pending, now):
 def _send(store, a, step, chan, msg, now):
     previous = store._one('SELECT * FROM escalation_sends WHERE alert_id=? AND step=? AND channel=?',
                           (a['id'], step, chan.id))
+    if previous and getattr(chan, 'type', '') == 'call':
+        return True
     if previous and (previous['state'] != 'failed' or now - previous['at'] < alerts.RETRY_AFTER_S):
         return previous['state'] != 'failed'
     store._run('INSERT OR REPLACE INTO escalation_sends VALUES(?,?,?,?,?)',
@@ -140,6 +144,8 @@ def _send(store, a, step, chan, msg, now):
     store.delivery_add(a['id'], chan.id, getattr(chan, 'owner', ''),
                        Receipt(False, error='Escalation outcome unknown. No automatic retry.', uncertain=True), now=now)
     attempt = store.delivery_latest(a['id'], chan.id)
+    if getattr(chan, 'type', '') == 'call':
+        store._run('INSERT INTO oncall_call_attempts VALUES(?)', (now,))
     receipt = chan.send(msg)  # exceptions leave durable uncertainty, never a silent retry
     store.delivery_finish(attempt['id'], receipt)
     state = 'sent' if receipt.ok else 'uncertain' if receipt.uncertain else 'failed'
@@ -163,9 +169,12 @@ def deliver(cfg, store, chans, pending, now):
     cap = int(cfg.get('hourly_cap') or alerts.HOURLY_CAP)
     used = len(store._all('SELECT id FROM deliveries WHERE sent_at>=? LIMIT ?', (now-3600, cap)))
     count = 0
-    targets = {c.id: c for c in alerts.alert_channels(cfg, chans)}
+    targets = {c.id: c for c in alerts.alert_channels(cfg, chans, include_calls=True)}
     for notice in store._all('SELECT * FROM escalation_notices WHERE due<=? ORDER BY due LIMIT ?', (now, BATCH)):
         cid = notice['channel']
+        if cid in targets and targets[cid].type == 'call':
+            store._run('DELETE FROM escalation_notices WHERE alert_id=? AND channel=?', (notice['alert_id'], cid))
+            continue
         a = store.alert(notice['alert_id'])
         if not a or a['state'] == 'cleared':
             store._run('DELETE FROM escalation_notices WHERE alert_id=? AND channel=?', (notice['alert_id'], cid))
@@ -201,11 +210,24 @@ def deliver(cfg, store, chans, pending, now):
             p = person(cfg, cid)
             if (p['id'] if p else 'owner') != step['person']:
                 continue
+            entry = next((c for c in cfg['channels'] if c['id'] == cid), {})
+            is_call = entry.get('type') == 'call'
+            if is_call and not calls.eligible(store, entry, a, i, now):
+                continue
+            if is_call and not calls.allowed(cfg, store, entry, a, row, i, now):
+                complete = False
+                continue
             quiet = (p or {}).get('quiet_hours', cfg.get('quiet_hours'))
+            if is_call and str(entry.get('during_quiet', 'false')).lower() == 'true':
+                quiet = None
             if cid not in targets or alerts.in_quiet_hours({'quiet_hours': quiet}, now) or used >= cap:
                 complete = False
                 continue
             subject, text, choices = alerts.render(a)
+            if is_call:
+                for value in (a.get('ref'), a.get('session_id'), a.get('token')):
+                    if value:
+                        text = text.replace(value, '')
             before = store._one('SELECT * FROM escalation_sends WHERE alert_id=? AND step=? AND channel=?', (a['id'], i, cid))
             try:
                 ok = _send(store, a, i, targets[cid], Outbound(text, subject=subject, thread=a['token'], choices=choices), now)
@@ -216,7 +238,7 @@ def deliver(cfg, store, chans, pending, now):
             if after and (not before or after['at'] != before['at']):
                 used += 1
                 count += int(after['state'] == 'sent')
-            complete &= ok
+            complete &= (ok or is_call)
         if complete:
             store.alert_mark_sent(a['id'], now=now)
             i += 1
