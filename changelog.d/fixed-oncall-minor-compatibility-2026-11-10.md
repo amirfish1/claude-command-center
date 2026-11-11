@@ -1,0 +1,1 @@
+- Keep minor-decision instructions accurate for WatchTower versions that support repeated attestations.
