@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -61,9 +62,26 @@ def main():
             assert result.returncode == 0 and not result.stderr
             assert time.monotonic() - hook_start < 2
             url = run(sys.executable, str(REPO / 'ccc'), 'oncall', 'agent-service')
-            again = run(sys.executable, str(REPO / 'ccc'), 'oncall', 'agent-service')
-            assert url == again and url.startswith('http://127.0.0.1:')
-            print('PASS: isolated install, service startup and reuse; %.1fs' % (time.monotonic() - started))
+            record = json.loads((root / 'state/oncall-agent-process.json').read_text())
+            # This pid was created by this proof, inside its unique HOME.
+            os.kill(record['pid'], signal.SIGSTOP)
+            try:
+                again = run(sys.executable, str(REPO / 'ccc'), 'oncall', 'agent-service')
+                assert url == again and url.startswith('http://127.0.0.1:')
+            finally:
+                os.kill(record['pid'], signal.SIGCONT)
+            os.kill(record['pid'], signal.SIGKILL)
+            # Wait on process death via procfs only in this bounded observer.
+            def gone():
+                try:
+                    return (Path('/proc') / str(record['pid']) / 'stat').read_text().split(') ', 1)[1][0] == 'Z'
+                except OSError:
+                    return True
+            proof.wait_for(gone, 5, 'isolated server exit')
+            restarted = run(sys.executable, str(REPO / 'ccc'), 'oncall', 'agent-service')
+            new_record = json.loads((root / 'state/oncall-agent-process.json').read_text())
+            assert new_record['pid'] != record['pid'] and restarted.startswith('http://127.0.0.1:')
+            print('PASS: isolated install, busy-service reuse and restart after crash; %.1fs' % (time.monotonic() - started))
         finally:
             proof.cleanup(root, [])
 

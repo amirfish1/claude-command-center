@@ -50,6 +50,11 @@ def handle(method, path, body=None, *, eng=None):
             return 200, status(eng)
         if method == "GET" and name == "decisions":
             return 200, {"ok": True, "decisions": decisions(eng)}
+        if method == "POST" and name in ("hook-register", "hook-wait", "hook-cancel"):
+            from . import agent_wait
+            fn = {"hook-register": agent_wait.register, "hook-wait": agent_wait.collect,
+                  "hook-cancel": agent_wait.cancel}[name]
+            return 200, dict({"ok": True}, **fn(eng, body))
         if method == "POST":
             fn = {"config": save_config, "channel": channel, "source": source, "test": test,
                   "customer": customer, "report": report, "inbound": inbound, "tick": tick}.get(name)

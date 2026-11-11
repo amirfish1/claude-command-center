@@ -74,6 +74,13 @@ def question(store, session_id, transcript, since=0, notify_idle=False):
             turn = str(row.get('uuid') or row.get('timestamp') or '')
         elif row.get('type') == 'event_msg' and payload.get('type') == 'user_message':
             last = ''
+    signal = from_message(last, turn, notify_idle=notify_idle)
+    store.kv_set(key, {'stamp': stamp, 'signal': signal})
+    return signal
+
+
+def from_message(last, turn='', notify_idle=False):
+    """Same conservative parser for a hook's final message and a transcript."""
     # Ignore machine footers and quoted/code examples. Only a closing paragraph
     # explicitly addressed to the owner qualifies, not every question mark.
     prose, _, footer = last.partition('<session-state>')
@@ -93,7 +100,6 @@ def question(store, session_id, transcript, since=0, notify_idle=False):
     if tail:
         digest = hashlib.sha256((turn + last).encode()).hexdigest()[:24]
         signal = {'kind': 'plain_question', 'stamp': digest, 'body': tail, 'meta': {}}
-    store.kv_set(key, {'stamp': stamp, 'signal': signal})
     return signal
 
 
@@ -122,7 +128,11 @@ def observe(eng, current):
                                    meta=signal['meta'], now=now)
             return key
 
+        from .agent_wait import active_sessions
+        hook_sessions = active_sessions(eng.store)
         for sid, row in (current or {}).items():
+            if sid in hook_sessions:
+                continue
             if row.get('needs_approval'):
                 signal = eng.deps.permission(sid)
                 if signal:
@@ -139,6 +149,8 @@ def observe(eng, current):
         for sid in [s for s in idle if s not in candidates]:
             del idle[sid]
         for alert in eng.store.alerts(state='open'):
+            if (alert.get('meta') or {}).get('hook_wait'):
+                continue  # the waiting hook owns expiry and collection
             gone = ((alert['kind'] == 'permission' and alert['key'] not in prompts)
                     or (alert['kind'] == 'plain_question'
                         and alert.get('session_id') not in candidates))

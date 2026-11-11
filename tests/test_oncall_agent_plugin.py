@@ -46,7 +46,7 @@ def test_recorded_payload_service_down(tmp_path, event):
     result = subprocess.run([sys.executable, str(HOOK), event], input=json.dumps(payload),
                             text=True, capture_output=True, env=env_for(tmp_path, True), timeout=2)
     assert result.returncode == 0 and not result.stderr and not result.stdout
-    live = tmp_path / '.claude/command-center/live-state'
+    live = tmp_path / 'state/live-state'
     filename = 'test-session-1234' + ('.json' if event == 'Stop' else '_needs_approval.json')
     assert (live / filename).exists()
 
@@ -92,7 +92,7 @@ def test_permission_clears_after_tool(tmp_path):
         result = subprocess.run([sys.executable, str(HOOK), event], input=payload,
                                 text=True, capture_output=True, env=env, timeout=2)
         assert result.returncode == 0 and not result.stdout and not result.stderr
-    assert not (tmp_path / '.claude/command-center/live-state/test-session-1234_needs_approval.json').exists()
+    assert not (tmp_path / 'state/live-state/test-session-1234_needs_approval.json').exists()
 
 
 def test_idle_notification_is_not_permission(tmp_path):
@@ -100,7 +100,7 @@ def test_idle_notification_is_not_permission(tmp_path):
     payload = json.dumps({'session_id': 'test-session-1234', 'notification_type': 'idle_prompt'})
     subprocess.run([sys.executable, str(HOOK), 'Notification'], input=payload, text=True,
                    env=env, check=True, timeout=2)
-    live = tmp_path / '.claude/command-center/live-state'
+    live = tmp_path / 'state/live-state'
     assert (live / 'test-session-1234.json').exists()
     assert not (live / 'test-session-1234_needs_approval.json').exists()
 
