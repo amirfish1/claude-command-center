@@ -1000,18 +1000,21 @@ class NtfyChannel(Channel):
             now = int(self.clock())
             events = self._fetch(now)
             newest = events[-1] if events else {}
+            self._set("baseline", now)
             self._set("cursor", {"id": str(newest.get("id") or ""),
                                  "time": _int(newest.get("time"), now)})
             self._set("seen", [str(e["id"]) for e in events][-50:])
             return []
         last_id, last_time = str(cursor.get("id") or ""), _int(cursor.get("time"))
+        baseline = self._get("baseline", last_time)
+        self._set("baseline", baseline)
         events = self._fetch(last_id or last_time)
         seen = list(self._get("seen", []) or [])
         out = []
         for event in events:
             event_id, when = str(event["id"]), _int(event.get("time"))
             # A server that no longer knows our cursor id replays its whole cache.
-            if event_id in seen or (last_id and when < last_time):
+            if event_id in seen or when < baseline:
                 continue
             seen.append(event_id)
             last_id, last_time = event_id, max(last_time, when)
