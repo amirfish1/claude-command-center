@@ -187,6 +187,8 @@ def _apply(cfg, store, chans, wt, alert, text, deps, now):
         if kind == "fixed" and not meta.get("notify"):
             store.alert_close(alert["id"], "cleared", text, now=now)
             return "noted", ""
+        action = "refused" if _is(alerts.NO_WORDS, text) else "approved" if _is(alerts.GO_WORDS, text) else "reworded"
+        store.alert_owner_action(alert["id"], action, now=now)
         if _is(alerts.NO_WORDS, text):
             customers.drop_message(store, message_id, now=now)
             store.alert_close(alert["id"], "answered", text, now=now)

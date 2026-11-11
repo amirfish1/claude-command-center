@@ -276,6 +276,14 @@
       r.control.append(p.alertToggles[key]);
       return r.node;
     });
+    p.summary = withStatus(row('Daily summary', 'daily summary morning'));
+    p.summaryToggle = toggle('Daily summary',
+      next => saveConfig({daily_summary: {enabled: next}}, p.summary.status));
+    p.summaryTime = input('Time', 'time');
+    p.summaryTime.setAttribute('aria-label', 'Daily summary time');
+    p.summaryTime.addEventListener('change', () =>
+      saveConfig({daily_summary: {time: p.summaryTime.value}}, p.summary.status));
+    p.summary.control.append(p.summaryToggle, p.summaryTime);
     p.quiet = withStatus(row('Quiet hours', 'quiet hours night do not disturb'));
     p.quietStart = input('Start', 'time');
     p.quietEnd = input('End', 'time');
@@ -293,7 +301,7 @@
       p.channelsLabel, p.channels, p.channelForm.node,
       p.sourcesLabel, p.sources, p.sourceForm.node,
       p.customersLabel, ...customerRows, p.known, addCustomer.node,
-      p.alertsLabel, ...alertRows, p.quiet.node);
+      p.alertsLabel, ...alertRows, p.summary.node, p.quiet.node);
     return {root, p};
   }
 
@@ -383,6 +391,8 @@
     fill(p.queueInput, state.queue);
     fill(p.repoInput, config.repo);
     setToggle(p.minorToggle, state.minor_decisions);
+    setToggle(p.summaryToggle, (config.daily_summary || {}).enabled);
+    fill(p.summaryTime, (config.daily_summary || {}).time || "09:00");
     for (const [key] of ALERT_SWITCHES) setToggle(p.alertToggles[key], (config.alerts || {})[key] !== false);
     for (const [key] of CUSTOMER_SWITCHES) setToggle(p.customerToggles[key], (config.customers || {})[key] !== false);
     const quiet = config.quiet_hours || {};
