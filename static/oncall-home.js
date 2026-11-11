@@ -253,11 +253,24 @@
     p.state.textContent = data.paused ? 'On-call is paused' : 'On-call is on';
     p.state.classList.toggle('is-paused', !!data.paused);
 
-    if (!interacting() && !sending.size) {
+    if (!sending.size && !interacting()) {
       p.needs.list.textContent = '';
       p.needs.count.textContent = data.needs_you.length ? String(data.needs_you.length) : '';
       if (!data.needs_you.length) empty(p.needs.list, 'Nothing needs you.');
       data.needs_you.forEach(item => p.needs.list.append(needCard(item)));
+    } else if (!sending.size) {
+      // Focus is inside the list: leave the cards that are still waiting
+      // untouched, but drop answered ones and add new arrivals so the list
+      // never goes stale while a control keeps focus.
+      const wanted = new Map(data.needs_you.map(item => [String(item.id), item]));
+      const shown = new Set();
+      Array.from(p.needs.list.children).forEach(node => {
+        const id = node.dataset ? node.dataset.alert : '';
+        if (id && wanted.has(id)) shown.add(id); else node.remove();
+      });
+      wanted.forEach((item, id) => { if (!shown.has(id)) p.needs.list.append(needCard(item)); });
+      p.needs.count.textContent = data.needs_you.length ? String(data.needs_you.length) : '';
+      if (!data.needs_you.length) empty(p.needs.list, 'Nothing needs you.');
     }
 
     p.working.list.textContent = '';

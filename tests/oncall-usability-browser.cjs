@@ -84,6 +84,14 @@ const server = http.createServer(async (req, res) => {
       historyFails = true;
       const context = await browser.createBrowserContext();
       const page = await context.newPage();
+      // Settings redraws when its background fetches land; a click that races
+      // a redraw is retried against the fresh node instead of failing.
+      const tap = async selector => {
+        for (let attempt = 0; ; attempt++) {
+          try { await page.waitForSelector(selector); return await page.click(selector); }
+          catch (error) { if (attempt >= 4 || !/detached|not clickable/i.test(error.message)) throw error; }
+        }
+      };
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       await page.setViewport({width, height: 900});
@@ -105,7 +113,7 @@ const server = http.createServer(async (req, res) => {
       assert.equal(await page.$eval(section + ' [aria-label="On-call"]', el => el.getAttribute('aria-checked')), 'true');
       assert.equal(await page.$eval(section + ' [aria-label="Agents decide small reversible things"]', el => el.getAttribute('aria-checked')), 'false');
       checked++;
-      await page.click(section + ' [aria-label="On-call"]');
+      await tap(section + ' [aria-label="On-call"]');
       await page.waitForFunction(() => {
         const toggle = document.querySelector('#settingsSection-oncall [aria-label="On-call"]');
         return toggle.getAttribute('aria-checked') === 'false' && !toggle.disabled;
@@ -125,7 +133,7 @@ const server = http.createServer(async (req, res) => {
       await page.evaluate(() => window.cccOncallSettings.refresh());
       assert.match(await page.$eval(section, el => el.innerText), /Which helper name\?[\s\S]*Applied\./);
       checked++;
-      await page.click('[aria-label="Agents decide small reversible things"]');
+      await tap('[aria-label="Agents decide small reversible things"]');
       await page.waitForFunction(() => {
         const toggle = document.querySelector('[aria-label="Agents decide small reversible things"]');
         return toggle.getAttribute('aria-checked') === 'false' && !toggle.disabled;
@@ -140,14 +148,14 @@ const server = http.createServer(async (req, res) => {
       assert.match(await page.$eval(section, el => el.innerText), /No decisions recorded\./);
       checked++;
       const channelButton = section + ' .oncall-list .settings-action-btn';
-      await page.click(channelButton);
+      await tap(channelButton);
       await page.waitForFunction(() => document.querySelector('#settingsSection-oncall').textContent.includes('Test send accepted.'));
       await page.evaluate(() => document.activeElement.blur());
       await page.evaluate(() => window.cccOncallSettings.refresh());
       assert.match(await page.$eval(section, el => el.innerText), /Test send accepted\. Check the channel\./);
       checked++;
       testFails = true;
-      await page.click(channelButton);
+      await tap(channelButton);
       await page.waitForFunction(() => document.querySelector('#settingsSection-oncall').textContent.includes('Local channel refused.'));
       await page.waitForNetworkIdle();
       await page.evaluate(() => document.activeElement.blur());
@@ -160,7 +168,7 @@ const server = http.createServer(async (req, res) => {
       assert.doesNotMatch(await page.$eval(section, el => el.innerText), /Local channel refused/);
       checked++;
       configFails = true;
-      await page.click(section + ' [aria-label="On-call"]');
+      await tap(section + ' [aria-label="On-call"]');
       await page.waitForFunction(() => document.querySelector('#settingsSection-oncall').textContent.includes('Add a message channel first.'));
       await page.evaluate(() => window.cccOncallSettings.refresh());
       assert.match(await page.$eval(section, el => el.innerText), /Add a message channel first\./);
@@ -175,7 +183,7 @@ const server = http.createServer(async (req, res) => {
       assert.equal(await page.$eval(section + ' [aria-label="Queue for bug tickets"]', el => el.tagName), 'INPUT');
       checked++;
       await page.$eval(input, el => {el.value = ''; el.dispatchEvent(new Event('input'));});
-      await page.click(section + ' .oncall-form button');
+      await tap(section + ' .oncall-form button');
       assert.equal(await page.$eval(input, el => el === document.activeElement && el.getAttribute('aria-invalid') === 'true'), true);
       checked++;
       // Email recipients can default to the mailbox on the server. Metadata
@@ -183,7 +191,7 @@ const server = http.createServer(async (req, res) => {
       await selects[0].select('email');
       await page.type(section + ' .oncall-form [aria-label="Mailbox address"]', 'tester@example.com');
       await page.type(section + ' .oncall-form [aria-label="App password"]', 'ExampleTestOnly!');
-      await page.click(section + ' .oncall-form button');
+      await tap(section + ' .oncall-form button');
       await page.waitForFunction(() => !document.querySelector('#settingsSection-oncall .oncall-form input'));
       assert.equal(channelAdds.length, 1);
       assert.deepEqual(channelAdds[0].channel, {type: 'email', address: 'tester@example.com'});
@@ -201,6 +209,17 @@ const server = http.createServer(async (req, res) => {
       await page.evaluate(() => window.cccOncallHome.refresh());
       assert.equal(await page.$eval(choice, el => el === document.activeElement), true);
       checked++;
+      // While a control keeps focus the list still follows the server: a new
+      // question appears and an answered one leaves, without moving focus.
+      home.needs_you.push({id: 2, headline: 'Second question', detail: 'Ship it?', choices: [], free_text: true});
+      await page.evaluate(() => window.cccOncallHome.refresh());
+      assert.equal(await page.$$eval('#oncallHome .oncall-home-card.is-you', cards => cards.length), 2);
+      assert.equal(await page.$eval(choice, el => el === document.activeElement), true);
+      home.needs_you.pop();
+      await page.evaluate(() => window.cccOncallHome.refresh());
+      assert.equal(await page.$$eval('#oncallHome .oncall-home-card.is-you', cards => cards.length), 1);
+      assert.equal(await page.$eval(choice, el => el === document.activeElement), true);
+      checked++;
       await page.$eval(reply, el => {el.value = ''; el.dispatchEvent(new Event('input'));});
       await page.$eval('#oncallHome form', el => el.requestSubmit());
       assert.equal(answers.length, 0);
@@ -209,14 +228,14 @@ const server = http.createServer(async (req, res) => {
       checked++;
       answerFails = true;
       await page.type(reply, 'Sample test text');
-      await page.click('#oncallHome form button');
+      await tap('#oncallHome form button');
       await page.waitForFunction(() => document.querySelector('#oncallHome').textContent.includes('Session unavailable.'));
       await page.evaluate(() => document.activeElement.blur());
       await page.evaluate(() => window.cccOncallHome.refresh());
       assert.equal(await page.$eval(reply, el => el.value), 'Sample test text');
       assert.match(await page.$eval('#oncallHome', el => el.innerText), /Session unavailable\. Try again\./);
       answerFails = false;
-      await page.click(choice);
+      await tap(choice);
       await page.waitForFunction(() => !document.querySelector('#oncallHome .oncall-home-card'));
       assert.deepEqual(answers, [{id: 1, text: 'Keep it'}]);
       assert.equal(await page.$eval('#oncallHome .oncall-home-change', el => el.innerText), 'On-call settings');
@@ -229,12 +248,12 @@ const server = http.createServer(async (req, res) => {
         await page.addScriptTag({content: 'function _syncSessionMenuItems() {}\n' + menuFunction + '\n_wireSimpleActionsMenu();'});
         for (const left of [8, 334]) {
           await page.$eval('#convSimpleActionsBtn', (el, left) => el.style.left = left + 'px', left);
-          await page.click('#convSimpleActionsBtn');
+          await tap('#convSimpleActionsBtn');
           const rect = await page.$eval('#convSimpleActionsMenu', el => {
             const r = el.getBoundingClientRect(); return {left: r.left, right: r.right, width: r.width};
           });
           assert.ok(rect.width > 0 && rect.left >= 8 && rect.right <= width - 8, JSON.stringify(rect));
-          await page.click('#convSimpleActionsBtn');
+          await tap('#convSimpleActionsBtn');
           checked++;
         }
       }

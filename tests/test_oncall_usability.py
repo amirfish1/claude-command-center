@@ -21,4 +21,4 @@ def test_oncall_browser_usability():
         cwd=root, capture_output=True, text=True, timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'PASS: 68 browser checks' in result.stdout
+    assert 'PASS: 72 browser checks' in result.stdout
