@@ -33,7 +33,7 @@ DB_NAME = "oncall.sqlite3"
 LOG_KEEP = 500
 
 CHANNEL_TYPES = ("email", "telegram", "ntfy", "imessage", "sms", "whatsapp", "command")
-SOURCE_TYPES = ("logs", "ci", "github", "sentry", "posthog", "http", "command")
+SOURCE_TYPES = ("docker", "logs", "ci", "github", "sentry", "posthog", "http", "command")
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _QUEUE_RE = re.compile(r"^[A-Z][A-Z0-9_-]{0,31}$")
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
