@@ -62,6 +62,16 @@ checks, failure text redaction, quiet hours, the alert cap, and stale permission
 metadata. Tests use local fixtures. They do not prove provider account security,
 SMS sender integrity, mailbox authentication, or delivery to a real phone.
 
+Two routes are not local-only: `GET /api/oncall/home` and `POST
+/api/oncall/answer`, which serve the dashboard home screen. They follow the
+dashboard's own access boundary (origin allow-list, proxy secret and phone PIN),
+because listing waiting questions and answering one is the same authority as
+reading and answering a session there. A trusted remote view therefore can
+answer a question, decide a report, or approve a held customer message, as a
+phone reply can. It cannot approve a permission prompt, and every setup,
+channel, source, customer and secret route stays local-only.
+`test_oncall_home.py` checks both sides over real loopback HTTP.
+
 HTTP sources allow only HTTP and HTTPS. Redirects to file URLs are refused.
 Local and private network HTTP destinations are still allowed. SMTP and IMAP
 hosts, ntfy servers, command sources, command channels and command working
@@ -120,6 +130,9 @@ reports are safely contained.
    it under the resolver lock; send only that ID. For Claude, bind to the
    permission-hook call hash and refuse remote approval when no exact binding
    is available. Test both prompt replacement and worker restarts.
+   The dashboard home screen lists a permission prompt but never approves one:
+   `POST /api/oncall/answer` refuses that alert kind, so the gap is not
+   reachable from a remote dashboard view.
 4. **High: ntfy topic possession is owner authority.** Any publisher who knows
    the reply topic can act as the owner. There is no independent sender check.
    Proposal: use an authenticated private server and separate read/write

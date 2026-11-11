@@ -223,6 +223,14 @@
     p.masterToggle = toggle('On-call', next => saveConfig({enabled: next}, p.master.status));
     p.master.control.append(p.masterToggle);
 
+    // A choice for this browser, not for the machine: it is kept here, not in the config.
+    p.home = row('Open on the On-call home', 'home screen desktop start calm simple');
+    p.homeToggle = toggle('Open on the On-call home', next => {
+      if (window.cccOncallHome) window.cccOncallHome.setOpensByItself(next);
+      setToggle(p.homeToggle, next);
+    });
+    p.home.control.append(p.homeToggle);
+
     p.queue = withStatus(row('Queue for bug tickets', 'queue tickets bugs'));
     p.queueInput = input('SHOP');
     p.queueInput.addEventListener('change', () => saveConfig({queue: p.queueInput.value.trim()}, p.queue.status));
@@ -296,7 +304,7 @@
     p.quietEnd.addEventListener('change', saveQuiet);
     p.quiet.control.append(p.quietStart, p.quietEnd);
 
-    root.append(p.master.node, p.queue.node, p.repo.node, p.minor.node, p.decisions,
+    root.append(p.master.node, p.home.node, p.queue.node, p.repo.node, p.minor.node, p.decisions,
       p.waitingLabel, p.waiting,
       p.channelsLabel, p.channels, p.channelForm.node,
       p.sourcesLabel, p.sources, p.sourceForm.node,
@@ -385,6 +393,7 @@
     if (!parts || !state) return;
     const p = parts, config = state.config || {};
     setToggle(p.masterToggle, state.enabled);
+    setToggle(p.homeToggle, !window.cccOncallHome || window.cccOncallHome.opensByItself());
     if (!state.wt) say(p.master.status, 'WatchTower is not installed, so no agent will pick tickets up.', true);
     else if (state.enabled && state.paused) say(p.master.status, 'Paused. Reply resume on any channel to continue.');
     else if (p.master.status.classList.contains('is-error') && state.wt) say(p.master.status, '');

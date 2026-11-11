@@ -48,6 +48,12 @@ def handle(method, path, body=None, *, eng=None):
                                 detail=str(body.get("detail", "")).lower() in ("1", "true"))
         if method == "GET" and name == "status":
             return 200, status(eng)
+        if method == "GET" and name == "home":
+            from . import home
+            return 200, dict({"ok": True}, **home.summary(eng))
+        if method == "POST" and name == "answer":
+            from . import home
+            return 200, dict({"ok": True}, **home.answer(eng, body))
         if method == "GET" and name == "decisions":
             return 200, {"ok": True, "decisions": decisions(eng)}
         if method == "POST" and name == "escalation":

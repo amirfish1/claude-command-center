@@ -94,6 +94,26 @@ The same settings live in **Settings > On-call**. To turn only the preview on
 and set the rest up there: **Settings > Advanced > Preview features >
 On-call**, or start CCC with `CCC_FF_ONCALL=1`.
 
+## The home screen
+
+With On-call on, the dashboard opens on one quiet screen instead of the full
+session list. It has three lists:
+
+- **Needs you**: the questions and decisions waiting for you, oldest first,
+  with the same choices your phone shows. Press a choice or type an answer.
+- **Being worked on**: reports an agent has picked up, and where each came from.
+- **Fixed this week**: what got closed, and how long after the report.
+
+**Open the full dashboard** takes you to everything else for that browser tab.
+The **On-call** button at the top of the left rail brings the home screen back.
+To stop it opening by itself in this browser, switch off **Settings > On-call >
+Open on the On-call home**.
+
+It opens by itself only on a plain dashboard address in a wide window. A link
+to a session or to Settings still goes where it points, and a phone or narrow
+window keeps its own layout. A permission prompt is listed but is answered in
+its session, not here.
+
 ## Automatic workers
 
 Setup enables WatchTower auto-drain for bug tickets, with one worker in the
@@ -317,8 +337,11 @@ reply releases it.
 - An email reply answers an alert only when it carries that alert's private
   thread token. Other mail from your own address is held as a report.
 - Chat channels trust the sender address you configured.
-- The On-call settings and its API answer only on the machine CCC runs on.
-  Requests through phone access or a proxy are refused.
+- The On-call settings and its setup API answer only on the machine CCC runs
+  on. Requests through phone access or a proxy are refused.
+- The home screen and its answers follow the dashboard's own access rules, the
+  same as reading and answering a session. A trusted remote view of the
+  dashboard can use them. It cannot approve a permission prompt or change setup.
 
 ## Limits
 

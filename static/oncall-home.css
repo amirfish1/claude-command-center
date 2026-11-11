@@ -1,0 +1,85 @@
+/* On-call home (preview). Loaded on demand by static/oncall-home.js.
+   Every colour comes from the theme variables, so it follows light and dark. */
+.oncall-home {
+  position: fixed; inset: 0; z-index: 1500; overflow-y: auto;
+  background: var(--bg); color: var(--text);
+  font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+.oncall-home[hidden] { display: none !important; }
+/* The quiet screen stays quiet: the floating counters and prompts belong to the full dashboard. */
+body.ccc-oncall-home-open .qtag-pill,
+body.ccc-oncall-home-open .pwa-install-banner { display: none !important; }
+.oncall-home-inner { max-width: 1180px; margin: 0 auto; padding: 34px 40px 40px; }
+
+.oncall-home-top { display: flex; align-items: center; gap: 14px; padding-bottom: 22px; border-bottom: 1px solid var(--border); }
+.oncall-home-brand { font-size: 18px; font-weight: 650; }
+.oncall-home-state {
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px;
+  font-size: 13.5px; color: var(--green); border: 1px solid var(--border); background: var(--surface);
+}
+.oncall-home-state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+.oncall-home-state:empty { display: none; }
+.oncall-home-state.is-paused { color: var(--orange); }
+.oncall-home-state.is-paused::before { background: var(--orange); }
+.oncall-home-full {
+  margin-left: auto; padding: 6px 10px; border: 0; border-radius: 8px; background: none;
+  color: var(--accent); font: inherit; font-size: 14px; cursor: pointer;
+}
+.oncall-home-full:hover { background: var(--surface); }
+
+.oncall-home-note { min-height: 22px; padding-top: 10px; font-size: 13.5px; color: var(--text-muted); }
+
+.oncall-home-cols { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 28px; padding-top: 8px; align-items: start; }
+.oncall-home-h {
+  margin: 0 0 12px; font-size: 12.5px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+.oncall-home-count { margin-left: 8px; color: var(--text); }
+.oncall-home-list { display: grid; gap: 10px; }
+.oncall-home-empty { padding: 12px 2px; font-size: 14px; color: var(--text-muted); }
+
+.oncall-home-card {
+  padding: 14px 15px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.oncall-home-card.is-you { border-color: var(--orange); }
+.oncall-home-card.is-sending { opacity: .6; }
+.oncall-home-who { font-size: 12.5px; color: var(--text-muted); margin-bottom: 4px; }
+.oncall-home-ask { font-weight: 600; white-space: pre-line; }
+.oncall-home-more { margin-top: 6px; font-size: 14px; white-space: pre-line; }
+.oncall-home-title { font-weight: 600; }
+.oncall-home-card.is-done .oncall-home-title::before { content: "✓"; margin-right: 7px; color: var(--green); }
+.oncall-home-sub { margin-top: 3px; font-size: 13.5px; color: var(--text-muted); }
+
+.oncall-home-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.oncall-home-btn {
+  flex: 1 1 0; min-width: 96px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px;
+  background: var(--surface-2); color: var(--text); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer;
+}
+.oncall-home-btn:hover { border-color: var(--accent); }
+.oncall-home-btn.is-main { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast, #fff); }
+.oncall-home-btn:disabled { opacity: .55; cursor: default; }
+.oncall-home-type { display: flex; gap: 8px; margin-top: 10px; }
+.oncall-home-type .oncall-home-btn { flex: 0 0 auto; min-width: 0; }
+.oncall-home-input {
+  flex: 1 1 auto; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 13.5px;
+}
+.oncall-home-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.oncall-home-said:empty { display: none; }
+.oncall-home-said { margin-top: 8px; font-size: 13px; color: var(--text-muted); }
+.oncall-home-said.is-error { color: var(--red); }
+
+.oncall-home-foot {
+  display: flex; flex-wrap: wrap; gap: 8px 26px; margin-top: 26px; padding-top: 16px;
+  border-top: 1px solid var(--border); font-size: 13.5px; color: var(--text-muted);
+}
+.oncall-home-foot:empty { display: none; }
+.oncall-home-fact b { color: var(--text); font-weight: 600; }
+.oncall-home-change { margin-left: auto; color: var(--accent); text-decoration: none; }
+.oncall-home-change:hover { text-decoration: underline; }
+
+@media (max-width: 900px) {
+  .oncall-home-inner { padding: 22px 18px 30px; }
+  .oncall-home-cols { grid-template-columns: 1fr; gap: 22px; }
+}

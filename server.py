@@ -501,8 +501,11 @@ def _oncall_loop():
         time.sleep(3.0)
 
 
+_ONCALL_DASHBOARD_ROUTES = {("GET", "/api/oncall/home"), ("POST", "/api/oncall/answer")}
+
+
 def _oncall_request(handler, method, path, payload=None):
-    """Serve /api/oncall/*: preview-flag gated and local-only."""
+    """Serve /api/oncall/*: preview-flag gated; setup is local-only."""
     if not _feature_flag("oncall") and not (method == "GET" and path == "/api/oncall/week"):
         handler.send_json({"ok": False, "error": "On-call is a preview and it is off. Turn it on with: ccc oncall setup"}, 404)
         return
@@ -511,7 +514,13 @@ def _oncall_request(handler, method, path, payload=None):
     local_origins = {f"{scheme}://{host}:{port}"
                      for scheme in ("http", "https")
                      for host in ("localhost", "127.0.0.1", "[::1]")}
-    if ((origin and origin not in local_origins)
+    # The home screen and its answers are session-level work, like reading and
+    # answering a session, so they follow the dashboard's own access boundary
+    # (origin allow-list and PIN, checked before this point). Setup stays local.
+    if (method, path) in _ONCALL_DASHBOARD_ROUTES:
+        if not handler._check_same_origin():
+            return
+    elif ((origin and origin not in local_origins)
             or phone_access.is_remote_request(handler.client_address[0], handler.headers)):
         handler.send_json({"ok": False, "error": "On-call settings are local-only"}, 403)
         return
