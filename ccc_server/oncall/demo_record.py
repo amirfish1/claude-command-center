@@ -70,7 +70,8 @@ class Recorder:
 
     def encode(self, args):
         result = subprocess.run(['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-                                 '-threads', '2', '-filter_threads', '1', '-filter_complex_threads', '1', *args], cwd=self.frames, stdout=self.log,
+                                 '-threads', '2', '-filter_threads', '1', '-filter_complex_threads', '1',
+                                 *args[:-1], '-threads', '2', args[-1]], cwd=self.frames, stdout=self.log,
                                 stderr=self.log, timeout=90)
         if result.returncode:
             raise RuntimeError('ffmpeg failed; see capture.log.')
