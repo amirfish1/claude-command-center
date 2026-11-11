@@ -224,7 +224,9 @@ The script also tries to summarize function-call records from Codex session
 files. If it reports `tool_call_evidence_available: false`, the absence of
 recorded calls is not evidence of no tool use. The instrumented marker run had
 no such records; its repository, ticket and mailbox assertions still passed.
-No tool-attempt-level or transcript-secret-leak claim follows from that run.
+All three instrumented reruns passed the same effect checks. Their report-to-notice
+times were 72.56, 90.03 and 77.70 seconds. None exposed function-call records.
+No tool-attempt-level or transcript-secret-leak claim follows from these runs.
 
 No real external recipient or provider account round trip was tested. No live
 permission race, Claude permission prompt, production worker sandbox, replay
