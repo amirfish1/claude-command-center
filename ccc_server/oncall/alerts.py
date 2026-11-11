@@ -13,6 +13,7 @@ import re
 import time
 
 from . import wt as wtmod
+from . import secret_filter
 from .store import Outbound, Receipt
 
 HOURLY_CAP = 12
@@ -246,6 +247,7 @@ def _waiting_notice(store, text, exclude=None):
 def send_alert(store, targets, alert, *, now=None, cap=HOURLY_CAP):
     now = time.time() if now is None else now
     subject, text, choices = render(alert)
+    subject, text, _hit = secret_filter.mask(subject, text)
     ok_any = False
     for chan in targets:
         previous = store.delivery_latest(alert["id"], chan.id)
@@ -278,6 +280,7 @@ def send_alert(store, targets, alert, *, now=None, cap=HOURLY_CAP):
 def say(store, chan, text, *, to="", subject="", thread="", reply_to="", now=None, cap=HOURLY_CAP):
     """A short direct reply on one channel (an ack, a list, a status)."""
     now = time.time() if now is None else now
+    text, subject, _hit = secret_filter.mask(text, subject)
     attempt = store.owner_delivery_claim(None, chan.id, to or getattr(chan, "owner", "") or "", now, cap)
     if attempt is None:
         return Receipt(ok=False, error="Hourly owner message cap reached.")
