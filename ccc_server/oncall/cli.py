@@ -162,6 +162,7 @@ def build_parser():
         prog="ccc oncall",
         description="Agents fix reported bugs and message you only for real decisions. Preview.")
     sub = parser.add_subparsers(dest="action", required=True)
+    sub.add_parser("replay", help="try closed public GitHub reports locally; use ccc oncall replay --help")
 
     p = sub.add_parser("setup", help="ask a few questions, send a test message, turn it on")
     p.add_argument("--queue", help="name of the queue bug tickets go to, for example SHOP")

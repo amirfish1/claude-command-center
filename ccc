@@ -1925,6 +1925,9 @@ def cmd_oncall(argv, server=None):
     repo_dir = os.path.dirname(os.path.realpath(__file__))
     if repo_dir not in sys.path:
         sys.path.append(repo_dir)
+    if argv[:1] == ["replay"]:
+        from ccc_server.oncall.replay import main as replay_main
+        return replay_main(argv[1:])
     if argv[:1] in (["phone-wait"], ["cancel-wait"]):
         from ccc_server.oncall.agent_install import phone_wait, cancel_wait
         return (phone_wait if argv[0] == "phone-wait" else cancel_wait)(argv[1:])
