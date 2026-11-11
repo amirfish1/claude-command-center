@@ -303,6 +303,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     meta TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS alerts_state ON alerts(state);
+CREATE INDEX IF NOT EXISTS alerts_unsent ON alerts(id) WHERE state='open' AND sent_at IS NULL;
+CREATE INDEX IF NOT EXISTS alerts_token ON alerts(token);
 CREATE TABLE IF NOT EXISTS deliveries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     alert_id INTEGER,
@@ -314,6 +316,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
     sent_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS deliveries_ext ON deliveries(channel, external_id);
+CREATE INDEX IF NOT EXISTS deliveries_time ON deliveries(sent_at, alert_id, ok);
 CREATE TABLE IF NOT EXISTS inbound (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
@@ -459,6 +462,23 @@ class Store:
         sql += " ORDER BY id DESC LIMIT ?"
         args.append(int(limit))
         return [_alert_row(r) for r in self._all(sql, args)]
+
+    def unsent_alerts(self, limit=50):
+        # Rotate bounded batches so failed or parked entries cannot starve older work.
+        after = self.kv_get("delivery_cursor", 0)
+        rows = self._all("SELECT * FROM alerts INDEXED BY alerts_unsent WHERE state='open' AND sent_at IS NULL "
+                         "AND id>? ORDER BY id LIMIT ?", (after, limit))
+        if not rows:
+            rows = self._all("SELECT * FROM alerts INDEXED BY alerts_unsent WHERE state='open' AND sent_at IS NULL "
+                             "ORDER BY id LIMIT ?", (limit,))
+        if rows:
+            self.kv_set("delivery_cursor", rows[-1]["id"])
+        return [_alert_row(r) for r in rows]
+
+    def recent_alert_ids(self, since, limit):
+        return {row["alert_id"] for row in self._all(
+            "SELECT DISTINCT alert_id FROM deliveries WHERE sent_at>=? "
+            "AND ok=1 AND alert_id IS NOT NULL LIMIT ?", (since, limit))}
 
     def alert_mark_sent(self, alert_id, now=None):
         self._run("UPDATE alerts SET sent_at=? WHERE id=? AND sent_at IS NULL",

@@ -215,14 +215,14 @@ def alert_channels(cfg, chans):
 def deliver(cfg, store, chans, *, now=None):
     """Send every open alert that has not gone out. Returns how many were sent."""
     now = time.time() if now is None else now
-    pending = [a for a in reversed(store.alerts(state="open", limit=500)) if not a.get("sent_at")]
+    pending = store.unsent_alerts()
     if not pending or store.kv_get("paused", False):
         return 0
     targets = alert_channels(cfg, chans)
     if not targets or in_quiet_hours(cfg, now):
         return 0
     cap = int(cfg.get("hourly_cap") or HOURLY_CAP)
-    recent = {d["alert_id"] for d in store.deliveries_since(now - 3600) if d["ok"] and d["alert_id"]}
+    recent = store.recent_alert_ids(now - 3600, cap)
     sent = 0
     for alert in pending:
         if len(recent) >= cap:
