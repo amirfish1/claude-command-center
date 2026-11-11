@@ -193,6 +193,11 @@ class Engine:
             if self._due("closed", CLOSED_EVERY_S, now, force):
                 customers.collect_closed(cfg, store, chans, self.wt, now=now)
 
+            from .week import daily
+            try:
+                daily(self, now)
+            except (ValueError, wtmod.WTError) as exc:
+                self._note("summary", str(exc))
             out["sent"] = alerts.deliver(cfg, store, chans, now=now)
             self.last_tick = out
             return out

@@ -213,6 +213,12 @@ def build_parser():
     p = sub.add_parser("minor", help="let agents decide small reversible things without stopping")
     p.add_argument("state", choices=("on", "off"))
 
+    p = sub.add_parser("week", help="counts from stored On-call activity")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--since")
+    p.add_argument("--weeks", type=int, default=2)
+    p.add_argument("--detail", action="store_true")
+    p.add_argument("--post", nargs="?", const="text", choices=("text", "markdown"))
     sub.add_parser("decisions", help="what agents decided without you, each with its undo")
     return parser
 
@@ -454,6 +460,19 @@ def run(argv, *, base, get, post, io=None):
 
 def _run(args, client, io):
     action = args.action
+    if action == "week":
+        from urllib.parse import urlencode
+        from .week import render
+        query = {"weeks": args.weeks, "detail": "1" if args.detail and not args.post else "0"}
+        if args.since:
+            query["since"] = args.since
+        code, data = client.get("week?" + urlencode(query))
+        if code != 200 or not data.get("ok"):
+            raise Stop(data.get("error", "Could not read the week."))
+        if data.get("limits") and args.post:
+            raise Stop("Export unavailable: " + " ".join(data["limits"]))
+        io.out(render(data, args.post == "markdown") if args.post else json.dumps(data, indent=2))
+        return 0
     if action == "setup":
         return _setup(client, args, io)
     if action == "status":

@@ -326,7 +326,7 @@ def send_message(store, chans, wt, message_id, *, text=None, now=None):
     receipt = chan.send(Outbound(text=body, to=message["address"], subject=message["subject"],
                                  thread=message["thread"],
                                  reply_to=str((report.get("meta") or {}).get("message_id") or "")))
-    store.delivery_add(None, chan.id, message["address"], receipt, now=now)
+    store.delivery_add(None, chan.id, message["address"], receipt, now=now, message_kind="reporter")
     if not receipt.ok:
         store.customer_message_update(message_id, state="failed", error=receipt.error[:300])
         store.log("customer", f"message for {message['ref']} failed: {receipt.error}", now=now)
