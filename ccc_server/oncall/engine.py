@@ -210,6 +210,9 @@ class Engine:
             if self._due("closed", CLOSED_EVERY_S, now, force):
                 customers.collect_closed(cfg, store, chans, self.wt, now=now)
 
+            if self._due("health", 60, now):
+                from .health import collect
+                collect(cfg, store, self.wt, now)
             store.park_unhandled_inbound(now=now)
             customers.collect_delivery_problems(store, now=now)
             from .week import daily

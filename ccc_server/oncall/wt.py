@@ -96,6 +96,10 @@ class WT:
         data = self._json("ls", "-q", queue, "--status", status, "--limit", limit, "--json", *extra)
         return [t for t in data if isinstance(t, dict)] if isinstance(data, list) else []
 
+    def health(self, queue):
+        rows = self._json("status", "-q", queue, "--json")
+        return next((row for row in rows if isinstance(row, dict) and row.get("queue") == queue), {})
+
     def find(self, ref):
         code, out, _err = self._call("find", ref, "--json")
         if code != 0:
