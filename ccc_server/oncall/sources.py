@@ -452,10 +452,13 @@ class SentrySource(Source):
             rows = self._api("Sentry", "GET", f"{self._org_url()}/issues/?{query}",
                              token=token, hint=self._hint)
         except _HttpStatus as exc:
-            if exc.status != 400:
+            if exc.status not in (400, 422):
                 raise
-            # An older server wants a numeric project here. The project-scoped
-            # list takes the slug in the path.
+            # The project-scoped list accepts a slug. GlitchTip 4 also uses
+            # its model field name for newest-first sorting (HTTP 422).
+            if exc.status == 422:
+                params = [(key, "-first_seen" if key == "sort" else value)
+                          for key, value in params]
             path = "/".join(urllib.parse.quote(p, safe="") for p in (self.org, self.project))
             rows = self._api("Sentry", "GET",
                              f"{self.base}/api/0/projects/{path}/issues/?{urllib.parse.urlencode(params)}",
