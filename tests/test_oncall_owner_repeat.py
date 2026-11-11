@@ -36,3 +36,20 @@ def test_customer_unknown_never_repeats(tmp_path):
     assert chan.calls == 1
     assert store.alert_by_key('delivery-problem:' + str(msg['id']))
     store.close()
+
+
+def test_pre_upgrade_uncertain_owner_attempt_gets_one_retry(tmp_path):
+    store = Store(tmp_path)
+    alert, _ = store.alert_upsert('legacy', kind='decision', title='Choose', body='')
+    store.delivery_add(alert['id'], 'local', '', Receipt(ok=False,
+        error='Delivery interrupted; outcome unknown. No automatic retry.'), now=1000)
+    class Channel:
+        id = 'local'
+        sent = []
+        def send(self, msg):
+            self.sent.append(msg.text)
+            return Receipt(ok=True)
+    channel = Channel()
+    assert alerts.send_alert(store, [channel], alert, now=1120)
+    assert len(channel.sent) == 1 and channel.sent[0].startswith('This may be a repeat.')
+    store.close()

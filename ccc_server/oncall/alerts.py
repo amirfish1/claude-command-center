@@ -253,10 +253,11 @@ def send_alert(store, targets, alert, *, now=None):
         if previous and previous["ok"]:
             ok_any = True
             continue
-        uncertain = "Delivery interrupted; outcome unknown. No automatic retry."
+        uncertain = "Delivery interrupted; outcome unknown."
         if previous and store.kv_get(f"owner-repeat:{alert['id']}:{chan.id}", False):
             continue
-        repeat = bool(previous and previous["error"] == uncertain)
+        repeat = bool(previous and previous["error"] in (
+            uncertain, "Delivery interrupted; outcome unknown. No automatic retry."))
         if repeat:
             if now - previous["sent_at"] < RETRY_AFTER_S:
                 continue
