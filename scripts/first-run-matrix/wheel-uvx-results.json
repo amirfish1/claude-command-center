@@ -1,0 +1,37 @@
+{
+  "started_utc": "2026-11-11T00:08:37.737349+00:00",
+  "network": "none",
+  "source": "tracked working-tree snapshot",
+  "results": [
+    {
+      "image": "ubuntu:24.04",
+      "environment": "clean",
+      "route": "uvx",
+      "command": "uvx --from /fixture/wheels/claude_command_center-5.44.0-py3-none-any.whl claude-command-center",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 9.36,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: uvx: command not found\n"
+    },
+    {
+      "image": "ubuntu:24.04",
+      "environment": "remediated",
+      "route": "uvx",
+      "command": "uvx --from /fixture/wheels/claude_command_center-5.44.0-py3-none-any.whl claude-command-center",
+      "exit_code": 1,
+      "timed_out": false,
+      "elapsed_seconds": 4.938,
+      "output": "bash=present\ncurl=present\ngit=present\npython3=present\nuv=present\nuvx=present\npipx=present\nbrew=missing\n\n--- documented command ---\nInstalled 1 package in 83ms\nSetting up WatchTower, CCC's queue engine. This only happens once.\nwatchtower: not installed \u2014 bootstrapping CCC's queue engine\u2026\nwatchtower: fetching WatchTower (CCC's queue engine) from https://github.com/amirfish1/watchtower\nwatchtower: installing WatchTower from https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz\nwatchtower: installing WatchTower from PyPI (watchtower-cli) \u2014 last resort, this release lags main\nwatchtower: WARNING: could not install WatchTower. CCC falls back to its built-in\nwatchtower:   queue engine \u2014 tickets can be filed, but no worker is dispatched.\nwatchtower:   Retry manually:  /tmp/ccc-home/.cache/uv/archive-v0/VFW8BXARBVyLyeGx/bin/python -m pip install --user https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz\nCCC could not load WatchTower. Check your connection and retry the same command with CCC_WATCHTOWER_FORCE=1.\n"
+    }
+  ],
+  "wheel": "/tmp/ccc-first-run-after-wheel/claude_command_center-5.44.0-py3-none-any.whl",
+  "remediation": [
+    {
+      "image": "ubuntu:24.04",
+      "command": "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git python3 curl ca-certificates && rm -rf /var/lib/apt/lists/* && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python3-venv pipx && python3 -m pip install --break-system-packages uv",
+      "exit_code": 0,
+      "elapsed_seconds": 245.575,
+      "output": ""
+    }
+  ]
+}

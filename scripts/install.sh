@@ -107,8 +107,10 @@ persist_channel() {
   local channel="$1"
   local dir
   dir="$(dirname "$SOURCE_FILE")"
-  mkdir -p "$dir"
-  printf '%s\n' "$channel" > "$SOURCE_FILE"
+  if ! { mkdir -p "$dir" && printf '%s\n' "$channel" > "$SOURCE_FILE"; } 2>/dev/null; then
+    err "Cannot write CCC settings in HOME; use a writable home directory and run the installer again."
+    exit 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -660,9 +662,8 @@ install_watchtower() {
     fi
   done
   if [ -z "$script" ]; then
-    printf 'install: WARNING: scripts/install-watchtower.sh not found — skipping WatchTower.\n'
-    printf 'install:   CCC will use its built-in queue engine (no worker dispatch).\n'
-    return 0
+    err "WatchTower setup is missing; download a fresh CCC checkout and run the installer again."
+    return 1
   fi
   # CCC_WATCHTOWER_FORCE: an explicit install is a user asking for this now,
   # so it must not be silently skipped by the once-a-day rate limits.
@@ -673,7 +674,7 @@ install_watchtower() {
   CCC_WATCHTOWER_LOG_PREFIX="install: " \
   CCC_WATCHTOWER_FORCE=1 \
   CCC_VERSION="$(grep -m1 '^__version__ = ' "$INSTALL_DIR/server.py" 2>/dev/null | sed -E 's/^__version__ = "(.*)"$/\1/')" \
-    bash "$script" || true
+    bash "$script"
 }
 
 # ---------------------------------------------------------------------------

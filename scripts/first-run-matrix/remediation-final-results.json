@@ -1,0 +1,36 @@
+{
+  "started_utc": "2026-11-11T00:09:36.168727+00:00",
+  "network": "none",
+  "source": "tracked working-tree snapshot",
+  "results": [
+    {
+      "image": "ubuntu:24.04",
+      "environment": "clean",
+      "route": "curl",
+      "command": "set -o pipefail; curl -fsSL file:///fixture/source/scripts/install.sh | CCC_FROM=readme bash",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 3.587,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: curl: command not found\n"
+    },
+    {
+      "image": "ubuntu:24.04",
+      "environment": "remediated",
+      "route": "curl",
+      "command": "set -o pipefail; curl -fsSL file:///fixture/source/scripts/install.sh | CCC_FROM=readme bash",
+      "exit_code": 1,
+      "timed_out": false,
+      "elapsed_seconds": 61.188,
+      "output": "bash=present\ncurl=present\ngit=present\npython3=present\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\n\n==> Claude Command Center\n     coding agents on call for your product, run from this computer\n\n==> Step 1 of 4: checking this computer\n     \u2713 git and python3 are ready\n     claude CLI not found yet. The setup tour can install it for you.\ninstall: attribution channel = readme\n==> Step 2 of 4: downloading CCC\n     cloning file:///work/source\nCloning into '/tmp/ccc-home/.ccc/claude-command-center.installing.10'...\nUpdating files:  28% (681/2362)\nUpdating files:  29% (685/2362)\nUpdating files:  30% (709/2362)\nUpdating files:  31% (733/2362)\nUpdating files:  32% (756/2362)\nUpdating files:  33% (780/2362)\nUpdating files:  34% (804/2362)\nUpdating files:  35% (827/2362)\nUpdating files:  36% (851/2362)\nUpdating files:  37% (874/2362)\nUpdating files:  38% (898/2362)\nUpdating files:  39% (922/2362)\nUpdating files:  40% (945/2362)\nUpdating files:  41% (969/2362)\nUpdating files:  41% (973/2362)\nUpdating files:  42% (993/2362)\nUpdating files:  43% (1016/2362)\nUpdating files:  44% (1040/2362)\nUpdating files:  45% (1063/2362)\nUpdating files:  46% (1087/2362)\nUpdating files:  47% (1111/2362)\nUpdating files:  48% (1134/2362)\nUpdating files:  49% (1158/2362)\nUpdating files:  50% (1181/2362)\nUpdating files:  51% (1205/2362)\nUpdating files:  52% (1229/2362)\nUpdating files:  53% (1252/2362)\nUpdating files:  54% (1276/2362)\nUpdating files:  55% (1300/2362)\nUpdating files:  56% (1323/2362)\nUpdating files:  57% (1347/2362)\nUpdating files:  58% (1370/2362)\nUpdating files:  59% (1394/2362)\nUpdating files:  60% (1418/2362)\nUpdating files:  61% (1441/2362)\nUpdating files:  62% (1465/2362)\nUpdating files:  63% (1489/2362)\nUpdating files:  64% (1512/2362)\nUpdating files:  65% (1536/2362)\nUpdating files:  66% (1559/2362)\nUpdating files:  67% (1583/2362)\nUpdating files:  68% (1607/2362)\nUpdating files:  69% (1630/2362)\nUpdating files:  70% (1654/2362)\nUpdating files:  71% (1678/2362)\nUpdating files:  72% (1701/2362)\nUpdating files:  73% (1725/2362)\nUpdating files:  74% (1748/2362)\nUpdating files:  75% (1772/2362)\nUpdating files:  76% (1796/2362)\nUpdating files:  77% (1819/2362)\nUpdating files:  78% (1843/2362)\nUpdating files:  79% (1866/2362)\nUpdating files:  80% (1890/2362)\nUpdating files:  81% (1914/2362)\nUpdating files:  82% (1937/2362)\nUpdating files:  83% (1961/2362)\nUpdating files:  84% (1985/2362)\nUpdating files:  85% (2008/2362)\nUpdating files:  86% (2032/2362)\nUpdating files:  87% (2055/2362)\nUpdating files:  88% (2079/2362)\nUpdating files:  89% (2103/2362)\nUpdating files:  90% (2126/2362)\nUpdating files:  91% (2150/2362)\nUpdating files:  92% (2174/2362)\nUpdating files:  93% (2197/2362)\nUpdating files:  94% (2221/2362)\nUpdating files:  95% (2244/2362)\nUpdating files:  96% (2268/2362)\nUpdating files:  97% (2292/2362)\nUpdating files:  98% (2315/2362)\nUpdating files:  99% (2339/2362)\nUpdating files: 100% (2362/2362)\nUpdating files: 100% (2362/2362), done.\n     \u2713 CCC is in place at /tmp/ccc-home/.ccc/claude-command-center\n==> Step 3 of 4: installing helper tools\ninstall: not installed \u2014 bootstrapping CCC's queue engine\u2026\ninstall: fetching WatchTower (CCC's queue engine) from https://github.com/amirfish1/watchtower\ninstall: installing WatchTower from https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz\ninstall: installing WatchTower from PyPI (watchtower-cli) \u2014 last resort, this release lags main\ninstall: WARNING: could not install WatchTower. CCC falls back to its built-in\ninstall:   queue engine \u2014 tickets can be filed, but no worker is dispatched.\ninstall:   Retry manually:  python3 -m pip install --user https://github.com/amirfish1/watchtower/archive/refs/heads/main.tar.gz\ninstall: ccc CLI linked at /tmp/ccc-home/.local/bin/ccc\ninstall: note: /tmp/ccc-home/.local/bin is not on PATH yet. To use `ccc` from anywhere, add this line to /tmp/ccc-home/.bashrc:\ninstall:   export PATH=\"$HOME/.local/bin:$PATH\"\n==> Step 4 of 4: starting CCC\n     starting CCC in this window on port 8090\n     keep this window open; stop CCC with Ctrl+C\n     CCC stops when this window closes; start it again any time with: /tmp/ccc-home/.local/bin/ccc\n     tip: /tmp/ccc-home/.ccc/claude-command-center/run.sh --install-service keeps CCC running in the background\n     open this in your browser: http://localhost:8090/?onboarding=1\n     next: the setup tour gets a first task running\n     want a nudge tomorrow morning? run: /tmp/ccc-home/.local/bin/ccc remind\n\u2192 Command Center\n  port     : 8090\n  bind     : (default 127.0.0.1, or from network.json)\n  url      : http://localhost:8090\n  community: https://discord.gg/aK325db94M\n  worker   : persistent (pid 151)\nTraceback (most recent call last):\n  File \"/tmp/ccc-home/.ccc/claude-command-center/server.py\", line 1203, in <module>\n    import watchtower.queue as _wt_q\nModuleNotFoundError: No module named 'watchtower'\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/tmp/ccc-home/.ccc/claude-command-center/ccc_server/boot.py\", line 43, in <module>\n    main()\n  File \"/tmp/ccc-home/.ccc/claude-command-center/ccc_server/boot.py\", line 38, in main\n    import server\n  File \"/tmp/ccc-home/.ccc/claude-command-center/server.py\", line 1205, in <module>\n    raise ImportError(\nImportError: CCC's queue system requires the `watchtower` package (watchtower.queue) to be installed and importable -- it is a hard dependency with no standalone fallback. Install/activate watchtower (e.g. `pip install -e <path-to-watchtower>`) and restart.\n"
+    }
+  ],
+  "remediation": [
+    {
+      "image": "ubuntu:24.04",
+      "command": "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git python3 curl ca-certificates && rm -rf /var/lib/apt/lists/*",
+      "exit_code": 0,
+      "elapsed_seconds": 83.002,
+      "output": ""
+    }
+  ]
+}

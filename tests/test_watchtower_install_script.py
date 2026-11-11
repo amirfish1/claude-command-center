@@ -538,17 +538,17 @@ class TestInstallChain(WatchtowerInstallHarness):
             "WT_FAKE_GIT_CLONE_RC": "1",
             "WT_FAKE_PIP_FAIL": "watchtower",  # matches every candidate target
         }
-        result = self.run_script(env_extra=env)
-        self.assertIn("could not install WatchTower", result.stdout)
-        self.assertIn("Retry manually:", result.stdout)
-        self.assertIn("main.tar.gz", result.stdout)
+        result = self.run_script(env_extra=env, expected_returncode=1)
+        self.assertIn("Could not install the required WatchTower", result.stdout)
+        self.assertIn("retry with CCC_WATCHTOWER_FORCE=1", result.stdout)
+        self.assertNotIn("built-in", result.stdout)
         self.assertTrue(
             (self.home / ".claude" / "command-center"
              / "watchtower-bootstrap-failed").exists()
         )
 
         before = len(self.pip_targets())
-        self.run_script(env_extra=env)
+        self.run_script(env_extra=env, expected_returncode=1)
         self.assertEqual(
             len(self.pip_targets()),
             before,
