@@ -33,6 +33,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 from . import store as _store
 
@@ -226,6 +227,14 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
         return new
 
 
+class HttpReply(tuple):
+    """Two-value transport result with optional response metadata."""
+    def __new__(cls, status, body, headers=None):
+        result = super().__new__(cls, (status, body))
+        result.headers = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
+        return result
+
+
 def _default_http(method, url, *, headers=None, data=None, timeout=20):
     """``(status, body)`` for any HTTP answer; OSError when there is none."""
     if urllib.parse.urlsplit(url).scheme.lower() not in ("http", "https"):
@@ -234,13 +243,13 @@ def _default_http(method, url, *, headers=None, data=None, timeout=20):
         req = urllib.request.Request(url, data=data, method=method, headers=dict(headers or {}))
         opener = urllib.request.build_opener(_SafeRedirect())
         with opener.open(req, timeout=timeout) as resp:
-            return int(resp.status), resp.read(MAX_BODY)
+            return HttpReply(int(resp.status), resp.read(MAX_BODY), dict(resp.headers))
     except urllib.error.HTTPError as exc:
         try:
             body = exc.read(MAX_BODY)
         except Exception:
             body = b""
-        return int(exc.code), body
+        return HttpReply(int(exc.code), body, dict(exc.headers))
     except OSError:
         raise
     except (http.client.HTTPException, ValueError) as exc:
@@ -318,15 +327,42 @@ class Source:
         self._redact.add(value)
         return value
 
+    def _request(self, method, url, **kwargs):
+        reply = self._http(method, url, **kwargs)
+        self._response_headers = getattr(reply, "headers", {})
+        status, body = reply
+        if int(status) in (429, 503):
+            value = self._response_headers.get("retry-after", "")
+            try:
+                if value.isdigit():
+                    delay = int(value)
+                else:
+                    target = parsedate_to_datetime(value).timestamp()
+                    server_date = self._response_headers.get("date")
+                    origin = parsedate_to_datetime(server_date).timestamp() if server_date else self._clock()
+                    delay = max(0, target - origin)
+                self._set("retry_at", float(self._clock()) + delay)
+            except (ValueError, TypeError, OverflowError):
+                pass
+        return status, body
+
+    def _cooling_down(self):
+        try:
+            return float(self._get("retry_at", 0) or 0) > float(self._clock())
+        except Exception:
+            return False
+
     def _api(self, label, method, url, *, token, data=None, hint=""):
         """One authenticated JSON call. Returns the parsed body or raises _Problem."""
+        if self._cooling_down():
+            raise _Problem(f"{label} asked to wait before the next request (Retry-After).")
         headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
         if token:
             headers["Authorization"] = f"Bearer {token}"
         if data is not None:
             headers["Content-Type"] = "application/json"
         try:
-            status, body = self._http(method, url, headers=headers, data=data, timeout=20)
+            status, body = self._request(method, url, headers=headers, data=data, timeout=20)
             status = int(status)
         except _Problem:
             raise
@@ -348,6 +384,8 @@ class Source:
 
     # -- public --
     def due(self):
+        if self._cooling_down():
+            return False
         try:
             last = self._get("last_poll")
         except Exception:
@@ -368,6 +406,8 @@ class Source:
             return False, self._safe(f"Check failed ({type(exc).__name__}).")
 
     def poll(self):
+        if self._cooling_down():
+            return []
         try:
             self._last_poll = float(self._clock())
             self._set("last_poll", self._last_poll)
@@ -745,7 +785,7 @@ class HttpSource(Source):
     def _probe(self):
         """``(ok, what was received)`` for one request. Never raises."""
         try:
-            status, body = self._http("GET", self.url, headers={"User-Agent": USER_AGENT},
+            status, body = self._request("GET", self.url, headers={"User-Agent": USER_AGENT},
                                       timeout=self.timeout_s)
             status = int(status)
         except Exception as exc:
