@@ -2,10 +2,18 @@
 """Measure a workspace-write worker against an isolated On-call adapter."""
 
 import argparse, os, pathlib, shutil, subprocess, tempfile, json, threading, sys, http.client, hmac, secrets, urllib.request, io, tarfile, time
+import signal
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.error import HTTPError
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def stop_on_term(signum, frame):
+    raise SystemExit(128 + signum)
+
+
+signal.signal(signal.SIGTERM, stop_on_term)
 REAL_AUTH = (
     pathlib.Path(os.environ.get('CODEX_HOME', str(pathlib.Path.home() / '.codex')))
     / 'auth.json'
@@ -58,16 +66,26 @@ with tempfile.TemporaryDirectory(prefix='ccc-sandbox-root-') as temp:
     os.environ.update(env)
 
     def run(args, cwd=repo, timeout=90, env=env):
-        r = subprocess.run(
+        proc = subprocess.Popen(
             args,
             cwd=cwd,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=timeout,
+            start_new_session=True,
         )
-        return r.returncode, r.stdout
+        try:
+            output, _ = proc.communicate(timeout=timeout)
+            return proc.returncode, output
+        finally:
+            # A timed-out Codex child may have started shell grandchildren.
+            # Reap the entire fixture group before removing its temporary HOME.
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()
 
     for cmd in (
         ['git', 'init', '-q'],
