@@ -54,6 +54,11 @@ def handle(method, path, body=None, *, eng=None):
             from .escalation_cli import command
             with eng._lock:
                 return 200, command(eng, body)
+        if method == "POST" and name in ("hook-register", "hook-wait", "hook-cancel"):
+            from . import agent_wait
+            fn = {"hook-register": agent_wait.register, "hook-wait": agent_wait.collect,
+                  "hook-cancel": agent_wait.cancel}[name]
+            return 200, dict({"ok": True}, **fn(eng, body))
         if method == "POST":
             fn = {"config": save_config, "channel": channel, "source": source, "test": test,
                   "customer": customer, "report": report, "inbound": inbound, "tick": tick}.get(name)

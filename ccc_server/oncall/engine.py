@@ -148,6 +148,9 @@ class Engine:
     def tick(self, force=False):
         with self._lock:
             now = self.clock()
+            from .agent_wait import sweep
+            if self._store is not None:
+                sweep(self._store)
             cfg = self.config()
             if not self.flag_on() or not cfg.get("enabled"):
                 if self._store is not None and self.store.kv_get("enabled_at"):
@@ -412,7 +415,9 @@ class Engine:
             "last_poll": store.kv_get(f"src:{s.get('id')}:last_poll"),
         } for s in cfg.get("sources") or []]
         waiting = [{"id": a["id"], "kind": a["kind"], "ref": a["ref"], "needs_reply": a["needs_reply"],
-                    "line": alerts.render(a)[0], "created_at": a["created_at"], "sent_at": a["sent_at"]}
+                    "line": alerts.render(a)[0], "created_at": a["created_at"], "sent_at": a["sent_at"],
+                    "session_id": a.get("session_id", ""),
+                    "phone_wait": bool((a.get("meta") or {}).get("hook_wait"))}
                    for a in store.alerts(state="open", limit=50)]
         from .escalation import who
         return {

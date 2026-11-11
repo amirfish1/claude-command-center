@@ -158,6 +158,15 @@ def _is(word_list, text):
 def _apply(cfg, store, chans, wt, alert, text, deps, now):
     """Carry out the answer. Returns (log note, ack text or '')."""
     kind, ref, meta = alert["kind"], alert.get("ref") or "", alert.get("meta") or {}
+    if meta.get("hook_wait"):
+        if kind == "permission" and text.strip().lower() not in ("allow", "deny"):
+            return "unclear", "Reply allow or deny."
+        from .agent_wait import answer
+        value = text.strip().lower() if kind == "permission" else text
+        if not answer(store, alert, value):
+            store.alert_close(alert["id"], "cleared", now=now)
+            raise wtmod.WTError("That hook is no longer waiting; answer in the session.")
+        return "queued for hook", "Received for the waiting session hook."
     if kind == "decision":
         wt.answer(ref, text)
         store.alert_close(alert["id"], "answered", text, now=now)

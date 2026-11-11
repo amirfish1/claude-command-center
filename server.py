@@ -359,7 +359,17 @@ class _OncallDeps:
             return None
         transcript = (_resolve_codex_rollout_path(sid) if engine == "codex"
                       else _resolve_conversation_path(sid))
-        return question(store, sid, transcript, since)
+        # Only sessions using the optional agent plugin request every idle turn.
+        try:
+            marker = json.loads((SIDECAR_STATE_DIR / (sid + ".json")).read_text())
+            if marker.get("oncall_hook_wait") is True:
+                return None
+            notify_idle = marker.get("oncall_notify_idle") is True
+        except (OSError, ValueError, AttributeError):
+            notify_idle = False
+        from ccc_server.oncall.agent_wait import handled
+        signal = question(store, sid, transcript, since, notify_idle=notify_idle)
+        return None if handled(store, sid, signal) else signal
 
     def permission(self, sid):
         engine = _detect_session_engine(sid)
@@ -24237,7 +24247,7 @@ def _flow_index_payload():
     return {"ok": True, "entries": entries, "count": len(entries)}
 
 # Sidecar state (written by hooks)
-SIDECAR_STATE_DIR = Path.home() / ".claude" / "command-center" / "live-state"
+SIDECAR_STATE_DIR = Path(os.environ.get("CCC_STATE_DIR") or COMMAND_CENTER_STATE_DIR) / "live-state"
 HOOK_SCRIPTS_DIR = Path.home() / ".claude" / "command-center" / "hooks"
 HOOK_MARKER = "command-center/hooks/"
 CCC_HOOK_SCRIPT_NAMES = (
