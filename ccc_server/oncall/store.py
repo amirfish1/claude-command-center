@@ -33,7 +33,7 @@ DB_NAME = "oncall.sqlite3"
 LOG_KEEP = 500
 
 CHANNEL_TYPES = ("email", "telegram", "ntfy", "imessage", "sms", "whatsapp", "command")
-SOURCE_TYPES = ("github", "sentry", "posthog", "http", "command")
+SOURCE_TYPES = ("ci", "github", "sentry", "posthog", "http", "command")
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _QUEUE_RE = re.compile(r"^[A-Z][A-Z0-9_-]{0,31}$")
 _HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -57,6 +57,8 @@ class Receipt:
     ok: bool
     external_id: str = ""  # the provider's id for the sent message
     error: str = ""
+    # Retry metadata does not change the legacy receipt value comparison.
+    uncertain: bool = field(default=False, compare=False)
 
 
 @dataclass
@@ -95,6 +97,7 @@ def default_config():
         "repo": "",
         "watch": [],
         "hourly_cap": 12,
+        "daily_summary": {"enabled": False, "time": "09:00"},
         "channels": [],
         "quiet_hours": None,
         "alerts": {"decisions": True, "stopped": True, "stuck": True, "fixed": True},
@@ -165,6 +168,9 @@ def validate_config(cfg):
         if squeue and not _QUEUE_RE.match(squeue):
             problems.append(f"Source {sid!r} has an invalid queue name.")
         problems += [f"Source {sid!r}: {p}" for p in _secret_fields(src)]
+    summary = cfg.get("daily_summary", {})
+    if not isinstance(summary, dict) or not isinstance(summary.get("enabled", False), bool) or not _HHMM_RE.fullmatch(str(summary.get("time", "09:00"))):
+        problems.append("Daily summary needs an on/off value and a time as HH:MM.")
     quiet = cfg.get("quiet_hours")
     if quiet is not None:
         if (not isinstance(quiet, dict) or not _HHMM_RE.match(str(quiet.get("start") or ""))
@@ -303,6 +309,8 @@ CREATE TABLE IF NOT EXISTS alerts (
     meta TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS alerts_state ON alerts(state);
+CREATE INDEX IF NOT EXISTS alerts_unsent ON alerts(id) WHERE state='open' AND sent_at IS NULL;
+CREATE INDEX IF NOT EXISTS alerts_token ON alerts(token);
 CREATE TABLE IF NOT EXISTS deliveries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     alert_id INTEGER,
@@ -314,6 +322,8 @@ CREATE TABLE IF NOT EXISTS deliveries (
     sent_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS deliveries_ext ON deliveries(channel, external_id);
+CREATE INDEX IF NOT EXISTS deliveries_alert_channel ON deliveries(alert_id, channel, id);
+CREATE INDEX IF NOT EXISTS deliveries_time ON deliveries(sent_at, alert_id, ok);
 CREATE TABLE IF NOT EXISTS inbound (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
@@ -324,6 +334,7 @@ CREATE TABLE IF NOT EXISTS inbound (
     handled TEXT NOT NULL DEFAULT '',
     UNIQUE(channel, external_id)
 );
+CREATE INDEX IF NOT EXISTS inbound_unhandled ON inbound(id) WHERE handled='';
 CREATE TABLE IF NOT EXISTS reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
@@ -362,6 +373,14 @@ CREATE TABLE IF NOT EXISTS customer_messages (
     external_id TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS customer_messages_state ON customer_messages(state, id);
+CREATE INDEX IF NOT EXISTS reports_created ON reports(created_at);
+CREATE INDEX IF NOT EXISTS reports_state ON reports(state);
+CREATE INDEX IF NOT EXISTS alerts_created ON alerts(created_at);
+CREATE INDEX IF NOT EXISTS alerts_kind_state ON alerts(kind,state);
+CREATE INDEX IF NOT EXISTS alerts_closed ON alerts(closed_at);
+CREATE INDEX IF NOT EXISTS deliveries_sent ON deliveries(sent_at);
+CREATE INDEX IF NOT EXISTS customer_messages_created ON customer_messages(created_at);
 CREATE TABLE IF NOT EXISTS log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at REAL NOT NULL,
@@ -383,6 +402,13 @@ class Store:
         self._db.row_factory = sqlite3.Row
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+            if "message_kind" not in {r[1] for r in self._db.execute("PRAGMA table_info(deliveries)")}:
+                self._db.execute("ALTER TABLE deliveries ADD COLUMN message_kind TEXT NOT NULL DEFAULT 'unknown'")
+            columns = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
+            if "owner_action_at" not in columns:
+                self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action_at REAL")
+                self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action TEXT NOT NULL DEFAULT ''")
+            self._db.execute("CREATE INDEX IF NOT EXISTS alerts_owner_action ON alerts(owner_action_at)")
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -459,6 +485,23 @@ class Store:
         args.append(int(limit))
         return [_alert_row(r) for r in self._all(sql, args)]
 
+    def unsent_alerts(self, limit=50):
+        # Rotate bounded batches so failed or parked entries cannot starve older work.
+        after = self.kv_get("delivery_cursor", 0)
+        rows = self._all("SELECT * FROM alerts INDEXED BY alerts_unsent WHERE state='open' AND sent_at IS NULL "
+                         "AND id>? ORDER BY id LIMIT ?", (after, limit))
+        if not rows:
+            rows = self._all("SELECT * FROM alerts INDEXED BY alerts_unsent WHERE state='open' AND sent_at IS NULL "
+                             "ORDER BY id LIMIT ?", (limit,))
+        if rows:
+            self.kv_set("delivery_cursor", rows[-1]["id"])
+        return [_alert_row(r) for r in rows]
+
+    def recent_alert_ids(self, since, limit):
+        return {row["alert_id"] for row in self._all(
+            "SELECT DISTINCT alert_id FROM deliveries WHERE sent_at>=? "
+            "AND ok=1 AND alert_id IS NOT NULL LIMIT ?", (since, limit))}
+
     def alert_mark_sent(self, alert_id, now=None):
         self._run("UPDATE alerts SET sent_at=? WHERE id=? AND sent_at IS NULL",
                   (time.time() if now is None else now, alert_id))
@@ -469,12 +512,24 @@ class Store:
                         (state, answer, time.time() if now is None else now, alert_id))
         return cur.rowcount == 1
 
+    def alert_owner_action(self, alert_id, action, now=None):
+        self._run("UPDATE alerts SET owner_action=?, owner_action_at=? WHERE id=? AND state='open'",
+                  (action, time.time() if now is None else now, alert_id))
+
     # -- deliveries --
-    def delivery_add(self, alert_id, channel, recipient, receipt, now=None):
-        self._run("INSERT INTO deliveries(alert_id,channel,recipient,external_id,ok,error,sent_at)"
-                  " VALUES(?,?,?,?,?,?,?)",
+    def delivery_add(self, alert_id, channel, recipient, receipt, now=None, message_kind="direct"):
+        self._run("INSERT INTO deliveries(alert_id,channel,recipient,external_id,ok,error,sent_at,message_kind)"
+                  " VALUES(?,?,?,?,?,?,?,?)",
                   (alert_id, channel, recipient, receipt.external_id, 1 if receipt.ok else 0,
-                   receipt.error[:500], time.time() if now is None else now))
+                   receipt.error[:500], time.time() if now is None else now, message_kind))
+
+    def delivery_latest(self, alert_id, channel):
+        return self._one("SELECT * FROM deliveries WHERE alert_id=? AND channel=? "
+                         "ORDER BY id DESC LIMIT 1", (alert_id, channel))
+
+    def delivery_finish(self, delivery_id, receipt):
+        self._run("UPDATE deliveries SET external_id=?, ok=?, error=? WHERE id=?",
+                  (receipt.external_id, int(receipt.ok), receipt.error[:500], delivery_id))
 
     def delivery_alert(self, channel, external_id):
         """The alert a provider message id belongs to, or None."""
@@ -491,6 +546,13 @@ class Store:
         return self._one("SELECT * FROM deliveries WHERE channel=? ORDER BY id DESC LIMIT 1", (channel,))
 
     # -- inbound --
+    def reply_action_claim(self, alert_id):
+        return self._run("INSERT OR IGNORE INTO kv(key,value) VALUES(?, 'true')",
+                         (f"reply-action:{alert_id}",)).rowcount == 1
+
+    def reply_action_release(self, alert_id):
+        self._run("DELETE FROM kv WHERE key=?", (f"reply-action:{alert_id}",))
+
     def inbound_claim(self, msg):
         """Record an inbound message once. False when it was already seen."""
         try:
@@ -501,9 +563,22 @@ class Store:
         except sqlite3.IntegrityError:
             return False
 
+    def park_unhandled_inbound(self, now=None):
+        """Expose interrupted routing without replaying a possibly applied approval."""
+        for row in self._all("SELECT * FROM inbound WHERE handled='' ORDER BY id LIMIT 50"):
+            self.alert_upsert(
+                f"inbound-review:{row['id']}", kind="reply_problem",
+                title="Reply delivery needs review",
+                body=f"Reply on {row['channel']} from {row['sender']} was not confirmed. "
+                     "Check the ticket or session before applying it again.\n\n" + row['text'],
+                needs_reply=False, now=now)
+            self._run("UPDATE inbound SET handled='needs_review' WHERE id=? AND handled=''",
+                      (row['id'],))
+
     def inbound_handled(self, msg, how):
         self._run("UPDATE inbound SET handled=? WHERE channel=? AND external_id=?",
-                  (how[:200], msg.channel, msg.external_id))
+                  ("" if how.startswith("error:") or how.endswith(" failed") else how[:200],
+                   msg.channel, msg.external_id))
 
     # -- reports --
     def report_upsert(self, source, fingerprint, *, title, text, queue="", state="held",
@@ -587,6 +662,23 @@ class Store:
         sql += " ORDER BY id DESC LIMIT ?"
         args.append(int(limit))
         return self._all(sql, args)
+
+    def customer_delivery_problems(self, state, limit=100):
+        after = self.kv_get("problem_cursor:" + state, 0)
+        rows = self._all("SELECT * FROM customer_messages WHERE state=? AND id>? "
+                         "ORDER BY id LIMIT ?", (state, after, limit))
+        if not rows:
+            rows = self._all("SELECT * FROM customer_messages WHERE state=? ORDER BY id LIMIT ?",
+                             (state, limit))
+        if rows:
+            self.kv_set("problem_cursor:" + state, rows[-1]["id"])
+        return rows
+
+    def customer_message_claim(self, message_id):
+        """Reserve a send before touching the provider; an uncertain send is not retried."""
+        return self._run("UPDATE customer_messages SET state='uncertain', "
+                         "error='Delivery may have started; not retried.' "
+                         "WHERE id=? AND state='pending'", (message_id,)).rowcount == 1
 
     def customer_message_update(self, message_id, **fields):
         allowed = {"state", "text", "alert_id", "sent_at", "external_id", "error"}

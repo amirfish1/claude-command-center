@@ -27,6 +27,7 @@ CHANNEL_NAMES = {
     "whatsapp": "WhatsApp (your Twilio sender)", "command": "Your own command",
 }
 SOURCE_NAMES = {
+    "ci": "Failed CI runs",
     "github": "GitHub issues", "sentry": "Sentry", "posthog": "PostHog",
     "http": "A URL that must stay up",
     "command": "A command that must keep passing",
@@ -213,6 +214,12 @@ def build_parser():
     p = sub.add_parser("minor", help="let agents decide small reversible things without stopping")
     p.add_argument("state", choices=("on", "off"))
 
+    p = sub.add_parser("week", help="counts from stored On-call activity")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--since")
+    p.add_argument("--weeks", type=int, default=2)
+    p.add_argument("--detail", action="store_true")
+    p.add_argument("--post", nargs="?", const="text", choices=("text", "markdown"))
     sub.add_parser("decisions", help="what agents decided without you, each with its undo")
     return parser
 
@@ -241,6 +248,9 @@ def _collect(kind, etype, fields, args, io):
         if not value:
             raise Stop("Nothing arrived on stdin.")
         typed[field] = value
+    if kind == "source" and etype == "ci" and "repo" not in entry:
+        from .ci_source import detect_repository
+        entry.update(detect_repository())
     for field in fields:
         name = field["name"]
         if name in entry or name in typed:
@@ -455,6 +465,33 @@ def run(argv, *, base, get, post, io=None):
 
 def _run(args, client, io):
     action = args.action
+    if action == "week":
+        from urllib.parse import urlencode
+        from .week import render
+        query = {"weeks": args.weeks, "detail": "1" if args.detail and not args.post else "0"}
+        if args.since:
+            query["since"] = args.since
+        code, data = client.get("week?" + urlencode(query))
+        if code != 200 or not data.get("ok"):
+            raise Stop(data.get("error", "Could not read the week."))
+        if data.get("limits") and args.post:
+            raise Stop("Export unavailable: " + " ".join(data["limits"]))
+        if args.post:
+            io.out(render(data, args.post == "markdown"))
+        elif args.json:
+            io.out(json.dumps(data, indent=2))
+        else:
+            for period in data["periods"]:
+                io.out(render({"periods": [period]}))
+                for label, counts in (("Sources", period["reports"]["by_source"]),
+                                      ("Channels", period["reports"]["by_channel"]),
+                                      ("Owner message kinds", period["owner_messages"])):
+                    io.out(label + ": " + (", ".join(f"{k}: {v}" for k, v in counts.items()) or "none"))
+                if args.detail:
+                    io.out("Reporters: " + ", ".join(period.get("reporters", [])))
+            for limit in data.get("limits", []):
+                io.out("Incomplete: " + limit)
+        return 0
     if action == "setup":
         return _setup(client, args, io)
     if action == "status":

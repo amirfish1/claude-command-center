@@ -492,3 +492,9 @@ ccc oncall tell REF "TEXT"       tell them something
 ccc oncall minor on | off        let agents decide small reversible things
 ccc oncall decisions             what agents decided, each with its undo
 ```
+
+See [the local monitoring proof](oncall-monitoring.md) for server versions and limits.
+See [failed CI runs](oncall-ci.md) for the Actions source and its proof limits.
+See [the fault checks and remaining recovery limits](oncall-reliability.md).
+Security review and limits: [On-call security](oncall-security.md).
+[Weekly counts and the daily summary](oncall-week.md).

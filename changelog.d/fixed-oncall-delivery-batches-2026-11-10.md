@@ -1,0 +1,1 @@
+- On-call rotates small batches of unsent alerts so old alerts are not hidden behind newer sent messages.

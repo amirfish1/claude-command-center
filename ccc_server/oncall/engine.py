@@ -136,7 +136,7 @@ class Engine:
 
     def _due(self, name, every, now, force=False):
         last = self.store.kv_get(f"due:{name}", 0) or 0
-        if force or now - last >= every:
+        if force or now < last or now - last >= every:
             self.store.kv_set(f"due:{name}", now)
             return True
         return False
@@ -181,6 +181,11 @@ class Engine:
                 for finding in findings:
                     if customers.file_finding(cfg, store, self.wt, entry, finding, now=now):
                         out["findings"] += 1
+                if entry.get("type") == "ci" and not source.last_error:
+                    try:
+                        source.reconcile(store, self.wt)
+                    except Exception as exc:
+                        self._note(f"source:{sid}", f"CI recovery could not close its ticket ({type(exc).__name__}).")
                 if entry.get("type") == "github" and not source.last_error:
                     source.receive_replies(lambda msg: self._github_reply(cfg, msg, now))
                     self._note(f"source:{sid}", source.last_error)
@@ -193,6 +198,13 @@ class Engine:
             if self._due("closed", CLOSED_EVERY_S, now, force):
                 customers.collect_closed(cfg, store, chans, self.wt, now=now)
 
+            store.park_unhandled_inbound(now=now)
+            customers.collect_delivery_problems(store, now=now)
+            from .week import daily
+            try:
+                daily(self, now)
+            except (ValueError, wtmod.WTError) as exc:
+                self._note("summary", str(exc))
             out["sent"] = alerts.deliver(cfg, store, chans, now=now)
             self.last_tick = out
             return out

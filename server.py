@@ -485,10 +485,16 @@ def _oncall_loop():
 
 def _oncall_request(handler, method, path, payload=None):
     """Serve /api/oncall/*: preview-flag gated and local-only."""
-    if not _feature_flag("oncall"):
+    if not _feature_flag("oncall") and not (method == "GET" and path == "/api/oncall/week"):
         handler.send_json({"ok": False, "error": "On-call is a preview and it is off. Turn it on with: ccc oncall setup"}, 404)
         return
-    if phone_access.is_remote_request(handler.client_address[0], handler.headers):
+    origin = (handler.headers.get("Origin") or "").strip()
+    port = handler.server.server_address[1]
+    local_origins = {f"{scheme}://{host}:{port}"
+                     for scheme in ("http", "https")
+                     for host in ("localhost", "127.0.0.1", "[::1]")}
+    if ((origin and origin not in local_origins)
+            or phone_access.is_remote_request(handler.client_address[0], handler.headers)):
         handler.send_json({"ok": False, "error": "On-call settings are local-only"}, 403)
         return
     from ccc_server.oncall import api as _oncall_api
@@ -30724,7 +30730,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server.moment_zero import moment_zero_state
             self.send_json(moment_zero_state())
         elif path.startswith("/api/oncall/"):
-            _oncall_request(self, "GET", path)
+            _oncall_request(self, "GET", path, {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items()})
         elif path == "/api/issue-flow/status":
             # GitHub issue auto-fix wizard (ccc_server/issue_flow.py): is gh
             # signed in, is WatchTower up, which local repos could feed a queue.
