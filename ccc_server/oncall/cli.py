@@ -231,6 +231,7 @@ def build_parser():
     p.add_argument("end", nargs="?", help="HH:MM")
     p.add_argument("--tz", help="IANA zone name such as America/Los_Angeles (default: this machine's zone)")
 
+    sub.add_parser("film", help="make an offline film of a fixed report")
     p = sub.add_parser("week", help="counts from stored On-call activity")
     p.add_argument("--json", action="store_true")
     p.add_argument("--since")
@@ -512,6 +513,9 @@ def _setup(client, args, io):
 
 def run(argv, *, base, get, post, io=None):
     """Run one ``ccc oncall ...`` command. Returns the exit code."""
+    if argv[:1] == ["film"]:
+        from .film import main
+        return main(argv[1:])
     if argv[:1] == ["demo"]: return __import__("ccc_server.oncall.demo", fromlist=["main"]).main(argv[1:])
     io = io or IO()
     if argv[:1] and argv[0] in ("escalate", "person", "rota"):
