@@ -523,6 +523,10 @@ class Store:
                   (alert_id, channel, recipient, receipt.external_id, 1 if receipt.ok else 0,
                    receipt.error[:500], time.time() if now is None else now, message_kind))
 
+    def owner_repeat_claim(self, alert_id, channel):
+        return self._run("INSERT OR IGNORE INTO kv(key,value) VALUES(?, 'true')",
+                         (f"owner-repeat:{alert_id}:{channel}",)).rowcount == 1
+
     def delivery_latest(self, alert_id, channel):
         return self._one("SELECT * FROM deliveries WHERE alert_id=? AND channel=? "
                          "ORDER BY id DESC LIMIT 1", (alert_id, channel))

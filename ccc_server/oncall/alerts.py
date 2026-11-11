@@ -242,6 +242,7 @@ def deliver(cfg, store, chans, *, now=None):
 
 
 def send_alert(store, targets, alert, *, now=None):
+    now = time.time() if now is None else now
     subject, text, choices = render(alert)
     ok_any = False
     for chan in targets:
@@ -250,14 +251,17 @@ def send_alert(store, targets, alert, *, now=None):
             ok_any = True
             continue
         uncertain = "Delivery interrupted; outcome unknown. No automatic retry."
-        if previous and previous["error"] == uncertain:
-            store.log("send", f"#{alert['id']} via {chan.id}: {uncertain}", now=now)
-            continue
+        repeat = bool(previous and previous["error"] == uncertain)
+        if repeat:
+            if now - previous["sent_at"] < RETRY_AFTER_S:
+                continue
+            if not store.owner_repeat_claim(alert["id"], chan.id):
+                continue
         # Commit the intent before the provider can accept the message.
         store.delivery_add(alert["id"], chan.id, getattr(chan, "owner", "") or "",
                            Receipt(ok=False, error=uncertain), now=now)
         attempt = store.delivery_latest(alert["id"], chan.id)
-        receipt = chan.send(Outbound(text=text, subject=subject, thread=alert["token"],
+        receipt = chan.send(Outbound(text=("This may be a repeat.\n\n" if repeat else "") + text, subject=subject, thread=alert["token"],
                                      choices=choices if alert.get("needs_reply") else ()))
         if receipt.uncertain:
             receipt = Receipt(ok=False, error=uncertain, uncertain=True)
