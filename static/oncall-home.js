@@ -28,7 +28,7 @@
     http: 'a URL check', command: 'a command check', docker: 'containers', logs: 'log files',
     alertmanager: 'Alertmanager', glitchtip: 'GlitchTip'};
 
-  let root = null, parts = null, data = null, timer = null, loading = false, railButton = null;
+  let root = null, parts = null, data = null, timer = null, loading = false, railButton = null, phoneEntry = null;
   const sending = new Set();
   const drafts = new Map(), cardNotes = new Map();
 
@@ -369,7 +369,33 @@
 
   // The rail rebuilds its links whenever the app list changes; put the
   // button back afterwards so it survives.
+  // Phones have no side rail: the same entry sits at the top of the More menu.
+  function placePhoneEntry() {
+    const menu = document.querySelector('#mobileBottomNav .mobile-nav-menu');
+    if (!menu) return;
+    if (!available()) { if (phoneEntry) phoneEntry.remove(); return; }
+    if (!phoneEntry) {
+      phoneEntry = el('a', 'mobile-nav-btn oncall-home-phone');
+      phoneEntry.href = '/?oncall-home=1';
+      phoneEntry.setAttribute('role', 'menuitem');
+      const icon = el('span', 'mobile-nav-icon', '\u{1F6CE}️');
+      icon.setAttribute('aria-hidden', 'true');
+      phoneEntry.append(icon, el('span', 'mobile-nav-label', 'On-call'));
+      phoneEntry.addEventListener('click', event => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const shown = document.querySelector('#mobileBottomNav .mobile-nav-menu');
+        if (shown) shown.hidden = true;
+        document.querySelectorAll('#mobileBottomNav [aria-expanded]').forEach(b => b.setAttribute('aria-expanded', 'false'));
+        open();
+      });
+    }
+    if (phoneEntry.parentNode !== menu || menu.firstElementChild !== phoneEntry) menu.prepend(phoneEntry);
+  }
+
   function placeRailButton() {
+    placePhoneEntry();
     const nav = document.querySelector('.ccc-side-nav nav') || document.querySelector('.ccc-side-nav');
     if (!nav) return;
     if (!available()) { if (railButton) railButton.remove(); return; }
@@ -418,6 +444,7 @@
       if (timer) { clearInterval(timer); timer = null; }
       retract();
       if (railButton) railButton.remove();
+      if (phoneEntry) phoneEntry.remove();
       return;
     }
     await load();

@@ -69,6 +69,8 @@ const server = http.createServer(async (req, res) => {
   if (req.url.startsWith('/api/')) return json({ok: true});
   res.end(`<html><head><link rel="stylesheet" href="/static/app.css"></head>
     <body><div id="settingsPane" class="settings-pane"></div><aside class="ccc-side-nav"><nav></nav></aside>
+    <nav id="mobileBottomNav"><div class="mobile-nav-menu" role="menu" hidden><button class="mobile-nav-btn">Other</button></div>
+      <button data-mobile-nav-menu aria-expanded="true">More</button></nav>
     <script>window.__CCC_FLAGS__={oncall:true};window.cccSettingsDestinations=[];</script>
     <script src="/static/oncall.js"></script><script src="/static/oncall-home.js"></script></body></html>`);
 });
@@ -239,6 +241,17 @@ const server = http.createServer(async (req, res) => {
       await page.waitForFunction(() => !document.querySelector('#oncallHome .oncall-home-card'));
       assert.deepEqual(answers, [{id: 1, text: 'Keep it'}]);
       assert.equal(await page.$eval('#oncallHome .oncall-home-change', el => el.innerText), 'On-call settings');
+      checked++;
+      // Phones have no side rail: the More menu leads to the same home.
+      await page.evaluate(() => {
+        window.cccOncallHome.close();
+        document.querySelector('#mobileBottomNav .mobile-nav-menu').hidden = false;
+      });
+      assert.equal(await page.$eval('#mobileBottomNav .mobile-nav-menu', el => el.firstElementChild.innerText.includes('On-call')), true);
+      await page.$eval('#mobileBottomNav .oncall-home-phone', el => el.click());
+      await page.waitForSelector('#oncallHome:not([hidden])');
+      assert.equal(await page.$eval('#mobileBottomNav .mobile-nav-menu', el => el.hidden), true);
+      assert.equal(await page.$eval('#mobileBottomNav [data-mobile-nav-menu]', el => el.getAttribute('aria-expanded')), 'false');
       checked++;
       assert.deepEqual(errors, []);
       if (width === 390) {

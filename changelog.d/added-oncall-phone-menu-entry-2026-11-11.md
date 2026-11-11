@@ -1,0 +1,1 @@
+- On a phone, On-call is now the first entry in the More menu, so the home screen with what needs you, what is being worked on and what got fixed can be reached without a desktop.

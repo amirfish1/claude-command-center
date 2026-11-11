@@ -113,6 +113,8 @@ session list. It has three lists:
 
 **Open the full dashboard** takes you to everything else for that browser tab.
 The **On-call** button at the top of the left rail brings the home screen back.
+On a phone or a narrow window the dashboard does not open on this screen by
+itself: tap **More**, then **On-call**.
 To stop it opening by itself in this browser, switch off **Settings > On-call >
 Open on the On-call home**.
 
