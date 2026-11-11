@@ -12,7 +12,7 @@ function harness(split, options = {}) {
   const inputListeners = [];
   const input = { addEventListener(type, listener) { if (type === 'input') inputListeners.push(listener); }, value: 'Submitted message', style: {}, closest() { return {}; }, focus() {}, dispatchEvent() {} };
   const button = { disabled: false };
-  const notices = [], removed = [], warnings = [];
+  const notices = [], removed = [], warnings = [], requests = [];
   let resolve;
   const response = new Promise(r => { resolve = r; });
   const noop = () => {};
@@ -29,10 +29,14 @@ function harness(split, options = {}) {
     appendPendingSendEcho: () => ({ id: 'echo' }), announcedInjectionPreview: text => text,
     updateInputBar: noop, _autosizeTextareaLike: noop, clearInputDraftForConversation: noop,
     looksDormantNoProcess: () => false, durableActionId: () => 'test-action', tapbackTakePending: () => '',
-    fetch: () => response, getConvViewForPane: () => null, getConvView: () => null,
+    fetch: (url, init) => {
+      requests.push({ url, init });
+      if (requests.length === 1 || !options.retryResponse) return response;
+      return Promise.resolve(options.retryResponse);
+    }, getConvViewForPane: () => null, getConvView: () => null,
     renderConvWakeOutcome: () => { if (options.uiError) throw Error('Status rendering failed'); },
     markPendingSendQueued: () => { if (split && options.uiError) throw Error('Status rendering failed'); },
-    showOpToast: (...args) => notices.push(args), setTimeout: noop, refreshConversationList: noop,
+    showOpToast: (...args) => notices.push(args), setTimeout: (fn, ms) => { if (options.retryResponse && ms <= 2000) fn(); }, refreshConversationList: noop,
     removePendingSendEcho: pending => removed.push(pending),
     renderInlineWakeError: noop, formatInjectFailure: () => 'Rejected',
     isCursorUsageLimitFailure: () => false, repoNotAllowedToastAction: noop,
@@ -40,9 +44,9 @@ function harness(split, options = {}) {
     bound: [], bindPendingSendDeliveryId: (pending, id) => ctx.bound.push([pending, id]),
   };
   vm.createContext(ctx);
-  vm.runInContext(fn('composerUserEditRevision') + '\n' + fn('clearAcceptedComposerInput') + '\n' + fn('restoreInputAfterSendFailure') + '\n' + fn(split ? 'sendToSplitTerminal' : 'sendToTerminal', split ? 4 : 2), ctx);
+  vm.runInContext(fn('fetchInjectWithRetry') + '\n' + fn('composerUserEditRevision') + '\n' + fn('clearAcceptedComposerInput') + '\n' + fn('restoreInputAfterSendFailure') + '\n' + fn(split ? 'sendToSplitTerminal' : 'sendToTerminal', split ? 4 : 2), ctx);
   const send = split ? ctx.sendToSplitTerminal : ctx.sendToTerminal;
-  return { input, bound: ctx.bound, edit(value) { input.value = value; inputListeners.forEach(listener => listener({ isTrusted: true })); }, switchConversation() { ctx.currentConversation = 'other'; }, button, notices, removed, warnings, send, respond(data, ok = true) { resolve({ ok, status: ok ? 200 : 500, json: async () => data }); } };
+  return { input, requests, bound: ctx.bound, edit(value) { input.value = value; inputListeners.forEach(listener => listener({ isTrusted: true })); }, switchConversation() { ctx.currentConversation = 'other'; }, button, notices, removed, warnings, send, respond(data, ok = true, status = ok ? 200 : 500) { resolve({ ok, status, json: async () => data }); } };
 }
 for (const split of [false, true]) {
   const label = split ? 'split composer' : 'pane composer';
@@ -112,6 +116,28 @@ for (const split of [false, true]) {
     await sending;
     assert.equal(h.input.value, 'Submitted message');
     assert.equal(h.removed.length, 1);
+  });
+  test(label + ': a 502 automatically recovers without restoring or duplicating the message', async () => {
+    const h = harness(split, { retryResponse: { ok: true, status: 200, json: async () => ({ ok: true, via: 'acp-prompt' }) } });
+    const sending = h.send();
+    h.respond({}, false, 502);
+    await sending;
+    assert.equal(h.requests.length, 2);
+    assert.equal(h.requests[0].init.body, h.requests[1].init.body);
+    assert.ok(JSON.parse(h.requests[0].init.body).idempotency_key);
+    assert.equal(h.input.value, '');
+    assert.equal(h.removed.length, 0);
+    assert.equal(h.button.disabled, false);
+  });
+  test(label + ': persistent 502 stops retrying and restores the message', async () => {
+    const h = harness(split, { retryResponse: { ok: false, status: 502, json: async () => ({}) } });
+    const sending = h.send();
+    h.respond({}, false, 502);
+    await sending;
+    assert.equal(h.requests.length, 3);
+    assert.equal(h.input.value, 'Submitted message');
+    assert.equal(h.removed.length, 1);
+    assert.equal(h.button.disabled, false);
   });
   test(label + ': rejection does not overwrite the next draft', async () => {
     const h = harness(split);

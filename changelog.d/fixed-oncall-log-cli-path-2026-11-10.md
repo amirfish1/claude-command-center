@@ -1,0 +1,1 @@
+- Resolve log file paths from the terminal folder before sending them to the dashboard.

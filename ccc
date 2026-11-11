@@ -92,7 +92,7 @@ PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
 SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "question", "brief", "where",
-               "brain", "consent", "jobs", "vault", "secret", "remind", "oncall")
+               "brain", "consent", "jobs", "vault", "secret", "remind", "oncall", "service")
 
 RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
 
@@ -1925,8 +1925,20 @@ def cmd_oncall(argv, server=None):
     repo_dir = os.path.dirname(os.path.realpath(__file__))
     if repo_dir not in sys.path:
         sys.path.append(repo_dir)
+    if argv[:1] in (["phone-wait"], ["cancel-wait"]):
+        from ccc_server.oncall.agent_install import phone_wait, cancel_wait
+        return (phone_wait if argv[0] == "phone-wait" else cancel_wait)(argv[1:])
+    if argv == ["install-codex"]:
+        from ccc_server.oncall.agent_install import install_codex
+        return install_codex()
+    if argv == ["agent-service"]:
+        from ccc_server.oncall.agent_install import service
+        print(service(server or os.environ.get("CCC_SERVER")))
+        return 0
     from ccc_server.oncall import cli as oncall_cli
-    return oncall_cli.run(argv, base=_resolve_server(server), get=_get_json, post=_post_json)
+    from ccc_server.oncall.agent_hook import server_url
+    base = server or os.environ.get("CCC_SERVER") or server_url() or _resolve_server(server)
+    return oncall_cli.run(argv, base=base, get=_get_json, post=_post_json)
 
 
 def cmd_consent(args):
@@ -2773,6 +2785,9 @@ def main(argv=None):
         script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "astra-check")
         os.execv(script, [script] + argv[1:])
     # `ccc oncall ...` has its own nested parser (ccc_server/oncall/cli.py).
+    if argv[:1] == ["service"]:
+        from ccc_server.service import main as service_main
+        return service_main(argv[1:])
     if argv[:1] == ["oncall"]:
         return cmd_oncall(argv[1:])
     if argv[:1] == ["--server"] and argv[2:3] == ["oncall"]:
@@ -2782,6 +2797,9 @@ def main(argv=None):
         argv = argv[1:]
     if not argv or argv[0] in RUN_SH_FLAGS:
         run_sh = os.path.join(os.path.dirname(os.path.realpath(__file__)), "run.sh")
+        if not os.path.isfile(run_sh):
+            from ccc_server.launcher import main as launch
+            return launch(argv)
         os.execv(run_sh, [run_sh] + argv)
 
     parser = argparse.ArgumentParser(
@@ -3143,6 +3161,8 @@ def main(argv=None):
     p.set_defaults(func=cmd_rebind_report_to)
 
     # Listed here so `ccc --help` shows it; main() hands it off before parsing.
+    sub.add_parser("service", add_help=False,
+                   help="install, inspect or remove the native On-call user service")
     sub.add_parser("oncall", add_help=False,
                    help="agents fix reported bugs and message you only for real decisions (preview)")
 

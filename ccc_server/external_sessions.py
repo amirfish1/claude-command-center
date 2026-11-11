@@ -1,4 +1,4 @@
-"""Discover external headless Claude parentage from live process evidence.
+"""Discover external headless session parentage from live process evidence.
 
 No hooks or launch wrappers. Only confirmed edges and identifiers survive a
 scan; raw arguments and environment are never written to disk or activity logs.
@@ -10,11 +10,13 @@ import time
 
 from ccc_server import core as _core
 from ccc_server import process_identity
+from ccc_server import codex_accounts
 
 _SID = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
 _MAX_CANDIDATES = 16
 _MAX_ATTEMPTS = 3
 _RETRY_SECONDS = 15
+_MAX_CODEX_PROCESSES = 32
 
 
 def _birth(value):
@@ -77,10 +79,45 @@ def _launch_options(argv):
     return headless, model
 
 
+def _codex_launch_options(argv):
+    """Recognize a new exec launch, keeping prompts and resumes out of it."""
+    valued = {'-c', '--config', '--enable', '--disable', '-m', '--model',
+              '-p', '--profile', '-s', '--sandbox', '-a', '--ask-for-approval',
+              '-C', '--cd', '--add-dir', '--local-provider', '--thread-source',
+              '--cyber-access-program', '-o', '--output-last-message',
+              '--output-schema', '--color', '-i', '--image'}
+    flags = {'--strict-config', '--oss', '--approve-for-me', '--full-auto',
+             '--dangerously-bypass-approvals-and-sandbox',
+             '--dangerously-bypass-hook-trust', '--skip-git-repo-check',
+             '--json', '--ephemeral', '--worktree', '--search', '--no-alt-screen'}
+    i, headless, model = 1, False, ''
+    while i < len(argv):
+        arg = argv[i]
+        if arg == '--':
+            return headless, model
+        option, separator, attached = arg.partition('=')
+        if option in valued:
+            value = attached if separator else argv[i + 1] if i + 1 < len(argv) else ''
+            if option in ('-m', '--model') and re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', value):
+                model = value
+            i += 1 if separator else 2
+        elif arg in flags:
+            i += 1
+        elif arg == 'exec' and not headless:
+            headless = True
+            i += 1
+        elif arg.startswith('-') and arg != '-':
+            return False, ''
+        else:
+            return headless and arg not in ('resume', 'fork', 'review', 'help'), model
+    return headless, model
+
+
 class _Discovery:
     def __init__(self):
         self._lock = threading.Lock()
         self._attempts = {}
+        self._codex_cursor = 0
 
     def scan(self, registry, process_rows, now=None):
         # Concurrent dashboard requests share one bounded scan.
@@ -93,6 +130,7 @@ class _Discovery:
 
     def _scan(self, registry, process_rows, now):
         graph = _core._session_graph
+        kinds = {int(pid): _process_kind(comm, args) for pid, _tty, comm, args in process_rows if str(pid).isdigit()}
         keys = {}
         for sid, row in registry.items():
             if not _SID.fullmatch(str(sid)) or not isinstance(row, dict):
@@ -104,43 +142,87 @@ class _Discovery:
             birth = _birth(row.get('procStart'))
             if pid > 0 and birth:
                 keys[sid] = (sid, pid, birth)
+        codex_pids = sorted(pid for pid, kind in kinds.items() if kind == 'codex')
+        if not keys and not codex_pids:
+            return
+        snapshot = process_identity.process_snapshot()
+        if not snapshot:
+            return
+        # Raw exec launches have no CCC/Claude registry entry. Native held
+        # writer locks identify their sessions, including a shared app-server's
+        # full set of threads. Rotate a bounded batch rather than scanning the
+        # machine or transcript corpus on every list request.
+        start = self._codex_cursor % len(codex_pids) if codex_pids else 0
+        selected = (codex_pids[start:] + codex_pids[:start])[:_MAX_CODEX_PROCESSES]
+        self._codex_cursor += len(selected)
+        homes = codex_accounts.homes() if selected else []
+        owners = process_identity.codex_writer_sessions(selected, homes)
+        native_ids = sorted({sid for ids in owners.values() for sid in ids})
+        native_rows = {}
+        if native_ids:
+            for offset in range(0, len(native_ids), 256):
+                ids = native_ids[offset:offset + 256]
+                rows = _core._codex_fetch_threads('id IN (' + ','.join('?' for _ in ids) + ')', tuple(ids))
+                native_rows.update((r['id'], r) for r in rows)
+        native_pids = {}
+        for pid, ids in owners.items():
+            birth = _birth(snapshot.get(pid, {}).get('birth'))
+            if birth:
+                for sid in ids:
+                    native_pids.setdefault(sid, set()).add(pid)
+                    if sid in native_rows:
+                        keys.setdefault(sid, (sid, pid, birth))
         live_keys = set(keys.values())
         self._attempts = {key: value for key, value in self._attempts.items() if key in live_keys}
         candidates = []
         for sid, key in keys.items():
+            if len(native_pids.get(sid, set())) > 1:
+                continue
+            if kinds.get(key[1]) == 'codex' and native_rows.get(sid, {}).get('source') != 'exec':
+                continue
             count, after = self._attempts.get(key, (0, 0))
             if not graph.parent_of(sid) and count < _MAX_ATTEMPTS and now >= after:
                 candidates.append(key)
         candidates = candidates[:_MAX_CANDIDATES]
         if not candidates:
             return
-        snapshot = process_identity.process_snapshot()
-        if not snapshot:
-            return
-        kinds = {int(pid): _process_kind(comm, args) for pid, _tty, comm, args in process_rows if str(pid).isdigit()}
         # Ambiguous PID-to-session mappings cannot establish an ancestor.
         pid_sessions = {}
         for sid, (_, pid, birth) in keys.items():
             if _birth(snapshot.get(pid, {}).get('birth')) == birth:
                 pid_sessions.setdefault(pid, set()).add(sid)
+        # Preserve *all* owned IDs, including threads not indexed yet. Dropping
+        # an unknown sibling would turn a shared process into a false singleton.
+        for pid, ids in owners.items():
+            if pid in snapshot:
+                pid_sessions.setdefault(pid, set()).update(ids)
         proposals = []
         codex_ids = set()
         for sid, pid, birth in candidates:
             count, _ = self._attempts.get((sid, pid, birth), (0, 0))
             self._attempts[(sid, pid, birth)] = (count + 1, now + _RETRY_SECONDS)
-            if kinds.get(pid) != 'claude' or _birth(snapshot.get(pid, {}).get('birth')) != birth:
+            engine = kinds.get(pid)
+            if engine not in ('claude', 'codex') or _birth(snapshot.get(pid, {}).get('birth')) != birth:
                 continue
             identity = process_identity.read_launch_identity(pid)
             if not identity:
                 continue
             argv = identity.get('argv', [])
-            headless, model = _launch_options(argv)
+            if engine == 'codex':
+                # Native subagents and continuations have their own lineage;
+                # an exec process can hold their locks as well as its root's.
+                if native_rows.get(sid, {}).get('source') != 'exec':
+                    continue
+                headless, model = _codex_launch_options(argv)
+            else:
+                headless, model = _launch_options(argv)
             if not headless:
                 continue
             env = identity.get('env', {})
             inherited = env.get('CODEX_THREAD_ID') or ''
             parent = ''
             evidence = ''
+            parent_pid = None
             chain = [pid]
             current = pid
             for _ in range(32):
@@ -157,13 +239,24 @@ class _Discovery:
                     # to an inherited Codex grandparent.
                     break
                 if kinds.get(current) == 'codex':
-                    if _SID.fullmatch(inherited) and inherited != sid:
+                    matches = pid_sessions.get(current, set())
+                    if len(matches) == 1:
+                        parent = next(iter(matches))
+                        evidence = 'codex-writer'
+                        parent_pid = current
+                    elif inherited in matches and inherited != sid:
+                        parent = inherited
+                        evidence = 'codex-writer'
+                        parent_pid = current
+                    elif not matches and engine == 'claude' and _SID.fullmatch(inherited) and inherited != sid:
                         parent = inherited
                         evidence = 'codex-environment'
                         codex_ids.add(parent)
+                    if evidence == 'codex-writer' and (parent not in native_rows or len(native_pids.get(parent, set())) != 1):
+                        parent = ''
                     break
             if parent and parent != sid:
-                proposals.append((sid, parent, evidence, model, chain))
+                proposals.append((sid, parent, evidence, model, chain, engine, parent_pid))
         known_codex = set()
         if codex_ids:
             ids = sorted(codex_ids)
@@ -175,12 +268,19 @@ class _Discovery:
         # A second batched snapshot only for actual discoveries catches exit,
         # reparenting and PID reuse during metadata reads (no per-row forks).
         current_snapshot = process_identity.process_snapshot()
-        for sid, parent, evidence, model, chain in proposals:
+        verify_pids = {chain[0] for sid, parent, evidence, model, chain, engine, parent_pid in proposals if engine == 'codex'}
+        verify_pids.update(parent_pid for sid, parent, evidence, model, chain, engine, parent_pid in proposals if parent_pid)
+        current_owners = process_identity.codex_writer_sessions(verify_pids, homes) if verify_pids else {}
+        for sid, parent, evidence, model, chain, engine, parent_pid in proposals:
             if any(snapshot.get(pid) != current_snapshot.get(pid) for pid in chain):
                 continue
-            if graph.try_add_discovered_edge(parent, sid, model=model):
+            if engine == 'codex' and sid not in current_owners.get(chain[0], set()):
+                continue
+            if parent_pid and parent not in current_owners.get(parent_pid, set()):
+                continue
+            if graph.try_add_discovered_edge(parent, sid, model=model, engine=engine):
                 _core._log_activity('spawn', 'DISCOVERED',
-                    f'session={sid} parent_session={parent} engine=claude '
+                    f'session={sid} parent_session={parent} engine={engine} '
                     f'via=process-discovery evidence={evidence} model={model or "unknown"}')
         graph.save()
 

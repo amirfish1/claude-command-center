@@ -1,0 +1,1 @@
+- On-call checks closed tickets with one listing per queue and rotates report batches so older reports are not skipped.

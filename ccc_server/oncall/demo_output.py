@@ -29,6 +29,6 @@ class Output:
         display = rendered or text
         if self.colour:
             display = '\033[36m' + display + '\033[0m' if rendered else '\033[1m' + display + '\033[0m'
-        self.events.append([round(time.monotonic() - self.started, 3), 'o', display + '\r\n'])
+        self.events.append([round(time.monotonic() - self.started, 3), 'o', display.replace('\n', '\r\n') + '\r\n'])
         if not self.quiet:
             print(display, flush=True)

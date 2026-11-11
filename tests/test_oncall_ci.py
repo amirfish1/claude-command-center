@@ -21,6 +21,13 @@ def source():
             obj = {'default_branch': 'main'}
         return 200, json.dumps(obj).encode(), {'ETag': 'test-etag'}
     src.request = request
+    # This helper represents the engine accepting every returned finding.
+    poll = src.poll
+    def accepted_poll():
+        for item in src._get('outbox', []):
+            src.acknowledge(item['fingerprint'])
+        return poll()
+    src.poll = accepted_poll
     return src, rows, calls
 
 
@@ -31,12 +38,13 @@ def run(i, result='failure', sha=None, branch='main'):
 
 def test_registration():
     assert build({'type': 'ci', 'id': 'ci', 'repo': 'example/demo'}).type == 'ci'
-    assert required_fields('ci')[0]['name'] == 'repo'
+    assert 'repo' in [f['name'] for f in required_fields('ci')]
 
 
 def test_baseline_red_is_left_alone_until_green():
     src, rows, calls = source()
     rows[:] = [run(1)]
+    src._credential = lambda: 'test-only'
     assert src.check()[0]
     rows[:] = [run(2)]
     assert src.poll() == []
@@ -176,17 +184,19 @@ def test_closed_notice_waits_for_observed_green(monkeypatch):
     monkeypatch.setattr(customers, '_closed_notice', lambda *args: notices.append(args))
     class Store:
         confirmed = []
-        def reports(self, **kwargs):
-            return [{'id': 1, 'source': 'source:ci', 'fingerprint': 'failure', 'ticket_ref': 'DEMO-1'}]
+        def filed_queues(self):
+            return ['DEMO']
+        def report_by_ref(self, ref):
+            return {'id': 1, 'state': 'filed', 'source': 'source:ci', 'fingerprint': 'failure', 'ticket_ref': 'DEMO-1'}
+        def kv_set(self, *args):
+            pass
         def kv_get(self, key, default=None):
-            return self.confirmed
+            return {} if key.endswith(":journal") else self.confirmed
         def report_update(self, *args, **kwargs):
             pass
     class WT:
         def ls(self, *args, **kwargs):
-            return []
-        def find(self, ref):
-            return {'status': 'closed'}
+            return [{'ref': 'DEMO-1', 'status': 'closed'}]
     store = Store()
     cfg = {'queue': 'DEMO', 'sources': [{'type': 'ci', 'id': 'ci'}]}
     assert customers.collect_closed(cfg, store, {}, WT()) == 0

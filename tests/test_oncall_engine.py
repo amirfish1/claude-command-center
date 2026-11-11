@@ -70,8 +70,9 @@ class FakeWT:
     def blocked(self, queue):
         return [t for t in self.tickets.values() if t["project"] == queue and t.get("needs_input")]
 
-    def ls(self, queue, status="active", limit=200):
-        return [t for t in self.tickets.values() if t["project"] == queue and t["status"] != "closed"]
+    def ls(self, queue, status="active", limit=200, *, offset=None):
+        return [t for t in self.tickets.values() if t["project"] == queue
+                and ((t["status"] == "closed") if status == "closed" else t["status"] != "closed")]
 
     def find(self, ref):
         return self.tickets.get(ref)
@@ -404,8 +405,9 @@ def test_fixed_ticket_tells_owner_then_customer_after_yes(rig):
     rig.wt.close(ref, summary="Bound the click handler after render and added a test.")
     rig.tick()
     note = rig.chan("tg").sent[-1].text
-    assert note == (f"Fixed: {ref} (#1)\nCheckout button does nothing on Safari\n"
-                    "Bound the click handler after render and added a test.\n\n"
+    assert note == ("Fixed: Checkout button does nothing on Safari (#1)\n"
+                    "Bound the click handler after render and added a test.\n"
+                    f"Ticket {ref}.\n\n"
                     "Reply yes to tell Dana it is fixed, or no to skip.")
     assert not [m for m in rig.chan("mail").sent if m.to == "dana@example.com"]
     rig.msg("tg", "yes", "4242")
@@ -421,7 +423,7 @@ def test_closed_without_a_commit_is_not_called_fixed(rig):
     rig.wt.close(ref, summary="Could not reproduce.", commit="")
     rig.tick()
     note = rig.chan("tg").sent[-1].text
-    assert note.startswith(f"Closed without a code change: {ref} (#1)")
+    assert note.startswith("Closed without a code change: Checkout button does nothing on Safari (#1)")
     assert "Reply yes" not in note
 
 
@@ -489,7 +491,7 @@ def test_session_question_and_stop_reach_the_owner_and_replies_are_injected(rig)
     rig.eng.raise_session("question", "sess-1", "Refactor billing", "Use the new client or keep the old one?", stamp="t1")
     rig.eng.raise_session("question", "sess-1", "Refactor billing", "Use the new client or keep the old one?", stamp="t1")
     rig.tick()
-    assert [m.text.splitlines()[0] for m in rig.chan("tg").sent] == ["An agent is waiting on you (#1)"]
+    assert [m.text.splitlines()[0] for m in rig.chan("tg").sent] == ["Question from Refactor billing (#1)"]
     rig.msg("tg", "new client", "4242")
     rig.tick()
     assert rig.deps.injected == [("sess-1", "new client")]
@@ -651,7 +653,7 @@ def test_full_walk_on_a_real_watchtower_queue(tmp_path):
                   "--no-code", "--force").returncode == 0
     clock.now += 61
     eng.tick(force=True)
-    assert built["tg"].sent[-1].text.startswith(f"Closed without a code change: {ref} (#2)")
+    assert built["tg"].sent[-1].text.startswith("Closed without a code change: ")
     assert eng.store.reports()[0]["state"] == "closed"
 
 
@@ -702,8 +704,8 @@ def test_plain_question_observation_cache_clear_and_reply(rig, engine, monkeypat
     assert len(rig.eng.store.alerts()) == 1
     # One lookup per idle period, however many ticks pass.
     assert probes == ['sess-1']
-    # A new turn gets a new incident, which clears on activity.
-    transcript.write_text(transcript.read_text().replace('turn-1', 'turn-2'))
+    # A new turn with a changed question gets a new incident, which clears on activity.
+    transcript.write_text(transcript.read_text().replace('turn-1', 'turn-2').replace('old client', 'new client'))
     signals.observe(rig.eng, {'sess-1': {'state': 'working'}})
     signals.observe(rig.eng, idle)
     rig.clock.now += signals.GRACE_S

@@ -1,0 +1,1 @@
+- On-call prunes completed history older than 13 months in small indexed batches while keeping open work and the full 52-week summary window.

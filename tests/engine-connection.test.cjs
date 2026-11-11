@@ -26,7 +26,7 @@ const SPAWN_DEFAULT_ENGINES=['claude','codex','cursor','antigravity','kilo','her
 let spawnDefaultsState={engine:'claude',models:{claude:'claude-sonnet-4-6',codex:'gpt-5-codex'},disabled_engines:[]};
 const $convInputEngineSelect=null,$kptToolbarEngineSelect=null;
 const escapeHtml=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const spawnEngineLabel=e=>e,normalizeSpawnDefaultEngine=e=>e;
+const spawnEngineLabel=e=>e,spawnEngineLabelWithAccount=e=>e,normalizeSpawnDefaultEngine=e=>e;
 window.__toasts=[];function showOpToast(...v){window.__toasts.push(v);}window.__sessions=[];
 let currentConversation=null;const nsAdvisor={manual:false,applying:false};
 ${between('  function markNsAdvisorManual() {','  async function loadNsAdvisor(')}
@@ -175,9 +175,9 @@ test('failed native recheck keeps stale state explicit through final rendering',
  assert.equal(await page.$eval('#engineConnection-session',n=>n.disabled),true);
 });
 
-test('saved setup details remain open across native status refresh',async t=>{
- const {page}=await open(t);await page.$eval('[data-connection-step=Authenticate]',n=>n.open=true);
- await page.evaluate(()=>window.__refresh());assert.equal(await page.$eval('[data-connection-step=Authenticate]',n=>n.open),true);
+test('setup steps stay inline across native status refresh',async t=>{
+ const {page}=await open(t);assert.equal(await page.$$('#engineConnectionPanel details').then(nodes=>nodes.length),0);
+ await page.evaluate(()=>window.__refresh());assert.equal(await page.$$('#engineConnectionPanel details').then(nodes=>nodes.length),0);
 });
 
 test('first-run uses the canonical defaults action and returns to setup without losing its policy draft',async t=>{

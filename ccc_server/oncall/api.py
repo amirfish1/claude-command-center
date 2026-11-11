@@ -48,8 +48,23 @@ def handle(method, path, body=None, *, eng=None):
                                 detail=str(body.get("detail", "")).lower() in ("1", "true"))
         if method == "GET" and name == "status":
             return 200, status(eng)
+        if method == "GET" and name == "home":
+            from . import home
+            return 200, dict({"ok": True}, **home.summary(eng))
+        if method == "POST" and name == "answer":
+            from . import home
+            return 200, dict({"ok": True}, **home.answer(eng, body))
         if method == "GET" and name == "decisions":
             return 200, {"ok": True, "decisions": decisions(eng)}
+        if method == "POST" and name == "escalation":
+            from .escalation_cli import command
+            with eng._lock:
+                return 200, command(eng, body)
+        if method == "POST" and name in ("hook-register", "hook-wait", "hook-cancel"):
+            from . import agent_wait
+            fn = {"hook-register": agent_wait.register, "hook-wait": agent_wait.collect,
+                  "hook-cancel": agent_wait.cancel}[name]
+            return 200, dict({"ok": True}, **fn(eng, body))
         if method == "POST":
             fn = {"config": save_config, "channel": channel, "source": source, "test": test,
                   "customer": customer, "report": report, "inbound": inbound, "tick": tick}.get(name)
@@ -226,7 +241,8 @@ def channel(eng, body):
             raise ApiError("I do not know the mail servers for that address. Add the SMTP and IMAP server names.")
         entry.setdefault("owner", entry.get("address", ""))
     try:
-        chan = chmod.build(entry, kv=eng.store)
+        from .calls import resolve
+        chan = chmod.build(resolve(entry, cfg), kv=eng.store)
     except ValueError as exc:
         raise ApiError(str(exc))
     note = ""
@@ -290,7 +306,11 @@ def source(eng, body):
 # -- actions ----------------------------------------------------------------
 
 def test(eng, body):
-    results = eng.test(str(body.get("channel") or ""))
+    if body.get("roundtrip"):
+        from .chat_setup import roundtrip
+        result = roundtrip(eng, str(body.get("channel") or ""))
+        return dict(result, results=[dict(result, channel=body.get("channel", ""))])
+    results = eng.test(str(body.get("channel") or ""), call=body.get("call") is True)
     if not results:
         raise ApiError("Add a message channel first.")
     return {"results": results, "ok": all(r["ok"] for r in results)}

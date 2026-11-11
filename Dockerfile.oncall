@@ -1,0 +1,19 @@
+FROM python:3.12-slim
+ARG WATCHTOWER_REF=a5cdbbeaf52c6e71b6c411d1059e36c3e4cb49b5
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates procps ripgrep tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir "git+https://github.com/amirfish1/watchtower@${WATCHTOWER_REF}" \
+    && useradd --uid 1000 --create-home --home-dir /state ccc
+WORKDIR /app
+COPY . /app
+RUN chmod -R a+rX /app && ln -s /app/ccc /usr/local/bin/ccc
+ENV HOME=/state CCC_STATE_DIR=/state/.claude/command-center \
+    WATCHTOWER_STORE=/state/.watchtower/queues.json WT_NO_AUTOSTART=1 \
+    WT_NO_SELF_UPDATE=1 CCC_AUTO_UPDATE=0 PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 CCC_BIND_HOST=127.0.0.1 \
+    PATH=/state/bin:/usr/local/bin:/usr/bin:/bin
+USER ccc
+VOLUME ["/state"]
+HEALTHCHECK --interval=30s --start-period=60s CMD python3 /app/scripts/oncall-supervisor.py --health
+ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
+CMD ["python3", "/app/scripts/oncall-supervisor.py"]

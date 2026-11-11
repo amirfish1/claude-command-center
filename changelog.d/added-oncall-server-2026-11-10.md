@@ -1,0 +1,1 @@
+- Add an isolated Linux server image and native user service for On-call, with headless setup and recovery proofs.

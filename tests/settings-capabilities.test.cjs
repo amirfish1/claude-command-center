@@ -70,83 +70,84 @@ async function open(t,width=1440,{query='',configured=false,fail=false,browserPr
  await page.setRequestInterception(true);page.on('request',r=>{requests.push({url:r.url(),method:r.method(),body:r.postData()});return r.url().startsWith(url)?r.continue():r.abort();});if(browserPref)await page.evaluateOnNewDocument(()=>localStorage.setItem('ccc-voice-call-button','0'));
  t.after(async()=>{await context.close();assert.deepEqual(errors,[]);});
  await page.goto(url+'/'+query,{waitUntil:'load'});if(!query){await page.focus('#opener');await page.keyboard.press('Enter');}
- await page.waitForFunction(()=>!document.querySelector('#capabilityInventoryStatus').textContent.includes('Reading'));await page.waitForSelector('#settingsSection-free [data-capability-body="free"]');
+ await page.waitForFunction(()=>!document.querySelector('#capabilityInventoryStatus').textContent.includes('Reading'));await page.waitForSelector('#settingsSection-free');
  return {page,requests,before};
 }
 const posts=rs=>rs.filter(r=>r.method==='POST');
-for(const width of [1440,390])test('fresh optional setup is gated, runtime unknown is honest and inventory has no side effects '+width,async t=>{
- const {page,requests,before}=await open(t,width);for(const id of ['voice','remote','free'])assert.equal(await page.$eval('[data-capability-body="'+id+'"]',n=>n.hidden),true);
+for(const width of [1440,390])test('optional setup is inline, runtime unknown is honest and inventory has no side effects '+width,async t=>{
+ const {page,requests,before}=await open(t,width);for(const id of ['voice','remote'])assert.equal(await page.$eval('[data-capability-body="'+id+'"]',n=>n.hidden),false);
  assert.match(await page.$eval('#capability-voice',n=>n.textContent),/Off.*No saved setup/);assert.match(await page.$eval('#capability-remote',n=>n.textContent),/Unknown.*No saved setup/);assert.match(await page.$eval('#capability-operator',n=>n.textContent),/Unavailable/);
- assert.deepEqual(posts(requests),[]);assert.deepEqual(saved(),before);assert(!requests.some(r=>r.url.includes('/api/free-settings/')||r.url.includes('/api/free-router/status')||r.url.includes('/api/phone-access/status')||r.url.includes('/api/voice/config')));
+ assert.deepEqual(posts(requests),[]);assert.deepEqual(saved(),before);assert.equal(await page.$$('.capability-gate').then(n=>n.length),0);assert.equal(await page.$$('#capabilityRows > .settings-row > .capability-actions').then(n=>n.length),0);
  assert.equal(await page.$eval('#settingsCapabilities',n=>n.scrollWidth<=n.clientWidth+1),true);await page.screenshot({path:path.join(scratch,'catalog-'+width+'.png'),fullPage:true});
 });
 test('voice opt-in opens canonical setup, labels shortcut visibility and does not start media or change runtime',async t=>{
- const {page,requests,before}=await open(t,390);await page.focus('#capability-voice button');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-listening');
+ const {page,requests,before}=await open(t,390);await page.evaluate(()=>window.cccSettingsCapabilities.open('voice'));await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-listening');
  assert.equal(await page.$eval('[data-capability-body="voice"]',n=>n.hidden),false);assert.equal(await page.$$eval('#voiceSelect',n=>n.length),1);assert.match(await page.$eval('#voiceSetup-access',n=>n.textContent),/shortcut/);assert.deepEqual(await page.evaluate(()=>window.__forbidden),[]);assert.deepEqual(posts(requests),[]);assert.deepEqual(saved(),before);
  await page.screenshot({path:path.join(scratch,'phone-voice-setup.png'),fullPage:true});await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.id),'opener');
 });
 test('configured setups and explicit saved off browser preferences remain reachable',async t=>{
- const {page,requests,before}=await open(t,390,{configured:true});for(const id of ['voice','remote','free'])assert.equal(await page.$eval('[data-capability-body="'+id+'"]',n=>n.hidden),false);
- assert.match(await page.$eval('#capability-free',n=>n.textContent),/Unknown.*Saved setup/);assert.match(await page.$eval('#capability-remote button',n=>n.textContent),/Manage/);assert.deepEqual(posts(requests),[]);assert.deepEqual(saved(),before);
+ const {page,requests,before}=await open(t,390,{configured:true});for(const id of ['voice','remote'])assert.equal(await page.$eval('[data-capability-body="'+id+'"]',n=>n.hidden),false);
+ assert.match(await page.$eval('#capability-free',n=>n.textContent),/Unknown.*Saved setup/);assert.equal(await page.$$('#capability-remote button').then(nodes=>nodes.length>0),true);assert.deepEqual(posts(requests),[]);assert.deepEqual(saved(),before);
 });
 test('saved off shortcut is configured, without claiming voice is disabled',async t=>{
  const {page}=await open(t,390,{browserPref:true});assert.equal(await page.$eval('[data-capability-body="voice"]',n=>n.hidden),false);assert.match(await page.$eval('#capability-voice',n=>n.textContent),/no global voice switch/);
 });
 test('failed inventory preserves access and retry restores truthful metadata',async t=>{
- const {page,requests}=await open(t,390,{configured:true,fail:true});for(const id of ['voice','remote','free'])assert.equal(await page.$eval('[data-capability-body="'+id+'"]',n=>n.hidden),false);assert.match(await page.$eval('#capabilityInventoryStatus',n=>n.textContent),/unavailable.*accessible/);
+ const {page,requests}=await open(t,390,{configured:true,fail:true});for(const id of ['voice','remote'])assert.equal(await page.$eval('[data-capability-body="'+id+'"]',n=>n.hidden),false);assert.match(await page.$eval('#capabilityInventoryStatus',n=>n.textContent),/unavailable.*accessible/);
  await page.screenshot({path:path.join(scratch,'phone-inventory-unavailable.png'),fullPage:true});fs.rmSync(path.join(scratch,'fail-inventory'));await page.click('#capabilityRefresh');await page.waitForFunction(()=>document.querySelector('#capabilityInventoryStatus').textContent.includes('Metadata snapshot'));assert.deepEqual(posts(requests),[]);
 });
 for(const section of ['voice','network','free'])test('legacy Settings URL '+section+' deliberately opens its canonical configuration',async t=>{
- const {page,requests}=await open(t,390,{query:'?ccc_settings='+section});const id={voice:'voice',network:'remote',free:'free'}[section];assert.equal(await page.$eval('[data-capability-body="'+id+'"]',n=>n.hidden),false);assert.deepEqual(posts(requests),[]);
+ const {page,requests}=await open(t,390,{query:'?ccc_settings='+section});const id={voice:'voice',network:'remote'}[section];if(id)assert.equal(await page.$eval('[data-capability-body="'+id+'"]',n=>n.hidden),false);assert.deepEqual(posts(requests),[]);
 });
 test('free routing native Stop remains reachable and leaves saved configuration intact',async t=>{
- const {page,requests}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');await page.click('#capability-free button');await page.waitForSelector('#fsStopBtn');await page.focus('#fsStopBtn');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('#fsStartBtn'));
+ const {page,requests}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');await page.evaluate(()=>window.cccSettingsCapabilities.open('free'));await page.waitForSelector('#fsStopBtn');await page.$eval('#fsStopBtn',n=>{n.focus();n.click();});await page.waitForFunction(()=>document.querySelector('#fsStartBtn'));
  assert.equal(await page.evaluate(()=>document.activeElement.id),'fsStartBtn');assert.equal(fs.existsSync(path.join(scratch,'router-on')),false);assert.equal(fs.readFileSync(path.join(scratch,'router.json'),'utf8'),'{}');assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/free-router/stop']);
 });
 test('failed free-router stop stays visible and never claims it stopped',async t=>{
- const {page}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');fs.writeFileSync(path.join(scratch,'fail-save'),'1');await page.click('#capability-free button');await page.waitForSelector('#fsStopBtn');await page.click('#fsStopBtn');await page.waitForFunction(()=>document.querySelector('#fsRoot').textContent.includes('Fixture router action failed'));assert.equal(await page.evaluate(()=>document.activeElement.id),'fsStopBtn');assert.equal(fs.existsSync(path.join(scratch,'router-on')),true);
+ const {page}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');fs.writeFileSync(path.join(scratch,'fail-save'),'1');await page.evaluate(()=>window.cccSettingsCapabilities.open('free'));await page.waitForSelector('#fsStopBtn');await page.$eval('#fsStopBtn',n=>{n.focus();n.click();});await page.waitForFunction(()=>document.querySelector('#fsRoot').textContent.includes('Fixture router action failed'));assert.equal(await page.evaluate(()=>document.activeElement.id),'fsStopBtn');assert.equal(fs.existsSync(path.join(scratch,'router-on')),true);
 });
 test('opening phone management does not enable a preview flag; configured sharing can be disabled with flag off',async t=>{
- const {page,requests}=await open(t,390,{configured:true});await page.click('#capability-remote button');await page.focus('#phoneAccessBtn');await page.keyboard.press('Enter');await page.waitForSelector('.ccc-phone-backdrop [data-act="disable"]');assert.deepEqual(posts(requests),[]);assert.equal(fs.existsSync(path.join(scratch,'flag-on')),false);
- await page.click('.ccc-phone-backdrop [data-act="disable"]');await page.waitForSelector('.ccc-phone-backdrop [data-act="enable"]');assert.equal(fs.existsSync(path.join(scratch,'phone.json')),false);assert.equal(fs.existsSync(path.join(scratch,'flag-on')),false);assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/phone-access/disable']);
+ const {page,requests}=await open(t,390,{configured:true});await page.evaluate(()=>window.cccSettingsCapabilities.open('remote'));await page.waitForSelector('.ccc-phone-inline [data-act="disable"]');assert.deepEqual(posts(requests),[]);assert.equal(fs.existsSync(path.join(scratch,'flag-on')),false);
+ await page.click('.ccc-phone-inline [data-act="disable"]');await page.waitForSelector('.ccc-phone-inline [data-act="enable"]');assert.equal(fs.existsSync(path.join(scratch,'phone.json')),false);assert.equal(fs.existsSync(path.join(scratch,'flag-on')),false);assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/phone-access/disable']);
 });
 test('explicit phone enable enables its gate only at the actual action, failures keep sharing off',async t=>{
- const {page,requests}=await open(t,390);await page.click('#capability-remote button');await page.click('#phoneAccessBtn');await page.waitForSelector('.ccc-phone-backdrop [data-act="enable"]');assert.deepEqual(posts(requests),[]);
- fs.writeFileSync(path.join(scratch,'fail-flag'),'1');await page.click('.ccc-phone-backdrop [data-act="enable"]');await page.waitForFunction(()=>document.querySelector('[data-role="serve-msg"]').textContent.includes('Could not enable'));
+ const {page,requests}=await open(t,390);await page.evaluate(()=>window.cccSettingsCapabilities.open('remote'));await page.waitForSelector('.ccc-phone-inline [data-act="enable"]');assert.deepEqual(posts(requests),[]);
+ fs.writeFileSync(path.join(scratch,'fail-flag'),'1');await page.click('.ccc-phone-inline [data-act="enable"]');await page.waitForFunction(()=>document.querySelector('[data-role="serve-msg"]').textContent.includes('Could not enable'));
  assert.equal(fs.existsSync(path.join(scratch,'phone.json')),false);assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/features/flag']);
 });
 test('preview flag rejected save keeps original gate and reports error without pretending runtime stopped',async t=>{
- const {page,requests}=await open(t,390);fs.writeFileSync(path.join(scratch,'fail-flag'),'1');await page.click('#capability-previews button');await page.focus('[data-ff-toggle="phone_access"]');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('[data-ff-status="phone_access"]').textContent.includes('Not saved'));
+ const {page,requests}=await open(t,390);fs.writeFileSync(path.join(scratch,'fail-flag'),'1');await page.evaluate(()=>window.cccSettingsCapabilities.open('previews'));await page.focus('[data-ff-toggle="phone_access"]');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('[data-ff-status="phone_access"]').textContent.includes('Not saved'));
  assert.equal(await page.$eval('[data-ff-toggle="phone_access"]',n=>n.getAttribute('aria-checked')),'false');assert.equal(fs.existsSync(path.join(scratch,'flag-on')),false);assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/features/flag']);assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('data-ff-toggle')),'phone_access');
 });
 test('actual Turn on sequences gate then sharing with only inert fixture effects',async t=>{
- const {page,requests}=await open(t,390);await page.click('#capability-remote button');await page.click('#phoneAccessBtn');await page.waitForSelector('.ccc-phone-backdrop [data-act="enable"]');assert.deepEqual(posts(requests),[]);
- await page.click('.ccc-phone-backdrop [data-act="enable"]');await page.waitForSelector('.ccc-phone-backdrop [data-act="disable"]');await page.waitForFunction(()=>document.querySelector('[data-role="test-msg"]').textContent.includes('Inert fixture'));
+ const {page,requests}=await open(t,390);await page.evaluate(()=>window.cccSettingsCapabilities.open('remote'));await page.waitForSelector('.ccc-phone-inline [data-act="enable"]');assert.deepEqual(posts(requests),[]);
+ await page.click('.ccc-phone-inline [data-act="enable"]');await page.waitForSelector('.ccc-phone-inline [data-act="disable"]');await page.waitForFunction(()=>document.querySelector('[data-role="test-msg"]').textContent.includes('Inert fixture'));
  assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/features/flag','/api/phone-access/enable','/api/phone-access/test']);assert.equal(fs.existsSync(path.join(scratch,'flag-on')),true);assert.equal(fs.existsSync(path.join(scratch,'phone.json')),true);
 });
-test('call controls open without starting a call or microphone and put focus on native Stop',async t=>{
- const {page,requests}=await open(t,390);await page.focus('#capability-voice .capability-actions button:last-child');await page.keyboard.press('Enter');
- assert.equal(await page.$eval('#settingsModal',n=>n.hidden),true);assert.equal(await page.$eval('#voicePanel',n=>n.hidden),false);assert.equal(await page.evaluate(()=>document.activeElement.id),'voicePanelStopBtn');assert.deepEqual(posts(requests),[]);assert.deepEqual(await page.evaluate(()=>window.__forbidden),[]);
+test('call stop is inline and viewing settings starts no call or microphone',async t=>{
+ const {page,requests}=await open(t,390);
+ assert.equal(await page.$eval('#voiceSetupStopCall',n=>!!n.getClientRects().length),true);
+ assert.equal(await page.$eval('#settingsModal',n=>n.hidden),false);assert.equal(await page.$eval('#voicePanel',n=>n.hidden),true);assert.deepEqual(posts(requests),[]);assert.deepEqual(await page.evaluate(()=>window.__forbidden),[]);
 });
 test('voice legacy task hash reveals setup without activation or changes',async t=>{
  const {page,requests,before}=await open(t,390,{query:'#settings/voice-offline'});await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-offline');assert.equal(await page.$eval('[data-capability-body="voice"]',n=>n.hidden),false);assert.deepEqual(posts(requests),[]);assert.deepEqual(saved(),before);
 });
 test('native browser shortcut remains a visibility control and writes only its existing preference keys',async t=>{
- const {page,requests}=await open(t,390);await page.click('#capability-voice button');await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-listening');
+ const {page,requests}=await open(t,390);await page.evaluate(()=>window.cccSettingsCapabilities.open('voice'));await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-listening');
  await page.click('#settingsVoiceCallBtnToggle');assert.deepEqual(await page.evaluate(()=>Object.fromEntries(Object.keys(localStorage).map(k=>[k,localStorage.getItem(k)]))),{'ccc-voice-call-button':'1','ccc-voice-mobile-btn':'1'});assert.match(await page.$eval('#voiceSetupAccessStatus',n=>n.textContent),/visibility flags.*no call is started/is);assert.deepEqual(posts(requests),[]);assert.deepEqual(await page.evaluate(()=>window.__forbidden),[]);
 });
 for(const failure of [false,true])test('hands-free native Stop preserves keys and reports '+(failure?'failed':'successful')+' requests',async t=>{
  const {page,requests}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'operator-on'),'1');if(failure)fs.writeFileSync(path.join(scratch,'fail-save'),'1');
- await page.focus('#capability-operator button');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('#voiceSetup-operator').open&&!document.querySelector('#carModeStopBtn').disabled);await page.focus('#carModeStopBtn');await page.keyboard.press('Enter');
+ await page.evaluate(()=>window.cccSettingsCapabilities.open('operator'));await page.waitForFunction(()=>document.querySelector('#voiceSetup-operator').getClientRects().length&&!document.querySelector('#carModeStopBtn').disabled);await page.focus('#carModeStopBtn');await page.keyboard.press('Enter');
  if(failure){await page.waitForFunction(()=>document.querySelector('#carModeError').textContent.includes('Fixture operator stop failed'));assert.equal(fs.existsSync(path.join(scratch,'operator-on')),true);}else{await page.waitForFunction(()=>document.querySelector('#carModeStopBtn').style.display==='none');assert.equal(fs.existsSync(path.join(scratch,'operator-on')),false);}
  assert.equal(fs.readFileSync(path.join(scratch,'operator-config.json'),'utf8'),'{}');assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/car-mode/stop']);assert.equal(await page.$eval('#carModeAnthropicKey',n=>n.value),'');
 });
 test('failed phone disable retains saved sharing and the native error is visible',async t=>{
- const {page}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'fail-save'),'1');await page.click('#capability-remote button');await page.click('#phoneAccessBtn');await page.waitForSelector('.ccc-phone-backdrop [data-act="disable"]');await page.click('.ccc-phone-backdrop [data-act="disable"]');await page.waitForFunction(()=>document.querySelector('[data-role="serve-msg"]').textContent.includes('Fixture sharing change failed'));assert.equal(fs.existsSync(path.join(scratch,'phone.json')),true);
+ const {page}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'fail-save'),'1');await page.evaluate(()=>window.cccSettingsCapabilities.open('remote'));await page.waitForSelector('.ccc-phone-inline [data-act="disable"]');await page.click('.ccc-phone-inline [data-act="disable"]');await page.waitForFunction(()=>document.querySelector('[data-role="serve-msg"]').textContent.includes('Fixture sharing change failed'));assert.equal(fs.existsSync(path.join(scratch,'phone.json')),true);
 });
-test('search for hidden voice configuration offers setup, clears filtering and opens canonical controls',async t=>{
- const {page,requests}=await open(t,390);await page.evaluate(()=>window.__search('realtime'));await page.waitForSelector('#settingsSection-voice .capability-gate button',{visible:true});await page.click('#settingsSection-voice .capability-gate button');
- assert.equal(await page.$eval('[data-capability-body="voice"]',n=>n.hidden),false);assert.equal(await page.$eval('#settingsModal .settings-modal',n=>n.classList.contains('is-searching')),false);assert.deepEqual(posts(requests),[]);
+test('search finds inline voice configuration without a setup gate',async t=>{
+ const {page,requests}=await open(t,390);await page.evaluate(()=>window.__search('realtime'));
+ assert.equal(await page.$eval('[data-capability-body="voice"]',n=>n.hidden),false);assert.equal(await page.$$('.capability-gate').then(n=>n.length),0);assert.deepEqual(posts(requests),[]);
 });
 test('unknown operator configuration cannot hide the existing voice manager',async t=>{
  const {page,requests}=await open(t,390);await page.evaluate(async()=>{
@@ -154,31 +155,31 @@ test('unknown operator configuration cannot hide the existing voice manager',asy
  });assert.equal(await page.$eval('[data-capability-body="voice"]',n=>n.hidden),false);assert.deepEqual(posts(requests),[]);
 });
 test('confirmed preview save updates its actual gate and preserves configured remote setup',async t=>{
- const {page,requests}=await open(t,390,{configured:true});await page.click('#capability-previews button');await page.focus('[data-ff-toggle="phone_access"]');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('[data-ff-toggle="phone_access"]').getAttribute('aria-checked')==='true');
+ const {page,requests}=await open(t,390,{configured:true});await page.evaluate(()=>window.cccSettingsCapabilities.open('previews'));await page.focus('[data-ff-toggle="phone_access"]');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('[data-ff-toggle="phone_access"]').getAttribute('aria-checked')==='true');
  assert.equal(fs.existsSync(path.join(scratch,'flag-on')),true);assert.equal(fs.readFileSync(path.join(scratch,'phone.json'),'utf8'),'{}');assert.match(await page.$eval('#capability-previews [role="status"]',n=>n.textContent),/^On.*not service status/);assert.deepEqual(posts(requests).map(r=>new URL(r.url).pathname),['/api/features/flag']);
 });
 
 test('phone dialog owns focus, traps Tab, consumes Escape and restores visible opener',async t=>{
  const{page}=await open(t,390);
- await page.focus('#capability-remote button');await page.evaluate(()=>window.cccPhoneAccess.open());await page.waitForSelector('.ccc-phone-backdrop [data-act="enable"]');
+ await page.focus('#capabilityRefresh');await page.evaluate(()=>window.cccPhoneAccess.open());await page.waitForSelector('.ccc-phone-backdrop [data-act="enable"]');
  assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('data-act')),'close');
  await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>!!document.activeElement.closest('.ccc-phone-backdrop')),true);
  await page.keyboard.down('Shift');await page.keyboard.press('Tab');await page.keyboard.up('Shift');assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('data-act')),'close');
  const small=await page.$$eval('#settingsCapabilities summary,.ccc-phone-backdrop button,.ccc-phone-backdrop input',nodes=>nodes.filter(n=>n.getClientRects().length&&n.getBoundingClientRect().height<44).map(n=>n.outerHTML));assert.deepEqual(small,[]);
- await page.keyboard.press('Escape');assert.equal(await page.$eval('#settingsModal',n=>n.hidden),false);assert.equal(await page.evaluate(()=>document.activeElement.matches('#capability-remote button')),true);
+ await page.keyboard.press('Escape');assert.equal(await page.$eval('#settingsModal',n=>n.hidden),false);assert.equal(await page.evaluate(()=>document.activeElement.matches('#capabilityRefresh')),true);
 });
 
 test('phone explicit enable preserves action focus across body replacement',async t=>{
- const{page}=await open(t,390);await page.focus('#capability-remote button');await page.evaluate(()=>window.cccPhoneAccess.open());await page.waitForSelector('.ccc-phone-backdrop [data-act="enable"]');
- await page.focus('.ccc-phone-backdrop [data-act="enable"]');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('[data-role="test-msg"]')?.textContent.includes('Inert fixture'));
+ const{page}=await open(t,390);await page.focus('#capabilityRefresh');await page.evaluate(()=>window.cccPhoneAccess.open());await page.waitForSelector('.ccc-phone-backdrop [data-act="enable"]');
+ await page.focus('.ccc-phone-backdrop [data-act="enable"]');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('.ccc-phone-backdrop [data-role="test-msg"]')?.textContent.includes('Inert fixture'));
  assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('data-act')),'disable');
- await page.focus('.ccc-phone-backdrop [data-act="close"]');await page.keyboard.press('Enter');assert.equal(await page.evaluate(()=>document.activeElement.matches('#capability-remote button')),true);
+ await page.focus('.ccc-phone-backdrop [data-act="close"]');await page.keyboard.press('Enter');assert.equal(await page.evaluate(()=>document.activeElement.matches('#capabilityRefresh')),true);
 });
 
 test('free Stop settlement preserves a deliberate focus move outside its renderer',async t=>{
- const{page}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');await page.click('#capability-free button');await page.waitForSelector('#fsStopBtn');
+ const{page}=await open(t,390,{configured:true});fs.writeFileSync(path.join(scratch,'router-on'),'1');await page.evaluate(()=>window.cccSettingsCapabilities.open('free'));await page.waitForSelector('#fsStopBtn');
  await page.evaluate(()=>{const native=window.fetch;window.fetch=async(...args)=>{if(args[0]==='/api/free-router/stop')await new Promise(resolve=>window.__releaseStop=resolve);return native(...args);};});
- await page.focus('#fsStopBtn');await page.keyboard.press('Enter');await page.waitForFunction(()=>window.__releaseStop);await page.focus('#settingsSearchInput');await page.evaluate(()=>window.__releaseStop());await page.waitForSelector('#fsStartBtn');
+ await page.$eval('#fsStopBtn',n=>{n.focus();n.click();});await page.waitForFunction(()=>window.__releaseStop);await page.focus('#settingsSearchInput');await page.evaluate(()=>window.__releaseStop());await page.waitForSelector('#fsStartBtn');
  assert.equal(await page.evaluate(()=>document.activeElement.id),'settingsSearchInput');
 });
 
@@ -193,4 +194,18 @@ test('phone close skips an occluded desktop fallback and focuses native More',as
  await page.waitForSelector('.ccc-phone-backdrop [data-act="enable"]');await page.keyboard.press('Escape');
  assert.equal(await page.evaluate(()=>document.activeElement.matches('[data-mobile-nav-menu]')),true);
  assert.equal(await page.evaluate(()=>{const n=document.activeElement,r=n.getBoundingClientRect(),top=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return top===n||n.contains(top);}),true);
+});
+
+test('catalog and dedicated sections reuse one inline editor and preserve its draft',async t=>{
+ const {page,requests}=await open(t,390);
+ await page.$eval('#voiceMaxMinutes',n=>n.value='37');
+ for(const section of ['voice','network','leftover','capabilities']){
+  await page.evaluate(section=>window.__navigate(section),section);
+  assert.equal(await page.$$eval('#voiceMaxMinutes',nodes=>nodes.length),1);
+  assert.equal(await page.$eval('#voiceMaxMinutes',n=>n.value),'37');
+ }
+ assert.equal(await page.$eval('#capability-voice #voiceSetup',n=>!!n.getClientRects().length),true);
+ assert.equal(await page.$eval('#capability-remote #phoneAccessSetup',n=>!!n.getClientRects().length),true);
+ assert.deepEqual(await page.$$eval('#settingsCapabilities details:not([open]),#settingsCapabilities .capability-gate,#settingsCapabilities .capability-actions',nodes=>nodes.map(n=>n.outerHTML)),[]);
+ assert.equal(await page.$$eval('.ccc-phone-backdrop',nodes=>nodes.length),0);assert.deepEqual(posts(requests),[]);
 });

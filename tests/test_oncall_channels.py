@@ -256,6 +256,11 @@ def test_required_fields_shape():
 
 
 MINIMAL = {
+    "call": {"sms_channel": "sms"},
+    "slack": {"token_vault": "test-token", "owner": "OWNER"},
+    "discord": {"token_vault": "test-token", "owner": "OWNER", "channel_id": "ROOM"},
+    "matrix": {"token_vault": "test-token", "owner": "OWNER", "channel_id": "ROOM", "api_base": "http://localhost"},
+    "mattermost": {"token_vault": "test-token", "owner": "OWNER", "channel_id": "ROOM", "api_base": "http://localhost"},
     "email": {"address": "oncall@gmail.com", "password_vault": "mail-pw", "owner": "sam@example.com"},
     "telegram": {"token_vault": "tg-token"},
     "ntfy": {"topic": "alerts"},
@@ -275,7 +280,7 @@ def test_build_every_type():
         assert isinstance(ch, channels.Channel)
         assert ch.type == ctype
         assert ch.id == f"my-{ctype}"
-        assert ch.can_receive is (ctype != "command")
+        assert ch.can_receive is (ctype not in ("command", "call"))
         assert ch.last_error == ""
 
 

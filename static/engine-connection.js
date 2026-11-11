@@ -15,9 +15,7 @@
   }
   const button = (label, action, row, disabled=false, extra='') => '<button type="button" class="settings-action-btn" id="engineConnection-'+action+'" data-eng-act="'+action+'" data-eng="'+escape(row.engine)+'"'+(disabled?' disabled':'')+extra+'>'+escape(label)+'</button>';
   const command = (label, value) => value ? '<div class="eng-cmd"><span class="eng-cmd-label">'+label+'</span><code>'+escape(value)+'</code><button type="button" class="eng-cmd-copy" data-eng-copy="'+escape(value)+'">Copy</button></div>' : '';
-  const section = (title, body, collapsed=false) => collapsed
-    ? '<details class="engine-connection-step" data-connection-step="'+escape(title.split(' · ')[0])+'"><summary>'+title+'</summary>'+body+'</details>'
-    : '<section class="engine-connection-step"><h3>'+title+'</h3>'+body+'</section>';
+  const section = (title, body) => '<section class="engine-connection-step"><h3>'+title+'</h3>'+body+'</section>';
 
   function render(next, state={}) {
     if (!mounted) return;
@@ -39,8 +37,6 @@
     const list=get('engList'), row=rows.find(item=>item.engine===selected);
     if (!row) { panelSignature='';list.textContent='No engine status available. Recheck to retry.';return; }
     const oldFocus=list.contains(document.activeElement)?document.activeElement.id:'';
-    const disclosureState=list.querySelector('#engineConnectionPanel')?.dataset.engine===row.engine
-      ? new Map([...list.querySelectorAll('details')].map(node=>[node.dataset.connectionStep||'availability',node.open])) : new Map();
     const loginPanel=list.querySelector('.onb-login-panel');
     const loginFocus=loginPanel?.contains(document.activeElement)?document.activeElement:null;
 
@@ -77,12 +73,11 @@
       +(api.sessionEngines.includes(row.engine)?button('Continue to new session','session',row,unavailable||!found.session):'')
       +'<p>Opening the composer follows native behavior, which may prewarm an agent process. This setup never sends a prompt automatically or changes saved defaults.</p>';
     list.innerHTML='<div id="engineConnectionPanel" class="engine-connection-panel" data-engine="'+escape(row.engine)+'"><h2>'+escape(row.meta.label)+'</h2><p>'+escape(found.label)+'</p>'
-      +section(row.installed?'Install · CLI detected':'Install',install,row.installed)+section(row.auth===true?'Authenticate · local sign-in evidence detected':'Authenticate',auth,row.auth===true||!row.installed)+section('Check connection',test)+section('Choose defaults',defaultBody)+section('Use this engine',launch)
-      +'<details class="engine-connection-details"><summary>Engine details & availability</summary><p>'+escape(row.bin||'No binary detected')+'</p>'
+      +section(row.installed?'Install · CLI detected':'Install',install)+section(row.auth===true?'Authenticate · local sign-in evidence detected':'Authenticate',auth)+section('Check connection',test)+section('Choose defaults',defaultBody)+section('Use this engine',launch)
+      +'<section class="engine-connection-details"><h3>Engine details & availability</h3><p>'+escape(row.bin||'No binary detected')+'</p>'
       +(row.email?'<p>Account: '+escape(row.email)+'</p>':'')+(row.usage?api.usageHtml(row):'<p>No current usage signal for this engine.</p>')
-      +'<p>Availability controls which engine pickers offer this engine; it does not install or sign in.</p><button type="button" id="engineConnectionAvailability" class="settings-toggle'+(row.disabled?'':' is-on')+'" role="switch" aria-checked="'+!row.disabled+'" data-eng-enable="'+escape(row.engine)+'" aria-label="Use '+escape(row.meta.label)+' in CCC"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button></details>'
+      +'<p>Availability controls which engine pickers offer this engine; it does not install or sign in.</p><button type="button" id="engineConnectionAvailability" class="settings-toggle'+(row.disabled?'':' is-on')+'" role="switch" aria-checked="'+!row.disabled+'" data-eng-enable="'+escape(row.engine)+'" aria-label="Use '+escape(row.meta.label)+' in CCC"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></button></section>'
       +'<div class="eng-links">'+links.map(([label,url])=>'<a class="eng-link" target="_blank" rel="noopener noreferrer" href="'+escape(url)+'">'+escape(label)+' ↗</a>').join('')+'</div></div>';
-    for(const node of list.querySelectorAll('details')){const key=node.dataset.connectionStep||'availability';if(disclosureState.has(key))node.open=disclosureState.get(key);}
     if(login?.panel)get('engineConnectionLoginHost')?.append(login.panel);
     if(loginFocus?.isConnected)loginFocus.focus({preventScroll:true});
     else if(oldFocus)get(oldFocus)?.focus({preventScroll:true});

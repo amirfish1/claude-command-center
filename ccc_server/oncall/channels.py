@@ -373,6 +373,11 @@ _FIELDS = {
         _field("db_path", "Messages database", optional=True,
                placeholder="~/Library/Messages/chat.db"),
     ],
+    "call": [
+        _field("sms_channel", "SMS reply channel"),
+        *[_field(n, n.replace("_", " "), optional=True) for n in
+          ("kinds", "after_minutes", "hourly_cap", "during_quiet")],
+    ],
     "sms": _TWILIO_FIELDS + [
         _field("api_base", "API address", optional=True, placeholder="https://api.twilio.com"),
     ],
@@ -385,6 +390,16 @@ _FIELDS = {
         _field("owner", "Recipient", optional=True, placeholder="you@example.com"),
     ],
 }
+
+
+for _kind in ('slack', 'discord', 'matrix', 'mattermost'):
+    _FIELDS[_kind] = [
+        _field('token_vault', 'Bot access token', secret=True),
+        _field('owner', 'Your user ID'),
+    ]
+    if _kind != 'slack':
+        _FIELDS[_kind].append(_field('channel_id', 'Channel ID'))
+    _FIELDS[_kind].append(_field('api_base', 'Server URL', optional=_kind in ('slack', 'discord')))
 
 
 def required_fields(channel_type):
@@ -409,6 +424,7 @@ class Channel:
         self.run = run or subprocess.run
         self.last_error = ""
         self._mem = {}
+        self._poll_updates = None
         self._secret_values = set()
         self._note = ""
 
@@ -448,16 +464,26 @@ class Channel:
         self.last_error = receipt.error
         return receipt
 
+    @property
+    def durable_poll(self):
+        return self.kv is not None and hasattr(self.kv, "stage_poll")
+
     def poll(self):
         """New inbound messages since the last poll. Never raises."""
         self._note = ""
+        durable = self.durable_poll
+        self._poll_updates = {} if durable else None
         try:
             out = list(self._poll() or [])
+            if durable:
+                self.kv.stage_poll(out, self._poll_updates)
             self.last_error = self._scrub(self._note)
             return out
         except Exception as exc:
             self.last_error = self._scrub(_describe(exc)) or "Poll failed."
             return []
+        finally:
+            self._poll_updates = None
 
     # -- subclass hooks --
     def _check(self):
@@ -502,13 +528,17 @@ class Channel:
 
     def _get(self, name, default=None):
         key = self._key(name)
+        if self._poll_updates is not None and key in self._poll_updates:
+            return self._poll_updates[key]
         if self.kv is None:
             return self._mem.get(key, default)
         return self.kv.kv_get(key, default)
 
     def _set(self, name, value):
         key = self._key(name)
-        if self.kv is None:
+        if self._poll_updates is not None:
+            self._poll_updates[key] = value
+        elif self.kv is None:
             self._mem[key] = value
         else:
             self.kv.kv_set(key, value)
@@ -968,17 +998,22 @@ class NtfyChannel(Channel):
         return True, "Connected."
 
     def _send(self, msg):
-        payload = {"topic": self.topic, "message": _clip_bytes(msg.text, NTFY_MESSAGE_BYTES)}
         subject = " ".join(str(msg.subject or "").split())
+        text = str(msg.text or "")
+        if subject and text.startswith(subject):
+            text = text[len(subject):].lstrip("\n")  # the title already says it
+        payload = {"topic": self.topic, "message": _clip_bytes(text, NTFY_MESSAGE_BYTES)}
         if subject:
             payload["title"] = _clip_bytes(subject, 250)
         thread = str(msg.thread or "").strip()
         actions = []
-        for choice in [str(c).strip() for c in (msg.choices or ()) if str(c).strip()][:3]:
+        pairs = [(str(c[0]).strip(), str(c[1]).strip()) if isinstance(c, (tuple, list))
+                 else (str(c).strip(),) * 2 for c in (msg.choices or ())]
+        for choice, reply in [p for p in pairs if p[0] and p[1]][:3]:
             # The access token is deliberately left out: it would be readable by
             # every subscriber of the topic.
             actions.append({"action": "http", "label": choice, "url": self._reply_url(),
-                            "method": "POST", "body": f"{thread} {choice}" if thread else choice,
+                            "method": "POST", "body": f"{thread} {reply}" if thread else reply,
                             "clear": True})
         if actions:
             payload["actions"] = actions
@@ -997,18 +1032,21 @@ class NtfyChannel(Channel):
             now = int(self.clock())
             events = self._fetch(now)
             newest = events[-1] if events else {}
+            self._set("baseline", now)
             self._set("cursor", {"id": str(newest.get("id") or ""),
                                  "time": _int(newest.get("time"), now)})
             self._set("seen", [str(e["id"]) for e in events][-50:])
             return []
         last_id, last_time = str(cursor.get("id") or ""), _int(cursor.get("time"))
+        baseline = self._get("baseline", last_time)
+        self._set("baseline", baseline)
         events = self._fetch(last_id or last_time)
         seen = list(self._get("seen", []) or [])
         out = []
         for event in events:
             event_id, when = str(event["id"]), _int(event.get("time"))
             # A server that no longer knows our cursor id replays its whole cache.
-            if event_id in seen or (last_id and when < last_time):
+            if event_id in seen or when < baseline:
                 continue
             seen.append(event_id)
             last_id, last_time = event_id, max(last_time, when)
@@ -1288,6 +1326,15 @@ class TwilioChannel(Channel):
             self._set("pending", pending[-10:])
         return receipt
 
+    def _template_problem(self, item, error):
+        self._note = error
+        if self.kv is not None and hasattr(self.kv, "alert_upsert"):
+            self.kv.alert_upsert(
+                f"whatsapp-template-problem:{self.id}:{item['sid']}", kind="delivery_problem",
+                title="WhatsApp delivery needs review", needs_reply=False,
+                body=f"Fallback for message {item['sid']}: {error}. No automatic retry."
+                     f"\n\nOriginal message:\n{item['text']}", now=self.clock())
+
     def _follow_up(self):
         """Retry accepted WhatsApp messages that later failed the 24 hour rule."""
         pending = list(self._get("pending", []) or [])
@@ -1302,9 +1349,31 @@ class TwilioChannel(Channel):
                 status, data = self._call("GET", f"/Messages/{sid}.json")
                 if _int(data.get("error_code")) == _TWILIO_WINDOW_CODE:
                     if self.template_sid:
-                        receipt = self._template(item["to"], item["text"])
-                        if not receipt.ok:
-                            self._note = receipt.error
+                        key = f"whatsapp-template:{self.id}:{item['sid']}"
+                        if self.kv is not None and hasattr(self.kv, "claim_once"):
+                            claimed = self.kv.claim_once(key)
+                            previous = self.kv.kv_get(key)
+                        else:
+                            claimed = key not in self._mem
+                            previous = self._mem.setdefault(key, True)
+                        if not claimed:
+                            if previous != "sent":
+                                self._template_problem(item, "The fallback outcome is unknown")
+                            continue
+                        try:
+                            receipt = self._template(item["to"], item["text"])
+                        except Exception:
+                            self._template_problem(item, "The fallback outcome is unknown")
+                            continue
+                        if receipt.ok:
+                            # Commit outside the polling cursor buffer: this is an
+                            # outbound side effect, not part of receiving a page.
+                            if self.kv is not None:
+                                self.kv.kv_set(key, "sent")
+                            else:
+                                self._mem[key] = "sent"
+                        else:
+                            self._template_problem(item, receipt.error)
                     else:
                         self._note = WHATSAPP_WINDOW_ERROR
                 elif status == 200 and data.get("status") in ("accepted", "scheduled", "queued", "sending"):
@@ -1347,6 +1416,25 @@ class TwilioChannel(Channel):
         return out
 
 
+class CallChannel(TwilioChannel):
+    """Speak only. Answers arrive on the linked SMS channel."""
+    type = "call"
+    can_receive = False
+
+    def _send(self, msg):
+        from .calls import spoken
+        twiml = '<Response><Say>' + _html.escape(spoken(msg.text, msg.choices)) + '</Say><Hangup/></Response>'
+        status, data = self._call('POST', '/Calls.json', form={
+            'To': self.owner, 'From': self._address(self.cfg.get('from')),
+            'Twiml': twiml, 'Timeout': '30'})
+        if 200 <= status < 300 and data.get('sid'):
+            return Receipt(True, external_id=str(data['sid']))
+        return Receipt(False, error=f'Call request failed (HTTP {status}).', uncertain=status >= 500)
+
+    def _poll(self):
+        return []
+
+
 # -- command ----------------------------------------------------------------
 
 class CommandChannel(Channel):
@@ -1380,7 +1468,7 @@ class CommandChannel(Channel):
         if proc.returncode == 0:
             return Receipt(ok=True, external_id="")
         detail = str(proc.stderr or "").strip().splitlines()
-        return Receipt(ok=False, error=f"Command exited {proc.returncode}."
+        return Receipt(ok=False, uncertain=True, error=f"Command exited {proc.returncode}."
                        + (f" {detail[-1]}" if detail else ""))
 
 
@@ -1392,6 +1480,7 @@ _CLASSES = {
     "ntfy": NtfyChannel,
     "imessage": IMessageChannel,
     "sms": TwilioChannel,
+    "call": CallChannel,
     "whatsapp": TwilioChannel,
     "command": CommandChannel,
 }
@@ -1401,7 +1490,12 @@ def build(cfg, **kw):
     """The channel object for one config entry. ValueError names what is wrong."""
     cfg = cfg if isinstance(cfg, dict) else {}
     ctype = str(cfg.get("type") or "")
-    cls = _CLASSES.get(ctype)
+    if ctype in ('slack', 'discord', 'matrix', 'mattermost'):
+        from importlib import import_module
+        module = import_module('.' + ctype, __package__)
+        cls = getattr(module, ctype.capitalize() + 'Channel')
+    else:
+        cls = _CLASSES.get(ctype)
     if cls is None:
         raise ValueError(f"Unknown channel type {ctype!r}.")
     missing = cls.missing(cfg)

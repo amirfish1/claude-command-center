@@ -1,0 +1,39 @@
+{
+  "started_utc": "2026-11-11T00:13:33.314647+00:00",
+  "network": "none",
+  "source": "tracked working-tree snapshot",
+  "results": [
+    {
+      "image": "ubuntu:24.04",
+      "environment": "clean",
+      "route": "pipx",
+      "command": "pipx run --spec /fixture/wheels/claude_command_center-5.44.0-py3-none-any.whl claude-command-center",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 2.516,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: pipx: command not found\n"
+    },
+    {
+      "image": "ubuntu:24.04",
+      "environment": "remediated",
+      "route": "pipx",
+      "command": "pipx run --spec /fixture/wheels/claude_command_center-5.44.0-py3-none-any.whl claude-command-center",
+      "exit_code": null,
+      "timed_out": true,
+      "elapsed_seconds": 76.265,
+      "output": "bash=present\ncurl=present\ngit=present\npython3=present\nuv=present\nuvx=present\npipx=present\nbrew=missing\n\n--- documented command ---\ncreating virtual environment...\ncreating shared libraries...\nupgrading shared libraries...\nERROR: Could not find a version that satisfies the requirement pip>=23.1 (from versions: none)\nERROR: No matching distribution found for pip>=23.1\nFailed to upgrade shared libraries\nTraceback (most recent call last):\n  File \"/usr/lib/python3/dist-packages/pipx/shared_libs.py\", line 119, in upgrade\n    subprocess_post_check(upgrade_process)\n  File \"/usr/lib/python3/dist-packages/pipx/util.py\", line 205, in subprocess_post_check\n    raise PipxError(f\"{' '.join([str(x) for x in completed_process.args])!r} failed\")\npipx.util.PipxError: '/tmp/ccc-home/.local/share/pipx/shared/bin/python -m pip --no-input\n--disable-pip-version-check install --force-reinstall -q --upgrade pip >=\n23.1' failed\ndetermining package name from '/fixture/wheels/claude_command_center-5.44.0-py3-none-any.whl'...\ncreating virtual environment...\ninstalling claude-command-center from spec '/fixture/wheels/claude_command_center-5.44.0-py3-none-any.whl'...\n"
+    }
+  ],
+  "source_head": "a4d9e604aad96a725bab4684266c00373cf95a9b",
+  "installer_sha256": "9ea75df9982a8334643983696b50d11bd3a50cfa1f71647d02839323d0f87707",
+  "wheel": "/tmp/ccc-first-run-after-wheel/claude_command_center-5.44.0-py3-none-any.whl",
+  "remediation": [
+    {
+      "image": "ubuntu:24.04",
+      "command": "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git python3 curl ca-certificates && rm -rf /var/lib/apt/lists/* && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python3-venv pipx && python3 -m pip install --break-system-packages uv",
+      "exit_code": 0,
+      "elapsed_seconds": 233.142,
+      "output": ""
+    }
+  ]
+}

@@ -24,6 +24,24 @@
     }
     if(otherList.children.length){const wrapper=make('li');wrapper.className='settings-health-other';wrapper.append(other);list.append(wrapper);}
     if(focus&&document.activeElement===document.body){const target=get(focus);target?.closest('details')?.setAttribute('open','');target?.focus({preventScroll:true});}
+    renderInline();
+  }
+  // Settings > System lists confirmed issues in place; fixes stay in Settings.
+  function renderInline(failed){
+    const host=get('settingsHealthInline');if(!host)return;
+    const issues=snapshot&&Date.now()<=expires?snapshot.checks.filter(row=>row.state==='issue'):[];
+    const head=make('div');head.className='settings-row';
+    const main=make('div');main.className='settings-row-main';main.append(Object.assign(make('div','Health checks'),{className:'settings-row-label'}));
+    const state=make('span',failed?'Unavailable':!snapshot?'Checking…':issues.length?issues.length+(issues.length===1?' issue':' issues'):'No issues');state.className='settings-health-inline-state';state.dataset.state=issues.length?'issue':'ok';
+    const control=make('div');control.className='settings-row-control';control.append(state);head.append(main,control);
+    const rows=issues.map(row=>{
+      const item=make('div');item.className='settings-row settings-health-inline-issue';item.dataset.healthInline=row.id;
+      const body=make('div');body.className='settings-row-main';body.append(Object.assign(make('div',row.label),{className:'settings-row-label'}),Object.assign(make('div',row.message),{className:'settings-row-desc'}));item.append(body);
+      const target=row.repair.startsWith('engine')?'engines':row.repair==='policy'?'defaults':row.repair==='connections'?'vault':row.repair==='capabilities'?'capabilities':'';
+      if(target){const fix=make('button','Fix');fix.type='button';fix.className='settings-action-btn';fix.dataset.healthInlineFix=target;const c=make('div');c.className='settings-row-control';c.append(fix);item.append(c);}
+      return item;
+    });
+    host.replaceChildren(head,...rows);
   }
   async function refresh(){
     if(busy)return;const initiated=document.activeElement===get('settingsHealthRefresh');busy=true;get('settingsHealthRefresh').disabled=true;
@@ -36,6 +54,7 @@
       get('settingsHealthStatus').textContent='This CCC host · Saved policy and cached observations only. Refresh does not test providers, start processes or change configuration.';
     }catch(_){
       if(snapshot){expires=0;render();}else get('settingsHealthChecks').replaceChildren();
+      renderInline(true);
       get('settingsHealthStatus').textContent='Health evidence unavailable. Retry refresh; no healthy result can be inferred. Existing diagnostics and setup remain available.';
     }finally{busy=false;get('settingsHealthRefresh').disabled=false;if(initiated&&document.activeElement===document.body)get('settingsHealthRefresh').focus();}
   }
@@ -72,7 +91,11 @@
     root.addEventListener('click',e=>{const b=e.target.closest('[data-health-repair]');if(b)repair(b);});refreshButton.addEventListener('click',refresh);
     const returnButton=make('button','Back to health checks');returnButton.id='settingsHealthReturn';returnButton.type='button';returnButton.className='settings-action-btn';returnButton.hidden=true;
     get('settingsModal').querySelector('.settings-modal').prepend(returnButton);returnButton.addEventListener('click',back);
-    const maintenance=get('settingsSection-maintenance');if(maintenance){const b=make('button','Open health checks');b.type='button';b.id='settingsHealthOpen';b.className='settings-action-btn';const row=make('div');row.className='settings-row';row.dataset.keywords='health checks doctor repair installation routes diagnostics';row.append(b);maintenance.prepend(row);b.addEventListener('click',()=>{api.closeSettings();api.openHealth();get('settingsHealthRefresh').focus();});}
+    const maintenance=get('settingsSection-maintenance');if(maintenance){const b=make('button','Open health checks');b.type='button';b.id='settingsHealthOpen';b.className='settings-action-btn';const row=make('div');row.className='settings-row';row.dataset.keywords='health checks doctor repair installation routes diagnostics';row.append(b);row.hidden=true;maintenance.prepend(row);
+      const inline=make('div');inline.id='settingsHealthInline';inline.dataset.keywords='health checks doctor repair installation routes diagnostics';row.after(inline);renderInline();
+      inline.addEventListener('click',e=>{const fix=e.target.closest('[data-health-inline-fix]');if(fix)api.navigate(fix.dataset.healthInlineFix);});
+      new MutationObserver(()=>{if(maintenance.classList.contains('is-active-section')&&!get('settingsModal').hidden&&(!snapshot||Date.now()>expires))refresh();}).observe(maintenance,{attributes:true,attributeFilter:['class']});
+b.addEventListener('click',()=>{api.closeSettings();api.openHealth();get('settingsHealthRefresh').focus();});}
     new MutationObserver(()=>{if(get('settingsModal').hidden){returnButton.hidden=true;}}).observe(get('settingsModal'),{attributes:true,attributeFilter:['hidden']});
     get('sysTabBtnHealth').textContent='Health checks';get('sysTabBtnStatus').textContent='Services';
     // Clock expiry changes only presentation, never polls or probes.

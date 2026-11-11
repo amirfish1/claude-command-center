@@ -394,33 +394,36 @@ FIXED_NOTE = "The problem you reported is fixed: {title}. Reply to this message 
 def collect_closed(cfg, store, chans, wt, *, now=None):
     """A filed report whose ticket closed -> a fixed notice, once per ticket."""
     now = time.time() if now is None else now
-    filed = [r for r in store.reports(state="filed", limit=500) if r.get("ticket_ref")]
-    by_queue = {}
-    for report in filed:
-        by_queue.setdefault(report.get("queue") or cfg.get("queue") or "", []).append(report)
+    queues = list(dict.fromkeys(q or cfg.get("queue") or "" for q in store.filed_queues()))
     done = 0
-    for queue, reports in by_queue.items():
+    for queue in queues:
         if not queue:
             continue
+        cursor_key = "closed_page:" + queue
+        offset = store.kv_get(cursor_key, 0)
         try:
-            active = {str(t.get("ref")) for t in wt.ls(queue, "active", limit=0)}
+            closed = wt.ls(queue, "closed", limit=100, offset=offset)
         except wtmod.WTError as exc:
             store.log("wt", f"ls {queue}: {exc}", now=now)
             continue
-        for report in reports:
+        for item in closed:
+            ref = str(item.get("ref") or "")
+            report = store.report_by_ref(ref)
+            if not report or report["state"] != "filed":
+                continue
             ci_id = next((s.get("id") for s in cfg.get("sources", [])
                           if s.get("type") == "ci" and report.get("source") == "source:" + s.get("id", "")), None)
-            if ci_id and report.get("fingerprint") not in store.kv_get(f"src:{ci_id}:confirmed", []):
+            confirmed = (store.kv_get(f"src:{ci_id}:journal", {}) or {}).get("confirmed",
+                         store.kv_get(f"src:{ci_id}:confirmed", [])) if ci_id else []
+            if ci_id and report.get("fingerprint") not in confirmed:
                 continue  # A worker closing its ticket is not evidence of green CI.
             ref = report["ticket_ref"]
-            if ref in active:
-                continue
-            item = wt.find(ref)
-            if not item or str(item.get("status") or "") != "closed":
+            if str(item.get("status") or "") != "closed":
                 continue
             store.report_update(report["id"], state="closed")
             done += 1
             _closed_notice(cfg, store, chans, wt, report, item, now)
+        store.kv_set(cursor_key, offset + len(closed) if len(closed) == 100 else 0)
     return done
 
 

@@ -38,6 +38,14 @@ os.environ.setdefault(
 )
 
 
+# On-call (preview) alerts a real person. With the preview on, a test that
+# reports a stopped or waiting session would raise it in the user's live
+# On-call store and send it to their phone. Point every test process at an
+# empty store; On-call tests set their own directory on top of this.
+if not os.environ.get("CCC_ONCALL_STATE_DIR", "").strip():
+    os.environ["CCC_ONCALL_STATE_DIR"] = tempfile.mkdtemp(prefix="ccc-test-oncall-")
+
+
 @pytest.fixture(autouse=True)
 def _reset_ccc_ttl_caches():
     def _reset():

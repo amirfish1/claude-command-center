@@ -350,6 +350,14 @@ class _OncallDeps:
             return False, str(result.get("error") or "the session did not take the message")
         return True, ""
 
+    def label(self, sid):
+        """(display name, project folder) from the cached census map; no I/O."""
+        from ccc_server import notify as _notify
+        ident = _notify._session_identity(sid)
+        name = str(ident.get("name") or "").strip()[:60]
+        folder = os.path.basename(str(ident.get("repo_path") or "").rstrip("/"))
+        return name, folder
+
     def question(self, sid, store, since=0):
         # Called once per idle period per session (session_signals.observe),
         # never per tick: the Claude path lookup walks the projects folder.
@@ -359,7 +367,17 @@ class _OncallDeps:
             return None
         transcript = (_resolve_codex_rollout_path(sid) if engine == "codex"
                       else _resolve_conversation_path(sid))
-        return question(store, sid, transcript, since)
+        # Only sessions using the optional agent plugin request every idle turn.
+        try:
+            marker = json.loads((SIDECAR_STATE_DIR / (sid + ".json")).read_text())
+            if marker.get("oncall_hook_wait") is True:
+                return None
+            notify_idle = marker.get("oncall_notify_idle") is True
+        except (OSError, ValueError, AttributeError):
+            notify_idle = False
+        from ccc_server.oncall.agent_wait import handled
+        signal = question(store, sid, transcript, since, notify_idle=notify_idle)
+        return None if handled(store, sid, signal) else signal
 
     def permission(self, sid):
         engine = _detect_session_engine(sid)
@@ -489,8 +507,11 @@ def _oncall_loop():
         time.sleep(3.0)
 
 
+_ONCALL_DASHBOARD_ROUTES = {("GET", "/api/oncall/home"), ("POST", "/api/oncall/answer")}
+
+
 def _oncall_request(handler, method, path, payload=None):
-    """Serve /api/oncall/*: preview-flag gated and local-only."""
+    """Serve /api/oncall/*: preview-flag gated; setup is local-only."""
     if not _feature_flag("oncall") and not (method == "GET" and path == "/api/oncall/week"):
         handler.send_json({"ok": False, "error": "On-call is a preview and it is off. Turn it on with: ccc oncall setup"}, 404)
         return
@@ -499,7 +520,13 @@ def _oncall_request(handler, method, path, payload=None):
     local_origins = {f"{scheme}://{host}:{port}"
                      for scheme in ("http", "https")
                      for host in ("localhost", "127.0.0.1", "[::1]")}
-    if ((origin and origin not in local_origins)
+    # The home screen and its answers are session-level work, like reading and
+    # answering a session, so they follow the dashboard's own access boundary
+    # (origin allow-list and PIN, checked before this point). Setup stays local.
+    if (method, path) in _ONCALL_DASHBOARD_ROUTES:
+        if not handler._check_same_origin():
+            return
+    elif ((origin and origin not in local_origins)
             or phone_access.is_remote_request(handler.client_address[0], handler.headers)):
         handler.send_json({"ok": False, "error": "On-call settings are local-only"}, 403)
         return
@@ -24243,7 +24270,7 @@ def _flow_index_payload():
     return {"ok": True, "entries": entries, "count": len(entries)}
 
 # Sidecar state (written by hooks)
-SIDECAR_STATE_DIR = Path.home() / ".claude" / "command-center" / "live-state"
+SIDECAR_STATE_DIR = Path(os.environ.get("CCC_STATE_DIR") or COMMAND_CENTER_STATE_DIR) / "live-state"
 HOOK_SCRIPTS_DIR = Path.home() / ".claude" / "command-center" / "hooks"
 HOOK_MARKER = "command-center/hooks/"
 CCC_HOOK_SCRIPT_NAMES = (

@@ -213,6 +213,25 @@ for(const width of [1440,390]){
   await page.click(width<=1200?'#sidebarMoreFilters [data-native-view]':'#convList [data-native-view]');
   assert.equal(await page.evaluate(()=>document.body.dataset.nativeView),'clicked');
  });
+ test(`repositories page lists every repository with avatar mode and inline actions at ${width}px`,async t=>{
+  const page=await open(t,width);
+  await page.evaluate(async()=>{const list=document.createElement('div');list.id='repoSettingsList';document.body.append(list);await renderRepoSettingsList();});
+  const rows=await page.$$eval('#repoSettingsList [data-repo-row]',els=>els.map(el=>[el.dataset.repoRow,el.querySelector('.repo-settings-mode').textContent,!!el.querySelector('[data-repo-upload]'),!!el.querySelector('[data-repo-auto]'),!!el.querySelector('[data-repo-avatar]')]));
+  assert.ok(rows.length>=2);assert.equal(await page.$$eval('#repoSettingsList select',els=>els.length),0);
+  for(const row of rows){assert.equal(row[1],row[3]?'Custom':'Auto mode');assert.equal(row[2],true);assert.equal(row[4],true);}
+  const target=rows[0][0];const [chooser]=await Promise.all([page.waitForFileChooser(),page.evaluate(()=>document.querySelector('#repoSettingsList [data-repo-upload]').click())]);
+  const imageFile=path.join(scratch,'list-logo.svg');fs.writeFileSync(imageFile,'<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="blue"/></svg>');
+  await chooser.accept([imageFile]);await page.waitForFunction(()=>document.body.dataset.toast==='Repo avatar saved.');
+  assert.equal(requests.filter(req=>req.method==='POST').at(-1).body.repo_path,target);
+  await page.waitForFunction(()=>document.querySelector('#repoSettingsList [data-repo-row] .repo-settings-mode').textContent==='Custom');
+  const before=requests.length;await page.evaluate(()=>document.querySelector('#repoSettingsList [data-repo-auto]').click());
+  await page.waitForFunction(()=>document.body.dataset.toast==='Automatic repo avatar restored.');
+  assert.deepEqual(requests.slice(before).find(req=>req.method==='POST').body,{repo_path:target,image:null});
+  await page.evaluate(()=>document.querySelector('#repoSettingsList [data-repo-add]').click());
+  assert.equal(await page.$$eval('#repoSettingsAddPath',els=>els.length),1);
+  await page.evaluate(()=>document.querySelector('#repoSettingsList [data-repo-add-cancel]').click());
+  assert.equal(await page.$$eval('#repoSettingsAddPath',els=>els.length),0);
+ });
  test(`repository management retains upload/reset handlers and chooses its repository at ${width}px`,async t=>{
   const page=await open(t,width);await page.focus('[data-context-repo="repo-alpha"]');await page.keyboard.press('Enter');
   await page.waitForFunction(()=>document.getElementById('repoAvatarSelect').value==='repo-alpha');

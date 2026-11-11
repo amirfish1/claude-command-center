@@ -44,11 +44,16 @@ def render(alert):
             lines.append(f"Needs you because: {meta['why']}")
         lines += ["", "Reply with your answer."]
     elif kind in ("question", "plain_question"):
-        head = f"An agent is waiting on you (#{n})"
-        lines = [head, title, "", body, "", "Reply with your answer."]
+        head = f"Question from {title or 'an agent'} (#{n})"
+        if kind == "plain_question":
+            choices = tuple((c[0], c[1]) for c in meta.get("choices") or ()
+                            if isinstance(c, (list, tuple)) and len(c) == 2)[:3]
+        asks = choices or body.rstrip().endswith("?")
+        lines = [head, body, "", "Reply with your answer." if asks
+                 else "Reply here when done, or with a question."]
     elif kind == "permission":
-        head = f"An agent needs permission (#{n})"
-        lines = [head, title, "", body, "", "Reply allow or deny. If unavailable, answer in the session."]
+        head = f"Permission needed: {title or 'an agent'} (#{n})"
+        lines = [head, body, "", "Reply allow or deny. If unavailable, answer in the session."]
         choices = ("allow", "deny")
     elif kind == "stopped":
         head = f"An agent stopped (#{n})"
@@ -77,11 +82,18 @@ def render(alert):
         choices = ("yes", "no")
     elif kind == "fixed":
         label = "Fixed" if meta.get("outcome", "fixed") == "fixed" else "Closed without a code change"
-        head = f"{label}: {ref} (#{n})"
-        lines = [head, title]
-        if body:
-            lines.append(_clip(body, 900))
-        if meta.get("notify"):
+        name = _clip(" ".join(title.split()), 80) if title.strip() else ref
+        head = f"{label}: {name} (#{n})"
+        lines = [head]
+        # Only the outcome paragraph: the per-file detail stays on the ticket.
+        first = body.strip().split("\n\n")[0].strip()
+        if first:
+            lines.append(_clip(first, 300))
+        if ref:
+            lines.append(f"Ticket {ref}.")
+        if not meta.get("notify"):
+            lines += ["", "No action needed."]
+        else:
             who = meta.get("name") or meta.get("address") or "the reporter"
             lines += ["", f"Reply yes to tell {who} it is fixed, or no to skip."]
             choices = ("yes", "no")
@@ -143,11 +155,15 @@ def collect_decisions(cfg, store, wt, *, now=None, silent_before=""):
             key = f"wt:{ref}:{blocked_at}"
             live_keys.add(key)
             question, why = _gate_note(item.get("block_question"))
+            report = store.report_by_ref(ref)
+            ci_source = bool(report and any(
+                source.get('type') == 'ci' and report['source'] == 'source:' + source.get('id', '')
+                for source in cfg.get('sources', [])))
             row, new = store.alert_upsert(
                 key, kind="decision", ref=ref,
                 title=_clip(item.get("title") or item.get("note") or ref, 160),
                 body=_clip(question or "The agent needs a decision.", 1800),
-                meta={"queue": queue, "recommend": _clip(wtmod.recommendation(item), 400),
+                meta={"queue": queue, "call_kind": "ci_failed" if ci_source else "decision", "recommend": _clip(wtmod.recommendation(item), 400),
                       "why": _clip(why, 300)}, now=now)
             if new:
                 created += 1
@@ -184,7 +200,17 @@ def in_quiet_hours(cfg, now=None):
     quiet = cfg.get("quiet_hours")
     if not isinstance(quiet, dict) or not quiet.get("start") or not quiet.get("end"):
         return False
-    local = time.localtime(time.time() if now is None else now)
+    when = time.time() if now is None else now
+    local = None
+    zone = str(quiet.get("tz") or "").strip()
+    if zone:
+        try:
+            import datetime
+            import zoneinfo
+            local = datetime.datetime.fromtimestamp(when, zoneinfo.ZoneInfo(zone)).timetuple()
+        except Exception:
+            local = None  # an unreadable zone falls back to the machine clock
+    local = local or time.localtime(when)
     minute = local.tm_hour * 60 + local.tm_min
     start, end = _minutes(quiet["start"]), _minutes(quiet["end"])
     if start == end:
@@ -197,10 +223,12 @@ def _minutes(hhmm):
     return int(hours) * 60 + int(mins or 0)
 
 
-def alert_channels(cfg, chans):
+def alert_channels(cfg, chans, *, include_calls=False):
     """Channels that carry owner alerts: enabled, built, not marked intake-only."""
     out = []
     for entry in cfg.get("channels") or []:
+        if entry.get("type") == "call" and not include_calls:
+            continue
         if not entry.get("enabled", True) or entry.get("alerts") is False:
             continue
         # A channel set to read customer reports, with no address for the owner,
@@ -217,19 +245,34 @@ def deliver(cfg, store, chans, *, now=None):
     """Send every open alert that has not gone out. Returns how many were sent."""
     now = time.time() if now is None else now
     pending = store.unsent_alerts()
+    from . import escalation
+    escalated = escalation.deliver(cfg, store, chans, pending, now)
+    if cfg.get("escalation"):
+        from .calls import escalates
+        pending = [a for a in pending if not escalates(cfg, a)]
     if not pending or store.kv_get("paused", False):
-        return 0
+        return escalated
     targets = alert_channels(cfg, chans)
     if not targets or in_quiet_hours(cfg, now):
-        return 0
+        return escalated
     cap = int(cfg.get("hourly_cap") or HOURLY_CAP)
-    sent = 0
+    from . import rate_limit
+    budget = rate_limit.load(store, now, cap)
+    recent = {int(key) for key in budget["entries"]}
+    sent = escalated
     for alert in pending:
+        if len(recent) >= cap and alert["id"] not in recent:
+            if not store.kv_get("cap_noted", 0) or now - store.kv_get("cap_noted", 0) > 3600:
+                store.kv_set("cap_noted", now)
+                store.log("alert", f"hourly cap of {cap} reached; the rest wait", now=now)
+            break
         tries = store.kv_get(f"try:{alert['id']}", {"n": 0, "at": 0})
         if tries["n"] and 0 <= now - tries["at"] < RETRY_AFTER_S:
             continue
         if send_alert(store, targets, alert, now=now, cap=cap):
             store.alert_mark_sent(alert["id"], now=now)
+            recent.add(alert["id"])
+            rate_limit.record(store, budget, alert["id"])
             sent += 1
         elif store.owner_deliveries_in_hour(now) >= cap:
             break
@@ -255,16 +298,25 @@ def send_alert(store, targets, alert, *, now=None, cap=HOURLY_CAP):
         if previous and previous["ok"]:
             ok_any = True
             continue
-        uncertain = "Delivery interrupted; outcome unknown. No automatic retry."
-        if previous and previous["error"] == uncertain:
-            store.log("send", f"#{alert['id']} via {chan.id}: {uncertain}", now=now)
+        uncertain = "Delivery interrupted; outcome unknown."
+        if previous and store.kv_get(f"owner-repeat:{alert['id']}:{chan.id}", False):
             continue
+        repeat = bool(previous and previous["error"] in (
+            uncertain, "Delivery interrupted; outcome unknown. No automatic retry."))
+        if repeat:
+            if now - previous["sent_at"] < RETRY_AFTER_S:
+                continue
+            if not store.owner_repeat_claim(alert["id"], chan.id):
+                continue
         # Commit the intent before the provider can accept the message.
+        # The claim is one transaction: the shared hourly cap holds across processes.
         attempt = store.owner_delivery_claim(alert["id"], chan.id,
                                              getattr(chan, "owner", "") or "", now, cap)
         if attempt is None:
+            # Not sent everywhere yet: the alert stays unsent and resumes when the cap frees.
             return False
-        outgoing = _waiting_notice(store, text, exclude=alert["id"])
+        outgoing = _waiting_notice(store, ("This may be a repeat.\n\n" if repeat else "") + text,
+                                   exclude=alert["id"])
         receipt = chan.send(Outbound(text=outgoing, subject=subject, thread=alert["token"],
                                      choices=choices if alert.get("needs_reply") else ()))
         if receipt.uncertain:

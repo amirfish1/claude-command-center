@@ -42,7 +42,7 @@ class FakeWT:
     def blocked(self, queue):
         return []
 
-    def ls(self, queue, status="active", limit=200):
+    def ls(self, queue, status="active", limit=200, *, offset=None):
         return []
 
     def find(self, ref):
@@ -326,7 +326,7 @@ def test_session_questions_become_alerts_and_clear(rig, tmp_path):
     assert api.observe_sessions({"s1": {"question_waiting": False}}, waiting, describe, eng=rig.eng) == 1
     rig.eng.tick(force=True)
     text = out.read_text()
-    assert "An agent is waiting on you (#1)" in text and "Keep the old redirect" in text
+    assert "Question from checkout fix (#1)" in text and "Keep the old redirect" in text
     api.observe_sessions(waiting, {"s1": {"question_waiting": False}}, describe, eng=rig.eng)
     assert rig.eng.store.alerts(state="open") == []
     assert api.session_stopped("s2", "checkout fix", "It died mid-task.", "99", eng=rig.eng)["kind"] == "stopped"

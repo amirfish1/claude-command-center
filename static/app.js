@@ -13812,7 +13812,7 @@
           payload.presentation_mode3 = true;
         }
         if (announcedFrom) payload.announced_from = announcedFrom;
-        res = await fetch('/api/inject-input', {
+        res = await fetchInjectWithRetry('/api/inject-input', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(payload),
@@ -13829,7 +13829,7 @@
           // Retry with force_terminal — route to the terminal via osascript.
           payload.force_terminal = true;
           try {
-            res = await fetch('/api/inject-input', {
+            res = await fetchInjectWithRetry('/api/inject-input', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify(payload),
@@ -13844,7 +13844,7 @@
           // Retry with force_headless — skip the soft-block and deliver.
           payload.force_headless = true;
           try {
-            res = await fetch('/api/inject-input', {
+            res = await fetchInjectWithRetry('/api/inject-input', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify(payload),
@@ -17338,6 +17338,19 @@
     _ttsPerfTarget = _ttsSel ? 'selection' : 'last';
     _ttsSelectionReadText = _ttsSel ? data.text.trim() : '';
     _ttsStartChunkedSpeech(textToSpeak, paneId, 0, false);
+  }
+
+  // A gateway can fail while a dormant session wakes. Keep the exact body
+  // (including its idempotency key) so a lost response cannot double-send.
+  async function fetchInjectWithRetry(url, options) {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(url, options);
+      if (response.status !== 502 || attempt >= 2) return response;
+      if (response.body) {
+        try { await response.body.cancel(); } catch (_) {}
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
   }
 
   function formatInjectFailure(data, status) {
@@ -40794,12 +40807,27 @@
 
   // Idea tickets: spend the render budget on rows whose ticket is in the
   // open tab's queue, so an older ticketed session isn't crowded out.
-  function _sidebarBudgetIdeaLane(row, tab) {
+  function _sidebarBudgetIdeaLane(row, tab, byId, seen) {
     const t = row && row.idea_ticket;
-    if (!t || (!t.ref && !t.pending) || t.closed) return false;
-    // CCC-285: All tickets = Features + Small bugs.
-    if (tab === 'alltickets') return true;
-    return (t.queue === 'SMALL-BUGS') === (tab === 'smallbugs');
+    if (t && (t.ref || t.pending)) {
+      if (t.closed) return false;
+      // CCC-285: All tickets = Features + Small bugs.
+      if (tab === 'alltickets') return true;
+      return (t.queue === 'SMALL-BUGS') === (tab === 'smallbugs');
+    }
+    // The ticket's family renders inside its row. Unticketed helpers must
+    // compete in the same lane, or the budget silently removes their rows
+    // before the family renderer can see them.
+    if (!row || !byId) return false;
+    const id = String(row.session_id || row.id || '').trim();
+    const parentId = String(row.parent_session_id || row.hermes_parent_session_id
+      || continuationParentId(row) || row.continued_from_session_id || '').trim();
+    if (!parentId || parentId === id || (seen && seen.has(parentId))) return false;
+    const parent = byId.get(parentId);
+    if (!parent) return false;
+    if (!seen) seen = new Set();
+    if (id) seen.add(id);
+    return _sidebarBudgetIdeaLane(parent, tab, byId, seen);
   }
   function _boundSidebarRowsForRender(rows, limit, tab) {
     const source = Array.isArray(rows) ? rows : [];
@@ -40818,7 +40846,7 @@
       .map(row => ({
         row,
         inLane: (tab === 'coding' || tab === 'workers') ? (_sidebarBudgetLaneGuess(row, byId) === tab)
-          : (tab === 'ideas' || tab === 'smallbugs' || tab === 'alltickets') ? _sidebarBudgetIdeaLane(row, tab)
+          : (tab === 'ideas' || tab === 'smallbugs' || tab === 'alltickets') ? _sidebarBudgetIdeaLane(row, tab, byId)
           : true,
         inWindow: _archiveWindowAllowsRow(row, cutoff),
         ts: _archiveWindowRowTs(row),
@@ -40844,7 +40872,30 @@
       if (selected.size >= limit) break;
       selected.add(row);
     }
-    const result = source.filter(row => selected.has(row));
+    // Spend slots on a row and its loaded ancestors together. Otherwise a
+    // fresh child can displace its older parent and become a loose row even
+    // though both arrived in the same response. Keep the hard cap intact.
+    const familySelected = new Set();
+    const includeWithAncestors = (row) => {
+      const chain = [];
+      const seen = new Set();
+      let current = row;
+      while (current && !familySelected.has(current) && !seen.has(current)) {
+        seen.add(current);
+        chain.push(current);
+        const pid = String(current.parent_session_id || current.hermes_parent_session_id
+          || continuationParentId(current) || current.continued_from_session_id || '').trim();
+        current = pid ? byId.get(pid) : null;
+      }
+      if (familySelected.size + chain.length > limit) return;
+      chain.forEach(member => familySelected.add(member));
+    };
+    if (selectedRow) includeWithAncestors(selectedRow);
+    for (const row of ranked) {
+      if (familySelected.size >= limit) break;
+      if (selected.has(row)) includeWithAncestors(row);
+    }
+    const result = source.filter(row => familySelected.has(row));
     return { rows: result, omitted: Math.max(0, source.length - result.length) };
   }
 
@@ -45171,6 +45222,18 @@
     // (continuations and children inherit the ticket server-side). Ticketless
     // Coding rows go to Other while the flag is on.
     const _ideaTicketsOn = ideaTicketsOn();
+    const _ideaTicketFor = (c) => {
+      const seen = new Set();
+      while (c) {
+        const id = _allTabSessionId(c);
+        if (seen.has(id)) break;
+        seen.add(id);
+        const ticket = c.idea_ticket;
+        if (ticket && (ticket.ref || ticket.pending)) return ticket;
+        c = _allTabById.get(_allTabParentId(c));
+      }
+      return null;
+    };
     const _ideaTicketLane = (c) => {
       const t = _ideaTicketsOn && c && c.idea_ticket;
       // A UI spawn still waiting for its first reply sits in Ideas until
@@ -45228,7 +45291,10 @@
       const members = new Map();
       candidates.forEach(c => {
         if (laneOf(c) !== lane || !inWindow(c)) return;
-        const ticket = c.idea_ticket || {};
+        // A newly discovered helper may not have a server-enriched ticket
+        // yet. Group it with its ancestor rather than making a standalone
+        // session row that causes family dedup to delete the nested copy.
+        const ticket = _ideaTicketFor(c) || {};
         const ref = ticket.ref || (ticket.pending && 'pending:' + _allTabSessionId(c))
           || (lane === 'alltickets' && 'session:' + _allTabSessionId(c));
         if (!ref) return;
@@ -83091,7 +83157,7 @@
             idempotency_key: idempotencyKey,
           };
           if (announcedFrom) payload.announced_from = announcedFrom;
-          res = await fetch('/api/inject-input', {
+          res = await fetchInjectWithRetry('/api/inject-input', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload),
@@ -88883,7 +88949,6 @@
     carModePollTimer = setInterval(fetchCarModeStatus, 3000);
   }
   function closeCarModeModal() {
-    if (window.cccVoiceSetup?.mounted()) { document.getElementById('voiceSetup-operator').open = false; }
     if ($carModeModal) $carModeModal.classList.remove('open');
     if (carModePollTimer) { clearInterval(carModePollTimer); carModePollTimer = null; }
   }
@@ -88944,7 +89009,7 @@
     }
   }
   if ($carModeMenuBtn) $carModeMenuBtn.addEventListener('click', () => {
-    closeSettingsModal();
+    if (!document.getElementById('carModeModal')?.classList.contains('settings-inline-dialog')) closeSettingsModal();
     openCarModeModal();
   });
   if ($carModeBackdrop) $carModeBackdrop.addEventListener('click', closeCarModeModal);
@@ -90171,18 +90236,12 @@
   }
 
   if ($networkBtn) $networkBtn.addEventListener('click', () => {
-    closeSettingsModal();
+    if (!document.getElementById('networkModal')?.classList.contains('settings-inline-dialog')) closeSettingsModal();
     networkOpen();
   });
   // Phone access wizard (static/phone-access.js, preview flag phone_access).
   const $phoneAccessBtn = document.getElementById('phoneAccessBtn');
-  if ($phoneAccessBtn) $phoneAccessBtn.addEventListener('click', () => {
-    closeSettingsModal();
-    if (window.cccPhoneAccess) {
-      // Merely viewing setup must not enable a flag or change sharing.
-      window.cccPhoneAccess.open();
-    }
-  });
+  window.cccPhoneAccess?.mount(document.getElementById('phoneAccessSetup'));
   if ($networkBackdrop) $networkBackdrop.addEventListener('click', networkClose);
   if ($networkCancelBtn) $networkCancelBtn.addEventListener('click', networkClose);
   if ($networkSaveBtn) $networkSaveBtn.addEventListener('click', networkSave);
@@ -90464,7 +90523,7 @@
   }
 
   if ($fedBtn) $fedBtn.addEventListener('click', () => {
-    closeSettingsModal();
+    if (!document.getElementById('fedPeersModal')?.classList.contains('settings-inline-dialog')) closeSettingsModal();
     openFederationPeersModal();
   });
   if ($fedBackdrop) $fedBackdrop.addEventListener('click', fedClose);
@@ -96187,7 +96246,13 @@
     if (event.key === 'Escape' && _aoPopup) { event.stopPropagation(); event.preventDefault(); closeSectionPopup(); }
   }, true);
   function openEngineSetupPopup(engine) {
-    if (_aoPopup?.kind === 'engines') { aoSelectSetupEngine(engine); return; }
+    if (_aoPopup?.kind === 'engines') {
+      // Same engine's button again closes its setup; another engine swaps it.
+      if (_aoPopup.engine === engine) { closeSectionPopup(); return; }
+      _aoPopup.engine = engine; aoSelectSetupEngine(engine);
+      _aoPopup.overlay.scrollIntoView({block: 'nearest'});
+      return;
+    }
     const header = document.getElementById('engineConnection');
     const list = document.getElementById('engList');
     if (!header || !list) return;
@@ -96195,8 +96260,12 @@
     const wasOpen = details?.open;
     if (details) details.open = true;   // keeps the hub's visibility gate (and polling) on
     if (!openSectionPopup('engines', 'Engine setup', [header, list], () => { if (details) details.open = !!wasOpen; })) return;
-    _aoPopup.kind = 'engines';
+    _aoPopup.kind = 'engines'; _aoPopup.engine = engine;
+    // Setup opens on the Engines page itself, under the list: not a pop-up.
+    _aoPopup.overlay.classList.add('ao-setup-inline');
+    _aoPopup.overlay.querySelector('.ao-setup-card')?.removeAttribute('aria-modal');
     aoSelectSetupEngine(engine);
+    _aoPopup.overlay.scrollIntoView({block: 'nearest'});
     if (!_engHubData) refreshEnginesHub({fresh: true});
   }
   function aoSelectSetupEngine(engine) {
@@ -96843,15 +96912,17 @@
   // with its avatar and inline Upload / Auto controls.
   const repoAvatarModes = new Map();
   let repoSettingsAddOpen = false;
+  let repoSettingsKnown = [];
   function repoSettingsOptions() {
-    try { if (!spawnCwdOptions.length) populateSpawnCwdPicker(); } catch (_) {}
+    let picker = [];
+    try { if (!spawnCwdOptions.length) populateSpawnCwdPicker(); picker = spawnCwdOptions; } catch (_) {}
     const seen = new Set(), out = [];
     const add = (path, label) => {
       if (!path || seen.has(path)) return;
       seen.add(path); out.push({ path, label: label || path.split('/').filter(Boolean).pop() || path });
     };
-    (spawnCwdOptions || []).forEach(o => add(o.value, o.label));
-    (repoListState.repos || []).forEach(r => add(r.path, r.label));
+    picker.forEach(o => add(o.value, o.label));
+    repoSettingsKnown.forEach(r => add(r.path, r.label));
     return out.slice(0, 60);
   }
   function drawRepoSettingsList() {
@@ -96886,7 +96957,10 @@
   }
   async function renderRepoSettingsList() {
     drawRepoSettingsList();
-    try { await loadRepoList({ foreground: true }); } catch (_) {}
+    try {
+      const state = await loadRepoList({ foreground: true });
+      repoSettingsKnown = [...(state.repos || []), ...(state.suggested || [])];
+    } catch (_) {}
     drawRepoSettingsList();
     const pending = repoSettingsOptions().filter(repo => !repoAvatarModes.has(repo.path));
     const worker = async () => {
@@ -96920,8 +96994,7 @@
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result.ok) throw new Error(result.error || 'Could not add repository');
-      if (Array.isArray(result.repos)) repoListState.repos = result.repos;
-      try { populateSpawnCwdPicker(); } catch (_) {}
+      try { if (Array.isArray(result.repos)) repoListState.repos = result.repos; populateSpawnCwdPicker(); } catch (_) {}
       repoSettingsAddOpen = false; input.blur();
       showOpToast('Repository added.', 'success');
       void renderRepoSettingsList();
@@ -96985,6 +97058,41 @@
     reader.readAsDataURL(file);
   });
 
+  // Settings never stacks a pop-up over itself: these dialogs render in place
+  // under their own row, and go back to their dialog home when closed.
+  const SETTINGS_INLINE_DIALOGS = {
+    networkAccessBtn: 'networkModal', federationPeersBtn: 'fedPeersModal',
+    carModeMenuBtn: 'carModeModal', voiceSettingsBtn: 'voiceModal',
+  };
+  document.addEventListener('click', event => {
+    const button = event.target.closest?.('#settingsPane button[id]');
+    const modal = button && document.getElementById(SETTINGS_INLINE_DIALOGS[button.id] || '');
+    const row = modal && button.closest('.settings-row');
+    if (!row) return;
+    if (modal.classList.contains('settings-inline-dialog')) {
+      // Second press closes it through the dialog's own close path.
+      if (modal.classList.contains('open')) { event.stopImmediatePropagation(); modal.querySelector('.upd-backdrop')?.click(); }
+      return;
+    }
+    const home = {parent: modal.parentNode, next: modal.nextSibling};
+    modal.classList.add('settings-inline-dialog');
+    modal.removeAttribute('aria-modal');
+    row.after(modal);
+    const observer = new MutationObserver(() => {
+      if (modal.classList.contains('open')) { modal.scrollIntoView({block: 'nearest'}); return; }
+      observer.disconnect();
+      modal.classList.remove('settings-inline-dialog');
+      modal.setAttribute('aria-modal', 'true');
+      home.parent.insertBefore(modal, home.next);
+    });
+    observer.observe(modal, {attributes: true, attributeFilter: ['class']});
+    // A dialog that never opened must not stay parked here.
+    setTimeout(() => {
+      if (modal.classList.contains('open') || !modal.classList.contains('settings-inline-dialog')) return;
+      observer.disconnect(); modal.classList.remove('settings-inline-dialog'); modal.setAttribute('aria-modal', 'true');
+      home.parent.insertBefore(modal, home.next);
+    }, 4000);
+  }, true);
   let settingsSearchFocusTimer;
   var choiceEligibilityReturn;
   function openSettingsModal({ focusSearch = true, cachedOnly = false } = {}) {

@@ -28,6 +28,8 @@ def setup_scan(monkeypatch, tmp_path):
     identity = {'argv': ['claude', '-p', 'describe image', '--model', 'haiku'], 'env': {'CODEX_THREAD_ID': PARENT}}
     monkeypatch.setattr(discovery.process_identity, 'process_snapshot', lambda: snapshot)
     monkeypatch.setattr(discovery.process_identity, 'read_launch_identity', lambda pid: reads.append(pid) or identity)
+    monkeypatch.setattr(discovery.process_identity, 'codex_writer_sessions', lambda pids, homes: {})
+    monkeypatch.setattr(discovery.codex_accounts, 'homes', lambda: [tmp_path])
     registry = {CHILD: {'pid': 10, 'procStart': BIRTH}}
     processes = [('10', '??', 'claude', 'claude -p'), ('20', '??', 'sh', 'sh'), ('30', '??', 'codex', 'codex app-server')]
     return SimpleNamespace(scan=discovery._Discovery(), graph=graph, logs=logs, queries=queries, reads=reads,
@@ -144,3 +146,92 @@ def test_background_discovery_keeps_native_refresh_at_old_cadence(monkeypatch):
     assert seen.count(('registry',)) == seen.count(('discover',)) == 2
     assert seen.count(('codex',)) == 1
     assert seen.count(('wait', 3.0)) == 2
+
+
+@pytest.fixture
+def codex_scan(setup_scan, monkeypatch):
+    s = setup_scan
+    s.registry.clear()
+    s.processes[0] = ('10', '??', 'codex', 'codex exec -m test-model')
+    s.identity['argv'] = ['codex', 'exec', '-m', 'test-model', 'a bounded helper task']
+    s.owners = {10: {CHILD}, 30: {PARENT, OTHER}}
+    monkeypatch.setattr(discovery.process_identity, 'codex_writer_sessions',
+                        lambda pids, homes: {pid: set(s.owners[pid]) for pid in pids if pid in s.owners})
+    s.core._codex_fetch_threads = lambda where='', params=(), **kw: [
+        {'id': sid, 'source': 'exec' if sid == CHILD else 'vscode'}
+        for sid in params if sid in {CHILD, PARENT, OTHER}]
+    return s
+
+
+def test_raw_exec_under_shared_app_server_uses_native_writer_and_inherited_thread(codex_scan):
+    s = codex_scan
+    s.scan.scan(s.registry, s.processes, now=0)
+    assert s.graph.parent_of(CHILD) == PARENT
+    assert s.graph.edge_meta(CHILD)['engine'] == 'codex'
+    assert s.graph.edge_meta(CHILD)['model'] == 'test-model'
+    s.graph.load()
+    assert s.graph.parent_of(CHILD) == PARENT
+    assert 'a bounded helper task' not in str(s.logs)
+
+
+def test_raw_exec_uses_nearest_exec_parent_instead_of_inherited_grandparent(codex_scan):
+    s = codex_scan
+    s.processes[1] = ('20', '??', 'codex', 'codex exec')
+    s.owners[30] = {PARENT}
+    s.owners[20] = {OTHER}
+    s.scan.scan(s.registry, s.processes, now=0)
+    assert s.graph.parent_of(CHILD) == OTHER
+
+
+def test_raw_exec_under_claude_uses_claude_registry(codex_scan):
+    s = codex_scan
+    s.registry[OTHER] = {'pid': 20, 'procStart': BIRTH}
+    s.processes[1] = ('20', '??', 'claude', 'claude -p')
+    s.scan.scan(s.registry, s.processes, now=0)
+    assert s.graph.parent_of(CHILD) == OTHER
+
+
+@pytest.mark.parametrize('case', ['unmapped_claude', 'unowned_inherited_id', 'ambiguous_parent',
+                                 'top_level', 'interactive', 'resume', 'native_subagent', 'lost_lock'])
+def test_raw_exec_does_not_guess_parentage(codex_scan, monkeypatch, case):
+    s = codex_scan
+    if case == 'unmapped_claude': s.processes[1] = ('20', '??', 'claude', 'claude -p')
+    if case == 'unowned_inherited_id': s.owners[30] = {OTHER, CHILD}
+    if case == 'ambiguous_parent': s.identity['env'] = {}
+    if case == 'top_level': s.snapshot[20]['ppid'] = 1
+    if case == 'interactive': s.identity['argv'] = ['codex']
+    if case == 'resume': s.identity['argv'] = ['codex', 'exec', 'resume', PARENT]
+    if case == 'native_subagent':
+        s.core._codex_fetch_threads = lambda where='', params=(), **kw: [
+            {'id': sid, 'source': '{"subagent":{"thread_spawn":{}}}' if sid == CHILD else 'vscode'}
+            for sid in params]
+    if case == 'lost_lock':
+        calls = []
+        def locks(pids, homes):
+            calls.append(1)
+            return s.owners if len(calls) == 1 else {}
+        monkeypatch.setattr(discovery.process_identity, 'codex_writer_sessions', locks)
+    s.scan.scan(s.registry, s.processes, now=0)
+    assert s.graph.parent_of(CHILD) is None
+
+
+def test_existing_native_parent_is_not_overwritten_by_discovery(codex_scan):
+    s = codex_scan
+    s.graph.add_edge(OTHER, CHILD, source='codex-native', engine='codex')
+    s.scan.scan(s.registry, s.processes, now=0)
+    assert s.graph.parent_of(CHILD) == OTHER
+    assert not s.logs
+
+
+@pytest.mark.parametrize('argv,headless', [
+    (['codex', 'exec', '-m', 'test-model', 'task'], True),
+    (['codex', '-c', 'model="test-model"', 'exec', '--json', 'task'], True),
+    (['codex', 'exec', '--', 'resume'], True),
+    (['codex', '--model', 'exec', 'task'], False),
+    (['codex', 'a prompt containing exec'], False),
+    (['codex', 'exec', 'fork', PARENT], False),
+    (['codex', 'exec', 'review'], False),
+    (['codex', '--unknown-option', 'exec'], False),
+])
+def test_codex_launch_boundaries(argv, headless):
+    assert discovery._codex_launch_options(argv)[0] is headless

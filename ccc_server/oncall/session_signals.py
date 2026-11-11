@@ -15,8 +15,35 @@ GRACE_S = 120
 
 # CCC's own session footer names the step that needs the person, when any.
 _FOOTER_STEP = re.compile(r"^NEXT_STEP_USER[ \t]*:[ \t]*(.*?)[ \t]*$", re.M)
+_FOOTER_ACTION = re.compile(r"^NEXT_ACTION[ \t]*:[ \t]*(.*?)[ \t]*$", re.M)
 _NO_STEP = re.compile(r"^(?:$|(?:none|nothing|no|neither|n/?a|null|nil|not (?:needed|required|applicable))\b)", re.I)
 _ASK = re.compile(r"\b(?:shall I|should I|should we|do you want|would you like|can you|could you|which .{0,80}(?:prefer|want|choose)|what do you (?:think|prefer))\b", re.I)
+
+
+def _choices(footer):
+    """Up to three (label, reply) answer choices from the footer's NEXT_ACTION.
+
+    Anything malformed, empty or longer than three yields no choices.
+    """
+    found = _FOOTER_ACTION.findall(footer)
+    try:
+        data = json.loads(found[-1]) if found else None
+    except ValueError:
+        return []
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list) or not 1 <= len(data) <= 3:
+        return []
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            return []
+        label, reply = item.get('label'), item.get('reply')
+        if not (isinstance(label, str) and isinstance(reply, str)
+                and label.strip() and reply.strip()):
+            return []
+        out.append([' '.join(label.split())[:24], reply.strip()[:400]])
+    return out
 
 
 def _epoch(iso):
@@ -26,7 +53,7 @@ def _epoch(iso):
         return 0
 
 
-def question(store, session_id, transcript, since=0):
+def question(store, session_id, transcript, since=0, notify_idle=False):
     """The closing question of an idle transcript, or None.
 
     ``since`` (epoch seconds) drops a transcript last written before On-call
@@ -39,7 +66,7 @@ def question(store, session_id, transcript, since=0):
         stat = path.stat()
         if since and stat.st_mtime < since:
             return None
-        stamp = [str(path), stat.st_mtime_ns, stat.st_size]
+        stamp = [str(path), stat.st_mtime_ns, stat.st_size, notify_idle]
         key = 'question-cache:' + session_id
         cached = store.kv_get(key) or {}
         if cached.get('stamp') == stamp:
@@ -74,6 +101,13 @@ def question(store, session_id, transcript, since=0):
             turn = str(row.get('uuid') or row.get('timestamp') or '')
         elif row.get('type') == 'event_msg' and payload.get('type') == 'user_message':
             last = ''
+    signal = from_message(last, turn, notify_idle=notify_idle)
+    store.kv_set(key, {'stamp': stamp, 'signal': signal})
+    return signal
+
+
+def from_message(last, turn='', notify_idle=False):
+    """Same conservative parser for a hook's final message and a transcript."""
     # Ignore machine footers and quoted/code examples. Only a closing paragraph
     # explicitly addressed to the owner qualifies, not every question mark.
     prose, _, footer = last.partition('<session-state>')
@@ -88,10 +122,15 @@ def question(store, session_id, transcript, since=0):
                        and not any(x in tail for x in ('```', '> ', '`'))):
         # A footer that says nothing is needed outranks a question mark above it.
         tail = ''
+    if not tail and notify_idle and last.strip():
+        tail = 'Turn finished. ' + (prose or 'Open the session for details.')[:1000]
     if tail:
-        digest = hashlib.sha256((turn + last).encode()).hexdigest()[:24]
-        signal = {'kind': 'plain_question', 'stamp': digest, 'body': tail, 'meta': {}}
-    store.kv_set(key, {'stamp': stamp, 'signal': signal})
+        # Keyed on the question text alone: the same session repeating an
+        # unchanged question (a stale footer) must not alert again each turn.
+        digest = hashlib.sha256(tail.encode()).hexdigest()[:24]
+        choices = _choices(footer) if not _NO_STEP.match(step) else []
+        signal = {'kind': 'plain_question', 'stamp': digest, 'body': tail,
+                  'meta': {'choices': choices} if choices else {}}
     return signal
 
 
@@ -112,15 +151,35 @@ def observe(eng, current):
             idle = eng._idle_seen = {}
         prompts, candidates = set(), set()
 
+        def label(sid):
+            # Display name and project folder, from the cached census map only.
+            try:
+                name, folder = eng.deps.label(sid)
+            except Exception:
+                name = folder = ''
+            parts = [p for p in dict.fromkeys(str(x or '').strip() for x in (name, folder)) if p]
+            return ' · '.join(parts) or 'Agent ' + sid[:8]
+
         def raise_signal(sid, signal):
             key = f"session:{sid}:{signal['kind']}:{signal['stamp']}"
+            # The same words asked again after the owner answered are a new
+            # question; one that only cleared unanswered is the same incident.
+            base, n = key, 0
+            while (signal['kind'] == 'plain_question' and (prior := eng.store.alert_by_key(key))
+                   and prior['state'] == 'answered'):
+                n += 1
+                key = f"{base}:{n}"
             if enabled:
                 alerts.raise_event(eng.store, kind=signal['kind'], key=key, session_id=sid,
-                                   title='Agent ' + sid[:8], body=signal['body'],
+                                   title=label(sid), body=signal['body'],
                                    meta=signal['meta'], now=now)
             return key
 
+        from .agent_wait import active_sessions
+        hook_sessions = active_sessions(eng.store)
         for sid, row in (current or {}).items():
+            if sid in hook_sessions:
+                continue
             if row.get('needs_approval'):
                 signal = eng.deps.permission(sid)
                 if signal:
@@ -137,6 +196,8 @@ def observe(eng, current):
         for sid in [s for s in idle if s not in candidates]:
             del idle[sid]
         for alert in eng.store.alerts(state='open'):
+            if (alert.get('meta') or {}).get('hook_wait'):
+                continue  # the waiting hook owns expiry and collection
             gone = ((alert['kind'] == 'permission' and alert['key'] not in prompts)
                     or (alert['kind'] == 'plain_question'
                         and alert.get('session_id') not in candidates))

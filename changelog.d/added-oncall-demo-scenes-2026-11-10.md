@@ -1,0 +1,1 @@
+- Add local CI and monitoring scenes to the On-call demo, with a one-key scene picker and an option to run all three scenes.

@@ -1,0 +1,151 @@
+{
+  "started_utc": "2026-11-11T00:03:28.070506+00:00",
+  "network": "none",
+  "source": "tracked working-tree snapshot",
+  "results": [
+    {
+      "image": "ubuntu:24.04",
+      "route": "curl",
+      "command": "set -o pipefail; curl -fsSL file:///fixture/source/scripts/install.sh | CCC_FROM=readme bash",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 4.92,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: curl: command not found\n"
+    },
+    {
+      "image": "ubuntu:24.04",
+      "route": "uvx",
+      "command": "cd /work/source && uv build --wheel && ccc_wheel=$(ls -t dist/claude_command_center-*.whl | head -n 1) && uvx --from \"$ccc_wheel\" claude-command-center",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 6.271,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: uv: command not found\n"
+    },
+    {
+      "image": "ubuntu:24.04",
+      "route": "pipx",
+      "command": "cd /work/source && uv build --wheel && ccc_wheel=$(ls -t dist/claude_command_center-*.whl | head -n 1) && pipx run --spec \"$ccc_wheel\" claude-command-center",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 4.879,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: uv: command not found\n"
+    },
+    {
+      "image": "ubuntu:24.04",
+      "route": "brew",
+      "command": "brew install amirfish1/tap/ccc",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 5.543,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: brew: command not found\n"
+    },
+    {
+      "image": "ubuntu:22.04",
+      "route": "curl",
+      "command": "set -o pipefail; curl -fsSL file:///fixture/source/scripts/install.sh | CCC_FROM=readme bash",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 15.766,
+      "output": "Unable to find image 'ubuntu:22.04' locally\n22.04: Pulling from library/ubuntu\n0626d3cc316c: Pulling fs layer\nae52aad3a114: Download complete\n0626d3cc316c: Download complete\n0626d3cc316c: Pull complete\nDigest: sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11\nStatus: Downloaded newer image for ubuntu:22.04\nbash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: curl: command not found\n"
+    },
+    {
+      "image": "ubuntu:22.04",
+      "route": "uvx",
+      "command": "cd /work/source && uv build --wheel && ccc_wheel=$(ls -t dist/claude_command_center-*.whl | head -n 1) && uvx --from \"$ccc_wheel\" claude-command-center",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 10.803,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: uv: command not found\n"
+    },
+    {
+      "image": "ubuntu:22.04",
+      "route": "pipx",
+      "command": "cd /work/source && uv build --wheel && ccc_wheel=$(ls -t dist/claude_command_center-*.whl | head -n 1) && pipx run --spec \"$ccc_wheel\" claude-command-center",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 5.981,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: uv: command not found\n"
+    },
+    {
+      "image": "ubuntu:22.04",
+      "route": "brew",
+      "command": "brew install amirfish1/tap/ccc",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 6.186,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: brew: command not found\n"
+    },
+    {
+      "image": "debian:12",
+      "route": "curl",
+      "command": "set -o pipefail; curl -fsSL file:///fixture/source/scripts/install.sh | CCC_FROM=readme bash",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 5.834,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: curl: command not found\n"
+    },
+    {
+      "image": "debian:12",
+      "route": "uvx",
+      "command": "cd /work/source && uv build --wheel && ccc_wheel=$(ls -t dist/claude_command_center-*.whl | head -n 1) && uvx --from \"$ccc_wheel\" claude-command-center",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 8.276,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: uv: command not found\n"
+    },
+    {
+      "image": "debian:12",
+      "route": "pipx",
+      "command": "cd /work/source && uv build --wheel && ccc_wheel=$(ls -t dist/claude_command_center-*.whl | head -n 1) && pipx run --spec \"$ccc_wheel\" claude-command-center",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 4.761,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: uv: command not found\n"
+    },
+    {
+      "image": "debian:12",
+      "route": "brew",
+      "command": "brew install amirfish1/tap/ccc",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 5.549,
+      "output": "bash=present\ncurl=missing\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbash: line 1: brew: command not found\nbrew=missing\n\n--- documented command ---\n"
+    },
+    {
+      "image": "fedora:latest",
+      "route": "curl",
+      "command": "set -o pipefail; curl -fsSL file:///fixture/source/scripts/install.sh | CCC_FROM=readme bash",
+      "exit_code": 1,
+      "timed_out": false,
+      "elapsed_seconds": 19.163,
+      "output": "Unable to find image 'fedora:latest' locally\nlatest: Pulling from library/fedora\n8e1cce5a4d4b: Pulling fs layer\n4c4b1e79eb2f: Download complete\n68dc595a1976: Download complete\n8e1cce5a4d4b: Download complete\n8e1cce5a4d4b: Pull complete\nDigest: sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c\nStatus: Downloaded newer image for fedora:latest\nbash=present\ncurl=present\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\n\n==> Claude Command Center\n     coding agents on call for your product, run from this computer\n\n==> Step 1 of 4: checking this computer\ninstall: git not found on PATH. Install git, then re-run this installer.\n"
+    },
+    {
+      "image": "fedora:latest",
+      "route": "uvx",
+      "command": "cd /work/source && uv build --wheel && ccc_wheel=$(ls -t dist/claude_command_center-*.whl | head -n 1) && uvx --from \"$ccc_wheel\" claude-command-center",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 5.915,
+      "output": "bash=present\ncurl=present\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: uv: command not found\n"
+    },
+    {
+      "image": "fedora:latest",
+      "route": "pipx",
+      "command": "cd /work/source && uv build --wheel && ccc_wheel=$(ls -t dist/claude_command_center-*.whl | head -n 1) && pipx run --spec \"$ccc_wheel\" claude-command-center",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 5.797,
+      "output": "bash=present\ncurl=present\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: uv: command not found\n"
+    },
+    {
+      "image": "fedora:latest",
+      "route": "brew",
+      "command": "brew install amirfish1/tap/ccc",
+      "exit_code": 127,
+      "timed_out": false,
+      "elapsed_seconds": 6.159,
+      "output": "bash=present\ncurl=present\ngit=missing\npython3=missing\nuv=missing\nuvx=missing\npipx=missing\nbrew=missing\n\n--- documented command ---\nbash: line 1: brew: command not found\n"
+    }
+  ]
+}

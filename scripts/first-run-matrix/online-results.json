@@ -1,0 +1,39 @@
+{
+  "started_utc": "2026-11-11T00:27:25.115714+00:00",
+  "image": "ubuntu:24.04",
+  "environment": "prerequisite remediation plus product WatchTower bootstrap",
+  "stages": {
+    "prerequisites": {
+      "exit_code": 0,
+      "elapsed_seconds": 109.249,
+      "output": ""
+    },
+    "watchtower_bootstrap": {
+      "exit_code": 0,
+      "elapsed_seconds": 14.082,
+      "output": "watchtower: not installed \u2014 bootstrapping CCC's queue engine\u2026\nwatchtower: fetching WatchTower (CCC's queue engine) from https://github.com/amirfish1/watchtower\nwatchtower: installing WatchTower from /tmp/ccc-home/.ccc/watchtower\nwatchtower: installed from /tmp/ccc-home/.ccc/watchtower \u2014 watchtower.queue is now available.\n"
+    },
+    "snapshot": {
+      "exit_code": 0,
+      "elapsed_seconds": 5.958,
+      "output": "sha256:f18bcbf5d1ffc1f765c52741ba1fb2800fb7a4d568fd8ea5192c252cf476aecc\n"
+    },
+    "start": {
+      "exit_code": 0,
+      "elapsed_seconds": 0.47,
+      "output": "4b0028b83fee5e2a4f3d538bbbcf4867766e220d26991ed0c85fea222c30213b\n"
+    },
+    "app_log": {
+      "exit_code": 0,
+      "elapsed_seconds": 0.202,
+      "output": "t stat '/fixture/source/./hooks': No such file or directory\ncp: cannot stat '/fixture/source/./infra': No such file or directory\ncp: cannot stat '/fixture/source/./ingesters': No such file or directory\ncp: cannot stat '/fixture/source/./ios-app': No such file or directory\ncp: cannot stat '/fixture/source/./objects_store.py': No such file or directory\ncp: cannot stat '/fixture/source/./plugin': No such file or directory\ncp: cannot stat '/fixture/source/./productivity.py': No such file or directory\ncp: cannot stat '/fixture/source/./puppeteer-browser-config.js': No such file or directory\ncp: cannot stat '/fixture/source/./pyproject.toml': No such file or directory\ncp: cannot stat '/fixture/source/./require-puppeteer.js': No such file or directory\ncp: cannot stat '/fixture/source/./resources': No such file or directory\ncp: cannot stat '/fixture/source/./run.ps1': No such file or directory\ncp: cannot stat '/fixture/source/./run.sh': No such file or directory\ncp: cannot stat '/fixture/source/./scripts': No such file or directory\ncp: cannot stat '/fixture/source/./sender_envelope.py': No such file or directory\ncp: cannot stat '/fixture/source/./server.py': No such file or directory\ncp: cannot stat '/fixture/source/./site': No such file or directory\ncp: cannot stat '/fixture/source/./skills': No such file or directory\ncp: cannot stat '/fixture/source/./snapshot.js': No such file or directory\ncp: cannot stat '/fixture/source/./ssh_multiplexer.py': No such file or directory\ncp: cannot stat '/fixture/source/./static': No such file or directory\ncp: cannot stat '/fixture/source/./systemd': No such file or directory\ncp: cannot stat '/fixture/source/./tests': No such file or directory\ncp: cannot stat '/fixture/source/./updates': No such file or directory\ncp: cannot stat '/fixture/source/./vscode-extension': No such file or directory\ncp: cannot stat '/fixture/source/./worker_engines.py': No such file or directory\ncp: cannot stat '/fixture/source/./.git': No such file or directory\n"
+    }
+  },
+  "success": false,
+  "screenshots": [],
+  "source_head": "a4d9e604aad96a725bab4684266c00373cf95a9b",
+  "installer_sha256": "242e2b5507037ebc12f058413f9aa7fbbc36bb9f006da2b2bc82ae04aaf1ea79",
+  "error": "Command failed: {\"command\": [\"docker\", \"port\", \"ccc-first-run-app-6b7d22fccc6a\", \"18090/tcp\"], \"exit_code\": 1, \"elapsed_seconds\": 0.03, \"output\": \"no public port '18090/tcp' published for ccc-first-run-app-6b7d22fccc6a\\n\"}",
+  "finished_utc": "2026-11-11T00:29:43.036338+00:00",
+  "note": "Interrupted development attempt; online harness not included because runtime path was not verified."
+}

@@ -104,6 +104,9 @@ def find_codex_conversations(
     # Durable CCC-spawn parent links (survive spawn-registry pruning). One
     # read per scan; O(1) dict hits per row. (CCC-465)
     codex_durable_parents = _core._load_codex_parent_links()
+    # Process-discovered links also survive exit and registry pruning. Keep
+    # full conversation responses consistent with the compact sidebar list.
+    graph_parents = _core._session_graph.parent_snapshot()
     # One batched, cached read of the codex goals sqlite for the whole scan —
     # per-row lookups are O(1) dict hits (perf gate: no per-row DB work).
     goals_by_sid = _core._codex_goals_snapshot()
@@ -306,6 +309,7 @@ def find_codex_conversations(
                 or codex_durable_parents.get(sid)
                 or spawn_info.get("parent_session_id")
                 or _codex_subagent_parent_id(row, path)
+                or graph_parents.get(sid)
                 or ""
             ),
             **codex_activity,

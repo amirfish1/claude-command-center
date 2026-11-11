@@ -7,6 +7,8 @@ has stopped, and your reply from the same thread is the agent's answer.
 On-call is a preview. It is off until you turn it on, and nothing is created
 on disk before that.
 
+[Planned call escalation contract](oncall-calls.md).
+
 ## What it needs
 
 - CCC running on a machine that stays on: your Mac, a Linux box or a small VM.
@@ -93,6 +95,26 @@ entry you already have (`--vault FIELD=ENTRY`).
 The same settings live in **Settings > On-call**. To turn only the preview on
 and set the rest up there: **Settings > Advanced > Preview features >
 On-call**, or start CCC with `CCC_FF_ONCALL=1`.
+
+## The home screen
+
+With On-call on, the dashboard opens on one quiet screen instead of the full
+session list. It has three lists:
+
+- **Needs you**: the questions and decisions waiting for you, oldest first,
+  with the same choices your phone shows. Press a choice or type an answer.
+- **Being worked on**: reports an agent has picked up, and where each came from.
+- **Fixed this week**: what got closed, and how long after the report.
+
+**Open the full dashboard** takes you to everything else for that browser tab.
+The **On-call** button at the top of the left rail brings the home screen back.
+To stop it opening by itself in this browser, switch off **Settings > On-call >
+Open on the On-call home**.
+
+It opens by itself only on a plain dashboard address in a wide window. A link
+to a session or to Settings still goes where it points, and a phone or narrow
+window keeps its own layout. A permission prompt is listed but is answered in
+its session, not here.
 
 ## Automatic workers
 
@@ -187,6 +209,16 @@ live-terminal path. Codex needs an actionable app-server approval request.
 
 Quiet hours hold messages until the window ends. At most 12 messages go out
 per hour.
+
+```
+ccc oncall quiet 23:00 07:00
+ccc oncall quiet 23:00 07:00 --tz America/Los_Angeles
+ccc oncall quiet off
+```
+
+Without `--tz` the window follows the machine's clock, which is UTC on most
+servers. `--tz` takes an IANA zone name and follows that zone's daylight
+saving changes. `ccc oncall status` prints the window and the zone it is in.
 
 ## Small decisions do not reach you
 
@@ -307,8 +339,11 @@ reply releases it.
 - An email reply answers an alert only when it carries that alert's private
   thread token. Other mail from your own address is held as a report.
 - Chat channels trust the sender address you configured.
-- The On-call settings and its API answer only on the machine CCC runs on.
-  Requests through phone access or a proxy are refused.
+- The On-call settings and its setup API answer only on the machine CCC runs
+  on. Requests through phone access or a proxy are refused.
+- The home screen and its answers follow the dashboard's own access rules, the
+  same as reading and answering a session. A trusted remote view of the
+  dashboard can use them. It cannot approve a permission prompt or change setup.
 
 ## Limits
 
@@ -501,3 +536,10 @@ ccc oncall decisions             what agents decided, each with its undo
 - [Weekly counts and the daily summary](oncall-week.md): `ccc oncall week`.
 - [What On-call does when things break](oncall-reliability.md).
 - [Security review and limits](oncall-security.md).
+
+For an always-on Linux machine, see [On-call on a server](oncall-server.md).
+- [Escalation steps, people and rotations](oncall-escalation.md).
+- [Team chat alerts and reply checks](oncall-team-chat.md).
+- [Step-by-step guides with checked terminal output](guides/README.md).
+
+Make a local replay with [On-call film](oncall-film.md).
