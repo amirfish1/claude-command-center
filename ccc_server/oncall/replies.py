@@ -112,7 +112,7 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
 
 def _resolve(store, text):
     """(alert, remaining text, problem). ``problem`` is a message for the owner."""
-    waiting = [a for a in store.alerts(state="open", needs_reply=True) if a.get("sent_at")]
+    waiting = store.alerts(state="open", needs_reply=True, delivered=True)
     m = _WORD_NUM_RE.match(text)
     if m:
         alert = store.alert(int(m.group(2)))
@@ -216,7 +216,7 @@ def _apply(cfg, store, chans, wt, alert, text, deps, now):
 
 
 def status_text(cfg, store):
-    waiting = [a for a in store.alerts(state="open", needs_reply=True) if a.get("sent_at")]
+    waiting = store.alerts(state="open", needs_reply=True, delivered=True)
     head = "On-call is paused." if store.kv_get("paused", False) else "On-call is on."
     if not waiting:
         return head + " Nothing is waiting on you."

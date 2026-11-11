@@ -324,6 +324,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
     sent_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS deliveries_ext ON deliveries(channel, external_id);
+CREATE INDEX IF NOT EXISTS deliveries_alert ON deliveries(alert_id, ok);
 CREATE INDEX IF NOT EXISTS deliveries_alert_channel ON deliveries(alert_id, channel, id);
 CREATE INDEX IF NOT EXISTS deliveries_time ON deliveries(sent_at, alert_id, ok);
 CREATE TABLE IF NOT EXISTS inbound (
@@ -479,7 +480,7 @@ class Store:
         row = self._one("SELECT * FROM alerts WHERE token=?", (str(token or ""),))
         return _alert_row(row) if row else None
 
-    def alerts(self, *, state=None, needs_reply=None, limit=200):
+    def alerts(self, *, state=None, needs_reply=None, limit=200, delivered=False):
         sql, args = "SELECT * FROM alerts WHERE 1=1", []
         if state:
             sql += " AND state=?"
@@ -487,6 +488,9 @@ class Store:
         if needs_reply is not None:
             sql += " AND needs_reply=?"
             args.append(1 if needs_reply else 0)
+        if delivered:
+            sql += (" AND (sent_at IS NOT NULL OR EXISTS (SELECT 1 FROM deliveries d "
+                    "WHERE d.alert_id=alerts.id AND d.ok=1))")
         sql += " ORDER BY id DESC LIMIT ?"
         args.append(int(limit))
         return [_alert_row(r) for r in self._all(sql, args)]
