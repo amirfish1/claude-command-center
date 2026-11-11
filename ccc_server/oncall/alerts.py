@@ -17,6 +17,7 @@ from . import secret_filter
 from .store import Outbound, Receipt
 
 HOURLY_CAP = 12
+DIRECT_PER_DAY = 20
 RETRY_AFTER_S = 120
 GO_WORDS = ("go", "yes", "y", "ok", "okay", "sure", "do it", "approve", "approved", "send", "send it")
 NO_WORDS = ("no", "n", "drop", "drop it", "skip", "ignore", "spam", "stop", "cancel", "don't", "dont")
@@ -281,9 +282,10 @@ def say(store, chan, text, *, to="", subject="", thread="", reply_to="", now=Non
     """A short direct reply on one channel (an ack, a list, a status)."""
     now = time.time() if now is None else now
     text, subject, _hit = secret_filter.mask(text, subject)
-    attempt = store.owner_delivery_claim(None, chan.id, to or getattr(chan, "owner", "") or "", now, cap)
+    attempt = store.owner_delivery_claim(None, chan.id, to or getattr(chan, "owner", "") or "", now, cap,
+                                         direct_daily_cap=DIRECT_PER_DAY)
     if attempt is None:
-        return Receipt(ok=False, error="Hourly owner message cap reached.")
+        return Receipt(ok=False, error="Owner message cap reached (hourly or daily direct replies).")
     outgoing = _waiting_notice(store, text)
     receipt = chan.send(Outbound(text=outgoing, to=to, subject=subject or text.splitlines()[0][:80],
                                  thread=thread, reply_to=reply_to))

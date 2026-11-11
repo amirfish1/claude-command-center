@@ -518,7 +518,7 @@ class Store:
                         (now - 3600, "Delivery interrupted; outcome unknown. No automatic retry."))
         return row["n"]
 
-    def owner_delivery_claim(self, alert_id, channel, recipient, now, cap):
+    def owner_delivery_claim(self, alert_id, channel, recipient, now, cap, direct_daily_cap=None):
         """Reserve a possible send atomically across processes sharing this store."""
         uncertain = "Delivery interrupted; outcome unknown. No automatic retry."
         with self._lock:
@@ -528,7 +528,13 @@ class Store:
                     "SELECT COUNT(*) FROM deliveries WHERE sent_at>? "
                     "AND message_kind!='reporter' AND (ok=1 OR error=?)",
                     (now - 3600, uncertain)).fetchone()[0]
-                if count >= cap:
+                direct_count = 0
+                if alert_id is None and direct_daily_cap is not None:
+                    direct_count = self._db.execute(
+                        "SELECT COUNT(*) FROM deliveries WHERE sent_at>? "
+                        "AND alert_id IS NULL AND message_kind!='reporter' AND (ok=1 OR error=?)",
+                        (now - 86400, uncertain)).fetchone()[0]
+                if count >= cap or (direct_daily_cap is not None and direct_count >= direct_daily_cap):
                     self._db.execute("INSERT INTO kv(key,value) VALUES('owner_cap_waiting','true') "
                                      "ON CONFLICT(key) DO UPDATE SET value='true'")
                     self._db.commit()
