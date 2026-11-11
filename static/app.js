@@ -12829,6 +12829,7 @@
       ts: Number(p.ts || Date.now()),
       delivered: !!p.delivered,
       queued: !!p.queued && !p.delivered,
+      busySend: !!p.busySend && !p.delivered,
       queuedLabel: p.queuedLabel || '',
       deliveryId: p.deliveryId || '',
     }));
@@ -12864,7 +12865,18 @@
         element: null, list: null, entry: null };
     const $view = getConvViewForPane(paneId) || getConvView();
     if ($view) {
+      const pane = paneByPaneId(paneId || activePaneId());
+      const session = (pane && pane.currentSession) || currentSession;
+      const row = (typeof conversationsData !== 'undefined' ? conversationsData : [])
+        .find(c => (c.session_id || c.id) === sid);
+      const busySend = restoredEntry ? !!restoredEntry.busySend : !!(
+        session && session.id === sid && (
+          (row && sessionIsActivelyWorking(row, false))
+          || (typeof liveStatusMatchesOpenConv === 'function' && liveStatusMatchesOpenConv()
+            && (liveStatus.codexState === 'working' || liveStatus.sidecarInFlight))
+        ));
       const pendingDiv = document.createElement('div');
+      if (busySend) pendingDiv.dataset.busySend = 'true';
       const pendingSteerHtml = userMessageSteerHtml(text, null, null);
       pendingDiv.className = 'event user_text pending' + (pendingSteerHtml ? ' has-user-steer' : '');
       pendingDiv.innerHTML = '<span class="label">User</span>'
@@ -12873,10 +12885,13 @@
         + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>'
         + pendingSteerHtml;
       $view.appendChild(pendingDiv);
-      showOptimisticAgentIndicator($view);
-      scrollConversationToEnd($view);
+      if (!busySend) {
+        showOptimisticAgentIndicator($view);
+        scrollConversationToEnd($view);
+      }
 
       const entry = restoredEntry || { text, sid, ts: Date.now(), timer: null };
+      entry.busySend = busySend;
       if (entry.timer) clearTimeout(entry.timer);
       if (entry.deliveryId) pendingDiv.dataset.deliveryId = String(entry.deliveryId);
       entry.element = pendingDiv;
@@ -12911,6 +12926,14 @@
           if (idx >= 0) pending.list.splice(idx, 1);
           const div = pending.element;
           if (div && div.parentNode) {
+            if (entry.busySend) {
+              entry.busySend = false;
+              delete div.dataset.busySend;
+              $view.appendChild(div);
+              div.querySelector('.queued-steer-actions')?.remove();
+              div.querySelector('.send-queued-note')?.remove();
+              syncQueuedSteerTray($view, pending.paneId, false);
+            }
             div.classList.remove('pending');
             div.classList.add('not-acknowledged');
             const noteEl = document.createElement('div');
@@ -12937,8 +12960,8 @@
         }
       }, _PENDING_SEND_ECHO_MAX_MS);
       const convId = currentConversation;
-      const pane = paneByPaneId(paneId || activePaneId());
       if (convId && pane) syncPendingSendsMapForConv(pane, convId);
+      if (busySend) syncQueuedSteerTray($view, paneId || activePaneId(), false);
     }
     if (sid) markSessionSending(sid);
     return pending;
@@ -12954,9 +12977,11 @@
       fresh.sending = false;
       _preSendPreview.delete(pending.sid);
     }
+    const tray = pending.element && pending.element.closest('.queued-steer-tray');
     if (pending.element && pending.element.parentNode) {
       pending.element.parentNode.removeChild(pending.element);
     }
+    if (tray && !tray.querySelector('.event.user_text')) tray.remove();
     if (pending.entry && pending.entry.timer) {
       clearTimeout(pending.entry.timer);
       pending.entry.timer = null;
@@ -12986,9 +13011,11 @@
         || (pending.list && !pending.list.includes(pending.entry))) return;
     if (pending.entry.timer) { clearTimeout(pending.entry.timer); pending.entry.timer = null; }
     pending.entry.queued = true;
+    pending.entry.busySend = false;
     pending.entry.queuedLabel = label || 'Will send when the session finishes its current step.';
     const div = pending.element;
     if (!div) return;
+    delete div.dataset.busySend;
     const pid = pending.paneId || activePaneId();
     const pane = paneByPaneId(pid);
     const convId = pending.conversationId || (pane && pane.conversationId);
@@ -13058,6 +13085,13 @@
     // ordinary send ACK can be older than the queue snapshot already shown.
     if ((div.classList.contains('send-queued') && !(data && data.queued_consumed))
         || div.classList.contains('not-acknowledged')) return;
+    if (pending.entry.busySend) {
+      pending.entry.busySend = false;
+      delete div.dataset.busySend;
+      const view = getConvViewForPane(pending.paneId) || getConvView();
+      if (view) view.appendChild(div);
+      syncQueuedSteerTray(view, pending.paneId || activePaneId(), false);
+    }
     pending.entry.queued = false;
     pending.entry.queuedLabel = '';
     div.classList.remove('pending', 'send-queued', 'server-queued', 'steering-optimistic');
@@ -13340,7 +13374,7 @@
           && !p.element?.isConnected && _normSend(p.text) === normed
           && Number(p.ts) === Number(row.ts));
         const restored = appendPendingSendEcho(text, sid, paneId,
-          detached || { text, sid, ts: Number(row.ts) || now, timer: null, deliveryId: savedId });
+          detached || { text, sid, ts: Number(row.ts) || now, timer: null, deliveryId: savedId, busySend: !!row.busySend });
         if (savedId && restored) bindPendingSendDeliveryId(restored, savedId);
         // Re-create it in the delivered state so it keeps the "✓ Delivered"
         // note and stops re-arming the not-acknowledged timer (CCC-154).
@@ -67244,11 +67278,12 @@
       tray.insertBefore(bar, tray.firstChild);
     }
     const hint = bar.querySelector('.queued-steer-all-hint');
-    if (hint) hint.textContent = cards + ' queued';
+    if (hint) hint.textContent = cards + (tray.querySelector('[data-busy-send="true"]') ? ' pending' : ' queued');
     const allBtn = bar.querySelector('[data-steer-all-queued]');
     if (allBtn) {
       allBtn.dataset.sessionId = sessionId || allBtn.dataset.sessionId || '';
       allBtn.hidden = cards < 2 || canSteerAll === false;
+      allBtn.disabled = !!tray.querySelector('[data-busy-send="true"]');
       allBtn.textContent = 'Steer all ' + cards;
     }
   }
@@ -67425,9 +67460,8 @@
     if (replaceServerCandidates && tray) {
       tray.querySelectorAll('[data-queued-steer-server="true"]').forEach(el => el.remove());
     }
-    // Only durable server queue entries belong here. A local `.pending` row
-    // merely means the browser is awaiting an acknowledgement; showing it as
-    // a queued candidate made an idle session look as though it still had work.
+    // Known-busy follow-ups start here while their POST is in flight. Other
+    // pending sends stay in the transcript so an idle send never looks queued.
     const selected = (conversationsData || []).find(item => item && (
       item.id === conversationId || item.session_id === conversationId
     ));
@@ -67487,7 +67521,7 @@
     const candidates = Array.from($view.querySelectorAll(
       '.event.user_text.pending, .event.user_text.send-queued'
     )).filter(el => el.dataset.queuedSteerServer === 'true'
-      || el.classList.contains('send-queued'))
+      || el.classList.contains('send-queued') || el.dataset.busySend === 'true')
       // A card the user just steered is deliberately standing in the transcript
       // as in-flight. Collecting it back would undo the optimistic move.
       .filter(el => !el.classList.contains('steering-optimistic'))
@@ -67586,6 +67620,16 @@
         steer = null;
       }
       if (canSteer && steer) { steer.disabled = false; }
+      const awaitingQueue = el.dataset.busySend === 'true';
+      cancel.disabled = awaitingQueue;
+      if (steer && awaitingQueue) steer.disabled = true;
+      let sendingNote = el.querySelector('.send-queued-note');
+      if (awaitingQueue && !sendingNote) {
+        sendingNote = document.createElement('div');
+        sendingNote.className = 'send-queued-note';
+        sendingNote.innerHTML = '<span class="send-queued-text">Sending…</span>';
+        el.appendChild(sendingNote);
+      }
       if (!el.querySelector('[data-copy-user-message]')) {
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
@@ -83207,10 +83251,12 @@
             markPendingSendQueued(pendingSend, 'Queued - will send when the session finishes its current step.');
             showOpToast('Queued - will send when the session finishes its current step.');
           } else if (data.via === 'codex-steer') {
+            markPendingSendDelivered(pendingSend, data);
             showOpToast('Sent to running Codex turn.');
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
           } else if (data.via === 'codex-app-turn') {
+            markPendingSendDelivered(pendingSend, data);
             showOpToast('Codex follow-up started.');
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
