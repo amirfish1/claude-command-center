@@ -21056,9 +21056,10 @@
       try { frame.src = 'about:blank'; } catch (_) {}
     }
     if (_lightboxHistoryPushed) {
-      _lightboxHistoryPushed = false;
       if (!(opts && opts.fromPopState)) {
-        try { history.back(); } catch (_) {}
+        // Keep ownership until the asynchronous popstate arrives, even when
+        // the toolbar or Escape has already hidden the viewer.
+        try { history.back(); } catch (_) { _lightboxHistoryPushed = false; }
       }
     }
   }
@@ -21130,12 +21131,14 @@
   window.openMediaLightbox = openMediaLightbox;
   window.closeMediaLightbox = closeMediaLightbox;
   window.addEventListener('resize', () => setMediaLightboxZoom(_lightboxZoom));
-  window.addEventListener('popstate', () => {
-    if (_imgLightbox && _imgLightbox.classList.contains('open')) {
-      _lightboxHistoryPushed = false;
-      closeMediaLightbox({ fromPopState: true });
-    }
-  });
+  window.addEventListener('popstate', (ev) => {
+    if (!_lightboxHistoryPushed) return;
+    _lightboxHistoryPushed = false;
+    closeMediaLightbox({ fromPopState: true });
+    // Closing media is not an app switch. In particular, the Sessions
+    // restore handler hides the current conversation on phones.
+    ev.stopImmediatePropagation();
+  }, true);
   document.addEventListener('click', (ev) => {
     const shotLink = ev.target.closest('a.uxq-td-img-wrap, .ann-ux-preview-shot a');
     if (shotLink && shotLink.getAttribute('href')) {

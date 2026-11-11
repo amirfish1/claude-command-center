@@ -7,6 +7,7 @@ const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');
 const lightbox = app.slice(app.indexOf('  let _imgLightbox = null;'), app.indexOf('  // Inline-code paths in conversation messages'));
+const coreNavigation = app.slice(app.indexOf('  function cccSwitchCoreApp(id, opts)'), app.indexOf('  // ── Simple-mode slim header'));
 const image = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="1200"><rect width="2400" height="1200" fill="#fff"/><text x="50" y="100" font-size="48">Image detail at actual size</text><text x="1300" y="900" font-size="48">Lower right detail</text></svg>');
 
 test('Image viewer zooms and pans on phones and desktops, and resets for the next image', async () => {
@@ -66,5 +67,47 @@ test('Image viewer zooms and pans on phones and desktops, and resets for the nex
     }
     await page.click('[data-lightbox-close]');
     assert.equal(await page.$eval('.img-lightbox', el => el.classList.contains('open')), false);
+  } finally { await browser.close(); }
+});
+
+test('Closing media consumes only its history entry and keeps the phone session open', async () => {
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({width: 390, height: 844, hasTouch: true});
+    await page.setRequestInterception(true);
+    page.on('request', req => req.respond({status: 200, contentType: 'text/html', body:
+      `<style>${css}</style><main id="session">Current session</main><textarea id="draft">Unsent draft</textarea>`}));
+    await page.goto('http://ccc-image.test/');
+    await page.addScriptTag({content: `
+      function escapeAttr(s) { return s; }
+      function isImeKey() { return false; }
+      let _coreApp = 'sessions';
+      const _sessionsDocumentTitle = 'CCC';
+      function isMobile() { return true; }
+      function mobileShowMain(on) { document.getElementById('session').hidden = !on; }
+      ${lightbox}
+      ${coreNavigation}
+      window.historyEvents = 0;
+      window.addEventListener('popstate', () => { window.historyEvents++; }, true);
+      history.replaceState({cccCoreApp: 'sessions'}, '');
+    `});
+    for (const close of ['browser', 'toolbar', 'escape', 'backdrop']) {
+      await page.evaluate(src => openMediaLightbox(src, {title: 'image.png'}), image);
+      assert.equal(await page.evaluate(() => history.state.cccMediaLightbox), true);
+      if (close === 'browser') await page.evaluate(() => history.back());
+      if (close === 'toolbar') await page.click('[data-lightbox-close]');
+      if (close === 'escape') await page.keyboard.press('Escape');
+      if (close === 'backdrop') await page.$eval('.img-lightbox', el => el.click());
+      await page.waitForFunction(() => !history.state?.cccMediaLightbox);
+      assert.equal(await page.$eval('.img-lightbox', el => el.classList.contains('open')), false, close);
+      assert.equal(await page.$eval('#session', el => el.hidden), false, `${close} keeps session visible`);
+      assert.equal(await page.$eval('#draft', el => el.value), 'Unsent draft');
+      assert.equal(await page.evaluate(() => window.historyEvents), 0, 'media popstate is consumed');
+    }
+    // Ordinary navigation still reaches the app handler after closing media.
+    await page.evaluate(() => { history.pushState({cccCoreApp: 'queues'}, '', '/q2.html'); history.back(); });
+    await page.waitForFunction(() => window.historyEvents === 1);
+    assert.equal(await page.$eval('#session', el => el.hidden), true);
   } finally { await browser.close(); }
 });
