@@ -181,6 +181,11 @@ class Engine:
                 for finding in findings:
                     if customers.file_finding(cfg, store, self.wt, entry, finding, now=now):
                         out["findings"] += 1
+                if entry.get("type") == "ci" and not source.last_error:
+                    try:
+                        source.reconcile(store, self.wt)
+                    except Exception as exc:
+                        self._note(f"source:{sid}", f"CI recovery could not close its ticket ({type(exc).__name__}).")
                 if entry.get("type") == "github" and not source.last_error:
                     source.receive_replies(lambda msg: self._github_reply(cfg, msg, now))
                     self._note(f"source:{sid}", source.last_error)

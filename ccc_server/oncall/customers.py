@@ -375,6 +375,10 @@ def collect_closed(cfg, store, chans, wt, *, now=None):
             store.log("wt", f"ls {queue}: {exc}", now=now)
             continue
         for report in reports:
+            ci_id = next((s.get("id") for s in cfg.get("sources", [])
+                          if s.get("type") == "ci" and report.get("source") == "source:" + s.get("id", "")), None)
+            if ci_id and report.get("fingerprint") not in store.kv_get(f"src:{ci_id}:confirmed", []):
+                continue  # A worker closing its ticket is not evidence of green CI.
             ref = report["ticket_ref"]
             if ref in active:
                 continue

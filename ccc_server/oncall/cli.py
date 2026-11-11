@@ -27,6 +27,7 @@ CHANNEL_NAMES = {
     "whatsapp": "WhatsApp (your Twilio sender)", "command": "Your own command",
 }
 SOURCE_NAMES = {
+    "ci": "Failed CI runs",
     "github": "GitHub issues", "sentry": "Sentry", "posthog": "PostHog",
     "http": "A URL that must stay up",
     "command": "A command that must keep passing",
@@ -241,6 +242,9 @@ def _collect(kind, etype, fields, args, io):
         if not value:
             raise Stop("Nothing arrived on stdin.")
         typed[field] = value
+    if kind == "source" and etype == "ci" and "repo" not in entry:
+        from .ci_source import detect_repository
+        entry.update(detect_repository())
     for field in fields:
         name = field["name"]
         if name in entry or name in typed:

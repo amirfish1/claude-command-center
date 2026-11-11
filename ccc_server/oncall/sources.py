@@ -994,6 +994,9 @@ def build(cfg, **kw):
     if not isinstance(cfg, dict):
         raise ValueError("A source must be an object.")
     kind = str(cfg.get("type") or "").strip()
+    if kind == "ci":
+        from .ci_source import CISource
+        return CISource(cfg, **kw)
     if kind not in _TYPES:
         raise ValueError(f"Unknown source type: {kind or '(none)'}. Use one of: {', '.join(_store.SOURCE_TYPES)}.")
     return _TYPES[kind](cfg, **kw)
@@ -1005,6 +1008,13 @@ def _field(name, label, placeholder="", *, secret=False, optional=False):
 
 
 _FIELDS = {
+    "ci": [
+        _field("repo", "Repository", "example-org/storefront"),
+        _field("token_vault", "Token", secret=True, optional=True),
+        _field("base", "API address", "https://api.github.com", optional=True),
+        _field("branches", "Branches (comma separated)", optional=True),
+        _field("every_s", "Seconds between checks", "300", optional=True),
+    ],
     "github": [
         _field("repo", "Repository", "example-org/storefront"),
         _field("token_vault", "Token", "", secret=True, optional=True),
