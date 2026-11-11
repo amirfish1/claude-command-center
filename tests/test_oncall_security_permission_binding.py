@@ -70,8 +70,28 @@ def test_claude_unbound_prompt_does_not_raise_alert(monkeypatch):
     monkeypatch.setattr(server, '_detect_session_engine', lambda sid: 'claude')
     monkeypatch.setattr(server, '_read_notification_state', lambda sid: {'message': 'tool'})
     monkeypatch.setattr(server, '_notification_is_blocking', lambda row: True)
-    monkeypatch.setattr(approval_hook, 'waiting', lambda sid, sha: False)
+    monkeypatch.setattr(approval_hook, 'waiting', lambda sid, sha, **kw: False)
     assert server._OncallDeps().permission('s') is None
+
+
+def test_claude_unbound_prompt_alerts_but_cannot_be_approved(monkeypatch):
+    from ccc_server.oncall import alerts
+    monkeypatch.setattr(server, '_detect_session_engine', lambda sid: 'claude')
+    monkeypatch.setattr(server, '_read_notification_state',
+                        lambda sid: {'message': 'Claude needs your permission to use Bash', 'started_at': 12.5})
+    monkeypatch.setattr(server, '_notification_is_blocking', lambda row: True)
+    monkeypatch.setattr(approval_hook, 'waiting', lambda sid, sha, **kw: False)
+    monkeypatch.setattr(server, 'respond_claude_permission',
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError('must not answer')))
+    deps = server._OncallDeps()
+    signal = deps.permission('s')
+    assert signal['kind'] == 'permission' and signal['meta'] == {'engine': 'claude', 'at_keyboard': True}
+    assert signal['stamp'] == 'keyboard:12.5'
+    ok, detail = deps.approve('s', 'allow', signal['meta'])
+    assert not ok and 'in the session' in detail
+    _subject, text, choices = alerts.render({'id': 3, 'kind': 'permission', 'title': 'a session',
+                                             'body': signal['body'], 'meta': signal['meta']})
+    assert choices == () and 'cannot be approved from here' in text and 'allow or deny' not in text
 
 
 def test_codex_unbound_prompt_does_not_raise_alert(monkeypatch):

@@ -172,6 +172,7 @@ def observe(eng, current):
             if enabled:
                 alerts.raise_event(eng.store, kind=signal['kind'], key=key, session_id=sid,
                                    title=label(sid), body=signal['body'],
+                                   needs_reply=not (signal['meta'] or {}).get('at_keyboard'),
                                    meta=signal['meta'], now=now)
             return key
 

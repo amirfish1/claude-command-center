@@ -53,8 +53,11 @@ def render(alert):
                  else "Reply here when done, or with a question."]
     elif kind == "permission":
         head = f"Permission needed: {title or 'an agent'} (#{n})"
-        lines = [head, body, "", "Reply allow or deny. If unavailable, answer in the session."]
-        choices = ("allow", "deny")
+        if meta.get("at_keyboard"):
+            lines = [head, body, "", "Answer it in the session. It cannot be approved from here."]
+        else:
+            lines = [head, body, "", "Reply allow or deny. If unavailable, answer in the session."]
+            choices = ("allow", "deny")
     elif kind == "stopped":
         head = f"An agent stopped (#{n})"
         lines = [head, title]

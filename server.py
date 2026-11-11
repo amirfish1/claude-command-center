@@ -395,9 +395,16 @@ class _OncallDeps:
             from ccc_server import approval_hook
             identity = pending.get("sha256")
             nonce = pending.get("nonce")
-            if not nonce or not approval_hook.waiting(sid, identity, nonce=nonce):
-                return None
             body = pending.get("message")
+            if not nonce or not approval_hook.waiting(sid, identity, nonce=nonce):
+                # No parked hook to bind an answer to. Still tell the owner an
+                # agent is waiting, but never accept an answer from a phone.
+                seen = pending.get("started_at") or pending.get("timestamp")
+                if not seen or not body:
+                    return None
+                return {"kind": "permission", "stamp": "keyboard:" + str(seen),
+                        "body": " ".join(str(body).split())[:500],
+                        "meta": {"engine": engine, "at_keyboard": True}}
         else:
             return None
         if identity is None or not str(identity).strip() or not nonce or not body:
@@ -410,6 +417,8 @@ class _OncallDeps:
         current = self.permission(sid)
         if not current or current["meta"] != meta:
             return False, "That permission prompt is no longer pending."
+        if meta.get("at_keyboard") or not meta.get("nonce"):
+            return False, "This prompt can only be answered in the session."
         action = "accept" if decision == "allow" else "decline"
         result = (_codex_app_server_resolve_approval(sid, action, expected_request_id=meta["prompt"], expected_nonce=meta["nonce"])
                   if meta["engine"] == "codex" else

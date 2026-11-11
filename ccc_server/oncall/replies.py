@@ -173,6 +173,8 @@ def _apply(cfg, store, chans, wt, alert, text, deps, now):
         store.alert_close(alert["id"], "answered", text, now=now)
         return f"answered {ref}", f"Sent to the agent on {ref}."
     if kind == "permission":
+        if meta.get("at_keyboard"):
+            return "unclear", "This prompt can only be answered in the session."
         if text.strip().lower() not in ("allow", "deny"):
             return "unclear", "Reply allow or deny."
         ok, detail = (deps.approve(alert["session_id"], text.strip().lower(), meta)
