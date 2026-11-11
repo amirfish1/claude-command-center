@@ -212,3 +212,98 @@ def test_report_headline_counts_goal_failure_not_just_session_failure(tmp_path):
             return result
     run_round(make_plan('http://localhost/', ['Try'], people=1), tmp_path / 'report', engine=Unsuccessful())
     assert '1 tester tried 1 goal. 1 could not finish.' in (tmp_path / 'report/report.html').read_text()
+
+
+def test_versioned_export_is_additive_and_usage_is_reported_only(tmp_path):
+    class UsageEngine(FakeEngine):
+        def run(self, plan, person, folder, earlier):
+            result = super().run(plan, person, folder, earlier)
+            (folder / 'engine.jsonl').write_text('\n'.join([
+                json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 10, 'output_tokens': 3}}),
+                json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 2, 'bad': -1, 'flag': True}}),
+                'malformed', json.dumps({'type': 'other', 'usage': {'output_tokens': 99}})]))
+            return result
+    plan = make_plan('http://localhost/', ['Explore'], people=1)
+    folder = tmp_path / 'round'
+    run_round(plan, folder, engine=UsageEngine())
+    export = json.loads((folder / 'findings.v1.json').read_text())
+    assert export['schema_version'] == 1 and export['review_required'] is True
+    assert export['findings'] == json.loads((folder / 'findings.json').read_text())
+    assert export['comparison'] == json.loads((folder / 'comparison.json').read_text())
+    assert isinstance(json.loads((folder / 'findings.json').read_text()), list)
+    assert export['testers'][0]['usage'] == {'reported': True, 'tokens': {'input_tokens': 12, 'output_tokens': 3}}
+    assert export['testers'][0]['person'] == plan['people'][0]
+
+
+@pytest.mark.parametrize('change', [
+    lambda p: p.update(version=2), lambda p: p.update(timeout=True),
+    lambda p: p['safety'].update(read_only='yes'), lambda p: p['safety'].update(hosts=['*.test']),
+    lambda p: p['people'][0].update(start_path='//offhost.test/'),
+    lambda p: p['people'][0].update(start_path='/\\\\offhost.test/'),
+    lambda p: p['people'][0].update(start_path='/\n/offhost.test/'),
+    lambda p: p['people'][0].update(start_path='/a#fragment'),
+    lambda p: p['people'][0].update(auth='missing'),
+    lambda p: p.update(authentication={'shop': {'password': 'obvious-fake'}}),
+])
+def test_invalid_plans_fail_before_artifacts(tmp_path, change):
+    from uxlab.core import validate_plan
+    plan = make_plan('http://localhost/', ['Explore'], people=1)
+    change(plan)
+    with pytest.raises(ValueError):
+        run_round(plan, tmp_path / 'invalid', engine=FakeEngine())
+    assert not (tmp_path / 'invalid').exists()
+
+
+def test_trusted_login_plan_hash_and_prompt_boundary(tmp_path, monkeypatch):
+    import hashlib
+    import uxlab.cli as cli
+    from uxlab.core import validate_plan, codex_config
+    helper = tmp_path / 'login.cjs'
+    helper.write_text('module.exports = async () => true; // fixture-only-password')
+    plan = make_plan('http://localhost/', ['Explore'], people=1)
+    plan['people'][0].update(auth='shop', start_path='/account/details')
+    plan['authentication'] = {'shop': {'script': str(helper), 'sha256': hashlib.sha256(helper.read_bytes()).hexdigest(),
+                                      'requests': [{'method': 'POST', 'url': 'http://localhost/session'}]}}
+    assert validate_plan(plan) == plan
+    prompt = brief(plan, plan['people'][0], [])
+    assert str(helper) not in prompt and 'fixture-only-password' not in prompt and 'sha256' not in prompt
+    assert '--connect' in codex_config(tmp_path / 'spec', tmp_path / 'browser.sock')
+    saved = tmp_path / 'input.json'
+    saved.write_text(json.dumps(plan))
+    seen = []
+    monkeypatch.setattr(cli, 'run_round', lambda plan, folder, **kw: seen.append(plan) or {'results': [{'status': 'finished'}]})
+    assert cli.main(['run', '--plan', str(saved), '--output', str(tmp_path / 'out')]) == 0
+    assert seen == [plan]
+    helper.write_text('module.exports = async () => false;')
+    with pytest.raises(ValueError, match='changed'):
+        validate_plan(plan)
+
+
+def test_exact_origins_and_auth_query(tmp_path):
+    import hashlib
+    from uxlab.core import validate_plan
+    helper = tmp_path / 'login.cjs'
+    helper.write_text('module.exports = async () => true;')
+    plan = make_plan('http://localhost:8000', ['Inspect account'], 1)
+    plan['safety'].update(origins=['http://localhost:8000'], blocked_paths=['/telemetry'])
+    plan['authentication'] = {'shop': {'script': str(helper), 'sha256': hashlib.sha256(helper.read_bytes()).hexdigest(),
+        'requests': [{'method': 'POST', 'url': 'http://localhost:8001/token?grant_type=password'}]}}
+    assert validate_plan(plan) is plan
+    plan['safety']['origins'] = ['http://localhost:8000/path']
+    with pytest.raises(ValueError): validate_plan(plan)
+
+
+def test_redacted_display_url_does_not_discard_findings():
+    f=finding(page='http://localhost:8000[REDACTED]')
+    assert finding_key(f)==finding_key(f)
+    assert len(merge_findings([{'id':'tester-1','findings':[f]}]))==1
+
+
+def test_teardown_requires_both_durable_finish_and_completed_turn(tmp_path):
+    from uxlab.core import finished_before_teardown
+    (tmp_path/'result.json').write_text('{"status":"finished"}')
+    assert not finished_before_teardown(tmp_path)
+    (tmp_path/'engine.jsonl').write_text('{"type":"turn.completed","usage":{"input_tokens":12}}\n')
+    assert finished_before_teardown(tmp_path)
+    (tmp_path/'result.json').write_text('{"status":"running"}')
+    assert not finished_before_teardown(tmp_path)
