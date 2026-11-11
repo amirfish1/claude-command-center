@@ -68,3 +68,36 @@ def test_ten_minute_refusal_then_recovery(tmp_path):
         server.server_close()
         thread.join()
         store.close()
+
+
+def test_half_open_connection_is_held(tmp_path):
+    from ccc_server.oncall.channels import http_request
+    accepted, release = [], threading.Event()
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+        def do_POST(self):
+            accepted.append(self.rfile.read(int(self.headers['Content-Length'])))
+            release.wait(2)
+            self.close_connection = True
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    store = Store(tmp_path)
+    def short_deadline(method, url, **kwargs):
+        kwargs['timeout'] = .1
+        return http_request(method, url, **kwargs)
+    channel = NtfyChannel({'id': 'local', 'type': 'ntfy', 'topic': 'proof',
+                           'server': f'http://127.0.0.1:{server.server_port}'}, kv=store,
+                          http=short_deadline)
+    alert, _ = store.alert_upsert('one', kind='permission', title='Choose', body='')
+    try:
+        assert not alerts.send_alert(store, [channel], alert)
+        assert not alerts.send_alert(store, [channel], alert)
+        assert len(accepted) == 1
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()
+        store.close()
