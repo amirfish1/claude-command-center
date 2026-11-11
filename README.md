@@ -102,7 +102,7 @@ The default worker is scripted; messages use real On-call code and tickets use i
 
 On-call is a preview and it is off by default. Install CCC with the line above, then:
 
-1. Run `ccc oncall setup`. It turns the preview on, asks a few questions and sends you a test message. If the test message does not arrive, On-call stays off.
+1. Run `ccc oncall setup`. It turns the preview on, asks a few questions and sends you a test message. If no test send succeeds, On-call stays off. Check your phone or inbox: an accepted send does not confirm receipt.
 2. Add where bugs come from and who your customers are.
 
 The same settings are in **Settings > On-call** once the preview is on (**Settings > Advanced > Preview features**, or start CCC with `CCC_FF_ONCALL=1`). Full guide: [On-call](docs/oncall.md).

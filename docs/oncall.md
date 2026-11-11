@@ -98,6 +98,9 @@ The same settings live in **Settings > On-call**. To turn only the preview on
 and set the rest up there: **Settings > Advanced > Preview features >
 On-call**, or start CCC with `CCC_FF_ONCALL=1`.
 
+For ntfy, the saved channel shows the address to subscribe to in the ntfy app.
+**Test** keeps its result visible; an accepted send still needs checking on your phone.
+
 ## The home screen
 
 With On-call on, the dashboard opens on one quiet screen instead of the full
@@ -279,6 +282,11 @@ SHOP-12  Name the new helper bindCheckout or attachCheckoutHandler?
   Undo: git revert 4ff30e8de6
   Applied.
 ```
+
+**Settings > On-call > Decided without you** shows the question, choice, undo
+instructions and current state too. Turning small decisions off keeps that
+history visible. Undo instructions are steps to carry out in the code folder;
+displaying them does not run them.
 
 These always come to you, whatever the switch says: sending to customers, a
 production change, money or prices, ad spend or a public post, and anything
