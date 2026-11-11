@@ -21,7 +21,7 @@ from . import store as st
 from . import wt as wtmod
 
 _CONFIG_KEYS = ("enabled", "queue", "repo", "quiet_hours", "alerts", "customers", "hourly_cap",
-                "watch", "ack")
+                "watch", "ack", "daily_summary")
 _ID_CLEAN = re.compile(r"[^a-z0-9_-]")
 DECISIONS_DETAILED = 20     # tickets read for "what was decided", newest last
 
@@ -42,6 +42,10 @@ def handle(method, path, body=None, *, eng=None):
     eng = _engine(eng)
     name = path.rstrip("/").rsplit("/", 1)[-1]
     try:
+        if method == "GET" and name == "week":
+            from .week import collect
+            return 200, collect(eng, since=body.get("since"), weeks=body.get("weeks", 2),
+                                detail=str(body.get("detail", "")).lower() in ("1", "true"))
         if method == "GET" and name == "status":
             return 200, status(eng)
         if method == "GET" and name == "decisions":

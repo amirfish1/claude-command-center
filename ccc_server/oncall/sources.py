@@ -217,8 +217,9 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
             raise urllib.error.HTTPError(newurl, code, "Redirect to a non-web URL refused", headers, fp)
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new is not None:
-            old_host = urllib.parse.urlsplit(req.full_url).netloc.lower()
-            if urllib.parse.urlsplit(newurl).netloc.lower() != old_host:
+            old = urllib.parse.urlsplit(req.full_url)
+            target = urllib.parse.urlsplit(newurl)
+            if (target.scheme.lower(), target.netloc.lower()) != (old.scheme.lower(), old.netloc.lower()):
                 for store_ in (new.headers, new.unredirected_hdrs):
                     for name in [h for h in store_ if h.lower() == "authorization"]:
                         del store_[name]
@@ -1028,6 +1029,9 @@ def build(cfg, **kw):
     if not isinstance(cfg, dict):
         raise ValueError("A source must be an object.")
     kind = str(cfg.get("type") or "").strip()
+    if kind == "ci":
+        from .ci_source import CISource
+        return CISource(cfg, **kw)
     if kind not in _TYPES:
         raise ValueError(f"Unknown source type: {kind or '(none)'}. Use one of: {', '.join(_store.SOURCE_TYPES)}.")
     return _TYPES[kind](cfg, **kw)
@@ -1039,6 +1043,13 @@ def _field(name, label, placeholder="", *, secret=False, optional=False):
 
 
 _FIELDS = {
+    "ci": [
+        _field("repo", "Repository", "example-org/storefront"),
+        _field("token_vault", "Token", secret=True, optional=True),
+        _field("base", "API address", "https://api.github.com", optional=True),
+        _field("branches", "Branches (comma separated)", optional=True),
+        _field("every_s", "Seconds between checks", "300", optional=True),
+    ],
     "github": [
         _field("repo", "Repository", "example-org/storefront"),
         _field("token_vault", "Token", "", secret=True, optional=True),

@@ -759,7 +759,8 @@ def test_build_accepts_form_strings_and_every_type():
         {"id": "b", "type": "posthog", "project_id": "1", "token_vault": "t"},
         {"id": "c", "type": "http", "url": "http://example.com"},
         {"id": "d", "type": "command", "cmd": "true"},
-        {"id": "e", "type": "github", "repo": "example-org/storefront"})} == set(store.SOURCE_TYPES)
+        {"id": "e", "type": "github", "repo": "example-org/storefront"},
+        {"id": "f", "type": "ci", "repo": "example-org/storefront"})} == set(store.SOURCE_TYPES)
 
 
 @pytest.mark.parametrize("kind", store.SOURCE_TYPES)

@@ -1,0 +1,1 @@
+- On-call reads and writes require a local browser origin for this server, or a direct local program without an Origin header.
