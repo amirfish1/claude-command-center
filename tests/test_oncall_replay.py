@@ -169,6 +169,7 @@ def test_explicit_features_are_not_bug_evidence(api):
     routes['/repos/example/library/issues'] = [
         {'number': 1, 'title': 'Feature request: add a method', 'closed_at': '2026-11-10T00:00:00Z'},
         {'number': 2, 'title': 'Add a method', 'labels': [{'name': 'enhancement'}], 'closed_at': '2026-11-10T00:00:00Z'},
+        {'number': 3, 'title': 'Move checks into a base class', 'closed_at': '2026-11-10T00:00:00Z'},
     ]
     assert r.select_cases(client, 'example/library', 30, 3, dt.datetime(2026, 11, 11, tzinfo=dt.timezone.utc)) == []
     assert not any('/events' in call for call in calls)

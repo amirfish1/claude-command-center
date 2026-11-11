@@ -107,6 +107,10 @@ def select_cases(api, repo, days, maximum, now=None):
         explicit_feature |= bool(re.match(r"\[?(?:feature(?: request)?|enhancement)\b", issue.get("title", ""), re.I))
         if explicit_feature and not any("bug" in label for label in labels):
             continue
+        bug_type = (issue.get("type") or {}).get("name", "").lower() == "bug"
+        symptom = re.search(r"\b(bug|crash(?:es)?|(?:over|under)flow|regression|incorrect(?:ly)?|wrong|broken|breaks|fail(?:s|ure|ures|ing)?|error|hang(?:s|ing)?|leak(?:s|ing)?|unexpected)\b", issue.get("title", ""), re.I)
+        if not (bug_type or any("bug" in label for label in labels) or symptom):
+            continue
         closed = issue.get("closed_at")
         if "pull_request" in issue or not closed or not since <= closed <= now.isoformat().replace("+00:00", "Z"):
             continue
