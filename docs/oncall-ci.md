@@ -132,3 +132,24 @@ local HTTP adapter and bounded observer; it does not run the dashboard server
 or verify its preview routing. It proves one seeded bug, not general agent
 reliability. Instructions and an ancestor check do not prove the worker never
 used a harmless force flag; repository branch protection is not tested.
+
+## Durable paging and delivery
+
+The source now scans at most two run pages per poll and saves its page cursor.
+New runs above the scan's starting ID wait for the next scan. Overlapping
+pages are deduplicated. Finished scans drain in run-ID order, with at most
+three findings enriched per poll. Two unfinished runs can be refreshed per
+poll. The bound is ten API calls, plus one initial repository lookup, excluding
+redirects. A sustained arrival rate above scan capacity delays intake; deleted
+runs and server retention limits cannot be recovered.
+
+A single stored journal commits the scan, episode state and pending findings.
+The engine acknowledges a finding only after it has a ticket reference.
+A crash before acknowledgement replays the same fingerprint, so WatchTower's
+dedupe key reuses a ticket filed before the crash. Pending excerpts are scrubbed
+before they enter the journal. These rules replace the earlier one-page limit
+and the statement that source state never contains an excerpt.
+
+Tests cover a 370-run burst with arrivals during paging, restart, failed
+journal writes, replay before acknowledgement, and a real local HTTP redirect
+to a different host. The redirected request did not carry Authorization.

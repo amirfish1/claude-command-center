@@ -1,7 +1,9 @@
 """Bounded Actions intake. State contains cursors and episode IDs, never logs."""
 from __future__ import annotations
 
+import copy
 import hashlib
+from dataclasses import asdict
 from datetime import datetime
 import re
 import subprocess
@@ -9,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .sources import Source, _Problem, _SafeRedirect, _finding, _json, _need, _text, _web_url
+from .sources import Finding, Source, _Problem, _SafeRedirect, _finding, _json, _need, _text, _web_url
 
 
 RULES = ('Never force-push. Never edit workflow files to make a run pass. '
@@ -59,6 +61,30 @@ class CISource(Source):
             raise ValueError('Use at most ten branches.')
         self.request = transport
 
+    def _get(self, name, default=None):
+        journal = getattr(self, '_transaction', None)
+        if journal is None:
+            journal = super()._get('journal', {})
+        return copy.deepcopy(journal.get(name, super()._get(name, default)))
+
+    def _set(self, name, value):
+        journal = getattr(self, '_transaction', None)
+        if journal is not None:
+            journal[name] = copy.deepcopy(value)
+        else:
+            journal = super()._get('journal', {})
+            journal[name] = copy.deepcopy(value)
+            super()._set('journal', journal)
+
+    def _atomic_poll(self, token):
+        self._transaction = copy.deepcopy(super()._get('journal', {}))
+        try:
+            result = self._poll_with(token)
+            super()._set('journal', self._transaction)
+            return result
+        finally:
+            self._transaction = None
+
     def _credential(self):
         if self.cfg.get('token_vault'):
             return self._token('CI')
@@ -102,12 +128,12 @@ class CISource(Source):
         repo = self._fetch('', token)
         self._set('default_branch', repo.get('default_branch') or 'main')
         # Set the baseline at setup, not on the first scheduled poll.
-        self._poll_with(token)
+        self._atomic_poll(token)
         return 'Actions connected. Existing red runs are left alone.'
 
     def _poll(self):
         try:
-            return self._poll_with(self._credential())
+            return self._atomic_poll(self._credential())
         except Exception:
             self._set('etags', {})
             raise
@@ -117,29 +143,27 @@ class CISource(Source):
         if not default:
             default = self._fetch('', token).get('default_branch') or 'main'
             self._set('default_branch', default)
-        rows = self._fetch('/actions/runs?per_page=100&limit=100', token, conditional=True)
-        if rows is None:
-            return []
-        if not isinstance(rows, dict) or not isinstance(rows.get('workflow_runs'), list):
-            raise _Problem('CI returned an unsupported workflow-runs shape.')
-        branches = self.branches or [default]
-        states = self._get('episodes', {})
+        pending = self._get('outbox', [])
+        if pending:
+            return [Finding(**item) for item in pending[:3]]
         baseline = not self._get('baselined', False)
         since = self._get('since', self._clock())
         self._set('since', since)
+        rows = self._read_runs(token, baseline)
+        branches = self.branches or [default]
+        states = self._get('episodes', {})
         findings = []
-        # Latest completed run per workflow and branch. A rerun keeps its run ID.
-        latest = {}
-        for row in rows['workflow_runs']:
+        remaining = []
+        for row in sorted(rows, key=lambda r: int(r['id'])):
+            if len(findings) >= 3:
+                remaining.append(row)
+                continue
             if row.get('head_branch') not in branches or row.get('status') != 'completed':
                 continue
             workflow = row.get('workflow_id') or row.get('path') or row.get('name')
             if not workflow:
                 continue
             key = str(workflow) + ':' + row['head_branch']
-            if key not in latest or int(row['id']) > int(latest[key]['id']):
-                latest[key] = row
-        for key, row in latest.items():
             state = states.get(key, {})
             if int(row['id']) < state.get('run_id', 0):
                 continue
@@ -176,10 +200,77 @@ class CISource(Source):
         # Do not cache a page whose enrichment budget left unprocessed episodes.
         if len(findings) == 3:
             self._set('etags', {})
+        # Persist delivery before advancing episode state or dropping backlog rows.
+        self._set('outbox', [asdict(f) for f in findings])
         self._mark_filed([f.fingerprint for f in findings])
         self._set('episodes', states)
         self._set('baselined', True)
+        self._set('backlog', remaining)
         return findings
+
+    def acknowledge(self, fingerprint):
+        self._set('outbox', [f for f in self._get('outbox', [])
+                             if f['fingerprint'] != fingerprint])
+
+    def _read_runs(self, token, baseline):
+        """Two pages per poll, durable scan cursor, no advancing past a backlog.
+
+        Offset pages may overlap when new runs arrive. IDs dedupe that overlap;
+        runs above the scan's first-page high watermark belong to the next scan.
+        """
+        backlog = self._get('backlog', [])
+        if backlog:
+            return backlog
+        watermark = self._get('watermark', 0)
+        scan = self._get('scan', {'page': 1, 'high': watermark, 'rows': {}})
+        active = self._get('active_runs', [])
+        completed = []
+        for run_id in active[:2]:
+            row = self._fetch(f'/actions/runs/{run_id}', token)
+            active.remove(run_id)
+            if row.get('status') == 'completed':
+                completed.append(row)
+            else:
+                active.append(run_id)
+        self._set('active_runs', active)
+        for _ in range(2):
+            page = scan['page']
+            path = '/actions/runs?per_page=100&limit=100' + (f'&page={page}' if page > 1 else '')
+            payload = self._fetch(path, token, conditional=page == 1)
+            if payload is None:
+                return completed
+            rows = payload.get('workflow_runs') if isinstance(payload, dict) else None
+            if not isinstance(rows, list):
+                raise _Problem('CI returned an unsupported workflow-runs shape.')
+            if page == 1:
+                scan['high'] = max([int(r['id']) for r in rows] + [watermark])
+            if baseline:
+                self._set('watermark', scan['high'])
+                return rows
+            for row in rows:
+                rid = int(row['id'])
+                # Re-read visible reruns as well as new IDs; fingerprint dedupe
+                # keeps repeat observations from filing twice.
+                if rid <= scan['high'] and (rid > watermark or page == 1):
+                    scan['rows'][str(rid)] = row
+            end = len(rows) < 100 or any(int(r['id']) <= watermark for r in rows)
+            scan['page'] += 1
+            self._set('scan', scan)
+            if end:
+                all_rows = list(scan['rows'].values())
+                for row in all_rows:
+                    if row.get('status') != 'completed' and int(row['id']) > watermark:
+                        if int(row['id']) not in active:
+                            active.append(int(row['id']))
+                self._set('active_runs', active)
+                # Backlog is written before the cursor advances. Replaying a
+                # completed scan after a crash is safe through stable IDs.
+                result = completed + [r for r in all_rows if r.get('status') == 'completed']
+                self._set('backlog', result)
+                self._set('watermark', scan['high'])
+                self._set('scan', {'page': 1, 'high': scan['high'], 'rows': {}})
+                return result
+        return completed
 
     def reconcile(self, store, wt):
         """Green ends the incident; never claim that a green rerun changed code."""

@@ -21,6 +21,13 @@ def source():
             obj = {'default_branch': 'main'}
         return 200, json.dumps(obj).encode(), {'ETag': 'test-etag'}
     src.request = request
+    # This helper represents the engine accepting every returned finding.
+    poll = src.poll
+    def accepted_poll():
+        for item in src._get('outbox', []):
+            src.acknowledge(item['fingerprint'])
+        return poll()
+    src.poll = accepted_poll
     return src, rows, calls
 
 
@@ -179,7 +186,7 @@ def test_closed_notice_waits_for_observed_green(monkeypatch):
         def reports(self, **kwargs):
             return [{'id': 1, 'source': 'source:ci', 'fingerprint': 'failure', 'ticket_ref': 'DEMO-1'}]
         def kv_get(self, key, default=None):
-            return self.confirmed
+            return {} if key.endswith(":journal") else self.confirmed
         def report_update(self, *args, **kwargs):
             pass
     class WT:

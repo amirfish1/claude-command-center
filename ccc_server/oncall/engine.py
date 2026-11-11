@@ -181,6 +181,8 @@ class Engine:
                 for finding in findings:
                     if customers.file_finding(cfg, store, self.wt, entry, finding, now=now):
                         out["findings"] += 1
+                        if entry.get("type") == "ci":
+                            source.acknowledge(finding.fingerprint)
                 if entry.get("type") == "ci" and not source.last_error:
                     try:
                         source.reconcile(store, self.wt)
