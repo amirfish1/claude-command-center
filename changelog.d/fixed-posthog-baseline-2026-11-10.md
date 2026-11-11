@@ -1,0 +1,1 @@
+- Read all PostHog baseline pages before accepting new groups, and stop with an error when the baseline exceeds 2,000 groups.

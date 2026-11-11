@@ -630,7 +630,7 @@ class PostHogSource(Source):
             f"WHERE event = '$exception' AND timestamp >= now() - INTERVAL {int(self.window_min)} MINUTE "
             "GROUP BY group_key "
             f"HAVING count() >= {int(self.min_events)} "
-            "ORDER BY event_count DESC "
+            "ORDER BY event_count DESC, group_key "
             "LIMIT 100"
         )
 
@@ -660,7 +660,19 @@ class PostHogSource(Source):
 
     def _poll(self):
         token = self._token("PostHog")
-        rows = self._query(token, self.hogql(), "ccc on-call exceptions")
+        sql = self.hogql()
+        rows = self._query(token, sql, "ccc on-call exceptions")
+        if not self._get("baselined") and not self.backfill:
+            page = list(rows)
+            while len(page) == 100:
+                if len(rows) > FILED_KEEP:
+                    raise _Problem("PostHog has too many existing groups to baseline safely. "
+                                   "Narrow window_min or raise min_events.")
+                page = self._query(token, sql + f" OFFSET {len(rows)}", "ccc on-call baseline")
+                rows += page
+            if len(rows) > FILED_KEEP:
+                raise _Problem("PostHog has too many existing groups to baseline safely. "
+                               "Narrow window_min or raise min_events.")
         day = time.strftime("%Y%m%d", time.gmtime(float(self._clock())))
         groups = []
         for row in rows:
