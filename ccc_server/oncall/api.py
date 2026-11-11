@@ -290,6 +290,10 @@ def source(eng, body):
 # -- actions ----------------------------------------------------------------
 
 def test(eng, body):
+    if body.get("roundtrip"):
+        from .chat_setup import roundtrip
+        result = roundtrip(eng, str(body.get("channel") or ""))
+        return dict(result, results=[dict(result, channel=body.get("channel", ""))])
     results = eng.test(str(body.get("channel") or ""))
     if not results:
         raise ApiError("Add a message channel first.")

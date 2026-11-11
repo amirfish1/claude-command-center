@@ -32,7 +32,7 @@ CONFIG_NAME = "config.json"
 DB_NAME = "oncall.sqlite3"
 LOG_KEEP = 500
 
-CHANNEL_TYPES = ("email", "telegram", "ntfy", "imessage", "sms", "whatsapp", "command")
+CHANNEL_TYPES = ("email", "telegram", "ntfy", "imessage", "sms", "whatsapp", "command", "slack", "discord", "matrix", "mattermost")
 SOURCE_TYPES = ("ci", "github", "sentry", "posthog", "http", "command")
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _QUEUE_RE = re.compile(r"^[A-Z][A-Z0-9_-]{0,31}$")
