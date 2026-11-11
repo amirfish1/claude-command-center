@@ -153,3 +153,30 @@ and the statement that source state never contains an excerpt.
 Tests cover a 370-run burst with arrivals during paging, restart, failed
 journal writes, replay before acknowledgement, and a real local HTTP redirect
 to a different host. The redirected request did not carry Authorization.
+
+## Setup and optional recheck
+
+Inside a GitHub checkout with workflow files and a saved gh login, interactive
+`ccc oncall setup` offers CI monitoring with one yes or no. It does not add a
+second CI source on repeat setup. `ccc oncall source add ci` detects origin
+without asking for repository or token. Setup now requires a login or Vault
+token and reports missing workflows, disabled workflows and unreadable
+repositories in one line. This replaces anonymous setup described above.
+
+Add `--set recheck=yes` to wait for a second failed run or rerun attempt on the
+same commit before filing. Repeated polls of one failed run do not count.
+A successful run on that commit clears the candidate. If no rerun arrives,
+no ticket is filed. This option is off by default.
+
+## GitLab pipelines
+
+Use `--set provider=gitlab --set repo=group/project --vault token=gitlab-read`.
+The default API root is https://gitlab.com/api/v4; `--set base=...` overrides it.
+Nested groups are supported. The adapter maps the documented pipelines, jobs
+and trace endpoints to the same episode and recovery logic. Jobs have no
+Actions-style steps, so the step is reported unavailable.
+
+This was tested with synthetic recorded-shape fixtures based on the official
+[pipelines API](https://docs.gitlab.com/api/pipelines/) and
+[jobs API](https://docs.gitlab.com/api/jobs/). It was **not run against a real
+GitLab server**. GitLab merge requests are not supported.

@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 from dataclasses import asdict
+from pathlib import Path
 from datetime import datetime
 import re
 import subprocess
@@ -11,7 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from .sources import Finding, Source, _Problem, _SafeRedirect, _finding, _json, _need, _text, _web_url
+from .sources import Finding, Source, _Problem, _SafeRedirect, _finding, _json, _need, _text, _web_url, _bool
 
 
 RULES = ('Never force-push. Never edit workflow files to make a run pass. '
@@ -49,25 +50,33 @@ class CISource(Source):
     type = 'ci'
 
     def _setup(self, cfg):
+        self.provider = _text(cfg, 'provider', 'github')
+        if self.provider not in ('github', 'gitea', 'forgejo', 'gitlab'):
+            raise ValueError('provider must be github, gitea, forgejo or gitlab.')
         self.repo = _need(cfg, 'repo').removesuffix('.git')
-        if not re.fullmatch(r'[\w.-]+/[\w.-]+', self.repo):
+        if not re.fullmatch(r'[\w.-]+(?:/[\w.-]+)+', self.repo):
             raise ValueError('repo must be owner/repository.')
-        self.base = _web_url(cfg, 'base', 'https://api.github.com').rstrip('/')
+        self.base = _web_url(cfg, 'base', 'https://gitlab.com/api/v4' if self.provider == 'gitlab' else 'https://api.github.com').rstrip('/')
         parts = urllib.parse.urlsplit(self.base)
         if parts.username or parts.password or parts.query or parts.fragment:
             raise ValueError('base must not contain credentials, a query or a fragment.')
         self.branches = [s.strip() for s in _text(cfg, 'branches').split(',') if s.strip()]
         if len(self.branches) > 10:
             raise ValueError('Use at most ten branches.')
+        self.recheck = _bool(cfg, 'recheck')
         self.request = transport
 
     def _get(self, name, default=None):
+        if name == "last_poll":
+            return super()._get(name, default)
         journal = getattr(self, '_transaction', None)
         if journal is None:
             journal = super()._get('journal', {})
         return copy.deepcopy(journal.get(name, super()._get(name, default)))
 
     def _set(self, name, value):
+        if name == "last_poll":
+            return super()._set(name, value)
         journal = getattr(self, '_transaction', None)
         if journal is not None:
             journal[name] = copy.deepcopy(value)
@@ -114,6 +123,10 @@ class CISource(Source):
             raise _Problem('CI request failed. Check the server address and connection.')
         if status == 304:
             return None
+        if status == 401:
+            raise _Problem('No usable CI login. Run gh auth login or supply a Vault token.')
+        if status == 404:
+            raise _Problem('CI login cannot read this repository or Actions endpoint (HTTP 404).')
         if status != 200:
             raise _Problem(f'CI answered HTTP {status}. Check Actions read access and rate limits.')
         if conditional:
@@ -125,7 +138,30 @@ class CISource(Source):
 
     def _check(self):
         token = self._credential()
+        if not token:
+            raise _Problem('No CI login. Run gh auth login or supply --vault token=ENTRY.')
         repo = self._fetch('', token)
+        if repo.get('has_actions') is False or repo.get('builds_access_level') == 'disabled':
+            raise _Problem('Actions is disabled for this repository.')
+        if self.base == 'https://api.github.com':
+            workflows = self._fetch('/actions/workflows?per_page=100', token).get('workflows') or []
+            if not workflows:
+                raise _Problem('No CI workflows found in this repository.')
+            if not any(w.get('state') == 'active' for w in workflows):
+                raise _Problem('Actions workflows are disabled for this repository.')
+        if self.provider in ('gitea', 'forgejo') or 'has_actions' in repo:
+            found = False
+            for folder in ('.forgejo/workflows', '.gitea/workflows', '.github/workflows'):
+                try:
+                    entries = self._fetch('/contents/' + folder, token)
+                    found = isinstance(entries, list) and any(str(e.get('name', '')).endswith(('.yml', '.yaml')) for e in entries)
+                    if found:
+                        break
+                except _Problem as exc:
+                    if 'HTTP 404' not in str(exc):
+                        raise
+            if not found:
+                raise _Problem('No CI workflows found in this repository.')
         self._set('default_branch', repo.get('default_branch') or 'main')
         # Set the baseline at setup, not on the first scheduled poll.
         self._atomic_poll(token)
@@ -175,6 +211,10 @@ class CISource(Source):
                     self._set('recovered', recovered)
                     confirmed = self._get('confirmed', [])
                     self._set('confirmed', (confirmed + [state['fingerprint']])[-2000:])
+                candidates = self._get('candidates', {})
+                candidate = 'ci:' + hashlib.sha256((key + ':' + sha).encode()).hexdigest()[:40]
+                candidates.pop(candidate, None)
+                self._set('candidates', candidates)
                 states[key] = {'green': sha, 'red': False, 'run_id': int(row['id'])}
                 continue
             if row.get('conclusion') not in ('failure', 'timed_out'):
@@ -191,6 +231,14 @@ class CISource(Source):
             fingerprint = 'ci:' + hashlib.sha256((key + ':' + sha).encode()).hexdigest()[:40]
             if fingerprint in self._filed():
                 continue
+            if self.recheck:
+                candidates = self._get('candidates', {})
+                observation = str(row['id']) + ':' + str(row.get('run_attempt', 1))
+                prior = candidates.get(fingerprint)
+                if not prior or prior == observation:
+                    candidates[fingerprint] = observation
+                    self._set('candidates', candidates)
+                    continue
             details = self._evidence(row, token)
             findings.append(_finding(fingerprint, 'CI failed: ' + str(row.get('name') or key),
                 RULES + '\n\n' + scrub(f"Repository: {self.repo}\nBranch: {row['head_branch']}\n"
@@ -312,11 +360,11 @@ class CISource(Source):
             return 'Job details unavailable (permission or unsupported endpoint).'
 
 
-def detect_repository():
+def detect_repository(folder=None):
     """Return safe defaults from origin without displaying its credentials."""
     try:
         remote = subprocess.run(['git', 'remote', 'get-url', 'origin'], capture_output=True,
-                                text=True, timeout=5, check=True).stdout.strip()
+                                text=True, timeout=5, check=True, cwd=folder).stdout.strip()
         if remote.startswith('git@'):
             remote = 'ssh://' + remote.replace(':', '/', 1)
         parts = urllib.parse.urlsplit(remote)
@@ -326,3 +374,54 @@ def detect_repository():
     except (OSError, subprocess.SubprocessError, ValueError):
         pass
     return {}
+
+
+def setup_candidate(folder):
+    """Local discovery only. Setup does not probe private accounts speculatively."""
+    root = Path(folder)
+    if not any(list((root / directory).glob('*.yml')) + list((root / directory).glob('*.yaml'))
+               for directory in ('.github/workflows', '.gitea/workflows', '.forgejo/workflows')):
+        return {}
+    detected = detect_repository(folder)
+    if not detected:
+        return {}
+    candidate = CISource({'id': 'ci-setup', **detected})
+    return detected if candidate._credential() else {}
+
+
+class GitLabSource(CISource):
+    """Documented pipeline/job shapes; not verified against a live GitLab server."""
+
+    def _fetch(self, path, token, *, conditional=False, raw=False):
+        original = path
+        if path.startswith('/actions/runs'):
+            path = path.replace('/actions/runs', '/pipelines', 1)
+            if '?' in path:
+                path += '&order_by=id&sort=desc'
+        elif path.startswith('/actions/jobs/'):
+            path = path.replace('/actions/jobs/', '/jobs/', 1).replace('/logs', '/trace')
+        # Reuse bounded HTTP and redaction without forwarding a private-token header.
+        transport_ = self.request
+        prefix = self.base + '/repos/' + self.repo
+        project = self.base + '/projects/' + urllib.parse.quote(self.repo, safe='')
+        self.request = lambda url, headers: transport_(url.replace(prefix, project, 1), headers)
+        try:
+            payload = super()._fetch(path, token, conditional=conditional, raw=raw)
+        finally:
+            self.request = transport_
+        if payload is None or raw:
+            return payload
+        if original.startswith('/actions/runs') and '/jobs' not in original:
+            def normalize(row):
+                status = row.get('status')
+                return {**row, 'workflow_id': 'pipeline', 'name': 'Pipeline',
+                        'head_sha': row.get('sha'), 'head_branch': row.get('ref'),
+                        'status': 'completed' if status in ('success', 'failed', 'canceled', 'skipped') else status,
+                        'conclusion': {'failed': 'failure'}.get(status, status)}
+            if isinstance(payload, list):
+                return {'workflow_runs': [normalize(row) for row in payload]}
+            return normalize(payload)
+        if '/jobs' in original and isinstance(payload, list):
+            return {'jobs': [{**j, 'conclusion': 'failure' if j.get('status') == 'failed' else j.get('status'),
+                              'steps': None} for j in payload]}
+        return payload

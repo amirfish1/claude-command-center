@@ -38,12 +38,13 @@ def run(i, result='failure', sha=None, branch='main'):
 
 def test_registration():
     assert build({'type': 'ci', 'id': 'ci', 'repo': 'example/demo'}).type == 'ci'
-    assert required_fields('ci')[0]['name'] == 'repo'
+    assert 'repo' in [f['name'] for f in required_fields('ci')]
 
 
 def test_baseline_red_is_left_alone_until_green():
     src, rows, calls = source()
     rows[:] = [run(1)]
+    src._credential = lambda: 'test-only'
     assert src.check()[0]
     rows[:] = [run(2)]
     assert src.poll() == []

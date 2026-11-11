@@ -1,0 +1,1 @@
+- Offer CI setup, optional flaky-run rechecks and GitLab pipeline intake.
