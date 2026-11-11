@@ -1,0 +1,1 @@
+- Installation stops with a recovery step when the required WatchTower setup script is missing.

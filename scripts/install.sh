@@ -662,9 +662,8 @@ install_watchtower() {
     fi
   done
   if [ -z "$script" ]; then
-    printf 'install: WARNING: scripts/install-watchtower.sh not found — skipping WatchTower.\n'
-    printf 'install:   CCC will use its built-in queue engine (no worker dispatch).\n'
-    return 0
+    err "WatchTower setup is missing; download a fresh CCC checkout and run the installer again."
+    return 1
   fi
   # CCC_WATCHTOWER_FORCE: an explicit install is a user asking for this now,
   # so it must not be silently skipped by the once-a-day rate limits.
