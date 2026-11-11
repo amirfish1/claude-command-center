@@ -216,8 +216,9 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
             raise urllib.error.HTTPError(newurl, code, "Redirect to a non-web URL refused", headers, fp)
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new is not None:
-            old_host = urllib.parse.urlsplit(req.full_url).netloc.lower()
-            if urllib.parse.urlsplit(newurl).netloc.lower() != old_host:
+            old = urllib.parse.urlsplit(req.full_url)
+            target = urllib.parse.urlsplit(newurl)
+            if (target.scheme.lower(), target.netloc.lower()) != (old.scheme.lower(), old.netloc.lower()):
                 for store_ in (new.headers, new.unredirected_hdrs):
                     for name in [h for h in store_ if h.lower() == "authorization"]:
                         del store_[name]

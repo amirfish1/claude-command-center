@@ -1,0 +1,1 @@
+- On-call rejects HTTP channel responses larger than one MiB before parsing them.
