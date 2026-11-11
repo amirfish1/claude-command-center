@@ -53,6 +53,39 @@ nice -n 15 python3 scripts/oncall-launch-pack.py \
   --render-only .claude/screenshots/launch-captures/my-run
 ```
 
+The opt-in second edit uses only existing recordings and never starts a proof:
+
+```sh
+nice -n 15 python3 scripts/oncall-launch-pack.py \
+  --render-only .claude/screenshots/launch-captures/my-run --edit-version v2
+```
+
+This writes `oncall-launch-40s-v2.mp4` and `oncall-hero-12s-v2.mp4`, retaining
+v1 media and its existing manifest entries. The v2 shot plan in the editor uses
+explicit source-time intervals and native-pixel crop rectangles for this capture
+layout. A different recording must satisfy those intervals and dimensions;
+the editor rejects invalid geometry, short footage, slowing, and beats under
+three seconds. It records each crop, native dimensions, uniform scale, output
+placement, exact speed, and rounded speed label in the film manifests. Captions
+are 56px and recording/cut/separate-run labels are 32px, outside the source UI.
+The source is never rearranged: phone input and sent receipts use separate cuts.
+`review-v2/` contains 960×540 decoded frames at eight evenly spaced times per
+film plus a representative midpoint for every beat. Review these before sharing.
+
+The light-theme session recording contains faded narration above its readable
+question card. Inspection of the capture scripts finds theme selection and
+native screenshot capture, without a dimming or recoloring step. In
+`static/app.css`, the reader's `--kw-text: #c9cdd4` is independent of the light
+theme's `--text: #1f2328`, and `.kimi-turn .assistant-text` uses that reader color.
+The conversation background follows the light `paper` palette in `static/app.js`.
+This is consistent with pale prose on a light background; without inspecting
+the original DOM it is evidence of a likely style mismatch, not a computed-style
+confirmation. The v2 transcript crop `[24, 200, 1380, 580]` from the
+1436×1310 source excludes the lower faded “Got it” prose and preserves the
+recorded question card and blue Owner answer. Uniform scaling by 1.35 yields
+1863×783 pixels at placement `[28, 170]` in both films, without changing
+styles or source pixels.
+
 To rebuild the contact sheet and 1270 by 760 gallery layouts:
 
 ```sh

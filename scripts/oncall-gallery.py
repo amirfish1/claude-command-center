@@ -80,9 +80,10 @@ def provenance(directory):
                 original=file.parent/role/asset.name
                 if original in index and original.read_bytes()==asset.read_bytes():
                     index[asset]={**index[original],'copy_of':str(original.relative_to(directory))}
-        for asset in (file.parent/'review').glob('*.png'):
-            index[asset]={'caption':'Frame decoded from the completed real browser film; see launch-pack.json for clip boundaries and speed.',
-                          'kind':'decoded-review-frame','source':str(file.relative_to(directory))}
+        for review in ('review', 'review-v2'):
+            for asset in (file.parent/review).glob('*.png'):
+                index[asset]={'caption':'Frame decoded from the completed real browser film; see launch-pack.json for clip boundaries and speed.',
+                              'kind':'decoded-review-frame','source':str(file.relative_to(directory))}
         for asset in (file.parent/'edits').glob('*.mp4'):
             index[asset]={'caption':'Intermediate edited clip of actual browser frames. See launch-pack.json for source run, speed and boundaries.',
                           'kind':'edited-real-browser-clip','source':str(file.relative_to(directory))}

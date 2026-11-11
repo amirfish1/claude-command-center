@@ -237,3 +237,128 @@ def test_report_captions_change_only_at_observed_events():
     meta['events'][1]['seconds']=50
     with pytest.raises(ValueError,match='captions must follow'):
         pack.caption_beats(meta,14,3,'unused',report_fix=True)
+
+
+def crop_source(tmp_path):
+    directory = source(tmp_path, seconds=12)
+    meta = json.loads((directory/'recording.json').read_text())
+    # Geometry-only JPEG header, deliberately not decodable film content.
+    header = b'\xff\xd8\xff\xc0' + struct.pack('>HBHH', 17, 8, 2532, 1170)
+    for frame in meta['frames']:
+        (directory/frame['file']).write_bytes(header)
+        frame['sha256'] = hashlib.sha256(header).hexdigest()
+    meta['run_id'] = 'test-run'
+    (directory/'recording.json').write_text(json.dumps(meta))
+    return directory
+
+
+@pytest.mark.parametrize('crop', [
+    [-1, 0, 1170, 1100], [0, 2000, 1170, 1100], [0, 0, 1171, 1100],
+    [0, 0, 0, 1100], [0, 0, 1170.5, 1100], [0, 0, 1170],
+])
+def test_v2_rejects_invalid_native_crop(tmp_path, crop):
+    scene = {**pack.LOOP_V2[0], 'crop': crop}
+    with pytest.raises(ValueError, match='Crop'):
+        pack.v2_plan(crop_source(tmp_path), scene)
+
+
+@pytest.mark.parametrize('options,reason', [
+    ({'start': -1}, 'outside'), ({'end': 13}, 'outside'),
+    ({'start': 4, 'end': 2}, 'outside'), ({'start': 1, 'end': 3}, 'too short'),
+    ({'seconds': 2}, 'at least 3'), ({'seconds': 3.01}, '30fps'),
+    ({'scale': .5}, '756'), ({'scale': -1}, 'Uniform scale'),
+    ({'scale': float('nan')}, 'finite'), ({'placement': [1000, 20]}, 'placement'),
+    ({'caption_font_size': 53}, '54px'), ({'label_font_size': 31}, '32px'),
+])
+def test_v2_readability_and_real_interval_gates(tmp_path, options, reason):
+    with pytest.raises(ValueError, match=reason):
+        pack.v2_plan(crop_source(tmp_path), {**pack.LOOP_V2[0], **options})
+
+
+def test_v2_provenance_describes_native_geometry_and_unrounded_time(tmp_path):
+    data, _ = pack.v2_plan(crop_source(tmp_path), pack.LOOP_V2[1])
+    assert data['native_dimensions'] == [1170, 2532]
+    assert data['crop'] == [0, 1432, 1170, 1100]
+    assert data['uniform_scale'] == .9
+    assert data['scaled_dimensions'] == [1053, 990]
+    assert data['output_placement'] == [48, 44]
+    assert data['source_start_seconds'] == .3
+    assert data['source_end_seconds'] == 3.5
+    assert data['speed'] == pytest.approx(3.2/3)
+    assert data['display_speed'] == '1.1x speed'
+    assert data['speed']*data['output_duration'] == pytest.approx(
+        data['source_end_seconds']-data['source_start_seconds'])
+
+
+def test_v2_still_checks_hashes_outside_the_selected_interval(tmp_path):
+    directory = crop_source(tmp_path)
+    (directory/'frame-0000020.jpg').write_bytes(b'corrupt outside selected trim')
+    with pytest.raises(ValueError, match='hash mismatch'):
+        pack.v2_plan(directory, pack.LOOP_V2[0])
+
+
+def test_v2_beat_budget_and_source_design():
+    pack.validate_v2_timeline(pack.FILM_V2, 40)
+    pack.validate_v2_timeline(pack.LOOP_V2, 12)
+    for scene in (pack.LOOP_V2[-1], pack.FILM_V2[-1]):
+        assert scene['crop'] == [24, 200, 1380, 580]
+        assert scene['scale'] == 1.35
+        assert scene['placement'] == [28, 170]
+    assert pack.FILM_V2[0]['start'] >= 8
+    assert pack.FILM_V2[0]['caption'] == 'The agent picks up the report.'
+    assert 39 <= pack.FILM_V2[1]['start'] < pack.FILM_V2[1]['end'] <= 42.413
+    assert pack.FILM_V2[1]['end']-pack.FILM_V2[1]['start'] >= 3
+    assert pack.LOOP_V2[1]['crop'][1] > pack.LOOP_V2[2]['crop'][1]
+    for scene in pack.FILM_V2+pack.LOOP_V2:
+        assert scene['end']-scene['start'] >= scene['seconds']
+        assert scene['crop'][3]*scene['scale'] >= 756
+        assert scene['caption_font_size'] >= 54
+    with pytest.raises(ValueError, match='durations'):
+        pack.validate_v2_timeline(pack.LOOP_V2[:-1], 12)
+    with pytest.raises(ValueError, match='at least 3'):
+        pack.validate_v2_timeline([{**pack.LOOP_V2[0], 'seconds': 2}], 2)
+
+
+def test_v2_merges_without_mutating_v1_assets():
+    old = [{'file': 'oncall-launch-40s.mp4', 'clips': [{'speed': 3.014571}]},
+           {'file': 'oncall-launch-40s-v2.mp4', 'clips': []}]
+    before = json.dumps(old)
+    added = {'file': 'oncall-launch-40s-v2.mp4', 'clips': [{'crop': [0, 0, 1170, 1100]}]}
+    merged = pack.merge_assets(old, [added])
+    assert merged[0] == old[0]
+    assert merged[1] == added
+    assert json.dumps(old) == before
+
+
+def test_v2_share_manifest_retains_v1_and_carries_geometry(tmp_path):
+    v1_asset = {'file': 'oncall-launch-40s.mp4', 'sha256': 'old-hash', 'caption': 'Original'}
+    v1_film = {'file': 'oncall-launch-40s.mp4', 'clips': [{'speed': 3.014571}]}
+    original = {'status': 'verified-media', 'assets': [v1_asset], 'films': [v1_film], 'retained': True}
+    (tmp_path/'share-manifest.json').write_text(json.dumps(original))
+    (tmp_path/'capture-manifest.json').write_text(json.dumps([
+        v1_asset, {'file': 'oncall-launch-40s-v2.mp4', 'sha256': 'new-hash'}]))
+    clip, _ = pack.v2_plan(crop_source(tmp_path), pack.LOOP_V2[0])
+    report = {'status': 'verified-media', 'real_boundary': 'Real recordings', 'separate_runs': ['a', 'b'],
+              'assets': [{'file': v1_asset['file'], 'clips': []},
+                         {'file': 'oncall-launch-40s-v2.mp4', 'edit_version': 'v2', 'clips': [clip]}]}
+    result = pack.share_manifest(tmp_path, report, 'v2')
+    assert result['assets'][0] == v1_asset
+    assert result['films'][0] == v1_film
+    assert result['retained'] is True
+    public = result['films'][1]['clips'][0]
+    assert public['crop'] == clip['crop']
+    assert public['uniform_scale'] == .9
+    assert public['native_dimensions'] == [1170, 2532]
+    assert public['display_speed'] == '1.4x speed'
+
+
+def test_v2_review_inventory_identifies_decoded_frames(tmp_path):
+    reviews = tmp_path/'review-v2'
+    reviews.mkdir()
+    (reviews/'oncall-hero-12s-v2-000.75s.png').write_bytes(
+        b'\x89PNG\r\n\x1a\n'+b'\0'*8+struct.pack('>II', 960, 540))
+    (tmp_path/'launch-pack.json').write_text(json.dumps({'status': 'verified-media', 'assets': []}))
+    entries = gallery.inventory(tmp_path)
+    assert entries[0]['pixels'] == [960, 540]
+    assert entries[0]['kind'] == 'decoded-review-frame'
+    assert entries[0]['source'] == 'launch-pack.json'

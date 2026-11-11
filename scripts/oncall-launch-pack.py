@@ -47,6 +47,39 @@ STILLS = [('session','session-alert-phone.png'),('session','session-alert-deskto
           ('agent','mail-fixed-phone.png')]
 
 
+def shot(role, source, seconds, start, end, crop, scale, placement, caption):
+    """An explicit cut in recorded source time; coordinates are native pixels."""
+    return dict(role=role, source=source, seconds=seconds, start=start, end=end,
+                crop=crop, scale=scale, placement=placement, caption=caption,
+                caption_font_size=56, label_font_size=32)
+
+
+def phone_shot(role, source, seconds, start, end, caption, bottom=False):
+    return shot(role, source, seconds, start, end,
+                [0, 1432 if bottom else 0, 1170, 1100], .9, [48, 44], caption)
+
+
+LOOP_V2 = [
+    phone_shot('session', 'session-alert', 3, .2, 4.4, 'A question reaches\nyour phone.'),
+    phone_shot('session', 'session-phone', 3, .3, 3.5, 'Reply from\nyour phone.', bottom=True),
+    phone_shot('session', 'session-phone', 3, 3.9, 8.4, 'Your reply\nis sent.'),
+    shot('session', 'session-transcript', 3, .3, 10.5, [24, 200, 1380, 580],
+         1.35, [28, 170], 'Your answer reaches the agent.'),
+]
+FILM_V2 = [
+    shot('agent', 'report-fix', 7, 8.5, 29.5, [1120, 220, 760, 340],
+         2.25, [105, 160], 'The agent picks up the report.'),
+    shot('agent', 'report-fix', 3, 39.1, 42.1, [320, 220, 820, 400],
+         2.1, [99, 130], 'The fix is ready.'),
+    phone_shot('agent', 'fixed-approval-alert', 3, .2, 3.5, 'You approve the\nfix notice.'),
+    phone_shot('agent', 'fixed-approval', 3, .3, 3.5, 'Reply yes to\napprove the notice.', bottom=True),
+    phone_shot('agent', 'fixed-approval', 3, 3.8, 7.4, 'Your approval\nis sent.'),
+    phone_shot('agent', 'fixed-result', 6, .3, 9.3, 'The reporter gets\nthe fix notice.'),
+    *LOOP_V2[:3],
+    {**LOOP_V2[3], 'seconds': 6},
+]
+
+
 def load(file):
     return json.loads(Path(file).read_text())
 
@@ -210,7 +243,196 @@ def edit_clip(directory, role, name, seconds, caption, dest):
             'recording':str((source/'recording.json').relative_to(directory))}
 
 
-def render(directory):
+def gallery_module():
+    from importlib.util import module_from_spec, spec_from_file_location
+    spec = spec_from_file_location('oncall_gallery_dimensions', REPO/'scripts/oncall-gallery.py')
+    gallery = module_from_spec(spec)
+    spec.loader.exec_module(gallery)
+    return gallery
+
+
+def native_dimensions(file):
+    """Read actual image dimensions without adding a runtime dependency."""
+    gallery = gallery_module()
+    size = gallery.dimensions(file)
+    if not size:
+        raise ValueError('Cannot read native source dimensions')
+    return size
+
+
+def v2_plan(source, scene):
+    """Validate every source frame before accepting trim/crop/scale options."""
+    meta, _, available, _ = recording_plan(source, scene['seconds'])
+    numbers = [scene[key] for key in ('seconds', 'start', 'end', 'scale')]
+    if any(not isinstance(n, (int, float)) or not math.isfinite(n) for n in numbers):
+        raise ValueError('Shot options must be finite numbers')
+    seconds, start, end, scale = numbers
+    if seconds < 3 or not math.isclose(seconds*30, round(seconds*30)):
+        raise ValueError('Each caption beat must last at least 3 seconds at 30fps')
+    if not meta['frames'][0]['seconds'] <= start < end <= meta['frames'][-1]['seconds']:
+        raise ValueError('Source interval is outside the real recording')
+    if end-start < seconds:
+        raise ValueError('Source interval is too short; never slow or freeze')
+    native = native_dimensions(source/meta['frames'][0]['file'])
+    # Geometry changes inside a recording would invalidate native-pixel crops.
+    if any(native_dimensions(source/frame['file']) != native for frame in meta['frames']):
+        raise ValueError('Native dimensions changed within the recording')
+    crop, placement = scene['crop'], scene['placement']
+    if (not isinstance(crop, (list, tuple)) or len(crop) != 4 or
+            any(type(n) is not int for n in crop)):
+        raise ValueError('Crop must contain four integer source pixels')
+    x, y, width, height = crop
+    if min(x, y) < 0 or min(width, height) <= 0 or x+width > native[0] or y+height > native[1]:
+        raise ValueError('Crop rectangle is outside native source dimensions')
+    if scale <= 0 or any(not math.isclose(n*scale, round(n*scale)) for n in (width, height)):
+        raise ValueError('Uniform scale must produce integer output dimensions')
+    scaled = [round(width*scale), round(height*scale)]
+    if scaled[1] < 756:
+        raise ValueError('UI height must be at least 756 pixels')
+    if (not isinstance(placement, (list, tuple)) or len(placement) != 2 or
+            any(type(n) is not int or n < 0 for n in placement) or
+            placement[0]+scaled[0] > 1920 or placement[1]+scaled[1] > 1080):
+        raise ValueError('Output placement is outside the film')
+    if scene['caption_font_size'] < 54 or scene['label_font_size'] < 32:
+        raise ValueError('Captions need 54px and honesty labels need 32px')
+    speed = (end-start)/seconds
+    display = f'{speed:.1f}'.rstrip('0').rstrip('.') + 'x speed'
+    return dict(source=str(source.name), run_id=meta['run_id'],
+                source_start_seconds=start, source_end_seconds=end,
+                available_source_seconds=available, output_duration=seconds,
+                native_dimensions=native, crop=list(crop), uniform_scale=scale,
+                scaled_dimensions=scaled, output_placement=list(placement),
+                speed=speed, display_speed=display,
+                caption=scene['caption'], caption_font_size=scene['caption_font_size'],
+                label_font_size=scene['label_font_size'],
+                caption_beats=[dict(start=0, end=seconds, text=scene['caption'])]), meta
+
+
+def validate_v2_timeline(scenes, expected):
+    if not scenes or any(scene['seconds'] < 3 for scene in scenes):
+        raise ValueError('Every beat must last at least 3 seconds')
+    if not math.isclose(sum(scene['seconds'] for scene in scenes), expected, abs_tol=1e-9):
+        raise ValueError('Shot durations do not match the film duration')
+
+
+def edit_v2_clip(directory, scene, dest):
+    source = directory/scene['role']/scene['source']
+    data, meta = v2_plan(source, scene)
+    start, end = scene['start'], scene['end']
+    frames = meta['frames']
+    # Keep the actual frame spanning the trim point. A sentinel real frame at
+    # the next boundary lets ffmpeg honour the final measured frame interval.
+    first = max(i for i, frame in enumerate(frames) if frame['seconds'] <= start)
+    last = next(i for i, frame in enumerate(frames) if frame['seconds'] >= end)
+    concat = ['ffconcat version 1.0']
+    for i in range(first, last):
+        begin = max(start, frames[i]['seconds'])
+        finish = min(end, frames[i+1]['seconds'])
+        concat += [f"file '{frames[i]['file']}'", f'duration {finish-begin:.12f}']
+    concat += [f"file '{frames[last]['file']}'"]
+    # v2 sidecars stay in edits; the original source and v1 lists are retained.
+    listing = dest.with_suffix('.source.ffconcat')
+    relative_source = os.path.relpath(source, dest.parent)
+    listing.write_text('\n'.join(line.replace("file '", f"file '{relative_source}/")
+                                 for line in concat)+'\n')
+    caption_file, label_file = dest.with_suffix('.caption.txt'), dest.with_suffix('.label.txt')
+    caption_file.write_text(scene['caption'])
+    label = 'Real recording\nCut | '+data['display_speed']
+    if scene['role'] == 'session':
+        label += '\nSeparate run'
+    label_file.write_text(label)
+    phone = scene['source'] not in ('report-fix', 'session-transcript')
+    if not phone:
+        label = label.replace('\n', ' | ')
+        label_file.write_text(label)
+    cx, cy = (1160, 310) if phone else (64, 40)
+    lx, ly = (1160, 730) if phone else (64, 996)
+    x, y, width, height = scene['crop']
+    sw, sh = data['scaled_dimensions']
+    px, py = scene['placement']
+    vf = (f'setpts=(PTS-STARTPTS)/{data["speed"]:.15g},'
+          f'format=yuv444p,crop={width}:{height}:{x}:{y}:exact=1,scale={sw}:{sh}:flags=lanczos,'
+          f'pad=1920:1080:{px}:{py}:color=0xf3f5f7,setsar=1,'
+          # yuv444 keeps odd crop/scale dimensions exact until final encoding.
+          f'drawtext=textfile={caption_file.name}:expansion=none:fontcolor=0x162332:'
+          f'fontsize={scene["caption_font_size"]}:x={cx}:y={cy}:line_spacing=16,'
+          f'drawtext=textfile={label_file.name}:expansion=none:fontcolor=0x162332:'
+          f'fontsize={scene["label_font_size"]}:x={lx}:y={ly}:line_spacing=12,'
+          'fps=30:round=up,format=yuv420p')
+    subprocess.run(['/usr/bin/nice', '-n', '15', 'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+                    '-threads', '1', '-f', 'concat', '-safe', '0', '-i', listing.name,
+                    '-vf', vf, '-t', str(scene['seconds']), '-an', '-c:v', 'libx264',
+                    '-preset', 'fast', '-crf', '19', '-threads', '2', '-movflags', '+faststart', dest.name],
+                   cwd=dest.parent, check=True, timeout=600)
+    verify_video(dest, scene['seconds'])
+    data.update(source=str(source.relative_to(directory)),
+                recording=str((source/'recording.json').relative_to(directory)),
+                honesty_label=label, edit_version='v2')
+    return data
+
+
+def merge_assets(previous, additions, key='file'):
+    """Replace only the selected edit, retaining unrelated v1 entries verbatim."""
+    names = {item[key] for item in additions}
+    return [item for item in previous if item[key] not in names] + additions
+
+
+def render_v2(directory):
+    agent, session = validate_proofs(directory)
+    validate_capture_runs(directory, agent, session)
+    previous = load(directory/'launch-pack.json')
+    edit = directory/'edits'
+    reviews = directory/'review-v2'
+    edit.mkdir(exist_ok=True)
+    reviews.mkdir(exist_ok=True)
+    assets = []
+    timelines = [('oncall-launch-40s-v2.mp4', FILM_V2, 40),
+                 ('oncall-hero-12s-v2.mp4', LOOP_V2, 12)]
+    # Fail all validation before starting either encode.
+    for _, scenes, expected in timelines:
+        validate_v2_timeline(scenes, expected)
+        for scene in scenes:
+            v2_plan(directory/scene['role']/scene['source'], scene)
+    for name, scenes, expected in timelines:
+        clips, provenance, cursor = [], [], 0
+        for index, scene in enumerate(scenes):
+            clip = edit/f'{Path(name).stem}-{index}.mp4'
+            data = edit_v2_clip(directory, scene, clip)
+            data.update(output_start=cursor, output_end=cursor+scene['seconds'])
+            cursor += scene['seconds']
+            provenance.append(data)
+            clips.append(f"file '{clip.name}'")
+        listing = edit/(Path(name).stem+'.ffconcat')
+        listing.write_text('ffconcat version 1.0\n'+'\n'.join(clips)+'\n')
+        target = directory/name
+        subprocess.run(['/usr/bin/nice', '-n', '15', 'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+                        '-f', 'concat', '-safe', '0', '-i', listing.name, '-c', 'copy', '-an',
+                        '-movflags', '+faststart', str(target)], cwd=edit, check=True, timeout=120)
+        verify_video(target, expected)
+        # Eight evenly spaced samples plus a midpoint for every individual beat.
+        samples = {round((i+.5)*expected/8, 6) for i in range(8)}
+        samples.update((clip['output_start']+clip['output_end'])/2 for clip in provenance)
+        review_files = []
+        for at in sorted(samples):
+            dest = reviews/f'{target.stem}-{at:06.2f}s.png'
+            subprocess.run(['/usr/bin/nice', '-n', '15', 'ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+                            '-ss', str(at), '-i', str(target), '-vf', 'scale=960:540', '-frames:v', '1',
+                            '-threads', '1', str(dest)], check=True, timeout=30)
+            review_files.append(dict(file=str(dest.relative_to(directory)), seconds=at))
+        assets.append(dict(file=name, seconds=expected, width=1920, height=1080, audio=False,
+                           edit_version='v2', caption='Silent real recordings with labelled cuts and separate runs.',
+                           clips=provenance, review_frames=review_files))
+    # Preserve all existing top-level evidence and v1 asset objects.
+    report = {**previous, 'assets': merge_assets(previous['assets'], assets)}
+    report['edit_v2'] = dict(created_utc=datetime.now(timezone.utc).isoformat(),
+                             visual_review='Required: inspect review-v2 before sharing.')
+    (directory/'launch-pack.json').write_text(json.dumps(report, indent=2))
+    return report
+
+
+def render(directory, edit_version='v1'):
+    if edit_version == 'v2':
+        return render_v2(directory)
     agent, session = validate_proofs(directory)
     validate_capture_runs(directory,agent,session)
     edit = directory/'edits'
@@ -301,7 +523,7 @@ def execute(directory, model, session_model=None, resume=False):
             raise RuntimeError(f'{script} failed; inspect {role}/proof.log. No film success claimed.')
 
 
-def share_manifest(directory, report):
+def share_manifest(directory, report, edit_version='v1'):
     """A copy whitelist; raw logs, mail, JSONL, and auth are never export assets."""
     entries=load(directory/'capture-manifest.json')
     public=[]
@@ -316,8 +538,16 @@ def share_manifest(directory, report):
               'separate_real_runs':report['separate_runs'],'assets':public,
               'films':[{'file':video['file'],'clips':[
                   {key:clip[key] for key in ('run_id','source_start_seconds','source_end_seconds',
-                    'output_start','output_end','output_duration','speed','caption','caption_beats')}
+                    'output_start','output_end','output_duration','speed','caption','caption_beats',
+                    'native_dimensions','crop','uniform_scale','scaled_dimensions','output_placement',
+                    'display_speed','caption_font_size','label_font_size','honesty_label','edit_version') if key in clip}
                   for clip in video['clips']]} for video in report['assets']]}
+    if edit_version == 'v2':
+        previous = load(directory/'share-manifest.json')
+        names = {video['file'] for video in report['assets'] if video.get('edit_version') == 'v2'}
+        manifest = {**previous,
+                    'assets': merge_assets(previous['assets'], [item for item in public if item['file'] in names]),
+                    'films': merge_assets(previous['films'], [item for item in manifest['films'] if item['file'] in names])}
     (directory/'share-manifest.json').write_text(json.dumps(manifest,indent=2))
     return manifest
 
@@ -328,18 +558,30 @@ def main():
     parser.add_argument('--session-model',default='gpt-6.1-terra',help='Optional different model supported by the CCC session catalogue')
     parser.add_argument('--resume',type=Path,help='Reuse successful parts of an interrupted pack; retain failed attempts')
     parser.add_argument('--render-only',type=Path,help='Existing launch-captures pack with two successful real proofs')
+    parser.add_argument('--edit-version', choices=('v1', 'v2'), default='v1',
+                        help='Opt-in v2 cuts; requires --render-only and retains v1 media/metadata')
     parser.add_argument('--output',type=Path,help='New directory strictly below launch-captures')
     args=parser.parse_args()
+    if args.edit_version == 'v2' and not args.render_only:
+        parser.error('--edit-version v2 requires --render-only; it never starts a proof')
     directory=contained(args.render_only or args.resume or args.output or BASE/('pack-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')))
     if not args.render_only:
         directory.mkdir(parents=True,exist_ok=bool(args.resume))
         execute(directory,args.model,args.session_model,resume=bool(args.resume))
     started=time.monotonic()
-    report=render(directory)
-    subprocess.run([sys.executable,str(REPO/'scripts/oncall-gallery.py'),'--output',str(directory)],check=True)
-    share_manifest(directory,report)
+    report=render(directory, args.edit_version)
+    if args.edit_version == 'v2':
+        # Inventory the additions without rewriting v1 entries or gallery assets.
+        entries = gallery_module().inventory(directory)
+        additions = [item for item in entries if '-v2' in Path(item['file']).name or
+                     item['file'].startswith('review-v2/')]
+        capture = directory/'capture-manifest.json'
+        capture.write_text(json.dumps(merge_assets(load(capture), additions), indent=2))
+    else:
+        subprocess.run([sys.executable,str(REPO/'scripts/oncall-gallery.py'),'--output',str(directory)],check=True)
+    share_manifest(directory,report,args.edit_version)
     print(f'Built and ffprobe-verified 40s film and 12s loop in {time.monotonic()-started:.2f}s: {directory}',flush=True)
-    print('Inspect review/*.png and the real stills before exporting. share-manifest.json lists only final media; private logs and metadata are excluded. No files published or copied outside this worktree.')
+    print(f'Inspect {"review-v2" if args.edit_version == "v2" else "review"}/*.png and the real stills before exporting. share-manifest.json lists only final media; private logs and metadata are excluded. No files published or copied outside this worktree.')
 
 
 if __name__=='__main__':
