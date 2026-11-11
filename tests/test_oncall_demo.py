@@ -48,7 +48,7 @@ def test_scripted_full_loop_and_perf(tmp_path):
 
 @pytest.mark.parametrize('answer,expected', [('zero', '0'), ('hide', 'None')])
 def test_terminal_choice_and_no_send(tmp_path, answer, expected):
-    proc = demo(tmp_path, '--terminal', '--keep', input=answer + '\nno\n')
+    proc = demo(tmp_path, '--terminal', '--keep', input=answer + '\ndecline\nno\n')
     assert proc.returncode == 0, proc.stderr + proc.stdout
     root = Path(proc.stdout.split('Kept workspace: ')[1].strip())
     try:
@@ -179,7 +179,7 @@ def test_same_second_fractional_block_is_delivered(tmp_path):
 
 
 def test_fast_terminal_phone_box(tmp_path):
-    proc = demo(tmp_path, '--terminal', '--fast', input='hide\nno\n')
+    proc = demo(tmp_path, '--terminal', '--fast', input='hide\ndecline\nno\n')
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert '| PHONE' in proc.stdout and 'Agent: Worker starts' in proc.stdout
     assert '\x1b[' not in proc.stdout

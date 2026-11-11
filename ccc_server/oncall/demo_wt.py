@@ -90,6 +90,18 @@ class RealTickets(WT):
     def close(self, commit):
         self._ok('close', self.ref, '--worker', 'demo-worker', '--commit', commit, '--summary', 'Sample test passes.')
 
+    def refund(self, commit):
+        from .demo_refund import QUESTION
+        self._ok('block', self.ref, '--worker', 'demo-worker', '--question', QUESTION,
+                 '--weight', 'minor', '--class', 'code-change-revertable', '--confidence', '0.99',
+                 '--recommend', 'Issue the requested $5 refund.', '--commit', commit,
+                 '--undo', 'git revert ' + commit,
+                 '--attest', 'money=yes,customer-sends=no,public-posts=no,ad-spend=no,irreversible=no')
+        evidence = [h for h in self.item.get('history', []) if h.get('event') == 'auto_decision_declined']
+        if not evidence or not self.item['needs_input']:
+            raise RuntimeError('WatchTower did not reject the refund proposal.')
+        return evidence[-1].get('text', '')
+
     def minor(self, commit):
         ref = super().add('DEMO', title='Ignore Python cache files', text='Ignore generated Python cache files.')
         outcome = self._ok('block', ref, '--worker', 'demo-worker', '--question', 'Ignore Python cache files?',

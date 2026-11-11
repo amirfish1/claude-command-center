@@ -18,6 +18,14 @@ class DemoTickets:
     def policy_set(self, queue, enabled):
         pass
 
+    def refund(self, commit):
+        from .demo_refund import QUESTION
+        self.block()
+        self.item['block_question'] = QUESTION
+        self.item['block_proposal'] = {}
+        self.save()
+        return 'Fixture only; WatchTower policy is not installed.'
+
     def minor(self, commit):
         decision = dict(question='Ignore Python cache files?', recommend='Ignore generated Python cache files.',
                         undo='git revert ' + commit)
@@ -54,7 +62,7 @@ class DemoTickets:
         self.save()
 
     def block(self):
-        self.item.update(needs_input=True, blocked_at=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        self.item.update(needs_input=True, blocked_at=datetime.now(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z'),
                          block_question='An empty cart crashes. Show zero or hide the total? Reply zero or hide.',
                          block_proposal={'recommend': 'zero'})
         self.item['history'].append(dict(event='block', question=self.item['block_question']))

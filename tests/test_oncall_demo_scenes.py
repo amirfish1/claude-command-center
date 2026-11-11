@@ -46,3 +46,26 @@ def test_source_scene_cli_budget(tmp_path, scene):
     assert json.loads(proc.stdout)['scene'] == scene
     assert time.monotonic() - start < 2
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('backend', ['fixture', 'watchtower'])
+@pytest.mark.parametrize('refund', ['approve', 'decline'])
+def test_refund_needs_a_real_reply(tmp_path, monkeypatch, backend, refund):
+    if backend == 'watchtower' and not installed():
+        pytest.skip('WatchTower is absent')
+    monkeypatch.setattr(demo, 'installed', lambda: backend == 'watchtower')
+    answers = iter(['zero', refund, 'no'])
+    def answer(prompt):
+        value = next(answers)
+        if value == refund:
+            assert not (tmp_path / 'project/refund.json').exists()
+            assert (tmp_path / 'project/cart.py').read_text() == demo.BROKEN
+        return value
+    monkeypatch.setattr('builtins.input', answer)
+    lines = []
+    result = demo.walkthrough(tmp_path, argparse.Namespace(scene='customer', json=False,
+                               terminal=True, agent=False), lines.append, lines)
+    assert result['refund']['blocked'] and result['refund']['answer'] == refund
+    if backend == 'watchtower':
+        assert 'money' in result['refund']['evidence'].lower()
+    assert json.loads((tmp_path / 'project/refund.json').read_text())['simulated']

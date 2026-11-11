@@ -188,6 +188,10 @@ def walkthrough(root, args, emit, lines):
         tick()
         if not tickets.answered(answer):
             raise RuntimeError('Reply did not reach the worker.')
+        refund = None
+        if not scene:
+            from .demo_refund import run as refund_step
+            refund = refund_step(engine, tickets, phone, project, head_commit(), reply, tick, emit)
         phone.state = 'Agent working'
         expected = '0' if answer == 'zero' else 'None'
         (project / 'test_cart.py').write_text(
@@ -264,7 +268,7 @@ def walkthrough(root, args, emit, lines):
         return dict(ok=True, worker='codex' if args.agent else 'scripted', ticket=ref,
                     backend=tickets.backend, commit=commit, test_before=before.returncode, test_after=0,
                     reporter_state=engine.store.customer_messages()[0]['state'] if not scene else 'not applicable',
-                    scene=scene_name, source_requests=scene.requests if scene else [],
+                    scene=scene_name, refund=refund, source_requests=scene.requests if scene else [],
                     decision=decision, messages=phone.messages,
                     commands=['ccc oncall setup', 'ccc oncall minor on'])
     finally:
