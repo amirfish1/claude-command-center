@@ -57,7 +57,8 @@ class Receipt:
     ok: bool
     external_id: str = ""  # the provider's id for the sent message
     error: str = ""
-    uncertain: bool = False  # provider may have accepted before the error
+    # Retry metadata does not change the legacy receipt value comparison.
+    uncertain: bool = field(default=False, compare=False)
 
 
 @dataclass
@@ -523,6 +524,13 @@ class Store:
         return self._one("SELECT * FROM deliveries WHERE channel=? ORDER BY id DESC LIMIT 1", (channel,))
 
     # -- inbound --
+    def reply_action_claim(self, alert_id):
+        return self._run("INSERT OR IGNORE INTO kv(key,value) VALUES(?, 'true')",
+                         (f"reply-action:{alert_id}",)).rowcount == 1
+
+    def reply_action_release(self, alert_id):
+        self._run("DELETE FROM kv WHERE key=?", (f"reply-action:{alert_id}",))
+
     def inbound_claim(self, msg):
         """Record an inbound message once. False when it was already seen."""
         try:

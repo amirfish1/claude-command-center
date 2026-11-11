@@ -83,11 +83,15 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
         say(f"#{alert['id']} was already handled.", alert)
         return f"#{alert['id']} already handled"
     try:
+        if not store.reply_action_claim(alert["id"]):
+            raise wtmod.WTError("An earlier answer may have been applied. Check the ticket or session directly; it will not be applied again.")
         note, ack = _apply(cfg, store, chans, wt, alert, rest.strip(), deps, now)
     except wtmod.WTError as exc:
         say(f"That did not go through: {exc}", alert)
         store.log("owner", f"#{alert['id']} answer failed: {exc}", now=now)
         return f"#{alert['id']} failed"
+    if note == "unclear":
+        store.reply_action_release(alert["id"])
     if ack:
         say(ack, alert)
     store.log("owner", f"#{alert['id']} {note}", now=now)
