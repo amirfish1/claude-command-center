@@ -92,7 +92,7 @@ PORT_FILE = os.path.expanduser("~/.claude/command-center/port.txt")
 
 SUBCOMMANDS = ("sessions", "session", "list-sessions", "spawn", "models", "doctor", "send", "ask", "quota", "restart",
                "rebind-report-to", "recall", "shipped", "history", "decisions", "question", "brief", "where",
-               "brain", "consent", "jobs", "vault", "secret", "remind", "oncall", "service")
+               "brain", "consent", "jobs", "vault", "secret", "remind", "oncall", "service", "uxlab")
 
 RUN_SH_FLAGS = ("--install-service", "--uninstall-service", "--service-status", "--app")
 
@@ -2773,6 +2773,9 @@ def _register_antigravity_session():
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["uxlab"]:
+        from uxlab.cli import main as uxlab_main
+        return uxlab_main(argv[1:])
     _register_antigravity_session()
     # `ccc` is also the Homebrew launcher's name (foreground server /
     # --install-service). Keep one name for both roles: no args or explicit
@@ -2809,6 +2812,7 @@ def main(argv=None):
     )
     parser.add_argument("--server", help="CCC base URL (default: $CCC_SERVER or port.txt)")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("uxlab", help="interactive usability testers for local apps; ccc uxlab run --help")
 
     for name in ("sessions", "session", "list-sessions"):
         p = sub.add_parser(name, help="session census (24h window by default; state, age, engine, repo, name)")

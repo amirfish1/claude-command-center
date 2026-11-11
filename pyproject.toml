@@ -55,7 +55,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = [
-    "/ccc", "/*.py", "/ccc_server/**", "/_history_index/**", "/static/**",
+    "/ccc", "/*.py", "/ccc_server/**", "/uxlab/**", "/require-puppeteer.js", "/_history_index/**", "/static/**",
     "/hooks/**", "/skills/**", "/resources/**", "/scripts/install-watchtower.sh",
     "/pyproject.toml", "/README.md", "/LICENSE", "/LICENSE-MIT", "/NOTICE",
 ]
@@ -67,7 +67,7 @@ only-include = [
     "ccc_peer_uds.py", "control_plane.py", "fcntl.py", "federation.py",
     "objects_store.py", "productivity.py", "ssh_multiplexer.py", "worker_engines.py",
     "sender_envelope.py",
-    "ccc_server", "_history_index", "static", "hooks", "skills", "resources",
+    "ccc_server", "uxlab", "require-puppeteer.js", "_history_index", "static", "hooks", "skills", "resources",
     "scripts/install-watchtower.sh",
 ]
 

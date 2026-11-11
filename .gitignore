@@ -161,3 +161,6 @@ static/reddit/
 .hunch-cache/
 .hunch-private/
 # <<< hunch <<<
+
+# Local usability reports may contain private app screenshots.
+/uxlab-runs/
