@@ -30,6 +30,43 @@ active = set()
 STOP_EVENT = threading.Event()
 
 
+def start_janitor(tmp):
+    """Clean this run if its supervisor kills the driver without a handler."""
+    if not hasattr(os, 'pidfd_open'):
+        return None
+    script = '''import os,pathlib,select,subprocess,sys
+parent,prefix,image,tmp=sys.argv[1:]
+try:
+ fd=os.pidfd_open(int(parent));select.select([fd],[],[]);os.close(fd)
+except ProcessLookupError:
+ pass
+def run(*args):
+ return subprocess.run(args,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=60,check=False).stdout.splitlines()
+for name in run('docker','ps','-aq','--filter','name='+prefix):
+ run('docker','rm','-f',name)
+for name in run('docker','network','ls','-q','--filter','name='+prefix):
+ run('docker','network','rm',name)
+run('docker','image','rm',image)
+for name in ('source.tar','key.pem','mail.p12'):
+ (pathlib.Path(tmp)/name).unlink(missing_ok=True)
+'''
+    return subprocess.Popen(
+        [
+            sys.executable,
+            '-c',
+            script,
+            str(os.getpid()),
+            'ccc-sec-' + TOKEN,
+            IMAGE,
+            str(tmp),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 def call(*cmd, check=True, timeout=90):
     r = subprocess.run(
         cmd,
@@ -438,6 +475,7 @@ def main():
     tmp = pathlib.Path(tempfile.mkdtemp(prefix='ccc-contained-results-'))
     print('RESULT_DIR', tmp, flush=True)
     proxy = 'ccc-sec-' + TOKEN + '-proxy'
+    janitor = start_janitor(tmp)
     try:
         (tmp / 'resolv.conf').write_text('nameserver 127.0.0.1\n')
         (tmp / 'resolv.conf').chmod(0o644)
@@ -575,6 +613,9 @@ RUN chmod 755 /usr/local/bin/codex* && printf '#!/usr/local/bin/python3\nfrom wa
         docker('image', 'rm', IMAGE, check=False, timeout=60)
         for filename in ('source.tar', 'key.pem', 'mail.p12'):
             (tmp / filename).unlink(missing_ok=True)
+        if janitor:
+            janitor.terminate()
+            janitor.wait(timeout=10)
     return int(any(result['exit'] != 0 for result in out))
 
 
