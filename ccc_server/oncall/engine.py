@@ -195,6 +195,11 @@ class Engine:
 
             store.park_unhandled_inbound(now=now)
             customers.collect_delivery_problems(store, now=now)
+            from .week import daily
+            try:
+                daily(self, now)
+            except (ValueError, wtmod.WTError) as exc:
+                self._note("summary", str(exc))
             out["sent"] = alerts.deliver(cfg, store, chans, now=now)
             self.last_tick = out
             return out

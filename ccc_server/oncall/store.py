@@ -97,6 +97,7 @@ def default_config():
         "repo": "",
         "watch": [],
         "hourly_cap": 12,
+        "daily_summary": {"enabled": False, "time": "09:00"},
         "channels": [],
         "quiet_hours": None,
         "alerts": {"decisions": True, "stopped": True, "stuck": True, "fixed": True},
@@ -167,6 +168,9 @@ def validate_config(cfg):
         if squeue and not _QUEUE_RE.match(squeue):
             problems.append(f"Source {sid!r} has an invalid queue name.")
         problems += [f"Source {sid!r}: {p}" for p in _secret_fields(src)]
+    summary = cfg.get("daily_summary", {})
+    if not isinstance(summary, dict) or not isinstance(summary.get("enabled", False), bool) or not _HHMM_RE.fullmatch(str(summary.get("time", "09:00"))):
+        problems.append("Daily summary needs an on/off value and a time as HH:MM.")
     quiet = cfg.get("quiet_hours")
     if quiet is not None:
         if (not isinstance(quiet, dict) or not _HHMM_RE.match(str(quiet.get("start") or ""))
@@ -370,6 +374,13 @@ CREATE TABLE IF NOT EXISTS customer_messages (
     error TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS customer_messages_state ON customer_messages(state, id);
+CREATE INDEX IF NOT EXISTS reports_created ON reports(created_at);
+CREATE INDEX IF NOT EXISTS reports_state ON reports(state);
+CREATE INDEX IF NOT EXISTS alerts_created ON alerts(created_at);
+CREATE INDEX IF NOT EXISTS alerts_kind_state ON alerts(kind,state);
+CREATE INDEX IF NOT EXISTS alerts_closed ON alerts(closed_at);
+CREATE INDEX IF NOT EXISTS deliveries_sent ON deliveries(sent_at);
+CREATE INDEX IF NOT EXISTS customer_messages_created ON customer_messages(created_at);
 CREATE TABLE IF NOT EXISTS log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at REAL NOT NULL,
@@ -391,6 +402,13 @@ class Store:
         self._db.row_factory = sqlite3.Row
         with self._lock, self._db:
             self._db.executescript(_SCHEMA)
+            if "message_kind" not in {r[1] for r in self._db.execute("PRAGMA table_info(deliveries)")}:
+                self._db.execute("ALTER TABLE deliveries ADD COLUMN message_kind TEXT NOT NULL DEFAULT 'unknown'")
+            columns = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
+            if "owner_action_at" not in columns:
+                self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action_at REAL")
+                self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action TEXT NOT NULL DEFAULT ''")
+            self._db.execute("CREATE INDEX IF NOT EXISTS alerts_owner_action ON alerts(owner_action_at)")
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -494,12 +512,16 @@ class Store:
                         (state, answer, time.time() if now is None else now, alert_id))
         return cur.rowcount == 1
 
+    def alert_owner_action(self, alert_id, action, now=None):
+        self._run("UPDATE alerts SET owner_action=?, owner_action_at=? WHERE id=? AND state='open'",
+                  (action, time.time() if now is None else now, alert_id))
+
     # -- deliveries --
-    def delivery_add(self, alert_id, channel, recipient, receipt, now=None):
-        self._run("INSERT INTO deliveries(alert_id,channel,recipient,external_id,ok,error,sent_at)"
-                  " VALUES(?,?,?,?,?,?,?)",
+    def delivery_add(self, alert_id, channel, recipient, receipt, now=None, message_kind="direct"):
+        self._run("INSERT INTO deliveries(alert_id,channel,recipient,external_id,ok,error,sent_at,message_kind)"
+                  " VALUES(?,?,?,?,?,?,?,?)",
                   (alert_id, channel, recipient, receipt.external_id, 1 if receipt.ok else 0,
-                   receipt.error[:500], time.time() if now is None else now))
+                   receipt.error[:500], time.time() if now is None else now, message_kind))
 
     def delivery_latest(self, alert_id, channel):
         return self._one("SELECT * FROM deliveries WHERE alert_id=? AND channel=? "

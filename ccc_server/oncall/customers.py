@@ -32,6 +32,11 @@ def _quoted(text):
     return str(text or "").strip().replace("-----", "- - -")
 
 
+def _label(text):
+    """Untrusted metadata stays on one line and cannot impersonate a marker."""
+    return " ".join(_quoted(text).split())[:300]
+
+
 def intake_enabled(entry):
     """Whether messages from other people on this channel become reports."""
     return bool(entry.get("intake", entry.get("type") in INTAKE_TYPES))
@@ -46,7 +51,7 @@ def report_ticket_text(report):
     return "\n".join([
         "Reported by a customer through CCC On-call. " + _GUARD,
         "",
-        f"Reporter: {label} via {report.get('reporter_channel') or 'a message'}",
+        f"Reporter: {_label(label)} via {_label(report.get('reporter_channel') or 'a message')}",
         "To ask the reporter a question:  ccc oncall ask <this ticket's ref> \"your question\"",
         "To tell the reporter something:  ccc oncall tell <this ticket's ref> \"your message\"",
         "The owner sees each message before it is sent. After asking, park the ticket:",
@@ -61,7 +66,7 @@ def report_ticket_text(report):
 
 def finding_ticket_text(source_cfg, finding):
     sender = getattr(finding, "sender", "")
-    origin = (f"Reported by {sender} ({source_cfg.get('type')}: {source_cfg.get('id')}) through "
+    origin = (f"Reported by {_label(sender)} ({source_cfg.get('type')}: {source_cfg.get('id')}) through "
               "CCC On-call. A person wrote the text below. " if sender else
               f"Found by monitoring ({source_cfg.get('type')}: {source_cfg.get('id')}) through "
               "CCC On-call. The evidence below was produced by a tool. ")
@@ -84,14 +89,14 @@ def finding_ticket_text(source_cfg, finding):
                   "asking, park the ticket:",
                   "  wt block <ref> --kind awaiting-client --wait-on external --question \"what you asked\""]
     if finding.url:
-        lines += ["", f"Link: {finding.url}"]
+        lines += ["", f"Link: {_label(finding.url)}"]
     return "\n".join(lines)
 
 
 def reply_text(report, text):
     who = report.get("reporter_name") or report.get("reporter_address") or "The reporter"
     return "\n".join([
-        f"{who} replied through CCC On-call. " + _GUARD,
+        f"{_label(who)} replied through CCC On-call. " + _GUARD,
         "",
         "----- reply -----",
         _quoted(text),
@@ -172,6 +177,10 @@ def intake(cfg, store, wt, msg, *, now=None):
     """Route one message from someone who is not the owner. Returns what happened."""
     now = time.time() if now is None else now
     report = store.report_by_thread(msg.thread) if msg.thread else None
+    if report is not None and (
+            report["reporter_channel"] != msg.channel or
+            normalize_address(report["reporter_address"]) != normalize_address(msg.sender)):
+        return "ignored: reporter identity does not match thread"
     if report is None:
         report = _open_conversation(store, msg, now)
     if report is not None:
@@ -196,7 +205,7 @@ def _open_conversation(store, msg, now):
 
 def _reporter_reply(cfg, store, wt, report, msg, now):
     if report["state"] == "held":
-        store.report_update(report["id"], text=(report.get("text") or "") + "\n\n" + msg.text)
+        store.report_update(report["id"], text=((report.get("text") or "") + "\n\n" + msg.text)[:20000])
         return f"added to held report {report['id']}"
     ref = report.get("ticket_ref") or ""
     item = wt.find(ref) if ref else None
@@ -328,7 +337,7 @@ def send_message(store, chans, wt, message_id, *, text=None, now=None):
     receipt = chan.send(Outbound(text=body, to=message["address"], subject=message["subject"],
                                  thread=message["thread"],
                                  reply_to=str((report.get("meta") or {}).get("message_id") or "")))
-    store.delivery_add(None, chan.id, message["address"], receipt, now=now)
+    store.delivery_add(None, chan.id, message["address"], receipt, now=now, message_kind="reporter")
     if not receipt.ok:
         store.customer_message_update(message_id, state="failed", error=receipt.error[:300])
         store.log("customer", f"message for {message['ref']} failed: {receipt.error}", now=now)

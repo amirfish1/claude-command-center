@@ -494,3 +494,5 @@ ccc oncall decisions             what agents decided, each with its undo
 ```
 
 See [the fault checks and remaining recovery limits](oncall-reliability.md).
+Security review and limits: [On-call security](oncall-security.md).
+[Weekly counts and the daily summary](oncall-week.md).

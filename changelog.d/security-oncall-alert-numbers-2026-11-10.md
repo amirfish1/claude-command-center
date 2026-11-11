@@ -1,0 +1,1 @@
+- On-call refuses unknown alert numbers and replies whose number conflicts with their thread.

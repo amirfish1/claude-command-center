@@ -1,0 +1,1 @@
+- Repeated replies cannot grow a held On-call report beyond its 20,000-character intake limit.

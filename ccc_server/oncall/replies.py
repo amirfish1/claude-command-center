@@ -32,6 +32,8 @@ def is_owner(entry, msg):
     """Whether this inbound message is from the person the channel alerts."""
     if entry.get("type") == "ntfy":
         return True   # the reply topic is the secret
+    if entry.get("type") == "telegram" and msg.raw.get("chat_type", "private") != "private":
+        return False
     owner = normalize_address(entry.get("owner"))
     return bool(owner) and normalize_address(msg.sender) == owner
 
@@ -53,7 +55,7 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
 
     by_token = store.alert_by_token(msg.thread) if msg.thread else None
     by_reply = store.delivery_alert(msg.channel, msg.reply_to) if msg.reply_to else None
-    trusted = (not email) or by_token is not None
+    trusted = (not email) or (by_token is not None and by_token["state"] == "open")
 
     if low in ("status", "help", "?"):
         say(HELP if low != "status" else status_text(cfg, store))
@@ -70,7 +72,7 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
     if not text:
         return "empty"
 
-    alert, rest = by_token or by_reply, text
+    alert, rest = (by_token if email else by_token or by_reply), text
     if alert is None:
         if email:
             say("I could not match that to an alert. Reply inside the alert's own email thread.")
@@ -79,6 +81,15 @@ def handle(cfg, store, chans, wt, entry, msg, *, deps=None, now=None):
         if problem:
             say(problem)
             return "unmatched"
+    numbered = _NUM_RE.match(rest) if by_token or by_reply else None
+    word_numbered = _WORD_NUM_RE.match(rest) if by_token or by_reply else None
+    explicit = (int(word_numbered.group(2)) if word_numbered else
+                int(numbered.group(1)) if numbered and numbered.group(2).strip() else None)
+    if explicit is not None:
+        if explicit != alert["id"]:
+            say("The reply number does not match this alert. Reply in the correct thread.")
+            return "refused: conflicting alert number"
+        rest = word_numbered.group(1) if word_numbered else numbered.group(2)
     if alert["state"] != "open":
         say(f"#{alert['id']} was already handled.", alert)
         return f"#{alert['id']} already handled"
@@ -106,9 +117,12 @@ def _resolve(store, text):
         alert = store.alert(int(m.group(2)))
         if alert:
             return alert, m.group(1), ""
+        return None, text, "That alert number was not found."
     m = _NUM_RE.match(text)
     if m and (m.group(2).strip() or len(waiting) != 1):
         alert = store.alert(int(m.group(1)))
+        if alert is None:
+            return None, text, "That alert number was not found."
         if alert and m.group(2).strip():
             return alert, m.group(2), ""
         if alert and not m.group(2).strip():
@@ -177,6 +191,8 @@ def _apply(cfg, store, chans, wt, alert, text, deps, now):
         if kind == "fixed" and not meta.get("notify"):
             store.alert_close(alert["id"], "cleared", text, now=now)
             return "noted", ""
+        action = "refused" if _is(alerts.NO_WORDS, text) else "approved" if _is(alerts.GO_WORDS, text) else "reworded"
+        store.alert_owner_action(alert["id"], action, now=now)
         if _is(alerts.NO_WORDS, text):
             customers.drop_message(store, message_id, now=now)
             store.alert_close(alert["id"], "answered", text, now=now)

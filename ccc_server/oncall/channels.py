@@ -75,6 +75,20 @@ _OUR_MESSAGE_ID_RE = re.compile(r"ccc-oncall\.([0-9a-f]{16})\.")
 
 # -- small helpers ----------------------------------------------------------
 
+def _response_body(response):
+    body = response.read(1024 * 1024 + 1)
+    if len(body) > 1024 * 1024:
+        raise OSError("Channel response is too large.")
+    return body
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A channel endpoint must not forward credentials or message text elsewhere."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def http_request(method, url, *, headers=None, data=None, timeout=20):
     """The default HTTP seam: ``(status, body)``, also for 4xx and 5xx.
 
@@ -84,11 +98,11 @@ def http_request(method, url, *, headers=None, data=None, timeout=20):
         raise OSError("Only http and https addresses are supported.")
     try:
         req = urllib.request.Request(url, data=data, headers=dict(headers or {}), method=method)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read()
+        with urllib.request.build_opener(_NoRedirect()).open(req, timeout=timeout) as resp:
+            return resp.status, _response_body(resp)
     except urllib.error.HTTPError as exc:
         try:
-            return exc.code, exc.read()
+            return exc.code, _response_body(exc)
         finally:
             exc.close()
     except (http.client.HTTPException, ValueError) as exc:
