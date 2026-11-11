@@ -532,6 +532,31 @@ def main():
         (tmp / 'mail.p12').chmod(0o644)
         import watchtower
 
+        wt_source = pathlib.Path(watchtower.__file__).parent
+        (tmp / 'metadata.json').write_text(
+            json.dumps(
+                {
+                    'ccc_revision': call(
+                        'git', '-C', str(ROOT), 'rev-parse', args.revision
+                    ),
+                    'watchtower_revision': call(
+                        'git', '-C', str(wt_source), 'rev-parse', 'HEAD', check=False
+                    ),
+                    'watchtower_status': call(
+                        'git',
+                        '-C',
+                        str(wt_source),
+                        'status',
+                        '--porcelain',
+                        '--',
+                        '.',
+                        check=False,
+                    ),
+                    'cases': selected,
+                },
+                indent=2,
+            )
+        )
         with tempfile.TemporaryDirectory(prefix='ccc-proof-build-') as build_dir:
             build = pathlib.Path(build_dir)
             shutil.copytree(
