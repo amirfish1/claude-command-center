@@ -219,7 +219,12 @@ def build_parser():
     p.add_argument("--since")
     p.add_argument("--weeks", type=int, default=2)
     p.add_argument("--detail", action="store_true")
-    p.add_argument("--post", nargs="?", const="text", choices=("text", "markdown"))
+    output = p.add_mutually_exclusive_group()
+    output.add_argument("--card", metavar="FILE", help="save a private SVG or PNG card")
+    output.add_argument("--page", metavar="FILE", help="save a private eight-week HTML page")
+    p.add_argument("--square", action="store_true", help="make the card 1080 by 1080")
+    p.add_argument("--theme", choices=("light", "dark"), default="light")
+    output.add_argument("--post", nargs="?", const="text", choices=("text", "markdown"))
     sub.add_parser("decisions", help="what agents decided without you, each with its undo")
     return parser
 
@@ -468,12 +473,21 @@ def _run(args, client, io):
     if action == "week":
         from urllib.parse import urlencode
         from .week import render
-        query = {"weeks": args.weeks, "detail": "1" if args.detail and not args.post else "0"}
+        visual = bool(args.card or args.page)
+        query = {"weeks": 8 if visual else args.weeks, "detail": "1" if args.detail and not (args.post or visual) else "0"}
         if args.since:
             query["since"] = args.since
         code, data = client.get("week?" + urlencode(query))
         if code != 200 or not data.get("ok"):
             raise Stop(data.get("error", "Could not read the week."))
+        if visual:
+            from .week_visual import write_export
+            try:
+                write_export(data, args.card or args.page, square=args.square, theme=args.theme, html=bool(args.page))
+            except (ValueError, OSError) as exc:
+                raise Stop(str(exc)) from exc
+            io.out("Saved " + (args.card or args.page))
+            return 0
         if data.get("limits") and args.post:
             raise Stop("Export unavailable: " + " ".join(data["limits"]))
         if args.post:

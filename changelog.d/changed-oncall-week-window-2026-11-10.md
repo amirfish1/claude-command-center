@@ -1,0 +1,1 @@
+- Read recent On-call queue activity through WatchTower time windows when supported, and refuse incomplete results.

@@ -63,7 +63,7 @@ def read_rows(store, table, column, start, end):
         'alerts': 'kind,state,answer,meta,sent_at,closed_at,owner_action,owner_action_at',
         'customer_messages': 'kind',
     }
-    selection = ('deliveries.ok,deliveries.alert_id,deliveries.message_kind,alerts.kind AS alert_kind'
+    selection = ('deliveries.ok,deliveries.alert_id,deliveries.message_kind,alerts.needs_reply,alerts.kind AS alert_kind'
                  if table == 'deliveries' else columns[table])
     source = 'deliveries LEFT JOIN alerts ON alerts.id=deliveries.alert_id' if table == 'deliveries' else table
     rows = bounded_query(store,
@@ -88,9 +88,22 @@ def collect(eng, *, since=None, weeks=2, detail=False, now=None):
         raise ValueError('Weekly queue limit reached (16).')
     tickets = {}
     limits = []
+    referenced = bounded_query(store,
+        "SELECT DISTINCT ticket_ref, queue FROM reports WHERE created_at>=? AND created_at<? AND ticket_ref!='' LIMIT ?",
+        (min(lo for lo, hi in spans), max(hi for lo, hi in spans), TICKET_LIMIT * QUEUE_LIMIT + 1))
+    if len(referenced) > TICKET_LIMIT * QUEUE_LIMIT:
+        raise ValueError('Weekly ticket reference limit reached.')
     for queue in queues:
         try:
-            rows = eng.wt.ls(queue, status='all', limit=TICKET_LIMIT + 1)
+            if hasattr(eng.wt, 'week_window'):
+                refs = {r['ticket_ref'] for r in referenced
+                        if (r['queue'] or r['ticket_ref'].rsplit('-', 1)[0]) == queue}
+                if len(refs) > TICKET_LIMIT:
+                    raise ValueError('Weekly ticket reference limit reached (2000 per queue).')
+                rows = eng.wt.week_window(queue, min(lo for lo, hi in spans),
+                                          max(hi for lo, hi in spans), refs, limit=TICKET_LIMIT)
+            else:
+                rows = eng.wt.ls(queue, status='all', limit=TICKET_LIMIT + 1)
             if len(rows) > TICKET_LIMIT:
                 raise ValueError('Weekly ticket limit reached (2000 per queue).')
             tickets.update((t['ref'], t) for t in rows)
@@ -167,6 +180,7 @@ def collect(eng, *, since=None, weeks=2, detail=False, now=None):
                          dropped=sum(a['kind'] == 'report' and a['answer'].strip().lower() in alerts.NO_WORDS for a in replies)),
             tickets=dict(filed=len(refs), **{k: outcomes[k] for k in ('fixed','closed_without_fix','still_open','unknown')}),
             report_to_fix_seconds=dict(median=median(durations), worst=max(durations, default=None)),
+            owner_questions_sent=len({d['alert_id'] for d in sent if d['ok'] and d['alert_id'] and d['needs_reply']}),
             owner_messages=dict(kinds), replies=dict(received=len(replies), median_seconds=median(reply_times)),
             decisions=dict(made=decisions, undone=undone),
             reporter_messages=dict(asked=sum(m['kind']=='ask' for m in messages),
