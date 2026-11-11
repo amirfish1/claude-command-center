@@ -26,6 +26,7 @@ body.ccc-oncall-home-open .pwa-install-banner { display: none !important; }
   color: var(--accent); font: inherit; font-size: 14px; cursor: pointer;
 }
 .oncall-home-full:hover { background: var(--surface); }
+.oncall-home :is(button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .oncall-home-note { min-height: 22px; padding-top: 10px; font-size: 13.5px; color: var(--text-muted); }
 

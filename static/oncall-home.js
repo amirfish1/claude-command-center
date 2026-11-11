@@ -30,6 +30,7 @@
 
   let root = null, parts = null, data = null, timer = null, loading = false, railButton = null;
   const sending = new Set();
+  const drafts = new Map(), cardNotes = new Map();
 
   const flagOn = () => { try { return !!(window.__CCC_FLAGS__ || {}).oncall; } catch (_) { return false; } };
   const flagsKnown = () => typeof window.__CCC_FLAGS__ === 'object' && window.__CCC_FLAGS__ !== null;
@@ -152,13 +153,26 @@
     const busy = sending.has(item.id);
     const say = el('div', 'oncall-home-said');
     say.setAttribute('role', 'status');
+    const previous = cardNotes.get(item.id);
+    if (previous) { say.textContent = previous; say.classList.add('is-error'); }
     const send = async text => {
-      if (!text || sending.has(item.id)) return;
+      if (sending.has(item.id)) return;
+      if (!text) {
+        say.textContent = 'Type an answer first.';
+        say.classList.add('is-error');
+        cardNotes.set(item.id, say.textContent);
+        const input = card.querySelector('input');
+        if (input) { input.setAttribute('aria-invalid', 'true'); input.focus(); }
+        return;
+      }
+      cardNotes.delete(item.id);
+      say.textContent = '';
       sending.add(item.id);
       card.classList.add('is-sending');
       card.querySelectorAll('button, input').forEach(control => { control.disabled = true; });
       try {
         const result = await api('POST', 'answer', {id: item.id, text});
+        drafts.delete(item.id);
         note(result.message || 'Sent to the agent.');
         sending.delete(item.id);
         await load();
@@ -168,6 +182,7 @@
         card.querySelectorAll('button, input').forEach(control => { control.disabled = false; });
         say.textContent = error.message;
         say.classList.add('is-error');
+        cardNotes.set(item.id, error.message);
       }
     };
     if (item.session_only) {
@@ -198,6 +213,11 @@
         input.type = 'text';
         input.placeholder = item.choices.length ? 'Or type your answer' : 'Type your answer';
         input.setAttribute('aria-label', 'Your answer');
+        input.value = drafts.get(item.id) || '';
+        input.addEventListener('input', () => {
+          if (input.value) drafts.set(item.id, input.value); else drafts.delete(item.id);
+          input.removeAttribute('aria-invalid');
+        });
         input.disabled = busy;
         const go = el('button', 'oncall-home-btn', 'Send');
         go.type = 'submit';
@@ -223,10 +243,9 @@
     if (text) setTimeout(() => { if (parts.note.textContent === text) parts.note.textContent = ''; }, 6000);
   }
 
-  // Redrawing would wipe a half-typed answer, so the "Needs you" list is left
-  // alone while the person is typing in it or an answer is on its way.
-  const typing = () => !!parts && parts.needs.list.contains(document.activeElement)
-    && document.activeElement.tagName === 'INPUT' && document.activeElement.value !== '';
+  // A refresh must not take keyboard focus from an answer control. Drafts
+  // also survive refresh after focus moves elsewhere on the screen.
+  const interacting = () => !!parts && parts.needs.list.contains(document.activeElement);
 
   function draw() {
     if (!parts || !data) return;
@@ -234,7 +253,7 @@
     p.state.textContent = data.paused ? 'On-call is paused' : 'On-call is on';
     p.state.classList.toggle('is-paused', !!data.paused);
 
-    if (!typing() && !sending.size) {
+    if (!interacting() && !sending.size) {
       p.needs.list.textContent = '';
       p.needs.count.textContent = data.needs_you.length ? String(data.needs_you.length) : '';
       if (!data.needs_you.length) empty(p.needs.list, 'Nothing needs you.');
@@ -275,7 +294,7 @@
     if (data.quiet) p.foot.append(fact('Quiet', hour(data.quiet.start) + ' to ' + hour(data.quiet.end)));
     if (data.sources.length) p.foot.append(fact('Reports come from', names(data.sources, SOURCES)));
     if (local()) {
-      const change = el('a', 'oncall-home-change', 'Change');
+      const change = el('a', 'oncall-home-change', 'On-call settings');
       change.href = '/?ccc_settings=oncall';
       p.foot.append(change);
     }
@@ -361,6 +380,8 @@
     try {
       const fresh = await api('GET', 'home');
       data = fresh;
+      const ids = new Set((data.needs_you || []).map(item => item.id));
+      for (const cache of [drafts, cardNotes]) for (const id of cache.keys()) if (!ids.has(id)) cache.delete(id);
       if (!data.enabled) retract();
       placeRailButton();
       if (isOpen()) draw();

@@ -14,7 +14,7 @@
 (() => {
   'use strict';
 
-  const CHANNEL_NAMES = {email: 'Email', telegram: 'Telegram', ntfy: 'ntfy', imessage: 'iMessage',
+  const CHANNEL_NAMES = {email: 'Email', telegram: 'Telegram', ntfy: 'Phone push (ntfy)', imessage: 'iMessage',
     sms: 'SMS', whatsapp: 'WhatsApp', command: 'Your own command'};
   const SOURCE_NAMES = {github: 'GitHub issues', sentry: 'Sentry', posthog: 'PostHog', http: 'URL check', command: 'Command check'};
   const INTAKE_TYPES = ['email', 'sms', 'whatsapp'];
@@ -26,6 +26,7 @@
   const REFRESH_MS = 10000;
 
   let section = null, parts = null, state = null, decisions = [], timer = null, loading = false, retries = 0;
+  const channelFeedback = new Map();
 
   const flagOn = () => { try { return !!(window.__CCC_FLAGS__ || {}).oncall; } catch (_) { return false; } };
 
@@ -44,7 +45,8 @@
     let data = {};
     try { data = await response.json(); } catch (_) { /* a non-JSON error page */ }
     if (!response.ok || data.ok === false) {
-      const error = new Error(data.error || 'CCC answered HTTP ' + response.status);
+      const failed = (data.results || []).filter(result => !result.ok).map(result => result.error).filter(Boolean);
+      const error = new Error(data.error || failed.join(' ') || 'CCC answered HTTP ' + response.status);
       error.data = data;
       throw error;
     }
@@ -55,6 +57,7 @@
     if (!target) return;
     target.textContent = text || '';
     target.classList.toggle('is-error', !!bad);
+    delete target.dataset.health;
   }
 
   // ── building blocks ───────────────────────────────────────────────────
@@ -181,9 +184,14 @@
       const list = ((typesOf() || {})[type] || []).slice();
       if (kind === 'source') list.push({name: 'queue', label: 'Queue', secret: false, optional: true, placeholder: ''});
       for (const field of list) {
-        const node = input(field.label + (field.optional ? ' (optional)' : ''), field.secret ? 'password' : 'text');
-        if (field.placeholder && !field.secret) node.title = field.placeholder;
-        fields.append(node);
+        const label = field.label + (field.optional ? ' (optional)' : '');
+        const node = input(label, field.secret ? 'password' : 'text');
+        if (kind === 'channel' && type === 'ntfy' && !field.optional) node.setAttribute('aria-required', 'true');
+        node.addEventListener('input', () => node.removeAttribute('aria-invalid'));
+        if (field.placeholder && !field.secret) node.placeholder = field.placeholder;
+        const wrap = el('label', 'oncall-field');
+        wrap.append(el('span', 'oncall-field-label', label), node);
+        fields.append(wrap);
         inputs.push({field, node});
       }
       const add = button('+ Add', submit);
@@ -195,6 +203,12 @@
       const entry = {type: pick.value}, secrets = {};
       for (const {field, node} of inputs) {
         const value = node.value.trim();
+        if (!value && !field.optional && kind === 'channel' && pick.value === 'ntfy') {
+          say(wrap.status, 'Enter ' + field.label.toLowerCase() + '.', true);
+          node.setAttribute('aria-invalid', 'true');
+          node.focus();
+          return;
+        }
         if (!value) continue;
         if (field.secret) secrets[field.name] = value; else entry[field.name] = value;
       }
@@ -233,11 +247,13 @@
 
     p.queue = withStatus(row('Queue for bug tickets', 'queue tickets bugs'));
     p.queueInput = input('SHOP');
+    p.queueInput.setAttribute('aria-label', 'Queue for bug tickets');
     p.queueInput.addEventListener('change', () => saveConfig({queue: p.queueInput.value.trim()}, p.queue.status));
     p.queue.control.append(p.queueInput);
 
     p.repo = withStatus(row('Code folder', 'repo repository folder code path'));
     p.repoInput = input('~/projects/example');
+    p.repoInput.setAttribute('aria-label', 'Code folder');
     p.repoInput.addEventListener('change', () => saveConfig({repo: p.repoInput.value.trim()}, p.repo.status));
     p.repo.control.append(p.repoInput);
 
@@ -245,6 +261,7 @@
     p.minorToggle = toggle('Agents decide small reversible things',
       next => saveConfig({minor_decisions: {enabled: next}}, p.minor.status));
     p.minor.control.append(p.minorToggle);
+    p.decisionsLabel = el('div', 'settings-subsection-label', 'Decided without you');
     p.decisions = el('div', 'oncall-list');
 
     p.waitingLabel = el('div', 'settings-subsection-label', 'Waiting on you');
@@ -304,7 +321,7 @@
     p.quietEnd.addEventListener('change', saveQuiet);
     p.quiet.control.append(p.quietStart, p.quietEnd);
 
-    root.append(p.master.node, p.home.node, p.queue.node, p.repo.node, p.minor.node, p.decisions,
+    root.append(p.master.node, p.home.node, p.queue.node, p.repo.node, p.minor.node, p.decisionsLabel, p.decisions,
       p.waitingLabel, p.waiting,
       p.channelsLabel, p.channels, p.channelForm.node,
       p.sourcesLabel, p.sources, p.sourceForm.node,
@@ -331,12 +348,32 @@
     p.channels.replaceChildren();
     for (const channel of state.channels || []) {
       const r = listRow(CHANNEL_NAMES[channel.type] || channel.type, channel.owner, channel.error);
+      if (channel.type === 'ntfy') {
+        const saved = ((state.config || {}).channels || []).find(entry => entry.id === channel.id);
+        if (saved && saved.topic) r.main.append(el('div', 'settings-row-desc oncall-subscribe',
+          'Subscribe in ntfy: ' + (saved.server || 'https://ntfy.sh').replace(/\/+$/, '') + '/' + encodeURIComponent(saved.topic)));
+      }
+      const feedback = channelFeedback.get(channel.id);
+      if (feedback) say(r.status, feedback.text, feedback.bad);
+      else if (channel.last_ok !== null && channel.last_ok !== undefined) {
+        say(r.status, channel.last_ok ? 'Last send accepted. Check the channel.' : 'Last send failed. Test again.', !channel.last_ok);
+      }
       const enabled = toggle((CHANNEL_NAMES[channel.type] || channel.type) + ' on',
         next => post('channel', {action: 'toggle', channel: {id: channel.id, enabled: next}}, r.status));
       setToggle(enabled, channel.enabled);
       r.control.append(
-        button('Test', () => post('test', {channel: channel.id}, r.status,
-          result => (result.results || []).map(x => x.ok ? 'Sent.' : 'Failed: ' + x.error).join(' '))),
+        button('Test', async () => {
+          let feedback;
+          try {
+            await api('POST', 'test', {channel: channel.id});
+            feedback = {text: 'Test send accepted. Check the channel.', bad: false};
+          } catch (error) {
+            feedback = {text: error.message, bad: true};
+          }
+          channelFeedback.set(channel.id, feedback);
+          say(r.status, feedback.text, feedback.bad);
+          await load();
+        }),
         enabled,
         button('Remove', () => post('channel', {action: 'remove', channel: {id: channel.id}}, r.status), true));
       p.channels.append(r.node);
@@ -381,12 +418,22 @@
     p.waiting.replaceChildren();
     for (const item of waiting) p.waiting.append(listRow('#' + item.id, item.line).node);
     p.decisions.replaceChildren();
+    if (!decisions.length) p.decisions.append(el('div', 'settings-empty', 'No decisions recorded.'));
     for (const decision of decisions) {
-      const parts = decision.recommend
-        ? ['Decided: ' + decision.recommend, decision.undo && 'Undo: ' + decision.undo]
+      const detail = decision.recommend
+        ? ['Decided: ' + decision.recommend, decision.undo && 'Undo: ' + decision.undo, decisionState(decision)]
         : [decision.state, decision.reason];
-      p.decisions.append(listRow(decision.ref, parts.filter(Boolean).join(' · ')).node);
+      const r = listRow(decision.ref + (decision.question ? ' — ' + decision.question : ''));
+      detail.filter(Boolean).forEach(text => r.main.append(el('div', 'settings-row-desc', text)));
+      p.decisions.append(r.node);
     }
+  }
+
+  function decisionState(decision) {
+    const state = String(decision.state || '');
+    if (state.endsWith(' reversed')) return 'Undone.';
+    return {pending: 'Waiting for an agent.', consumed: 'Being applied.', applied: 'Applied.',
+      verified: 'Verified.', failed: 'Did not finish.'}[state] || state;
   }
 
   function draw() {
@@ -394,9 +441,11 @@
     const p = parts, config = state.config || {};
     setToggle(p.masterToggle, state.enabled);
     setToggle(p.homeToggle, !window.cccOncallHome || window.cccOncallHome.opensByItself());
-    if (!state.wt) say(p.master.status, 'WatchTower is not installed, so no agent will pick tickets up.', true);
-    else if (state.enabled && state.paused) say(p.master.status, 'Paused. Reply resume on any channel to continue.');
-    else if (p.master.status.classList.contains('is-error') && state.wt) say(p.master.status, '');
+    if (!state.wt || (state.enabled && state.paused)) {
+      say(p.master.status, !state.wt ? 'WatchTower is not installed, so no agent will pick tickets up.'
+        : 'Paused. Reply resume on any channel to continue.', !state.wt);
+      p.master.status.dataset.health = 'true';
+    } else if (p.master.status.dataset.health) say(p.master.status, '');
     fill(p.queueInput, state.queue);
     fill(p.repoInput, config.repo);
     setToggle(p.minorToggle, state.minor_decisions);
@@ -421,10 +470,15 @@
     loading = true;
     try {
       state = await api('GET', 'status');
-      decisions = state.minor_decisions ? ((await api('GET', 'decisions')).decisions || []) : [];
+      const ids = new Set((state.channels || []).map(channel => channel.id));
+      for (const id of channelFeedback.keys()) if (!ids.has(id)) channelFeedback.delete(id);
+      decisions = (await api('GET', 'decisions')).decisions || [];
       draw();
     } catch (error) {
-      if (parts) say(parts.master.status, error.message, true);
+      if (parts) {
+        say(parts.master.status, error.message, true);
+        parts.master.status.dataset.health = 'true';
+      }
     } finally {
       loading = false;
     }

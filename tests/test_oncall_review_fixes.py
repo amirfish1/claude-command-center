@@ -117,7 +117,7 @@ function el(tag, cls, text) {
     append(...nodes) {this.children.push(...nodes);},
     setAttribute() {}, addEventListener() {}};
 }
-const context = {el, sending: new Set(), window: {}};
+const context = {el, sending: new Set(), drafts: new Map(), cardNotes: new Map(), window: {}};
 vm.createContext(context);
 vm.runInContext(FUNCTION, context);
 const card = context.needCard({id: 1, headline: 'Checkout', detail: 'Which redirect?',

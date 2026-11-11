@@ -6,6 +6,9 @@
 #settingsSection-oncall .oncall-form:empty { display: none; }
 #settingsSection-oncall .oncall-form .settings-text-input { width: 100%; box-sizing: border-box; }
 #settingsSection-oncall .oncall-form .oncall-form-wide { grid-column: 1 / -1; justify-self: start; }
+#settingsSection-oncall .oncall-field { display: grid; gap: 4px; min-width: 0; }
+#settingsSection-oncall .oncall-field-label { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+#settingsSection-oncall .oncall-subscribe { overflow-wrap: anywhere; user-select: text; }
 #settingsSection-oncall .oncall-status:empty { display: none; }
 #settingsSection-oncall .oncall-status.is-error { color: var(--red); }
 #settingsSection-oncall .oncall-list:empty { display: none; }

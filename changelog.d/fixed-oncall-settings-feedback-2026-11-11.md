@@ -1,0 +1,1 @@
+On-call settings keep channel test results and save errors visible, show the ntfy subscription address and persistent setup field labels, and retain decision history when small decisions are turned off. History includes the question and follow-through state.
