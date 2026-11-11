@@ -22,6 +22,7 @@ import secrets as _secrets
 import sys
 
 CHANNEL_NAMES = {
+    "call": "Phone call (answer by SMS)",
     "slack": "Slack", "discord": "Discord", "matrix": "Matrix", "mattermost": "Mattermost",
     "email": "Email", "telegram": "Telegram", "ntfy": "ntfy (phone push, no account)",
     "imessage": "iMessage (this Mac)", "sms": "SMS (your Twilio number)",
@@ -175,6 +176,7 @@ def build_parser():
 
     p = sub.add_parser("test", help="send a test message to every channel, or to one")
     p.add_argument("channel", nargs="?", default="")
+    p.add_argument("--call", action="store_true", help="place a real paid phone call; answer by SMS")
     p.add_argument("--roundtrip", action="store_true", help="wait for a team chat test reply")
 
     sub.add_parser("on", help="turn On-call on")
@@ -574,7 +576,7 @@ def _run(args, client, io):
             _print_status(status, io)
         return 0
     if action == "test":
-        code, res = client.post("test", {"channel": args.channel, "roundtrip": args.roundtrip})
+        code, res = client.post("test", {"channel": args.channel, "roundtrip": args.roundtrip, "call": args.call})
         if not res.get("results"):
             raise Stop(PREVIEW_OFF if code == 404 else str(res.get("error") or f"CCC answered HTTP {code}."))
         for row in res["results"]:

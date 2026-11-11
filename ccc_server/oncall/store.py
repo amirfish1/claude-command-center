@@ -32,7 +32,7 @@ CONFIG_NAME = "config.json"
 DB_NAME = "oncall.sqlite3"
 LOG_KEEP = 500
 
-CHANNEL_TYPES = ("email", "telegram", "ntfy", "imessage", "sms", "whatsapp", "command", "slack", "discord", "matrix", "mattermost")
+CHANNEL_TYPES = ("call", "email", "telegram", "ntfy", "imessage", "sms", "whatsapp", "command", "slack", "discord", "matrix", "mattermost")
 SOURCE_TYPES = ("alertmanager", "docker", "logs", "ci", "github", "sentry", "posthog", "http", "command")
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _QUEUE_RE = re.compile(r"^[A-Z][A-Z0-9_-]{0,31}$")
@@ -179,7 +179,8 @@ def validate_config(cfg):
         elif quiet.get("tz") and not valid_zone(quiet["tz"]):
             problems.append(f"Quiet hours time zone {quiet['tz']!r} is not a known zone name.")
     from .escalation import validate
-    return problems + validate(cfg)
+    from .calls import validate as validate_calls
+    return problems + validate(cfg) + validate_calls(cfg)
 
 
 _SECRET_WORDS = ("password", "token", "secret", "api_key", "auth")

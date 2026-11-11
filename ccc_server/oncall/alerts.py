@@ -153,11 +153,15 @@ def collect_decisions(cfg, store, wt, *, now=None, silent_before=""):
             key = f"wt:{ref}:{blocked_at}"
             live_keys.add(key)
             question, why = _gate_note(item.get("block_question"))
+            report = store.report_by_ref(ref)
+            ci_source = bool(report and any(
+                source.get('type') == 'ci' and report['source'] == 'source:' + source.get('id', '')
+                for source in cfg.get('sources', [])))
             row, new = store.alert_upsert(
                 key, kind="decision", ref=ref,
                 title=_clip(item.get("title") or item.get("note") or ref, 160),
                 body=_clip(question or "The agent needs a decision.", 1800),
-                meta={"queue": queue, "recommend": _clip(wtmod.recommendation(item), 400),
+                meta={"queue": queue, "call_kind": "ci_failed" if ci_source else "decision", "recommend": _clip(wtmod.recommendation(item), 400),
                       "why": _clip(why, 300)}, now=now)
             if new:
                 created += 1
@@ -217,10 +221,12 @@ def _minutes(hhmm):
     return int(hours) * 60 + int(mins or 0)
 
 
-def alert_channels(cfg, chans):
+def alert_channels(cfg, chans, *, include_calls=False):
     """Channels that carry owner alerts: enabled, built, not marked intake-only."""
     out = []
     for entry in cfg.get("channels") or []:
+        if entry.get("type") == "call" and not include_calls:
+            continue
         if not entry.get("enabled", True) or entry.get("alerts") is False:
             continue
         # A channel set to read customer reports, with no address for the owner,
@@ -240,7 +246,8 @@ def deliver(cfg, store, chans, *, now=None):
     from . import escalation
     escalated = escalation.deliver(cfg, store, chans, pending, now)
     if cfg.get("escalation"):
-        pending = [a for a in pending if not a["needs_reply"]]
+        from .calls import escalates
+        pending = [a for a in pending if not escalates(cfg, a)]
     if not pending or store.kv_get("paused", False):
         return escalated
     targets = alert_channels(cfg, chans)

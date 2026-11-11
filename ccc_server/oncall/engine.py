@@ -100,7 +100,8 @@ class Engine:
             built = {}
             for entry in entries:
                 try:
-                    built[entry["id"]] = build(entry, kv=self.store)
+                    from .calls import resolve
+                    built[entry["id"]] = build(resolve(entry, cfg), kv=self.store)
                 except Exception as exc:  # a bad entry must not stop the others
                     self._note(f"channel:{entry.get('id')}", str(exc))
             self._chan_cache = (stamp, built)
@@ -362,7 +363,7 @@ class Engine:
                 title=f"{queue} is not moving", body=detail, needs_reply=False, now=self.clock())
             return row
 
-    def test(self, channel_id=""):
+    def test(self, channel_id="", *, call=False):
         """Send a test message. Returns [{channel, ok, error}]."""
         with self._lock:
             cfg = self.config()
@@ -370,6 +371,8 @@ class Engine:
             results = []
             for entry in cfg.get("channels") or []:
                 cid = entry.get("id")
+                if (entry.get("type") == "call") != call:
+                    continue
                 if channel_id and cid != channel_id:
                     continue
                 chan = chans.get(cid)

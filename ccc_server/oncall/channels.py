@@ -372,6 +372,11 @@ _FIELDS = {
         _field("db_path", "Messages database", optional=True,
                placeholder="~/Library/Messages/chat.db"),
     ],
+    "call": [
+        _field("sms_channel", "SMS reply channel"),
+        *[_field(n, n.replace("_", " "), optional=True) for n in
+          ("kinds", "after_minutes", "hourly_cap", "during_quiet")],
+    ],
     "sms": _TWILIO_FIELDS + [
         _field("api_base", "API address", optional=True, placeholder="https://api.twilio.com"),
     ],
@@ -1403,6 +1408,25 @@ class TwilioChannel(Channel):
         return out
 
 
+class CallChannel(TwilioChannel):
+    """Speak only. Answers arrive on the linked SMS channel."""
+    type = "call"
+    can_receive = False
+
+    def _send(self, msg):
+        from .calls import spoken
+        twiml = '<Response><Say>' + _html.escape(spoken(msg.text, msg.choices)) + '</Say><Hangup/></Response>'
+        status, data = self._call('POST', '/Calls.json', form={
+            'To': self.owner, 'From': self._address(self.cfg.get('from')),
+            'Twiml': twiml, 'Timeout': '30'})
+        if 200 <= status < 300 and data.get('sid'):
+            return Receipt(True, external_id=str(data['sid']))
+        return Receipt(False, error=f'Call request failed (HTTP {status}).', uncertain=status >= 500)
+
+    def _poll(self):
+        return []
+
+
 # -- command ----------------------------------------------------------------
 
 class CommandChannel(Channel):
@@ -1448,6 +1472,7 @@ _CLASSES = {
     "ntfy": NtfyChannel,
     "imessage": IMessageChannel,
     "sms": TwilioChannel,
+    "call": CallChannel,
     "whatsapp": TwilioChannel,
     "command": CommandChannel,
 }

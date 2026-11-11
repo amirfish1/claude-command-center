@@ -7,6 +7,8 @@ has stopped, and your reply from the same thread is the agent's answer.
 On-call is a preview. It is off until you turn it on, and nothing is created
 on disk before that.
 
+[Planned call escalation contract](oncall-calls.md).
+
 ## What it needs
 
 - CCC running on a machine that stays on: your Mac, a Linux box or a small VM.
