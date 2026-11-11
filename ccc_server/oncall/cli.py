@@ -294,6 +294,8 @@ def _collect(kind, etype, fields, args, io):
         value = io.prompt(field["label"] + hint, default)
         if value:
             entry[name] = value
+    if kind == "source" and etype == "logs" and entry.get("path"):
+        entry["path"] = os.path.abspath(os.path.expanduser(entry["path"]))
     return entry, typed
 
 
