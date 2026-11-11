@@ -1,0 +1,7 @@
+[
+  {"kind":"blocked","device":"phone","control":"Save favorite","problem":"Button has no effect at widths at or below 600px."},
+  {"kind":"confusing","control":"Check availability","problem":"Error says only Invalid input, even for valid fake values; no field or recovery guidance."},
+  {"kind":"blocked","control":"Get help choosing","problem":"Help page is a dead end without a next step or return link."},
+  {"kind":"ugly","control":"Product details","problem":"Return instructions clipped horizontally with no way to reveal the text."},
+  {"kind":"slow","control":"Show available colors","problem":"6.5 second delay without loading or disabled state."}
+]
