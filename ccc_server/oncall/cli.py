@@ -440,6 +440,7 @@ def _setup(client, args, io):
 
 def run(argv, *, base, get, post, io=None):
     """Run one ``ccc oncall ...`` command. Returns the exit code."""
+    if argv[:1] == ["demo"]: return __import__("ccc_server.oncall.demo", fromlist=["main"]).main(argv[1:])
     io = io or IO()
     args = build_parser().parse_args(argv)
     if args.action == "setup" and not args.yes and not args.secret_stdin:
