@@ -74,7 +74,10 @@ queue's shared learnings before starting and writes back at the end. See
 - **Workers tab:** Compact, Cozy, and Detailed densities, fixed columns, a
   WORKING NOW strip, and rows visible before engine sessions exist.
 - **Self-attaching agents:** external headless sessions discover parents
-  through process ancestry; CLI spawns and queue lanes appear as they start.
+  through process ancestry, including raw Claude print and Codex exec launches.
+  Codex writer locks identify threads even under a shared app server. Confirmed
+  links survive process exit and restart. Discovery requires observing the
+  running processes; ambiguous or historical relationships are not guessed.
 - **GitHub integration:** start from an issue with an in-progress label and
   self-assignment. Verify closes the issue with a commit-SHA comment; Archive
   closes it as not planned. Issue bodies and comments render inside CCC.
