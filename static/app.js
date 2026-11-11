@@ -40859,7 +40859,30 @@
       if (selected.size >= limit) break;
       selected.add(row);
     }
-    const result = source.filter(row => selected.has(row));
+    // Spend slots on a row and its loaded ancestors together. Otherwise a
+    // fresh child can displace its older parent and become a loose row even
+    // though both arrived in the same response. Keep the hard cap intact.
+    const familySelected = new Set();
+    const includeWithAncestors = (row) => {
+      const chain = [];
+      const seen = new Set();
+      let current = row;
+      while (current && !familySelected.has(current) && !seen.has(current)) {
+        seen.add(current);
+        chain.push(current);
+        const pid = String(current.parent_session_id || current.hermes_parent_session_id
+          || continuationParentId(current) || current.continued_from_session_id || '').trim();
+        current = pid ? byId.get(pid) : null;
+      }
+      if (familySelected.size + chain.length > limit) return;
+      chain.forEach(member => familySelected.add(member));
+    };
+    if (selectedRow) includeWithAncestors(selectedRow);
+    for (const row of ranked) {
+      if (familySelected.size >= limit) break;
+      if (selected.has(row)) includeWithAncestors(row);
+    }
+    const result = source.filter(row => familySelected.has(row));
     return { rows: result, omitted: Math.max(0, source.length - result.length) };
   }
 

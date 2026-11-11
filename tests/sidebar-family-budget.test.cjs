@@ -48,3 +48,17 @@ test('family priority respects ticket queue, closed tickets, missing parents and
   byId.delete('parent');
   assert.equal(lane('alltickets'), false);
 });
+
+test('a recent helper retains its older ancestors without exceeding the row cap', () => {
+  const parent = {session_id: 'parent', modified: -100, idea_ticket: {ref: 'TEST-1'}};
+  const middle = {session_id: 'middle', parent_session_id: 'parent', modified: -99};
+  const child = {session_id: 'child', parent_session_id: 'middle', modified: 502};
+  const rows = Array.from({length: 300}, (_, i) => ({session_id: 'other-' + i,
+    modified: i, idea_ticket: {ref: 'TEST-' + (i + 2)}})).concat(parent, middle, child);
+  const {context} = setup(rows);
+  const result = context._boundSidebarRowsForRender(rows, 240, 'alltickets');
+  assert.ok(result.rows.includes(child));
+  assert.ok(result.rows.includes(parent));
+  assert.ok(result.rows.includes(middle));
+  assert.equal(result.rows.length, 240);
+});
