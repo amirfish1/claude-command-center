@@ -143,7 +143,7 @@ test('closing Settings clears unfinished credentials without a request and retur
  await page.waitForFunction(()=>document.querySelector('#settingsModal').hidden);assert.equal(await page.$eval('#byokKeyInput',n=>n.value),'');assert.equal(await page.evaluate(()=>document.activeElement.id),'opener');assert.deepEqual(posts(requests),[]);
 });
 test('existing explicit copy capability only opens the canonical editor and explains independent scope',async t=>{
- const {page,requests}=await open(t,390);await page.click('#serviceConnectionCompatibility>summary');await page.click('[data-vault-import="0"]');
+ const {page,requests}=await open(t,390);assert.equal(await page.$eval('#serviceConnectionCompatibility',n=>n.tagName),'SECTION');await page.click('[data-vault-import="0"]');
  assert.equal(await page.$eval('#serviceCredentialEditor',n=>n.open),true);assert.equal(await page.$eval('#vaultValueInput',n=>n.hidden),true);
  assert.match(await page.$eval('#vaultFormStatus',n=>n.textContent),/explicitly creates an independent named copy/);assert.deepEqual(posts(requests),[]);assert.deepEqual(state(),initial);
 });

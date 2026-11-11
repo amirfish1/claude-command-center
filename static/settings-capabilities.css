@@ -14,3 +14,14 @@
  .ccc-phone-backdrop .ccc-phone-box button,
  .ccc-phone-backdrop .ccc-phone-box input { min-height:44px; box-sizing:border-box; }
 }
+
+/* Inline configuration keeps the native editor and its event handlers. */
+#settingsCapabilities > #capabilityRows > .settings-row { display:block; }
+#settingsCapabilities .capability-inline { min-width:0; }
+#phoneAccessRow { display:block; }
+#phoneAccessSetup { width:100%; min-width:0; }
+.ccc-phone-inline { font-size:13px; line-height:1.5; }
+.ccc-phone-inline .ccc-phone-step { border:0; border-top:1px solid var(--border); border-radius:0; padding:16px 0; }
+@media(max-width:700px) {
+ .ccc-phone-inline button, .ccc-phone-inline input { min-height:44px; box-sizing:border-box; }
+}

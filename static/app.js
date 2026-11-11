@@ -88949,7 +88949,6 @@
     carModePollTimer = setInterval(fetchCarModeStatus, 3000);
   }
   function closeCarModeModal() {
-    if (window.cccVoiceSetup?.mounted()) { document.getElementById('voiceSetup-operator').open = false; }
     if ($carModeModal) $carModeModal.classList.remove('open');
     if (carModePollTimer) { clearInterval(carModePollTimer); carModePollTimer = null; }
   }
@@ -90242,13 +90241,7 @@
   });
   // Phone access wizard (static/phone-access.js, preview flag phone_access).
   const $phoneAccessBtn = document.getElementById('phoneAccessBtn');
-  if ($phoneAccessBtn) $phoneAccessBtn.addEventListener('click', () => {
-    closeSettingsModal();
-    if (window.cccPhoneAccess) {
-      // Merely viewing setup must not enable a flag or change sharing.
-      window.cccPhoneAccess.open();
-    }
-  });
+  window.cccPhoneAccess?.mount(document.getElementById('phoneAccessSetup'));
   if ($networkBackdrop) $networkBackdrop.addEventListener('click', networkClose);
   if ($networkCancelBtn) $networkCancelBtn.addEventListener('click', networkClose);
   if ($networkSaveBtn) $networkSaveBtn.addEventListener('click', networkSave);

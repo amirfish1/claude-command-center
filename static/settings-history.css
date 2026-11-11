@@ -25,3 +25,7 @@
 #settingsHistoryEntries > li > button[disabled] { visibility:hidden; }
 #settingsHistoryEntries li li { padding:4px 0; }
 @media(max-width:600px){ #settingsHistoryEntries > li { grid-template-columns:minmax(0,1fr) auto auto; } #settingsHistoryEntries > li > p { display:none; } #settingsHistoryEntries > li > button { min-height:44px; } }
+
+/* Recorded values stay visible in the history row. */
+#settingsHistoryEntries > li > section { grid-column:1 / -1; order:5; }
+#settingsHistoryEntries > li > section > h4 { margin:8px 0 4px; font-size:12px; }

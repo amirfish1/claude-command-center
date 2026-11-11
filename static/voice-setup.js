@@ -25,13 +25,13 @@
   }
   function mounted(){return ready;}
   function leave(){
-    if(!ready)return;get('voiceSetup-operator').open=false;
+    if(!ready)return;
     get('carModeAnthropicKey').value='';get('carModeDeepgramKey').value='';
   }
   function enter() {
     if(window.cccSettingsCapabilities&&!window.cccSettingsCapabilities.configurationVisible('voice'))return;
     if(!ready)return;listeningStatus();refreshAccess();
-    if(!entered&&!loading){entered=true;reload();hooks.refreshVoices();}
+    if(!entered&&!loading){entered=true;reload();hooks.refreshVoices();hooks.loadOperator();}
   }
   async function reload(){if(loading)return;loading=true;get('voiceSetupCallStatus').textContent='Reading saved call settings…';try{await hooks.load();}finally{loading=false;}}
   function loaded(data){if(!ready)return;get('voiceSetupCallStatus').textContent='This machine · Saved call defaults loaded. Subscription entitlement, microphone and connection are untested. '+(data.openai_profiles?.length?'Paid fallback profiles are listed by name only.':'No paid fallback profile is available.');}
@@ -40,7 +40,7 @@
   function ttsLoaded(options){if(ready)get('voiceSetupReadingStatus').textContent=options.length?'This browser · '+options.length+' output voices advertised by this machine. $ marks paid output. Playback has not been tested.':'No optional output voices advertised. Random voice uses the existing speech fallback; its availability has not been tested.';}
   function ttsFailed(){if(ready)get('voiceSetupReadingStatus').textContent='Output voice catalog unavailable. The saved selection is retained; refresh to retry. Playback has not been tested.';}
   function open(part='listening'){
-    if(!ready)return false;window.cccSettingsCapabilities?.reveal('voice');hooks.navigate();enter();
+    if(!ready)return false;window.cccSettingsCapabilities?.reveal('voice');hooks.navigate();enter();if(part==='operator')hooks.loadOperator();
     const target=get('voiceSetup-'+part)||get('voiceSetup-listening');
     const disclosure=get('settingsSection-voice').querySelector(':scope > details');if(disclosure)disclosure.open=true;
     if(target.tagName==='DETAILS')target.open=true;
@@ -63,7 +63,7 @@
       <section id="voiceSetup-conversation" class="voice-setup-section settings-row" data-keywords="voice realtime live conversation codex call limits fallback profile" tabindex="-1"><h3>Live conversation · listen and answer</h3><p>This machine · Experimental Codex realtime calls use the ChatGPT subscription lane. Microphone audio goes to OpenAI; starting a call may request microphone permission. An optional OpenAI BYOK profile permits paid fallback. The call can propose actions for confirmation, not execute them automatically.</p><p id="voiceSetupCallStatus" role="status" aria-live="polite">Open this section to read call settings.</p><button type="button" id="voiceSetupReload" class="settings-action-btn">Reload call settings</button><button type="button" data-settings-go="api-keys" class="settings-action-btn">Manage provider keys</button></section>
       <section id="voiceSetup-offline" class="voice-setup-section settings-row" data-keywords="voice offline output kokoro install repair availability" tabindex="-1"><h3>Offline output · for reading replies</h3><p>This machine · Optional local speech output. Its status does not establish offline dictation, an available microphone or offline live conversation. Installation is a separate explicit download.</p><button type="button" id="voiceSetupOfflineRefresh" class="settings-action-btn">Refresh offline status</button></section>
       <section id="voiceSetup-access" class="voice-setup-section settings-row" data-keywords="voice call access shortcut floating mobile" tabindex="-1"><h3>Call access</h3><p>Show or hide the floating CALL shortcut on phone layouts. The header Voice control can still open the live conversation panel.</p><p id="voiceSetupAccessStatus" role="status" aria-live="polite"></p></section>
-      <details id="voiceSetup-operator" class="voice-setup-section settings-row" data-keywords="voice hands free car mode operator credentials local" tabindex="-1"><summary>Hands-free operator · separate local process</summary><p>This machine · Car Mode is separate from browser dictation, Speak and Codex realtime calls. Its dispatcher requires an Anthropic key; its speech engine is selected by machine configuration. Status below reports configuration requirements, not a microphone or call test. Blank key fields retain stored credentials.</p></details>`;
+      <section id="voiceSetup-operator" class="voice-setup-section settings-row" data-keywords="voice hands free car mode operator credentials local" tabindex="-1"><h3>Hands-free operator · separate local process</h3><p>This machine · Car Mode is separate from browser dictation, Speak and Codex realtime calls. Its dispatcher requires an Anthropic key; its speech engine is selected by machine configuration. Status below reports configuration requirements, not a microphone or call test. Blank key fields retain stored credentials.</p></section>`;
     const disclosure=root.querySelector(':scope > details'), destination=disclosure||root;
     destination.append(host);
     const legacy=create('div');legacy.hidden=true;legacy.id='voiceSetupLegacy';host.append(legacy);
@@ -83,7 +83,7 @@
     legacy.append(get('voiceModalCancelBtn'));
     const operator=get('voiceSetup-operator'), car=get('carModeModal'), carDialog=car.querySelector('.upd-dialog');
     for(const child of [...carDialog.children])if(child.id!=='carModeTitle'&&!child.classList.contains('upd-versions'))operator.append(child);
-    get('carModeCancelBtn').textContent='Close operator section';
+    get('carModeCancelBtn').hidden=true;
     // Existing openers become setup shortcuts; no second set of editors.
     for(const id of ['voiceSettingsBtn','carModeMenuBtn']){
       const button=get(id);if(!button)continue;const row=button.closest('.settings-row');
@@ -98,7 +98,7 @@
     get('voiceSetupReadingRefresh').addEventListener('click',()=>hooks.refreshVoices());
     get('voiceSetupOfflineRefresh').addEventListener('click',()=>window.cccLocalSpeech?.check?.());
     host.addEventListener('click',event=>{const target=event.target.closest('[data-voice-part]');if(target){event.preventDefault();open(target.dataset.voicePart);}});
-    operator.addEventListener('toggle',()=>{get('carModeAnthropicKey').value='';get('carModeDeepgramKey').value='';if(operator.open)hooks.loadOperator();});
+    const stop=create('button','End active call','settings-action-btn');stop.type='button';stop.id='voiceSetupStopCall';stop.onclick=()=>get('voicePanelStopBtn')?.click();get('voiceSetup-access').append(stop);
     // Search each task as a unit, keeping its native controls visible together.
     host.querySelectorAll('.voice-setup-section').forEach(section=>{section.setAttribute('data-settings-search-group','');section.dataset.keywords+=' '+section.textContent;});
     legacy.querySelectorAll('.settings-row').forEach(row=>{row.hidden=true;});

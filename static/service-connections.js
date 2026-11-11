@@ -58,9 +58,11 @@
     get('byokSaveKeyBtn').after(cancel);cancel.onclick=()=>{get('byokKeyInput').value='';providerEditor.open=false;get('serviceConnectionAdd').focus();};
     const advanced=makeEditor('serviceConnectionCompatibility','Advanced',[
       get('vaultByokList').closest('.settings-row'),...section.querySelectorAll('[data-keywords*="vault cli"]')]);
+    const expanded=document.createElement('section');expanded.id=advanced.id;expanded.className=advanced.className;
+    const title=document.createElement('h3');title.textContent='Advanced';expanded.append(title,...[...advanced.children].filter(node=>node.tagName!=='SUMMARY'));advanced.replaceWith(expanded);
     const copyRow=get('vaultByokList').closest('.settings-row');copyRow.querySelector('.settings-row-label').textContent='Existing provider credentials';
     copyRow.querySelector('.settings-row-desc').textContent='Advanced: explicitly copy a provider credential into a named entry for a tool that needs one. This creates an independent copy; it does not link or verify either entry.';
-    const usage=get('byokUsageDesc').closest('.settings-row');usage.querySelector('.settings-row-label').textContent='Provider usage (last 30 days)';advanced.append(usage);
+    const usage=get('byokUsageDesc').closest('.settings-row');usage.querySelector('.settings-row-label').textContent='Provider usage (last 30 days)';expanded.append(usage);
     const smartRepo=get('smartRepoTokenBtn')?.closest('.settings-row');
     const smartRepoNotes=smartRepo?.querySelectorAll('.settings-row-desc');
     if(smartRepoNotes?.[1])smartRepoNotes[1].textContent='Jev receives your scrubbed prompt, repo descriptions and recent session titles. Your token stays in local secure storage.';
