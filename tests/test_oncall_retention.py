@@ -55,3 +55,43 @@ def test_retention_batches_and_rotates_past_protected_deliveries(tmp_path):
     assert max(results) <= 100 and sum(results) == 150
     assert len(store.deliveries_since(0)) == 150
     store.close()
+
+
+def test_engine_tick_budget_on_thirteen_month_store(tmp_path):
+    from ccc_server.oncall.engine import Engine
+    class Queue:
+        calls = 0
+        def blocked(self, queue):
+            self.calls += 1
+            return []
+        def ls(self, *args, **kwargs):
+            self.calls += 1
+            return []
+    queue = Queue()
+    eng = Engine(tmp_path, wt=queue, clock=lambda: NOW, flag_on=lambda: True)
+    cfg = eng.config()
+    cfg.update(enabled=True, queue='DEMO')
+    eng.save_config(cfg)
+    with eng.store._db:
+        eng.store._db.executemany("INSERT INTO alerts(key,kind,token,state,created_at,closed_at) "
+                                  "VALUES(?, 'fixed', '', 'answered', ?, ?)",
+                                  [(str(n), NOW-n*340, NOW-n*340) for n in range(100000)])
+    with eng.store._db:
+        history = [(str(n), NOW-n*3300) for n in range(10000)]
+        eng.store._db.executemany("INSERT INTO reports(source,fingerprint,state,created_at,updated_at) "
+                                  "VALUES('history', ?, 'closed', ?, ?)", [(key, at, at) for key, at in history])
+        eng.store._db.executemany("INSERT INTO inbound(channel,external_id,received_at,handled) "
+                                  "VALUES('history', ?, ?, 'handled')", history)
+        eng.store._db.executemany("INSERT INTO customer_messages(kind,channel,address,text,state,created_at) "
+                                  "VALUES('tell', 'history', '', '', 'sent', ?)", [(at,) for _, at in history])
+        eng.store._db.executemany("INSERT INTO deliveries(channel,ok,sent_at) VALUES('history',1,?)",
+                                  [(at,) for _, at in history])
+        eng.store._db.executemany("INSERT INTO log(at,kind,detail) VALUES(?, 'history', '')",
+                                  [(at,) for _, at in history])
+    steps = []
+    eng.store._db.set_progress_handler(lambda: steps.append(1) or 0, 100)
+    eng.tick()
+    assert len(steps) < 300, 'Tick scanned historical rows instead of bounded batches'
+    assert queue.calls <= 2
+    eng.store._db.set_progress_handler(None, 0)
+    eng.store.close()

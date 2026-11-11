@@ -1,0 +1,1 @@
+- On-call bounds log cleanup per tick and protects recent summary records when clocks move.

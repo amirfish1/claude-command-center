@@ -742,7 +742,8 @@ class Store:
     def log(self, kind, detail, now=None):
         self._run("INSERT INTO log(at,kind,detail) VALUES(?,?,?)",
                   (time.time() if now is None else now, kind, str(detail)[:1000]))
-        self._run("DELETE FROM log WHERE id <= (SELECT MAX(id) FROM log) - ?", (LOG_KEEP,))
+        self._run("DELETE FROM log WHERE id IN (SELECT id FROM log "
+                  "WHERE id <= (SELECT MAX(id) FROM log) - ? ORDER BY id LIMIT 100)", (LOG_KEEP,))
 
     def recent_log(self, limit=50):
         return self._all("SELECT at,kind,detail FROM log ORDER BY id DESC LIMIT ?", (int(limit),))

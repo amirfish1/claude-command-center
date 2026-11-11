@@ -40,6 +40,13 @@ def prune(store, now, batch=BATCH):
             rows = store._all(sql, (before, 0, 0, batch))
         removed[table] = 0
         for row in rows:
+            # Clock jumps must not delete a row used by a recent weekly window.
+            if table in ('alerts', 'reports') and row['created_at'] >= before:
+                continue
+            if table == 'alerts' and (row.get('owner_action_at') or 0) >= before:
+                continue
+            if table == 'customer_messages' and (row['sent_at'] or 0) >= before:
+                continue
             if table == 'deliveries' and row['alert_id']:
                 alert = store.alert(row['alert_id'])
                 if alert and alert['state'] == 'open':
