@@ -2199,7 +2199,7 @@ def _codex_app_server_approval_request_summary(request_id, method, params, now):
     if not isinstance(params, dict):
         params = {}
     raw_request_id = request_id
-    request_id = str(request_id or "").strip()
+    request_id = str(request_id if request_id is not None else "").strip()
     approval_id = params.get("approvalId") or params.get("approval_id") or ""
     item_id = (
         params.get("itemId")
@@ -2319,6 +2319,14 @@ def _codex_app_server_record_server_request(request_id, method, params):
 
     summary = _codex_app_server_approval_request_summary(request_id, method, params, now)
     if summary:
+        transport = _core._CODEX_APP_SERVER_TRANSPORT
+        if transport is not None:
+            generation = getattr(transport, "_ccc_approval_generation", None)
+            if not generation:
+                generation = uuid.uuid4().hex
+                transport._ccc_approval_generation = generation
+            summary["approval_generation"] = generation
+            summary["approval_nonce"] = uuid.uuid4().hex
         active = state.setdefault("active_items", {})
         if not isinstance(active, dict):
             active = {}
@@ -2851,11 +2859,13 @@ def _codex_user_message_item_text(item):
     return _item_text(item)
 
 
-def _codex_app_server_handle_message(payload):
+def _codex_app_server_handle_message(payload, source_transport=None):
     if not isinstance(payload, dict):
         return
     global _CODEX_APP_SERVER_LAST_MSG_AT
     with _core._CODEX_APP_SERVER_LOCK:
+        if source_transport is not None and source_transport is not _core._CODEX_APP_SERVER_TRANSPORT:
+            return
         _CODEX_APP_SERVER_LAST_MSG_AT = time.time()
         method = payload.get("method")
         if "id" in payload and method:
@@ -3189,7 +3199,7 @@ def _codex_app_server_reader(transport):
                 try:
                     if codex_client_observe(payload, transport):
                         continue
-                    _core._codex_app_server_handle_message(payload)
+                    _core._codex_app_server_handle_message(payload, source_transport=transport)
                 except Exception as e:
                     # Traced, then re-raised: killing the reader on one bad
                     # message is the PRE-EXISTING behavior -- preserve it, but
@@ -3209,7 +3219,7 @@ def _codex_app_server_reader(transport):
                 try:
                     if codex_client_observe(payload, transport):
                         continue
-                    _core._codex_app_server_handle_message(payload)
+                    _core._codex_app_server_handle_message(payload, source_transport=transport)
                 except Exception as e:
                     _core._app_server_trace("reader-msg-error", error=repr(e))
                     raise
@@ -6639,12 +6649,13 @@ def _codex_app_server_approval_result_payload(method, decision, pending):
     return None, f"unsupported approval method: {method}"
 
 
-def _codex_app_server_resolve_approval(session_id, decision, expected_request_id=None):
+def _codex_app_server_resolve_approval(session_id, decision, expected_request_id=None, expected_nonce=None):
     routed = _core._control_plane_engine_call(
         "codex", "approval", {
             "session_id": session_id,
             "decision": decision,
             "expected_request_id": expected_request_id,
+            "expected_nonce": expected_nonce,
         },
     )
     if routed is not None:
@@ -6670,6 +6681,9 @@ def _codex_app_server_resolve_approval(session_id, decision, expected_request_id
                 or str(request_id) != str(expected_request_id)):
             return {"ok": False, "via": "codex-approval",
                     "code": "codex_approval_changed",
+                    "error": "That permission prompt is no longer pending."}
+        if expected_nonce is not None and (not expected_nonce or pending.get("approval_nonce") != expected_nonce):
+            return {"ok": False, "via": "codex-approval", "code": "codex_approval_changed",
                     "error": "That permission prompt is no longer pending."}
         if request_id is None or (isinstance(request_id, str) and not request_id.strip()):
             return {
@@ -6697,19 +6711,23 @@ def _codex_app_server_resolve_approval(session_id, decision, expected_request_id
         }
 
     response = {"jsonrpc": "2.0", "id": request_id, "result": result}
-    try:
-        transport.send_json(response)
-        from ccc_server.codex_requests import CODEX_REQUESTS
-        CODEX_REQUESTS.resolve(request_id, sid, CODEX_REQUESTS.generation)
-    except (BrokenPipeError, OSError) as e:
-        return {
-            "ok": False,
-            "via": "codex-approval",
-            "code": "codex_approval_send_failed",
-            "error": str(e),
-        }
-
     with _core._CODEX_APP_SERVER_LOCK:
+        current_state = _core._CODEX_APP_SERVER_THREAD_STATE.get(sid) or {}
+        current = _codex_app_server_pending_approval_item(current_state)
+        if expected_nonce is not None and (not current or
+                current.get("approval_nonce") != expected_nonce or
+                transport is not _core._CODEX_APP_SERVER_TRANSPORT or
+                current.get("approval_generation") != getattr(transport, "_ccc_approval_generation", None)):
+            return {"ok": False, "via": "codex-approval", "code": "codex_approval_changed",
+                    "error": "That permission prompt is no longer pending."}
+        try:
+            transport.send_json(response)
+            from ccc_server.codex_requests import CODEX_REQUESTS
+            CODEX_REQUESTS.resolve(request_id, sid, CODEX_REQUESTS.generation)
+        except (BrokenPipeError, OSError) as e:
+            return {"ok": False, "via": "codex-approval",
+                    "code": "codex_approval_send_failed", "error": str(e)}
+
         state = _core._CODEX_APP_SERVER_THREAD_STATE.get(sid) if sid else None
         if isinstance(state, dict):
             current = state.get("pending_approval_request")

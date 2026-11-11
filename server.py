@@ -367,6 +367,7 @@ class _OncallDeps:
             state = _codex_thread_state_resolved(sid)
             pending = _codex_app_server_pending_approval_item(state) or {}
             identity = pending.get("request_id")
+            nonce = pending.get("approval_nonce")
             detail = pending.get("command") or pending.get("approval_message")
             body = (str(pending.get("tool") or "Tool") + ": " + str(detail)) if detail else ""
         elif engine == "claude":
@@ -375,25 +376,26 @@ class _OncallDeps:
                 return None
             from ccc_server import approval_hook
             identity = pending.get("sha256")
-            if not approval_hook.waiting(sid, identity):
+            nonce = pending.get("nonce")
+            if not nonce or not approval_hook.waiting(sid, identity, nonce=nonce):
                 return None
             body = pending.get("message")
         else:
             return None
-        if not identity or not body:
+        if identity is None or not str(identity).strip() or not nonce or not body:
             return None
-        return {"kind": "permission", "stamp": str(identity),
+        return {"kind": "permission", "stamp": str(identity) + ":" + str(nonce),
                 "body": " ".join(str(body).split())[:500],
-                "meta": {"engine": engine, "prompt": str(identity)}}
+                "meta": {"engine": engine, "prompt": str(identity), "nonce": str(nonce)}}
 
     def approve(self, sid, decision, meta):
         current = self.permission(sid)
         if not current or current["meta"] != meta:
             return False, "That permission prompt is no longer pending."
         action = "accept" if decision == "allow" else "decline"
-        result = (_codex_app_server_resolve_approval(sid, action, expected_request_id=meta["prompt"])
+        result = (_codex_app_server_resolve_approval(sid, action, expected_request_id=meta["prompt"], expected_nonce=meta["nonce"])
                   if meta["engine"] == "codex" else
-                  respond_claude_permission(sid, action, expected_hook_sha=meta["prompt"]))
+                  respond_claude_permission(sid, action, expected_hook_sha=meta["prompt"], expected_hook_nonce=meta["nonce"]))
         return bool(result.get("ok")), result.get("error") or ""
 
 

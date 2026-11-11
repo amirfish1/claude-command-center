@@ -12,13 +12,13 @@ def test_approval_adapter_routes_and_refuses_stale(monkeypatch, engine, decision
     calls = []
     monkeypatch.setattr(server, '_detect_session_engine', lambda sid: engine)
     monkeypatch.setattr(server, '_read_notification_state', lambda sid: {
-        'started_at': 'request-1', 'message': 'Bash: echo hello', 'sha256': 'request-1'})
+        'started_at': 'request-1', 'message': 'Bash: echo hello', 'sha256': 'request-1', 'nonce': 'abc'})
     monkeypatch.setattr(server, '_notification_is_blocking', lambda row: True)
     from ccc_server import approval_hook
-    monkeypatch.setattr(approval_hook, 'waiting', lambda sid, sha: sha == 'request-1')
+    monkeypatch.setattr(approval_hook, 'waiting', lambda sid, sha, **kw: sha == 'request-1')
     monkeypatch.setattr(server, '_codex_thread_state_resolved', lambda sid: {})
     monkeypatch.setattr(server, '_codex_app_server_pending_approval_item', lambda state: {
-        'request_id': 'request-1', 'command': 'echo hello'})
+        'request_id': 'request-1', 'approval_nonce': 'abc', 'command': 'echo hello'})
     def resolve(sid, action, **kwargs):
         calls.append((sid, action, kwargs))
         return {'ok': True}
@@ -28,7 +28,8 @@ def test_approval_adapter_routes_and_refuses_stale(monkeypatch, engine, decision
     signal = deps.permission('s')
     assert deps.approve('s', decision, signal['meta']) == (True, '')
     key = 'expected_hook_sha' if engine == 'claude' else 'expected_request_id'
-    assert calls == [('s', expected, {key: 'request-1'})]
+    nonce_key = 'expected_hook_nonce' if engine == 'claude' else 'expected_nonce'
+    assert calls == [('s', expected, {key: 'request-1', nonce_key: 'abc'})]
     assert not deps.approve('s', decision, {'engine': engine, 'prompt': 'old'})[0]
     assert len(calls) == 1
 
