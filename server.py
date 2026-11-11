@@ -19735,12 +19735,12 @@ def _rehydrate_archive_cached_rows(rows):
             # session" / usage-limit auto-resume): the origin marker only
             # appears in continuation prompts, never in subagent spawns, so
             # this stays empty for ordinary spawned workers.
-            continued_from = _continued_from_session_id_from_text(
+            continued_from = row.get("continued_from_session_id") or _continued_from_session_id_from_text(
                 row.get("first_message")
             )
             if (
                 not continued_from
-                and sid in spawn_registry_by_sid
+                and (sid in spawn_registry_by_sid or (row.get("engine") == "codex" and spawn_parent_id))
                 and row.get("jsonl_path")
             ):
                 continued_from = _continued_from_session_id_from_transcript(
@@ -27862,6 +27862,8 @@ def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False
     # when the reader scrolls past the top of this one.
     try:
         _cont_fp = _resolve_conversation_path(conv_id)
+        if not _cont_fp or not _cont_fp.is_file():
+            _cont_fp = _resolve_codex_rollout_path(conv_id)
         result["continued_from_session_id"] = (
             _continued_from_session_id_from_transcript(_cont_fp)
             if _cont_fp and _cont_fp.is_file() else ""

@@ -251,6 +251,9 @@ def find_codex_conversations(
             "branch": branch,
             "git_branch": branch,
             "first_message": first_message[:200],
+            # The display preview can end inside an injected preamble, before
+            # the continuation marker. Preserve lineage from the full prompt.
+            "continued_from_session_id": _core._continued_from_session_id_from_text(first_message),
             "display_name": display_name,
             "agent_task_name": agent_task_name,
             "status_rail_title": status_rail_title,
