@@ -79,8 +79,9 @@ def cleanup(home, processes):
         proc.wait(timeout=10)
 
 
-def proof(root, rows):
+def proof(root, rows, capture=False):
     processes = []
+    recorder = None
     container_name = root.name + '-ntfy'
     bins = root / 'bin'
     bins.mkdir()
@@ -101,7 +102,7 @@ def proof(root, rows):
     env = {k: os.environ[k] for k in ('LANG', 'LC_ALL') if k in os.environ}
     env.update(HOME=str(root), TMPDIR=str(root / 'tmp'), PATH=str(bins), CODEX_HOME=str(root / '.codex'),
                XDG_CONFIG_HOME=str(root / 'config'), XDG_DATA_HOME=str(root / 'data'),
-               CCC_STATE_DIR=str(root / 'state'), CCC_EPHEMERAL='1',
+               CCC_STATE_DIR=str(root / 'state'), CCC_ONCALL_STATE_DIR=str(root / 'oncall'), WT_NO_AUTOSTART='1', CCC_EPHEMERAL='1',
                CCC_FF_ONCALL='1', CCC_ONCALL_EPHEMERAL='1', CCC_TELEMETRY_DISABLED='1', CCC_AUTO_UPDATE='0',
                CCC_BG_HELPER='0', CCC_CONV_READER='0', CCC_BOOT_WARM_DELAY_S='86400',
                WATCHTOWER_STORE=str(root / 'queues.json'), WT_NO_SELF_UPDATE='1',
@@ -134,6 +135,24 @@ def proof(root, rows):
         request(base + '/api/oncall/channel', {'channel': {
             'type': 'ntfy', 'server': web, 'topic': topic}})
         request(base + '/api/oncall/config', {'queue': 'PROOF', 'repo': str(project), 'enabled': True})
+        if capture:
+            browser = sorted((Path.home() / '.cache/puppeteer/chrome').glob('*/chrome-linux64/chrome'))
+            if not browser:
+                raise RuntimeError('Puppeteer Chrome not found in the host cache')
+            capture_env = dict(env, PUPPETEER_EXECUTABLE_PATH=str(browser[-1]))
+            recorder = subprocess.Popen([shutil.which('node'), str(REPO / 'scripts/oncall-capture.cjs'), web, topic],
+                                        env=capture_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True, start_new_session=True)
+            def capture_step(step, **values):
+                recorder.stdin.write(json.dumps(dict(step=step, **values)) + '\n')
+                recorder.stdin.flush()
+                result = recorder.stdout.readline()
+                if not result:
+                    raise RuntimeError('Capture process stopped: ' + recorder.stderr.read())
+                result = json.loads(result)
+                if not result.get('ok'):
+                    raise RuntimeError('Capture failed: ' + result.get('error', 'unknown error'))
+            capture_step('open')
         print('Dashboard and ntfy ready; model=' + MODEL + '; effort=medium; grace=120s (unchanged)', flush=True)
         started = time.monotonic()
         spawn = request(base + '/api/sessions/spawn', {
@@ -202,12 +221,17 @@ def proof(root, rows):
             return time.monotonic() >= until
         wait_for(no_repeat, 25, 'deduplication observation')
         rows.append(('plain_question deduplication', 'PASS', '20s, one ntfy message'))
+        if capture:
+            capture_step('session', base=base, sid=sid)
         token = alert.get('token') or str(alert['id'])
         answer = 'proof-answer-blue-accepted'
         reply_at = time.monotonic()
-        with urllib.request.urlopen(urllib.request.Request(web + '/' + topic + '-reply',
-                data=f'{token} {answer}'.encode()), timeout=10) as response:
-            json.load(response)
+        if capture:
+            capture_step('reply', text=f'{token} {answer}')
+        else:
+            with urllib.request.urlopen(urllib.request.Request(web + '/' + topic + '-reply',
+                    data=f'{token} {answer}'.encode()), timeout=10) as response:
+                json.load(response)
         def user_turn():
             for transcript in transcripts:
                 for line in transcript.read_text().splitlines():
@@ -221,7 +245,16 @@ def proof(root, rows):
         wait_for(lambda: not any(a['id'] == alert['id'] for a in
                  request(base + '/api/oncall/status')['waiting']), 30, 'alert did not close')
         rows.append(('reply user turn / close', 'PASS', f'{time.monotonic() - reply_at:.2f}s'))
+        if capture:
+            capture_step('session_reply', text=answer)
+            capture_step('finish')
     finally:
+        if recorder is not None:
+            try:
+                os.killpg(recorder.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            recorder.wait(timeout=10)
         try:
             cleanup(root, processes)
         finally:
@@ -236,6 +269,7 @@ def proof(root, rows):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--with-agent', action='store_true', help='Allow one paid Codex session')
+    parser.add_argument('--capture', action='store_true', help='Capture the real local ntfy web reply')
     args = parser.parse_args()
     if not args.with_agent:
         parser.error('--with-agent is required; this proof uses your Codex model connection')
@@ -251,7 +285,7 @@ def main():
     signal.alarm(600)
     try:
         with tempfile.TemporaryDirectory(prefix='ccc-session-proof-') as tmp:
-            proof(Path(tmp), rows)
+            proof(Path(tmp), rows, capture=args.capture)
     except Exception as exc:
         rows.append(('session proof', 'FAIL', str(exc)))
         code = 1

@@ -91,7 +91,32 @@ def wait_worker(rec, timeout=240):
             pass
 
 
-def start_watcher(root, argv):
+def listener_port(pid):
+    """Find only this isolated process's loopback TCP listener on Linux.
+
+    WatchTower logs the requested port (0), not the assigned port. Matching
+    socket inodes avoids reserving a port or reading another service's state.
+    """
+    sockets = set()
+    for fd in (Path('/proc') / str(pid) / 'fd').iterdir():
+        try:
+            target = fd.readlink().as_posix()
+            if target.startswith('socket:['):
+                sockets.add(target[8:-1])
+        except OSError:
+            pass
+    ports = []
+    for line in (Path('/proc') / str(pid) / 'net/tcp').read_text().splitlines()[1:]:
+        fields = line.split()
+        host, port = fields[1].split(':')
+        if fields[3] == '0A' and host == '0100007F' and fields[9] in sockets:
+            ports.append(int(port, 16))
+    if len(ports) != 1:
+        raise RuntimeError('Expected one private watcher loopback listener')
+    return ports[0]
+
+
+def start_watcher(root, argv, capture=False):
     """Use the foreground service entry point, never the host service manager."""
     log = Path(root) / 'watcher.log'
     with log.open('wb') as stream:
@@ -105,6 +130,8 @@ def start_watcher(root, argv):
             if proc.poll() is not None:
                 raise RuntimeError(log.read_text())
             if 'HTTP server on' in log.read_text():
+                if capture:
+                    proc.proof_url = f'http://127.0.0.1:{listener_port(proc.pid)}'
                 return proc
             threading.Event().wait(.1)
         raise TimeoutError('Isolated WatchTower watcher did not start')
@@ -217,6 +244,18 @@ def child(root, web, smtp, imap, with_agent=False):
         conn.logout()
         return out
 
+    def capture_mail(message, agent):
+        # GreenMail has no webmail UI. Render decoded fields from the fetched
+        # RFC822 source, and retain that source only in the ignored asset pack.
+        parts = message.walk() if message.is_multipart() else [message]
+        body = '\n'.join(part.get_payload(decode=True).decode(part.get_content_charset() or 'utf-8', errors='replace')
+                         for part in parts if part.get_content_type() == 'text/plain')
+        payload = {'subject': str(message['Subject']), 'body': body,
+                   'from': str(message['From']), 'to': str(message['To']),
+                   'source': message.as_string(), 'agent': agent}
+        subprocess.run([os.environ['PROOF_NODE'], str(REPO / 'scripts/oncall-mail-capture.cjs')],
+                       input=json.dumps(payload), text=True, check=True, timeout=90)
+
     def mail(sender, subject, text, reply_to=''):
         import smtplib
         msg = EmailMessage()
@@ -237,13 +276,23 @@ def child(root, web, smtp, imap, with_agent=False):
         os.chdir(project)
         start = time.monotonic()
         if eng.wt.available():
-            watcher = start_watcher(root, eng.wt.argv())
+            watcher = start_watcher(root, eng.wt.argv(), capture=os.environ.get('PROOF_CAPTURE') == '1')
         output = cli('setup', '--set', 'server=' + web, input='\n\n')
         topic = eng.config()["channels"][0]["topic"]
         assert topic.startswith("ccc-oncall-")
         assert output.count("Folder of the code agents should fix") == 1
         assert output.count("Pick a number") == 1
         print(output)
+        if os.environ.get('PROOF_CAPTURE') == '1':
+            if not with_agent:
+                eng.wt._ok('config', '-q', eng.config()['queue'], '--auto-drain', 'off')
+            minor = cli('minor', 'on')
+            decisions = cli('decisions')
+            rendered = output.replace(str(Path(root)), '[temporary directory]')
+            rendered = rendered.replace(web, '[local ntfy server]')
+            capture = {'setup': rendered, 'minor': minor, 'decisions': decisions, 'agent': with_agent}
+            subprocess.run([os.environ['PROOF_NODE'], str(REPO / 'scripts/oncall-cli-capture.cjs')],
+                           input=json.dumps(capture), text=True, check=True, timeout=60)
         print(f'Setup: {time.monotonic() - start:.2f}s; 2 prompts (folder, channel; preview supplied by environment).')
         assert any('This is a test' in e.get('message', '') for e in events()), 'ntfy test missing'
         eng.tick(force=True)  # establish inbound cursors before phone replies
@@ -282,6 +331,9 @@ def child(root, web, smtp, imap, with_agent=False):
             report = next(r for r in eng.store.reports() if r.get('reporter_address') == 'reporter@example.test')
             ref = report['ticket_ref']
             assert ref
+            if os.environ.get('PROOF_CAPTURE') == '1':
+                subprocess.run([os.environ['PROOF_NODE'], str(REPO / 'scripts/oncall-ticket-capture.cjs'),
+                                watcher.proof_url, eng.config()['queue'], ref, 'reported', '--fixture'], check=True, timeout=90)
             eng.wt._ok('block', ref, '--question', 'Keep the fallback?', '--wait-on', 'owner')
             eng.tick(force=True)
             alert = next(a for a in eng.store.alerts(state='open') if a['kind'] == 'decision' and a['ref'] == ref)
@@ -292,12 +344,17 @@ def child(root, web, smtp, imap, with_agent=False):
             # Queue closure is a fixture event, not a claim that an agent fixed code.
             commit = run(os.environ['PROOF_GIT'], '-C', str(REPO), 'rev-parse', 'HEAD')
             queue.close(ref, resolution={'summary': 'Local protocol proof completed.', 'commit': commit})
+            if os.environ.get('PROOF_CAPTURE') == '1':
+                subprocess.run([os.environ['PROOF_NODE'], str(REPO / 'scripts/oncall-ticket-capture.cjs'),
+                                watcher.proof_url, eng.config()['queue'], ref, 'fixed', '--fixture'], check=True, timeout=90)
             eng.tick(force=True)
             fixed = next(a for a in eng.store.alerts(state='open') if a['kind'] == 'fixed' and a['ref'] == ref)
             assert mailbox('reporter') == [], 'Reporter was notified before approval'
             publish(f"{fixed['token']} yes")
             eng.tick(force=True)
             assert any('fixed' in str(m).lower() for m in mailbox('reporter')), 'fixed notice missing'
+            if os.environ.get('PROOF_CAPTURE') == '1':
+                capture_mail(mailbox('reporter')[-1], False)
             results.append(('ticket / decision / fixed mailbox', 'PASS'))
         if not with_agent:
             results.append(('agent execution', 'BOUNDARY: no agent session started'))
@@ -327,6 +384,9 @@ def child(root, web, smtp, imap, with_agent=False):
             eng.tick(force=True)
             report = next(r for r in eng.store.reports() if r.get('title') == 'Addition bug')
             agent_ref = report['ticket_ref']
+            if os.environ.get('PROOF_CAPTURE') == '1':
+                subprocess.run([os.environ['PROOF_NODE'], str(REPO / 'scripts/oncall-ticket-capture.cjs'),
+                                watcher.proof_url, queue_name, agent_ref, 'reported'], check=True, timeout=60)
             rec = None
             print(f'Worker model: {model}; effort: medium; transport: {transport}', flush=True)
             try:
@@ -348,6 +408,9 @@ def child(root, web, smtp, imap, with_agent=False):
                 run(sys.executable, '-B', '-m', 'unittest', '-v', cwd=project)
                 close_commits = [e.get('commit') for e in item.get('history', []) if e.get('event') == 'close']
                 assert commit in close_commits or (item.get('resolution') or {}).get('commit') == commit
+                if os.environ.get('PROOF_CAPTURE') == '1':
+                    subprocess.run([os.environ['PROOF_NODE'], str(REPO / 'scripts/oncall-ticket-capture.cjs'),
+                                    watcher.proof_url, queue_name, agent_ref, 'fixed'], check=True, timeout=60)
                 eng.tick(force=True)
                 fixed = next(a for a in eng.store.alerts(state='open')
                              if a['kind'] == 'fixed' and a['ref'] == agent_ref)
@@ -356,6 +419,8 @@ def child(root, web, smtp, imap, with_agent=False):
                 eng.tick(force=True)
                 received = mailbox('reporter')
                 assert len(received) == before_mail + 1 and 'fixed' in str(received[-1]).lower()
+                if os.environ.get('PROOF_CAPTURE') == '1':
+                    capture_mail(received[-1], True)
                 print(f'Report to fixed notice: {time.monotonic() - started:.2f}s')
                 print(f'Observed fix commit: {commit}')
                 results.append(('agent execution / approved fixed notice', 'PASS (explicit drain once)' if explicit else 'PASS (automatic WatchTower dispatch)'))
@@ -383,6 +448,7 @@ def main():
                         help='Run one paid Codex worker using an isolated copy of the login')
     parser.add_argument('--explicit-start', action='store_true',
                         help='With --with-agent, retain the explicit exec drain-once comparison')
+    parser.add_argument('--capture', action='store_true', help='Capture real local UI and labelled CLI/mail output; no film is generated')
     parser.add_argument('--model', default=AGENT_MODEL,
                         help=f'Codex model for --with-agent (default {AGENT_MODEL})')
     args = parser.parse_args()
@@ -391,6 +457,10 @@ def main():
         print('BOUNDARY: automatic agent start needs Linux /proc for cleanup. '
               'Running the protocol checks only; use --explicit-start for the agent stage.')
         args.with_agent = False
+    def interrupted(signum, frame):
+        raise RuntimeError(f'Interrupted by signal {signum}')
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
     containers = []
     login_before = None
     with tempfile.TemporaryDirectory(prefix='ccc-oncall-proof-') as tmp:
@@ -400,6 +470,9 @@ def main():
         bins = root / 'bin'
         bins.mkdir()
         names = ['python3', 'wt']
+        if args.capture and not args.with_agent:
+            # require-puppeteer.js locates the shared dependency with git.
+            names.append('git')
         if args.with_agent:
             names += ['codex', 'git', 'bash', 'sh', 'env', 'cat', 'ls', 'rg', 'sed']
         for name in names:
@@ -470,6 +543,15 @@ def main():
                        GIT_CONFIG_GLOBAL=os.devnull,
                        SSL_CERT_FILE=str(trust), PROOF_GIT=shutil.which('git'),
                        PROOF_MODEL=args.model, PROOF_EXPLICIT_START='1' if args.explicit_start else '0')
+            if args.capture:
+                chrome = sorted((Path.home() / '.cache/puppeteer/chrome').glob('*/chrome-linux64/chrome'))
+                node = shutil.which('node')
+                if not chrome or not node:
+                    raise RuntimeError('Capture requires Node and cached Puppeteer Chrome')
+                env.update(PROOF_CAPTURE='1', PROOF_NODE=node,
+                           PROOF_WITH_AGENT='1' if args.with_agent else '0',
+                           WATCHTOWER_MACHINE='proof',
+                           PUPPETEER_EXECUTABLE_PATH=str(chrome[-1]))
             proc = subprocess.run([sys.executable, __file__, '--child', tmp,
                                    f'http://127.0.0.1:{http}', str(smtp), str(imap), *(['--with-agent'] if args.with_agent else [])], env=env, timeout=600)
             copied = root / '.codex' / 'auth.json'
