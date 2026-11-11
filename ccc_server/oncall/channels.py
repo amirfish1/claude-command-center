@@ -1383,7 +1383,7 @@ class CommandChannel(Channel):
         if proc.returncode == 0:
             return Receipt(ok=True, external_id="")
         detail = str(proc.stderr or "").strip().splitlines()
-        return Receipt(ok=False, error=f"Command exited {proc.returncode}."
+        return Receipt(ok=False, uncertain=True, error=f"Command exited {proc.returncode}."
                        + (f" {detail[-1]}" if detail else ""))
 
 
