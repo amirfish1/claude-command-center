@@ -985,8 +985,11 @@ class NtfyChannel(Channel):
         return True, "Connected."
 
     def _send(self, msg):
-        payload = {"topic": self.topic, "message": _clip_bytes(msg.text, NTFY_MESSAGE_BYTES)}
         subject = " ".join(str(msg.subject or "").split())
+        text = str(msg.text or "")
+        if subject and text.startswith(subject):
+            text = text[len(subject):].lstrip("\n")  # the title already says it
+        payload = {"topic": self.topic, "message": _clip_bytes(text, NTFY_MESSAGE_BYTES)}
         if subject:
             payload["title"] = _clip_bytes(subject, 250)
         thread = str(msg.thread or "").strip()

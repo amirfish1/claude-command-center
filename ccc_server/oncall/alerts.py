@@ -42,14 +42,16 @@ def render(alert):
             lines.append(f"Needs you because: {meta['why']}")
         lines += ["", "Reply with your answer."]
     elif kind in ("question", "plain_question"):
-        head = f"An agent is waiting on you (#{n})"
-        lines = [head, title, body, "", "Reply with your answer."]
+        head = f"Question from {title or 'an agent'} (#{n})"
         if kind == "plain_question":
             choices = tuple((c[0], c[1]) for c in meta.get("choices") or ()
                             if isinstance(c, (list, tuple)) and len(c) == 2)[:3]
+        asks = choices or body.rstrip().endswith("?")
+        lines = [head, body, "", "Reply with your answer." if asks
+                 else "Reply here when done, or with a question."]
     elif kind == "permission":
-        head = f"An agent needs permission (#{n})"
-        lines = [head, title, body, "", "Reply allow or deny. If unavailable, answer in the session."]
+        head = f"Permission needed: {title or 'an agent'} (#{n})"
+        lines = [head, body, "", "Reply allow or deny. If unavailable, answer in the session."]
         choices = ("allow", "deny")
     elif kind == "stopped":
         head = f"An agent stopped (#{n})"
@@ -80,9 +82,13 @@ def render(alert):
         label = "Fixed" if meta.get("outcome", "fixed") == "fixed" else "Closed without a code change"
         head = f"{label}: {ref} (#{n})"
         lines = [head, title]
-        if body:
-            lines.append(_clip(body, 900))
-        if meta.get("notify"):
+        # Only the outcome paragraph: the per-file detail stays on the ticket.
+        first = body.strip().split("\n\n")[0].strip()
+        if first:
+            lines.append(_clip(first, 300))
+        if not meta.get("notify"):
+            lines += ["", "No action needed."]
+        else:
             who = meta.get("name") or meta.get("address") or "the reporter"
             lines += ["", f"Reply yes to tell {who} it is fixed, or no to skip."]
             choices = ("yes", "no")

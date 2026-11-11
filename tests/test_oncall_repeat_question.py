@@ -59,14 +59,15 @@ def _label_alert(tmp_path, label):
 
 
 def test_alert_label_named_unnamed_and_layout(tmp_path):
+    q = 'Should I keep the old client?'
     lines = _label_alert(tmp_path / 'a', lambda sid: ('Fix login', 'webapp'))
-    assert lines[1:3] == ['Fix login · webapp', 'Should I keep the old client?']
+    assert lines[:2] == ['Question from Fix login · webapp (#1)', q]
     lines = _label_alert(tmp_path / 'b', lambda sid: ('', ''))
-    assert lines[1] == 'Agent 9977c333' and lines[2] == 'Should I keep the old client?'
+    assert lines[:2] == ['Question from Agent 9977c333 (#1)', q]
     lines = _label_alert(tmp_path / 'c', None)
-    assert lines[1] == 'Agent 9977c333'
+    assert lines[0] == 'Question from Agent 9977c333 (#1)'
     lines = _label_alert(tmp_path / 'd', lambda sid: ('webapp', 'webapp'))
-    assert lines[1] == 'webapp'
+    assert lines[0] == 'Question from webapp (#1)'
 
 
 import pytest
@@ -149,3 +150,35 @@ def test_cleared_without_answer_then_repeated_gives_none(tmp_path):
     assert eng.store.alerts()[0]['state'] == 'cleared'
     period('u2')
     assert len(eng.store.alerts()) == 1
+
+
+def _ntfy_card(alert):
+    from ccc_server.oncall import channels
+    from ccc_server.oncall.store import Outbound
+    sent = []
+    ch = channels.build({'id': 'p', 'type': 'ntfy', 'topic': 'alerts', 'server': 'http://x'},
+                        kv=None, secret=lambda name: '', clock=lambda: 1000.0)
+    ch.http = lambda method, url, headers=None, data=None, timeout=0: (
+        sent.append(json.loads(data)) or (200, b'{"id":"1"}'))
+    subject, text, choices = alerts.render(alert)
+    ch.send(Outbound(text=text, subject=subject, thread='TOK', choices=choices))
+    return sent[0]
+
+
+def test_ntfy_cards_for_each_wording_case():
+    base = {'id': 1, 'kind': 'plain_question', 'title': 'Fix login · webapp', 'meta': {}}
+    q = _ntfy_card(dict(base, body='Should I keep the old client?'))
+    assert q['title'] == 'Question from Fix login · webapp (#1)'
+    assert q['message'] == 'Should I keep the old client?\n\nReply with your answer.'
+    task = _ntfy_card(dict(base, body='Install the ntfy app and subscribe.'))
+    assert task['message'].endswith('Reply here when done, or with a question.')
+    perm = _ntfy_card(dict(base, kind='permission', body='Bash: rm x'))
+    assert perm['title'] == 'Permission needed: Fix login · webapp (#1)'
+    assert perm['message'].startswith('Bash: rm x')
+    summary = 'Fixed the crash.\n\n- a.py: one\n- b.py: two'
+    fixed = _ntfy_card({'id': 2, 'kind': 'fixed', 'ref': 'SHOP-1', 'title': 'Crash on save',
+                        'body': summary, 'meta': {}})
+    assert fixed['title'] == 'Fixed: SHOP-1 (#2)'
+    assert fixed['message'] == 'Crash on save\nFixed the crash.\n\nNo action needed.'
+    for card in (q, task, perm, fixed):
+        assert card['title'] not in card['message']

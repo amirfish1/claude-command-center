@@ -486,7 +486,7 @@ def test_session_question_and_stop_reach_the_owner_and_replies_are_injected(rig)
     rig.eng.raise_session("question", "sess-1", "Refactor billing", "Use the new client or keep the old one?", stamp="t1")
     rig.eng.raise_session("question", "sess-1", "Refactor billing", "Use the new client or keep the old one?", stamp="t1")
     rig.tick()
-    assert [m.text.splitlines()[0] for m in rig.chan("tg").sent] == ["An agent is waiting on you (#1)"]
+    assert [m.text.splitlines()[0] for m in rig.chan("tg").sent] == ["Question from Refactor billing (#1)"]
     rig.msg("tg", "new client", "4242")
     rig.tick()
     assert rig.deps.injected == [("sess-1", "new client")]
