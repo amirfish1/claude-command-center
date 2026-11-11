@@ -380,6 +380,7 @@ CREATE TABLE IF NOT EXISTS customer_messages (
     external_id TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS customer_messages_ref_state ON customer_messages(ref,state);
 CREATE INDEX IF NOT EXISTS customer_messages_state ON customer_messages(state, id);
 CREATE INDEX IF NOT EXISTS reports_created ON reports(created_at);
 CREATE INDEX IF NOT EXISTS reports_state ON reports(state);
@@ -416,6 +417,8 @@ class Store:
                 self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action_at REAL")
                 self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action TEXT NOT NULL DEFAULT ''")
             self._db.execute("CREATE INDEX IF NOT EXISTS alerts_owner_action ON alerts(owner_action_at)")
+            from .retention import initialize
+            initialize(self._db)
         try:
             os.chmod(self.path, 0o600)
         except OSError:

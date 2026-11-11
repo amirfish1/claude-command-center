@@ -217,6 +217,9 @@ class Engine:
                 daily(self, now)
             except (ValueError, wtmod.WTError) as exc:
                 self._note("summary", str(exc))
+            if self._due("retention", 60, now):
+                from .retention import prune
+                prune(store, now)
             out["sent"] = alerts.deliver(cfg, store, chans, now=now)
             self.last_tick = out
             return out
