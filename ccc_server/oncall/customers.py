@@ -32,6 +32,11 @@ def _quoted(text):
     return str(text or "").strip().replace("-----", "- - -")
 
 
+def _label(text):
+    """Untrusted metadata stays on one line and cannot impersonate a marker."""
+    return " ".join(_quoted(text).split())[:300]
+
+
 def intake_enabled(entry):
     """Whether messages from other people on this channel become reports."""
     return bool(entry.get("intake", entry.get("type") in INTAKE_TYPES))
@@ -46,7 +51,7 @@ def report_ticket_text(report):
     return "\n".join([
         "Reported by a customer through CCC On-call. " + _GUARD,
         "",
-        f"Reporter: {label} via {report.get('reporter_channel') or 'a message'}",
+        f"Reporter: {_label(label)} via {_label(report.get('reporter_channel') or 'a message')}",
         "To ask the reporter a question:  ccc oncall ask <this ticket's ref> \"your question\"",
         "To tell the reporter something:  ccc oncall tell <this ticket's ref> \"your message\"",
         "The owner sees each message before it is sent. After asking, park the ticket:",
@@ -61,7 +66,7 @@ def report_ticket_text(report):
 
 def finding_ticket_text(source_cfg, finding):
     sender = getattr(finding, "sender", "")
-    origin = (f"Reported by {sender} ({source_cfg.get('type')}: {source_cfg.get('id')}) through "
+    origin = (f"Reported by {_label(sender)} ({source_cfg.get('type')}: {source_cfg.get('id')}) through "
               "CCC On-call. A person wrote the text below. " if sender else
               f"Found by monitoring ({source_cfg.get('type')}: {source_cfg.get('id')}) through "
               "CCC On-call. The evidence below was produced by a tool. ")
@@ -84,14 +89,14 @@ def finding_ticket_text(source_cfg, finding):
                   "asking, park the ticket:",
                   "  wt block <ref> --kind awaiting-client --wait-on external --question \"what you asked\""]
     if finding.url:
-        lines += ["", f"Link: {finding.url}"]
+        lines += ["", f"Link: {_label(finding.url)}"]
     return "\n".join(lines)
 
 
 def reply_text(report, text):
     who = report.get("reporter_name") or report.get("reporter_address") or "The reporter"
     return "\n".join([
-        f"{who} replied through CCC On-call. " + _GUARD,
+        f"{_label(who)} replied through CCC On-call. " + _GUARD,
         "",
         "----- reply -----",
         _quoted(text),
