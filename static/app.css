@@ -2359,6 +2359,17 @@
     --kw-danger: #f85149; --kw-danger-soft: rgba(248,81,73,0.14);
     --kw-warning: #d29922;
   }
+  /* Light conversation backgrounds: the dark palette above leaves pale text
+     on a pale page. Follow the colours derived from the chosen background. */
+  .conv-pane.is-webui-session.conv-bg-light {
+    --kw-bg: var(--conv-bg); --kw-surface: var(--conv-surface); --kw-raised: var(--conv-surface-2); --kw-sunken: var(--conv-surface);
+    --kw-line: var(--conv-border); --kw-text: var(--conv-text); --kw-muted: var(--conv-text-muted); --kw-faint: var(--conv-text-muted);
+    --kw-accent: var(--conv-accent); --kw-accent-hover: var(--conv-accent);
+    --kw-accent-soft: rgba(36,90,154,0.10); --kw-accent-bd: rgba(36,90,154,0.28);
+    --kw-success: #1a7f37; --kw-success-soft: rgba(26,127,55,0.12);
+    --kw-danger: #cf222e; --kw-danger-soft: rgba(207,34,46,0.10);
+    --kw-warning: #9a6700;
+  }
 
   /* Let rendered turns use the complete reader column. The pane itself
      supplies the horizontal padding, so a second centered 760px column

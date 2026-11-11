@@ -1,0 +1,1 @@
+- Codex and Kimi sessions are readable in the light theme: agent text, tool rows and borders now follow the light conversation background instead of a fixed dark palette that left pale text on a pale page.
