@@ -760,7 +760,10 @@ def test_build_accepts_form_strings_and_every_type():
         {"id": "c", "type": "http", "url": "http://example.com"},
         {"id": "d", "type": "command", "cmd": "true"},
         {"id": "e", "type": "github", "repo": "example-org/storefront"},
-        {"id": "f", "type": "ci", "repo": "example-org/storefront"})} == set(store.SOURCE_TYPES)
+        {"id": "f", "type": "ci", "repo": "example-org/storefront"},
+        {"id": "g", "type": "logs", "path": "/tmp/example.log"},
+        {"id": "h", "type": "docker", "container": "sample-app"},
+        {"id": "i", "type": "alertmanager", "url": "http://localhost:9093"})} == set(store.SOURCE_TYPES)
 
 
 @pytest.mark.parametrize("kind", store.SOURCE_TYPES)
@@ -783,11 +786,15 @@ def test_required_fields_describe_a_form_that_builds(kind):
         sources.build(cfg)  # nothing filled in yet
     samples = {"org": "example-org", "project": "storefront", "token_vault": "monitor-token",
                "project_id": "12345", "url": "https://example.com/health", "cmd": "true",
-               "repo": "example-org/storefront"}
+               "repo": "example-org/storefront", "container": "sample-app"}
     cfg.update({f["name"]: samples[f["name"]] for f in required})
+    if kind == "logs":
+        # The form offers three alternative targets; fill exactly one.
+        cfg["path"] = "/tmp/example.log"
     assert sources.build(cfg).type == kind
     # Every optional placeholder is itself an accepted value.
-    cfg.update({f["name"]: f["placeholder"] for f in fields if f["optional"]})
+    cfg.update({f["name"]: f["placeholder"] for f in fields
+                if f["optional"] and not (kind == "logs" and f["name"] == "path")})
     assert sources.build(cfg).type == kind
 
 

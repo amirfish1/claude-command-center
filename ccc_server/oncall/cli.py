@@ -27,6 +27,9 @@ CHANNEL_NAMES = {
     "whatsapp": "WhatsApp (your Twilio sender)", "command": "Your own command",
 }
 SOURCE_NAMES = {
+    "alertmanager": "Prometheus Alertmanager",
+    "docker": "Docker container health",
+    "logs": "Application logs",
     "ci": "Failed CI runs",
     "github": "GitHub issues", "sentry": "Sentry", "posthog": "PostHog",
     "http": "A URL that must stay up",
@@ -187,6 +190,8 @@ def build_parser():
     ssub = p.add_subparsers(dest="what", required=True)
     s = ssub.add_parser("add")
     s.add_argument("type", choices=sorted(SOURCE_NAMES))
+    for option in ("path", "unit", "container"):
+        s.add_argument("--" + option, help="Log file, journal unit or Docker container")
     _entry_flags(s)
     ssub.add_parser("list")
     s = ssub.add_parser("rm")
@@ -240,6 +245,14 @@ def _collect(kind, etype, fields, args, io):
             raise Stop(f"{etype} has no setting called {key}. It has: "
                        + ", ".join(sorted(n for n in names if not n.endswith("_vault"))) + ".")
         entry[key] = value
+    for key in ("path", "unit", "container"):
+        value = getattr(args, key, None)
+        if value is not None:
+            if key not in names:
+                raise Stop(f"{etype} does not accept --{key}.")
+            if key in entry and entry[key] != value:
+                raise Stop(f"Give {key} once, using --{key} or --set {key}=...")
+            entry[key] = value
     for key, value in _pairs(args.vault, "--vault").items():
         field = key if key.endswith("_vault") else key + "_vault"
         if field not in names:
@@ -286,6 +299,8 @@ def _collect(kind, etype, fields, args, io):
         value = io.prompt(field["label"] + hint, default)
         if value:
             entry[name] = value
+    if kind == "source" and etype == "logs" and entry.get("path"):
+        entry["path"] = os.path.abspath(os.path.expanduser(entry["path"]))
     return entry, typed
 
 

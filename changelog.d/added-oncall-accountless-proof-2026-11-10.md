@@ -1,0 +1,1 @@
+- Add local logs, Docker health, and Prometheus with Alertmanager repair proofs, plus Sentry burst and clock-skew checks.
