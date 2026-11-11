@@ -674,7 +674,7 @@ install_watchtower() {
   CCC_WATCHTOWER_LOG_PREFIX="install: " \
   CCC_WATCHTOWER_FORCE=1 \
   CCC_VERSION="$(grep -m1 '^__version__ = ' "$INSTALL_DIR/server.py" 2>/dev/null | sed -E 's/^__version__ = "(.*)"$/\1/')" \
-    bash "$script" || true
+    bash "$script"
 }
 
 # ---------------------------------------------------------------------------

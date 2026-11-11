@@ -985,6 +985,10 @@ ensure_watchtower() {
     bash "$script" || true
 }
 ensure_watchtower
+if ! "$PYTHON" -c 'import watchtower.queue' >/dev/null 2>&1; then
+  echo "CCC needs WatchTower to start; check your connection and retry with CCC_WATCHTOWER_FORCE=1 and CCC_SKIP_WATCHTOWER=0." >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # ccc CLI: symlink the repo-root client onto PATH. Shared with
