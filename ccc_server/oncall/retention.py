@@ -66,6 +66,9 @@ def prune(store, now, batch=BATCH):
                               "('pending','uncertain','failed') LIMIT 1", (row['ticket_ref'],)):
                     continue
             store._run(f'DELETE FROM {table} WHERE id=?', (row['id'],))
+            if table == 'deliveries' and row['external_id']:
+                store._run('DELETE FROM kv WHERE key=?',
+                           (f"whatsapp-template:{row['channel']}:{row['external_id']}",))
             if table == 'alerts':
                 for key in (f"try:{row['id']}", f"reply-action:{row['id']}"):
                     store._run('DELETE FROM kv WHERE key=?', (key,))

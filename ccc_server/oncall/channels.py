@@ -1298,6 +1298,15 @@ class TwilioChannel(Channel):
             self._set("pending", pending[-10:])
         return receipt
 
+    def _template_problem(self, item, error):
+        self._note = error
+        if self.kv is not None and hasattr(self.kv, "alert_upsert"):
+            self.kv.alert_upsert(
+                f"whatsapp-template-problem:{self.id}:{item['sid']}", kind="delivery_problem",
+                title="WhatsApp delivery needs review", needs_reply=False,
+                body=f"Fallback for message {item['sid']}: {error}. No automatic retry."
+                     f"\n\nOriginal message:\n{item['text']}", now=self.clock())
+
     def _follow_up(self):
         """Retry accepted WhatsApp messages that later failed the 24 hour rule."""
         pending = list(self._get("pending", []) or [])
@@ -1312,9 +1321,31 @@ class TwilioChannel(Channel):
                 status, data = self._call("GET", f"/Messages/{sid}.json")
                 if _int(data.get("error_code")) == _TWILIO_WINDOW_CODE:
                     if self.template_sid:
-                        receipt = self._template(item["to"], item["text"])
-                        if not receipt.ok:
-                            self._note = receipt.error
+                        key = f"whatsapp-template:{self.id}:{item['sid']}"
+                        if self.kv is not None and hasattr(self.kv, "claim_once"):
+                            claimed = self.kv.claim_once(key)
+                            previous = self.kv.kv_get(key)
+                        else:
+                            claimed = key not in self._mem
+                            previous = self._mem.setdefault(key, True)
+                        if not claimed:
+                            if previous != "sent":
+                                self._template_problem(item, "The fallback outcome is unknown")
+                            continue
+                        try:
+                            receipt = self._template(item["to"], item["text"])
+                        except Exception:
+                            self._template_problem(item, "The fallback outcome is unknown")
+                            continue
+                        if receipt.ok:
+                            # Commit outside the polling cursor buffer: this is an
+                            # outbound side effect, not part of receiving a page.
+                            if self.kv is not None:
+                                self.kv.kv_set(key, "sent")
+                            else:
+                                self._mem[key] = "sent"
+                        else:
+                            self._template_problem(item, receipt.error)
                     else:
                         self._note = WHATSAPP_WINDOW_ERROR
                 elif status == 200 and data.get("status") in ("accepted", "scheduled", "queued", "sending"):
