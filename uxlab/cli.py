@@ -7,7 +7,7 @@ from .core import make_plan, new_round_path, run_round
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="ccc uxlab", description="Interactive model usability testers for disposable local apps (incurs model usage).")
+    parser = argparse.ArgumentParser(prog="ccc uxlab", description="Preview. Interactive model usability testers for disposable local apps (incurs model usage).")
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="run testers, or replay an earlier round")
     run.add_argument("url", nargs="?")

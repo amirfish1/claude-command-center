@@ -2815,7 +2815,7 @@ def main(argv=None):
     )
     parser.add_argument("--server", help="CCC base URL (default: $CCC_SERVER or port.txt)")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("uxlab", help="interactive usability testers for local apps; ccc uxlab run --help")
+    sub.add_parser("uxlab", help="preview: interactive usability testers for local apps; ccc uxlab run --help")
 
     for name in ("sessions", "session", "list-sessions"):
         p = sub.add_parser(name, help="session census (24h window by default; state, age, engine, repo, name)")
