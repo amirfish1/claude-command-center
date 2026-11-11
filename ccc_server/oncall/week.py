@@ -60,7 +60,7 @@ def read_rows(store, table, column, start, end):
     # Fixed identifiers supplied only by this module. Never load message bodies.
     columns = {
         'reports': 'source,reporter_channel,reporter_address,ticket_ref,created_at',
-        'alerts': 'kind,state,answer,meta,sent_at,closed_at',
+        'alerts': 'kind,state,answer,meta,sent_at,closed_at,owner_action,owner_action_at',
         'customer_messages': 'kind',
     }
     selection = ('deliveries.ok,deliveries.alert_id,deliveries.message_kind,alerts.kind AS alert_kind'
@@ -142,8 +142,11 @@ def collect(eng, *, since=None, weeks=2, detail=False, now=None):
         replies = [a for a in answered if a['state'] == 'answered']
         reply_times = [a['closed_at']-a['sent_at'] for a in replies
                        if a['sent_at'] is not None and a['closed_at'] >= a['sent_at']]
-        approvals = Counter()
+        actions = read_rows(store, 'alerts', 'owner_action_at', lo, hi)
+        approvals = Counter(a['owner_action'] for a in actions)
         for a in replies:
+            if a['owner_action_at'] is not None:
+                continue
             meta = json.loads(a['meta'])
             if a['kind'] not in ('send', 'fixed') or not meta.get('message_id'):
                 continue

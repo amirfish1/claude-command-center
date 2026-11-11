@@ -396,6 +396,11 @@ class Store:
             self._db.executescript(_SCHEMA)
             if "message_kind" not in {r[1] for r in self._db.execute("PRAGMA table_info(deliveries)")}:
                 self._db.execute("ALTER TABLE deliveries ADD COLUMN message_kind TEXT NOT NULL DEFAULT 'unknown'")
+            columns = {r[1] for r in self._db.execute("PRAGMA table_info(alerts)")}
+            if "owner_action_at" not in columns:
+                self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action_at REAL")
+                self._db.execute("ALTER TABLE alerts ADD COLUMN owner_action TEXT NOT NULL DEFAULT ''")
+            self._db.execute("CREATE INDEX IF NOT EXISTS alerts_owner_action ON alerts(owner_action_at)")
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -481,6 +486,10 @@ class Store:
         cur = self._run("UPDATE alerts SET state=?, answer=?, closed_at=? WHERE id=? AND state='open'",
                         (state, answer, time.time() if now is None else now, alert_id))
         return cur.rowcount == 1
+
+    def alert_owner_action(self, alert_id, action, now=None):
+        self._run("UPDATE alerts SET owner_action=?, owner_action_at=? WHERE id=? AND state='open'",
+                  (action, time.time() if now is None else now, alert_id))
 
     # -- deliveries --
     def delivery_add(self, alert_id, channel, recipient, receipt, now=None, message_kind="direct"):

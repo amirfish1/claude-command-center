@@ -219,3 +219,13 @@ def test_summary_off_cancels_pending(eng):
     a,_ = eng.store.alert_upsert('queued',kind='summary',title='',body='',needs_reply=False)
     week.daily(eng,eng.clock())
     assert eng.store.alert(a['id'])['state'] == 'cleared'
+
+
+def test_approval_count_survives_failed_delivery(eng):
+    a,_ = eng.store.alert_upsert('send',kind='send',title='',body='',meta={'message_id':1},now=eng.clock()-10)
+    eng.store.alert_owner_action(a['id'],'reworded',now=eng.clock()-2)
+    eng.store.delivery_add(None,'mail','',st.Receipt(False),now=eng.clock()-1,message_kind='reporter')
+    p = week.collect(eng)['periods'][0]
+    assert p['reporter_messages']['reworded'] == 1
+    assert p['replies']['received'] == 0
+    assert p['failed_deliveries'] == 1

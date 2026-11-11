@@ -40,9 +40,13 @@ send. Extra replies that did not answer an alert are not included.
 Decisions and reversals use WatchTower history event times. Reversals are counted
 in the window when undone, even if the decision was made earlier. Reporter asks
 use message creation time; approval, rewording and refusal use the owner answer
-time. Failed deliveries count attempts, including reporter sends.
+time. New approvals are recorded even when delivery then fails. Older approvals
+can only be counted when the stored alert was answered. A later owner edit or
+retry replaces that message's earlier approval record. Failed deliveries count
+attempts, including reporter sends.
 
-Default output is structured JSON with no reporter addresses. `--detail` adds
+Default output is plain text. `--json` returns structured counts. Neither
+includes reporter addresses. `--detail` adds
 reporter addresses. Both post formats contain only fixed labels, dates, counts
 and times, even with `--detail`. They omit source identifiers, ticket references,
 message text and addresses. Review the period and the definitions above before
