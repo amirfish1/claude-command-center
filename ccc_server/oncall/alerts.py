@@ -13,7 +13,7 @@ import re
 import time
 
 from . import wt as wtmod
-from .store import Outbound
+from .store import Outbound, Receipt
 
 HOURLY_CAP = 12
 MAX_ATTEMPTS = 5
@@ -246,9 +246,21 @@ def send_alert(store, targets, alert, *, now=None):
     subject, text, choices = render(alert)
     ok_any = False
     for chan in targets:
+        previous = store.delivery_latest(alert["id"], chan.id)
+        if previous and previous["ok"]:
+            ok_any = True
+            continue
+        uncertain = "Delivery interrupted; outcome unknown. No automatic retry."
+        if previous and previous["error"] == uncertain:
+            store.log("send", f"#{alert['id']} via {chan.id}: {uncertain}", now=now)
+            continue
+        # Commit the intent before the provider can accept the message.
+        store.delivery_add(alert["id"], chan.id, getattr(chan, "owner", "") or "",
+                           Receipt(ok=False, error=uncertain), now=now)
+        attempt = store.delivery_latest(alert["id"], chan.id)
         receipt = chan.send(Outbound(text=text, subject=subject, thread=alert["token"],
                                      choices=choices if alert.get("needs_reply") else ()))
-        store.delivery_add(alert["id"], chan.id, getattr(chan, "owner", "") or "", receipt, now=now)
+        store.delivery_finish(attempt["id"], receipt)
         if receipt.ok:
             ok_any = True
         else:

@@ -423,7 +423,7 @@ def _closed_notice(cfg, store, chans, wt, report, item, now):
 def collect_delivery_problems(store, *, now=None):
     """Keep ambiguous and failed customer sends visible to the owner without replay."""
     for state in ("uncertain", "failed"):
-        for message in store.customer_messages(state=state, limit=100):
+        for message in store.customer_delivery_problems(state):
             alerts.raise_event(
                 store, kind="delivery_problem", key=f"delivery-problem:{message['id']}",
                 ref=message["ref"], title="Reporter message needs review",

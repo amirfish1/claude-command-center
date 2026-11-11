@@ -316,6 +316,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
     sent_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS deliveries_ext ON deliveries(channel, external_id);
+CREATE INDEX IF NOT EXISTS deliveries_alert_channel ON deliveries(alert_id, channel, id);
 CREATE INDEX IF NOT EXISTS deliveries_time ON deliveries(sent_at, alert_id, ok);
 CREATE TABLE IF NOT EXISTS inbound (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -366,6 +367,7 @@ CREATE TABLE IF NOT EXISTS customer_messages (
     external_id TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS customer_messages_state ON customer_messages(state, id);
 CREATE TABLE IF NOT EXISTS log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     at REAL NOT NULL,
@@ -497,6 +499,14 @@ class Store:
                   (alert_id, channel, recipient, receipt.external_id, 1 if receipt.ok else 0,
                    receipt.error[:500], time.time() if now is None else now))
 
+    def delivery_latest(self, alert_id, channel):
+        return self._one("SELECT * FROM deliveries WHERE alert_id=? AND channel=? "
+                         "ORDER BY id DESC LIMIT 1", (alert_id, channel))
+
+    def delivery_finish(self, delivery_id, receipt):
+        self._run("UPDATE deliveries SET external_id=?, ok=?, error=? WHERE id=?",
+                  (receipt.external_id, int(receipt.ok), receipt.error[:500], delivery_id))
+
     def delivery_alert(self, channel, external_id):
         """The alert a provider message id belongs to, or None."""
         if not external_id:
@@ -621,6 +631,17 @@ class Store:
         sql += " ORDER BY id DESC LIMIT ?"
         args.append(int(limit))
         return self._all(sql, args)
+
+    def customer_delivery_problems(self, state, limit=100):
+        after = self.kv_get("problem_cursor:" + state, 0)
+        rows = self._all("SELECT * FROM customer_messages WHERE state=? AND id>? "
+                         "ORDER BY id LIMIT ?", (state, after, limit))
+        if not rows:
+            rows = self._all("SELECT * FROM customer_messages WHERE state=? ORDER BY id LIMIT ?",
+                             (state, limit))
+        if rows:
+            self.kv_set("problem_cursor:" + state, rows[-1]["id"])
+        return rows
 
     def customer_message_claim(self, message_id):
         """Reserve a send before touching the provider; an uncertain send is not retried."""
