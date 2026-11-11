@@ -44,6 +44,10 @@ measured attack rate. High means a simple payload was enough in a local test.
 | Unbounded channel HTTP response | A channel server could make CCC read an arbitrarily large response before parsing. | Medium; high with server control. | Success and error bodies are limited to one MiB. `test_oncall_security_response_size.py`. |
 | Metadata marker spoofing | Reporter names could insert marker lines outside the quoted report. | Medium; high for formatting, unknown for model obedience. | Metadata is flattened and markers are escaped. `test_oncall_security_markers.py`. This is not a model sandbox. |
 | Read origin gap | A local request with a foreign browser Origin received On-call status. | Low; defense in depth. No browser CORS bypass was demonstrated. | Both reads and writes now require a local origin for this server, or no Origin for a direct local program. Proxy and phone checks remain. `test_oncall_security_read_origin.py`. |
+| Forged customer email | A sender could use a known customer's From address to bypass the hold or join their conversation. | High; high without mailbox authentication. | Require pinned receiver results and aligned pass; bind continuations to sender, channel and token. `test_oncall_security_email_auth.py` and the local TLS mail proof. Provider header provenance remains a condition. |
+| Replaced permission request | An answer could reach a later prompt in the same session. | High; timing dependent. | Recheck invocation identity at delivery; refuse unbound Claude prompts. `test_oncall_security_permission_binding.py`. |
+| Owner-send cap bypass | A reporter or channel could cause acknowledgements and multichannel delivery beyond the alert count cap. | Medium; high for a reachable reply channel. | Count individual sends atomically, cap daily direct replies and retain waiting decisions. `test_oncall_security_caps.py` and `test_oncall_security_daily_replies.py`. |
+| Known secrets in outgoing text | Report or worker text could copy a Vault value or common token into owner messages, reporter messages or monitoring tickets. | High; dependent on access to the value. | Mask known matches and hold reporter messages or monitoring evidence. `test_oncall_send_filter.py` and `test_oncall_security_owner_redaction.py`. This is not a complete secret detector. |
 
 ## Boundaries checked
 
@@ -51,8 +55,8 @@ measured attack rate. High means a simple payload was enough in a local test.
 Telegram, SMS, WhatsApp, iMessage and command intake. It verifies repeated and
 concurrent replies answer one alert once, using the engine's lock and inbound
 message IDs. It checks foreign POST origins and three proxy headers over real
-loopback HTTP. It records ntfy and acknowledgement-limit risks below as explicit tests of
-current behavior, not as security successes. The known-email attack now verifies
+loopback HTTP. It records ntfy authority as a risk and verifies that repeated acknowledgements
+stop at the shared owner-send cap. The known-email attack now verifies
 that unverified mail is held.
 
 The existing On-call suites cover email parsing and thread extraction,
@@ -75,8 +79,9 @@ GitHub intake checks the provider's owner, member or collaborator association.
 Comment replies must match the original reporter login and, when present,
 numeric author ID. The posting account and bots are ignored. A source with no
 posting token cannot message reporters. GitHub comments always require approval,
-even when `approve_sends` is off. An approved comment can still contain secrets:
-there is no general content or secret checker in the send path.
+even when `approve_sends` is off. Outgoing text is checked for common token
+shapes and exact CCC Vault values. A match is masked and held for review.
+This is a limited filter, not a guarantee that a comment contains no secrets.
 
 Alert tokens contain 64 random bits from `secrets.token_hex(8)`. Numbers are
 sequential database IDs, not secrets. Number routing accepts up to six digits;
@@ -129,16 +134,18 @@ reports are safely contained.
    egress, and a message-proposal-only broker. Keep approval authority outside
    the worker. The model connection itself must remain available through a
    credential boundary that does not expose the owner's reusable login.
-3. **High: permission approval has a check/use gap.** `_OncallDeps.approve`
-   checks pending metadata, then calls a generic resolver by session ID.
-   The Codex resolver selects the pending request again. A changed request
-   between those operations could receive the earlier approval. Claude's
-   terminal keystroke path cannot bind a keypress to a prompt identity.
-   This is a source-level finding, not a reproduced live race. Proposal:
-   propagate an expected request ID through control-plane dispatch and compare
-   it under the resolver lock; send only that ID. For Claude, bind to the
-   permission-hook call hash and refuse remote approval when no exact binding
-   is available. Test both prompt replacement and worker restarts.
+3. **Permission request replacement is now checked at delivery.** Previously,
+   a changed request could receive an earlier answer. Codex answers now carry
+   the request ID and an invocation nonce through worker routing. The resolver
+   rechecks that nonce and the transport generation under its lock before
+   sending. Request ID zero is valid. Claude answers require a fresh hook
+   hash and a per-invocation nonce, delivered through a nonce-specific file.
+   Identical tool inputs do not reuse that approval. On-call refuses prompts
+   without this binding and never falls back to a terminal keypress. Older
+   hooks and notification-only badges must be answered in the session.
+   `test_oncall_security_permission_binding.py` tests replacement, repeated
+   inputs, transport changes, routing and missing bindings. These are isolated
+   tests, not a live Claude permission round trip.
 4. **High: ntfy topic possession is owner authority.** Any publisher who knows
    the reply topic can act as the owner. There is no independent sender check.
    Proposal: use an authenticated private server and separate read/write
@@ -146,40 +153,49 @@ reports are safely contained.
    the topic in screenshots, issue text or customer messages. SMS, WhatsApp,
    iMessage and Telegram likewise depend on the provider and configured
    account not being compromised. SIM swaps and account theft were not tested.
-5. **Medium: flood and retention limits are incomplete.** The hourly cap
-   counts distinct alerts, not every provider message. Multiple channels
-   multiply sends. Acknowledgements, status replies, customer messages and
-   test sends bypass that cap. Spoofed owner email can trigger status replies
-   to the owner. The 20-report limit counts currently held unknown reports,
-   not all arrivals in the last day. Inbound rows, reports, alerts, deliveries
-   and cursors have no general retention limit. Mail fetches and command output
-   may allocate large buffers before clipping. Proposal: separate intake,
-   provider-send and model-work budgets; cap fetch bytes and subprocess output;
-   set retention with replay tombstones that outlive the provider replay window.
-   Do not silently purge replay protection or count dropped reports as free.
-6. **High impact, conditional: secrets can leave through legitimate content.**
-   Vault references keep configured credential values out of config. Adapter
-   redaction handles known credentials in errors, not every secret in reports,
-   command output, model transcripts, tickets or approved messages. Provider
-   payloads can contain private data. Proposal: minimize worker credentials,
-   treat all those stores as sensitive, add send-time redaction and review,
-   and make public GitHub destination and exact text explicit in approval.
-7. **Medium: send durability is not exactly once.** The engine serializes
-   requests within one process, and replay/concurrency tests pass there. A
-   crash after provider acceptance but before the database update can leave
-   an ambiguous send. There is no atomic transaction across SQLite and a
-   provider. Multiple engines sharing a store are not covered. Proposal:
-   atomically claim each send, persist an idempotency key, use provider
-   idempotency where supported, and mark ambiguous outcomes for reconciliation
-   instead of retrying them blindly. Bind approvals to immutable content,
-   destination and configuration version.
+5. **Owner sends and held stranger reports now have shared caps.** The rolling
+   hourly cap counts each successful message to the owner, across channels,
+   including acknowledgements, status replies and test messages. Direct replies
+   also have a rolling 24-hour limit of 20 across channels. This daily limit
+   does not discard decision alerts. An ambiguous
+   send reserves a slot; a definite rejection releases it. Decision alerts
+   stay queued when capped. The next successful alert reports how many other
+   alerts still await delivery. A reply can answer an alert delivered to one
+   channel even while another channel is capped. The stranger-report limit
+   counts reports initially held during the last 24 hours, including reports
+   later filed or dropped. It does not limit all trusted intake, reporter
+   sends or model work. Mail fetches and command output may still allocate
+   buffers before clipping. History retention is a separate concern. See
+   `test_oncall_security_caps.py` and `test_oncall_security_partial_delivery.py`.
+6. **High impact, conditional: the secret filter is incomplete.** Reporter
+   messages, public GitHub comments and monitoring evidence are checked for
+   common token shapes and exact values in the CCC Vault. Matches are masked
+   and held; approval rechecks outgoing text. An unreadable Vault pauses sends.
+   Owner notifications and acknowledgements are masked too. This does not
+   detect arbitrary passwords, encoded or split credentials, all private
+   information, or secrets copied through another tool. Local reports, logs,
+   model transcripts and the repository still need protection. A powerful
+   fixing worker can bypass On-call entirely. Limit its credentials and use
+   separate authority. Synthetic-secret tests cover these filters in
+   `test_oncall_send_filter.py` and `test_oncall_security_owner_redaction.py`.
+7. **Medium: delivery still has ambiguous outcomes.** Owner alerts and
+   reporter messages reserve a send in SQLite before calling the provider.
+   Interrupted owner sends are marked uncertain and are not blindly retried.
+   Reporter messages also use a conditional claim. These changes reduce
+   duplicates, but cannot make provider acceptance and local persistence one
+   atomic transaction. An uncertain result still needs reconciliation.
+   Proposal: use provider idempotency where available and expose reconciliation
+   to the owner. Bind approval to the destination's configuration version as
+   well as the saved message text; a channel can be reconfigured while approval
+   is pending. No host-crash or real-provider recovery guarantee is made.
 
-With `approve_sends` off, agent ask/tell requests to non-GitHub reporters send
-immediately through their configured channel. This is not just a reduction in
-notifications. The ticket's generic statement that the owner sees every message
-is then inaccurate. Proposal: make the ticket instructions describe the actual
-policy and show an explicit warning when this switch is turned off. Keep the
-switch on until worker authority is separated. No setting was changed here.
+With `approve_sends` off, agent ask/tell requests to non-GitHub reporters can
+send immediately unless the secret filter holds them. GitHub comments always
+need approval. Newly filed ticket instructions, CLI status and the settings row
+state that policy. The CLI asks once before turning approval off. Existing
+tickets can retain older instructions; the current setting controls sends.
+Keep approval on until worker authority is separated. No real setting was
+changed during this review.
 
 ## Real fixing-worker exposure
 
@@ -213,7 +229,7 @@ It does not establish safety for a production repository or another model.
 
 ### Reproduction and verification limits
 
-The final stable-code run passed all 448 tests in 67.46 seconds. No performance
+The initial review's stable-code run passed all 448 tests in 67.46 seconds. No performance
 bound was changed. An earlier run edited concurrently with server source failed
 a source-inspection assertion; the fresh stable-code run passed it.
 
@@ -261,8 +277,8 @@ and not rebuilt. It is a spend guard, not a defense against hostile report text.
 
 On-call is still a local operator tool that hands untrusted text to a powerful
 agent. It does not isolate that agent from owner authority. It relies on a pinned mailbox server for
-email sender evidence, and does not yet provide comprehensive rate limits, prevent all secret
-leaks, or guarantee exactly-once delivery. Do not read the successful injection
+email sender evidence, and caps owner messages and held stranger reports, but does not cap every
+resource, prevent all secret leaks, or guarantee exactly-once delivery. Do not read the successful injection
 fixtures as a general security guarantee. Before exposing an automatic worker
 to arbitrary reports, verify the mailbox server trust boundary and resolve worker authority, keep
 send approval enabled, and choose credentials and repositories with limited
