@@ -699,8 +699,8 @@ def test_plain_question_observation_cache_clear_and_reply(rig, engine, monkeypat
     assert len(rig.eng.store.alerts()) == 1
     # One lookup per idle period, however many ticks pass.
     assert probes == ['sess-1']
-    # A new turn gets a new incident, which clears on activity.
-    transcript.write_text(transcript.read_text().replace('turn-1', 'turn-2'))
+    # A new turn with a changed question gets a new incident, which clears on activity.
+    transcript.write_text(transcript.read_text().replace('turn-1', 'turn-2').replace('old client', 'new client'))
     signals.observe(rig.eng, {'sess-1': {'state': 'working'}})
     signals.observe(rig.eng, idle)
     rig.clock.now += signals.GRACE_S

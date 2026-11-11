@@ -98,7 +98,9 @@ def from_message(last, turn='', notify_idle=False):
     if not tail and notify_idle and last.strip():
         tail = 'Turn finished. ' + (prose or 'Open the session for details.')[:1000]
     if tail:
-        digest = hashlib.sha256((turn + last).encode()).hexdigest()[:24]
+        # Keyed on the question text alone: the same session repeating an
+        # unchanged question (a stale footer) must not alert again each turn.
+        digest = hashlib.sha256(tail.encode()).hexdigest()[:24]
         signal = {'kind': 'plain_question', 'stamp': digest, 'body': tail, 'meta': {}}
     return signal
 
