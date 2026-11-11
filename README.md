@@ -98,7 +98,7 @@ Reply yes to tell Dana it is fixed, or no to skip.
 ## Set it up
 
 Try without an account: `ccc oncall demo` ([details](docs/oncall-demo.md)).
-The worker and ticket backend are scripted; messages and replies use the real On-call engine.
+The default worker is scripted; messages use real On-call code and tickets use installed WatchTower, with a built-in fallback when it is absent.
 
 On-call is a preview and it is off by default. Install CCC with the line above, then:
 
