@@ -27,7 +27,7 @@ def isolated_env(root):
     env = {k: os.environ[k] for k in ('LANG', 'LC_ALL', 'SYSTEMROOT') if k in os.environ}
     bins = root / 'bin'
     bins.mkdir()
-    for name in ('git', 'python3', 'sh', 'bash', 'env', 'node', 'codex'):
+    for name in ('git', 'python3', 'sh', 'bash', 'env', 'node', 'codex', 'cat', 'ls', 'rg', 'sed', 'bwrap'):
         executable = shutil.which(name)
         if executable:
             (bins / name).symlink_to(executable)
@@ -51,6 +51,7 @@ def agent_fix(project, env, auth, answer):
               'Only edit cart.py. Do not use network, delegates, background processes or git. '
               'Do not read outside this workspace. Run python3 test_cart.py.')
     proc = None
+    started = time.monotonic()
     try:
         with (project / 'agent.log').open('w') as log:
             proc = subprocess.Popen(['codex', 'exec', '--skip-git-repo-check',
@@ -68,6 +69,7 @@ def agent_fix(project, env, auth, answer):
                 pass
             proc.wait(timeout=10)
         shutil.rmtree(home)
+    return round(time.monotonic() - started, 3)
 
 
 def walkthrough(root, args, emit, lines):
@@ -165,7 +167,8 @@ def walkthrough(root, args, emit, lines):
                 raise RuntimeError('--agent needs Codex with an existing auth.json login. Retry without --agent.')
             emit('Codex is fixing the sample with your existing login. This can take longer than a minute.')
             test_source = (project / 'test_cart.py').read_bytes()
-            agent_fix(project, env, auth, answer)
+            agent_seconds = agent_fix(project, env, auth, answer)
+            emit(f'Codex finished in {agent_seconds:.1f} seconds.')
             if (project / 'test_cart.py').read_bytes() != test_source:
                 raise RuntimeError('Agent changed the test instead of preserving it.')
         else:
