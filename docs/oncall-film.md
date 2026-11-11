@@ -17,7 +17,7 @@ The command saves an MP4, a poster PNG, an HTML player, a frames directory and
 a JSON report beside the chosen output. Existing outputs are not overwritten.
 If ffmpeg is missing, it saves the player, frames, poster and report and says
 that no MP4 was made. Open the HTML file and press Play. Each caption stays for
-at least three seconds. There is no audio. The default theme is light.
+three to ten seconds, longer for more words. There is no audio. The default theme is light.
 
 The scenes show an excerpt of the report, scoped file operations, a few lines
 of the local commit diff, a recorded passing check, the Fixed notice and elapsed

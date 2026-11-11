@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Amir Fish. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-CCC-Software-License
 """Offline replay of one retained On-call fix. Never starts an agent."""
 from __future__ import annotations
 import argparse
@@ -158,7 +160,7 @@ def collect(ref, root=None, show_names=False):
         # A bounded excerpt, with an explicit mark rather than an invented summary.
         if len(body) > 650:
             body = body[:647] + '…'
-        scenes.append(dict(kind=kind, caption=caption, text=body, seconds=max(3, len(body.split()) / 3 + 2)))
+        scenes.append(dict(kind=kind, caption=caption, text=body, seconds=min(10, max(3, len(body.split()) / 3 + 2))))
     add('report', 'The report', report['text'] or report['title'])
     steps, checks = transcript_evidence(ticket, repo)
     add('work', 'The agent picks it up', '\n'.join(steps) or 'No scoped work steps retained.')
