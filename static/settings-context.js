@@ -113,6 +113,7 @@
     hooks.openList(); syncList();
     if (phone()) {
       if (get('sidebarMoreMenu')?.hidden) get('sidebarMoreBtn')?.click();
+      const details = list.closest('details'); if (details) details.open = true;
     } else {
       const details = list.closest('details'); if (details) details.open = true; clampList();
     }

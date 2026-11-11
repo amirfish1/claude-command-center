@@ -168,7 +168,7 @@ for(const width of [1440,390]){
     await page.click('#termCloseBtn');await menu(page);await page.focus('#settingsCmdkBtn');await page.keyboard.press('Enter');
     await page.waitForSelector('#cmdkModal.open');await page.waitForFunction(()=>document.activeElement.id==='cmdkInput');
     await page.evaluate(()=>document.getElementById('cmdkModal').classList.remove('open'));
-    await menu(page);await page.click('#kptWorktreesBtn');await page.waitForSelector('#worktreesModal.open');
+    await menu(page);await page.click('#settingsActionsWorkspace > summary');await page.click('#kptWorktreesBtn');await page.waitForSelector('#worktreesModal.open');
     await page.evaluate(()=>document.getElementById('worktreesModal').classList.remove('open'));
     await menu(page);await page.click('#todayToggleBtn');assert.equal(await page.$eval('#todayTray',element=>element.hidden),false);
     await menu(page);await page.click('#fleetViewBtn');assert.deepEqual(await page.evaluate(()=>window.__opens.at(-1)),{destination:'/fleet.html',target:'_blank'});
@@ -248,12 +248,23 @@ test('More and destinations fit desktop/mobile and reveal focused items without 
 });
 
 test('responsive topbar updates preserve permanent workspace action homes',async t=>{
-  const page=await open(t);await menu(page);
+  const page=await open(t);await menu(page);await page.click('#settingsActionsWorkspace > summary');
   for(const mobile of [false,true,false]){
     await page.evaluate(value=>window.__syncResponsiveActions(value),mobile);
     for(const id of ['statsBtn','termToggleBtn','kptWorktreesBtn','annotationNotesBtn']){
       assert.equal(await page.$eval('#'+id,node=>!!node.closest('#settingsActionsTools')),true);
-      assert.equal(await page.$eval('#'+id,node=>!!node.getClientRects().length),true);
+      assert.equal(await page.$eval('#'+id,node=>node.checkVisibility()),true);
     }
   }
+});
+
+ test('collapsed workspace is skipped by keyboard until expanded', async t => {
+  const page=await open(t); await menu(page);
+  await page.focus('#statsBtn'); await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(()=>document.activeElement.parentElement.id),'settingsActionsWorkspace');
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(()=>!!document.activeElement.closest('#settingsActionsWorkspace')),false);
+  await page.focus('#settingsActionsWorkspace > summary'); await page.keyboard.press('Enter');
+  await page.keyboard.press('ArrowDown');
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'historyStatusPill');
 });
