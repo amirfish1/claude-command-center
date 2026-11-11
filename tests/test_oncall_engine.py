@@ -70,8 +70,9 @@ class FakeWT:
     def blocked(self, queue):
         return [t for t in self.tickets.values() if t["project"] == queue and t.get("needs_input")]
 
-    def ls(self, queue, status="active", limit=200):
-        return [t for t in self.tickets.values() if t["project"] == queue and t["status"] != "closed"]
+    def ls(self, queue, status="active", limit=200, *, offset=None):
+        return [t for t in self.tickets.values() if t["project"] == queue
+                and ((t["status"] == "closed") if status == "closed" else t["status"] != "closed")]
 
     def find(self, ref):
         return self.tickets.get(ref)

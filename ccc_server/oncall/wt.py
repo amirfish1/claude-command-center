@@ -91,8 +91,9 @@ class WT:
         data = self._json("blocked", "-q", queue, "--json")
         return [t for t in data if isinstance(t, dict)] if isinstance(data, list) else []
 
-    def ls(self, queue, status="active", limit=200):
-        data = self._json("ls", "-q", queue, "--status", status, "--limit", limit, "--json")
+    def ls(self, queue, status="active", limit=200, *, offset=None):
+        extra = ["--offset", offset] if offset is not None else []
+        data = self._json("ls", "-q", queue, "--status", status, "--limit", limit, "--json", *extra)
         return [t for t in data if isinstance(t, dict)] if isinstance(data, list) else []
 
     def find(self, ref):

@@ -384,6 +384,7 @@ CREATE INDEX IF NOT EXISTS customer_messages_ref_state ON customer_messages(ref,
 CREATE INDEX IF NOT EXISTS customer_messages_state ON customer_messages(state, id);
 CREATE INDEX IF NOT EXISTS reports_created ON reports(created_at);
 CREATE INDEX IF NOT EXISTS reports_state ON reports(state);
+CREATE INDEX IF NOT EXISTS reports_state_queue ON reports(state,queue);
 CREATE INDEX IF NOT EXISTS alerts_created ON alerts(created_at);
 CREATE INDEX IF NOT EXISTS alerts_kind_state ON alerts(kind,state);
 CREATE INDEX IF NOT EXISTS alerts_closed ON alerts(closed_at);
@@ -656,6 +657,20 @@ class Store:
         sql += " ORDER BY id DESC LIMIT ?"
         args.append(int(limit))
         return [_meta_row(r) for r in self._all(sql, args)]
+
+    def filed_queues(self, limit=16):
+        after = self.kv_get("closed_queue_cursor", "")
+        queues = []
+        for _ in range(limit):
+            row = self._one("SELECT queue FROM reports WHERE state='filed' AND queue>? "
+                            "ORDER BY queue LIMIT 1", (after,))
+            if not row:
+                after = ""
+                break
+            after = row["queue"]
+            queues.append(after)
+        self.kv_set("closed_queue_cursor", after)
+        return queues
 
     def report_update(self, report_id, **fields):
         allowed = {"state", "queue", "ticket_ref", "title", "text", "meta"}
