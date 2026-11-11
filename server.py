@@ -16427,7 +16427,7 @@ def find_all_conversations(
 # v11: Exclude injected setup messages from Codex prompt/title metadata.
 # v12: Reparse session footers so cached rows retain short action labels.
 # v14: Recompute Close gates; inapplicable delivery no longer passes.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 14
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 15
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
