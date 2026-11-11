@@ -200,7 +200,7 @@ def _open_conversation(store, msg, now):
 
 def _reporter_reply(cfg, store, wt, report, msg, now):
     if report["state"] == "held":
-        store.report_update(report["id"], text=(report.get("text") or "") + "\n\n" + msg.text)
+        store.report_update(report["id"], text=((report.get("text") or "") + "\n\n" + msg.text)[:20000])
         return f"added to held report {report['id']}"
     ref = report.get("ticket_ref") or ""
     item = wt.find(ref) if ref else None
