@@ -359,7 +359,13 @@ class _OncallDeps:
             return None
         transcript = (_resolve_codex_rollout_path(sid) if engine == "codex"
                       else _resolve_conversation_path(sid))
-        return question(store, sid, transcript, since)
+        # Only sessions using the optional agent plugin request every idle turn.
+        try:
+            marker = json.loads((SIDECAR_STATE_DIR / (sid + ".json")).read_text())
+            notify_idle = marker.get("oncall_notify_idle") is True
+        except (OSError, ValueError, AttributeError):
+            notify_idle = False
+        return question(store, sid, transcript, since, notify_idle=notify_idle)
 
     def permission(self, sid):
         engine = _detect_session_engine(sid)

@@ -26,7 +26,7 @@ def _epoch(iso):
         return 0
 
 
-def question(store, session_id, transcript, since=0):
+def question(store, session_id, transcript, since=0, notify_idle=False):
     """The closing question of an idle transcript, or None.
 
     ``since`` (epoch seconds) drops a transcript last written before On-call
@@ -39,7 +39,7 @@ def question(store, session_id, transcript, since=0):
         stat = path.stat()
         if since and stat.st_mtime < since:
             return None
-        stamp = [str(path), stat.st_mtime_ns, stat.st_size]
+        stamp = [str(path), stat.st_mtime_ns, stat.st_size, notify_idle]
         key = 'question-cache:' + session_id
         cached = store.kv_get(key) or {}
         if cached.get('stamp') == stamp:
@@ -88,6 +88,8 @@ def question(store, session_id, transcript, since=0):
                        and not any(x in tail for x in ('```', '> ', '`'))):
         # A footer that says nothing is needed outranks a question mark above it.
         tail = ''
+    if not tail and notify_idle and last.strip():
+        tail = 'Turn finished. ' + (prose or 'Open the session for details.')[:1000]
     if tail:
         digest = hashlib.sha256((turn + last).encode()).hexdigest()[:24]
         signal = {'kind': 'plain_question', 'stamp': digest, 'body': tail, 'meta': {}}

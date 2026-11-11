@@ -1,0 +1,8 @@
+{
+  "name": "oncall",
+  "version": "0.1.0",
+  "description": "Manage CCC On-call from your agent.",
+  "author": {
+    "name": "CCC maintainers"
+  }
+}

@@ -1925,6 +1925,13 @@ def cmd_oncall(argv, server=None):
     repo_dir = os.path.dirname(os.path.realpath(__file__))
     if repo_dir not in sys.path:
         sys.path.append(repo_dir)
+    if argv == ["install-codex"]:
+        from ccc_server.oncall.agent_install import install_codex
+        return install_codex()
+    if argv == ["agent-service"]:
+        from ccc_server.oncall.agent_install import service
+        print(service(_resolve_server(server)))
+        return 0
     from ccc_server.oncall import cli as oncall_cli
     return oncall_cli.run(argv, base=_resolve_server(server), get=_get_json, post=_post_json)
 
