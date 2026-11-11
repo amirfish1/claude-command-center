@@ -575,7 +575,8 @@ RUN chmod 755 /usr/local/bin/codex* && printf '#!/usr/local/bin/python3\nfrom wa
         docker('image', 'rm', IMAGE, check=False, timeout=60)
         for filename in ('source.tar', 'key.pem', 'mail.p12'):
             (tmp / filename).unlink(missing_ok=True)
+    return int(any(result['exit'] != 0 for result in out))
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
