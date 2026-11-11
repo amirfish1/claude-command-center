@@ -991,11 +991,13 @@ class NtfyChannel(Channel):
             payload["title"] = _clip_bytes(subject, 250)
         thread = str(msg.thread or "").strip()
         actions = []
-        for choice in [str(c).strip() for c in (msg.choices or ()) if str(c).strip()][:3]:
+        pairs = [(str(c[0]).strip(), str(c[1]).strip()) if isinstance(c, (tuple, list))
+                 else (str(c).strip(),) * 2 for c in (msg.choices or ())]
+        for choice, reply in [p for p in pairs if p[0] and p[1]][:3]:
             # The access token is deliberately left out: it would be readable by
             # every subscriber of the topic.
             actions.append({"action": "http", "label": choice, "url": self._reply_url(),
-                            "method": "POST", "body": f"{thread} {choice}" if thread else choice,
+                            "method": "POST", "body": f"{thread} {reply}" if thread else reply,
                             "clear": True})
         if actions:
             payload["actions"] = actions

@@ -57,7 +57,7 @@ class Phone:
         self.messages.append(asdict(message))
         self.thread_messages.append(dict(sender='Reporter notice' if message.to else 'On-call', text=message.text))
         if message.choices:
-            self.choices = list(message.choices)
+            self.choices = [c[1] if isinstance(c, (tuple, list)) else c for c in message.choices]
         elif 'Reply approve or decline.' in message.text:
             self.choices = ['approve', 'decline']
         elif 'Reply zero or hide.' in message.text:

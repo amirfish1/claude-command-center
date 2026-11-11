@@ -15,8 +15,35 @@ GRACE_S = 120
 
 # CCC's own session footer names the step that needs the person, when any.
 _FOOTER_STEP = re.compile(r"^NEXT_STEP_USER[ \t]*:[ \t]*(.*?)[ \t]*$", re.M)
+_FOOTER_ACTION = re.compile(r"^NEXT_ACTION[ \t]*:[ \t]*(.*?)[ \t]*$", re.M)
 _NO_STEP = re.compile(r"^(?:$|(?:none|nothing|no|neither|n/?a|null|nil|not (?:needed|required|applicable))\b)", re.I)
 _ASK = re.compile(r"\b(?:shall I|should I|should we|do you want|would you like|can you|could you|which .{0,80}(?:prefer|want|choose)|what do you (?:think|prefer))\b", re.I)
+
+
+def _choices(footer):
+    """Up to three (label, reply) answer choices from the footer's NEXT_ACTION.
+
+    Anything malformed, empty or longer than three yields no choices.
+    """
+    found = _FOOTER_ACTION.findall(footer)
+    try:
+        data = json.loads(found[-1]) if found else None
+    except ValueError:
+        return []
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list) or not 1 <= len(data) <= 3:
+        return []
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            return []
+        label, reply = item.get('label'), item.get('reply')
+        if not (isinstance(label, str) and isinstance(reply, str)
+                and label.strip() and reply.strip()):
+            return []
+        out.append([' '.join(label.split())[:24], reply.strip()[:400]])
+    return out
 
 
 def _epoch(iso):
@@ -101,7 +128,9 @@ def from_message(last, turn='', notify_idle=False):
         # Keyed on the question text alone: the same session repeating an
         # unchanged question (a stale footer) must not alert again each turn.
         digest = hashlib.sha256(tail.encode()).hexdigest()[:24]
-        signal = {'kind': 'plain_question', 'stamp': digest, 'body': tail, 'meta': {}}
+        choices = _choices(footer) if not _NO_STEP.match(step) else []
+        signal = {'kind': 'plain_question', 'stamp': digest, 'body': tail,
+                  'meta': {'choices': choices} if choices else {}}
     return signal
 
 

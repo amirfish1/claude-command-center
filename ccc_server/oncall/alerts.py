@@ -44,6 +44,9 @@ def render(alert):
     elif kind in ("question", "plain_question"):
         head = f"An agent is waiting on you (#{n})"
         lines = [head, title, body, "", "Reply with your answer."]
+        if kind == "plain_question":
+            choices = tuple((c[0], c[1]) for c in meta.get("choices") or ()
+                            if isinstance(c, (list, tuple)) and len(c) == 2)[:3]
     elif kind == "permission":
         head = f"An agent needs permission (#{n})"
         lines = [head, title, body, "", "Reply allow or deny. If unavailable, answer in the session."]

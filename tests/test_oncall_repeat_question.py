@@ -67,3 +67,44 @@ def test_alert_label_named_unnamed_and_layout(tmp_path):
     assert lines[1] == 'Agent 9977c333'
     lines = _label_alert(tmp_path / 'd', lambda sid: ('webapp', 'webapp'))
     assert lines[1] == 'webapp'
+
+
+import pytest
+
+from ccc_server.oncall import alerts
+
+
+def _footer(action):
+    return ('Which one?\n\n<session-state>\nNEXT_STEP_USER: Pick one\n'
+            f'NEXT_ACTION: {action}\n</session-state>')
+
+
+def _choices(n):
+    return json.dumps([{'label': f'Opt {i}', 'reply': f'reply {i}'} for i in range(n)])
+
+
+@pytest.mark.parametrize('action,expected', [
+    (_choices(1), 1), (_choices(3), 3), (_choices(4), 0), ('null', 0),
+    ('[{"label": "x"', 0), ('[{"label": "x"}]', 0), ('{"label":"A","reply":"b"}', 1)])
+def test_footer_choices_become_ntfy_buttons(action, expected):
+    signal = signals.from_message(_footer(action), 't')
+    assert signal and signal['body'] == 'Pick one'
+    alert = {'id': 7, 'kind': 'plain_question', 'title': 'x', 'body': signal['body'],
+             'meta': signal['meta']}
+    choices = alerts.render(alert)[2]
+    assert len(choices) == expected
+    if expected:
+        assert choices[0][1].startswith(('reply 0', 'b'))
+
+
+def test_ntfy_button_publishes_reply_text():
+    from ccc_server.oncall import channels
+    from ccc_server.oncall.store import Outbound
+    payloads = []
+    ch = channels.build({'id': 'p', 'type': 'ntfy', 'topic': 'alerts', 'server': 'http://x'},
+                        kv=None, secret=lambda name: '', clock=lambda: 1000.0)
+    ch.http = lambda method, url, headers=None, data=None, timeout=0: (
+        payloads.append(json.loads(data)) or (200, b'{"id":"1"}'))
+    ch.send(Outbound(text='q', thread='TOK', choices=(('Keep', 'keep the old one'),)))
+    action = payloads[0]['actions'][0]
+    assert action['label'] == 'Keep' and action['body'] == 'TOK keep the old one'
