@@ -42,6 +42,7 @@ FILED_KEEP = 2000
 ENRICH_MAX = 5          # latest-event lookups per Sentry poll
 STACK_LINES = 30
 PAGE_LIMIT = 25
+PAGES_PER_POLL = 4
 MAX_BODY = 4 * 1024 * 1024
 USER_AGENT = "ccc-oncall/1"
 
@@ -482,12 +483,14 @@ class SentrySource(Source):
     def _org_url(self):
         return f"{self.base}/api/0/organizations/{urllib.parse.quote(self.org, safe='')}"
 
-    def _list(self, token, limit):
+    def _list(self, token, limit, cursor=""):
         """Unresolved issues, newest first, one page."""
         params = [("query", "is:unresolved"), ("sort", "new"), ("limit", str(limit)),
                   ("statsPeriod", "14d")]
         if self.environment:
             params.append(("environment", self.environment))
+        if cursor:
+            params.append(("cursor", cursor))
         query = urllib.parse.urlencode([("project", self.project)] + params)
         try:
             rows = self._api("Sentry", "GET", f"{self._org_url()}/issues/?{query}",
@@ -504,6 +507,18 @@ class SentrySource(Source):
             rows = self._api("Sentry", "GET",
                              f"{self.base}/api/0/projects/{path}/issues/?{urllib.parse.urlencode(params)}",
                              token=token, hint=self._hint)
+        self._next_cursor = ""
+        for part in getattr(self, "_response_headers", {}).get("link", "").split(","):
+            if 'rel="next"' not in part or 'results="false"' in part:
+                continue
+            match = re.search(r'<([^>]+)>', part)
+            if match:
+                # Extract only the opaque cursor. Never follow a supplied host
+                # or path with the bearer token.
+                values = urllib.parse.parse_qs(urllib.parse.urlsplit(match[1]).query)
+                candidate = (values.get("cursor") or [""])[0]
+                if len(candidate) <= 1000 and candidate != cursor:
+                    self._next_cursor = candidate
         if not isinstance(rows, list):
             raise _Problem("Sentry sent an answer in an unexpected shape.")
         issues = []
@@ -523,25 +538,47 @@ class SentrySource(Source):
 
     def _poll(self):
         token = self._token("Sentry")
-        issues = self._list(token, PAGE_LIMIT)
-        ids = [str(i["id"]).strip() for i in issues]
+        cursor = str(self._get("scan_cursor", "") or "")
+        issues = self._list(token, PAGE_LIMIT, cursor)
         if not self._get("baselined") and not self.backfill:
-            self._mark_filed(ids)
             if len(issues) >= PAGE_LIMIT:
-                # Older issues can move onto this page as newer ones resolve.
-                # Retain a cutoff instead of treating those unseen IDs as new.
-                self._set("baseline_before", float(self._clock()))
+                # Compare server timestamps with server timestamps, not the
+                # host clock. The latest observed issue is a safe fallback for
+                # compatible servers that omit Date.
+                stamps = []
+                for issue in issues:
+                    try:
+                        stamps.append(datetime.fromisoformat(str(issue.get("firstSeen", "")).replace("Z", "+00:00")).timestamp())
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+                try:
+                    stamps.append(parsedate_to_datetime(self._response_headers.get("date", "")).timestamp())
+                except (ValueError, TypeError, AttributeError, OverflowError):
+                    pass
+                if not stamps:
+                    raise _Problem("Sentry did not provide a server date or first-seen timestamps. "
+                                   "Cannot safely baseline a full page.")
+                self._set("baseline_before", max(stamps))
+            self._mark_filed([str(i["id"]).strip() for i in issues])
             self._set("baselined", True)
             return []
+        for _ in range(PAGES_PER_POLL - 1):
+            cursor = self._next_cursor
+            if not cursor:
+                break
+            issues += self._list(token, PAGE_LIMIT, cursor)
+        next_cursor = self._next_cursor
         filed = set(self._filed())
         fresh = [i for i in issues
                  if str(i["id"]).strip() not in filed and self._events(i) >= self.min_events
                  and not self._before_baseline(i)]
+        fresh = list({str(issue["id"]): issue for issue in fresh}.values())
         findings = []
         for index, issue in enumerate(fresh):
             stack = self._latest_event(token, str(issue["id"]).strip()) if index < ENRICH_MAX else []
             findings.append(self._to_finding(issue, stack))
         self._mark_filed([str(i["id"]).strip() for i in fresh])
+        self._set("scan_cursor", next_cursor)
         if not self._get("baselined"):
             self._set("baselined", True)
         return findings
