@@ -43,10 +43,10 @@ def render(alert):
         lines += ["", "Reply with your answer."]
     elif kind in ("question", "plain_question"):
         head = f"An agent is waiting on you (#{n})"
-        lines = [head, title, "", body, "", "Reply with your answer."]
+        lines = [head, title, body, "", "Reply with your answer."]
     elif kind == "permission":
         head = f"An agent needs permission (#{n})"
-        lines = [head, title, "", body, "", "Reply allow or deny. If unavailable, answer in the session."]
+        lines = [head, title, body, "", "Reply allow or deny. If unavailable, answer in the session."]
         choices = ("allow", "deny")
     elif kind == "stopped":
         head = f"An agent stopped (#{n})"

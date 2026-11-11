@@ -37,3 +37,33 @@ def test_same_question_across_idle_periods_alerts_once(tmp_path):
     _turn(transcript, 'u3', 'Should I drop the old client?')
     period()
     assert len(eng.store.alerts()) == 2
+
+
+def _label_alert(tmp_path, label):
+    from ccc_server.oncall import alerts
+    eng = Engine(tmp_path, flag_on=lambda: True, clock=lambda: 1000.0)
+    cfg = eng.config()
+    cfg.update(enabled=True, queue='TEST')
+    eng.save_config(cfg)
+    transcript = tmp_path / 't.jsonl'
+    _turn(transcript, 'u1', 'Should I keep the old client?')
+    eng.deps = type('D', (), {})()
+    if label is not None:
+        eng.deps.label = label
+    eng.deps.permission = lambda sid: None
+    eng.deps.question = lambda sid, store, since=0: signals.question(store, sid, transcript)
+    signals.observe(eng, {'9977c333aa': {'state': 'idle'}})
+    eng.clock = lambda: 2000.0
+    signals.observe(eng, {'9977c333aa': {'state': 'idle'}})
+    return alerts.render(eng.store.alerts()[0])[1].splitlines()
+
+
+def test_alert_label_named_unnamed_and_layout(tmp_path):
+    lines = _label_alert(tmp_path / 'a', lambda sid: ('Fix login', 'webapp'))
+    assert lines[1:3] == ['Fix login · webapp', 'Should I keep the old client?']
+    lines = _label_alert(tmp_path / 'b', lambda sid: ('', ''))
+    assert lines[1] == 'Agent 9977c333' and lines[2] == 'Should I keep the old client?'
+    lines = _label_alert(tmp_path / 'c', None)
+    assert lines[1] == 'Agent 9977c333'
+    lines = _label_alert(tmp_path / 'd', lambda sid: ('webapp', 'webapp'))
+    assert lines[1] == 'webapp'

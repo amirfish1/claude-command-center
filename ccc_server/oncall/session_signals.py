@@ -122,11 +122,20 @@ def observe(eng, current):
             idle = eng._idle_seen = {}
         prompts, candidates = set(), set()
 
+        def label(sid):
+            # Display name and project folder, from the cached census map only.
+            try:
+                name, folder = eng.deps.label(sid)
+            except Exception:
+                name = folder = ''
+            parts = [p for p in dict.fromkeys(str(x or '').strip() for x in (name, folder)) if p]
+            return ' · '.join(parts) or 'Agent ' + sid[:8]
+
         def raise_signal(sid, signal):
             key = f"session:{sid}:{signal['kind']}:{signal['stamp']}"
             if enabled:
                 alerts.raise_event(eng.store, kind=signal['kind'], key=key, session_id=sid,
-                                   title='Agent ' + sid[:8], body=signal['body'],
+                                   title=label(sid), body=signal['body'],
                                    meta=signal['meta'], now=now)
             return key
 

@@ -350,6 +350,14 @@ class _OncallDeps:
             return False, str(result.get("error") or "the session did not take the message")
         return True, ""
 
+    def label(self, sid):
+        """(display name, project folder) from the cached census map; no I/O."""
+        from ccc_server import notify as _notify
+        ident = _notify._session_identity(sid)
+        name = str(ident.get("name") or "").strip()[:60]
+        folder = os.path.basename(str(ident.get("repo_path") or "").rstrip("/"))
+        return name, folder
+
     def question(self, sid, store, since=0):
         # Called once per idle period per session (session_signals.observe),
         # never per tick: the Claude path lookup walks the projects folder.
