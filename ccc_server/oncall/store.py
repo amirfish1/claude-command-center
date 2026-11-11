@@ -24,7 +24,7 @@ import sqlite3
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 CONFIG_VERSION = 1
@@ -324,6 +324,13 @@ CREATE TABLE IF NOT EXISTS deliveries (
 CREATE INDEX IF NOT EXISTS deliveries_ext ON deliveries(channel, external_id);
 CREATE INDEX IF NOT EXISTS deliveries_alert_channel ON deliveries(alert_id, channel, id);
 CREATE INDEX IF NOT EXISTS deliveries_time ON deliveries(sent_at, alert_id, ok);
+CREATE TABLE IF NOT EXISTS poll_inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    UNIQUE(channel, external_id)
+);
 CREATE TABLE IF NOT EXISTS inbound (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel TEXT NOT NULL,
@@ -550,6 +557,23 @@ class Store:
         return self._one("SELECT * FROM deliveries WHERE channel=? ORDER BY id DESC LIMIT 1", (channel,))
 
     # -- inbound --
+    def stage_poll(self, messages, updates):
+        """Commit messages and cursor changes together, before provider acknowledgement."""
+        with self._lock, self._db:
+            for msg in messages:
+                self._db.execute("INSERT OR IGNORE INTO poll_inbox(channel,external_id,payload) VALUES(?,?,?)",
+                                 (msg.channel, msg.external_id, json.dumps(asdict(msg))))
+            for key, value in updates.items():
+                self._db.execute("INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) "
+                                 "DO UPDATE SET value=excluded.value", (key, json.dumps(value)))
+
+    def polled_messages(self, limit=100):
+        return [(row["id"], Inbound(**json.loads(row["payload"]))) for row in
+                self._all("SELECT * FROM poll_inbox ORDER BY id LIMIT ?", (limit,))]
+
+    def polled_handled(self, row_id):
+        self._run("DELETE FROM poll_inbox WHERE id=?", (row_id,))
+
     def reply_action_claim(self, alert_id):
         return self._run("INSERT OR IGNORE INTO kv(key,value) VALUES(?, 'true')",
                          (f"reply-action:{alert_id}",)).rowcount == 1

@@ -408,6 +408,7 @@ class Channel:
         self.run = run or subprocess.run
         self.last_error = ""
         self._mem = {}
+        self._poll_updates = None
         self._secret_values = set()
         self._note = ""
 
@@ -450,13 +451,19 @@ class Channel:
     def poll(self):
         """New inbound messages since the last poll. Never raises."""
         self._note = ""
+        durable = self.kv is not None and hasattr(self.kv, "stage_poll")
+        self._poll_updates = {} if durable else None
         try:
             out = list(self._poll() or [])
+            if durable:
+                self.kv.stage_poll(out, self._poll_updates)
             self.last_error = self._scrub(self._note)
             return out
         except Exception as exc:
             self.last_error = self._scrub(_describe(exc)) or "Poll failed."
             return []
+        finally:
+            self._poll_updates = None
 
     # -- subclass hooks --
     def _check(self):
@@ -501,13 +508,17 @@ class Channel:
 
     def _get(self, name, default=None):
         key = self._key(name)
+        if self._poll_updates is not None and key in self._poll_updates:
+            return self._poll_updates[key]
         if self.kv is None:
             return self._mem.get(key, default)
         return self.kv.kv_get(key, default)
 
     def _set(self, name, value):
         key = self._key(name)
-        if self.kv is None:
+        if self._poll_updates is not None:
+            self._poll_updates[key] = value
+        elif self.kv is None:
             self._mem[key] = value
         else:
             self.kv.kv_set(key, value)

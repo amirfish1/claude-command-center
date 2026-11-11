@@ -169,9 +169,21 @@ class Engine:
                     continue
                 messages = chan.poll()
                 self._note(f"channel:{chan.id}", getattr(chan, "last_error", ""))
-                for msg in messages:
-                    if self._route(cfg, chans, entry, msg, now):
-                        out["inbound"] += 1
+                # Production channels stage a durable inbox with their cursors.
+                # Constructor-injected channels may still return messages directly.
+                if not hasattr(chan, "_poll_updates"):
+                    for msg in messages:
+                        if self._route(cfg, chans, entry, msg, now):
+                            out["inbound"] += 1
+
+            for row_id, msg in store.polled_messages():
+                entry = st.channel_by_id(cfg, msg.channel)
+                if entry is None:
+                    # Preserve already received messages if a channel was removed.
+                    store.inbound_claim(msg)
+                elif self._route(cfg, chans, entry, msg, now):
+                    out["inbound"] += 1
+                store.polled_handled(row_id)
 
             for sid, (entry, source) in self.sources(cfg).items():
                 if not (force or source.due()):
