@@ -1,0 +1,1 @@
+- On-call keeps failed or interrupted reporter sends for owner review and does not retry them automatically.

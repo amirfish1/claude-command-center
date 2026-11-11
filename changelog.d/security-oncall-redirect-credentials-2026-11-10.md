@@ -1,0 +1,1 @@
+- On-call channel requests refuse redirects, and monitoring redirects drop credentials when the scheme or host changes.

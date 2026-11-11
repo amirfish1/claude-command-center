@@ -32,6 +32,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from . import store as _store
 
@@ -216,8 +217,9 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
             raise urllib.error.HTTPError(newurl, code, "Redirect to a non-web URL refused", headers, fp)
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new is not None:
-            old_host = urllib.parse.urlsplit(req.full_url).netloc.lower()
-            if urllib.parse.urlsplit(newurl).netloc.lower() != old_host:
+            old = urllib.parse.urlsplit(req.full_url)
+            target = urllib.parse.urlsplit(newurl)
+            if (target.scheme.lower(), target.netloc.lower()) != (old.scheme.lower(), old.netloc.lower()):
                 for store_ in (new.headers, new.unredirected_hdrs):
                     for name in [h for h in store_ if h.lower() == "authorization"]:
                         del store_[name]
@@ -451,10 +453,13 @@ class SentrySource(Source):
             rows = self._api("Sentry", "GET", f"{self._org_url()}/issues/?{query}",
                              token=token, hint=self._hint)
         except _HttpStatus as exc:
-            if exc.status != 400:
+            if exc.status not in (400, 422):
                 raise
-            # An older server wants a numeric project here. The project-scoped
-            # list takes the slug in the path.
+            # The project-scoped list accepts a slug. GlitchTip 4 also uses
+            # its model field name for newest-first sorting (HTTP 422).
+            if exc.status == 422:
+                params = [(key, "-first_seen" if key == "sort" else value)
+                          for key, value in params]
             path = "/".join(urllib.parse.quote(p, safe="") for p in (self.org, self.project))
             rows = self._api("Sentry", "GET",
                              f"{self.base}/api/0/projects/{path}/issues/?{urllib.parse.urlencode(params)}",
@@ -482,11 +487,16 @@ class SentrySource(Source):
         ids = [str(i["id"]).strip() for i in issues]
         if not self._get("baselined") and not self.backfill:
             self._mark_filed(ids)
+            if len(issues) >= PAGE_LIMIT:
+                # Older issues can move onto this page as newer ones resolve.
+                # Retain a cutoff instead of treating those unseen IDs as new.
+                self._set("baseline_before", float(self._clock()))
             self._set("baselined", True)
             return []
         filed = set(self._filed())
         fresh = [i for i in issues
-                 if str(i["id"]).strip() not in filed and self._events(i) >= self.min_events]
+                 if str(i["id"]).strip() not in filed and self._events(i) >= self.min_events
+                 and not self._before_baseline(i)]
         findings = []
         for index, issue in enumerate(fresh):
             stack = self._latest_event(token, str(issue["id"]).strip()) if index < ENRICH_MAX else []
@@ -495,6 +505,19 @@ class SentrySource(Source):
         if not self._get("baselined"):
             self._set("baselined", True)
         return findings
+
+    def _before_baseline(self, issue):
+        cutoff = self._get("baseline_before")
+        if cutoff is None:
+            return False
+        try:
+            first = datetime.fromisoformat(str(issue.get("firstSeen", "")).replace("Z", "+00:00"))
+            if first.tzinfo is None:
+                first = first.replace(tzinfo=timezone.utc)
+            return first.timestamp() <= float(cutoff)
+        except (ValueError, TypeError, OverflowError):
+            # Without a timestamp we cannot safely label an unseen issue new.
+            return True
 
     @staticmethod
     def _events(issue):
@@ -608,7 +631,7 @@ class PostHogSource(Source):
             f"WHERE event = '$exception' AND timestamp >= now() - INTERVAL {int(self.window_min)} MINUTE "
             "GROUP BY group_key "
             f"HAVING count() >= {int(self.min_events)} "
-            "ORDER BY event_count DESC "
+            "ORDER BY event_count DESC, group_key "
             "LIMIT 100"
         )
 
@@ -638,7 +661,19 @@ class PostHogSource(Source):
 
     def _poll(self):
         token = self._token("PostHog")
-        rows = self._query(token, self.hogql(), "ccc on-call exceptions")
+        sql = self.hogql()
+        rows = self._query(token, sql, "ccc on-call exceptions")
+        if not self._get("baselined") and not self.backfill:
+            page = list(rows)
+            while len(page) == 100:
+                if len(rows) > FILED_KEEP:
+                    raise _Problem("PostHog has too many existing groups to baseline safely. "
+                                   "Narrow window_min or raise min_events.")
+                page = self._query(token, sql + f" OFFSET {len(rows)}", "ccc on-call baseline")
+                rows += page
+            if len(rows) > FILED_KEEP:
+                raise _Problem("PostHog has too many existing groups to baseline safely. "
+                               "Narrow window_min or raise min_events.")
         day = time.strftime("%Y%m%d", time.gmtime(float(self._clock())))
         groups = []
         for row in rows:
@@ -994,6 +1029,9 @@ def build(cfg, **kw):
     if not isinstance(cfg, dict):
         raise ValueError("A source must be an object.")
     kind = str(cfg.get("type") or "").strip()
+    if kind == "ci":
+        from .ci_source import CISource
+        return CISource(cfg, **kw)
     if kind not in _TYPES:
         raise ValueError(f"Unknown source type: {kind or '(none)'}. Use one of: {', '.join(_store.SOURCE_TYPES)}.")
     return _TYPES[kind](cfg, **kw)
@@ -1005,6 +1043,13 @@ def _field(name, label, placeholder="", *, secret=False, optional=False):
 
 
 _FIELDS = {
+    "ci": [
+        _field("repo", "Repository", "example-org/storefront"),
+        _field("token_vault", "Token", secret=True, optional=True),
+        _field("base", "API address", "https://api.github.com", optional=True),
+        _field("branches", "Branches (comma separated)", optional=True),
+        _field("every_s", "Seconds between checks", "300", optional=True),
+    ],
     "github": [
         _field("repo", "Repository", "example-org/storefront"),
         _field("token_vault", "Token", "", secret=True, optional=True),
