@@ -176,3 +176,48 @@ def test_poll_call_budget_includes_inflight_pages_and_log_enrichment():
     before = len(calls)
     assert len(source.poll()) == 3
     assert len(calls) - before == 10
+
+
+def test_run_listing_larger_than_one_megabyte_is_read_whole():
+    """A real page of 100 GitHub runs is over 1 MB; a cut-off read broke setup."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    import pytest
+    from ccc_server.oncall import ci_source
+    from ccc_server.oncall.sources import _Problem
+    pad = 'x' * 15000
+    listing = json.dumps({'workflow_runs': [
+        {'id': n, 'status': 'completed', 'conclusion': 'success', 'head_branch': 'main',
+         'head_sha': f'{n:040x}', 'name': 'CI', 'workflow_id': 1, 'repository': {'description': pad}}
+        for n in range(1, 101)]}).encode()
+    assert len(listing) > 1024 * 1024
+    class Server(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if '/runs' in self.path:
+                body = listing
+            elif self.path.endswith('/huge'):
+                body = b'[' + b' ' * (ci_source.MAX_REPLY + 10) + b']'
+            elif self.path.endswith('/logs'):
+                body = b'a' * (ci_source.MAX_LOG + 500)
+            else:
+                body = b'{"default_branch": "main"}'
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *args): pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Server)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        source = CISource({'id': 'ci', 'repo': 'example/demo',
+                           'base': f'http://127.0.0.1:{server.server_port}/api/v1'}, kv=_MemoryKV())
+        rows = source._fetch('/actions/runs?per_page=100&limit=100', 'test-only')['workflow_runs']
+        assert len(rows) == 100
+        with pytest.raises(_Problem, match='too large'):
+            source._fetch('/huge', 'test-only')
+        assert len(source._fetch('/actions/jobs/1/logs', 'test-only', raw=True)) == ci_source.MAX_LOG
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()

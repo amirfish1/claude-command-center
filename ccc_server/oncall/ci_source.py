@@ -36,6 +36,11 @@ def scrub(text, secrets=()):
     return text
 
 
+# A page of 100 GitHub runs is 1 to 2 MB. Job logs keep the earlier 1 MB bound.
+MAX_REPLY = 8 * 1024 * 1024
+MAX_LOG = 1024 * 1024
+
+
 def transport(url, headers):
     opener = urllib.request.build_opener(_SafeRedirect())
     try:
@@ -43,7 +48,8 @@ def transport(url, headers):
     except urllib.error.HTTPError as exc:
         response = exc
     with response:
-        return response.code, response.read(1024 * 1024), dict(response.headers)
+        # One byte past the limit lets _fetch tell a cut-off answer from a complete one.
+        return response.code, response.read(MAX_REPLY + 1), dict(response.headers)
 
 
 def normalize_forgejo_run(row):
@@ -147,7 +153,9 @@ class CISource(Source):
                 cache[path] = tag
                 self._set('etags', cache)
         if raw:
-            return body.decode('utf-8', 'replace')
+            return body[:MAX_LOG].decode('utf-8', 'replace')
+        if len(body) > MAX_REPLY:
+            raise _Problem('CI answer was too large to read (over 8 MB).')
         payload = _json(body)
         if self.provider == 'forgejo':
             if '/actions/runs' in path and '/jobs' not in path:
