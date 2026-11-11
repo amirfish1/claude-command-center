@@ -136,7 +136,7 @@ class Engine:
 
     def _due(self, name, every, now, force=False):
         last = self.store.kv_get(f"due:{name}", 0) or 0
-        if force or now - last >= every:
+        if force or now < last or now - last >= every:
             self.store.kv_set(f"due:{name}", now)
             return True
         return False
