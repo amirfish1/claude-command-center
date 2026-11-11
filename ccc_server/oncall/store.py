@@ -324,6 +324,7 @@ CREATE TABLE IF NOT EXISTS inbound (
     handled TEXT NOT NULL DEFAULT '',
     UNIQUE(channel, external_id)
 );
+CREATE INDEX IF NOT EXISTS inbound_unhandled ON inbound(id) WHERE handled='';
 CREATE TABLE IF NOT EXISTS reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
@@ -501,9 +502,22 @@ class Store:
         except sqlite3.IntegrityError:
             return False
 
+    def park_unhandled_inbound(self, now=None):
+        """Expose interrupted routing without replaying a possibly applied approval."""
+        for row in self._all("SELECT * FROM inbound WHERE handled='' ORDER BY id LIMIT 50"):
+            self.alert_upsert(
+                f"inbound-review:{row['id']}", kind="reply_problem",
+                title="Reply delivery needs review",
+                body=f"Reply on {row['channel']} from {row['sender']} was not confirmed. "
+                     "Check the ticket or session before applying it again.\n\n" + row['text'],
+                needs_reply=False, now=now)
+            self._run("UPDATE inbound SET handled='needs_review' WHERE id=? AND handled=''",
+                      (row['id'],))
+
     def inbound_handled(self, msg, how):
         self._run("UPDATE inbound SET handled=? WHERE channel=? AND external_id=?",
-                  (how[:200], msg.channel, msg.external_id))
+                  ("" if how.startswith("error:") or how.endswith(" failed") else how[:200],
+                   msg.channel, msg.external_id))
 
     # -- reports --
     def report_upsert(self, source, fingerprint, *, title, text, queue="", state="held",

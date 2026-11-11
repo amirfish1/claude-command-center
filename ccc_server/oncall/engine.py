@@ -193,6 +193,7 @@ class Engine:
             if self._due("closed", CLOSED_EVERY_S, now, force):
                 customers.collect_closed(cfg, store, chans, self.wt, now=now)
 
+            store.park_unhandled_inbound(now=now)
             customers.collect_delivery_problems(store, now=now)
             out["sent"] = alerts.deliver(cfg, store, chans, now=now)
             self.last_tick = out
