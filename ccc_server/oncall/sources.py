@@ -1119,6 +1119,9 @@ def build(cfg, **kw):
     if not isinstance(cfg, dict):
         raise ValueError("A source must be an object.")
     kind = str(cfg.get("type") or "").strip()
+    if kind == "logs":
+        from .logs_source import LogsSource
+        return LogsSource(cfg, **kw)
     if kind == "ci":
         from .ci_source import CISource
         return CISource(cfg, **kw)
@@ -1189,6 +1192,9 @@ _FIELDS = {
 def required_fields(source_type):
     """The fields a setup form asks for, in order. Optional ones come last."""
     kind = str(source_type or "").strip()
+    if kind == "logs":
+        from .logs_source import FIELDS
+        return [dict(f) for f in FIELDS]
     if kind not in _FIELDS:
         raise ValueError(f"Unknown source type: {kind or '(none)'}.")
     return [dict(f) for f in _FIELDS[kind]]
