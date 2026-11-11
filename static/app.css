@@ -10972,19 +10972,9 @@
     margin-top: 0;
     font-size: 10px; color: var(--text-muted); opacity: 0.6;
   }
-  .conv-input-hint:empty,
-  .conv-input-hint:has(.tty-label:empty):not(:has(.conv-input-kbd)) { display: none; }
+  .conv-input-hint:not(:has(.codex-appsrv.visible, .tty-label:not(:empty))) { display: none; }
   .conv-input-hint .tty-label {
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-  }
-  .conv-input-hint .conv-input-kbd {
-    margin-left: auto;
-    font-family: inherit;
-  }
-  .conv-input-hint kbd {
-    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 3px; padding: 0 4px; font-size: 9px;
   }
   /* Legacy in-row tty-label kept for any hidden code paths that still query
      it; the new footer span is what's actually visible. */
