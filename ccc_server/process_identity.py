@@ -6,6 +6,8 @@ Callers must never need a process-per-candidate command or raw environment.
 
 import ctypes
 import os
+from pathlib import Path
+import re
 import struct
 import subprocess
 import sys
@@ -13,6 +15,79 @@ import sys
 
 _ALLOWED_ENV = frozenset(("CCC_PARENT_SESSION_ID", "CODEX_THREAD_ID"))
 _MAX_PROCARGS_BYTES = 1024 * 1024
+_WRITER_SID = re.compile(r"^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+
+
+def _writer_session(filename, lock_dirs):
+    candidate = Path(filename)
+    if candidate.parent not in lock_dirs or candidate.suffix != '.lock':
+        return ''
+    return candidate.stem if _WRITER_SID.fullmatch(candidate.stem) else ''
+
+
+def codex_writer_sessions(pids, homes):
+    """Held native writer locks, grouped by PID; never infer from cwd/argv.
+
+    A shared app-server can own several threads. Keep the whole set so callers
+    cannot mistake one of its sessions for the parent of another. Linux reads
+    procfs directly; macOS uses one bounded lsof call for the batch.
+    """
+    pids = sorted({pid for pid in pids if isinstance(pid, int) and pid > 0})
+    lock_dirs = {Path(home).expanduser().resolve() / 'thread-writer-locks' for home in homes}
+    if not pids or not lock_dirs:
+        return {}
+    result = {}
+    if sys.platform.startswith('linux'):
+        for pid in pids:
+            try:
+                descriptors = list(Path('/proc', str(pid), 'fd').iterdir())
+                if len(descriptors) > 4096:
+                    continue
+                for descriptor in descriptors:
+                    try:
+                        sid = _writer_session(str(descriptor.readlink()), lock_dirs)
+                        if not sid:
+                            continue
+                        info = Path('/proc', str(pid), 'fdinfo', descriptor.name).read_text()
+                        # An open file is insufficient: the process must own
+                        # the exclusive whole-file lock, not be waiting for it.
+                        if re.search(r'^lock:\s+\d+: FLOCK\s+ADVISORY\s+WRITE '
+                                     + str(pid) + r' \S+ 0 EOF$', info, re.M):
+                            result.setdefault(pid, set()).add(sid)
+                    except OSError:
+                        continue
+            except OSError:
+                continue
+    elif sys.platform == 'darwin':
+        try:
+            completed = subprocess.run(
+                ['/usr/sbin/lsof', '-nP', '-a', '-p', ','.join(map(str, pids)), '-Fpfln'],
+                capture_output=True, text=True, timeout=3, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        if completed.returncode not in (0, 1) or len(completed.stdout) > _MAX_PROCARGS_BYTES:
+            return {}
+        result = _parse_writer_lsof(completed.stdout, set(pids), lock_dirs)
+    return result
+
+
+def _parse_writer_lsof(output, pids, lock_dirs):
+    result = {}
+    pid, locked = None, False
+    for line in output.splitlines():
+        if line.startswith('p'):
+            pid = int(line[1:]) if line[1:].isdigit() else None
+            locked = False
+        elif line.startswith('f'):
+            locked = False
+        elif line.startswith('l'):
+            locked = line[1:] == 'W'
+        elif line.startswith('n') and locked and pid in pids:
+            sid = _writer_session(line[1:], lock_dirs)
+            if sid:
+                result.setdefault(pid, set()).add(sid)
+    return result
 
 
 def process_snapshot():

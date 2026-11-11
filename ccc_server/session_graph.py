@@ -46,7 +46,7 @@ from ccc_server.quick_actions import _validated_quick_action, _validated_quick_a
 #   6. Kimi Code Agent subagents (agents/<name>/wire.jsonl) — source: "kimi-subagent"
 #   7. Grok Build subagents (sessions/<parent>/subagents/<child>/meta.json)
 #      — source: "grok-subagent" (real resumable child sessions)
-#   8. Observed live Claude subprocess ancestry — source: "process-discovery"
+#   8. Observed live headless subprocess ancestry — source: "process-discovery"
 #
 # Edges are added eagerly at startup (sources 1-4, 7) and lazily on first
 # family_tree() query for sources 5-6 (filesystem glob, cached). Source 7
@@ -271,7 +271,7 @@ class _SessionGraph:
             self._edge_meta[child] = meta
             self._dirty = True
 
-    def try_add_discovered_edge(self, parent, child, model=""):
+    def try_add_discovered_edge(self, parent, child, model="", engine="claude"):
         """Atomically accept a new observed edge without overriding lineage."""
         with self._lock:
             if not parent or not child or parent == child or self._parent_of.get(child):
@@ -283,7 +283,7 @@ class _SessionGraph:
                     return False
                 seen.add(ancestor)
                 ancestor = self._parent_of.get(ancestor)
-            self.add_edge(parent, child, source="process-discovery", engine="claude", model=model)
+            self.add_edge(parent, child, source="process-discovery", engine=engine, model=model)
             return True
 
     def remove_edge(self, parent, child):

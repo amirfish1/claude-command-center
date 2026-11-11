@@ -74,3 +74,31 @@ class ProcessIdentityTests(unittest.TestCase):
 def test_darwin_rejects_unterminated_environment():
     record = struct.pack('=i', 2) + b'/bin/claude\0\0claude\0-p\0CODEX_THREAD_ID=unterminated'
     assert process_identity._parse_procargs2(record) is None
+
+
+def test_linux_requires_a_held_exclusive_writer_lock(tmp_path):
+    import sys
+    import pytest
+    if not sys.platform.startswith('linux'):
+        pytest.skip('procfs contract')
+    import fcntl
+    sid = '11111111-1111-4111-8111-111111111111'
+    locks = tmp_path / 'thread-writer-locks'
+    locks.mkdir()
+    with (locks / (sid + '.lock')).open('w') as handle:
+        assert process_identity.codex_writer_sessions([os.getpid()], [tmp_path]) == {}
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert process_identity.codex_writer_sessions([os.getpid()], [tmp_path]) == {os.getpid(): {sid}}
+        assert process_identity.codex_writer_sessions([os.getpid()], [tmp_path / 'another-home']) == {}
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        assert process_identity.codex_writer_sessions([os.getpid()], [tmp_path]) == {}
+
+
+def test_lsof_writer_records_keep_pid_file_and_lock_boundaries(tmp_path):
+    sid = '11111111-1111-4111-8111-111111111111'
+    locks = tmp_path / 'thread-writer-locks'
+    filename = str(locks / (sid + '.lock'))
+    output = f'p10\nf3\nlW\nn{filename}\nf4\nn{filename}\np20\nf3\nlR\nn{filename}\n'
+    assert process_identity._parse_writer_lsof(output, {10, 20}, {locks}) == {10: {sid}}
+    assert process_identity._parse_writer_lsof(output, {20}, {locks}) == {}
+    assert process_identity._parse_writer_lsof(output, {10}, {tmp_path}) == {}

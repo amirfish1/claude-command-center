@@ -50,6 +50,17 @@ class EphemeralSessionTests(unittest.TestCase):
         self.assertFalse(rows[0]['is_live'])
         self.assertEqual(rows[0]['last_event_type'], 'result')
 
+    def test_discovered_parent_survives_registry_pruning_in_full_list(self):
+        from ccc_server.session_graph import _SessionGraph
+        graph = _SessionGraph(self.repo / 'graph.json')
+        graph.try_add_discovered_edge('parent-thread', 'capture-thread', engine='codex')
+        graph.save()
+        reloaded = _SessionGraph(self.repo / 'graph.json')
+        reloaded.load()
+        with mock.patch.object(server, '_session_graph', reloaded):
+            rows = server.find_codex_conversations(repo_path=str(self.repo), resolve_pr_states=False, resolve_worktree_dirty=False)
+        self.assertEqual(rows[0]['parent_session_id'], 'parent-thread')
+
     def test_capture_without_native_path_recovers_answer(self):
         result = server._codex_recover_log_conversation('capture-thread', None)
         self.assertIsNotNone(result)
