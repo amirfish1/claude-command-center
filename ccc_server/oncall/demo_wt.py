@@ -48,7 +48,13 @@ class RealTickets(WT):
 
     def __init__(self, root, env):
         self.ref = ''
-        self.proc = subprocess.Popen([interpreter(), str(Path(__file__).resolve()), '--bridge'],
+        spec = importlib.util.find_spec('watchtower')
+        # WatchTower is stdlib-only. Avoid unrelated site hooks on the hot path
+        # while retaining the installed package's actual CLI implementation.
+        argv = ([sys.executable, '-S', str(Path(__file__).resolve()), '--bridge',
+                 str(Path(spec.origin).parent.parent)] if spec and spec.origin else
+                [interpreter(), str(Path(__file__).resolve()), '--bridge'])
+        self.proc = subprocess.Popen(argv,
                                      cwd=root / 'project', env=env, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      text=True, start_new_session=True)
@@ -132,6 +138,27 @@ class RealTickets(WT):
         self.proc.stderr.close()
 
 
+def close_verified(cli, args):
+    """Use WatchTower's proof and store without installed-checkout deployment.
+
+    cmd_close also syncs the installed WatchTower checkout. A demo must never
+    run that housekeeping, even with a private HOME and ticket store.
+    """
+    from watchtower import queue
+    if not args.commit or not args.summary:
+        raise ValueError('The demo close requires a commit and summary.')
+    verified, error = cli._verify_close_commit(args.ref, args.commit)
+    if error:
+        raise ValueError(error)
+    args.commit = verified
+    item = queue.close(args.ref, args.worker,
+                       resolution=cli._resolution_from_args(args))
+    if not item or item.get('status') != 'closed':
+        raise RuntimeError('WatchTower did not close the demo ticket.')
+    print('CLOSED: ' + item['ref'])
+    return 0
+
+
 def bridge():
     from watchtower import cli
     parser = cli.build_parser()
@@ -147,7 +174,8 @@ def bridge():
                 argv = json.loads(line)
                 args = parser.parse_args(argv)
                 args.message_attr = None
-                code = args.func(args) or 0
+                code = (close_verified(cli, args) if argv[0] == 'close'
+                        else args.func(args)) or 0
         except (Exception, SystemExit) as exc:
             code = 1
             err.write('Command ' + repr(argv) + ': ' + str(exc))
@@ -155,4 +183,6 @@ def bridge():
 
 
 if __name__ == '__main__':
+    if len(sys.argv) > 2:
+        sys.path.insert(0, sys.argv[2])
     bridge()
