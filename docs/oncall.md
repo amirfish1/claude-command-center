@@ -503,3 +503,4 @@ ccc oncall decisions             what agents decided, each with its undo
 - [Security review and limits](oncall-security.md).
 - [Escalation steps, people and rotations](oncall-escalation.md).
 - [Team chat alerts and reply checks](oncall-team-chat.md).
+- [Step-by-step guides with checked terminal output](guides/README.md).

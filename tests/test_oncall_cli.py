@@ -175,7 +175,7 @@ def test_day_two_commands(box, tmp_path):
     box.lines.clear()
 
     assert box.run("report", "Checkout button does nothing on Safari") == 0
-    assert box.lines[-1] == "Filed as SHOP-1. An agent will pick it up."
+    assert box.lines[-1] == "Filed as SHOP-1. Worker start is not confirmed."
 
     assert box.run("customer", "add", "dana@example.com", "--name", "Dana") == 0
     assert box.run("customer", "list") == 0
