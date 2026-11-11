@@ -229,6 +229,21 @@ It does not establish safety for a production repository or another model.
 
 ### Reproduction and verification limits
 
+After the email, permission, secret-filter and cap changes, the required suite
+passed all 562 tests in 136.26 seconds. The first integrated run had ten failures
+because the test Vault lacked the newly used enumeration method, and a demo
+timing failure at 4.35 seconds against its two-second bound. The fixture now
+implements that method. A separate profiled demo completed in 0.82 seconds;
+the subsequent full suite passed the unchanged timing and performance checks.
+No timing bound was relaxed.
+
+An independent Puppeteer fixture check exercised the actual settings script
+at desktop and 390-pixel mobile widths. The send-policy text was visible and
+wrapped without overlap; the switch changed its accessible checked state on
+synthetic save. The email authentication-server field had an accessible name,
+but its full placeholder clipped on mobile. That fixture did not test the
+complete email setup form or a real saved channel.
+
 The initial review's stable-code run passed all 448 tests in 67.46 seconds. No performance
 bound was changed. An earlier run edited concurrently with server source failed
 a source-inspection assertion; the fresh stable-code run passed it.
