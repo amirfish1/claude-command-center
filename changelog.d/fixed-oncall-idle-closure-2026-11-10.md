@@ -1,0 +1,1 @@
+- On-call skips closed-ticket listings when no filed report needs them.

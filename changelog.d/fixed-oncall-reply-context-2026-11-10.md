@@ -1,0 +1,1 @@
+- On-call keeps reply thread context after interrupted delivery so owner review can identify the original conversation.

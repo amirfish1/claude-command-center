@@ -101,3 +101,32 @@ def test_half_open_connection_is_held(tmp_path):
         server.server_close()
         thread.join()
         store.close()
+
+
+def test_slow_successful_response_is_not_repeated(tmp_path):
+    accepted = []
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+        def do_POST(self):
+            accepted.append(self.rfile.read(int(self.headers['Content-Length'])))
+            threading.Event().wait(.1)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"id":"slow-proof"}')
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    store = Store(tmp_path)
+    channel = NtfyChannel({'id': 'local', 'type': 'ntfy', 'topic': 'proof',
+                           'server': f'http://127.0.0.1:{server.server_port}'}, kv=store)
+    alert, _ = store.alert_upsert('one', kind='permission', title='Choose', body='')
+    try:
+        assert alerts.send_alert(store, [channel], alert)
+        assert alerts.send_alert(store, [channel], alert)
+        assert len(accepted) == 1
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+        store.close()

@@ -169,11 +169,23 @@ class Engine:
                     continue
                 messages = chan.poll()
                 self._note(f"channel:{chan.id}", getattr(chan, "last_error", ""))
-                for msg in messages:
-                    if self._route(cfg, chans, entry, msg, now):
-                        out["inbound"] += 1
-                if hasattr(chan, "ack_poll"):
-                    chan.ack_poll(messages)
+                # Production channels stage a durable inbox with their cursors.
+                # Constructor-injected channels may still return messages directly.
+                if not getattr(chan, "durable_poll", False):
+                    for msg in messages:
+                        if self._route(cfg, chans, entry, msg, now):
+                            out["inbound"] += 1
+                    if hasattr(chan, "ack_poll"):
+                        chan.ack_poll(messages)
+
+            for row_id, msg in store.polled_messages():
+                entry = st.channel_by_id(cfg, msg.channel)
+                if entry is None:
+                    # Preserve already received messages if a channel was removed.
+                    store.inbound_claim(msg)
+                elif self._route(cfg, chans, entry, msg, now):
+                    out["inbound"] += 1
+                store.polled_handled(row_id)
 
             for sid, (entry, source) in self.sources(cfg).items():
                 if not (force or source.due()):
@@ -202,6 +214,9 @@ class Engine:
             if self._due("closed", CLOSED_EVERY_S, now, force):
                 customers.collect_closed(cfg, store, chans, self.wt, now=now)
 
+            if self._due("health", 60, now):
+                from .health import collect
+                collect(cfg, store, self.wt, now)
             store.park_unhandled_inbound(now=now)
             customers.collect_delivery_problems(store, now=now)
             from .week import daily
@@ -209,6 +224,9 @@ class Engine:
                 daily(self, now)
             except (ValueError, wtmod.WTError) as exc:
                 self._note("summary", str(exc))
+            if self._due("retention", 60, now):
+                from .retention import prune
+                prune(store, now)
             out["sent"] = alerts.deliver(cfg, store, chans, now=now)
             self.last_tick = out
             return out

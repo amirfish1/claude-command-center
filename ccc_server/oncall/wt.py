@@ -91,8 +91,9 @@ class WT:
         data = self._json("blocked", "-q", queue, "--json")
         return [t for t in data if isinstance(t, dict)] if isinstance(data, list) else []
 
-    def ls(self, queue, status="active", limit=200):
-        data = self._json("ls", "-q", queue, "--status", status, "--limit", limit, "--json")
+    def ls(self, queue, status="active", limit=200, *, offset=None):
+        extra = ["--offset", offset] if offset is not None else []
+        data = self._json("ls", "-q", queue, "--status", status, "--limit", limit, "--json", *extra)
         return [t for t in data if isinstance(t, dict)] if isinstance(data, list) else []
 
     def week_window(self, queue, start, end, refs, limit=2000):
@@ -124,6 +125,10 @@ class WT:
         if not isinstance(rows, list) or len(rows) > limit:
             raise WTError("WatchTower weekly read exceeded its limit.")
         return rows
+
+    def health(self, queue):
+        rows = self._json("status", "-q", queue, "--json")
+        return next((row for row in rows if isinstance(row, dict) and row.get("queue") == queue), {})
 
     def find(self, ref):
         code, out, _err = self._call("find", ref, "--json")

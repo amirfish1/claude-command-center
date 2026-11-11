@@ -42,7 +42,7 @@ class FakeWT:
     def blocked(self, queue):
         return []
 
-    def ls(self, queue, status="active", limit=200):
+    def ls(self, queue, status="active", limit=200, *, offset=None):
         return []
 
     def find(self, ref):
