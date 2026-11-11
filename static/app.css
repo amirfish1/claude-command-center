@@ -32289,13 +32289,34 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
   margin: 0; height: 36px; padding: 0; font-size: 13px; color: var(--text-muted);
   background: transparent; border: 0; cursor: pointer;
 }
+/* Never taller than the room above the offer row (--f2c-room, measured when
+   the sheet opens): the fields scroll and the buttons stay pinned in view. */
+.f2c-panel .f2c-config {
+  box-sizing: border-box; flex-wrap: nowrap;
+  max-height: var(--f2c-room, 70vh); overflow-y: auto; overscroll-behavior: contain;
+  padding-bottom: 0;
+}
+.f2c-panel .f2c-config > * { flex-shrink: 0; }
+.f2c-panel .f2c-config .f2c-actions {
+  position: sticky; bottom: 0; z-index: 1; margin-top: 0;
+  padding: 10px 0 14px; background: inherit;
+}
+/* While the sheet is open it sits above the pane's floating buttons, and
+   the install prompt stays out of the way of its buttons. */
+.conv-input-bar:has(.f2c-config) { z-index: 20; }
+/* The toolbar row's narrow-width overflow guard would clip the open sheet. */
+.conv-input-bar .conv-input-row-bottom:has(.f2c-config) { overflow: visible !important; }
+body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
+.conv-pane:has(.f2c-config) .conv-ready-archive-footer:not([hidden]) { display: none; }
 @media (max-width: 1200px) {
-  /* In flow, not position:fixed: an ancestor's containment boxed a fixed
-     sheet into a narrow clipped strip. The offer row grows to hold it. */
+  /* Opens upward from the offer row, across its full width. Not in flow:
+     the composer sits at the bottom of a pane that does not scroll, so an
+     in-flow sheet pushed Continue below the screen. Not position:fixed
+     either: an ancestor's containment boxed a fixed sheet into a strip. */
   .f2c-panel .route:has(.f2c-config) { display: flex; flex-wrap: wrap; width: 100%; max-width: 100%; }
   .f2c-panel .f2c-config {
-    position: static; order: -1; flex: 1 1 100%; width: 100%; max-width: 100%;
-    box-sizing: border-box; margin-bottom: 8px;
+    position: absolute; left: 0; right: 0; bottom: calc(100% + 8px);
+    width: auto; max-width: 100%;
   }
   .f2c-panel .f2c-config .f2c-select { height: 44px; font-size: 16px; }
 }

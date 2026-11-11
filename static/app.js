@@ -6121,7 +6121,27 @@
         ? 'Idle ' + ageLabel + '. Start fresh with just the context you need.'
         : 'Resuming here reloads ~' + tokensLabel + ' tokens on ' + modelLabel + '.');
     panel.innerHTML = '<div class="routes">' + f2RoutesHtml(st, verdictText) + '</div>';
+    f2FitSheet(panel);
   }
+
+  // The sheet opens upward from the offer row. Cap it at the room between
+  // that row and the top of the conversation so its fields scroll inside it
+  // and the Continue button stays on screen (phones, short windows, and a
+  // phone with the keyboard up).
+  function f2FitSheet(panel) {
+    try {
+      const sheet = panel && panel.querySelector('.f2c-config');
+      if (!sheet || !sheet.parentElement) return;
+      const pane = panel.closest('.conv-pane');
+      const body = pane && pane.querySelector(':scope > .conversations-view');
+      const top = Math.max(0, (body || pane || document.body).getBoundingClientRect().top);
+      const room = Math.floor(sheet.parentElement.getBoundingClientRect().top - top - 14);
+      sheet.style.setProperty('--f2c-room', Math.max(room, 180) + 'px');
+    } catch (_) {}
+  }
+  window.addEventListener('resize', () => {
+    document.querySelectorAll('.f2c-panel').forEach(f2FitSheet);
+  });
 
   // ── route action ───────────────────────────────────────────────────────
   // Start new from here (~2k). Spawns a lean session on the

@@ -1,0 +1,1 @@
+- On a phone, tablet or narrow window, "Continue in a new session" now opens above the message box and scrolls inside itself, so its Continue button is always on screen. Before, the button sat below the screen and could not be reached by scrolling.
