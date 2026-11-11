@@ -370,22 +370,61 @@ def observe_sessions(previous, current, describe=None, *, eng=None):
     eng = _engine(eng)
     if not eng.active():
         return 0
+    from .clarity import label, unreadable, choices
+    for sid, title, body, stamp in getattr(eng, '_stopped_pending', {}).values():
+        eng.raise_session('stopped', sid, title, body, stamp=stamp)
+    eng._stopped_pending = {}
+    if not (eng.config().get('alerts') or {}).get('decisions', True):
+        return 0
+    pending = getattr(eng, '_question_observations', {})
+    eng._question_observations = pending
     raised = 0
-    previous = previous if previous is not None else None
     for sid, cur in (current or {}).items():
-        waiting = bool(cur.get("question_waiting"))
-        was = bool(((previous or {}).get(sid) or {}).get("question_waiting"))
-        if waiting and not was and previous is not None:
-            title, question = describe(sid) if describe else ("", "")
-            row = eng.raise_session("question", sid, title or "A session",
-                                    question or "It asked a question. Open CCC to read it.",
-                                    stamp=str(int(eng.clock())))
-            raised += 1 if row else 0
-        elif was and not waiting:
-            close_session_alerts(eng, sid, "question")
-    for sid in (previous or {}):
-        if sid not in (current or {}) and (previous[sid] or {}).get("question_waiting"):
-            close_session_alerts(eng, sid, "question")
+        waiting = bool(cur.get('question_waiting'))
+        was = bool(((previous or {}).get(sid) or {}).get('question_waiting'))
+        if waiting and previous is not None and (not was or sid in pending):
+            title = cur.get('name') or cur.get('title') or ''
+            question = cur.get('question_text') or ''
+            options = choices(cur.get('question_option_details') or cur.get('question_options'))
+            signal_meta = {}
+            native = eng.deps.waiting_question(sid, eng.store) if hasattr(eng.deps, 'waiting_question') else None
+            if native:
+                question = native.get('body') or question
+                signal_meta = native.get('meta') or {}
+                options = signal_meta.get('choices') or options
+            if not question and describe:
+                title, question = describe(sid)
+                if isinstance(question, dict):
+                    signal_meta = question.get('meta') or {}
+                    options = signal_meta.get('choices') or options
+                    question = question.get('body') or ''
+            if not question and sid not in pending:
+                pending[sid] = str(eng.clock())
+                continue
+            stamp = pending.pop(sid, str(eng.clock()))
+            info = {}
+            if not question and hasattr(eng.deps, 'context'):
+                info = eng.deps.context(sid, eng.store)
+                structured = info.get('structured') or {}
+                question = structured.get('body') or info.get('last') or ''
+                signal_meta = structured.get('meta') or {}
+                options = signal_meta.get('choices') or options
+            row, new = alerts.raise_event(
+                eng.store, kind='question', key=f'session:{sid}:question:{stamp}',
+                session_id=sid, title=label(eng.deps, sid, title),
+                body=question or unreadable(),
+                meta={**signal_meta, 'choices': options} if question else {'at_keyboard': True},
+                needs_reply=bool(question) and not signal_meta.get('at_keyboard'), now=eng.clock())
+            raised += int(new)
+        elif not waiting:
+            pending.pop(sid, None)
+            if was:
+                close_session_alerts(eng, sid, 'question')
+    for sid in set(previous or {}) | set(pending):
+        if sid not in (current or {}):
+            pending.pop(sid, None)
+            close_session_alerts(eng, sid, 'question')
+
     return raised
 
 
@@ -398,4 +437,12 @@ def close_session_alerts(eng, session_id, kind):
 def session_stopped(session_id, title, body, stamp="", *, eng=None):
     """CCC saw a session die mid-task."""
     eng = _engine(eng)
+    if not eng.active() or not (eng.config().get('alerts') or {}).get('stopped', True):
+        return None
+    info = eng.deps.context(session_id, eng.store) if hasattr(eng.deps, 'context') else {}
+    if not str(info.get('last') or '').partition('<session-state>')[0].strip():
+        pending = getattr(eng, '_stopped_pending', {})
+        pending[session_id] = (session_id, title, body, str(stamp))
+        eng._stopped_pending = pending
+        return None
     return eng.raise_session("stopped", session_id, title, body, stamp=str(stamp))

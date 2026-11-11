@@ -354,6 +354,20 @@ class Engine:
         if kind == "question" and not wants.get("decisions", True):
             return None
         with self._lock:
+            from .clarity import label, excerpt
+            body = str(body or "")
+            if kind == 'stopped':
+                title = label(self.deps, session_id, title)
+                last = ''
+                if hasattr(self.deps, 'context'):
+                    info = self.deps.context(session_id, self.store)
+                    last = excerpt(info.get('last'))
+                    if last and last not in body:
+                        body = (body[:500] + '\n\nLast assistant message:\n' + last[-1200:]).strip()
+                if not last:
+                    fallback = ('On-call could not read the last assistant message. '
+                                'Open this session in CCC for its history before continuing.')
+                    body = '\n\n'.join(part for part in (body[:500], fallback) if part)
             row, _new = alerts.raise_event(
                 self.store, kind=kind, key=f"session:{session_id}:{kind}:{stamp}",
                 title=title or "A session", body=body, session_id=session_id, now=self.clock())

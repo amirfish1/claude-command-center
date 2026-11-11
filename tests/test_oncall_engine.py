@@ -160,7 +160,7 @@ def test_parked_ticket_reaches_every_owner_channel_once(rig):
     for cid in ("tg", "mail"):
         assert len(rig.chan(cid).sent) == 1
     out = rig.chan("tg").sent[0]
-    assert out.text == (f"{ref} needs a decision (#1)\nCheckout button does nothing on Safari\n\n"
+    assert out.text == (f"{ref} — Checkout button does nothing on Safari needs a decision (#1)\n\n"
                         "Keep the old redirect as a fallback for one release, or remove it now?\n"
                         "Agent recommends: keep it for one release\n\nReply with your answer.")
     assert out.thread and len(out.thread) == 16
@@ -172,7 +172,7 @@ def test_gate_note_is_worded_for_a_person(rig):
           block_proposal={"recommend": "keep it"})
     rig.tick()
     assert rig.chan("tg").sent[0].text == (
-        "SHOP-1 needs a decision (#1)\nCheckout button does nothing on Safari\n\n"
+        "SHOP-1 — Checkout button does nothing on Safari needs a decision (#1)\n\n"
         "Keep the old redirect, or remove it now?\nAgent recommends: keep it\n"
         "Needs you because: Major: live-product. every shopper sees it\n\nReply with your answer.")
 
@@ -182,7 +182,7 @@ def test_a_question_parked_in_the_same_second_as_the_last_answer_still_reaches_t
     ref = _park(rig)
     rig.wt.tickets[ref].update(answered_at="2030-01-01T00:00:07Z", blocked_at="2030-01-01T00:00:07.955390Z")
     rig.tick()
-    assert rig.chan("tg").sent[0].text.startswith(f"{ref} needs a decision (#1)")
+    assert rig.chan("tg").sent[0].text.startswith(f"{ref} — Checkout button does nothing on Safari needs a decision (#1)")
     rig.wt.tickets[ref].update(answered_at="2030-01-01T00:00:08Z")
     assert not wtmod.waits_on_owner(rig.wt.tickets[ref])
 
@@ -297,7 +297,7 @@ def test_stranger_report_waits_for_go(rig):
     alert = rig.chan("tg").sent[-1]
     assert alert.text.startswith("New report from Dana (dana@example.com) (#1)\n"
                                  "Checkout button does nothing on Safari")
-    assert alert.text.endswith("Reply go to have an agent work on it, or no to drop it.")
+    assert alert.text.endswith("Reply go (1) to have an agent work on it, or no (2) to drop it.")
     rig.msg("tg", "go", "4242")
     rig.tick()
     ref = rig.wt.added[0]
@@ -351,9 +351,9 @@ def test_agent_question_to_customer_needs_owner_yes(rig):
     rig.tick()
     assert rig.chan("mail").sent[-1].to == ""   # the approval went to the owner, not the customer
     assert rig.chan("tg").sent[-1].text == (
-        f"An agent wants to ask Dana (dana@example.com) about {ref} (#1):\n\n"
+        f"An agent wants to ask Dana (dana@example.com) about {ref} — Re: Checkout button does nothing on Safari (#1):\n\n"
         "Which Safari version are you on?\n\n"
-        "Reply yes to send, no to drop, or reply with your own wording.")
+        "Reply yes (1) to send, no (2) to drop, or reply with your own wording.")
     rig.msg("tg", "yes", "4242")
     rig.tick()
     to_customer = [m for m in rig.chan("mail").sent if m.to == "dana@example.com"]
@@ -456,7 +456,7 @@ def test_issue_from_a_stranger_waits_for_go_and_cannot_close_its_own_markers(rig
     assert rig.wt.added == []
     alert = rig.chan("tg").sent[-1].text
     assert alert.startswith("New report from dana on GitHub (#1)\nCheckout button does nothing")
-    assert alert.endswith("Reply go to have an agent work on it, or no to drop it.")
+    assert alert.endswith("Reply go (1) to have an agent work on it, or no (2) to drop it.")
     rig.msg("tg", "go", "4242")
     rig.tick()
     ref = rig.wt.added[0]
@@ -526,7 +526,7 @@ def test_status_lists_what_is_waiting(rig):
     rig.tick()
     rig.msg("tg", "status", "4242")
     rig.tick()
-    assert rig.chan("tg").sent[-1].text == f"On-call is on. 1 waiting on you:\n#1 {ref} needs a decision"
+    assert rig.chan("tg").sent[-1].text == f"On-call is on. 1 waiting on you:\n#1 {ref} — Checkout button does nothing on Safari needs a decision"
 
 
 def test_messages_from_strangers_on_a_chat_channel_are_ignored(rig):
@@ -639,7 +639,7 @@ def test_full_walk_on_a_real_watchtower_queue(tmp_path):
 
     clock.now += 61
     eng.tick(force=True)
-    assert built["tg"].sent[-1].text.startswith(f"{ref} needs a decision (#1)\nCheckout button does nothing on Safari")
+    assert built["tg"].sent[-1].text.startswith(f"{ref} — Checkout button does nothing on Safari needs a decision (#1)\n\n")
 
     built["tg"].inbox.append(Inbound(channel="tg", external_id="m1", sender="4242", text="keep it"))
     clock.now += 61
@@ -780,7 +780,7 @@ def test_question_reads_the_session_footer(rig):
         return question(rig.eng.store, 's', transcript)
     foot = '\n\n<session-state>\nDID: x\nNEXT_STEP_USER: %s\n<!--\nNEXT_ACTION: null\n-->\n</session-state>'
     assert last('Done.' + foot % 'Choose: keep the old client or drop it.')['body'] == \
-        'Choose: keep the old client or drop it.'
+        'Done.\n\nChoose: keep the old client or drop it.'
     for nothing in ['None', 'None.', 'none', 'Nothing pending; the queue is drained.',
                     'No decision is pending.', 'N/A', 'Neither card needs an answer.', '']:
         assert last('Should I keep the old client?' + foot % nothing) is None, nothing

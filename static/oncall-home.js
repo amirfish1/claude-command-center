@@ -148,6 +148,7 @@
       card.append(el('div', 'oncall-home-ask', cut < 0 ? item.detail : item.detail.slice(0, cut)));
       if (cut >= 0) card.append(el('div', 'oncall-home-more', item.detail.slice(cut + 2)));
     }
+    if (item.reply_help) card.append(el('div', 'oncall-home-more', item.reply_help));
     const busy = sending.has(item.id);
     const say = el('div', 'oncall-home-said');
     say.setAttribute('role', 'status');

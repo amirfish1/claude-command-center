@@ -1,0 +1,1 @@
+- On-call alerts identify sessions by name or first request, include readable prompt context and accepted replies, render and translate structured or numbered choices, and show honest unreadable-content guidance after one extra observation. Home cards mask secrets in context and choices; transcript reads use persisted modification-time and size caching behind candidate gates.

@@ -213,3 +213,42 @@ def test_identical_claude_replacement_rejects_old_alert(tmp_path, monkeypatch):
     assert server._OncallDeps().permission('s') is None
     monkeypatch.setattr(server, '_read_notification_state', lambda sid: {'sha256': sha, 'nonce': new, 'message': 'Bash: echo hello'})
     assert server._OncallDeps().permission('s')['meta']['nonce'] == new
+
+
+def test_codex_record_reused_zero_across_transports_has_new_identity(monkeypatch):
+    first, second = SimpleNamespace(), SimpleNamespace()
+    monkeypatch.setattr(server, '_CODEX_APP_SERVER_THREAD_STATE', {})
+    monkeypatch.setattr(server, '_CODEX_APP_SERVER_TURN_THREAD', {})
+    monkeypatch.setattr(server, '_CODEX_APP_SERVER_EVENT_SEQ', 0)
+    monkeypatch.setattr(server, '_save_codex_app_server_state_unlocked', lambda: None)
+    monkeypatch.setattr(codex, '_codex_telemetry_note_notification', lambda *args: None)
+    monkeypatch.setattr(server, '_CODEX_APP_SERVER_TRANSPORT', first)
+    params = {'threadId': 's', 'command': 'echo hello'}
+    assert codex._codex_app_server_record_server_request(0, 'execCommandApproval', params)
+    old = dict(server._CODEX_APP_SERVER_THREAD_STATE['s']['pending_approval_request'])
+    monkeypatch.setattr(server, '_CODEX_APP_SERVER_TRANSPORT', second)
+    assert codex._codex_app_server_record_server_request(0, 'execCommandApproval', params)
+    new = server._CODEX_APP_SERVER_THREAD_STATE['s']['pending_approval_request']
+    assert old['request_id'] == new['request_id'] == '0'
+    assert old['approval_generation'] != new['approval_generation']
+    assert old['approval_nonce'] != new['approval_nonce']
+    monkeypatch.setattr(server, '_control_plane_engine_call', lambda *a: None)
+    result = codex._codex_app_server_resolve_approval('s', 'accept', '0', old['approval_nonce'])
+    assert result['code'] == 'codex_approval_changed'
+
+
+def test_codex_replacement_during_transport_lookup_is_rejected(monkeypatch):
+    first = {**pending(0), 'approval_generation': 'gen'}
+    replacement = {**pending(0), 'approval_nonce': 'replacement', 'approval_generation': 'gen'}
+    state = {'pending_approval_request': first}
+    sent = []
+    transport = SimpleNamespace(_ccc_approval_generation='gen', send_json=sent.append)
+    monkeypatch.setattr(server, '_control_plane_engine_call', lambda *a: None)
+    monkeypatch.setattr(server, '_CODEX_APP_SERVER_THREAD_STATE', {'s': state})
+    monkeypatch.setattr(server, '_CODEX_APP_SERVER_TRANSPORT', transport)
+    def get_transport():
+        state['pending_approval_request'] = replacement
+        return transport
+    monkeypatch.setattr(server, '_ensure_codex_app_server', get_transport)
+    assert not codex._codex_app_server_resolve_approval('s', 'accept', '0', first['approval_nonce'])['ok']
+    assert not sent

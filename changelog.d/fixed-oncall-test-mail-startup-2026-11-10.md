@@ -1,0 +1,1 @@
+- Give disposable On-call mail servers a 30-second startup limit to avoid partial initialization under load.

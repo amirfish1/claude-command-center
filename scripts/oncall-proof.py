@@ -509,6 +509,7 @@ def main():
             mail_id, (smtp, imap) = container('greenmail/standalone:2.1.3', [3465, 3993], extra=(
                 '-v', f'{root / "mail.p12"}:/tmp/proof.p12:ro', '-e',
                 'GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 '
+                '-Dgreenmail.startup.timeout=30000 '
                 '-Dgreenmail.tls.keystore.file=/tmp/proof.p12 -Dgreenmail.tls.keystore.password=changeit '
                 '-Dgreenmail.users=oncall:test-password@example.test,owner:test-password@example.test,reporter:test-password@example.test'))
             # One bounded readiness watcher, no agent-side polling turns.
