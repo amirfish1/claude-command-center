@@ -1,5 +1,7 @@
 # On-call (preview)
 
+For interactive usability feedback on a local test app, see [UX lab](uxlab.md).
+
 Bugs reported by your customers and by your monitoring go to coding agents
 that fix them. CCC messages you only when an agent needs a real decision or
 has stopped, and your reply from the same thread is the agent's answer.

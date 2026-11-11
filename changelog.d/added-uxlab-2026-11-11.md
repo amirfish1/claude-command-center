@@ -1,0 +1,1 @@
+- Add `ccc uxlab` interactive model usability sessions for disposable local apps, with guarded fresh browsers, replay evidence, standalone reports, and optional queue filing.
