@@ -176,6 +176,8 @@ def validate_config(cfg):
         if (not isinstance(quiet, dict) or not _HHMM_RE.match(str(quiet.get("start") or ""))
                 or not _HHMM_RE.match(str(quiet.get("end") or ""))):
             problems.append("Quiet hours need a start and an end as HH:MM.")
+        elif quiet.get("tz") and not valid_zone(quiet["tz"]):
+            problems.append(f"Quiet hours time zone {quiet['tz']!r} is not a known zone name.")
     from .escalation import validate
     return problems + validate(cfg)
 
@@ -218,6 +220,15 @@ def save_config(root, cfg):
             pass
         raise
     return cfg
+
+
+def valid_zone(name):
+    try:
+        import zoneinfo
+        zoneinfo.ZoneInfo(str(name))
+        return True
+    except Exception:
+        return False
 
 
 def public_config(cfg):

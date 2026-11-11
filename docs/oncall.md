@@ -188,6 +188,16 @@ live-terminal path. Codex needs an actionable app-server approval request.
 Quiet hours hold messages until the window ends. At most 12 messages go out
 per hour.
 
+```
+ccc oncall quiet 23:00 07:00
+ccc oncall quiet 23:00 07:00 --tz America/Los_Angeles
+ccc oncall quiet off
+```
+
+Without `--tz` the window follows the machine's clock, which is UTC on most
+servers. `--tz` takes an IANA zone name and follows that zone's daylight
+saving changes. `ccc oncall status` prints the window and the zone it is in.
+
 ## Small decisions do not reach you
 
 ```

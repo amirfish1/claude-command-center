@@ -185,7 +185,17 @@ def in_quiet_hours(cfg, now=None):
     quiet = cfg.get("quiet_hours")
     if not isinstance(quiet, dict) or not quiet.get("start") or not quiet.get("end"):
         return False
-    local = time.localtime(time.time() if now is None else now)
+    when = time.time() if now is None else now
+    local = None
+    zone = str(quiet.get("tz") or "").strip()
+    if zone:
+        try:
+            import datetime
+            import zoneinfo
+            local = datetime.datetime.fromtimestamp(when, zoneinfo.ZoneInfo(zone)).timetuple()
+        except Exception:
+            local = None  # an unreadable zone falls back to the machine clock
+    local = local or time.localtime(when)
     minute = local.tm_hour * 60 + local.tm_min
     start, end = _minutes(quiet["start"]), _minutes(quiet["end"])
     if start == end:

@@ -224,6 +224,11 @@ def build_parser():
     p = sub.add_parser("minor", help="let agents decide small reversible things without stopping")
     p.add_argument("state", choices=("on", "off"))
 
+    p = sub.add_parser("quiet", help="hold messages overnight: quiet 23:00 07:00 [--tz ZONE], or quiet off")
+    p.add_argument("start", help="HH:MM, or off")
+    p.add_argument("end", nargs="?", help="HH:MM")
+    p.add_argument("--tz", help="IANA zone name such as America/Los_Angeles (default: this machine's zone)")
+
     p = sub.add_parser("week", help="counts from stored On-call activity")
     p.add_argument("--json", action="store_true")
     p.add_argument("--since")
@@ -363,11 +368,21 @@ def _add_source(client, etype, args, io, types):
 
 # -- commands ---------------------------------------------------------------
 
+def _quiet_zone(tz):
+    if tz:
+        return tz
+    import datetime
+    return "machine time zone " + (datetime.datetime.now().astimezone().tzname() or "local")
+
+
 def _print_status(status, io):
     state = "on" if status.get("enabled") else "off"
     if status.get("enabled") and status.get("paused"):
         state = "paused"
     io.out(f"On-call is {state}." + (f" Queue: {status['queue']}." if status.get("queue") else ""))
+    quiet = (status.get("config") or {}).get("quiet_hours")
+    if isinstance(quiet, dict) and quiet.get("start") and quiet.get("end"):
+        io.out(f"Quiet hours: {quiet['start']} to {quiet['end']}, {_quiet_zone(quiet.get('tz'))}.")
     if "oncall_now" in status:
         io.out("On call now: " + status["oncall_now"])
     if not status.get("wt"):
@@ -617,6 +632,21 @@ def _run(args, client, io):
             io.out(f"Sent to {res.get('to') or 'the reporter'}.")
         else:
             io.out("Waiting for the owner to approve the message. The reply will land on the ticket.")
+        return 0
+    if action == "quiet":
+        if args.start.lower() == "off" and not args.end and not args.tz:
+            client.must("config", {"quiet_hours": None})
+            io.out("Quiet hours are off.")
+            return 0
+        times = [args.start, args.end or ""]
+        if not all(re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", t) for t in times):
+            raise Stop("Quiet hours need two times as HH:MM, for example: ccc oncall quiet 23:00 07:00 (or: ccc oncall quiet off).")
+        if args.tz:
+            from .store import valid_zone
+            if not valid_zone(args.tz):
+                raise Stop(f"{args.tz!r} is not a known time zone. Use a name like America/Los_Angeles.")
+        client.must("config", {"quiet_hours": {"start": times[0], "end": times[1], "tz": args.tz or ""}})
+        io.out(f"Quiet hours {times[0]} to {times[1]}, {_quiet_zone(args.tz)}.")
         return 0
     if action == "minor":
         res = client.must("config", {"minor_decisions": {"enabled": args.state == "on"}})
