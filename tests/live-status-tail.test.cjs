@@ -144,3 +144,65 @@ test('Codex in-flight tool card expands on click to the full command (CCC-227)',
     await browser.close();
   }
 });
+
+test('compaction clock and live tail updates keep the card stationary (CCC-423)', async () => {
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<style>${css}</style><div class="conversations-view" style="height:500px;overflow:auto"><div class="event assistant">Investigating the reported issue.</div></div>`);
+    const code = ['anchorCodexStateBadge', '_reanchorToTailUnlessOnlyTransientBetween',
+      '_compactElapsedLabel', '_compactTokenLabel', '_compactStepIndexFor', '_compactRunStepsHtml',
+      '_compactRunResultHtml', '_compactRunPaint', '_compactRunMount'].map(fn).join('\n');
+    await page.evaluate(code => {
+      window.getConvView = window._compactRunView = () => document.querySelector('.conversations-view');
+      window._compactRunIsForeground = () => true;
+      window.escapeHtml = s => String(s);
+      window._COMPACT_TYPICAL_MS = 90000;
+      window._COMPACT_STEPS = [{ label: 'Handing the transcript over' }, { label: 'Writing the summary' }, { label: 'Rebuilding the context window' }];
+      window.clock = Date.now();
+      Date.now = () => window.clock;
+      window._compactRun = { sid: 'test-session', stage: 'working', engineLabel: 'Codex',
+        startedAt: clock - 14000, before: { tokens: 182000 } };
+      (0, eval)(code + '\nwindow.mount = _compactRunMount; window.paint = _compactRunPaint; window.anchor = _reanchorToTailUnlessOnlyTransientBetween;');
+    }, code);
+    const result = await page.evaluate(() => {
+      const view = getConvView();
+      mount(view); paint();
+      const card = _compactRun.el;
+      const spinner = card.querySelector('.compact-run-spinner');
+      const progress = card.querySelector('.compact-run-bar-fill');
+      const initialProgress = progress.style.width;
+      const tool = document.createElement('div');
+      tool.className = 'conv-live-tool-inline'; tool.textContent = 'contextCompaction';
+      view.appendChild(tool);
+      const observer = new MutationObserver(() => {});
+      observer.observe(view, { childList: true });
+      const top = card.getBoundingClientRect().top;
+      let stationary = true;
+      for (let i = 0; i < 20; i++) {
+        clock += 1000;
+        anchor(view, tool); mount(view); paint();
+        stationary &&= card.getBoundingClientRect().top === top;
+      }
+      const stable = { stationary, moves: observer.takeRecords().length,
+        sameSpinner: spinner === card.querySelector('.compact-run-spinner'),
+        sameProgress: progress === card.querySelector('.compact-run-bar-fill'),
+        progressAdvanced: initialProgress !== progress.style.width,
+        clock: card.querySelector('.compact-run-clock').textContent };
+      const next = document.createElement('div'); next.className = 'event'; next.textContent = 'New transcript content';
+      view.appendChild(next); mount(view); anchor(view, tool);
+      stable.followsNewContent = next.nextElementSibling === card;
+      _compactRun.stage = 'done'; _compactRun.endedAt = clock; _compactRun.after = { tokens: 12000 };
+      mount(view); paint();
+      stable.completed = card.textContent.includes('Context compacted') && card.textContent.includes('170000 freed');
+      const later = document.createElement('div'); later.className = 'event'; view.appendChild(later);
+      mount(view);
+      stable.finishedStaysPut = view.lastElementChild === later;
+      observer.disconnect();
+      return stable;
+    });
+    assert.deepEqual(result, { stationary: true, moves: 0, sameSpinner: true, sameProgress: true,
+      progressAdvanced: true, clock: '0:34', followsNewContent: true, completed: true, finishedStaysPut: true });
+    if (process.env.CCC_FLICKER_SCREENSHOT) await page.screenshot({ path: process.env.CCC_FLICKER_SCREENSHOT });
+  } finally { await browser.close(); }
+});

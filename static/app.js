@@ -9926,6 +9926,7 @@
       if (!n.classList || !(n.classList.contains('stream-bubble')
         || n.classList.contains('conv-live-tool-inline')
         || n.classList.contains('conv-live-tool-strip')
+        || n.classList.contains('compact-run-card')
         || n.classList.contains('conv-codex-state'))) {
         $view.insertBefore(el, $view.querySelector(':scope > .conv-codex-state'));
         return;
@@ -19484,6 +19485,24 @@
     const elapsed = _compactElapsedLabel((run.endedAt || Date.now()) - run.startedAt);
     const before = run.before && run.before.tokens ? run.before.tokens : 0;
 
+    const frac = 1 - Math.exp(-((Date.now() - run.startedAt) / _COMPACT_TYPICAL_MS));
+    const pct = Math.min(92, Math.max(4, Math.round(frac * 92)));
+    // Clock ticks must not recreate the spinner, pulse and progress animation.
+    // Rebuild only when the card's actual lifecycle content changes.
+    const paintKey = JSON.stringify([run.stage, run.slow, run.queued, engine, before,
+      run.after, run.afterUnread, run.error, run.summaryHtml, run.acked, run.startedAt, run.endedAt]);
+    if (run.paintKey === paintKey && el.firstElementChild) {
+      el.querySelectorAll('.compact-run-clock, .compact-run-elapsed').forEach(node => {
+        if (node.textContent !== elapsed) node.textContent = elapsed;
+      });
+      const progress = el.querySelector('.compact-run-bar');
+      if (progress) {
+        progress.setAttribute('aria-valuenow', String(pct));
+        progress.querySelector('.compact-run-bar-fill').style.width = pct + '%';
+      }
+      return;
+    }
+
     let glyph, title, note, extra = '';
     if (run.stage === 'failed') {
       glyph = '⚠';
@@ -19527,8 +19546,6 @@
     // never reaches — 100% while working, and only fills on the real result.
     let bar = '';
     if ((run.stage === 'requested' || run.stage === 'working') && !run.queued) {
-      const frac = 1 - Math.exp(-((Date.now() - run.startedAt) / _COMPACT_TYPICAL_MS));
-      const pct = Math.min(92, Math.max(4, Math.round(frac * 92)));
       bar = '<div class="compact-run-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"'
         + ' aria-valuenow="' + pct + '" aria-label="Compaction progress (estimated)">'
         + '<span class="compact-run-bar-fill" style="width:' + pct + '%"></span></div>';
@@ -19575,6 +19592,7 @@
       const slot = el.querySelector('.compact-run-summary');
       if (slot) slot.appendChild(liveSummaryNode);
     }
+    run.paintKey = paintKey;
   }
 
   function _compactRunView() {
@@ -19599,7 +19617,7 @@
     if (run.anchored) return;
     const live = run.stage === 'requested' || run.stage === 'working';
     if (run.el.parentNode !== view) view.appendChild(run.el);
-    else if (live && run.el !== view.lastElementChild) view.appendChild(run.el);
+    if (live) _reanchorToTailUnlessOnlyTransientBetween(view, run.el);
     // A finished run stays where it ended. Codex writes no resume-summary
     // row to anchor to, so without this every later render re-pinned the
     // done card under the new turns, forever (CCC-151).

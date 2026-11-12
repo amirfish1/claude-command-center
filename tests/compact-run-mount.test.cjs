@@ -25,6 +25,9 @@ function fakeView() {
 }
 function load(run) {
   const ctx = vm.createContext({
+    _reanchorToTailUnlessOnlyTransientBetween: (view, el) => {
+      if (el !== view.lastElementChild) view.appendChild(el);
+    },
     _compactRun: run,
     _compactRunIsForeground: () => true,
     _compactRunView: () => null,
