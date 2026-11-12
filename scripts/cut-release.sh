@@ -299,10 +299,20 @@ if [ "$DRY_RUN" = 0 ]; then
       || { echo "${RED}published Homebrew formula does not match v${VERSION}${NC}" >&2; exit 1; }
     echo "   brew formula: v${VERSION} published"
   fi
-  if [ "${CCC_RELEASE_ANNOUNCE:-1}" != 0 ] && [ -f "${HOME}/.claude/command-center/discord.json" ]; then
-    REL_URL="$(gh release view v${VERSION} --json url --jq .url 2>/dev/null || echo "https://github.com/amirfish1/claude-command-center/releases/tag/v${VERSION}")"
-    python3 ./scripts/discord_community.py ship "🚀 **CCC v${VERSION} shipped!** Release notes & download: ${REL_URL}" >/dev/null 2>&1 || true
-    echo "   discord:  announced v${VERSION} in #ship-log"
+  if [ "${CCC_RELEASE_ANNOUNCE:-1}" != 0 ]; then
+    if [ -f "${HOME}/.claude/command-center/discord.json" ]; then
+      REL_URL="$(gh release view v${VERSION} --json url --jq .url 2>/dev/null || echo "https://github.com/amirfish1/claude-command-center/releases/tag/v${VERSION}")"
+      # Report the real outcome: a failed post must not read as "announced".
+      if DISCORD_OUT="$(python3 ./scripts/discord_community.py ship "🚀 **CCC v${VERSION} shipped!** Release notes & download: ${REL_URL}" 2>&1)"; then
+        echo "   discord:  announced v${VERSION} in #ship-log"
+      else
+        echo "${RED}   discord:  announce FAILED: ${DISCORD_OUT}${NC}" >&2
+      fi
+    else
+      echo "   discord:  NOT announced (no ~/.claude/command-center/discord.json on this machine); post it from one that has it"
+    fi
+    # WhatsApp is a manual step (docs/RELEASING.md 0.9); keep it from being forgotten.
+    echo "   whatsapp: not automated; post the release blurb + hero screenshot per docs/RELEASING.md 0.9"
   fi
 fi
 step "Done — v${VERSION} shipped. 🚀"

@@ -66,6 +66,13 @@ the release, and leave the `[Unreleased]` header empty.
 
 Post directly, don't just hand text to the maintainer:
 
+- **Discord #ship-log** — `cut-release.sh` posts it when
+  `~/.claude/command-center/discord.json` exists on the machine cutting the
+  release, and now prints `FAILED` or `NOT announced` instead of a false
+  "announced". To post by hand from a machine that has the config:
+  `python3 scripts/discord_community.py ship "🚀 **CCC vX.Y.Z shipped!** Release notes & download: <release URL>"`
+  (prints `Posted to #ship-log (HTTP 204)`). There is no read-back command, so
+  glance at the channel before re-posting to avoid a duplicate.
 - **"CCC Updates" WhatsApp group** — the maintainer's FishClaw WhatsApp
   bridge lives on the Hermes VM at loopback `:3000` (`ssh <bridge-host>`).
   **Always post with a screenshot of the new functionality** — reuse the
@@ -79,9 +86,13 @@ Post directly, don't just hand text to the maintainer:
     -d "{\"chatId\":\"<group-jid>@g.us\",\"filePath\":\"/tmp/ccc-vX-Y-Z-hero.png\",\"mediaType\":\"image\",\"caption\":\"<blurb>\"}"'
   ```
   Plain text uses the same shape against `/send` (`{chatId, message}`).
-  To resolve the group JID: after the bridge account is added to the group,
-  any inbound message lands in the bridge log as `"chatId":"<digits>@g.us"`
-  (`~/.hermes/whatsapp/bridge.log` on the VM). When the release is
+  Check the bridge is up with `curl -s 127.0.0.1:3000/health` (expect
+  `"status":"connected"`), not by reading an old `bridge.log`, which can end
+  in a stale "Logged out". A bridge that exposes `GET /groups` lists
+  `{jid, subject, size}` for every group it is in. If a bridge is really
+  logged out it needs a one-time QR scan or pairing code by the account owner.
+  To resolve the group JID, ask a bridge that exposes `GET /groups` (see above).
+  When the release is
   cut *on* the bridge host this all runs locally — no ssh hop.
 - **Blurb style** — short, casual, top 3 features + link. WhatsApp uses
   single-asterisk `*bold*` (not markdown `**`). The GH release URL
