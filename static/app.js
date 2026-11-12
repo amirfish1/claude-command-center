@@ -18790,7 +18790,24 @@
     if (many.length && many.every(Boolean)) return many.slice(0, 4);
     const one = sessionQuickAction(state.next_action);
     if (one) return [one];
-    return decisionQuickActions(next == null ? state.next_step_user : next);
+    const step = String(next == null ? state.next_step_user || '' : next).trim();
+    const decisions = decisionQuickActions(step);
+    if (decisions.length) return decisions;
+    // A delivered design can leave the build explicitly outside authorization.
+    // Offer that choice to the user; rendering it never authorizes any work.
+    const completion = state.completion;
+    const planned = completion?.remaining_actions?.[0];
+    if ((!step || /^(?:none|nothing|n\/a)[.!]?$/i.test(step))
+        && completion?.valid === true && !completion.ready_to_close
+        && completion.scope?.closure_met === false
+        && /\bdesign[ -]only\b/i.test(completion.scope.evidence || '')
+        && /\b(?:saved|delivered|recorded|verified)\b.*\bdesign\b|\bdesign\b.*\b(?:saved|delivered|recorded|verified)\b/i.test(state.did || '')
+        && planned?.owner === 'agent' && planned.within_scope === false && planned.reversible === true
+        && /\b(?:implement|implementation|build)\b/i.test(planned.text || '')) {
+      return [{ label: 'Build', derived: true, build: true,
+        reply: 'Build the implementation described in the saved design. Recheck the design and repository state first, then implement and verify locally. Inspect any unresolved delivery receipt before starting; do not resend an unknown delivery. This authorizes implementation only, not paid calls, spending, launch, deployment, or customer contact.' }];
+    }
+    return [];
   }
   function rowQuickActionSource(c, candidateOnly = false) {
     if (!c || c.archived || c.trashed || c.pending_spawn) return null;
@@ -18801,7 +18818,11 @@
     const info = rowOutcomeView(c);
     let next = String((c.session_state || {}).next_step_user || '').trim();
     let actions = sessionQuickActions(c.session_state, next);
-    if (info.kind === 'plan' && info.planOwner === '' && !actions.length) {
+    const build = actions.length === 1 && actions[0].build === true;
+    if (build) {
+      if (!['plan', 'next'].includes(info.kind)) return null;
+      next = c.session_state.completion.remaining_actions[0].text;
+    } else if (info.kind === 'plan' && info.planOwner === '' && !actions.length) {
       // Older footers leave investigations unowned with NEXT_ACTION: null.
       // Offer a literal resume of the scoped investigation, rather than
       // making the owner compose it. Explicit agent/external waits stay put.
@@ -18812,7 +18833,7 @@
       actions = [{ label: 'Continue investigation', reply: 'Continue the investigation: ' + next, derived: true }];
     } else if (!actions.length || !next || info.kind !== 'next' || (info.next || info.text) !== next) return null;
     const source = { sid, actions, action: actions[0], key: JSON.stringify([sid, next, actions]) };
-    if (info.kind === 'plan') {
+    if (info.kind === 'plan' || build) {
       source.investigation = next;
       const check = _rowInvestigationChecks.get(sid);
       if (!candidateOnly && (!check || check.key !== source.key || !check.idle || check.until <= Date.now())) return null;
