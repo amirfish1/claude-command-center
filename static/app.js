@@ -18871,13 +18871,16 @@
       if (!['plan', 'next'].includes(info.kind)) return null;
       next = c.session_state.completion.remaining_actions[0].text;
     } else if (info.kind === 'plan' && info.planOwner === 'agent' && info.eventDriven && !actions.length) {
-      // A callback wait has no decision to approve, but the user can still
-      // ask for status without rerunning the job or executing its next step.
+      // Offer the actual pending task, not a generic status request. Its
+      // trigger remains part of the reply; a chip never waives prerequisites.
       const planned = c.session_state?.completion?.remaining_actions?.[0];
-      if (planned?.within_scope !== true || planned.reversible !== true) return null;
       next = info.text;
-      actions = [{ label: 'Check progress', derived: true,
-        reply: 'Check progress on the pending work and report its current status. Do not restart work, rerun jobs, publish, deploy, spend money, or execute the waiting action merely to answer this status check.' }];
+      if (planned?.within_scope !== true || planned.reversible !== true
+          || !next || next.length > 340 || /[\x00-\x1f]/.test(next)) return null;
+      const label = /\bverify\b/i.test(next) ? 'Run verification' : 'Continue work';
+      const reply = 'Carry out the pending work: ' + next.replace(/[.!?]+$/, '') + '. Honor its stated trigger and prerequisites, then verify the result. Preserve existing approval and spending limits; do not bypass dependencies or fabricate evidence.';
+      if (reply.length > 400) return null;
+      actions = [{ label, reply, derived: true }];
     } else if (info.kind === 'plan' && info.planOwner === '' && !actions.length) {
       // Older footers leave investigations unowned with NEXT_ACTION: null.
       // Offer a literal resume of the scoped investigation, rather than
