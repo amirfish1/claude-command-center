@@ -36,37 +36,43 @@ def interpreter():
                 parts = parts[1:]
             if parts and 'python' in Path(parts[0]).name:
                 return shutil.which(parts[0])
+    if _real_home_package_root(sys.executable):
+        return sys.executable
     return None
 
 
-def _wt_python_argv():
-    """Bridge command for a WatchTower this process cannot import itself.
+def _real_home_package_root(python):
+    """Directory holding `watchtower` as seen from the real home, or ''.
 
     A pip --user install lives under the real home's site directory, but the
-    demo runs with HOME pointed at a temporary directory, so that interpreter
-    cannot see it. Ask it from the real home where the package is, then give
-    the bridge that directory explicitly.
+    demo runs with HOME pointed at a temporary directory, so neither this
+    process nor a `wt` wrapper's interpreter can see it. Ask the interpreter
+    from the real home instead.
     """
-    python = interpreter()
-    script = str(Path(__file__).resolve())
     try:
         import pwd
         real_home = pwd.getpwuid(os.getuid()).pw_dir
     except (ImportError, KeyError):
-        real_home = None
-    if python and real_home:
-        env = dict(os.environ, HOME=real_home)
-        env.pop('PYTHONNOUSERSITE', None)
-        try:
-            found = subprocess.run(
-                [python, '-c', 'import os, watchtower; '
-                 'print(os.path.dirname(os.path.dirname(watchtower.__file__)))'],
-                env=env, capture_output=True, text=True, timeout=20)
-        except (OSError, subprocess.SubprocessError):
-            found = None
-        root = found.stdout.strip() if found and found.returncode == 0 else ''
-        if root:
-            return [python, '-S', script, '--bridge', root]
+        return ''
+    env = dict(os.environ, HOME=real_home)
+    env.pop('PYTHONNOUSERSITE', None)
+    try:
+        found = subprocess.run(
+            [python, '-c', 'import os, watchtower; '
+             'print(os.path.dirname(os.path.dirname(watchtower.__file__)))'],
+            env=env, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return found.stdout.strip() if found.returncode == 0 else ''
+
+
+def _wt_python_argv():
+    """Bridge command for a WatchTower this process cannot import itself."""
+    python = interpreter()
+    script = str(Path(__file__).resolve())
+    root = _real_home_package_root(python) if python else ''
+    if root:
+        return [python, '-S', script, '--bridge', root]
     return [python, script, '--bridge']
 
 
