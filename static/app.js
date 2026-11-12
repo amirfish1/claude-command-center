@@ -48069,12 +48069,7 @@
         const queueName = openQueueTicketComposer.lastQueue || scopedQueue;
         const targetProj = _UXQ_FAMILY_DEFAULT[_uxqProjectKey(queueName)] || queueName;
         try {
-          const res = await fetch('/api/ux-fixes/enqueue', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(targetProj ? { note, project: targetProj } : { note }),
-          });
-          const data = await res.json().catch(() => ({}));
+          const data = await _enqueueQueueTicket(note, targetProj);
           if (data && data.ok) {
             _ticketQueueUsageRecord(targetProj);
             const ref = (data.item && data.item.ref) || 'ticket';
@@ -48082,11 +48077,9 @@
             _uxqItemsCache.ts = 0;
             _uxqHealthCache.ts = 0;
             _renderQueuePanel();
-          } else {
-            showOpToast('Failed to add ticket', 'error');
           }
         } catch (err) {
-          showOpToast('Error: ' + err.message, 'error');
+          _showQueueTicketAddError(targetProj, note, err);
         }
       });
     }
@@ -59612,6 +59605,35 @@
     return Array.from(new Set(((health && health.queues) || [])
       .map(q => String((q && q.queue) || '').trim()).filter(Boolean)));
   }
+  // Shared by every ticket-add entry point: a proxy error or an empty body
+  // must not turn into an unexplained "unknown" toast.
+  async function _enqueueQueueTicket(note, project) {
+    let res;
+    try {
+      res = await fetch('/api/ux-fixes/enqueue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(project ? { note, project } : { note }),
+      });
+    } catch (err) {
+      throw new Error('Could not reach the dashboard (' + ((err && err.message) || 'connection lost')
+        + '). Saving could not be confirmed. Check the queue before retrying.');
+    }
+    const data = await res.json().catch(() => null);
+    if (res.ok && data && data.ok && data.item && data.item.ref) return data;
+    const detail = data && typeof data.error === 'string' && data.error.trim();
+    if (detail) throw new Error(detail);
+    const status = 'HTTP ' + res.status + (res.statusText ? ' ' + res.statusText : '');
+    throw new Error('The dashboard returned ' + status + ' without a ticket confirmation. '
+      + 'Check the queue before retrying.');
+  }
+  function _showQueueTicketAddError(project, note, err) {
+    const preview = String(note || '').replace(/\s+/g, ' ').trim();
+    const label = preview.length > 80 ? preview.slice(0, 80) + '…' : preview;
+    const reason = (err && err.message) || String(err);
+    showOpToast(escapeHtml('Could not add ticket to ' + (project || 'the default queue')
+      + ' (“' + label + '”): ' + reason), 'error');
+  }
   // CCC-163: the panel "+" used to file silently into whatever queue the panel
   // was scoped to (e.g. ACME) with no queue shown; it now shows the Queue
   // picker preselected to that scope and files where the user picks.
@@ -59628,12 +59650,7 @@
     _uxqPendingQueueAdds.set(pendingId, { note, project: targetProj });
     _renderQueuePanel({ allowStale: true });
     try {
-      const res = await fetch('/api/ux-fixes/enqueue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(targetProj ? { note, project: targetProj } : { note }),
-      });
-      const data = await res.json().catch(() => ({}));
+      const data = await _enqueueQueueTicket(note, targetProj);
       if (data && data.ok) {
         const ref = (data.item && data.item.ref) || 'ticket';
         _ticketQueueUsageRecord(targetProj);
@@ -59645,15 +59662,11 @@
         _uxqPendingQueueAdds.delete(pendingId);
         await _renderQueuePanel({ allowStale: true });
         _uxqRevealNewTicket(ref);
-      } else {
-        _uxqPendingQueueAdds.delete(pendingId);
-        _renderQueuePanel({ allowStale: true });
-        showOpToast('Add failed: ' + ((data && data.error) || 'unknown'));
       }
     } catch (e) {
       _uxqPendingQueueAdds.delete(pendingId);
       _renderQueuePanel({ allowStale: true });
-      showOpToast('Add failed: ' + e);
+      _showQueueTicketAddError(targetProj, note, e);
     }
   }
 
@@ -59668,23 +59681,16 @@
     if (!note) return;
     const queue = openQueueTicketComposer.lastQueue;
     try {
-      const res = await fetch('/api/ux-fixes/enqueue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(queue ? { note, project: queue } : { note }),
-      });
-      const data = await res.json().catch(() => ({}));
+      const data = await _enqueueQueueTicket(note, queue);
       if (data && data.ok) {
         _ticketQueueUsageRecord(queue);
         _uxqItemsCache.ts = 0;
         _uxqHealthCache.ts = 0;
         showOpToast('Added ' + ((data.item && data.item.ref) || 'ticket') + ' to ' + queue);
         _renderQueuePanel();
-      } else {
-        showOpToast('Add failed: ' + ((data && data.error) || 'unknown'), 'error');
       }
     } catch (e) {
-      showOpToast('Add failed: ' + e, 'error');
+      _showQueueTicketAddError(queue, note, e);
     }
   }
   {
