@@ -38,16 +38,18 @@ class ConvViewToggleTest(unittest.TestCase):
         js = _read("static/app.js")
         self.assertIn("localStorage.getItem('ccc-conv-verbose') === '1' ? 'verbose' : 'normal'", js)
 
-    def test_compact_collapses_and_outranks_stitch_theme(self):
+    def test_compact_keeps_commentary_readable_and_outranks_stitch_theme(self):
         css = _read("static/app.css")
         rule = re.search(
             r"body\.conv-compact\.conv-compact \.conversations-view \.event\.assistant \.assistant-text \{([^}]*)\}", css)
         self.assertIsNotNone(rule)
         self.assertIn("padding: 3px 10px !important", rule.group(1))
-        # Collapsing, not shrinking: messages clamp to two lines and the
-        # newest assistant reply is exempt.
-        self.assertIn(".event.assistant:has(~ .event.assistant .assistant-text) .assistant-text:not(.cc-open)", css)
-        self.assertIn("-webkit-line-clamp: 2;", css)
+        # User asks remain expandable; assistant commentary now stays fully
+        # readable throughout the turn, including merged engine turns.
+        self.assertNotIn(".event.assistant:has(~ .event.assistant .assistant-text) .assistant-text:not(.cc-open)", css)
+        rule = re.search(r"\.event\.user_text:not\(\.cc-open\):not\(:has\(img\)\) \.user-msg \{([^}]*)\}", css)
+        self.assertIsNotNone(rule)
+        self.assertIn("-webkit-line-clamp: 2;", rule.group(1))
 
     def test_tap_expands_in_compact(self):
         js = _read("static/app.js")
@@ -77,15 +79,16 @@ class ConvViewToggleTest(unittest.TestCase):
         # Empty span + ::before: copy / read-aloud never see the label.
         self.assertIn('.cc-run-chip::before { content: "\\25B8 " attr(data-cc-run-label); }', css)
         self.assertIn(".cc-run-head.cc-run-chipped:not(.cc-run-open) { display: none !important; }", css)
-        # Chip-bearing text is never two-line clamped (chip would be cut).
-        self.assertIn(".assistant-text:not(.cc-open):not(.cc-final):not(:has(.cc-run-chip)),", css)
+        # All commentary remains open, so chips cannot be clipped by the
+        # old assistant-text clamp (browser coverage checks actual sizing).
+        self.assertNotIn(".assistant-text:not(.cc-open):not(.cc-final):not(:has(.cc-run-chip))", css)
 
     def test_turn_final_summary_keeps_card(self):
         js = _read("static/app.js")
         css = _read("static/app.css")
         self.assertIn("if (u.el.classList.contains('user_text')) { markFinal(turnText); turnText = null; }", js)
         self.assertIn(".assistant-text.cc-final {", css)
-        self.assertIn(":not(.cc-final):not(:has(.cc-run-chip))", css)
+        self.assertIn(".event.assistant:has(> .assistant-text.cc-final) .assistant-message-actions", css)
 
     def test_compact_tones_down_text(self):
         css = _read("static/app.css")

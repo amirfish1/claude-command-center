@@ -6747,7 +6747,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("sendToTerminal('p1', 'steer')", app_js)
         self.assertIn("mode: injectMode", app_js)
         self.assertIn("function codexTurnSteerable()", app_js)
-        self.assertIn("(isCodex && codexTurnSteerable()) || isKimi || devinSteerable || claudeSteerable", app_js)
+        # The server resolves Codex's current turn and sends normally when
+        # idle; a stale client status must not disable the attempt.
+        self.assertIn("(isCodex || isKimi || devinSteerable || claudeSteerable)", app_js)
         self.assertIn("function codexSteerUnavailable(data)", app_js)
         self.assertNotIn("if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable())", app_js)
         send_handler = app_js[
@@ -15985,10 +15987,13 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(fields["codex_writer"], "unknown")
         self.assertEqual(fields["codex_state_reason"], "An active Codex turn is writing this thread")
 
-    def test_codex_unknown_writer_is_not_offered_steer(self):
-        """Unknown ownership remains queue-only until the active turn ends."""
+    def test_codex_unknown_writer_defers_steer_to_native_rpc(self):
+        """Client writer attribution must not overrule the native turn check."""
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
-        self.assertIn("writer !== 'unknown'", js)
+        helper = js.split("function codexTurnSteerable() {", 1)[1].split("\n  }", 1)[0]
+        self.assertIn("currentSession.source !== 'codex'", helper)
+        self.assertIn("liveStatus.codexState === 'working'", helper)
+        self.assertNotIn("writer !== 'unknown'", helper)
 
 
 class TestModelPicker(unittest.TestCase):
