@@ -12309,15 +12309,17 @@
         // server-side "could attempt" (binary resolves), not "a connection
         // is already up" (nothing else ever creates one).
         const devinSteerable = devinSteerCapableNow();
+        // Codex resolves the active turn on the server and falls back to Send
+        // when idle. A stale status snapshot must not prevent that attempt.
         const canSteer = canSend && hasSession && !isNewSession && !isBacklogIssue
-          && ((isCodex && codexTurnSteerable()) || isKimi || devinSteerable || claudeSteerable);
+          && (isCodex || isKimi || devinSteerable || claudeSteerable);
         activeSteerBtn.classList.toggle('visible', canSteer);
         activeSteerBtn.disabled = !canSteer;
         activeSteerBtn.title = canSteer
           ? (isKimi
               ? 'Steer running Kimi turn now'
               : (isCodex
-                  ? 'Steer running Codex turn now'
+                  ? 'Steer Codex now (send if no turn is running)'
                   : (isDevinCli
                       ? 'Steer this Devin session (attaches a live devin acp connection on first use)'
                       : 'Interrupt the running tool and send this now')))
@@ -39689,9 +39691,8 @@
 
   function codexTurnSteerable() {
     if (!currentSession || currentSession.source !== 'codex') return false;
-    if (!liveStatusMatchesOpenConv() || !liveStatus || liveStatus.codexState !== 'working') return false;
-    const writer = liveStatus.codexWriter || null;
-    return writer !== 'desktop' && writer !== 'external' && writer !== 'unknown';
+    // Writer attribution is not authoritative; the native RPC checks the turn.
+    return !!(liveStatusMatchesOpenConv() && liveStatus && liveStatus.codexState === 'working');
   }
 
   // "Could a steer/send be attempted over the shared `devin acp` conn" for

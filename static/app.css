@@ -32587,13 +32587,11 @@ body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
   }
 }
 
-/* Touch composer: Esc lives in the ⋯ menu, Steer is gone (on a phone you
-   send, and steer with the next message), and the attachment preview strip
-   is dropped so the text box keeps its room; the attachment path stays in
-   the message text. */
+/* Touch composer: Esc lives in the ⋯ menu and the attachment preview strip
+   is dropped so the text box keeps its room. Keep explicit Steer available
+   on touch too; ordinary Send may queue behind the running turn. */
 @media (pointer: coarse) {
   .conv-input-bar #convEscBtn,
-  .conv-input-bar .steer-btn,
   .conv-input-bar .paste-thumb-strip { display: none !important; }
 }
 
