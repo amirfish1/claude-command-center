@@ -99860,20 +99860,26 @@
   }
 })();
 
-// Machine-wide self-hosted Actions activity, independent of the selected repo.
+// Local activity plus the last two completed workflow runs, shared across devices.
 (function initLocalCiProgress() {
   let busy = false;
-  async function refresh() {
-    const host = document.getElementById('localCiProgress');
-    if (!host || document.hidden || busy) return;
-    busy = true;
-    try {
-      const response = await fetch('/api/ci/local', {cache: 'no-store', signal: AbortSignal.timeout(30000)});
-      if (!response.ok) throw new Error('CI progress unavailable');
-      const data = await response.json();
+  let lastCompleted = [];
+  const dismissed = new Set();
+  const conclusions = {success:'Passed', failure:'Failed', cancelled:'Cancelled',
+    timed_out:'Timed out', skipped:'Skipped', neutral:'Neutral', action_required:'Action required',
+    startup_failure:'Failed', stale:'Stopped', unknown:'Completed'};
+  function render(data) {
+    const completed = (data.completed || []).filter(job => !dismissed.has(job.id));
+    const entries = [...(data.jobs || []).map(job => ({job, done:false})),
+      ...completed.map(job => ({job, done:true}))];
+    for (const host of document.querySelectorAll('[data-local-ci-host]')) {
+      const focused = host.contains(document.activeElement) ? document.activeElement.dataset.ciDismiss : null;
       host.replaceChildren();
-      for (const job of data.jobs || []) {
-        const row = document.createElement(job.url ? 'a' : 'div');
+      for (const {job, done} of entries) {
+        const entry = document.createElement('div');
+        entry.className = 'local-ci-entry' + (done ? ' is-completed' : '');
+        entry.dataset.runId = job.id || '';
+        const row = document.createElement('a');
         row.className = 'local-ci-job';
         if (job.url && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/.test(job.url)) {
           row.href = job.url;
@@ -99884,26 +99890,69 @@
         label.className = 'local-ci-label';
         const name = document.createElement('span');
         name.className = 'local-ci-name';
-        name.textContent = 'CI · ' + job.repo.split('/').pop() + ' · ' + job.name;
+        name.textContent = 'CI · ' + String(job.repo || '').split('/').pop() + ' · ' + job.name;
         const percent = document.createElement('span');
         percent.className = 'local-ci-percent';
-        percent.textContent = job.percent == null ? 'Running' : job.percent + '%';
+        percent.textContent = done ? (conclusions[job.conclusion] || 'Completed')
+          : job.percent == null ? 'Running' : job.percent + '%';
+        const outcome = done ? (job.conclusion === 'success' ? 'success'
+          : ['failure','timed_out','startup_failure','action_required'].includes(job.conclusion) ? 'failure' : 'neutral') : 'active';
+        entry.dataset.outcome = outcome;
         label.append(name, percent);
         const bar = document.createElement('progress');
         bar.max = 100;
-        if (job.percent != null) bar.value = job.percent;
-        bar.setAttribute('aria-label', name.textContent + ': completed steps');
+        if (done) bar.value = 100;
+        else if (job.percent != null) bar.value = job.percent;
+        bar.setAttribute('aria-label', name.textContent + ': ' + (done ? percent.textContent : 'completed steps'));
         const step = document.createElement('span');
         step.className = 'local-ci-step';
-        step.textContent = job.current_step;
-        row.title = job.repo + ' · ' + job.runner + '\n' + job.current_step + '\n'
-          + job.completed_steps + '/' + job.total_steps + ' steps complete (not time remaining)';
+        step.textContent = done ? 'Completed' + (job.completed_at ? ' · ' + new Date(job.completed_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : job.current_step;
+        row.title = job.repo + ' · ' + (done ? percent.textContent : job.current_step)
+          + (done ? '' : '\n' + job.completed_steps + '/' + job.total_steps + ' steps complete (not time remaining)');
         row.append(label, bar, step);
-        host.append(row);
+        entry.append(row);
+        if (done) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'local-ci-dismiss';
+          button.dataset.ciDismiss = job.id;
+          button.setAttribute('aria-label', 'Dismiss completed CI run: ' + job.name);
+          button.title = 'Dismiss completed run';
+          button.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+          button.addEventListener('click', async () => {
+            button.disabled = true;
+            try {
+              const response = await fetch('/api/ci/dismiss', {method:'POST', cccPriority:'user',
+                headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:job.id})});
+              if (!response.ok) throw new Error('Dismiss failed');
+              dismissed.add(job.id);
+              render(data);
+            } catch (_) {
+              button.disabled = false;
+              button.title = 'Could not dismiss. Try again.';
+              button.setAttribute('aria-label', 'Could not dismiss CI run. Try again.');
+            }
+          });
+          entry.append(button);
+        }
+        host.append(entry);
       }
       host.hidden = !host.childElementCount;
+      if (focused) [...host.querySelectorAll('[data-ci-dismiss]')].find(button => button.dataset.ciDismiss === focused)?.focus({preventScroll:true});
+    }
+  }
+  async function refresh() {
+    if (document.hidden || busy || !document.querySelector('[data-local-ci-host]')) return;
+    busy = true;
+    try {
+      const response = await fetch('/api/ci/local', {cache:'no-store', signal:AbortSignal.timeout(45000)});
+      if (!response.ok) throw new Error('CI progress unavailable');
+      const data = await response.json();
+      if (data.unavailable) throw new Error('CI progress unavailable');
+      lastCompleted = data.completed || [];
+      render(data);
     } catch (_) {
-      host.hidden = true; // Never leave an old percentage looking live.
+      render({jobs:[], completed:lastCompleted});
     } finally { busy = false; }
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', refresh);

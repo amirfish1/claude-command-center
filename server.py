@@ -36991,6 +36991,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except OSError:
                 self.send_json({"ok": False, "error": "Undo could not be saved; refresh history to check the outcome"}, 503)
             return
+        if path == "/api/ci/dismiss":
+            from ccc_server.local_ci import dismiss_local_ci
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 2048:
+                    self.send_json({"ok": False, "error": "Invalid request size"}, 413)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                found = dismiss_local_ci(payload.get("id") if isinstance(payload, dict) else None)
+                self.send_json({"ok": found}, 200 if found else 404)
+            except (ValueError, OSError, sqlite3.Error):
+                self.send_json({"ok": False, "error": "Could not dismiss this run"}, 400)
+            return
         if path == "/api/spawn-defaults":
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length) if length > 0 else b""

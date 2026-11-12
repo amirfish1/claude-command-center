@@ -571,6 +571,7 @@
   <script src="/static/headroom-bars.js" defer></script>
 
   <div class="sidebar" data-tour="lhs">
+    <div id="localCiMobileList" data-local-ci-host class="local-ci-progress local-ci-mobile" aria-label="Local CI runs" hidden></div>
     <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
          only). One clean bar — brand left, search + "+" right — replacing
          the two stacked dashboard headers (brand/version/WatchTower/meta
@@ -820,7 +821,7 @@
             </svg>
           </a>
         </div>
-        <div id="localCiProgress" class="local-ci-progress" aria-label="CI running on this machine" hidden></div>
+        <div id="localCiProgress" data-local-ci-host class="local-ci-progress" aria-label="Local CI runs" hidden></div>
         <!-- One rollup chip for every service CCC runs. It replaced two
              separate header badges (WatchTower + Worker) whose signals fought
              for the same 20px of sidebar; both still live inside #sysModal,
@@ -1045,6 +1046,7 @@
   <div class="sidebar-resizer" id="sidebarResizer" title="Drag to resize"></div>
   <button type="button" id="convListRestoreBtn" class="conv-list-restore" title="Show conversation list" aria-label="Show conversation list">&raquo;</button>
   <div class="main">
+    <div id="localCiMobileReader" data-local-ci-host class="local-ci-progress local-ci-mobile" aria-label="Local CI runs" hidden></div>
     <!-- Star-on-GitHub nudge. Shown by app.js only once the dashboard has
          been opened on three distinct days. "Star" and "Don't ask
          again" hide it forever; "Maybe later" snoozes it for 14 days.
