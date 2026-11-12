@@ -1,9 +1,11 @@
 """CCC-1202: rebindable report_to routes, resolved server-side at send time."""
 
+import sqlite3
+
 import pytest
 
 import server
-from ccc_server import continuation
+from ccc_server import continuation, ship_graph
 from ccc_server import report_routes as rr
 
 
@@ -19,6 +21,26 @@ def manual_forward_store(tmp_path, monkeypatch):
     path = str(tmp_path / "manual-forwards.json")
     monkeypatch.setattr(continuation, "_manual_forward_path", lambda: path)
     return path
+
+
+@pytest.fixture(autouse=True)
+def lineage_conn(monkeypatch):
+    """Fake SIDs must never touch the host's session index.
+
+    forward_target() syncs the real session graph (git repos, WatchTower,
+    every transcript) before answering. Against a developer's or release
+    Mac's real ~/.claude that took longer than the request timeout, left the
+    GET in flight, and then failed the restart-drain test that ran after it.
+    """
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    ship_graph._init_db(conn)
+    monkeypatch.setattr(continuation._sg, "_get_connection", lambda: conn)
+    monkeypatch.setattr(continuation._sg, "_sync_all", lambda conn, force=False: None)
+    # Likewise the "is the old sid mid-turn" check builds live activity for
+    # every host session; the fake SIDs here are never working.
+    monkeypatch.setattr(continuation._core, "_sessions_state_snapshot", lambda: {})
+    yield conn
+    conn.close()
 
 
 def test_resolve_follows_rebind(store):
