@@ -77091,6 +77091,11 @@
   // handler can open URL-shaped paths (`/api/foo/bar`) on the right
   // domain instead of localhost (or, for file paths, the editor).
   let _vercelDeployUrl = '';
+  let _vercelProgressRepo = '';
+  let _vercelProgressRequest = 0;
+  function publishVercelProgress(repoPath, deployment) {
+    window.dispatchEvent(new CustomEvent('ccc-vercel-progress', {detail:{repoPath, deployment}}));
+  }
 
   function setDeployPill({ dotClass, label, title, href }) {
     if ($deployDot) $deployDot.className = 'deploy-dot' + (dotClass ? ' ' + dotClass : '');
@@ -77109,6 +77114,11 @@
 
   async function pollVercelDeploy() {
     const repoPath = activeConvRepoPath();
+    const request = ++_vercelProgressRequest;
+    if (repoPath !== _vercelProgressRepo) {
+      _vercelProgressRepo = repoPath;
+      publishVercelProgress(repoPath, null);
+    }
     if (!repoPath) {
       setDeployPill({
         dotClass: '',
@@ -77122,6 +77132,8 @@
     try {
       const res = await backgroundApiFetch(repoUrl('/api/vercel-deploy', repoPath));
       const d = await res.json();
+      if (request !== _vercelProgressRequest || repoPath !== activeConvRepoPath()) return;
+      publishVercelProgress(repoPath, res.ok && !d.error && !d.disabled ? d : null);
       if (d.disabled) {
         // No .vercel/project.json (and no $VERCEL_PROJECT env override).
         // Friendly hint moved to the pill's title attribute (hover).
@@ -77170,7 +77182,9 @@
         if (link) khtml += '<a href="' + link + '" target="_blank" style="color:var(--accent);text-decoration:none;"> ↗</a>';
         $kptDeploy.innerHTML = khtml;
       }
-    } catch {}
+    } catch {
+      if (request === _vercelProgressRequest) publishVercelProgress(repoPath, null);
+    }
   }
 
   function timeAgo(ts) {
@@ -100190,14 +100204,36 @@
 (function initLocalCiProgress() {
   let busy = false;
   let lastCompleted = [];
+  let lastData = {jobs:[], completed:[]};
+  let deploymentJob = null;
+  window.addEventListener('ccc-vercel-progress', event => {
+    const {repoPath, deployment:d} = event.detail;
+    const states = {QUEUED:'Queued', INITIALIZING:'Initializing', BUILDING:'Building',
+      READY:'Ready', ERROR:'Failed', CANCELED:'Cancelled', CANCELLED:'Cancelled'};
+    deploymentJob = d && states[d.state] ? {
+      provider:'vercel', id:'vercel:' + repoPath + ':' + (d.url || d.created_at),
+      repo:d.project || String(repoPath || '').split('/').pop(),
+      name:d.commit_msg || d.commit_sha || 'Production deployment',
+      url:d.url && /^https:\/\//.test(d.url) ? d.url : d.url ? 'https://' + d.url : '',
+      status:states[d.state], current_step:states[d.state] + (d.commit_sha ? ' · ' + d.commit_sha : ''),
+      done:['READY','ERROR','CANCELED','CANCELLED'].includes(d.state),
+      conclusion:d.state === 'READY' ? 'success' : d.state === 'ERROR' ? 'failure' : 'cancelled',
+      completed_at:d.ready_at || null, percent:null,
+    } : null;
+    render(lastData);
+  });
   const dismissed = new Set();
   const conclusions = {success:'Passed', failure:'Failed', cancelled:'Cancelled',
     timed_out:'Timed out', skipped:'Skipped', neutral:'Neutral', action_required:'Action required',
     startup_failure:'Failed', stale:'Stopped', unknown:'Completed'};
   function render(data) {
+    lastData = data;
     const completed = (data.completed || []).filter(job => !dismissed.has(job.id));
     const entries = [...(data.jobs || []).map(job => ({job, done:false})),
       ...completed.map(job => ({job, done:true}))];
+    if (deploymentJob && !dismissed.has(deploymentJob.id)) {
+      entries.unshift({job:deploymentJob, done:deploymentJob.done});
+    }
     for (const host of document.querySelectorAll('[data-local-ci-host]')) {
       const focused = host.contains(document.activeElement) ? document.activeElement.dataset.ciDismiss : null;
       host.replaceChildren();
@@ -100207,7 +100243,8 @@
         entry.dataset.runId = job.id || '';
         const row = document.createElement('a');
         row.className = 'local-ci-job';
-        if (job.url && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/.test(job.url)) {
+        const vercelLink = job.provider === 'vercel' && /^https:\/\/[a-z0-9.-]+(?::\d+)?(?:\/[^\s]*)?$/i.test(job.url);
+        if (vercelLink || job.url && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/.test(job.url)) {
           row.href = job.url;
           row.target = '_blank';
           row.rel = 'noopener';
@@ -100216,10 +100253,10 @@
         label.className = 'local-ci-label';
         const name = document.createElement('span');
         name.className = 'local-ci-name';
-        name.textContent = 'CI · ' + String(job.repo || '').split('/').pop() + ' · ' + job.name;
+        name.textContent = (job.provider === 'vercel' ? 'Vercel · ' : 'CI · ') + String(job.repo || '').split('/').pop() + ' · ' + job.name;
         const percent = document.createElement('span');
         percent.className = 'local-ci-percent';
-        percent.textContent = done ? (conclusions[job.conclusion] || 'Completed')
+        percent.textContent = job.provider === 'vercel' ? job.status : done ? (conclusions[job.conclusion] || 'Completed')
           : job.percent == null ? 'Running' : job.percent + '%';
         const outcome = done ? (job.conclusion === 'success' ? 'success'
           : ['failure','timed_out','startup_failure','action_required'].includes(job.conclusion) ? 'failure' : 'neutral') : 'active';
@@ -100229,12 +100266,12 @@
         bar.max = 100;
         if (done) bar.value = 100;
         else if (job.percent != null) bar.value = job.percent;
-        bar.setAttribute('aria-label', name.textContent + ': ' + (done ? percent.textContent : 'completed steps'));
+        bar.setAttribute('aria-label', name.textContent + ': ' + (job.provider === 'vercel' ? job.status : done ? percent.textContent : 'completed steps'));
         const step = document.createElement('span');
         step.className = 'local-ci-step';
-        step.textContent = done ? 'Completed' + (job.completed_at ? ' · ' + new Date(job.completed_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : job.current_step;
+        step.textContent = job.provider === 'vercel' ? job.current_step : done ? 'Completed' + (job.completed_at ? ' · ' + new Date(job.completed_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : job.current_step;
         row.title = job.repo + ' · ' + (done ? percent.textContent : job.current_step)
-          + (done ? '' : '\n' + job.completed_steps + '/' + job.total_steps + ' steps complete (not time remaining)');
+          + (done || job.provider === 'vercel' ? '' : '\n' + job.completed_steps + '/' + job.total_steps + ' steps complete (not time remaining)');
         row.append(label, bar, step);
         entry.append(row);
         if (done) {
@@ -100242,10 +100279,15 @@
           button.type = 'button';
           button.className = 'local-ci-dismiss';
           button.dataset.ciDismiss = job.id;
-          button.setAttribute('aria-label', 'Dismiss completed CI run: ' + job.name);
+          button.setAttribute('aria-label', 'Dismiss completed ' + (job.provider === 'vercel' ? 'deployment: ' : 'CI run: ') + job.name);
           button.title = 'Dismiss completed run';
           button.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
           button.addEventListener('click', async () => {
+            if (job.provider === 'vercel') {
+              dismissed.add(job.id);
+              render(lastData);
+              return;
+            }
             button.disabled = true;
             try {
               const response = await fetch('/api/ci/dismiss', {method:'POST', cccPriority:'user',
