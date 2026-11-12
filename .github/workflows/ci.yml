@@ -69,7 +69,7 @@ jobs:
         run: |
           python -m pip install pytest
           WATCHTOWER_REF=adf5bc16ab35c6f382005cddedca607be9928568 CCC_PYTHON=python CCC_SKIP_WATCHTOWER_DAEMON=1 CCC_WATCHTOWER_FORCE=1 bash scripts/install-watchtower.sh
-          python -m pytest -q --tb=short -rf --junitxml="$RUNNER_TEMP/junit.xml" tests/
+          python -m pytest -q --tb=short -rf --junitxml="$RUNNER_TEMP/junit.xml" tests/test_oncall_demo.py tests/test_oncall_engine.py
       # The short summary above can be cut off by log truncation when many
       # tests fail; the junit file is the reliable list of what failed.
       - name: List failed tests

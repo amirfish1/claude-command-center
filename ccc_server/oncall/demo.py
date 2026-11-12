@@ -194,7 +194,10 @@ def _walkthrough(root, args, emit, lines, cleanup):
     tick(True)
     reports = engine.store.reports(state='filed')
     if not reports:
-        raise RuntimeError('Report was not filed.')
+        # Say why: filing failures are logged by the engine, not raised.
+        why = '; '.join(f'{row["kind"]}: {row["detail"]}'
+                        for row in engine.store.recent_log(5)[:3])
+        raise RuntimeError('Report was not filed.' + (' Last events: ' + why[:600] if why else ''))
     ref = reports[0]['ticket_ref']
     tickets.ref = ref
     extra_refs = [r['ticket_ref'] for r in reports[1:]]
