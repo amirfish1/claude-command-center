@@ -41105,7 +41105,8 @@
   function _sidebarBudgetIdeaLane(row, tab, byId, seen) {
     const t = row && row.idea_ticket;
     if (t && (t.ref || t.pending)) {
-      if (t.closed) return false;
+      // Finished and archived tickets still belong to their queue's lane.
+      // Excluding them spends the archive quota on unrelated sessions.
       // CCC-285: All tickets = Features + Small bugs.
       if (tab === 'alltickets') return true;
       return (t.queue === 'SMALL-BUGS') === (tab === 'smallbugs');
@@ -46512,7 +46513,7 @@
       // `||` fallback keeps the empty-state text when BOTH are empty while
       // still showing ready-to-merge rows when only In-progress is empty.
       : ((_readyToMergeHtml + _forceOpen(_inProgressHtml, 'conv-inprogress-section')) || _tabEmpty('in-progress sessions'));
-    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_ipSearchActive || (_sidebarTab !== 'decisions' && _sidebarTab !== 'decisions2' && _sidebarTab !== 'jobs' && _sidebarTab !== 'ideas' && _sidebarTab !== 'smallbugs' && _sidebarTab !== 'alltickets')))
+    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_ipSearchActive || (_sidebarTab !== 'decisions' && _sidebarTab !== 'decisions2' && _sidebarTab !== 'jobs')))
       ? '<div class="archive-empty-state"><button type="button" class="conv-window-btn" data-role="sidebar-show-more">Show '
         + Math.min(SIDEBAR_RENDER_MORE_ROWS, _sidebarRowsOmitted)
         + ' more sessions</button><div>' + _sidebarRowsOmitted + ' older rows are not rendered yet.</div></div>'

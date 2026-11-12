@@ -13,6 +13,7 @@ function launch({enabled = true, source = 'claude', meta = {}, parents = [], que
   const events = [];
   const prefs = new Map([['ccc-sidebar-tab', 'archived']]);
   const ctx = {
+    window: {CCCNavigation: {setTab: tab => prefs.set('ccc-sidebar-tab', tab)}},
     conversationsData: parents, pendingSpawns: new Map(), columnOverrides: {},
     trackSpawnView:()=>{}, requestAnimationFrame:fn=>fn(), setTimeout:fn=>fn(),
     _currentSidebarTabKey:()=>prefs.get('ccc-sidebar-tab'),
@@ -94,6 +95,7 @@ function classify({placeholder = false, selected = true, tab = 'ideas', external
   const prefs = new Map([['ccc-sidebar-tab', tab]]);
   const toasts = [];
   const ctx = {conversationsData: [old], pendingSpawns: new Map(),
+    window: {CCCNavigation: {setTab: tab => prefs.set('ccc-sidebar-tab', tab)}},
     currentConversation: selected ? old.id : 'another', ideaTicketsOn: () => true,
     _currentSidebarTabKey: () => prefs.get('ccc-sidebar-tab'),
     localStorage: {setItem: (k, v) => prefs.set(k, v)}, showConvToast: t => toasts.push(t)};

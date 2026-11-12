@@ -18,6 +18,8 @@ const source = timeHelpers + '\nconst _ipWindowCutoff = _archiveWindowCutoff();\
 function representatives(rows, lane = 'ideas', bucket = 'active', trash = [], window = 'all', query = '') {
   const ctx = {
     _allTabConvs: rows, _allTabTrashConvs: trash, _qActive: query,
+    _ideaTicketFor: r => r.idea_ticket,
+    _ticketlessRowsInAll: false,
     ARCHIVE_WINDOW_KEY: 'ccc-archive-window',
     localStorage: {getItem: () => window},
     Date: class extends Date { static now() { return 2_000_000_000 * 1000; } },
@@ -231,6 +233,7 @@ test('Auto supports every engine while retaining cancellation controls', () => {
 function allTabRows(rows, ticketlessInAll) {
   const ctx = {
     _allTabConvs: rows, _allTabTrashConvs: [], _qActive: '', _ticketlessRowsInAll: ticketlessInAll,
+    _ideaTicketFor: r => r.idea_ticket,
     ARCHIVE_WINDOW_KEY: 'ccc-archive-window',
     localStorage: {getItem: () => 'all'},
     _allTabSessionId: r => r.session_id || '',

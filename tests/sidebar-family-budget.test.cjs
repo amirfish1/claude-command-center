@@ -41,7 +41,7 @@ test('family priority respects ticket queue, closed tickets, missing parents and
   assert.equal(lane('ideas'), false);
   assert.equal(lane('alltickets'), true);
   parent.idea_ticket.closed = true;
-  assert.equal(lane('alltickets'), false);
+  assert.equal(lane('alltickets'), true);
   delete parent.idea_ticket;
   parent.parent_session_id = 'child';
   assert.equal(lane('alltickets'), false);
@@ -60,5 +60,17 @@ test('a recent helper retains its older ancestors without exceeding the row cap'
   assert.ok(result.rows.includes(child));
   assert.ok(result.rows.includes(parent));
   assert.ok(result.rows.includes(middle));
+  assert.equal(result.rows.length, 240);
+});
+
+test('old closed tickets retain archive quota ahead of unrelated recent sessions', () => {
+  const archived = {session_id: 'old-topic', modified: -100, archived: true,
+    idea_ticket: {ref: 'TEST-1', queue: 'IDEAS', closed: true}};
+  const rows = Array.from({length: 300}, (_, i) => ({session_id: 'unrelated-' + i,
+    modified: i})).concat(archived);
+  const {context} = setup(rows);
+  context.classifyKanbanColumn = row => row.archived ? 'archived' : 'active';
+  const result = context._boundSidebarRowsForRender(rows, 240, 'ideas');
+  assert.ok(result.rows.includes(archived));
   assert.equal(result.rows.length, 240);
 });
