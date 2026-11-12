@@ -23,8 +23,23 @@ def cutoff(now):
 
 
 def initialize(db):
+    # The store commits this transaction on initialization. Serialize the
+    # legacy-index upgrade across connections before inspecting its schema.
+    if not db.in_transaction:
+        db.execute('BEGIN IMMEDIATE')
     for table, (age, predicate) in TABLES.items():
-        db.execute(f'CREATE INDEX IF NOT EXISTS retention_{table} ON {table}({age},id) WHERE {predicate}')
+        name = 'retention_' + table
+        if predicate == '1=1':
+            # SQLite 3.53 folds this tautology out of queries, then cannot
+            # prove that an INDEXED BY query can use a WHERE 1=1 index.
+            # Upgrade existing stores as well as creating usable new ones.
+            indexes = db.execute(f'PRAGMA index_list({table})').fetchall()
+            if any(row[1] == name and row[4] for row in indexes):
+                db.execute(f'DROP INDEX IF EXISTS {name}')
+            where = ''
+        else:
+            where = ' WHERE ' + predicate
+        db.execute(f'CREATE INDEX IF NOT EXISTS {name} ON {table}({age},id){where}')
 
 
 def prune(store, now, batch=BATCH):

@@ -1,9 +1,31 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from ccc_server.oncall import retention
 from ccc_server.oncall.store import Store, Receipt, Inbound
 
 NOW = datetime(2026, 11, 11, tzinfo=timezone.utc).timestamp()
 OLD = datetime(2025, 9, 1, tzinfo=timezone.utc).timestamp()
+
+
+def test_upgrades_constant_partial_indexes_for_newer_sqlite(tmp_path):
+    store = Store(tmp_path)
+    with store._db:
+        for table, age in (('deliveries', 'sent_at'), ('log', 'at')):
+            store._db.execute(f'DROP INDEX retention_{table}')
+            store._db.execute(f'CREATE INDEX retention_{table} ON {table}({age},id) WHERE 1=1')
+        retention.initialize(store._db)
+        retention.initialize(store._db)  # Reopening an upgraded store is safe.
+    store.delivery_add(None, 'local', '', Receipt(ok=True), now=OLD)
+    store._run("INSERT INTO log(at,kind,detail) VALUES(?, 'test', '')", (OLD,))
+    for table in ('deliveries', 'log'):
+        indexes = store._db.execute(f'PRAGMA index_list({table})').fetchall()
+        assert next(row[4] for row in indexes if row[1] == 'retention_' + table) == 0
+    # Genuine partial indexes still protect waiting work and bound scans.
+    assert next(row[4] for row in store._db.execute('PRAGMA index_list(alerts)')
+                if row[1] == 'retention_alerts') == 1
+    removed = retention.prune(store, NOW)
+    assert removed['deliveries'] == removed['log'] == 1
+    store.close()
 
 
 def test_retention_preserves_waiting_and_52_weeks(tmp_path):
@@ -27,6 +49,24 @@ def test_retention_preserves_waiting_and_52_weeks(tmp_path):
     assert store.alert(waiting['id']) and store.alert(recent['id'])
     assert {m['state'] for m in store.customer_messages()} == {'pending', 'uncertain', 'failed'}
     store.close()
+
+
+def test_existing_index_upgrade_serializes_store_connections(tmp_path):
+    store = Store(tmp_path)
+    with store._db:
+        store._db.execute('DROP INDEX retention_deliveries')
+        store._db.execute('CREATE INDEX retention_deliveries ON deliveries(sent_at,id) WHERE 1=1')
+    store.close()
+
+    def reopen(_):
+        reader = Store(tmp_path)
+        try:
+            return retention.prune(reader, NOW)
+        finally:
+            reader.close()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert all(not any(result.values()) for result in pool.map(reopen, range(8)))
 
 
 def test_retention_budget_does_not_scan_thirteen_months(tmp_path):
