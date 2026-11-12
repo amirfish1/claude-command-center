@@ -295,6 +295,10 @@ Built something with it? [![Built with CCC](static/built-with-ccc.svg)](docs/sha
 
 ## Recent
 
+**v5.45 — local CI and easier runner setup.** See active GitHub Actions jobs and the two latest completed runs on desktop or phone; dismiss results when you are done. Settings → CI runners starts your default agent to connect a runner. On-call adds setup checks, replayable examples, and clearer reply handling.
+
+![Local CI activity and recent results in CCC, shown with synthetic demo data](docs/images/ccc-v5-45-ci.png)
+
 See [CHANGELOG.md](CHANGELOG.md) and [releases](https://github.com/amirfish1/claude-command-center/releases).
 Choose **Watch > Releases** on GitHub for update notifications.
 
