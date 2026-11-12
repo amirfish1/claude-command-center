@@ -82730,6 +82730,8 @@
   // does (engine/model/effort from the composer, optimistic placeholder that
   // auto-selects and follows the spawn). For surfaces outside this closure,
   // e.g. the Jobs tab's "+ Add" (static/jobs-tab.js). Resolves {ok, error?}.
+  // opts.sessionDefaults uses saved new-session defaults; localOnly forces
+  // this server machine even when the usual composer launches over SSH.
   // opts.job ({host, repo, what, when, name?}) routes through POST
   // /api/jobs/add instead, which composes the job prompt server-side.
   window.cccSpawnPromptSession = async function (opts) {
@@ -82738,7 +82740,17 @@
     const repoPath = String((opts && opts.repoPath) || '').trim()
       || (typeof getSpawnCwd === 'function' && getSpawnCwd()) || '';
     if (!prompt && !job) return { ok: false, error: 'empty prompt' };
-    const engine = getSpawnEngine();
+    const sessionDefaults = !!(opts && opts.sessionDefaults && !job);
+    let engine = getSpawnEngine();
+    if (sessionDefaults) {
+      try {
+        const response = await fetch('/api/spawn-defaults', {cache:'no-store', cccPriority:'user', signal:AbortSignal.timeout(10000)});
+        if (!response.ok) return {ok:false, error:'Could not read new-session defaults.'};
+        const defaults = await response.json();
+        if (!defaults.engine) return {ok:false, error:'New-session defaults are unavailable.'};
+        engine = normalizeSpawnDefaultEngine(defaults.engine);
+      } catch (_) { return {ok:false, error:'Could not read new-session defaults.'}; }
+    }
     const subject = String((opts && opts.name) || '').trim() || (prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt);
     const tempPid = 'tmp-' + Date.now();
     insertPendingSpawnCard(tempPid, subject, spawnSourceForEngine(engine));
@@ -82757,12 +82769,18 @@
         body = Object.assign({}, job, { engine, cwd: repoPath });
         if (sb.model) body.model = sb.model;
         if (sb.reasoning_effort) body.effort = sb.reasoning_effort;
+      } else if (sessionDefaults) {
+        // Omit engine/model/effort: the normal spawn endpoint resolves the
+        // saved session defaults, independently of composer overrides.
+        body = {prompt, repo_path:repoPath, cwd:repoPath};
+        if (opts.name) body.name = String(opts.name).slice(0, 80);
       } else {
         body = buildSpawnBody({ engine, model: choice.model, effort: choice.effort, prompt, repoPath });
         if (opts && opts.name) body.name = String(opts.name).slice(0, 80);
       }
+      if (opts && opts.localOnly) body.remote = false;
       body.idempotency_key = durableActionId('spawn');
-      const res = await fetch(job ? '/api/jobs/add' : spawnEndpointForEngine(engine), {
+      const res = await fetch(job ? '/api/jobs/add' : sessionDefaults ? '/api/sessions/spawn' : spawnEndpointForEngine(engine), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -95889,6 +95907,7 @@
       ['defaults', 'Agents', ['defaults','routing']],
       ['queues', 'Queues', ['queues']],
       ['repositories', 'Repositories', ['repositories']],
+      ['ci-runners', 'CI runners', ['ci-runners']],
       ['notifications', 'Notifications & voice', ['notifications','voice']],
       ['vault', 'Vault', ['vault','api-keys','network']],
       ['sessions', 'Usage & budgets', ['sessions','limits']],

@@ -5,6 +5,9 @@ configuration and a bounded diagnostic prefix supply identity only; job/step
 state comes from GitHub through the existing gh authentication.
 """
 import json
+import os
+import platform
+import shutil
 from pathlib import Path
 import re
 import subprocess
@@ -16,18 +19,22 @@ _cached = {"jobs": []}
 _checked = 0.0
 
 
-def _worker_roots():
+def _runner_roots(names):
     result = subprocess.run(["ps", "-eo", "comm=,args="], capture_output=True,
                             text=True, timeout=3)
     roots = set()
     for line in result.stdout.splitlines():
         parts = line.split(None, 2)
-        if len(parts) < 2 or Path(parts[0]).name != "Runner.Worker":
+        if len(parts) < 2 or Path(parts[0]).name not in names:
             continue
         executable = Path(parts[1])
         if executable.is_absolute():
             roots.add(executable.parent.parent)
     return sorted(roots)
+
+
+def _worker_roots():
+    return _runner_roots({"Runner.Worker"})
 
 
 def _identity(root):
@@ -97,3 +104,33 @@ def local_ci_progress():
                 _cached = {"jobs": [], "unavailable": True}
             _checked = time.monotonic()
         return _cached
+
+
+def local_ci_setup():
+    """On-demand setup checks; never register runners or return auth output."""
+    system = platform.system()
+    gh = shutil.which("gh")
+    result = {"platform": system, "supported": system in ("Linux", "Darwin"),
+              "github_cli": bool(gh), "github_authenticated": False,
+              "runners": [], "runner_check_available": True}
+    if gh:
+        try:
+            auth = subprocess.run([gh, "api", "--hostname", "github.com", "user", "--silent"],
+                                  capture_output=True, timeout=5,
+                                  env=dict(os.environ, GH_PROMPT_DISABLED="1"))
+            result["github_authenticated"] = auth.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        active = set(_worker_roots())
+        roots = set(_runner_roots({"Runner.Listener"})) | active
+        for root in sorted(roots):
+            try:
+                config = json.loads((root / ".runner").read_text(encoding="utf-8-sig"))
+                result["runners"].append({"name": config.get("agentName", "Runner"),
+                                          "state": "running_job" if root in active else "listening"})
+            except (OSError, ValueError):
+                continue
+    except (OSError, subprocess.TimeoutExpired):
+        result["runner_check_available"] = False
+    return result

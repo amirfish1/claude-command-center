@@ -60,3 +60,40 @@ def test_multiple_dashboard_reads_share_ten_second_cache():
          patch.object(local_ci, '_collect', return_value={'jobs': [{'name': 'test'}]}) as collect:
         assert local_ci.local_ci_progress() == local_ci.local_ci_progress()
         assert collect.call_count == 1
+
+
+def test_setup_reports_missing_cli_and_no_runners_without_network():
+    with patch.object(local_ci.shutil, 'which', return_value=None), \
+         patch.object(local_ci, '_runner_roots', return_value=[]), \
+         patch.object(local_ci.subprocess, 'run') as run:
+        result = local_ci.local_ci_setup()
+        assert not result['github_cli']
+        assert not result['github_authenticated']
+        assert result['runners'] == []
+        run.assert_not_called()
+
+
+def test_setup_checks_active_and_idle_runners_without_exposing_config(tmp_path):
+    active, idle = tmp_path / 'active', tmp_path / 'idle'
+    for root in (active, idle):
+        root.mkdir()
+        (root / '.runner').write_text(json.dumps({
+            'agentName': root.name, 'serverUrl': 'private-value-never-returned'}))
+    with patch.object(local_ci.shutil, 'which', return_value='/usr/bin/gh'), \
+         patch.object(local_ci, '_runner_roots', return_value=[active, idle]), \
+         patch.object(local_ci, '_worker_roots', return_value=[active]), \
+         patch.object(local_ci.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+        result = local_ci.local_ci_setup()
+        assert result['github_authenticated']
+        assert result['runners'] == [{'name': 'active', 'state': 'running_job'},
+                                     {'name': 'idle', 'state': 'listening'}]
+        assert 'private-value-never-returned' not in json.dumps(result)
+
+
+def test_setup_auth_timeout_is_unverified_not_ready():
+    with patch.object(local_ci.shutil, 'which', return_value='/usr/bin/gh'), \
+         patch.object(local_ci, '_runner_roots', return_value=[]), \
+         patch.object(local_ci.subprocess, 'run', side_effect=local_ci.subprocess.TimeoutExpired('gh', 5)):
+        result = local_ci.local_ci_setup()
+        assert result['github_cli']
+        assert not result['github_authenticated']

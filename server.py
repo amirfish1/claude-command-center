@@ -33923,6 +33923,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Flight tour welcome chips.
             _q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             self.send_json(_engines_installed(fresh=(_q.get("fresh") or [""])[0] in ("1", "true")))
+        elif path == "/api/ci/setup":
+            from ccc_server.local_ci import local_ci_setup
+            self.send_json(local_ci_setup())
         elif path == "/api/ci/local":
             from ccc_server.local_ci import local_ci_progress
             self.send_json(local_ci_progress())

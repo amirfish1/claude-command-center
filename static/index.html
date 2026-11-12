@@ -2706,6 +2706,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="12" cy="19" r="2.3"/><path d="M8 6.6h8M9.3 8.3 11 16.7M14.7 8.3 13 16.7"/></svg>
             <span>Fleet &amp; Network</span>
           </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-ci-runners" data-section-target="ci-runners" role="tab" aria-selected="false" aria-controls="settingsSection-ci-runners"><span>CI runners</span></button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-tools" data-section-target="tools" role="tab" aria-selected="false" aria-controls="settingsSection-tools">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2"/></svg>
             <span>Tools</span>
@@ -3554,6 +3555,25 @@
             </div>
           </section>
 
+          <section class="settings-section" id="settingsSection-ci-runners" data-section-id="ci-runners" role="tabpanel" aria-labelledby="settingsRailTab-ci-runners">
+            <h2>CI runners</h2>
+            <div class="settings-row" data-keywords="github actions ci runners self hosted setup repository configure install progress agent session">
+              <div class="settings-row-main">
+                <div class="settings-row-label">GitHub Actions runner</div>
+                <p class="settings-row-desc">Your default new-session agent installs and connects a runner for the selected project.</p>
+                <div id="ciRunnerLaunchStatus" role="status" aria-live="polite"></div>
+              </div>
+              <div class="settings-row-control"><button id="ciRunnerStart" class="settings-action-btn" type="button">Set up a runner</button></div>
+            </div>
+            <details class="ci-runner-diagnostics">
+              <summary>Runner status</summary>
+              <div class="settings-row" data-keywords="github ci runner check diagnostics installed authenticated idle listening status">
+                <div class="settings-row-main"><div id="ciRunnerSetupStatus" role="status" aria-live="polite">Check GitHub access and runners on this machine.</div></div>
+                <div class="settings-row-control"><button type="button" id="ciRunnerCheck" class="settings-action-btn">Refresh status</button></div>
+              </div>
+            </details>
+          </section>
+
           <section class="settings-section" id="settingsSection-help" data-section-id="help" role="tabpanel" aria-labelledby="settingsRailTab-help">
             <div class="settings-section-eyebrow">Help &amp; Onboarding</div>
 
@@ -4163,6 +4183,7 @@
 <link rel="stylesheet" href="/static/session-recaps.css">
 <script src="/static/session-recaps.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/settings-ci-runners.js"></script>
 <script src="/static/settings-preferences.js"></script>
 <script src="/static/free-settings.js" defer></script>
 <script src="/static/leftover.js" defer></script>

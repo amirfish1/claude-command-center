@@ -34663,3 +34663,11 @@ a.local-ci-job:hover { color: var(--accent); }
 .local-ci-job progress::-webkit-progress-value { background: var(--accent); }
 .local-ci-job progress::-moz-progress-bar { background: var(--accent); }
 .local-ci-step { display: block; font-size: 11px; color: var(--text-secondary, var(--text)); }
+
+#ciRunnerSetupStatus ul { padding-inline-start: 20px; line-height: 1.6; }
+
+.settings-rail-item[data-section-target="ci-runners"] { text-transform: none; }
+#ciRunnerLaunchStatus { margin-top: 10px; font-size: 12px; line-height: 1.5; }
+
+.ci-runner-diagnostics { margin-top: 18px; }
+.ci-runner-diagnostics summary { cursor: pointer; color: var(--text); }
