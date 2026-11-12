@@ -129,6 +129,17 @@ def test_headless_parent_detection(tmp_path, monkeypatch):
         # argv[0] is what /proc reports, so this looks like a claude process.
         proc = subprocess.Popen(argv, executable=sys.executable)
         try:
+            # Popen returns before exec finishes; until then /proc still shows
+            # the pytest parent's cmdline, so wait for the fake argv.
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                try:
+                    with open("/proc/%d/cmdline" % proc.pid, "rb") as f:
+                        if f.read().split(b"\0")[0].decode() == fake:
+                            break
+                except OSError:
+                    pass
+                time.sleep(0.02)
             # Start the walk at the fake claude itself.
             assert hook.headless_parent(pid=proc.pid) is want
         finally:
