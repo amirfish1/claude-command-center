@@ -94,12 +94,25 @@ def wait_worker(rec, timeout=240):
             pass
 
 
+def _listener_port_lsof(pid):
+    """macOS has no /proc: ask lsof for this pid's own loopback listeners."""
+    out = subprocess.run(['lsof', '-nP', '-a', '-p', str(pid), '-iTCP', '-sTCP:LISTEN', '-Fn'],
+                         capture_output=True, text=True, timeout=10).stdout
+    ports = sorted({int(line.rsplit(':', 1)[1]) for line in out.splitlines()
+                    if line.startswith('n127.0.0.1:')})
+    if len(ports) != 1:
+        raise RuntimeError('Expected one private watcher loopback listener')
+    return ports[0]
+
+
 def listener_port(pid):
     """Find only this isolated process's loopback TCP listener on Linux.
 
     WatchTower logs the requested port (0), not the assigned port. Matching
     socket inodes avoids reserving a port or reading another service's state.
     """
+    if not Path('/proc/self/fd').exists():
+        return _listener_port_lsof(pid)
     sockets = set()
     for fd in (Path('/proc') / str(pid) / 'fd').iterdir():
         try:

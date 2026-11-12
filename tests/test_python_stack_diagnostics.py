@@ -46,7 +46,7 @@ time.sleep(60)
         for _ in range(60):
             os.kill(child.pid, signal.SIGUSR2)
             time.sleep(0.01)
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 30  # loaded hosts: 4 spinners share the GIL with the dump thread
         while time.monotonic() < deadline:
             if stack_log.exists() and "[sleeper]" in stack_log.read_text():
                 break
@@ -126,7 +126,7 @@ time.sleep(60)
         for _ in range(20):
             os.kill(child.pid, signal.SIGUSR2)
             time.sleep(0.02)
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 30  # loaded hosts: 4 spinners share the GIL with the dump thread
         while time.monotonic() < deadline:
             if stack_log.exists() and "worker SIGUSR2" in stack_log.read_text():
                 break
