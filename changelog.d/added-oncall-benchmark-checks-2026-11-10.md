@@ -1,1 +1,0 @@
-- Add isolated benchmark checks, record tool revisions, and make quick mode run its four cases once by default.

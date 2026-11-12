@@ -1,1 +1,0 @@
-- Running the test suite on a machine with On-call turned on no longer raises test alerts in your real On-call list or sends them to your phone.

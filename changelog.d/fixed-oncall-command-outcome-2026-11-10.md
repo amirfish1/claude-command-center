@@ -1,1 +1,0 @@
-- On-call treats command exits after a send as uncertain and limits the possible-repeat owner alert to one retry.

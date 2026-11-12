@@ -1,1 +1,0 @@
-- The opt-in On-call agent proof now lets WatchTower start the fixing agent on its own instead of starting it itself, and runs its own isolated watcher so nothing is left running afterwards.

@@ -1,1 +1,0 @@
-- The installer explains how to recover when it cannot write settings in the home directory.

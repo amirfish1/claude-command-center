@@ -1,1 +1,0 @@
-- Export private weekly On-call cards as SVG or PNG and eight-week pages as HTML.

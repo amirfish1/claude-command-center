@@ -1,1 +1,0 @@
-- Narrow and phone layouts: the menu button's list now ends with a pinned Settings item, and the left app rail is hidden whenever the bottom bar is shown, since the menu already lists every app.

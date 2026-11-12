@@ -1,1 +1,0 @@
-- On-call keeps reporter names and source links on one line so they cannot forge report markers.

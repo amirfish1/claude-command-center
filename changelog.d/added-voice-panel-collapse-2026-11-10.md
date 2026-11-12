@@ -1,1 +1,0 @@
-- Voice mode: the call panel collapses to a small bar (state, timer, mute, end) and remembers the choice.

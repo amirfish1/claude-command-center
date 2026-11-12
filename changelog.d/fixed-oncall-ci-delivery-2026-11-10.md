@@ -1,1 +1,0 @@
-- Keep CI findings through crashes and scan bursts across bounded pages.

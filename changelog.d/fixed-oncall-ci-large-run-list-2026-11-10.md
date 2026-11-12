@@ -1,1 +1,0 @@
-- On-call: `ccc oncall source add ci` failed with `bad-json` on repositories whose list of the last 100 workflow runs is larger than 1 MB (most active GitHub repositories). The run list is now read whole; job logs keep their 1 MB bound.

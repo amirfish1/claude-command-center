@@ -1,1 +1,0 @@
-- On-call saves received channel messages and polling cursors in one transaction, so a restart cannot skip a fetched reply.

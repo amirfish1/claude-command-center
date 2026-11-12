@@ -1,1 +1,0 @@
-- Turn firing Alertmanager groups into tickets and add recovery evidence without closing a worker's ticket or claiming a fix.

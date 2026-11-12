@@ -1,1 +1,0 @@
-- Telegram group members cannot answer On-call alerts as the owner; use a private bot chat for replies.

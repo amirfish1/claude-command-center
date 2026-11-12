@@ -1,1 +1,0 @@
-- Retry GlitchTip issue checks with its supported sort order and project route.

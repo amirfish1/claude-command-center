@@ -1,1 +1,0 @@
-- Reject old benchmark result directories so a failed retry cannot reuse a previous successful case.

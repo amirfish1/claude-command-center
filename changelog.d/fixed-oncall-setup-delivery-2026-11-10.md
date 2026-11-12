@@ -1,1 +1,0 @@
-- On-call setup now turns alerts off if every test message fails, including when setup is run again.

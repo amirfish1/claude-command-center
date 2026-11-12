@@ -1,1 +1,0 @@
-- Fix unreadable question dialog text in light mode and match answer fields, links, dividers, and keyboard focus to the active theme.

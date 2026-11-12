@@ -1,4 +1,0 @@
-- Settings: Launch defaults offer the favorite engine/model/effort chips for new sessions and queue workers, with "Apply to all queues" in one click; worker fallback and model profiles are edited on the Agents page instead of a pop-up.
-- Settings: Queues rows can set each queue's model and effort, not only its engine.
-- Settings: Repositories lists every repository from the new-session picker with its avatar ("Auto mode" when none is chosen), inline Upload/Auto, and "+ Add".
-- Settings: notifications use plain on/off switches (no mode menu), agent config is four on/off switches, and Preview features and Optional capabilities live expanded on Advanced.

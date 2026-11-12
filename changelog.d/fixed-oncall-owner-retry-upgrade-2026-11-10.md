@@ -1,1 +1,0 @@
-- On-call preserves the single warned owner retry for uncertain attempts saved before the retry policy changed.

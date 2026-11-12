@@ -1,1 +1,0 @@
-- The README, the landing page and the in-app copy now describe what CCC is for: coding agents on call for your product. Bugs from customers and monitoring go to agents that fix them, and real decisions reach you by message. On-call itself is still a preview and off by default.

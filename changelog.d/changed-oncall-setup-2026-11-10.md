@@ -1,1 +1,0 @@
-- `ccc oncall setup` is shorter: it offers ntfy first (no account), makes up a private topic and the queue name for you, accepts piped answers, and ends by saying what is on and how to turn it off. `ccc oncall status` marks channels that are untested or send only. `scripts/oncall-proof.py` checks ntfy and email end to end against local servers in Docker.

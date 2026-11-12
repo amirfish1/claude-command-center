@@ -1,1 +1,0 @@
-- Limit browser demo recording encoders to two threads as well as limiting their decoders.

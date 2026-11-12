@@ -1,1 +1,0 @@
-- A valid Codex form answer is no longer rejected as "exceeded the supported time limit" on a slow or busy machine; the two-second limit now covers only the validation itself, not the validator's start-up.

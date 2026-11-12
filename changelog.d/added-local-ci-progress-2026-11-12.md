@@ -1,1 +1,0 @@
-Show active self-hosted GitHub Actions jobs beneath the dashboard title, with step completion progress, the current step, and a link to the run. Refresh every ten seconds and hide the indicator when local runners are idle.

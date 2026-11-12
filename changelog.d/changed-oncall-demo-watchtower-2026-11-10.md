@@ -1,1 +1,0 @@
-- Use an isolated real WatchTower store and minor-decision policy in the local demo when the Python package is installed, with a disclosed fixture fallback.

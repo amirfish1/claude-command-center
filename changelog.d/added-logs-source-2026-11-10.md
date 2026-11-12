@@ -1,1 +1,0 @@
-- Follow application files, journal units, or Docker logs and file scrubbed, grouped errors without replaying existing logs.

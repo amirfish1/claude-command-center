@@ -1,1 +1,0 @@
-- Stop claiming a worker will start when a bug report has only been filed.

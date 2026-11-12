@@ -1,1 +1,0 @@
-- On-call records owner send attempts before delivery and holds interrupted attempts for review instead of sending them again.

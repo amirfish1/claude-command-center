@@ -1,1 +1,0 @@
-- Tell fixing agents how to record a small reversible choice with a verified commit and an exact undo when minor decisions are on.

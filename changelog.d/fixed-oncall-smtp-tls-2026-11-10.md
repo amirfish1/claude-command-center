@@ -1,1 +1,0 @@
-- On-call email channels can use implicit TLS on a custom SMTP port with `smtp_security=tls`.

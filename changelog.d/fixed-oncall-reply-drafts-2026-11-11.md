@@ -1,1 +1,0 @@
-On-call home preserves reply drafts, errors and keyboard focus during refresh, explains empty replies inline, and labels its settings link. Setup documentation distinguishes an accepted test send from receipt on a phone.

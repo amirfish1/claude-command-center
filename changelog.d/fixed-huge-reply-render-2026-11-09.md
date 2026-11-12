@@ -1,1 +1,0 @@
-- Opening a conversation containing a multi-megabyte pasted log no longer freezes for up to two minutes; long replies render the first 40k characters and fold the rest into a collapsed plain-text block.

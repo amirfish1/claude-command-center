@@ -1,1 +1,0 @@
-- On-call (preview) still alerts when an agent's permission prompt cannot be safely answered from a phone; the alert says to answer it in the session and accepts no reply.

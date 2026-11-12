@@ -1,1 +1,0 @@
-- Kept the hero phone glow within the page on narrow screens to prevent sideways scrolling.

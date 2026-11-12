@@ -1,1 +1,0 @@
-- Email decisions require a matching private alert token, and closed tokens cannot pause or resume On-call.

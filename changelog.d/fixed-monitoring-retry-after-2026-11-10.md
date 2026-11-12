@@ -1,1 +1,0 @@
-- Honour monitoring servers' Retry-After delays across polls and restarts, including when clocks disagree.

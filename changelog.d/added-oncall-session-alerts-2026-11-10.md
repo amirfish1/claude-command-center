@@ -1,1 +1,0 @@
-- On-call (preview) now messages you when a Claude Code or Codex agent ends its turn with a question for you and sits idle for two minutes, and when an agent is waiting for tool permission. Your reply answers the question; a permission prompt takes only `allow` or `deny`.

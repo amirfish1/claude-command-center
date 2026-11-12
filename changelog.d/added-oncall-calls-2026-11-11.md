@@ -1,1 +1,0 @@
-- Add opt-in On-call phone escalation with spoken alerts, replies through an existing SMS channel, quiet hours and a call-attempt cap. General channel tests skip calls; `ccc oncall test --call` explicitly places a call.

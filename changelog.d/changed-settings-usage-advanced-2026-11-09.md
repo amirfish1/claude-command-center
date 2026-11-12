@@ -1,1 +1,0 @@
-- Settings → Usage & budgets: session limits appear only while sessions are actually waiting on a limit (and are no longer collapsed). Spare quota and free model setup moved to a new "Advanced" page, the last item in the Settings menu.

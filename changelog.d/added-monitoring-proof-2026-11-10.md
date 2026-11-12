@@ -1,1 +1,0 @@
-- Add isolated monitoring proofs for GlitchTip, HTTP health checks, and commands, with explicit PostHog contract-only results.

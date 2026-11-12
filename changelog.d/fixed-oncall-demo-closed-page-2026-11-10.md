@@ -1,1 +1,0 @@
-- The portable On-call demo supports paged closed-ticket checks and skips unattended queue-health checks.

@@ -1,1 +1,0 @@
-- On-call (preview): with On-call on, a desktop window opens on a quiet home screen with three lists (needs you, being worked on, fixed this week) where you can answer questions directly. The full dashboard is one click away, and the screen follows the light and dark themes.

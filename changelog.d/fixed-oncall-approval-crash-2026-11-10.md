@@ -1,1 +1,0 @@
-- On-call reserves each owner answer before applying it, so an interrupted approval cannot be applied again by a duplicate reply.

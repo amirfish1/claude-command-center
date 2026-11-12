@@ -1,1 +1,0 @@
-- Closing an image with Back, Escape, or the viewer controls keeps the current session open on phones.

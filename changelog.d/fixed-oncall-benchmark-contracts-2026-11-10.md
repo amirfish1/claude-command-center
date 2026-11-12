@@ -1,1 +1,0 @@
-- State benchmark return types explicitly, check hard stops before the owner answer, and retain private failure evidence.

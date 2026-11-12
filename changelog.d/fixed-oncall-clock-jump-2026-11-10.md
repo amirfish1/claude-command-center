@@ -1,1 +1,0 @@
-- On-call resumes scheduled checks after the clock moves backward instead of waiting for the old time.

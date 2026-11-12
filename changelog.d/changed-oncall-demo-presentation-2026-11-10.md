@@ -1,1 +1,0 @@
-- Give the local demo a paced terminal walkthrough, boxed messages, fast mode and a phone thread with reply buttons and live ticket state.

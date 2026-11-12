@@ -1,1 +1,0 @@
-- Add an opt-in proof that starts an isolated dashboard and a real Codex session, and checks that a closing question reaches a local ntfy topic once after the idle wait and that the reply reaches the session.

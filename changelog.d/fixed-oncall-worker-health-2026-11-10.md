@@ -1,1 +1,0 @@
-- On-call reports a stuck WatchTower queue once per incident and clears the alert when progress resumes.

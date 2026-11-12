@@ -1,1 +1,0 @@
-- The On-call sandbox proof stops child process groups on timeout or termination before removing its temporary workspace.

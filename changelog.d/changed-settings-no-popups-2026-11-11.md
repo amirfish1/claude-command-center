@@ -1,2 +1,0 @@
-- Settings: engine setup, Network access and Nodes & peers now open in place on their own page instead of as pop-ups over Settings, and Settings stays open.
-- Settings: System shows health-check issues inline with a Fix button that jumps to the right Settings page, replacing "Open health checks".

@@ -1,1 +1,0 @@
-- Add CI intake for allowed pull requests and verify fixes on Gitea and Forgejo.

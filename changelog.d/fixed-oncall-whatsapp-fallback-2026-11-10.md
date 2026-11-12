@@ -1,1 +1,0 @@
-- On-call holds an uncertain WhatsApp fallback for owner review instead of sending it again after a restart.

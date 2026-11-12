@@ -1,1 +1,0 @@
-- On-call rejects customer thread replies from a different sender or channel.

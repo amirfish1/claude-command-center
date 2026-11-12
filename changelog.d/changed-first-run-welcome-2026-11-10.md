@@ -1,1 +1,0 @@
-- The first-run welcome now says what CCC is for ("Your agents are on call. You are not."), tells you when no agent is installed and what to do next, links to what the daily ping sends, and no longer reappears on reload.
