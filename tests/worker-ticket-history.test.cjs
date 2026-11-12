@@ -101,6 +101,42 @@ test('changes to attributed ticket history invalidate the sidebar content signat
   assert.notEqual(updated, initial);
 });
 
+test('worker headlines describe the exact ticket in every state, preserving names and helper roles', () => {
+  const ctx = harness();
+  ctx.sessionIsActivelyWorking = c => c.state === 'working';
+  ctx._applyLiveOverlayToRow = c => c;
+  ctx._setUxFixesQueueMeta([
+    ticket(1, {type: 'bug', title: '', note: '/tmp/issue.png  Booking fails after rescheduling'}),
+    ticket(2, {type: 'feature', title: 'Add calendar export'}),
+  ]);
+  for (const state of [
+    {is_live: false}, {is_live: true}, {is_live: true, state: 'working'},
+    {is_live: true, question_waiting: true},
+  ]) {
+    const facts = ctx.workerRowFacts({...row, ...state}, 'EXAMPLE worker');
+    assert.equal(facts.title, 'Bug: Booking fails after rescheduling');
+    assert.equal(facts.ticketRef, 'EXAMPLE-1', 'headline must match the avatar, not the newest history ticket');
+    assert.match(ctx.workerTicketChipHtml(facts), /data-worker-ticket="EXAMPLE-1"/);
+  }
+  assert.equal(ctx.workerRowFacts({...row, display_name: '🧵 EXAMPLE#2'}, 'EXAMPLE worker').title, 'FR: Add calendar export');
+  assert.equal(ctx.workerRowFacts({...row, name_overridden: true}, 'My named worker').title, 'My named worker');
+  assert.equal(ctx.workerRowFacts({...row, worker_origin: {role: 'verifier'}}, 'EXAMPLE worker').title, 'Independent verifier');
+  const before = ctx.uxFixesQueueMeta._sig;
+  ctx._setUxFixesQueueMeta([ticket(1, {type: 'feature', title: 'Calendar export'})]);
+  assert.notEqual(ctx.uxFixesQueueMeta._sig, before);
+  assert.equal(ctx.workerRowFacts(row, 'EXAMPLE worker').title, 'FR: Calendar export');
+});
+
+test('ticket issue headlines strip attachment boilerplate and handle missing descriptions', () => {
+  const ctx = harness();
+  assert.equal(ctx.workerTicketIssueTitle({type: 'bug', note: 'Fix the following UX issue based on this annotation:\nAnnotation: ![screen](/tmp/screen.png)\n# Button does nothing'}), 'Bug: Button does nothing');
+  assert.equal(ctx.workerTicketIssueTitle({type: 'feature', title: 'FR: Export appointments'}), 'FR: Export appointments');
+  assert.equal(ctx.workerTicketIssueTitle({type: 'task', text: 'Check export errors'}), 'Check export errors');
+  assert.equal(ctx.workerTicketIssueTitle({type: 'bug', title: ' ', note: 'https://example.com/screen.png', text: 'Empty invoice'}), 'Bug: Empty invoice');
+  assert.equal(ctx.workerTicketIssueTitle({type: 'bug'}), '');
+  assert.equal(ctx.workerTicketIssueTitle({type: 'bug', note: '/tmp/issue.png'}), 'Bug: Screenshot report');
+});
+
 test('worker history shows ticket numbers only, and ticket clicks do not select the session row', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {

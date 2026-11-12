@@ -79351,6 +79351,7 @@
     return Number.isFinite(t) ? t : 0;
   }
   function _setUxFixesQueueMeta(items) {
+    const ticketsByRef = new Map();
     const byClaimedSession = new Map();
     const activeByProject = new Map();
     const projectMaxSeq = new Map();
@@ -79367,6 +79368,7 @@
       const project = String((item && item.project) || '').trim() || '?';
       projectMaxSeq.set(project, Math.max(projectMaxSeq.get(project) || 0, seq));
       const status = item.status || '';
+      if (item.ref) ticketsByRef.set(item.ref, workerTicketIssueTitle(item));
       // History uses explicit identities only. A claim is evidence of work
       // even when another session later resolved it; never credit that
       // claimant as the resolver, or infer ownership from a shared queue.
@@ -79493,6 +79495,7 @@
     // refresh path repaint the sidebar only when the queue actually changed,
     // instead of re-rendering on every 15s poll.
     const sigParts = [];
+    for (const [ref, title] of ticketsByRef) sigParts.push('t' + ref + ':' + title);
     for (const [sid, rec] of byClaimedSession) sigParts.push('c' + sid + ':' + rec.seq + ':' + (rec.claimedAt || 0));
     for (const [proj, rec] of activeByProject) sigParts.push('pc' + proj + ':' + rec.seq + ':' + (rec.claimedAt || 0));
     for (const [sid, rec] of lastFixBySession) sigParts.push('d' + sid + ':' + rec.seq);
@@ -79506,6 +79509,7 @@
       list.sort((a, b) => (b.closedAt || 0) - (a.closedAt || 0));
     }
     uxFixesQueueMeta = {
+      ticketsByRef,
       projectMaxSeq, byClaimedSession, activeByProject, lastFixBySession, lastFixByProject,
       closedTicketsBySession, ticketsBySession, _sig,
     };
@@ -79606,6 +79610,29 @@
     if (alive && (live.needs_approval || live.question_waiting || c.needs_approval || c.question_waiting)) return 'needs-you';
     return alive ? 'idle' : 'done';
   }
+  function workerTicketIssueTitle(ticket) {
+    if (!ticket) return '';
+    // Notes from annotations often start with an image or boilerplate. The
+    // row needs the actual request, while the modal keeps the complete note.
+    let body = '';
+    for (const raw of [ticket.title, ticket.note, ticket.text]) {
+      body = String(raw || '')
+        .replace(/Fix the following UX issue based on this annotation:\s*/gi, '')
+        .replace(/^\s*Annotation:\s*/gim, '')
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+        .replace(/(?:https?:\/\/\S+|(?:\/[\w.~-]+)+)\.(?:png|jpe?g|webp|gif)(?:\?\S*)?/gi, '')
+        .replace(/^\s*#+\s*/gm, '')
+        .replace(/\s+/g, ' ').trim();
+      if (body) break;
+    }
+    if (!body && [ticket.title, ticket.note, ticket.text].some(raw => /\.(?:png|jpe?g|webp|gif)\b/i.test(String(raw || '')))) {
+      body = 'Screenshot report';
+    }
+    if (!body) return '';
+    const type = String(ticket.type || '').toLowerCase();
+    const label = type === 'bug' ? 'Bug' : /^(?:feature|feature_request|fr)$/.test(type) ? 'FR' : '';
+    return label && !/^(?:Bug|FR|Feature request)\s*:/i.test(body) ? label + ': ' + body : body;
+  }
   function workerRowFacts(c, shownTitle) {
     const origin = (c && c.worker_origin) || null;
     let role = String((origin && origin.role) || '').trim();
@@ -79641,12 +79668,15 @@
     }
     const generic = !prose || _WK_GENERIC_TITLE_RE.test(prose);
     const roleLabel = WORKER_HELPER_ROLE_LABELS[role] || ('Worker ' + role.replace(/_/g, ' '));
+    const issueTitle = uxFixesQueueMeta && uxFixesQueueMeta.ticketsByRef?.get(ticketRef);
     let title;
     if (isHelper) {
       // "Critique: Critique X" -> "Critique: X" when the prose repeats the role.
       const dupRe = new RegExp('^' + roleLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[:\u00b7-]?\\s*', 'i');
       const body = prose.replace(dupRe, '').trim();
       title = (generic || !body) ? roleLabel : roleLabel + ': ' + body;
+    } else if (issueTitle && !c?.name_overridden) {
+      title = issueTitle;
     } else if (!generic) {
       title = prose;
     } else if (bucket === 'working') {
