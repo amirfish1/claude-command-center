@@ -39,6 +39,37 @@ def interpreter():
     return None
 
 
+def _wt_python_argv():
+    """Bridge command for a WatchTower this process cannot import itself.
+
+    A pip --user install lives under the real home's site directory, but the
+    demo runs with HOME pointed at a temporary directory, so that interpreter
+    cannot see it. Ask it from the real home where the package is, then give
+    the bridge that directory explicitly.
+    """
+    python = interpreter()
+    script = str(Path(__file__).resolve())
+    try:
+        import pwd
+        real_home = pwd.getpwuid(os.getuid()).pw_dir
+    except (ImportError, KeyError):
+        real_home = None
+    if python and real_home:
+        env = dict(os.environ, HOME=real_home)
+        env.pop('PYTHONNOUSERSITE', None)
+        try:
+            found = subprocess.run(
+                [python, '-c', 'import os, watchtower; '
+                 'print(os.path.dirname(os.path.dirname(watchtower.__file__)))'],
+                env=env, capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            found = None
+        root = found.stdout.strip() if found and found.returncode == 0 else ''
+        if root:
+            return [python, '-S', script, '--bridge', root]
+    return [python, script, '--bridge']
+
+
 def installed():
     return bool(interpreter())
 
@@ -53,7 +84,7 @@ class RealTickets(WT):
         # while retaining the installed package's actual CLI implementation.
         argv = ([sys.executable, '-S', str(Path(__file__).resolve()), '--bridge',
                  str(Path(spec.origin).parent.parent)] if spec and spec.origin else
-                [interpreter(), str(Path(__file__).resolve()), '--bridge'])
+                _wt_python_argv())
         self.proc = subprocess.Popen(argv,
                                      cwd=root / 'project', env=env, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -61,8 +92,13 @@ class RealTickets(WT):
         super().__init__(argv=['wt'], run=self.call, env=env, dispatch=False)
 
     def call(self, argv, **kwargs):
-        self.proc.stdin.write(json.dumps(argv[1:]) + '\n')
-        self.proc.stdin.flush()
+        try:
+            self.proc.stdin.write(json.dumps(argv[1:]) + '\n')
+            self.proc.stdin.flush()
+        except BrokenPipeError:
+            # The bridge died before reading: its stderr is the real reason.
+            self.proc.wait(timeout=5)
+            raise WTError('Isolated WatchTower exited: ' + self.proc.stderr.read()[-1000:])
         with selectors.DefaultSelector() as selector:
             selector.register(self.proc.stdout, selectors.EVENT_READ)
             if not selector.select(kwargs.get('timeout', 30)):
