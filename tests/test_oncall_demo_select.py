@@ -8,6 +8,18 @@ import sys
 import termios
 
 
+# PENDIN is a kernel-set flag meaning "input is waiting to be reprinted". The
+# kernel raises it after a mode change while a key is queued; it is not a
+# setting the picker chose, so it must not count as an unrestored mode.
+PENDIN = 0x20000000 if sys.platform == 'darwin' else 0x4000
+
+
+def _settings(attrs):
+    attrs = list(attrs)
+    attrs[3] &= ~PENDIN
+    return attrs
+
+
 def test_scene_picker_one_key():
     master, slave = pty.openpty()
     before = termios.tcgetattr(slave)
@@ -33,7 +45,7 @@ print('SCENE=' + pick(), flush=True)
         stdout, stderr = proc.communicate(timeout=5)
         assert proc.returncode == 0, stderr
         assert b'SCENE=ci' in stdout
-        assert termios.tcgetattr(slave) == before
+        assert _settings(termios.tcgetattr(slave)) == _settings(before)
     finally:
         if proc.poll() is None:
             proc.kill()
