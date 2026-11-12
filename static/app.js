@@ -66557,15 +66557,13 @@
   // dropping everything after a `&&`/`;` — the user filed this repeatedly
   // because the actual command that ran was unrecoverable from the header.
   // Show the real (cd-stripped) command text instead of a synthetic
-  // "cmd sub" label; the header's CSS ellipsis clips it visually, and the
-  // untruncated string still lives in the title attribute for hover.
-  function fullCommandSummaryLabel(command, maxLen) {
+  // "cmd sub" label. The header wraps to keep the complete command readable.
+  function fullCommandSummaryLabel(command) {
     let raw = String(command || '').replace(/\s+/g, ' ').trim();
     if (!raw) return '';
     raw = raw.replace(/^Shell command:\s*/i, '').trim();
     raw = _stripCdWrapperPrefix(raw);
-    const cap = maxLen || 140;
-    return raw.length > cap ? raw.slice(0, cap - 1) + '…' : raw;
+    return raw;
   }
 
   function compactShellCommandLabel(command) {
@@ -66822,7 +66820,7 @@
       const raw = out.textContent.replace(/^\[J[^\]]*\]\s{0,2}/, '');
       const line = raw.split('\n').map(l => l.trim()).find(Boolean);
       if (!line) return 'no output';
-      return line.length > 90 ? line.slice(0, 89) + '…' : line;
+      return line;
     }
     if (tc.querySelector('.tool-result-code-preview')) return '';
     return '';

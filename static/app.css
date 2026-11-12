@@ -4486,7 +4486,7 @@
     cursor: pointer; user-select: none;
     padding: 4px 10px;
     font-size: 13px; color: var(--text-muted);
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   }
   .conversations-view .tool-call-group-header:hover { background: var(--surface-2); border-radius: 6px; }
@@ -4494,13 +4494,13 @@
     display: inline-block; transition: transform 0.15s; font-size: 10px; color: var(--orange);
   }
   .conversations-view .tool-call-group-header .tcg-label {
-    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1 1 240px; min-width: 0; white-space: normal; overflow-wrap: anywhere;
   }
   /* CCC-501: a short hint of what the command actually returned, right of the
      label — "Completed git status" alone gave no sense of the outcome. */
   .conversations-view .tool-call-group-header .tcg-result {
-    flex-shrink: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis;
-    white-space: nowrap; opacity: 0.6; font-size: 12px; font-style: italic;
+    flex: 1 1 240px; min-width: 0;
+    white-space: normal; overflow-wrap: anywhere; opacity: 0.6; font-size: 12px; font-style: italic;
   }
   .conversations-view .tool-call-group-header .tcg-result:empty { display: none; }
   /* Real time + line number, right-aligned — a run of collapsed "▶ Completed
@@ -31971,8 +31971,7 @@ body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assis
    hidden there. */
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) > .event-token-chips,
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) > .event-model-meta { display: block !important; }
-/* Two-line clamp on messages (all but the newest assistant reply). */
-body.conv-compact.conv-compact .conversations-view .event.assistant:has(~ .event.assistant .assistant-text) .assistant-text:not(.cc-open):not(.cc-final):not(:has(.cc-run-chip)),
+/* User asks can expand on click; assistant commentary stays fully readable. */
 body.conv-compact.conv-compact .conversations-view .event.user_text:not(.cc-open):not(:has(img)) .user-msg {
   display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
   overflow: hidden; cursor: pointer;
@@ -31986,11 +31985,10 @@ body.conv-compact.conv-compact .conversations-view .thinking-block:not(.cc-open)
 body.conv-compact.conv-compact .conversations-view .thinking-block.cc-open .t-body {
   display: block; -webkit-line-clamp: unset; max-height: none;
 }
-/* One-line tool commands. */
+/* Tool commands wrap so the complete command stays readable. */
 body.conv-compact.conv-compact .conversations-view .tool-call { padding: 0 !important; }
 body.conv-compact.conv-compact .conversations-view .tool-call:not(.cc-open) .tool-detail {
-  display: inline-block; max-width: calc(100% - 90px); vertical-align: bottom;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+  white-space: pre-wrap; overflow-wrap: anywhere;
 }
 body.conv-compact.conv-compact .conversations-view .tool-call:not(.cc-open) pre.tool-result-output { display: none; }
 body.conv-compact.conv-compact .conversations-view .tool-call-group { margin: 0; }
@@ -32101,10 +32099,6 @@ body.conv-compact.conv-compact .conversations-view .kimi-turn {
   margin: 0 !important; padding: 1px 0 !important;
 }
 body.conv-compact.conv-compact .conversations-view .kimi-turn > * + * { margin-top: 0 !important; }
-body.conv-compact.conv-compact .conversations-view .kimi-turn .assistant-text:not(.cc-open):not(.cc-final):not(:has(.cc-run-chip)) {
-  display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  overflow: hidden; cursor: pointer;
-}
 body.conv-compact.conv-compact .conversations-view .kimi-tool-peek { display: none !important; }
 body.conv-compact.conv-compact .conversations-view .kimi-tool-group:has(.acp-needs-approval) > .kimi-tool-group-body { display: block !important; }
 body.conv-compact.conv-compact .conversations-view :is(.kimi-tool, .kimi-tool-group, .kimi-thinking).cc-run-head.cc-run-open:not(.cc-run-chipped)::before {
