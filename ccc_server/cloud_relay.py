@@ -41,6 +41,7 @@ import socket
 import sqlite3
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -94,6 +95,7 @@ MAX_TURNS = 20
 
 # Command validation (PROTOCOL §4.3).
 ALLOWED_CAPABILITIES = (
+    "session.spawn",
     "session.send_input",
     "question.answer",
     "session.wake",
@@ -123,6 +125,7 @@ CREDENTIAL_REJECTS_FATAL = 3
 SERVICE_DISCONNECT_REASONS = ("device_revoked", "account_deleted",
                               "credentials_rejected")
 DEVICE_CAPABILITIES = ["sessions", "attention", "workers", "questions",
+                       "session_spawn",
                        "session_input", "question_answer", "session_wake",
                        "session_detail", "session_history",
                        "approval_answer"]
@@ -1166,7 +1169,7 @@ def build_snapshot(local_api: LocalAPI, config: dict, ccc_version: str = "0.0.0"
     if schedules:
         capabilities.append("schedules")
     capabilities += ["session_input", "question_answer", "session_wake",
-                     "session_detail", "session_history"]
+                     "session_detail", "session_history", "session_spawn"]
 
     snapshot = {
         "v": PROTOCOL_VERSION,
@@ -1291,6 +1294,8 @@ def validate_command(env: dict, last_seq: int, now: float | None = None) -> str 
     payload = env.get("payload")
     if not isinstance(payload, dict):
         return "invalid_payload"
+    if capability == "session.spawn":
+        return _validate_spawn_payload(payload)
     if not payload.get("session_ref"):
         return "invalid_payload"
     text = payload.get("text")
@@ -1299,6 +1304,30 @@ def validate_command(env: dict, last_seq: int, now: float | None = None) -> str 
             return "invalid_payload"
         if len(text.encode("utf-8")) > COMMAND_TEXT_MAX_BYTES:
             return "payload_too_large"
+    return None
+
+
+def _validate_spawn_payload(payload: dict) -> str | None:
+    # The source session selects a repository on THIS machine. No paths,
+    # shell options, environment, permission bypass or remote node selectors
+    # are accepted from the relay.
+    caps = {"session_ref": 200, "engine": 40, "model": 200,
+            "reasoning_effort": 20, "name": 120}
+    if not {"session_ref", "prompt"} <= set(payload) <= set(caps) | {"prompt"}:
+        return "invalid_payload"
+    for key, cap in caps.items():
+        if key not in payload:
+            continue
+        value = payload[key]
+        if (not isinstance(value, str) or not value.strip()
+                or value != value.strip() or len(value) > cap
+                or any(unicodedata.category(c) == "Cc" for c in value)):
+            return "invalid_payload"
+    prompt = payload["prompt"]
+    if not isinstance(prompt, str) or not prompt.strip():
+        return "invalid_payload"
+    if len(prompt.encode("utf-8")) > COMMAND_TEXT_MAX_BYTES:
+        return "payload_too_large"
     return None
 
 
@@ -1408,6 +1437,9 @@ class CommandExecutor:
         payload = env.get("payload") or {}
         request_id = str(env.get("request_id") or "")
         text = payload.get("text") or ""
+        if capability == "session.spawn":
+            return self._spawn(request_id, session_ref, payload,
+                               issued_by=env.get("issued_by"))
         if capability == "session.send_input":
             return self._inject(request_id, session_ref, text, mode="send",
                                 issued_by=env.get("issued_by"))
@@ -1426,6 +1458,53 @@ class CommandExecutor:
         if capability == "approval.answer":
             return self._approval_answer(request_id, session_ref, payload)
         return self._result(request_id, "rejected", error_code="unknown_capability")
+
+    def _spawn(self, request_id, session_ref, payload, issued_by=None) -> dict:
+        row = self._find_row(session_ref)
+        if not row or is_subagent_ref(session_ref):
+            return self._result(request_id, "error", error_code="session_not_found")
+        repo = row.get("session_cwd") or row.get("cwd") or row.get("repo_path")
+        if not isinstance(repo, str) or not os.path.isabs(repo) or not os.path.isdir(repo):
+            return self._result(request_id, "error", error_code="repo_not_found")
+        body = {
+            "repo_path": repo,
+            "prompt": provenance_header(issued_by, request_id) + payload["prompt"],
+            # Also dedupe at the local spawn layer if the result is lost
+            # after the owner has accepted the request.
+            "task_key": "cloud-spawn-" + request_id,
+        }
+        for key in ("engine", "model", "reasoning_effort", "name"):
+            if key in payload:
+                body[key] = payload[key]
+        if not body.get("engine") and row.get("engine"):
+            body["engine"] = row["engine"]
+        if body.get("engine") == row.get("engine"):
+            for key in ("model", "reasoning_effort"):
+                if key not in body and row.get(key):
+                    body[key] = row[key]
+        status, data = self.local_api.post("/api/sessions/spawn", body)
+        if not isinstance(data, dict) or not (200 <= status < 300) or not data.get("ok"):
+            return self._result(request_id, "error", error_code="spawn_failed")
+        # A loopback success without an owner-issued identifier is not a
+        # confirmed spawn. Never return paths, logs or the full local body.
+        if not data.get("session_id") and not data.get("spawn_id"):
+            return self._result(request_id, "error", error_code="spawn_unconfirmed")
+        receipt = {}
+        for key in ("session_id", "spawn_id", "engine", "model"):
+            value = data.get(key)
+            # These are protocol handles, just like snapshot session refs,
+            # not free-text labels. Token redaction would destroy real UUIDs
+            # and engine-issued ids, making the new session unreachable.
+            pattern = (r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}"
+                       if key in ("session_id", "spawn_id")
+                       else r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}")
+            if isinstance(value, str) and re.fullmatch(pattern, value):
+                receipt[key] = value
+        receipt["session_id_pending"] = not bool(data.get("session_id"))
+        if self.paths is not None and data.get("session_id"):
+            open_reply_thread(self.paths, data["session_id"])
+        return self._result(request_id, "ok", detail_code="spawned",
+                            extra={"detail": receipt})
 
     def _inject(self, request_id, session_ref, text, mode, detail_ok="delivered",
                 issued_by=None) -> dict:
@@ -1745,7 +1824,8 @@ class CommandExecutor:
                 "folder_label", "state", "is_live", "parent_session_id",
                 "pending_tool", "pending_file", "question_waiting",
                 "question_text", "question_options", "needs_approval",
-                "engine"))})
+                "engine", "model", "reasoning_effort", "session_cwd",
+                "repo_path", "cwd"))})
         rows = []
         if isinstance(data, dict):
             rows = data.get("sessions") or data.get("conversations") or []
