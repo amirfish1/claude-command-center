@@ -52,7 +52,12 @@ class RealTickets(WT):
         # WatchTower is stdlib-only. Avoid unrelated site hooks on the hot path
         # while retaining the installed package's actual CLI implementation.
         argv = ([sys.executable, '-S', str(Path(__file__).resolve()), '--bridge',
-                 str(Path(spec.origin).parent.parent)] if spec and spec.origin else
+                 # Hand over the parent's whole import path: the package's
+                 # parent directory is not always where an editable or
+                 # path-file install actually resolves it from.
+                 os.pathsep.join([str(Path(spec.origin).parent.parent)]
+                                 + [p for p in sys.path if p])]
+                if spec and spec.origin else
                 [interpreter(), str(Path(__file__).resolve()), '--bridge'])
         self.proc = subprocess.Popen(argv,
                                      cwd=root / 'project', env=env, stdin=subprocess.PIPE,
@@ -189,5 +194,5 @@ def bridge():
 
 if __name__ == '__main__':
     if len(sys.argv) > 2:
-        sys.path.insert(0, sys.argv[2])
+        sys.path[:0] = sys.argv[2].split(os.pathsep)
     bridge()
