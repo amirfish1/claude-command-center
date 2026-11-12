@@ -497,3 +497,21 @@
   .iflow-node-dot, .iflow-node-tick, .iflow-link::after { animation: none !important; }
   .iflow-link.is-flow::after, .iflow-pipe.is-demo .iflow-link::after { display: none; }
 }
+
+/* The initial workspace offers setup without covering the dashboard. */
+.ccc-start-view {
+  width: min(640px, calc(100% - 48px));
+  margin: clamp(32px, 8vh, 88px) auto 32px;
+  color: var(--text);
+}
+body:has(#cccStartView) #popoutSidePanelBtn { display: none; }
+.ccc-start-view h1 { margin: 0 0 10px; font-size: clamp(22px, 3vw, 30px); line-height: 1.2; text-wrap: balance; }
+.ccc-start-intro { margin: 0 0 28px; color: var(--text-secondary); font-size: 14px; line-height: 1.5; }
+.ccc-start-view .iflow-starter { width: 100%; box-sizing: border-box; margin: 0 0 12px; background: var(--if-panel); }
+.ccc-start-view .iflow-starter-text span { margin-top: 5px; }
+.ccc-start-view .iflow-starter-btn { min-height: 44px; }
+.ccc-start-view .iflow-starter-btn:focus-visible { outline: 2px solid var(--if-accent); outline-offset: 3px; }
+.ccc-start-view .iflow-starter-btn:disabled { opacity: .65; cursor: wait; }
+@media (max-width: 560px) {
+  .ccc-start-view { width: calc(100% - 32px); margin-top: 24px; }
+}

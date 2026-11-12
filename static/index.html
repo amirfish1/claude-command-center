@@ -535,11 +535,11 @@
         } catch (_) {}
         // Conversation-list collapse (CCC-132). Desktop only — on mobile the
         // list IS the screen, so never hide it there. Restored before paint to
-        // avoid a flash. Persisted as `ccc-conv-list-collapsed` ('1').
+        // avoid a flash. Start collapsed unless the user saved an open list.
         try {
           const _isMobileViewport2 = (typeof window.matchMedia === 'function')
             && window.matchMedia('(max-width: 950px)').matches;
-          if (!_isMobileViewport2 && localStorage.getItem('ccc-conv-list-collapsed') === '1') {
+          if (!_isMobileViewport2 && localStorage.getItem('ccc-conv-list-collapsed') !== '0') {
             document.body.classList.add('conv-list-collapsed');
           }
         } catch (_) {}
@@ -1394,15 +1394,22 @@
           <span class="conv-presentation-zero-cost" data-role="presentation-cost" title="Present is local; Mode 3 asks the working agent to author slides">0 extra tokens</span>
         </div>
         <div class="conversations-view" id="conversationsView">
-          <div class="empty-state" style="height:auto;padding:40px;">Pick a session on the left, or press New session to start one</div>
-          <!-- Starter card for the GitHub issue auto-fix wizard
-               (static/issue-flow.js). Lives in the empty state, so it is
-               gone the moment a session opens. -->
-          <div class="iflow-starter" id="iflowStarter">
-            <span class="iflow-starter-art"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13.4 2.5 4.6 13.3a.6.6 0 0 0 .5 1h5.3l-1 6.9a.4.4 0 0 0 .7.3l8.8-10.8a.6.6 0 0 0-.5-1h-5.3l1-6.9a.4.4 0 0 0-.7-.3Z"/></svg></span>
-            <span class="iflow-starter-text"><strong>Auto-fix issues from production</strong><span>Your product opens a GitHub issue. An agent fixes it and closes it. Set it up in about three minutes.</span></span>
-            <button type="button" class="iflow-starter-btn" data-issue-flow-open>Set it up</button>
-          </div>
+          <section class="ccc-start-view" id="cccStartView" aria-labelledby="cccStartTitle">
+            <h1 id="cccStartTitle">What would you like to set up?</h1>
+            <p class="ccc-start-intro">Choose where to start. You can come back to the other options later.</p>
+            <div class="iflow-starter">
+              <span class="iflow-starter-text"><strong>Work with agents on your machine</strong><span>See all your sessions in one place. Connect an engine if you haven’t set one up yet.</span></span>
+              <button type="button" class="iflow-starter-btn" data-start-action="agents">Open All</button>
+            </div>
+            <div class="iflow-starter" id="iflowStarter">
+              <span class="iflow-starter-text"><strong>Auto-fix issues from production</strong><span>Your product opens a GitHub issue. An agent fixes it and closes it.</span></span>
+              <button type="button" class="iflow-starter-btn" data-issue-flow-open>Set it up</button>
+            </div>
+            <div class="iflow-starter">
+              <span class="iflow-starter-text"><strong>Use CCC from your phone</strong><span>Set up private access to this machine so you can check in while you’re away.</span></span>
+              <button type="button" class="iflow-starter-btn" data-start-action="phone">Set up access</button>
+            </div>
+          </section>
         </div>
         <!-- CCC-1033: last-write timestamp for the open conversation, centered
              below the transcript. Populated + ticked by _updateLastWrittenLine()

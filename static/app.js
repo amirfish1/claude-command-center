@@ -25037,8 +25037,52 @@
     if ($convListCollapseBtn) $convListCollapseBtn.setAttribute('aria-expanded', String(!collapsed));
     try { localStorage.setItem('ccc-conv-list-collapsed', collapsed ? '1' : '0'); } catch (_) {}
   }
-  if ($convListCollapseBtn) $convListCollapseBtn.addEventListener('click', () => setConvListCollapsed(true));
+  if ($convListCollapseBtn) {
+    $convListCollapseBtn.setAttribute('aria-expanded', String(!document.body.classList.contains('conv-list-collapsed')));
+    $convListCollapseBtn.addEventListener('click', () => setConvListCollapsed(true));
+  }
   if ($convListRestoreBtn) $convListRestoreBtn.addEventListener('click', () => setConvListCollapsed(false));
+
+  // Use the existing phone reader/back navigation for the initial choices.
+  const showStartView = () => {
+    if (isMobile() && !isSimpleMode() && !READER_ONLY_POPOUT && document.getElementById('cccStartView')) mobileShowMain(true);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', showStartView, { once: true });
+  else showStartView();
+
+  // Delegate because opening a conversation replaces the start view.
+  document.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-start-action]');
+    if (!button || button.disabled) return;
+    if (button.dataset.startAction === 'phone') {
+      window.cccPhoneAccess?.open();
+      return;
+    }
+    setConvListCollapsed(false);
+    mobileShowMain(false);
+    mobileShowConv(false);
+    _activateSidebarTabFromMobileNav('alltickets');
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    try {
+      const response = await fetch('/api/engines/doctor', { signal: AbortSignal.timeout(10000) });
+      if (!response.ok) throw new Error('Engine status unavailable');
+      const data = await response.json();
+      const disabled = new Set(spawnDefaultsState.disabled_engines || []);
+      const ready = Object.entries(data.engines || {}).some(([engine, status]) =>
+        SPAWN_DEFAULT_ENGINES.includes(engine) && !disabled.has(engine)
+        && status.cli_present && status.auth_present !== false);
+      if (ready) return;
+    } catch (_) {
+      showOpToast('Could not check engines. Review engine setup to continue.', 'error');
+    } finally {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+    }
+    openSettingsModal({ focusSearch: false });
+    setActiveSettingsRailSection('engines');
+    window.cccEngineConnection?.open();
+  });
 
   // CCC-761: "..." reveals the secondary header/session-panel rows
   // (refresh/history/board/chips, New Group chat/live/manage) that are
@@ -97555,10 +97599,10 @@
     if (window.__cccEnginesFirstRun && tailscaleStepPending() && showTailscaleStep()) return;
     closeSettingsModal();
   });
-  // Moment Zero (static/onboarding/onboarding.js) owns first-run for fresh
-  // installs. claimFirstRun() resolves true when it takes over — including
-  // the explicit ?onboarding=1 route — in which case this screen never runs.
-  if (window.__cccEnginesFirstRun) {
+  // The start view makes setup opt-in. Older entry points without that view
+  // still hand first-run to Moment Zero; explicit onboarding links are handled
+  // by onboarding.js itself.
+  if (window.__cccEnginesFirstRun && !document.getElementById('cccStartView')) {
     setTimeout(() => {
       const claim = (window.cccOnboarding && typeof window.cccOnboarding.claimFirstRun === 'function')
         ? window.cccOnboarding.claimFirstRun()
@@ -99036,7 +99080,7 @@
   function maybeStartFirstFlight(attempt) {
     let done = null;
     try { done = localStorage.getItem(FFT_DONE_KEY); } catch (_) { return; }
-    if (done || window.cccFirstRunLoad) return;
+    if (done || window.cccFirstRunLoad || document.getElementById('cccStartView')) return;
     // Never AUTO-start on small viewports. The tour's spotlight anchors
     // assume the desktop split layout, and its fixed welcome card sits on
     // top of the transcript swallowing every touch gesture — drag-to-scroll
