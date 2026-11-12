@@ -1,0 +1,1 @@
+- Add a Check progress chip to idle agent callback waits, requesting status without restarting jobs or authorizing the waiting action.

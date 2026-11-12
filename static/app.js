@@ -18822,6 +18822,14 @@
     if (build) {
       if (!['plan', 'next'].includes(info.kind)) return null;
       next = c.session_state.completion.remaining_actions[0].text;
+    } else if (info.kind === 'plan' && info.planOwner === 'agent' && info.eventDriven && !actions.length) {
+      // A callback wait has no decision to approve, but the user can still
+      // ask for status without rerunning the job or executing its next step.
+      const planned = c.session_state?.completion?.remaining_actions?.[0];
+      if (planned?.within_scope !== true || planned.reversible !== true) return null;
+      next = info.text;
+      actions = [{ label: 'Check progress', derived: true,
+        reply: 'Check progress on the pending work and report its current status. Do not restart work, rerun jobs, publish, deploy, spend money, or execute the waiting action merely to answer this status check.' }];
     } else if (info.kind === 'plan' && info.planOwner === '' && !actions.length) {
       // Older footers leave investigations unowned with NEXT_ACTION: null.
       // Offer a literal resume of the scoped investigation, rather than
