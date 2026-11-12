@@ -99832,3 +99832,55 @@
     boot();
   }
 })();
+
+// Machine-wide self-hosted Actions activity, independent of the selected repo.
+(function initLocalCiProgress() {
+  let busy = false;
+  async function refresh() {
+    const host = document.getElementById('localCiProgress');
+    if (!host || document.hidden || busy) return;
+    busy = true;
+    try {
+      const response = await fetch('/api/ci/local', {cache: 'no-store', signal: AbortSignal.timeout(30000)});
+      if (!response.ok) throw new Error('CI progress unavailable');
+      const data = await response.json();
+      host.replaceChildren();
+      for (const job of data.jobs || []) {
+        const row = document.createElement(job.url ? 'a' : 'div');
+        row.className = 'local-ci-job';
+        if (job.url && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/.test(job.url)) {
+          row.href = job.url;
+          row.target = '_blank';
+          row.rel = 'noopener';
+        }
+        const label = document.createElement('span');
+        label.className = 'local-ci-label';
+        const name = document.createElement('span');
+        name.className = 'local-ci-name';
+        name.textContent = 'CI · ' + job.repo.split('/').pop() + ' · ' + job.name;
+        const percent = document.createElement('span');
+        percent.className = 'local-ci-percent';
+        percent.textContent = job.percent == null ? 'Running' : job.percent + '%';
+        label.append(name, percent);
+        const bar = document.createElement('progress');
+        bar.max = 100;
+        if (job.percent != null) bar.value = job.percent;
+        bar.setAttribute('aria-label', name.textContent + ': completed steps');
+        const step = document.createElement('span');
+        step.className = 'local-ci-step';
+        step.textContent = job.current_step;
+        row.title = job.repo + ' · ' + job.runner + '\n' + job.current_step + '\n'
+          + job.completed_steps + '/' + job.total_steps + ' steps complete (not time remaining)';
+        row.append(label, bar, step);
+        host.append(row);
+      }
+      host.hidden = !host.childElementCount;
+    } catch (_) {
+      host.hidden = true; // Never leave an old percentage looking live.
+    } finally { busy = false; }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', refresh);
+  else refresh();
+  setInterval(refresh, 10000);
+  document.addEventListener('visibilitychange', refresh);
+})();

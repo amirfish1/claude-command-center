@@ -34648,3 +34648,18 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 .upd-overlay.settings-inline-dialog.open { position: static; inset: auto; z-index: auto; display: block; }
 .upd-overlay.settings-inline-dialog .upd-backdrop { display: none; }
 .upd-overlay.settings-inline-dialog .upd-dialog { width: auto !important; max-height: none !important; overflow: visible !important; box-shadow: none; margin: 8px 0 12px; }
+
+/* Local CI sits beneath the identity and disappears when runners are idle. */
+.local-ci-progress { width: 100%; min-width: 0; margin-top: 7px; }
+.local-ci-progress[hidden] { display: none; }
+.local-ci-job { display: block; color: var(--text); text-decoration: none; padding: 3px 0; }
+.local-ci-job + .local-ci-job { margin-top: 5px; }
+a.local-ci-job:hover { color: var(--accent); }
+.local-ci-label { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; line-height: 1.5; }
+.local-ci-name, .local-ci-step { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.local-ci-percent { flex: none; font-variant-numeric: tabular-nums; }
+.local-ci-job progress { display: block; width: 100%; height: 4px; margin: 3px 0; border: 0; border-radius: 2px; overflow: hidden; background: var(--border); accent-color: var(--accent); }
+.local-ci-job progress::-webkit-progress-bar { background: var(--border); }
+.local-ci-job progress::-webkit-progress-value { background: var(--accent); }
+.local-ci-job progress::-moz-progress-bar { background: var(--accent); }
+.local-ci-step { display: block; font-size: 11px; color: var(--text-secondary, var(--text)); }
