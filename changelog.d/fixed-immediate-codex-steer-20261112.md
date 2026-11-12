@@ -1,0 +1,1 @@
+- Keep Codex queued-message Steer and Steer all available immediately after sending. Early clicks wait for queue confirmation and avoid resending messages already delivered.

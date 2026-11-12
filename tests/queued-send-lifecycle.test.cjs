@@ -35,7 +35,8 @@ const renderTail = between(
 const steerStart = source.lastIndexOf("  document.addEventListener('click', async (ev) => {",
   source.indexOf("const btn = ev.target.closest('[data-steer-queued-message]')"));
 const steerHandler = source.slice(steerStart,
-  source.indexOf("  document.addEventListener('click', async (ev) => {", steerStart + 1));
+  source.indexOf("  document.addEventListener('click', async (ev) => {", steerStart + 1))
+  + between('  // Steer all: one prompt', '  function setCurrentSession(');
 let browser;
 before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
@@ -121,13 +122,15 @@ async function fixture(run, input, realTray = false) {
       window.beginOptimisticSteerMove = rows => rows;
       window.revertOptimisticSteerMove = () => {};
       window.showOpToast = () => {};
+      window.steeredToastText = () => 'Steered';
+      window.subagentRelayToastText = () => '';
       window.setQueuedSteerError = () => { throw new Error('Unexpected steer error'); };
       window.refreshConversationList = () => {};
       window.formatInjectFailure = data => data.error;
       (0, eval)(steerHandler);
     }, { lifecycle, reconciliation, renderedUserReconciliation, renderTail, steerHandler });
     if (realTray) await page.evaluate(helpers => {
-      window.conversationsData = [{ session_id: 'session', codex_state: 'working' }];
+      window.conversationsData = [{ id: 'conversation', session_id: 'session', codex_state: 'working' }];
       window.currentSession = { id: 'session', source: 'codex', engine: 'codex' };
       fixturePane.currentSession = currentSession;
       window.sessionIsActivelyWorking = row => row.codex_state === 'working';
@@ -159,7 +162,7 @@ test('busy sends paint once in the tray and keep the same node through queue ack
         && !row.querySelector('[data-cancel-queued-message]').disabled };
   }, undefined, true);
   assert.deepEqual(result, { before: { inTray: true, transcript: 0,
-    steerDisabled: true, cancelDisabled: true, label: 'Sending…' },
+    steerDisabled: false, cancelDisabled: true, label: 'Sending…' },
     sameNode: true, count: 1, enabled: true });
 });
 
@@ -206,7 +209,76 @@ test('a queue snapshot confirms a busy send before its POST returns without dupl
       confirmed: !first.entry.busySend && first.entry.queued,
       allEnabled: !document.querySelector('[data-steer-all-queued]').disabled };
   }, undefined, true);
-  assert.deepEqual(result, { allDisabled: true, count: 2, sameNode: true, confirmed: true, allEnabled: true });
+  assert.deepEqual(result, { allDisabled: false, count: 2, sameNode: true, confirmed: true, allEnabled: true });
+});
+
+test('Steer accepts a click before send acknowledgement and replaces the confirmed delivery ID once', async () => {
+  const result = await fixture(async () => {
+    const pending = appendPendingSendEcho('Immediate steer', 'session', 'main');
+    const requests = [];
+    let sent;
+    const done = new Promise(resolve => { sent = resolve; });
+    window.postInjectInput = async (...args) => {
+      requests.push(args);
+      sent();
+      return { ok: true, queued_consumed: 1, via: 'codex-steer' };
+    };
+    pending.element.querySelector('[data-steer-queued-message]').click();
+    await Promise.resolve();
+    const beforeAck = requests.length;
+    syncQueuedSteerTray(getConvView(), 'main', false);
+    pending.element.querySelector('[data-steer-queued-message]').click();
+    bindPendingSendDeliveryId(pending, 'delivery-17');
+    markPendingSendQueued(pending, 'Queued');
+    await done;
+    await Promise.resolve();
+    return { beforeAck, requests, delivered: pending.entry.delivered };
+  }, undefined, true);
+  assert.deepEqual(result, { beforeAck: 0,
+    requests: [['session', 'Immediate steer', 'steer', { replaceQueued: true, userInitiated: true, replaceQueuedIds: ['delivery-17'] }]],
+    delivered: true });
+});
+
+test('early steer waits end without another send after delivery, rejection or a durable receipt', async () => {
+  const result = await fixture(async () => {
+    const results = [];
+    for (const outcome of ['delivered', 'rejected', 'receipt']) {
+      const pending = appendPendingSendEcho(outcome, 'session', 'main');
+      const waiting = readyQueuedSteerRows([pending.element]);
+      if (outcome === 'delivered') markPendingSendDelivered(pending, { via: 'codex-app-turn' });
+      else if (outcome === 'rejected') removePendingSendEcho(pending);
+      else reconcileUserEvent({ text: outcome, ts: new Date().toISOString() }, 'main', getConvView());
+      results.push((await waiting).length);
+    }
+    return results;
+  }, undefined, true);
+  assert.deepEqual(result, [0, 0, 0]);
+});
+
+test('Steer all accepts pending sends and waits for both delivery IDs before replacing them', async () => {
+  const result = await fixture(async () => {
+    const first = appendPendingSendEcho('First', 'session', 'main');
+    const second = appendPendingSendEcho('Second', 'session', 'main');
+    const requests = [];
+    let sent;
+    const done = new Promise(resolve => { sent = resolve; });
+    window.postInjectInput = async (...args) => {
+      requests.push(args);
+      sent();
+      return { ok: true, queued_consumed: 2 };
+    };
+    document.querySelector('[data-steer-all-queued]').click();
+    bindPendingSendDeliveryId(first, 'first-id');
+    markPendingSendQueued(first, 'Queued');
+    await Promise.resolve();
+    const beforeSecond = requests.length;
+    bindPendingSendDeliveryId(second, 'second-id');
+    markPendingSendQueued(second, 'Queued');
+    await done;
+    return { beforeSecond, requests };
+  }, undefined, true);
+  assert.deepEqual(result, { beforeSecond: 0,
+    requests: [['session', 'First\n\nSecond', 'steer', { replaceQueuedTexts: ['First', 'Second'], replaceQueuedIds: ['first-id', 'second-id'], userInitiated: true }]] });
 });
 
 test('an unacknowledged busy send becomes a retry notice instead of a stuck tray card', async () => {

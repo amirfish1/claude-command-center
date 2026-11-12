@@ -11158,7 +11158,7 @@
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
-    const row = btn.closest('.event.user_text');
+    let row = btn.closest('.event.user_text');
     const msg = row && row.querySelector('.user-msg');
     const text = (msg && (msg.getAttribute('data-raw-text') || msg.textContent || '')).trim();
     const sid = btn.dataset.sessionId || '';
@@ -11173,7 +11173,12 @@
     const original = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Steering…';
-    const $view = trayConversationView(btn.closest('.queued-steer-tray'));
+    if (row?.dataset.busySend === 'true') {
+      const ready = await readyQueuedSteerRows([row]);
+      if (!ready.length) return;
+      row = ready[0];
+    }
+    const $view = trayConversationView(row.closest('.queued-steer-tray'));
     markSteerInFlight(sid, [text]);
     clearQueuedSteerError(sid, text);
     const moved = beginOptimisticSteerMove([row], $view);
@@ -11330,7 +11335,15 @@
     ev.stopPropagation();
     const tray = btn.closest('.queued-steer-tray');
     const sid = btn.dataset.sessionId || '';
-    const rows = tray ? Array.from(tray.querySelectorAll('.event.user_text')) : [];
+    const original = btn.textContent;
+    let rows = tray ? Array.from(tray.querySelectorAll('.event.user_text')) : [];
+    if (rows.some(row => row.dataset.busySend === 'true')) {
+      btn.disabled = true;
+      btn.textContent = 'Steering…';
+      rows = await readyQueuedSteerRows(rows);
+      if (!rows.length) return;
+      btn.disabled = false;
+    }
     const texts = rows.map(row => {
       const msg = row.querySelector('.user-msg');
       return ((msg && (msg.getAttribute('data-raw-text') || msg.textContent)) || '').trim();
@@ -11343,7 +11356,6 @@
       showOpToast('Steer all is only available for Codex and ACP sessions.', 'error');
       return;
     }
-    const original = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Steering…';
     const $view = trayConversationView(tray);
@@ -12862,6 +12874,24 @@
     }
   }
 
+  // Accept the click immediately, but replace only a server-confirmed queue
+  // entry. The original send may still deliver directly or fail instead.
+  async function readyQueuedSteerRows(rows) {
+    if (rows.some(row => row._pendingRef?.steerWaiting)) return [];
+    const claimed = [];
+    const ready = await Promise.all(rows.map(async row => {
+      const pending = row._pendingRef;
+      if (pending) { pending.steerWaiting = true; claimed.push(pending); }
+      if (row.dataset.busySend !== 'true') return row;
+      if (!pending?.queueReady) return null;
+      const queued = await pending.queueReady;
+      return queued && pending.entry?.queued && !pending.entry.delivered
+        && pending.element?.isConnected ? pending.element : null;
+    }));
+    claimed.forEach(pending => { pending.steerWaiting = false; });
+    return ready.filter(row => row?.isConnected && !row._pendingRef?.entry?.delivered);
+  }
+
   function appendPendingSendEcho(text, sid, paneId, restoredEntry) {
     const pending = (restoredEntry && restoredEntry.element && restoredEntry.element._pendingRef)
       || { text, sid, paneId: paneId || activePaneId(), conversationId: currentConversation,
@@ -12895,6 +12925,9 @@
 
       const entry = restoredEntry || { text, sid, ts: Date.now(), timer: null };
       entry.busySend = busySend;
+      if (busySend && !pending.queueReady) {
+        pending.queueReady = new Promise(resolve => { pending.resolveQueueReady = resolve; });
+      }
       if (entry.timer) clearTimeout(entry.timer);
       if (entry.deliveryId) pendingDiv.dataset.deliveryId = String(entry.deliveryId);
       entry.element = pendingDiv;
@@ -12959,6 +12992,7 @@
             });
           }
           if (pending.sid) clearSessionSending(pending.sid);
+          pending.resolveQueueReady?.(false);
           clearOptimisticAgentIndicator($view);
         }
       }, _PENDING_SEND_ECHO_MAX_MS);
@@ -12972,6 +13006,7 @@
 
   function removePendingSendEcho(pending) {
     if (!pending) return;
+    pending.resolveQueueReady?.(false);
     // A cancelled/refused send has no durable user event. Undo only its
     // local barrier; a later transcript event already proves real activity.
     const fresh = pending.sid && _ultraFresh.entries.get(String(pending.sid));
@@ -13014,6 +13049,7 @@
         || (pending.list && !pending.list.includes(pending.entry))) return;
     if (pending.entry.timer) { clearTimeout(pending.entry.timer); pending.entry.timer = null; }
     pending.entry.queued = true;
+    pending.resolveQueueReady?.(true);
     pending.entry.busySend = false;
     pending.entry.queuedLabel = label || 'Will send when the session finishes its current step.';
     const div = pending.element;
@@ -13137,6 +13173,7 @@
     // cutoff to it (otherwise a long turn made the message vanish "until much
     // later" when it finally landed).
     pending.entry.delivered = true;
+    pending.resolveQueueReady?.(false);
     const pane = paneByPaneId(pending.paneId || activePaneId());
     const convId = pending.conversationId || (pane && pane.conversationId);
     if (pane && convId && pane.conversationId === convId) {
@@ -67333,7 +67370,10 @@
     if (allBtn) {
       allBtn.dataset.sessionId = sessionId || allBtn.dataset.sessionId || '';
       allBtn.hidden = cards < 2 || canSteerAll === false;
-      allBtn.disabled = !!tray.querySelector('[data-busy-send="true"]');
+      const session = paneByPaneId(tray.closest('.conv-pane')?.dataset.paneId || activePaneId())?.currentSession;
+      const codex = queuedSteerSource(session?.source, session?.engine) === 'codex';
+      const waiting = Array.from(tray.querySelectorAll('.event.user_text')).some(row => row._pendingRef?.steerWaiting);
+      allBtn.disabled = waiting || (!codex && !!tray.querySelector('[data-busy-send="true"]'));
       allBtn.textContent = 'Steer all ' + cards;
     }
   }
@@ -67669,10 +67709,10 @@
         steer.remove();
         steer = null;
       }
-      if (canSteer && steer) { steer.disabled = false; }
+      if (canSteer && steer) { steer.disabled = !!el._pendingRef?.steerWaiting; }
       const awaitingQueue = el.dataset.busySend === 'true';
       cancel.disabled = awaitingQueue;
-      if (steer && awaitingQueue) steer.disabled = true;
+      if (steer && awaitingQueue) steer.disabled = queuedSource !== 'codex' || !!el._pendingRef?.steerWaiting;
       let sendingNote = el.querySelector('.send-queued-note');
       if (awaitingQueue && !sendingNote) {
         sendingNote = document.createElement('div');
@@ -71562,6 +71602,7 @@
           _normSend(p.text) === normed && canAcknowledgeSend(p));
         if (pIdx >= 0) {
           const p = _pendingSends[pIdx];
+          p.element?._pendingRef?.resolveQueueReady?.(false);
           if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
           if (p.timer) clearTimeout(p.timer);
           if (p.sid) clearSessionSending(p.sid);
@@ -72649,6 +72690,7 @@
           for (const p of _pendingSends.slice()) {
             if (!p || !p.text) continue;
             if (!takeQueuedSendAcknowledgement(_durableUserRows, _normSend(p.text), Number(p.ts || 0))) continue;
+            p.element?._pendingRef?.resolveQueueReady?.(false);
             if (p.element && p.element.parentNode) p.element.parentNode.removeChild(p.element);
             if (p.timer) clearTimeout(p.timer);
             if (p.sid) clearSessionSending(p.sid);
