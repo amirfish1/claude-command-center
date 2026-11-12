@@ -99,3 +99,24 @@ test('an event-triggered agent step reads Waiting, not Waiting for agent', () =>
   assert.equal(info.kind, 'plan');
   assert.match(info.text, /^on the first went_bad/);
 });
+
+
+test('raw footer preserves all comma-qualified decision chips and their exact replies', () => {
+  const app = require('node:fs').readFileSync(require.resolve('../static/app.js'), 'utf8');
+  const names = ['sessionQuickAction', '_ultraFreshParseState'];
+  const source = names.map(name => {
+    const start = app.indexOf('  function ' + name + '(');
+    return app.slice(start, app.indexOf('\n  }\n', start) + 4);
+  }).join('\n');
+  const parse = require('node:vm').runInNewContext(source + '\n_ultraFreshParseState;');
+  const chips = ['Brand everywhere', 'Demo Meta, private video', 'Personal, keep private', 'Personal, public video']
+    .map(label => ({ label, reply: '[Q12:destination] ' + label + '; preserve these qualifications.' }));
+  const footer = actions => '<session-state>\nNEXT_STEP_USER: Choose brand or personal destinations.\n<!--\nNEXT_ACTION: '
+    + JSON.stringify(actions) + '\n-->\n</session-state>';
+  const state = parse(footer(chips));
+  assert.deepEqual(JSON.parse(JSON.stringify(state.next_actions)), chips);
+  assert.equal(rowOutcomeView(row(state)).label, 'Decide');
+  for (const label of ['Brand,', 'Brand,, private', 'Brand,private', 'Brand / private', 'One two three four five']) {
+    assert.equal(parse(footer([...chips.slice(0, 3), { label, reply: 'Yes.' }])).next_actions, undefined);
+  }
+});

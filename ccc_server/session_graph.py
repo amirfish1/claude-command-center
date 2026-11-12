@@ -1287,9 +1287,10 @@ with a scoped reply for each. Do not leave NEXT_ACTION null for a short list of
 explicit answer choices just because the question is phrased as "tell me which".
 For real-world tasks (signing a form, reviewing a document, sending a message),
 do not create a chip that falsely claims the user has completed the task.
-Prefer one short verb for the label; up to three words and 24 characters are
-allowed when needed for clarity. Reply is the exact text to send back to this
-session (at most 400 characters), preserving the scope and qualifications and
+Prefer one short verb for the label; up to four words and 24 characters are
+allowed when needed for clarity, with optional commas between words. Reply is
+the exact text to send back to this session (at most 400 characters), preserving
+the scope and qualifications and
 repeating any question tag verbatim. Otherwise use null. Never pick an option
 for the user, invent missing information, claim the user performed a task, or
 turn a request to review/read/check something into approval. Do authorized

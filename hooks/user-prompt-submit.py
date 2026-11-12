@@ -26,7 +26,8 @@ REPLY_CHIP_CONTEXT = """CCC reply-chip reminder: In your final <session-state> f
 NEXT_ACTION as a single-line JSON array of {"label":"...","reply":"..."} for
 2-4 explicit answer choices, including categorical questions such as which
 notification type the user sees. Use one object for a genuinely required,
-scoped go-ahead. Labels: 1-3 words, letters/spaces only, at most 24 characters.
+scoped go-ahead. Labels: 1-4 words, letters/spaces and optional commas between words,
+at most 24 characters.
 Replies: at most 400 characters; preserve the exact question tag and scope.
 NEXT_STEP_USER must describe the actual pending question. Use NEXT_ACTION: null
 when no reply choice or approval is needed. Do not invent choices, ask again

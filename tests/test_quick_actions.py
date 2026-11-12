@@ -40,10 +40,24 @@ class QuickActionTests(unittest.TestCase):
                 self.assertNotIn("next_action", self.parse(raw))
 
     def test_short_labels_are_preserved_as_authored(self):
-        for label in ("Build triage", "Review the plan", "Revisar plan"):
+        for label in ("Build triage", "Review the plan", "Revisar plan",
+                      "Demo Meta, private video", "Personal, keep private"):
             with self.subTest(label=label):
                 action = {"label": label, "reply": "Yes, proceed with the proposed scope."}
                 self.assertEqual(self.parse(json.dumps(action))["next_action"], action)
+
+    def test_comma_labels_preserve_the_complete_decision(self):
+        chips = [{"label": label, "reply": "[Q12:destination] " + reply} for label, reply in [
+            ("Brand everywhere", "Create dedicated brand accounts."),
+            ("Demo Meta, private video", "Create brand Meta; keep the video account private."),
+            ("Personal, keep private", "Use personal accounts; keep videos private."),
+            ("Personal, public video", "Use personal accounts and make videos public."),
+        ]]
+        parsed = self.parse(json.dumps(chips), "Choose brand or personal destinations.")
+        self.assertEqual(parsed["next_actions"], chips)
+        for label in ["Brand,", "Brand,, private", "Brand,private", "Brand / private", "One two three four five"]:
+            invalid = chips[:-1] + [{"label": label, "reply": "Yes."}]
+            self.assertNotIn("next_actions", self.parse(json.dumps(invalid)))
 
     def test_action_requires_a_pending_user_step(self):
         action = json.dumps({"label": "Restart", "reply": "Yes, restart both."})
