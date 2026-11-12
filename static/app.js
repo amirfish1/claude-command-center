@@ -18656,6 +18656,75 @@
       }
     });
   }
+  function confirmNearButton(btn, message, actionLabel) {
+    return new Promise(resolve => {
+      // Keep the decision by its trigger, outside the periodically rebuilt list.
+      document.querySelector('.conv-action-confirm [data-confirm-cancel]')?.click();
+      const pop = document.createElement('div');
+      pop.className = 'conv-report-editor conv-action-confirm';
+      pop.setAttribute('popover', 'auto');
+      pop.setAttribute('role', 'dialog');
+      pop.setAttribute('aria-label', message);
+      const text = document.createElement('p');
+      text.textContent = message;
+      const controls = document.createElement('div');
+      controls.className = 'conv-report-controls';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.dataset.confirmCancel = '';
+      cancel.textContent = 'Cancel';
+      const accept = document.createElement('button');
+      accept.type = 'button';
+      accept.dataset.confirmAccept = '';
+      accept.textContent = actionLabel;
+      controls.append(cancel, accept);
+      pop.append(text, controls);
+      let finished = false;
+      const finish = accepted => {
+        if (finished) return;
+        finished = true;
+        window.removeEventListener('resize', position);
+        window.removeEventListener('scroll', position, true);
+        window.visualViewport?.removeEventListener('resize', position);
+        window.visualViewport?.removeEventListener('scroll', position);
+        document.removeEventListener('pointerdown', outside, true);
+        pop.remove();
+        btn.removeAttribute('aria-expanded');
+        if (btn.isConnected) btn.focus({ preventScroll: true });
+        resolve(accepted);
+      };
+      const position = () => {
+        if (!btn.isConnected) { finish(false); return; }
+        const viewport = window.visualViewport;
+        const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
+        const width = viewport?.width || innerWidth, height = viewport?.height || innerHeight;
+        const anchor = btn.getBoundingClientRect();
+        pop.style.width = Math.min(320, width - 24) + 'px';
+        pop.style.maxHeight = Math.max(80, height - 24) + 'px';
+        pop.style.left = Math.max(left + 12, Math.min(anchor.right - pop.offsetWidth, left + width - pop.offsetWidth - 12)) + 'px';
+        pop.style.top = Math.max(top + 12, Math.min(anchor.bottom + 8 + pop.offsetHeight > top + height - 12
+          ? anchor.top - pop.offsetHeight - 8 : anchor.bottom + 8, top + height - pop.offsetHeight - 12)) + 'px';
+      };
+      const outside = ev => { if (!pop.contains(ev.target)) finish(false); };
+      cancel.addEventListener('click', () => finish(false));
+      accept.addEventListener('click', () => finish(true));
+      pop.addEventListener('click', ev => ev.stopPropagation());
+      pop.addEventListener('keydown', ev => {
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); finish(false); }
+      });
+      pop.addEventListener('toggle', ev => { if (ev.newState === 'closed') finish(false); });
+      document.body.appendChild(pop);
+      btn.setAttribute('aria-expanded', 'true');
+      if (pop.showPopover) pop.showPopover();
+      position();
+      window.addEventListener('resize', position);
+      window.addEventListener('scroll', position, true);
+      window.visualViewport?.addEventListener('resize', position);
+      window.visualViewport?.addEventListener('scroll', position);
+      document.addEventListener('pointerdown', outside, true);
+      cancel.focus({ preventScroll: true });
+    });
+  }
   function openRowDecisionReportEditor(btn, submit) {
     const form = document.createElement('form');
     form.className = 'conv-report-editor';
@@ -48719,7 +48788,9 @@
         const sessionId = item && item.dataset.sessionId;
         if (!convId || !sessionId) return;
         const wantTrashed = btn.dataset.role === 'trash';
-        if (wantTrashed && !confirm('Move this session to Trash? You can restore it from Trash later.')) return;
+        if (wantTrashed && !await confirmNearButton(btn,
+          'Move this session to Trash? You can restore it from Trash later.', 'Move to Trash')) return;
+        if (!btn.isConnected) return;
         const nextSelectId = wantTrashed && currentConversation === convId
           ? _visibleConversationNeighborId(convId, item)
           : null;

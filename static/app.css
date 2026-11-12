@@ -34230,6 +34230,8 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
   .conv-report-controls button:hover { border-color: var(--text); }
   .conv-report-editor :is(textarea, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .conv-report-editor :disabled { opacity: .6; cursor: wait; }
+  .conv-action-confirm p { margin: 0; }
+  .conv-action-confirm [data-confirm-accept] { color: var(--red); }
   .conv-report-error { margin: 8px 0 0; color: var(--red); }
   .wa-line1 > .conv-decision-report-btn { flex-basis: 32px; width: 32px; height: 32px; margin-block: -4px; }
 
