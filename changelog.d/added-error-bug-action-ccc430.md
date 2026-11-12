@@ -1,0 +1,1 @@
+- Add “File as bug for CCC” to error toasts, resume failures, and Simple mode errors, opening an editable report with the error prefilled for private support or public GitHub submission.

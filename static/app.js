@@ -9117,6 +9117,7 @@
       + '<span class="cl-tool"></span>'
       + '<button type="button" class="cl-dismiss" title="Dismiss">×</button>';
     el.querySelector('.cl-tool').textContent = message;
+    el.insertBefore(bugErrorAction(message, 'resume-error'), el.querySelector('.cl-dismiss'));
     el.querySelector('.cl-dismiss').addEventListener('click', () => el.remove());
     $view.appendChild(el);
     scrollConversationToEnd($view);
@@ -23353,6 +23354,7 @@
     toast.textContent = text || '';
     toast.hidden = !text;
     toast.classList.toggle('is-error', !!isError);
+    if (text && isError) toast.appendChild(bugErrorAction(text, 'simple-error'));
   }
   async function _simpleStartTask() {
     const input = document.getElementById('simpleComposerInput');
@@ -23517,6 +23519,7 @@
       card.appendChild(err);
     }
     err.textContent = 'Could not send: ' + msg;
+    err.appendChild(bugErrorAction(err.textContent, 'simple-send-error'));
   }
 
   // ── Working / Finished cards ──
@@ -38003,6 +38006,7 @@
   function showOpToast(msg, kind, action) {
     if (!debugModeEnabled() && kind === 'info') return;
     const toast = document.createElement('div');
+    toast.className = 'op-toast';
     const color = kind === 'error' ? 'var(--red)'
       : kind === 'warning' ? 'var(--yellow, var(--accent))' : (kind === 'info' ? 'var(--accent, #5b8def)' : 'var(--green)');
     const mark = (kind === 'error' || kind === 'warning') ? '!' : (kind === 'info' ? '\u22ef' : '\u2713');
@@ -38013,6 +38017,9 @@
     body.style.cssText = 'flex:1 1 auto;min-width:0;word-break:break-word;';
     body.innerHTML = '<span style="color:' + color + '">' + mark + '</span> ' + msg;
     toast.appendChild(body);
+    if (kind === 'error') {
+      toast.appendChild(bugErrorAction((body.textContent || '').replace(/^!\s*/, ''), 'error-toast'));
+    }
     if (action && action.label && typeof action.onClick === 'function') {
       const actionBtn = document.createElement('button');
       actionBtn.type = 'button';
@@ -38061,11 +38068,27 @@
       // re-arms a short one so it eventually clears once you're done with it.
       toast.addEventListener('mouseenter', () => { if (timer) clearTimeout(timer); });
       toast.addEventListener('mouseleave', () => arm(5000));
+      toast.addEventListener('focusin', () => { if (timer) clearTimeout(timer); });
+      toast.addEventListener('focusout', () => arm(5000));
     }
     document.body.appendChild(toast);
     // Errors and warnings linger 15s, info 10s (time to read + copy); success stays 3s.
     // Hover pauses the timer, and the \u00d7 dismisses instantly.
     arm((action && action.ttlMs) || (kind === 'error' || kind === 'warning' ? 15000 : (kind === 'info' ? 10000 : 3000)));
+  }
+
+  // Prepare a report locally; the existing dialog owns review and submission
+  // for every installation, including users without a local queue.
+  function bugErrorAction(message, from) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'error-report-btn';
+    button.textContent = 'File as bug for CCC';
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      bugOpenModal({ error: String(message || ''), from: from });
+    });
+    return button;
   }
 
   // Soft-block dialog: "CCC detected a terminal running on this session.
@@ -52404,6 +52427,10 @@
   // Used when a drop is rejected because the conv is already open.
   let _convToastTimer = null;
   function showConvToast(msg) {
+    if (/\b(fail(?:ed|ure)?|error|could not|unavailable)\b/i.test(String(msg))) {
+      showOpToast(escapeHtml(String(msg)), 'error');
+      return;
+    }
     let el = document.getElementById('convToast');
     if (!el) {
       el = document.createElement('div');
@@ -88639,7 +88666,7 @@
   if ($bugShotRetakeBtn) $bugShotRetakeBtn.addEventListener('click', bugCaptureScreenshot);
   if ($bugShotRemoveBtn) $bugShotRemoveBtn.addEventListener('click', bugClearShot);
 
-  // opts: {auto?: bool, stall?: {engine?, name?, waitedSeconds?}}.
+  // opts: {error?: string, from?: string, auto?: bool, stall?: {engine?, name?, waitedSeconds?}}.
   // Manual opens come from the topbar link; auto opens come from the
   // spawn-stall watcher and can be silenced with the banner's opt-out
   // checkbox (persisted in localStorage).
@@ -88653,6 +88680,10 @@
     bugResetState();
     bugDiagnosticRequestId = '';
     bugApplyMode(false);
+    if (typeof opts.error === 'string') {
+      const privacy = document.getElementById('bugReportPrivacyCopy');
+      if (privacy) privacy.textContent = 'Review and edit the error text before sending. Errors may contain private paths or identifiers. Only the data shown in the preview is sent.';
+    }
     bugDiag = { private: null, github: null };
     bugReportFrom = typeof opts.from === 'string' ? opts.from.slice(0, 64) : '';
     if ($bugDiagInclude) $bugDiagInclude.checked = true;
@@ -88660,7 +88691,9 @@
     if ($bugAutoBanner) $bugAutoBanner.style.display = auto ? '' : 'none';
     if ($bugAutoOptOut) $bugAutoOptOut.checked = false;
     if ($bugDescInput) {
-      if (auto && opts.stall) {
+      if (typeof opts.error === 'string') {
+        $bugDescInput.value = opts.error.slice(0, 12000) + '\n\nWhat were you doing?\n\nWhat did you expect?\n';
+      } else if (auto && opts.stall) {
         const engine = opts.stall.engine || 'unknown';
         const waited = opts.stall.waitedSeconds || 30;
         const label = opts.stall.name ? ' "' + opts.stall.name + '"' : '';

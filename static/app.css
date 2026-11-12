@@ -3625,6 +3625,30 @@
   }
   .conv-toast.visible { opacity: 1; }
 
+  .error-report-btn {
+    flex: 0 0 auto;
+    margin-inline-start: 8px;
+    padding: 4px 8px;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+    white-space: normal;
+  }
+  .error-report-btn:hover { background: var(--surface-2); }
+  .error-report-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .op-toast { flex-wrap: wrap; width: max-content; box-sizing: border-box; max-width: min(520px, calc(100vw - 24px)) !important; }
+  .op-toast > span { flex-basis: 100% !important; }
+  .op-toast .error-report-btn { margin-inline-start: 0; }
+  .conv-live-tool-inline.is-error { flex-wrap: wrap; }
+  .conv-live-tool-inline.is-error .cl-tool { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+  #bugReportModal { z-index: 10002; }
+  @media (max-width: 600px) {
+    .error-report-btn { min-height: 44px; }
+  }
+
   .conv-pane-drop-overlay {
     position: absolute;
     inset: 0;
