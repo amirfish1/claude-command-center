@@ -11640,8 +11640,11 @@
     box-shadow: 0 2px 10px rgba(0,0,0,0.4);
   }
   .conv-codex-state .ccs-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-  .conv-codex-state.state-working { color: #f2cc60; }
-  .conv-codex-state.state-working .ccs-dot { animation: ccc-flow-chip-pulse 1.6s ease-in-out infinite; }
+  .conv-codex-state.state-working { color: var(--text); }
+  .conv-codex-state.state-working .ccs-dot {
+    background: var(--orange);
+    animation: ccc-flow-chip-pulse 1.6s ease-in-out infinite;
+  }
   .conv-codex-state.state-working.steady .ccs-dot { animation: none; }
   .conv-codex-state.state-stuck   { color: #e0a83c; }
   /* Stuck pill carries the "why" reason on its own wrapped line so the badge
@@ -11661,6 +11664,7 @@
     content: '· ';
     opacity: 0.6;
   }
+  .conv-codex-state.state-working .ccs-age { opacity: 1; }
   /* One-click wake: a stuck/idle pill becomes a button that nudges GPT. */
   .conv-codex-state.is-wakeable { cursor: pointer; }
   .conv-codex-state.is-wakeable:hover { border-color: currentColor; filter: brightness(1.12); }
@@ -32086,6 +32090,39 @@ body.conv-compact .conversations-view .cc-orch-chip::before { content: attr(data
 /* A run with no preceding text hosts its chips inside the bare head line,
    whose other children are hidden while folded. */
 body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open):not(.tool-call-group) > .cc-orch-chip { display: inline-block !important; }
+/* Compact runs reveal reasoning before commands, with a persistent way back. */
+body.conv-compact .conversations-view .cc-run-head > .tool-call-group-header { flex-wrap: wrap; }
+body.conv-compact.conv-compact .conversations-view .cc-run-head.tool-call.cc-run-thinking > :not(.cc-run-fold, .cc-run-tools, .cc-orch-chip, .cc-run-thumbs) { display: none !important; }
+.cc-run-tools, .cc-run-preview { display: none; }
+body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open) > .tool-call-group-header > .cc-orch-chip {
+  display: inline-block !important;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open) > .cc-run-preview {
+  display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden; white-space: normal; font-style: normal;
+  color: var(--text-secondary); font-size: 13px; line-height: 1.5; margin: 4px 0 8px;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-chipped:not(.cc-run-open):has(> .cc-run-preview) {
+  display: block !important;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-chipped:not(.cc-run-open)::before { content: none; }
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-open .cc-run-fold,
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-open .cc-run-tools {
+  display: inline-flex; border: 0; background: transparent; padding: 2px 6px;
+  color: var(--text-muted); font: inherit; font-size: 12px; cursor: pointer;
+}
+body.conv-compact .conversations-view .cc-run-tools:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-tail.cc-run-thinking:not(.cc-run-thought),
+body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-thinking > :is(.tool-call-group-body, .kimi-tool-body, .kimi-tool-group-body) {
+  display: none !important;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-thinking.thinking-block .t-body {
+  display: block; -webkit-line-clamp: unset; max-height: none;
+}
+body.conv-compact.conv-compact .conversations-view .cc-run-thinking.kimi-thinking > .kimi-thinking-full { display: block; }
+body.conv-compact.conv-compact .conversations-view .cc-run-thinking.kimi-thinking > .kimi-thinking-teaser { display: none; }
 /* Same purple pills in a Codex/Kimi tool-group header, in every view mode
    (CCC-254): the header is all a collapsed group shows. */
 .kimi-tg-orch { display: inline-flex; gap: 4px; flex: 0 1 auto; min-width: 0; overflow: hidden; }

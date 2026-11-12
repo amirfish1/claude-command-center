@@ -70271,6 +70271,7 @@
         // tool forces this wrapper to be rebuilt on the next live tick.
         if (g.dataset.ccRun) row.dataset.ccRun = g.dataset.ccRun;
         row.classList.toggle('cc-run-open', g.classList.contains('cc-run-open'));
+        row.classList.toggle('cc-run-thinking', g.classList.contains('cc-run-thinking'));
         g.parentNode.insertBefore(row, g);
       }
       g.remove();
@@ -70306,6 +70307,7 @@
         const expandedRun = run.find(r => r.classList.contains('cc-run-open'));
         if (expandedRun) {
           grp.classList.add('cc-run-open');
+          grp.classList.toggle('cc-run-thinking', expandedRun.classList.contains('cc-run-thinking'));
           if (expandedRun.dataset.ccRun) grp.dataset.ccRun = expandedRun.dataset.ccRun;
         }
         // Default to collapsed: only stay open when the run's rows carry an
@@ -88114,7 +88116,7 @@
   function _ccMarkRuns(view) {
     const stale = new Set(view.querySelectorAll('[data-cc-run]'));
     const staleChips = new Set(view.querySelectorAll('.cc-run-chip'));
-    const staleFolds = new Set(view.querySelectorAll('.cc-run-fold'));
+    const staleFolds = new Set(view.querySelectorAll('.cc-run-fold, .cc-run-tools, .cc-run-preview'));
     const staleOrch = new Set(view.querySelectorAll('.cc-orch-chip'));
     const staleThumbs = new Set(view.querySelectorAll('.cc-run-thumbs'));
     const staleFinals = new Set(view.querySelectorAll('.assistant-text.cc-final'));
@@ -88138,13 +88140,16 @@
         const calls = active.reduce((n, u) => n + (u.calls || 0), 0);
         const thoughts = active.filter(u => u.kind === 'think').length;
         const open = run.some(u => u.el.classList.contains('cc-run-open'));
+        const thinking = run.some(u => u.el.classList.contains('cc-run-thinking'));
         const id = head.dataset.ccRun || String(++_ccRunSeq);
-        run.forEach(({ el }) => {
+        run.forEach(({ el, kind }) => {
           stale.delete(el);
           el.dataset.ccRun = id;
           el.classList.toggle('cc-run-head', el === head);
           el.classList.toggle('cc-run-tail', el !== head);
           el.classList.toggle('cc-run-open', open);
+          el.classList.toggle('cc-run-thinking', thinking);
+          el.classList.toggle('cc-run-thought', kind === 'think');
         });
         const label = [
           calls ? calls + ' tool call' + (calls === 1 ? '' : 's') : '',
@@ -88155,7 +88160,7 @@
         if (labelEl && labelEl.dataset.ccRunLabel !== label) labelEl.dataset.ccRunLabel = label;
         // The first Claude group's arrow belongs to that group, just like
         // later arrows. Give the enclosing run its own collapse control.
-        if (head.classList.contains('tool-call-group') && labelEl) {
+        if (labelEl) {
           let fold = labelEl.querySelector('.cc-run-fold');
           if (!fold) {
             fold = document.createElement('button');
@@ -88167,6 +88172,36 @@
           const foldLabel = 'Fold ' + label;
           if (fold.textContent !== foldLabel) fold.textContent = foldLabel;
           staleFolds.delete(fold);
+          let tools = labelEl.querySelector('.cc-run-tools');
+          if (calls && thoughts) {
+            if (!tools) {
+              tools = document.createElement('button');
+              tools.type = 'button';
+              tools.className = 'cc-run-tools';
+              labelEl.appendChild(tools);
+            }
+            const toolsLabel = thinking ? 'Show tools' : 'Hide tools';
+            if (tools.textContent !== toolsLabel) tools.textContent = toolsLabel;
+            tools.setAttribute('aria-expanded', String(open && !thinking));
+            staleFolds.delete(tools);
+          }
+          // Keep the first thought readable without expanding commands.
+          const firstThought = active.find(u => u.kind === 'think')?.el;
+          const thoughtBody = firstThought?.querySelector('.t-body, .kimi-thinking-full') || firstThought;
+          const previewText = thoughtBody && Array.from(thoughtBody.childNodes)
+            .filter(el => !el.matches?.('.cc-run-preview, .cc-run-fold, .cc-run-tools, .cc-orch-chip, .cc-run-thumbs'))
+            .map(el => el.textContent).join('').trim();
+          let preview = head.querySelector(':scope > .cc-run-preview');
+          if (previewText) {
+            if (!preview) {
+              preview = document.createElement('div');
+              preview.className = 'cc-run-preview';
+              head.appendChild(preview);
+            }
+            const text = previewText.slice(0, 600) + (previewText.length > 600 ? '…' : '');
+            if (preview.textContent !== text) preview.textContent = text;
+            staleFolds.delete(preview);
+          }
         }
         // Chip at the end of the preceding text, so the fold line doesn't
         // take a row between sentences (CSS exempts chip-bearing text from
@@ -88275,7 +88310,7 @@
     markFinal(turnText);
     staleFinals.forEach(t => t.classList.remove('cc-final'));
     stale.forEach(el => {
-      el.classList.remove('cc-run-head', 'cc-run-tail', 'cc-run-open', 'cc-run-chipped');
+      el.classList.remove('cc-run-head', 'cc-run-tail', 'cc-run-open', 'cc-run-chipped', 'cc-run-thinking', 'cc-run-thought');
       delete el.dataset.ccRun;
     });
     staleChips.forEach(c => c.remove());
@@ -88314,20 +88349,29 @@
     const chip = t.closest('.cc-run-chip');
     const head = chip ? null : t.closest('.cc-run-head');
     if (!chip && !head) return;
-    if (head && head.classList.contains('tool-call-group') && !t.closest('.tool-call-group-header')) return;
+    if (head && head.classList.contains('tool-call-group')
+        && !t.closest('.tool-call-group-header, .cc-run-preview')) return;
     if (head?.classList.contains('tool-call-group') && head.classList.contains('cc-run-open')
-        && !t.closest('.cc-run-fold')) return;
+        && !t.closest('.cc-run-fold, .cc-run-tools')) return;
     // Once revealed, let the tool/think controls handle their own clicks.
     // A chip or the standalone head's fold label still closes the run.
     if (head?.matches('.kimi-tool, .kimi-tool-group, .kimi-thinking')
-        && head.classList.contains('cc-run-open') && t !== head) return;
+        && head.classList.contains('cc-run-open') && t !== head
+        && !t.closest('.cc-run-fold, .cc-run-tools')) return;
     const view = (chip || head).closest('.conversations-view');
     if (!view) return;
     ev.stopImmediatePropagation();
     const id = chip ? chip.dataset.ccChipFor : head.dataset.ccRun;
-    const open = !(chip || head).classList.contains('cc-run-open');
+    const tools = t.closest('.cc-run-tools');
+    const open = tools ? true : !(chip || head).classList.contains('cc-run-open');
+    const hasThoughts = !!view.querySelector('[data-cc-run="' + id + '"].cc-run-thought');
+    const thinking = tools ? !head.classList.contains('cc-run-thinking') : open && hasThoughts;
     view.querySelectorAll('[data-cc-run="' + id + '"], .cc-run-chip[data-cc-chip-for="' + id + '"]')
-      .forEach(el => el.classList.toggle('cc-run-open', open));
+      .forEach(el => {
+        el.classList.toggle('cc-run-open', open);
+        el.classList.toggle('cc-run-thinking', thinking);
+      });
+    _ccMarkRuns(view);
   }, true);
 
   // CCC-454: transcript view segmented control (rail topbar + per-pane

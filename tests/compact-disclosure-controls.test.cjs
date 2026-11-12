@@ -20,9 +20,9 @@ test('Claude disclosure arrows expand their own group without folding the run', 
           ${narration ? '<div class="event assistant"><div class="assistant-text"><p>Checking.</p></div></div>' : ''}
           <div class="tool-call-group collapsed" id="first">
             <div class="tool-call-group-header"><span class="tcg-arrow">▶</span><span class="tcg-label">Read first result</span></div>
-            <div class="tool-call-group-body"><div class="tool-call"><details><summary>Command result</summary>First result</details></div></div>
+            <div class="tool-call-group-body"><div class="tool-call" data-cc-orch="wt claim|wt find"><details><summary>Command result</summary>First result</details></div></div>
           </div>
-          <div class="event assistant"><div class="thinking-block">Considering the result</div></div>
+          <div class="event assistant"><div class="thinking-block"><div class="t-body">I have claimed the report. The reviewer is stuck because the launch failed. I will fix the launcher and preserve the independent review.</div></div></div>
           <div class="tool-call-group collapsed" id="second">
             <div class="tool-call-group-header"><span class="tcg-arrow">▶</span><span class="tcg-label">Read second result</span></div>
             <div class="tool-call-group-body"><div class="tool-call">Second result</div></div>
@@ -35,7 +35,20 @@ test('Claude disclosure arrows expand their own group without folding the run', 
         });
         markRuns(document.querySelector('.conversations-view'));
       }, compact);
-      await page.click(narration ? '.cc-run-chip' : '#first .tool-call-group-header');
+      assert.equal(await page.$eval('.cc-run-preview', el => getComputedStyle(el).webkitLineClamp), '3');
+      assert.notEqual(await page.$eval('.cc-orch-chip', el => getComputedStyle(el).display), 'none');
+      assert.match(await page.$eval('.cc-run-preview', el => el.textContent), /launcher/);
+      if (process.env.CCC_DISCLOSURE_SCREENSHOT_DIR) {
+        await page.screenshot({ path: process.env.CCC_DISCLOSURE_SCREENSHOT_DIR + '/collapsed-' + narration + '.png' });
+      }
+      await page.click(narration ? '.cc-run-chip' : '.cc-run-preview');
+      assert.equal(await page.$eval('#first .tool-call-group-body', el => getComputedStyle(el).display), 'none');
+      assert.notEqual(await page.$eval('.thinking-block', el => getComputedStyle(el).display), 'none');
+      assert.equal(await page.$eval('.thinking-block .t-body', el => getComputedStyle(el).webkitLineClamp), 'none');
+      if (process.env.CCC_DISCLOSURE_SCREENSHOT_DIR) {
+        await page.screenshot({ path: process.env.CCC_DISCLOSURE_SCREENSHOT_DIR + '/thinking-' + narration + '.png' });
+      }
+      await page.click('.cc-run-tools');
       await page.click('#first .tcg-arrow');
       assert.equal(await page.$eval('#first', el => el.classList.contains('cc-run-open')), true,
         'first disclosure must leave the surrounding run open');
@@ -53,6 +66,9 @@ test('Claude disclosure arrows expand their own group without folding the run', 
       });
       assert.equal(await page.$$eval('.cc-run-fold', els => els.length), 1);
       await page.click('#first .tcg-arrow');
+      await page.click('.cc-run-tools');
+      assert.equal(await page.$eval('#first .tool-call-group-body', el => getComputedStyle(el).display), 'none');
+      await page.click('.cc-run-tools');
       if (process.env.CCC_DISCLOSURE_SCREENSHOT_DIR) {
         await page.screenshot({ path: process.env.CCC_DISCLOSURE_SCREENSHOT_DIR + '/disclosures-' + narration + '.png' });
       }

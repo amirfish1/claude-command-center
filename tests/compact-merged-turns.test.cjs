@@ -51,6 +51,7 @@ test('merged turns fold tools and reasoning across lifecycle markers, preserving
     assert.deepEqual(result, { chips: 1, label: '3 tool calls · 1 thought', hiddenTools: true,
       final: true, narrationFinal: false, approvalVisible: true });
     await page.click('.cc-run-chip');
+    await page.click('.cc-run-tools');
     await page.click('#single .kimi-tool-head');
     assert.equal(await page.$eval('#single', el => el.classList.contains('open')), true);
     await page.click('.cc-run-chip');
