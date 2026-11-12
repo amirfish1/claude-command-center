@@ -1,4 +1,6 @@
+import time
 import unittest
+from unittest import mock
 from ccc_server import codex_requests
 
 
@@ -135,6 +137,39 @@ class RequestRegistryTests(unittest.TestCase):
             "threadId": "task", "mode": "form", "requestedSchema": schema})
         self.reply(key, {"action": "accept", "content": {"answer": "yes"}})
         self.assertEqual(len(self.sent), 1)
+
+    def test_slow_child_startup_does_not_consume_the_validation_budget(self):
+        # A cold or loaded host can take longer than the 2s validation bound
+        # just to boot the interpreter; that must not reject a valid form.
+        real = codex_requests.subprocess.Popen
+
+        def slow_boot(argv, **kw):
+            code = ("import time, runpy, sys; time.sleep(3); "
+                    "sys.argv = ['x']; runpy.run_module('ccc_server.codex_form_check', run_name='__main__')")
+            return real([argv[0], "-S", "-c", code], **kw)
+
+        schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+        with mock.patch.object(codex_requests.subprocess, "Popen", slow_boot):
+            codex_requests._validate_mcp_form({"answer": "yes"}, schema)
+            with self.assertRaises(ValueError):
+                codex_requests._validate_mcp_form({"answer": 5}, schema)
+
+    def test_child_that_never_becomes_ready_hits_the_startup_deadline_and_is_reaped(self):
+        real = codex_requests.subprocess.Popen
+        spawned = []
+
+        def hung(argv, **kw):
+            proc = real([argv[0], "-S", "-c", "import time; time.sleep(60)"], **kw)
+            spawned.append(proc)
+            return proc
+
+        started = time.monotonic()
+        with mock.patch.object(codex_requests.subprocess, "Popen", hung), \
+                mock.patch.object(codex_requests, "_FORM_CHILD_START_S", 0.5):
+            with self.assertRaisesRegex(ValueError, "could not start"):
+                codex_requests._validate_mcp_form({"answer": "yes"}, {"type": "object"})
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertIsNotNone(spawned[0].poll(), "hung child must be killed and reaped")
 
     def test_untrusted_regex_cannot_stall_the_host(self):
         schema = {"type": "string", "pattern": "^(a+)+$"}

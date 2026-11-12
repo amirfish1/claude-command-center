@@ -23,19 +23,56 @@ INTERACTIVE_METHODS = frozenset({
 })
 
 
+_FORM_CHILD_START_S = 15.0  # interpreter boot only; never covers validation
+_FORM_VALIDATION_S = 2.0
+
+
 def _validate_mcp_form(value, schema):
     """Untrusted provider schemas cannot monopolize the native reader/GIL.
 
     This subprocess runs only on a deliberate form submission, never during
     row rendering, polling, or native streaming. Input travels over stdin.
     """
+    # Two separate budgets: interpreter start-up (cold disk, loaded host) and
+    # the validation itself. Only the latter is the adversarial-schema bound.
+    proc = subprocess.Popen([sys.executable, "-S", "-m", "ccc_server.codex_form_check"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        cwd=str(Path(__file__).resolve().parent.parent))
+    reader = None
     try:
-        result = subprocess.run([sys.executable, "-m", "ccc_server.codex_form_check"],
-            input=json.dumps({"value": value, "schema": schema}), text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=2,
-            cwd=str(Path(__file__).resolve().parent.parent))
-    except subprocess.TimeoutExpired:
-        raise ValueError("Form validation exceeded the supported time limit") from None
+        # A reader thread plus Event is portable: Windows cannot select() on
+        # anonymous pipes. Killing the child in `finally` yields EOF and ends it.
+        ready = threading.Event()
+        first = []
+
+        def _await_ready():
+            try:
+                first.append(proc.stdout.read(1))
+            except (OSError, ValueError):
+                first.append(b"")
+            ready.set()
+
+        reader = threading.Thread(target=_await_ready, daemon=True)
+        reader.start()
+        if not ready.wait(_FORM_CHILD_START_S) or first[0] != b"R":
+            raise ValueError("Form validation could not start")
+        try:
+            proc.communicate(json.dumps({"value": value, "schema": schema}).encode(),
+                             timeout=_FORM_VALIDATION_S)
+        except subprocess.TimeoutExpired:
+            raise ValueError("Form validation exceeded the supported time limit") from None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+        if reader is not None:
+            reader.join(1.0)
+    result = proc
     if result.returncode != 0:
         raise ValueError("Form input does not match the requested fields or rules")
 

@@ -216,6 +216,12 @@ def http_broker(broker, monkeypatch):
     import server
     monkeypatch.setattr(cb, "_INSTANCE", broker)
     monkeypatch.setattr(server, "SLOW_REQ_MS", 0)
+    # The in-process server's CPU accounting prints a "[CPU]" line to stdout
+    # whenever a request lands after its 60s window; a CLI test that captures
+    # stdout (the secret itself) must not see unrelated diagnostics. Isolate
+    # the emitter instead of filtering what the CLI wrote.
+    from ccc_server import cpu_accounting
+    monkeypatch.setattr(cpu_accounting, "_emit", lambda row: None)
     monkeypatch.setattr(server, "ALLOWED_ORIGINS", ["https://phone.test"])
     monkeypatch.setattr(server.phone_access, "pin_gate_blocks", lambda *args: False)
     monkeypatch.setattr(server.phone_access, "live_extra_origins", lambda: [])
@@ -312,6 +318,18 @@ def test_cli_refuses_unintentional_output_and_terminal(http_broker, monkeypatch,
 def test_cli_local_transport_only(base):
     with pytest.raises(ValueError):
         load_cli()._secret_post(base, "request", {})
+
+
+def test_cli_stdout_is_only_the_value_even_when_cpu_window_elapses(http_broker, broker, capsys, monkeypatch):
+    from ccc_server import cpu_accounting
+    monkeypatch.setattr(cpu_accounting, "WINDOW_S", 0.0)  # every request closes a window
+    base, _ = http_broker
+    created = request(broker)
+    broker.resolve({"id": created["id"], "value": FAKE, "remember": True})
+    assert load_cli().main(["--server", base, "secret", "request", "example-service",
+                            "--reason", "Test", "--stdout"]) == 0
+    assert capsys.readouterr().out == FAKE.strip()
+    assert load_cli().main(["--server", base, "secret", "forget", "example-service"]) == 0
 
 
 def test_cli_delivers_exact_value_without_stderr_echo(http_broker, broker, capsys):
