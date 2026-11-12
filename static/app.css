@@ -34734,3 +34734,20 @@ a.local-ci-job:hover { color: var(--accent); }
   .local-ci-mobile .local-ci-label, .local-ci-mobile .local-ci-step { font-size: 12px; }
   .local-ci-mobile .local-ci-dismiss { flex-basis: 44px; width: 44px; height: 44px; }
 }
+.session-ref-chip {
+  display: inline-block;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font: inherit;
+  font-size: .9em;
+  overflow-wrap: anywhere;
+  vertical-align: baseline;
+  text-decoration: none;
+}
+.session-ref-chip:hover { text-decoration: underline; }
+.session-ref-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

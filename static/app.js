@@ -21079,7 +21079,31 @@
     // Bare file paths (relative like docs/foo/bar.md, absolute /Users/..., or ~/...)
     s = s.replace(/(^|[\s(])((?:~\/|\/|(?:[\w.\-]+\/)+)[\w.\-/]+\.(?:md|ts|tsx|js|jsx|py|json|yaml|yml|css|html|sql|prisma|sh))\b/g,
       (m, pre, p) => pre + '<a role="button" tabindex="0" class="path-link" data-path="' + p + '">' + p + '</a>');
-    return linkifyWatchtowerTicketRefs(linkifyCodexInlineVisuals(s));
+    return linkifySessionRefs(linkifyWatchtowerTicketRefs(linkifyCodexInlineVisuals(s)));
+  }
+
+  // Only known session identities become navigation; arbitrary UUIDs may be
+  // request ids or other data. Preserve explicit links and HTML attributes.
+  function linkifySessionRefs(html) {
+    const protectedParts = [];
+    const safe = String(html || '').replace(/<a\b[^>]*>[\s\S]*?<\/a>|<pre\b[^>]*>[\s\S]*?<\/pre>|<[^>]+>/gi, part => {
+      const token = '\u0000SESSIONHTML' + protectedParts.length + '\u0000';
+      protectedParts.push(part);
+      return token;
+    });
+    const linked = safe.replace(/\b(?:(?:session_|devin-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|devincli-[a-z0-9]+(?:-[a-z0-9]+)+)\b/gi, (sid, offset) => {
+      // File paths, longer ids and fragments of URLs are not session refs.
+      if (/[\w/.-]/.test(safe[offset - 1] || '') || /[\w/-]/.test(safe[offset + sid.length] || '')) return sid;
+      const row = conversationsData.find(c => String(c.session_id || c.id || '') === sid)
+        || archiveData.find(c => String(c.session_id || c.id || '') === sid);
+      if (!row) return sid;
+      const name = sidebarRowDisplayTitle(row.display_name || row.ai_title || cleanIssuePrompt(row.first_message || '')) || shortSessionId(sid);
+      const child = !!(row.parent_session_id || row.hermes_parent_session_id);
+      return '<a class="session-ref-chip" href="?session=' + encodeURIComponent(sid) + '"'
+        + ' data-session-ref="' + escapeAttr(sid) + '" title="' + escapeAttr('Open session: ' + name + '\n' + sid) + '">'
+        + escapeHtml((child ? 'Child · ' : '') + truncate(name, 70)) + '</a>';
+    });
+    return linked.replace(/\u0000SESSIONHTML(\d+)\u0000/g, (match, index) => protectedParts[Number(index)] || match);
   }
 
   // A ticket ref is durable navigation, not merely a status label. Keep the
@@ -21133,6 +21157,13 @@
     document.body.appendChild(tmp);
     tmp.click();
     document.body.removeChild(tmp);
+  });
+
+  document.addEventListener('click', (ev) => {
+    const link = ev.target.closest('a.session-ref-chip');
+    if (!link || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    ev.preventDefault();
+    selectConversation(link.dataset.sessionRef);
   });
 
   // Copy button on fenced code blocks. Reads plain text from the <code>
