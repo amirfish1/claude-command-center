@@ -39,6 +39,37 @@ def interpreter():
     return None
 
 
+def _wt_python_argv():
+    """Bridge command for a WatchTower this process cannot import itself.
+
+    A pip --user install lives under the real home's site directory, but the
+    demo runs with HOME pointed at a temporary directory, so that interpreter
+    cannot see it. Ask it from the real home where the package is, then give
+    the bridge that directory explicitly.
+    """
+    python = interpreter()
+    script = str(Path(__file__).resolve())
+    try:
+        import pwd
+        real_home = pwd.getpwuid(os.getuid()).pw_dir
+    except (ImportError, KeyError):
+        real_home = None
+    if python and real_home:
+        env = dict(os.environ, HOME=real_home)
+        env.pop('PYTHONNOUSERSITE', None)
+        try:
+            found = subprocess.run(
+                [python, '-c', 'import os, watchtower; '
+                 'print(os.path.dirname(os.path.dirname(watchtower.__file__)))'],
+                env=env, capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            found = None
+        root = found.stdout.strip() if found and found.returncode == 0 else ''
+        if root:
+            return [python, '-S', script, '--bridge', root]
+    return [python, script, '--bridge']
+
+
 def installed():
     return bool(interpreter())
 
@@ -52,13 +83,8 @@ class RealTickets(WT):
         # WatchTower is stdlib-only. Avoid unrelated site hooks on the hot path
         # while retaining the installed package's actual CLI implementation.
         argv = ([sys.executable, '-S', str(Path(__file__).resolve()), '--bridge',
-                 # Hand over the parent's whole import path: the package's
-                 # parent directory is not always where an editable or
-                 # path-file install actually resolves it from.
-                 os.pathsep.join([str(Path(spec.origin).parent.parent)]
-                                 + [p for p in sys.path if p])]
-                if spec and spec.origin else
-                [interpreter(), str(Path(__file__).resolve()), '--bridge'])
+                 str(Path(spec.origin).parent.parent)] if spec and spec.origin else
+                _wt_python_argv())
         self.proc = subprocess.Popen(argv,
                                      cwd=root / 'project', env=env, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -170,10 +196,7 @@ def close_verified(cli, args):
 
 
 def bridge():
-    try:
-        from watchtower import cli
-    except ImportError:
-        import sys as _s; print('DIAG argv=%r path=%r' % (_s.argv, _s.path), file=_s.stderr); raise
+    from watchtower import cli
     parser = cli.build_parser()
     with contextlib.redirect_stdout(sys.stderr):
         setup = parser.parse_args(['config', '-q', 'DEMO', '--auto-drain', 'off'])
@@ -197,5 +220,5 @@ def bridge():
 
 if __name__ == '__main__':
     if len(sys.argv) > 2:
-        sys.path[:0] = sys.argv[2].split(os.pathsep)
+        sys.path.insert(0, sys.argv[2])
     bridge()
