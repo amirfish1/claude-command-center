@@ -18295,8 +18295,8 @@
 
   // Peer (child -> parent) reports arrive as one dense blob:
   // "STATUS: ...\nSUMMARY: (1) ... (2) ... Needs Amir: ...\nFILES: a, b, c".
-  // Give it breathing room without restyling: each LABEL: line is its own
-  // block, "(N)" items and "Needs X:" callouts start new paragraphs, and
+  // Give each LABEL: line its own readable section;
+  // "(N)" items and "Needs X:" callouts start new paragraphs, and
   // FILES lists one path per line. Returns '' when there's no structure,
   // so ordinary peer chatter keeps the plain rendering.
   const PEER_LABEL_RE = /^([A-Z][A-Z0-9 _/-]{1,30}):[ \t]*(.*)$/;
@@ -18306,7 +18306,7 @@
     for (const ch of s) {
       if (ch === '{' || ch === '(' || ch === '[') depth++;
       else if ((ch === '}' || ch === ')' || ch === ']') && depth > 0) depth--;
-      if (ch === ',' && depth === 0) { if (cur.trim()) out.push(cur.trim()); cur = ''; continue; }
+      if ((ch === ',' || ch === ';') && depth === 0) { if (cur.trim()) out.push(cur.trim()); cur = ''; continue; }
       cur += ch;
     }
     if (cur.trim()) out.push(cur.trim());
@@ -18315,7 +18315,12 @@
   function formatPeerMessageHtml(text) {
     const lines = String(text || '').split('\n');
     if (!lines.some(l => PEER_LABEL_RE.test(l.trim()))) return '';
-    const fmt = s => linkifyPastedImages(escapeHtml(s));
+    const fmt = s => String(s).split(/((?:~?\/|[\w.-]+\/)[^\s<>"'`,;()]+\.[a-zA-Z0-9]{1,12}(?::\d+)?)/g)
+      .map((part, i) => i % 2
+        ? (/\/\.claude\/(?:command-center\/)?(?:pasted-images|annotation-screenshots)\//.test(part)
+          ? linkifyPastedImages(escapeHtml(part))
+          : '<span class="peer-file-ref">' + linkifyPath(part) + '</span>')
+        : linkifyPastedImages(escapeHtml(part))).join('');
     const paras = body => body
       .split(/\s+(?=\(\d+\)\s)|\s+(?=Needs [A-Z][\w-]*:)/)
       .map(p => p.trim()).filter(Boolean)
@@ -18331,7 +18336,7 @@
       if (!m) { html += paras(line); continue; }
       const label = m[1], body = m[2];
       const items = /^FILES?$/.test(label) ? splitTopLevelCommas(body) : null;
-      html += '<div class="peer-section"><span class="peer-section-label">' + escapeHtml(label) + ':</span>'
+      html += '<div class="peer-section' + (/^FILES?$/.test(label) ? ' peer-files' : '') + '"><span class="peer-section-label">' + escapeHtml(label) + ':</span>'
         + (items && items.length > 1
           ? '<ul class="peer-list">' + items.map(i => '<li>' + fmt(i) + '</li>').join('') + '</ul>'
           : (body ? ' ' + (/^\(\d+\)\s/.test(body) || body.length > 160 ? paras(body) : fmt(body)) : ''))
@@ -71989,7 +71994,7 @@
               + _imagesHtml
               + '</div>';
           } else {
-            const _peerHtml = (ev.peer && !_codexPane) ? formatPeerMessageHtml(cleanedText) : '';
+            const _peerHtml = ev.peer ? formatPeerMessageHtml(cleanedText) : '';
             textHtml = '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(cleanedText) + '">' + bridgeSenderHtml + (_peerHtml || (_codexPane ? renderCodexUserText(cleanedText) : linkifyPastedImages(escapeHtml(cleanedText)))) + '</div>';
           }
         } else {

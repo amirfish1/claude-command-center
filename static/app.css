@@ -4228,9 +4228,7 @@
   /* Cross-session (UDS peer) delivery gets its own green tint so it reads
      distinctly from a normal chat turn -- e.g. the WatchTower reconciler's
      release instruction, or any other Claude-to-Claude peer message.
-     CCC-1001: liked the green, disliked how loud it read -- dimmed the
-     tint/border/glow and the text itself goes smaller + italic instead of
-     the bright/bold default. */
+     Keep the tint quiet and the report body upright for sustained reading. */
   .conversations-view .event.user_text.peer-message,
   .conv-pane.has-conv-bg .conversations-view .event.user_text.peer-message {
     background:
@@ -4239,22 +4237,25 @@
     box-shadow: 0 2px 14px rgba(63, 185, 80, 0.05);
   }
   .conversations-view .event.user_text.peer-message .user-msg {
-    font-size: 13px;
-    font-style: italic;
+    font-size: 14px;
+    font-style: normal;
     font-weight: 400;
   }
-  /* Structured child->parent reports (formatPeerMessageHtml): spacing only,
-     same font/colour as the plain peer bubble. */
-  .event.user_text.peer-message .peer-structured { white-space: normal; line-height: 1.55; }
+  /* Structured reports share one reading layout across conversation engines. */
+  .event.user_text.peer-message .peer-structured { white-space: normal; line-height: 1.65; max-width: 72ch; font-style: normal; font-weight: 400; }
   .peer-structured .peer-para { margin: 0 0 8px; }
   .peer-structured .peer-section { margin: 0 0 14px; }
   .peer-structured .peer-section:last-child,
   .peer-structured .peer-section > .peer-para:last-child { margin-bottom: 0; }
-  .peer-structured .peer-section-label { font-weight: 600; }
-  .peer-structured .peer-section-label + .peer-para { display: inline; }
+  .peer-structured .peer-section-label { display: block; margin-bottom: 4px; font-size: 0.86em; font-weight: 500; }
+  .peer-structured .peer-section-label + .peer-para { display: block; }
   .peer-structured .peer-section-label + .peer-para + .peer-para { margin-top: 8px; }
-  .peer-structured .peer-list { margin: 4px 0 0; padding-left: 20px; list-style: none; }
-  .peer-structured .peer-list li { margin: 2px 0; overflow-wrap: anywhere; }
+  .peer-structured .peer-list { margin: 4px 0 0; padding-left: 20px; list-style: disc; }
+  .peer-structured .peer-list li { margin: 6px 0; overflow-wrap: anywhere; }
+  .peer-structured .peer-files { font-size: 0.88em; }
+  .peer-structured .peer-file-ref { font-size: 0.88em; overflow-wrap: anywhere; }
+  .peer-structured .peer-files .peer-file-ref { font-size: inherit; }
+  .peer-structured strong { font-weight: 500; }
   .peer-image-gallery { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
   .peer-image-gallery figure { flex: 0 1 240px; min-width: 0; max-width: 100%; margin: 0; }
   .peer-image-gallery img.msg-image { width: 100%; max-height: 180px; object-fit: contain; }
@@ -26476,6 +26477,12 @@ body.has-gc-reader .pwa-install-banner {
   border: none !important;
   border-radius: 0 !important;
   padding: 0 !important;
+}
+
+/* Peer reports remain reading text inside the decorative conversation theme. */
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text.peer-message .user-msg {
+  font-weight: 400 !important;
+  letter-spacing: normal !important;
 }
 
 /* Cyan >_ prompt at the end of the user message */
