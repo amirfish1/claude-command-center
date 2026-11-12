@@ -224,15 +224,21 @@ training; CCC asks for consent before enabling it. Do not send it private code.
 
 All captures use seeded demo data. [Full feature guide](docs/features.md).
 
+## Features that arrived earlier
+
+Ten selected features were released in CCC before comparable implementations merged in Orca or Paperclip, with leads from **4 days to 21 weeks**.
+
+[![CCC feature timeline: ten milestones in release order, with arrows to later competitor implementations and a separate research panel](docs/images/ccc-feature-timeline-2026-11-12.png)](https://ccc.amirfish.ai/feature-timeline.html)
+
+[Dates, sources and accessible text](https://ccc.amirfish.ai/feature-timeline.html) · [Full-size PNG](https://ccc.amirfish.ai/images/ccc-feature-timeline-2026-11-12.png) · [PDF](https://ccc.amirfish.ai/images/ccc-feature-timeline-2026-11-12.pdf)
+
+The timeline compares CCC public releases with named competitors’ code-merge dates. These are selected examples, not a claim of consistent or market-wide priority. In the research panel, **× means no equivalent established in the reviewed sources**, not proven absence. Research snapshot: 12 November 2026.
+
 ## Quickstart
 
-You need Git and Python 3.9+ to run CCC, plus curl for the install line above.
-On Ubuntu or Debian: `sudo apt-get install git python3 curl ca-certificates`.
-To launch agents, use an installed agent CLI or let the first-run wizard help set one up. `gh` is
-optional for GitHub features.
+You need Git and Python 3.9+ to run CCC, plus curl for the install line above. On Ubuntu or Debian: `sudo apt-get install git python3 curl ca-certificates`. To launch agents, use an installed agent CLI or let the first-run wizard help set one up. `gh` is optional for GitHub features.
 
-Prefer Python tools? [Build and run a wheel with uvx or pipx](docs/install.md#python-runners-preview).
-This is a source-build preview, not a PyPI release.
+Prefer Python tools? [Build and run a wheel with uvx or pipx](docs/install.md#python-runners-preview). This is a source-build preview, not a PyPI release.
 
 ### WatchTower comes with it
 
@@ -244,8 +250,7 @@ WatchTower powers CCC's queues. See [setup and requirements](docs/install.md#wat
 irm https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.ps1 | iex
 ```
 
-From a clone, run `.\run.ps1`. Native Windows runs in the foreground; WSL2
-supports the Linux systemd service route. [Windows guide](docs/install.md#running-on-windows).
+From a clone, run `.\run.ps1`. Native Windows runs in the foreground; WSL2 supports the Linux systemd service route. [Windows guide](docs/install.md#running-on-windows).
 
 ### From source
 
@@ -255,14 +260,11 @@ cd claude-command-center
 ./run.sh
 ```
 
-Open [http://localhost:8090](http://localhost:8090), then pick a repo before
-starting work. Keep the terminal open for a foreground launch.
+Open [http://localhost:8090](http://localhost:8090), then pick a repo before starting work. Keep the terminal open for a foreground launch.
 
 ### Running on Linux
 
-Use `./run.sh` in the foreground or `./run.sh --install-service` for a systemd
-user service. [Linux and WSL2 guide](docs/install.md#running-on-linux-and-wsl2) ·
-[macOS services](docs/install.md#from-source-on-macos) · [Docker](docs/docker.md).
+Use `./run.sh` in the foreground or `./run.sh --install-service` for a systemd user service. [Linux and WSL2 guide](docs/install.md#running-on-linux-and-wsl2) · [macOS services](docs/install.md#from-source-on-macos) · [Docker](docs/docker.md).
 
 ### Your agent config
 

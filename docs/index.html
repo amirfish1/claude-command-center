@@ -637,6 +637,12 @@
     .flow-arrow::after, .working i { animation: none !important; }
     .flow-arrow::after { display: none; }
   }
+  /* Dated product comparison */
+  .feature-timeline-figure { margin: 0; }
+  .feature-timeline-figure img { display: block; width: 100%; height: auto; border-radius: 12px; }
+  .feature-timeline-figure figcaption { color: var(--fg-dim); font-size: 15px; margin-top: 18px; max-width: 75ch; }
+  .feature-timeline-links { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 20px 0 0; }
+  .feature-timeline-figure a:focus-visible, .feature-timeline-links a:focus-visible { outline: 2px solid var(--orange); outline-offset: 5px; }
 </style>
 <noscript><style>.fade-target, .boot-target { opacity: 1; transform: none; }</style></noscript>
 <script src="/analytics.js" defer></script>
@@ -1257,6 +1263,20 @@ ccc oncall tell REF "This is fixed. Reload the page."</pre>
       <p class="demo-link fade-target" style="margin-top: 40px;">
         Nothing to install. All data in the demo is fake. <a href="/demo">Tour the read-only demo of the session view &rarr;</a>
       </p>
+    </div>
+  </section>
+
+  <section id="feature-timeline" aria-labelledby="feature-timeline-heading">
+    <div class="wrap">
+      <h2 id="feature-timeline-heading">Features that arrived <span class="orange">earlier</span>.</h2>
+      <p class="section-lede">Ten selected features were released in CCC before comparable implementations merged in Orca or Paperclip, with leads from 4 days to 21 weeks.</p>
+      <figure class="feature-timeline-figure">
+        <a href="./images/ccc-feature-timeline-2026-11-12.png" aria-label="Open the full-size CCC feature timeline">
+          <img src="./images/ccc-feature-timeline-2026-11-12.png" width="1800" height="2050" loading="lazy" alt="CCC and Others timelines with ten numbered arrows in CCC release order, followed by four researched workflows with arrows ending in crosses. Dates, feature names and sources are available in the linked text version.">
+        </a>
+        <figcaption>CCC public releases are compared with each named competitor’s code-merge dates, not its later packaged releases. The research panel’s × means no equivalent was established in the reviewed sources; it does not prove a competitor lacks the feature. Research snapshot: 12 November 2026.</figcaption>
+      </figure>
+      <p class="feature-timeline-links"><a href="./feature-timeline.html">Read the dates and sources</a><a href="./images/ccc-feature-timeline-2026-11-12.png">Full-size PNG</a><a href="./images/ccc-feature-timeline-2026-11-12.pdf">Download PDF</a></p>
     </div>
   </section>
 

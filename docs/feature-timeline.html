@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CCC feature timeline — dates and sources</title>
+<meta name="description" content="Ten dated comparisons of CCC releases with Orca and Paperclip, plus a qualified review of four distinctive workflows.">
+<link rel="canonical" href="https://ccc.amirfish.ai/feature-timeline.html"><link rel="icon" href="/brand/favicon.svg" type="image/svg+xml">
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #0a0d11; color: #e6ebf2; font: 17px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+main { max-width: 1120px; margin: auto; padding: 32px 24px 72px; }
+a { color: #8fb3ff; text-underline-offset: 3px; }
+a:focus-visible, .table-scroll:focus-visible { outline: 2px solid #f5a623; outline-offset: 5px; }
+h1 { font-size: clamp(30px,5vw,50px); line-height: 1.15; margin: 40px 0 20px; }
+h2 { margin: 48px 0 16px; line-height: 1.25; }
+h3 { margin: 28px 0 10px; }
+p, li { max-width: 75ch; }
+li { margin-bottom: 16px; }
+figure { margin: 30px 0; }
+img { display: block; width: 100%; height: auto; border-radius: 12px; }
+figcaption, .muted { color: #9aa3ad; }
+figcaption { margin-top: 12px; font-size: 15px; }
+.table-scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 620px; text-align: left; }
+caption { text-align: left; margin-bottom: 12px; }
+th,td { padding: 14px 12px; border-bottom: 1px solid #2e343d; vertical-align: top; }
+thead th { color: #6ee7b7; }
+.downloads { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+</style></head><body><main>
+<a href="./#feature-timeline">← Back to CCC</a>
+<h1>CCC features preceded Paperclip and Orca by days to months</h1>
+<p>Ten selected comparisons, with leads from 4 days to 21 weeks. Matching numbers connect each CCC release to the named competitor’s later code merge. The numbers follow CCC release dates; features released on the same date have no implied within-day order.</p>
+<p class="muted">Research snapshot: 12 November 2026. This is a selected set of examples, not a comprehensive ranking or a claim of consistent market-wide priority.</p>
+<p class="downloads"><a href="images/ccc-feature-timeline-2026-11-12.png">Full-size PNG</a><a href="images/ccc-feature-timeline-2026-11-12.pdf">Download PDF</a><a href="images/ccc-feature-timeline-2026-11-12.svg">SVG with source links</a></p>
+<figure><a href="images/ccc-feature-timeline-2026-11-12.png"><img src="images/ccc-feature-timeline-2026-11-12.png" width="1800" height="2050" alt="Two-row CCC and Others timeline with ten dated arrows and a separate four-workflow research panel; full text follows below."></a><figcaption>Research crosses indicate an equivalent was not established in reviewed sources, not proven competitor absence.</figcaption></figure>
+<h2>Dates and primary sources</h2>
+<p>We compare CCC’s published GitHub release with the rival implementation’s merge date, giving the rival its earlier code milestone instead of waiting for a packaged release. Leads are UTC calendar-day differences. Earlier private versions, external plugins and arbitrary CLI passthrough were not assessed.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable feature dates and sources"><table><caption>Each date links to its release or merged pull request.</caption><thead><tr><th scope="col">Feature</th><th scope="col">CCC released</th><th scope="col">Competitor merged</th><th scope="col">Lead</th></tr></thead><tbody><tr><th scope="row">1. Inter-agent messaging</th><td><a href="https://github.com/amirfish1/claude-command-center/releases/tag/v0.1.2">2026-04-24<br>v0.1.2</a></td><td><a href="https://github.com/stablyai/orca/pull/1188">Orca<br>2026-04-28</a></td><td>4 days</td></tr>
+<tr><th scope="row">2. Context indicator in chat</th><td><a href="https://github.com/amirfish1/claude-command-center/releases/tag/v2.0.0">2026-05-01<br>v2.0.0</a></td><td><a href="https://github.com/stablyai/orca/pull/22301">Orca<br>2026-09-24</a></td><td>146 days</td></tr>
+<tr><th scope="row">3. Full-text conversation search</th><td><a href="https://github.com/amirfish1/claude-command-center/releases/tag/v3.2.0">2026-05-09<br>v3.2.0</a></td><td><a href="https://github.com/stablyai/orca/pull/20580">Orca<br>2026-09-16</a></td><td>130 days</td></tr>
+<tr><th scope="row">4. Session model picker</th><td><a href="https://github.com/amirfish1/claude-command-center/releases/tag/v3.2.0">2026-05-09<br>v3.2.0</a></td><td><a href="https://github.com/stablyai/orca/pull/9085">Orca<br>2026-07-17</a></td><td>69 days</td></tr>
+<tr><th scope="row">5. Queue follow-up messages</th><td><a href="https://github.com/amirfish1/claude-command-center/releases/tag/v3.2.0">2026-05-09<br>v3.2.0</a></td><td><a href="https://github.com/stablyai/orca/pull/23731">Orca<br>2026-09-30</a></td><td>144 days</td></tr>
+<tr><th scope="row">6. Active Claude subagents</th><td><a href="https://github.com/amirfish1/claude-command-center/releases/tag/v4.4.0">2026-06-01<br>v4.4.0</a></td><td><a href="https://github.com/stablyai/orca/pull/8211">Orca<br>2026-07-11</a></td><td>40 days</td></tr>
+<tr><th scope="row">7. Kimi Code engine</th><td><a href="https://github.com/amirfish1/claude-command-center/releases/tag/v5.9.0">2026-07-20<br>v5.9.0</a></td><td><a href="https://github.com/paperclipai/paperclip/pull/9967">Paperclip<br>2026-08-20</a></td><td>31 days</td></tr>
+<tr><th scope="row">8. Continue after quota resets</th><td><a href="https://github.com/amirfish1/claude-command-center/releases/tag/v5.25.0">2026-08-16<br>v5.25.0</a></td><td><a href="https://github.com/stablyai/orca/pull/36873">Orca<br>2026-11-02</a></td><td>78 days</td></tr>
+<tr><th scope="row">9. Subscription fees in costs</th><td><a href="https://github.com/amirfish1/claude-command-center/releases/tag/v5.33.0">2026-09-13<br>v5.33.0</a></td><td><a href="https://github.com/paperclipai/paperclip/pull/15634">Paperclip<br>2026-10-09</a></td><td>26 days</td></tr>
+<tr><th scope="row">10. Voice interaction (experimental)</th><td><a href="https://github.com/amirfish1/claude-command-center/releases/tag/v5.37.0">2026-10-05<br>v5.37.0</a></td><td><a href="https://github.com/paperclipai/paperclip/pull/15728">Paperclip<br>2026-10-13</a></td><td>8 days</td></tr></tbody></table></div>
+<h2>What each comparison covers</h2><ol style="list-style: none; padding: 0"><li><strong>1. Inter-agent messaging</strong> — A running agent can send work/questions to another agent. CCC spawn/inject/ask versus Orca send/check/reply. Not a claim that their orchestration systems are identical. <a href="https://github.com/amirfish1/claude-command-center/commit/99b1815d">CCC implementation</a>.</li>
+<li><strong>2. Context indicator in chat</strong> — An app-rendered context-use indicator next to the conversation/composer. Excludes a terminal showing the underlying CLI statusline; Orca PR explicitly distinguishes these surfaces. <a href="https://github.com/amirfish1/claude-command-center/commit/ce4714a9">CCC implementation</a>.</li>
+<li><strong>3. Full-text conversation search</strong> — Full-text search across stored transcripts with matching snippets. CCC v3.2 bundles its own indexer, so this comparison does not rely on the earlier external-index integration. Orca tab-title search is not transcript-content search. <a href="https://github.com/amirfish1/claude-command-center/commit/97d0b949">CCC implementation</a>.</li>
+<li><strong>4. Session model picker</strong> — Per-session model picker without switching to the terminal: CCC live Claude /model and next-resume overrides; Orca native-chat per-session options. This comparison covers model selection, not identical effort/fast-mode controls. <a href="https://github.com/amirfish1/claude-command-center/commit/648ff62d">CCC implementation</a>.</li>
+<li><strong>5. Queue follow-up messages</strong> — App-owned follow-ups held until the active turn/process finishes. CCC Codex/Gemini automatic queue drain; Orca native-chat host queue and composer cards. Excludes an input going directly into the underlying CLI; does not claim CCC already had all Orca edit/pause/steer semantics. <a href="https://github.com/amirfish1/claude-command-center/commit/8bd3ce4f">CCC implementation</a>.</li>
+<li><strong>6. Active Claude subagents</strong> — Discover Claude Task spawns, descriptions and working/done status. CCC chip/status panel versus Orca child rows. This is subagent visibility, not proof of identical predecessor/successor lineage. <a href="https://github.com/amirfish1/claude-command-center/commit/ed535160">CCC implementation</a>.</li>
+<li><strong>7. Kimi Code engine</strong> — First-class Kimi Code CLI integration, including ACP streaming, session execution and permissions. Kimi model API access alone does not qualify. <a href="https://github.com/amirfish1/claude-command-center/commit/20835bd2">CCC implementation</a>.</li>
+<li><strong>8. Continue after quota resets</strong> — Automatically send continuation after a provider usage limit resets, with countdown/cancellation. Excludes a manual Continue button, ordinary retry, and scheduled task pause/resume. <a href="https://github.com/amirfish1/claude-command-center/commit/990726f5">CCC implementation</a>.</li>
+<li><strong>9. Subscription fees in costs</strong> — Subscription-aware dollar reporting beyond API list-price equivalents. CCC allocates configurable plan fees to sessions; Paperclip reports monthly account fees alongside API spend. Shared outcome, different accounting granularity; neither is a claim of exact per-session billing. <a href="https://github.com/amirfish1/claude-command-center/commit/7d10e64c">CCC implementation</a>.</li>
+<li><strong>10. Voice interaction (experimental)</strong> — Experimental browser voice interaction with the agent workspace. CCC voice reads workspace state and proposes actions; Paperclip uses Speko personas bound to task agents. Both are two-way voice, not dictation or TTS. Does not claim identical phone-call or task-binding support. <a href="https://github.com/amirfish1/claude-command-center/commit/3a1c6dc5">CCC implementation</a>.</li></ol>
+<h2>Four distinctive workflows under review</h2>
+<p>The lower panel is a research snapshot, not a timeline. Its spacing does not represent time. No rival launch date was established for these workflows, so they are not additional dated leads. Public-source review cannot establish that a feature is absent from every product.</p>
+<h3>A. Cross-engine task continuation</h3>
+<p><a href="https://github.com/amirfish1/claude-command-center/blob/main/ccc_server/continuation.py">CCC can move work to another engine with a context handoff and session lineage</a>. This starts a new session rather than replaying native transcripts across providers. <a href="https://github.com/stablyai/orca/issues/21965">Orca issue #21965</a> remained open at review time and requests a comparable provider-exhaustion handoff. An open request supports a reported gap; it does not rule out workarounds or later implementations.</p>
+<h3>B. Local redacted replay exports</h3>
+<p><a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/sharing.md">CCC exports local HTML and PNG replays</a>, with redaction and filtering for supported human-authored messages. No equivalent complete workflow was found in the reviewed Orca, Paperclip and SuperPlane material. <a href="https://github.com/paperclipai/paperclip/blob/master/cli/README.md">Paperclip’s company export</a> serves a different portability purpose. This is a documentation finding, not proof of absence.</p>
+<h3>C. Secret + Vault</h3>
+<p><a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/credential-broker.md">Masked credential requests</a> and <a href="https://github.com/amirfish1/claude-command-center/blob/main/docs/byok-and-vault.md">Vault process injection</a> let users supply service credentials outside agent chat. <a href="https://github.com/stablyai/orca/issues/24182">Orca issue #24182</a> remained open and requests related secret-store and injection capabilities. CCC does not claim all the project/host scoping requested there. <a href="https://github.com/paperclipai/paperclip/blob/master/skills/paperclip/references/api-reference.md">Paperclip already supports secret approvals and environment injection</a>, so generic secret storage is not exclusive.</p>
+<h3>D. Local CI setup and monitoring</h3>
+<p>CCC combines <a href="https://github.com/amirfish1/claude-command-center/blob/main/static/settings-ci-runners.js">agent-assisted runner setup</a> with <a href="https://github.com/amirfish1/claude-command-center/blob/main/ccc_server/local_ci.py">local GitHub Actions step progress</a> and recent outcomes on desktop and phone. The setup button starts an agent; it does not guarantee a completed installation. No equivalent complete combination was established in the reviewed material. <a href="https://github.com/stablyai/orca">Orca has PR checks and failure-to-agent workflows</a>, and <a href="https://docs.superplane.com/integrations/ci-cd/">SuperPlane has CI/CD integration</a>. Generic CI integration is not unique. Paperclip’s <a href="https://github.com/paperclipai/paperclip/blob/master/packages/paperclip-runner/README.md">Native Runner</a> is an agent execution runtime, not evidence of the same CI monitor.</p>
+<p><a href="./#feature-timeline">Return to CCC</a></p>
+</main></body></html>
