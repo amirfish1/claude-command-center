@@ -126,3 +126,19 @@ class SteadyStateTest(PerfGateTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_rows_beyond_a_tail_window_are_still_counted(tmp_path):
+    # CCC-144: a fixed tail window hid every tts sample behind other kinds.
+    import json, importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location(
+        "perf_gate_mod", pathlib.Path(__file__).resolve().parent.parent / "scripts" / "perf_gate.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    f = tmp_path / "ev.jsonl"
+    lines = [json.dumps({"ts": "2026-11-11T00:00:00Z", "kind": "tts_start", "ms": 5})]
+    lines += [json.dumps({"ts": "2026-11-11T01:00:00Z", "kind": "list_read", "ms": 1,
+                          "pad": "x" * 1000}) for _ in range(20000)]
+    f.write_text("\n".join(lines) + "\n")
+    rows = mod._read_rows(str(f), __import__("datetime").datetime(2020, 1, 1, tzinfo=__import__("datetime").timezone.utc), "tts_start")
+    assert len(rows) == 1

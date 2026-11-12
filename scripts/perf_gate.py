@@ -34,7 +34,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DEFAULT_EVENTS = Path.home() / ".claude" / "command-center" / "perf-events.jsonl"
-TAIL_BYTES = 8 * 1024 * 1024
 # Same steady-state rule as ccc_server/perf_events._exclusion_reason (CCC-168).
 BOOT_EXCLUDE_S = int(os.environ.get("CCC_PERF_BOOT_EXCLUDE_S", "1800"))
 
@@ -74,28 +73,30 @@ def _git(repo, *args):
     return proc.returncode, proc.stdout.strip()
 
 
-def _read_rows(path, since):
+def _read_rows(path, since, kind=None):
+    """Rows at or after ``since`` (optionally only ``kind``).
+
+    Streams the whole file with a cheap substring prefilter: the log is
+    dominated by other kinds, so a fixed tail window silently covered only a
+    few hours and the gate reported "0 samples" (CCC-144).
+    """
+    needle = '"kind": "%s"' % kind if kind else None
+    rows = []
     try:
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - TAIL_BYTES))
-            blob = f.read().decode("utf-8", "replace")
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if needle and needle not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                ts = _parse_ts(row.get("ts")) if isinstance(row, dict) else None
+                if ts and ts >= since:
+                    row["_ts"] = ts
+                    rows.append(row)
     except OSError:
         return []
-    lines = blob.splitlines()
-    if size > TAIL_BYTES and lines:
-        lines = lines[1:]  # first line is likely cut
-    rows = []
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        ts = _parse_ts(row.get("ts")) if isinstance(row, dict) else None
-        if ts and ts >= since:
-            row["_ts"] = ts
-            rows.append(row)
     return rows
 
 
@@ -190,7 +191,7 @@ def main(argv=None):
     except ValueError as exc:
         ap.error(str(exc))
     since = datetime.now(timezone.utc) - timedelta(hours=args.hours)
-    rows = [r for r in _read_rows(args.events, since) if r.get("kind") == args.kind]
+    rows = [r for r in _read_rows(args.events, since, args.kind) if r.get("kind") == args.kind]
     excluded = {str(s) for s in args.exclude_status}
     if excluded:
         rows = [r for r in rows
