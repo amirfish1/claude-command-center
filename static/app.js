@@ -81880,7 +81880,10 @@
       _codexAccountSession = sid;
       badge.textContent = 'Codex account…';
       fetch('/api/codex/accounts?session_id=' + encodeURIComponent(sid)).then(r => r.json()).then(data => {
-        if (_codexAccountSession === sid) badge.textContent = 'Account: ' + data.session_account;
+        if (_codexAccountSession === sid) {
+          const label = data.session_account === 'Codex · current account' ? 'Primary' : data.session_account;
+          badge.textContent = 'Account: ' + label;
+        }
       }).catch(() => { if (_codexAccountSession === sid) badge.textContent = 'Account unavailable'; });
     }
     if (row.hidden || _codexAccountsLoading || Date.now() - _codexAccountsLoadedAt < 30000) return;
@@ -81889,7 +81892,7 @@
       if (!data.ok) throw new Error('Accounts unavailable');
       // Until the user picks one, start on the saved default account.
       const selected = select.dataset.userPicked === '1' ? select.value : (spawnDefaultsState.codex_account_id || '__current__');
-      select.replaceChildren(new Option('Codex (Primary) · current account', '__current__'));
+      select.replaceChildren(new Option('Codex (Primary)', '__current__'));
       for (const account of data.accounts || []) {
         if (!account.current) select.add(new Option('Codex (Secondary) · ' + account.label, account.id));
       }
