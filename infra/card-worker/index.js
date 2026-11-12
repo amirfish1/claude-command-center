@@ -207,7 +207,7 @@ export function renderPage(id, meta, origin) {
 <a class="btn install" href="${SITE_URL}">Install CCC</a>
 <a class="btn star" href="${REPO_URL}">&#9733; Star on GitHub</a>
 </div>
-<p>Free and open source. Run your own fleet of AI coding agents.</p>
+<p>${escapeHtml(DESCRIPTION)}</p>
 </body></html>`;
 }
 
