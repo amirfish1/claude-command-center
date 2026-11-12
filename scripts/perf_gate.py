@@ -35,6 +35,27 @@ from pathlib import Path
 
 DEFAULT_EVENTS = Path.home() / ".claude" / "command-center" / "perf-events.jsonl"
 TAIL_BYTES = 8 * 1024 * 1024
+# Same steady-state rule as ccc_server/perf_events._exclusion_reason (CCC-168).
+BOOT_EXCLUDE_S = int(os.environ.get("CCC_PERF_BOOT_EXCLUDE_S", "1800"))
+
+
+def _steady_reason(row):
+    """Why a sample is not steady-state ('' when it counts)."""
+    if row.get("warmup"):
+        return "warmup"
+    try:
+        load1, ncpu = row.get("load1"), row.get("ncpu")
+        if load1 is not None and ncpu is not None and float(load1) > float(ncpu):
+            return "load"
+    except (TypeError, ValueError):
+        pass
+    try:
+        up_s = row.get("up_s")
+        if up_s is not None and float(up_s) < BOOT_EXCLUDE_S:
+            return "boot"
+    except (TypeError, ValueError):
+        pass
+    return ""
 
 
 def _parse_ts(value):
@@ -157,6 +178,9 @@ def main(argv=None):
     ap.add_argument("--repo", default=os.environ.get("WT_GATE_REPO") or ".",
                     help="git repo for the deploy check")
     ap.add_argument("--events", default=str(DEFAULT_EVENTS))
+    ap.add_argument("--steady-state", action="store_true",
+                    help="count only calm-host samples: warmup=false, load1<=ncpu, "
+                         ">=30 min after dashboard boot; prints included/excluded counts")
     args = ap.parse_args(argv)
     if args.p95_ms is None and args.p50_ms is None and args.max_ms is None:
         ap.error("give at least one budget: --p95-ms / --p50-ms / --max-ms")
@@ -176,12 +200,28 @@ def main(argv=None):
         rows = [r for r in rows if _matches(r, wheres)]
     deployed = _Deployed(args.repo, args.commit)
     counted = [r for r in rows if deployed(r)]
+    steady_note = ""
+    if args.steady_state:
+        reasons = {}
+        kept = []
+        for r in counted:
+            why = _steady_reason(r)
+            if why:
+                reasons[why] = reasons.get(why, 0) + 1
+            else:
+                kept.append(r)
+        steady_note = (f"steady-state: {len(kept)} included, {len(counted) - len(kept)} "
+                       "excluded (" + (", ".join(f"{k}={v}" for k, v in sorted(reasons.items()))
+                                       or "none") + ")")
+        counted = kept
     ms = [float(r.get("ms") or 0) for r in counted]
 
     label = f"{args.kind} over {args.hours:g}h" + (
         " where " + " ".join(args.where) if args.where else "")
     print(f"perf_gate: {label}: {len(rows)} samples, {len(counted)} on code with the fix"
           + (f" ({args.commit[:12]})" if args.commit else ""))
+    if steady_note:
+        print(f"perf_gate: {steady_note}")
     if len(counted) < args.min_samples:
         print(f"FAIL: need >= {args.min_samples} post-fix samples, have {len(counted)}. "
               "Deploy the fix (restart the dashboard for server changes; static/ changes "

@@ -89,5 +89,40 @@ class PerfGateTest(unittest.TestCase):
         self.assertEqual(rc, 1)
 
 
+class SteadyStateTest(PerfGateTest):
+    """--steady-state: warmup=false, load1<=ncpu, >=30 min after boot (Q968)."""
+
+    def _row(self, ms, **over):
+        r = {"ts": _iso(5), "kind": "list_read", "ms": ms, "warmup": False,
+             "load1": 2.0, "ncpu": 16, "up_s": 7200}
+        r.update(over)
+        return r
+
+    def test_excludes_warmup_load_and_boot_samples(self):
+        calm = [self._row(300) for _ in range(5)]
+        bad = ([self._row(9000, warmup=True)] + [self._row(9000, load1=30.0)]
+               + [self._row(9000, up_s=60)])
+        self._write(calm + bad)
+        self.assertEqual(self._run("--kind", "list_read", "--p95-ms", "1000",
+                                   "--min-samples", "5", "--steady-state"), 0)
+        self.assertEqual(self._run("--kind", "list_read", "--p95-ms", "1000",
+                                   "--min-samples", "5"), 1)
+
+    def test_filtering_alone_does_not_pass(self):
+        self._write([self._row(300)] + [self._row(9000, load1=30.0) for _ in range(9)])
+        self.assertEqual(self._run("--kind", "list_read", "--p95-ms", "1000",
+                                   "--min-samples", "5", "--steady-state"), 1)
+
+    def test_reports_included_and_excluded_counts(self):
+        import contextlib, io
+        self._write([self._row(300) for _ in range(3)] + [self._row(9, warmup=True)])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self._run("--kind", "list_read", "--p95-ms", "1000", "--min-samples", "1",
+                      "--steady-state")
+        self.assertIn("steady-state: 3 included, 1 excluded", buf.getvalue())
+        self.assertIn("warmup=1", buf.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
