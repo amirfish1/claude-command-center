@@ -170,7 +170,10 @@ def close_verified(cli, args):
 
 
 def bridge():
-    from watchtower import cli
+    try:
+        from watchtower import cli
+    except ImportError:
+        import sys as _s; print('DIAG argv=%r path=%r' % (_s.argv, _s.path), file=_s.stderr); raise
     parser = cli.build_parser()
     with contextlib.redirect_stdout(sys.stderr):
         setup = parser.parse_args(['config', '-q', 'DEMO', '--auto-drain', 'off'])
