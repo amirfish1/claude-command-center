@@ -16,6 +16,7 @@
     --green: #3fb950;
     --orange: #d29922;
     --purple: #bc8cff;
+    --orch-chip-text: #d8beff;
     --red: #f85149;
     --cyan: #39d2c0;
     --cb-bg: #0b1016;
@@ -44,6 +45,7 @@
     --green: #1a7f37;
     --orange: #9a6700;
     --purple: #8250df;
+    --orch-chip-text: #6639a6;
     --red: #cf222e;
     --cyan: #0e7490;
   }
@@ -300,6 +302,7 @@
      prevents the sidebar resizer from making the conversation pane narrow. */
   .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
   .conv-pane.has-conv-bg {
+    --orch-chip-text: #d8beff;
     --bg: var(--conv-bg);
     --surface: var(--conv-surface);
     --surface-2: var(--conv-surface-2);
@@ -310,6 +313,9 @@
     --accent: var(--conv-accent);
     background: var(--conv-bg);
     color: var(--conv-text);
+  }
+  .conv-pane.has-conv-bg.conv-bg-light {
+    --orch-chip-text: #6639a6;
   }
   .conv-pane.has-conv-bg .conversations-view {
     background: var(--conv-bg);
@@ -32036,13 +32042,13 @@ body.conv-compact.conv-compact .conversations-view .cc-run-head.cc-run-chipped:n
 .te-conversation-chip {
   display: inline-block; padding: 2px 8px; border-radius: 9px;
   font-size: 11px; font-weight: 600; line-height: 16px;
-  color: #d2b4ff; background: rgba(163,113,247,0.16);
+  color: var(--orch-chip-text); background: rgba(163,113,247,0.16);
   border: 1px solid rgba(163,113,247,0.45);
 }
 body.conv-compact .conversations-view .cc-orch-chip {
   display: inline-block; margin-left: 6px; padding: 0 7px; border-radius: 9px;
   font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap;
-  vertical-align: baseline; color: #d2b4ff; background: rgba(163,113,247,0.16);
+  vertical-align: baseline; color: var(--orch-chip-text); background: rgba(163,113,247,0.16);
   border: 1px solid rgba(163,113,247,0.45);
 }
 body.conv-compact .conversations-view .cc-orch-chip::before { content: attr(data-cc-orch); }
@@ -32055,7 +32061,7 @@ body.conv-compact.conv-compact .conversations-view .cc-run-head:not(.cc-run-open
 .kimi-tg-orch-chip {
   display: inline-block; padding: 0 7px; border-radius: 9px;
   font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap;
-  color: #d2b4ff; background: rgba(163,113,247,0.16);
+  color: var(--orch-chip-text); background: rgba(163,113,247,0.16);
   border: 1px solid rgba(163,113,247,0.45);
 }
 .kimi-tg-orch-chip::before { content: attr(data-cc-orch); }
