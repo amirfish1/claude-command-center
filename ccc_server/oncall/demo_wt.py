@@ -61,8 +61,13 @@ class RealTickets(WT):
         super().__init__(argv=['wt'], run=self.call, env=env, dispatch=False)
 
     def call(self, argv, **kwargs):
-        self.proc.stdin.write(json.dumps(argv[1:]) + '\n')
-        self.proc.stdin.flush()
+        try:
+            self.proc.stdin.write(json.dumps(argv[1:]) + '\n')
+            self.proc.stdin.flush()
+        except BrokenPipeError:
+            # The bridge died before reading: its stderr is the real reason.
+            self.proc.wait(timeout=5)
+            raise WTError('Isolated WatchTower exited: ' + self.proc.stderr.read()[-1000:])
         with selectors.DefaultSelector() as selector:
             selector.register(self.proc.stdout, selectors.EVENT_READ)
             if not selector.select(kwargs.get('timeout', 30)):
