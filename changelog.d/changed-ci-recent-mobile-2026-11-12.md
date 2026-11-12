@@ -1,0 +1,1 @@
+Keep the two latest completed local CI runs with their final outcomes until dismissed, with dismissal shared across devices. Show CI activity and recent results at the top of both the mobile session list and conversation reader.

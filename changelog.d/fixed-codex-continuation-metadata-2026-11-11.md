@@ -1,0 +1,1 @@
+- Preserve Codex continuation links when an instruction preamble pushes the origin past the prompt preview, and expose the predecessor when opening a Codex conversation.

@@ -571,6 +571,7 @@
   <script src="/static/headroom-bars.js" defer></script>
 
   <div class="sidebar" data-tour="lhs">
+    <div id="localCiMobileList" data-local-ci-host class="local-ci-progress local-ci-mobile" aria-label="Local CI runs" hidden></div>
     <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
          only). One clean bar — brand left, search + "+" right — replacing
          the two stacked dashboard headers (brand/version/WatchTower/meta
@@ -820,6 +821,7 @@
             </svg>
           </a>
         </div>
+        <div id="localCiProgress" data-local-ci-host class="local-ci-progress" aria-label="Local CI runs" hidden></div>
         <!-- One rollup chip for every service CCC runs. It replaced two
              separate header badges (WatchTower + Worker) whose signals fought
              for the same 20px of sidebar; both still live inside #sysModal,
@@ -1044,6 +1046,7 @@
   <div class="sidebar-resizer" id="sidebarResizer" title="Drag to resize"></div>
   <button type="button" id="convListRestoreBtn" class="conv-list-restore" title="Show conversation list" aria-label="Show conversation list">&raquo;</button>
   <div class="main">
+    <div id="localCiMobileReader" data-local-ci-host class="local-ci-progress local-ci-mobile" aria-label="Local CI runs" hidden></div>
     <!-- Star-on-GitHub nudge. Shown by app.js only once the dashboard has
          been opened on three distinct days. "Star" and "Don't ask
          again" hide it forever; "Maybe later" snoozes it for 14 days.
@@ -1417,7 +1420,7 @@
           <span id="codexAccountRow" class="codex-account-row" hidden>
             <label for="codexAccountSelect">Account</label>
             <select id="codexAccountSelect" aria-label="Codex account for new session" title="This account stays attached to the new session and its replies">
-              <option value="__current__">Codex (Primary) · current account</option>
+              <option value="__current__">Codex (Primary)</option>
             </select>
             <a href="/view/allowances" target="_blank" rel="noopener">Allowances</a>
           </span>
@@ -1963,9 +1966,7 @@
             </div>
           </div>
         </div>
-        <!-- Footer hint row beneath the input card — tty label on the left,
-             keyboard-shortcut hint on the right. Kept out of the input row
-             itself so the row stays uncluttered. -->
+        <!-- Optional process status beneath the input card. -->
         <div class="conv-input-hint" id="convInputHint">
           <!-- Codex app-server state (managed / CCC / exec). Mirrors the top
                breadcrumb proc pill so the indicator stays visible on the
@@ -1975,7 +1976,6 @@
             <span class="dot"></span>
             <span class="codex-appsrv-label" id="convCodexAppSrvLabel">exec</span>
           </span>
-          <span class="conv-input-kbd"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</span>
         </div>
       </div>
     </div>
@@ -2708,6 +2708,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="12" cy="19" r="2.3"/><path d="M8 6.6h8M9.3 8.3 11 16.7M14.7 8.3 13 16.7"/></svg>
             <span>Fleet &amp; Network</span>
           </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-ci-runners" data-section-target="ci-runners" role="tab" aria-selected="false" aria-controls="settingsSection-ci-runners"><span>CI runners</span></button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-tools" data-section-target="tools" role="tab" aria-selected="false" aria-controls="settingsSection-tools">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2"/></svg>
             <span>Tools</span>
@@ -3556,6 +3557,25 @@
             </div>
           </section>
 
+          <section class="settings-section" id="settingsSection-ci-runners" data-section-id="ci-runners" role="tabpanel" aria-labelledby="settingsRailTab-ci-runners">
+            <h2>CI runners</h2>
+            <div class="settings-row" data-keywords="github actions ci runners self hosted setup repository configure install progress agent session">
+              <div class="settings-row-main">
+                <div class="settings-row-label">GitHub Actions runner</div>
+                <p class="settings-row-desc">Your default new-session agent installs and connects a runner for the selected project.</p>
+                <div id="ciRunnerLaunchStatus" role="status" aria-live="polite"></div>
+              </div>
+              <div class="settings-row-control"><button id="ciRunnerStart" class="settings-action-btn" type="button">Set up a runner</button></div>
+            </div>
+            <details class="ci-runner-diagnostics">
+              <summary>Runner status</summary>
+              <div class="settings-row" data-keywords="github ci runner check diagnostics installed authenticated idle listening status">
+                <div class="settings-row-main"><div id="ciRunnerSetupStatus" role="status" aria-live="polite">Check GitHub access and runners on this machine.</div></div>
+                <div class="settings-row-control"><button type="button" id="ciRunnerCheck" class="settings-action-btn">Refresh status</button></div>
+              </div>
+            </details>
+          </section>
+
           <section class="settings-section" id="settingsSection-help" data-section-id="help" role="tabpanel" aria-labelledby="settingsRailTab-help">
             <div class="settings-section-eyebrow">Help &amp; Onboarding</div>
 
@@ -4165,6 +4185,7 @@
 <link rel="stylesheet" href="/static/session-recaps.css">
 <script src="/static/session-recaps.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/settings-ci-runners.js"></script>
 <script src="/static/settings-preferences.js"></script>
 <script src="/static/free-settings.js" defer></script>
 <script src="/static/leftover.js" defer></script>

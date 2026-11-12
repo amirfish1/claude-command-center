@@ -7,6 +7,7 @@ times, so nothing depends on this machine's real boot history.
 import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +20,19 @@ DOWN = BOOT - 3600  # machine went down an hour before it came back
 @pytest.fixture(autouse=True)
 def _fresh_memo(tmp_path, monkeypatch):
     rr._MEMO = None
+    # Defaults must be isolated too: callers need not pass every state path.
+    for name in ("STATE_DIR", "PROJECTS_ROOT", "STATE_FILE", "HEARTBEAT_FILE",
+                 "SHUTDOWNS_FILE", "STOP_MARKER_FILE", "SHUTDOWN_KINDS_FILE"):
+        monkeypatch.setattr(rr, name, tmp_path / name.lower())
+    # Fail before touching real state if a future test introduces another path.
+    for name in ("_read_json", "_write_json"):
+        original = getattr(rr, name)
+
+        def guarded(path, *args, _original=original, **kwargs):
+            assert Path(path).resolve().is_relative_to(tmp_path.resolve()), path
+            return _original(path, *args, **kwargs)
+
+        monkeypatch.setattr(rr, name, guarded)
     # Never let a test see this machine's real Codex / ACP transcripts.
     monkeypatch.setattr(rr, "CODEX_ROOT", tmp_path / "codex")
     monkeypatch.setattr(rr, "ACP_ROOT", tmp_path / "acp")
@@ -144,14 +158,24 @@ def test_scan_runs_once_per_boot_and_carries_undismissed_entries(tmp_path, monke
 
 def test_heartbeat_before_boot_records_the_shutdown(tmp_path):
     hb, log = tmp_path / "hb", tmp_path / "shutdowns.json"
+    paths = {"marker_file": tmp_path / "stop.json", "kinds_file": tmp_path / "kinds.json"}
     hb.touch()
     os.utime(hb, (DOWN, DOWN))
-    assert rr.record_heartbeat_shutdown(BOOT, hb, log) == DOWN
-    assert rr.record_heartbeat_shutdown(BOOT, hb, log) == DOWN
+    assert rr.record_heartbeat_shutdown(BOOT, hb, log, **paths) == DOWN
+    assert rr.record_heartbeat_shutdown(BOOT, hb, log, **paths) == DOWN
     assert json.loads(log.read_text()) == [DOWN]
+    assert json.loads(paths["kinds_file"].read_text()) == [[DOWN, "crashed"]]
     os.utime(hb, (BOOT + 5, BOOT + 5))  # touched in this boot: not a shutdown
-    assert rr.record_heartbeat_shutdown(BOOT, hb, log) is None
+    assert rr.record_heartbeat_shutdown(BOOT, hb, log, **paths) is None
     assert rr.known_shutdowns(BOOT, BOOT + 60, log, journal=[DOWN + 30, DOWN - 86400]) == [DOWN - 86400, DOWN]
+
+
+def test_default_heartbeat_paths_are_isolated():
+    rr.HEARTBEAT_FILE.touch()
+    os.utime(rr.HEARTBEAT_FILE, (DOWN, DOWN))
+    rr.record_clean_stop(now=DOWN, preempted=True)
+    assert rr.record_heartbeat_shutdown(BOOT) == DOWN
+    assert rr.shutdown_kinds() == [(DOWN, "preempted")]
 
 
 def test_parse_journal_boot_list():

@@ -1,0 +1,1 @@
+- Show follow-ups to busy sessions in the queued-message tray immediately, keeping them in place while the server confirms delivery instead of flashing through the conversation.

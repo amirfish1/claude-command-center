@@ -10972,19 +10972,9 @@
     margin-top: 0;
     font-size: 10px; color: var(--text-muted); opacity: 0.6;
   }
-  .conv-input-hint:empty,
-  .conv-input-hint:has(.tty-label:empty):not(:has(.conv-input-kbd)) { display: none; }
+  .conv-input-hint:not(:has(.codex-appsrv.visible, .tty-label:not(:empty))) { display: none; }
   .conv-input-hint .tty-label {
     font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-  }
-  .conv-input-hint .conv-input-kbd {
-    margin-left: auto;
-    font-family: inherit;
-  }
-  .conv-input-hint kbd {
-    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 3px; padding: 0 4px; font-size: 9px;
   }
   /* Legacy in-row tty-label kept for any hidden code paths that still query
      it; the new footer span is what's actually visible. */
@@ -32591,13 +32581,11 @@ body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
   }
 }
 
-/* Touch composer: Esc lives in the ⋯ menu, Steer is gone (on a phone you
-   send, and steer with the next message), and the attachment preview strip
-   is dropped so the text box keeps its room; the attachment path stays in
-   the message text. */
+/* Touch composer: Esc lives in the ⋯ menu and the attachment preview strip
+   is dropped so the text box keeps its room. Keep explicit Steer available
+   on touch too; ordinary Send may queue behind the running turn. */
 @media (pointer: coarse) {
   .conv-input-bar #convEscBtn,
-  .conv-input-bar .steer-btn,
   .conv-input-bar .paste-thumb-strip { display: none !important; }
 }
 
@@ -34654,3 +34642,54 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 .upd-overlay.settings-inline-dialog.open { position: static; inset: auto; z-index: auto; display: block; }
 .upd-overlay.settings-inline-dialog .upd-backdrop { display: none; }
 .upd-overlay.settings-inline-dialog .upd-dialog { width: auto !important; max-height: none !important; overflow: visible !important; box-shadow: none; margin: 8px 0 12px; }
+
+/* Local CI sits beneath the identity and disappears when runners are idle. */
+.local-ci-progress { width: 100%; min-width: 0; margin-top: 7px; }
+.local-ci-progress[hidden] { display: none; }
+.local-ci-job { display: block; color: var(--text); text-decoration: none; padding: 3px 0; }
+.local-ci-job + .local-ci-job { margin-top: 5px; }
+a.local-ci-job:hover { color: var(--accent); }
+.local-ci-label { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; line-height: 1.5; }
+.local-ci-name, .local-ci-step { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.local-ci-percent { flex: none; font-variant-numeric: tabular-nums; }
+.local-ci-job progress { display: block; width: 100%; height: 4px; margin: 3px 0; border: 0; border-radius: 2px; overflow: hidden; background: var(--border); accent-color: var(--accent); }
+.local-ci-job progress::-webkit-progress-bar { background: var(--border); }
+.local-ci-job progress::-webkit-progress-value { background: var(--accent); }
+.local-ci-job progress::-moz-progress-bar { background: var(--accent); }
+.local-ci-step { display: block; font-size: 11px; color: var(--text-secondary, var(--text)); }
+
+#ciRunnerSetupStatus ul { padding-inline-start: 20px; line-height: 1.6; }
+
+.settings-rail-item[data-section-target="ci-runners"] { text-transform: none; }
+#ciRunnerLaunchStatus { margin-top: 10px; font-size: 12px; line-height: 1.5; }
+
+.ci-runner-diagnostics { margin-top: 18px; }
+.ci-runner-diagnostics summary { cursor: pointer; color: var(--text); }
+
+.local-ci-progress { max-height: 230px; overflow-y: auto; flex-shrink: 0; }
+.local-ci-entry { display: flex; align-items: center; gap: 6px; --ci-color: var(--accent); }
+.local-ci-entry + .local-ci-entry { margin-top: 5px; }
+.local-ci-entry .local-ci-job { flex: 1 1 0; min-width: 0; }
+.local-ci-job:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.local-ci-entry[data-outcome="success"] { --ci-color: var(--green); }
+.local-ci-entry[data-outcome="failure"] { --ci-color: var(--red); }
+.local-ci-entry[data-outcome="neutral"] { --ci-color: var(--text-muted); }
+.local-ci-entry .local-ci-percent { color: var(--ci-color); }
+.local-ci-entry progress { accent-color: var(--ci-color); }
+.local-ci-entry progress::-webkit-progress-value { background: var(--ci-color); }
+.local-ci-entry progress::-moz-progress-bar { background: var(--ci-color); }
+.local-ci-dismiss { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 32px; border: 0; border-radius: 5px; background: transparent; color: var(--text-muted); cursor: pointer; }
+.local-ci-dismiss:hover { background: var(--surface-2); color: var(--text); }
+.local-ci-dismiss:disabled { opacity: .5; cursor: wait; }
+.local-ci-mobile { display: none; }
+@media (max-width: 1200px) {
+  #localCiProgress { display: none !important; }
+  body .sidebar > #localCiMobileList:not([hidden]),
+  body .main > #localCiMobileReader:not([hidden]),
+  body.ccc-mobile-redesign.ccc-simple-mode .sidebar > #localCiMobileList:not([hidden]) {
+    display: block !important; flex: 0 0 auto; width: 100%; margin: 0; padding: 6px 12px;
+    max-height: 28vh; overflow-y: auto; border-bottom: 1px solid var(--border); background: var(--surface);
+  }
+  .local-ci-mobile .local-ci-label, .local-ci-mobile .local-ci-step { font-size: 12px; }
+  .local-ci-mobile .local-ci-dismiss { flex-basis: 44px; width: 44px; height: 44px; }
+}

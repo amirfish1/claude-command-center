@@ -40,7 +40,7 @@ let browser;
 before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
 
-async function fixture(run, input) {
+async function fixture(run, input, realTray = false) {
   const page = await browser.newPage();
   try {
     await page.setRequestInterception(true);
@@ -126,11 +126,101 @@ async function fixture(run, input) {
       window.formatInjectFailure = data => data.error;
       (0, eval)(steerHandler);
     }, { lifecycle, reconciliation, renderedUserReconciliation, renderTail, steerHandler });
+    if (realTray) await page.evaluate(helpers => {
+      window.conversationsData = [{ session_id: 'session', codex_state: 'working' }];
+      window.currentSession = { id: 'session', source: 'codex', engine: 'codex' };
+      fixturePane.currentSession = currentSession;
+      window.sessionIsActivelyWorking = row => row.codex_state === 'working';
+      window.getConvInputBarForPane = () => document.querySelector('.conv-input-bar');
+      window.isPendingSendEchoElement = el => el.matches('.pending, .send-queued, .send-delivered');
+      (0, eval)(helpers);
+    }, between('  function queuedSteerCardCount(', '  // ── Conversation presentation modes'));
     return await page.evaluate(run, input);
   } finally {
     await page.close();
   }
 }
+
+test('busy sends paint once in the tray and keep the same node through queue acknowledgement', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Busy follow-up', 'session', 'main');
+    const row = pending.element;
+    const before = { inTray: !!row.closest('.queued-steer-tray'),
+      transcript: getConvView().querySelectorAll('.event.user_text').length,
+      steerDisabled: row.querySelector('[data-steer-queued-message]').disabled,
+      cancelDisabled: row.querySelector('[data-cancel-queued-message]').disabled,
+      label: row.querySelector('.send-queued-text').textContent };
+    syncQueuedSteerTray(getConvView(), 'main', true);
+    restorePendingSendEchoes('conversation', 'main');
+    markPendingSendQueued(pending, 'Queued for Codex');
+    return { before, sameNode: row === pending.element && row.isConnected,
+      count: document.querySelectorAll('.queued-steer-tray .event').length,
+      enabled: !row.querySelector('[data-steer-queued-message]').disabled
+        && !row.querySelector('[data-cancel-queued-message]').disabled };
+  }, undefined, true);
+  assert.deepEqual(result, { before: { inTray: true, transcript: 0,
+    steerDisabled: true, cancelDisabled: true, label: 'Sending…' },
+    sameNode: true, count: 1, enabled: true });
+});
+
+test('busy send restoration retains staging and a direct delivery removes the tray', async () => {
+  const result = await fixture(() => {
+    const pending = appendPendingSendEcho('Turn just ended', 'session', 'main');
+    document.querySelector('.queued-steer-tray').remove();
+    restorePendingSendEchoes('conversation', 'main');
+    const restoredInTray = !!pending.element.closest('.queued-steer-tray');
+    markPendingSendDelivered(pending, { via: 'codex-app-turn' });
+    return { restoredInTray, delivered: pending.element.classList.contains('send-delivered'),
+      transcript: getConvView().contains(pending.element),
+      tray: !!document.querySelector('.queued-steer-tray') };
+  }, undefined, true);
+  assert.deepEqual(result, { restoredInTray: true, delivered: true, transcript: true, tray: false });
+});
+
+test('idle sends stay in the transcript and rejected busy sends remove the empty tray', async () => {
+  const result = await fixture(() => {
+    conversationsData[0].codex_state = 'idle';
+    const idle = appendPendingSendEcho('Idle follow-up', 'session', 'main');
+    const idleInTranscript = getConvView().contains(idle.element);
+    conversationsData[0].codex_state = 'working';
+    const busy = appendPendingSendEcho('Refused follow-up', 'session', 'main');
+    removePendingSendEcho(busy);
+    return { idleInTranscript, tray: !!document.querySelector('.queued-steer-tray'),
+      pending: _pendingSends.length };
+  }, undefined, true);
+  assert.deepEqual(result, { idleInTranscript: true, tray: false, pending: 1 });
+});
+
+test('a queue snapshot confirms a busy send before its POST returns without duplicating it', async () => {
+  const result = await fixture(() => {
+    const first = appendPendingSendEcho('First', 'session', 'main');
+    const second = appendPendingSendEcho('Second', 'session', 'main');
+    const allDisabled = document.querySelector('[data-steer-all-queued]').disabled;
+    const server = addQueueCard('First');
+    getConvView().appendChild(server);
+    syncQueuedSteerTray(getConvView(), 'main', false);
+    markPendingSendQueued(first, 'Queued');
+    markPendingSendQueued(second, 'Queued');
+    return { allDisabled, count: document.querySelectorAll('.queued-steer-tray .event').length,
+      sameNode: first.element.isConnected && second.element.isConnected,
+      confirmed: !first.entry.busySend && first.entry.queued,
+      allEnabled: !document.querySelector('[data-steer-all-queued]').disabled };
+  }, undefined, true);
+  assert.deepEqual(result, { allDisabled: true, count: 2, sameNode: true, confirmed: true, allEnabled: true });
+});
+
+test('an unacknowledged busy send becomes a retry notice instead of a stuck tray card', async () => {
+  const result = await fixture(() => {
+    let expire;
+    window.setTimeout = callback => { expire = callback; return 123; };
+    const pending = appendPendingSendEcho('No acknowledgement', 'session', 'main');
+    expire();
+    return { inTranscript: getConvView().contains(pending.element),
+      retry: !!pending.element.querySelector('.not-ack-retry'),
+      tray: !!document.querySelector('.queued-steer-tray'), pending: _pendingSends.length };
+  }, undefined, true);
+  assert.deepEqual(result, { inTranscript: true, retry: true, tray: false, pending: 0 });
+});
 
 test('restoring a saved send recognizes its current conversation tray card', async () => {
   const result = await fixture(() => {

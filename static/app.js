@@ -12309,15 +12309,17 @@
         // server-side "could attempt" (binary resolves), not "a connection
         // is already up" (nothing else ever creates one).
         const devinSteerable = devinSteerCapableNow();
+        // Codex resolves the active turn on the server and falls back to Send
+        // when idle. A stale status snapshot must not prevent that attempt.
         const canSteer = canSend && hasSession && !isNewSession && !isBacklogIssue
-          && ((isCodex && codexTurnSteerable()) || isKimi || devinSteerable || claudeSteerable);
+          && (isCodex || isKimi || devinSteerable || claudeSteerable);
         activeSteerBtn.classList.toggle('visible', canSteer);
         activeSteerBtn.disabled = !canSteer;
         activeSteerBtn.title = canSteer
           ? (isKimi
               ? 'Steer running Kimi turn now'
               : (isCodex
-                  ? 'Steer running Codex turn now'
+                  ? 'Steer Codex now (send if no turn is running)'
                   : (isDevinCli
                       ? 'Steer this Devin session (attaches a live devin acp connection on first use)'
                       : 'Interrupt the running tool and send this now')))
@@ -12829,6 +12831,7 @@
       ts: Number(p.ts || Date.now()),
       delivered: !!p.delivered,
       queued: !!p.queued && !p.delivered,
+      busySend: !!p.busySend && !p.delivered,
       queuedLabel: p.queuedLabel || '',
       deliveryId: p.deliveryId || '',
     }));
@@ -12864,7 +12867,18 @@
         element: null, list: null, entry: null };
     const $view = getConvViewForPane(paneId) || getConvView();
     if ($view) {
+      const pane = paneByPaneId(paneId || activePaneId());
+      const session = (pane && pane.currentSession) || currentSession;
+      const row = (typeof conversationsData !== 'undefined' ? conversationsData : [])
+        .find(c => (c.session_id || c.id) === sid);
+      const busySend = restoredEntry ? !!restoredEntry.busySend : !!(
+        session && session.id === sid && (
+          (row && sessionIsActivelyWorking(row, false))
+          || (typeof liveStatusMatchesOpenConv === 'function' && liveStatusMatchesOpenConv()
+            && (liveStatus.codexState === 'working' || liveStatus.sidecarInFlight))
+        ));
       const pendingDiv = document.createElement('div');
+      if (busySend) pendingDiv.dataset.busySend = 'true';
       const pendingSteerHtml = userMessageSteerHtml(text, null, null);
       pendingDiv.className = 'event user_text pending' + (pendingSteerHtml ? ' has-user-steer' : '');
       pendingDiv.innerHTML = '<span class="label">User</span>'
@@ -12873,10 +12887,13 @@
         + '<div class="user-msg" dir="auto" data-raw-text="' + escapeAttr(text) + '">' + escapeHtml(text) + '</div>'
         + pendingSteerHtml;
       $view.appendChild(pendingDiv);
-      showOptimisticAgentIndicator($view);
-      scrollConversationToEnd($view);
+      if (!busySend) {
+        showOptimisticAgentIndicator($view);
+        scrollConversationToEnd($view);
+      }
 
       const entry = restoredEntry || { text, sid, ts: Date.now(), timer: null };
+      entry.busySend = busySend;
       if (entry.timer) clearTimeout(entry.timer);
       if (entry.deliveryId) pendingDiv.dataset.deliveryId = String(entry.deliveryId);
       entry.element = pendingDiv;
@@ -12911,6 +12928,14 @@
           if (idx >= 0) pending.list.splice(idx, 1);
           const div = pending.element;
           if (div && div.parentNode) {
+            if (entry.busySend) {
+              entry.busySend = false;
+              delete div.dataset.busySend;
+              $view.appendChild(div);
+              div.querySelector('.queued-steer-actions')?.remove();
+              div.querySelector('.send-queued-note')?.remove();
+              syncQueuedSteerTray($view, pending.paneId, false);
+            }
             div.classList.remove('pending');
             div.classList.add('not-acknowledged');
             const noteEl = document.createElement('div');
@@ -12937,8 +12962,8 @@
         }
       }, _PENDING_SEND_ECHO_MAX_MS);
       const convId = currentConversation;
-      const pane = paneByPaneId(paneId || activePaneId());
       if (convId && pane) syncPendingSendsMapForConv(pane, convId);
+      if (busySend) syncQueuedSteerTray($view, paneId || activePaneId(), false);
     }
     if (sid) markSessionSending(sid);
     return pending;
@@ -12954,9 +12979,11 @@
       fresh.sending = false;
       _preSendPreview.delete(pending.sid);
     }
+    const tray = pending.element && pending.element.closest('.queued-steer-tray');
     if (pending.element && pending.element.parentNode) {
       pending.element.parentNode.removeChild(pending.element);
     }
+    if (tray && !tray.querySelector('.event.user_text')) tray.remove();
     if (pending.entry && pending.entry.timer) {
       clearTimeout(pending.entry.timer);
       pending.entry.timer = null;
@@ -12986,9 +13013,11 @@
         || (pending.list && !pending.list.includes(pending.entry))) return;
     if (pending.entry.timer) { clearTimeout(pending.entry.timer); pending.entry.timer = null; }
     pending.entry.queued = true;
+    pending.entry.busySend = false;
     pending.entry.queuedLabel = label || 'Will send when the session finishes its current step.';
     const div = pending.element;
     if (!div) return;
+    delete div.dataset.busySend;
     const pid = pending.paneId || activePaneId();
     const pane = paneByPaneId(pid);
     const convId = pending.conversationId || (pane && pane.conversationId);
@@ -13058,6 +13087,13 @@
     // ordinary send ACK can be older than the queue snapshot already shown.
     if ((div.classList.contains('send-queued') && !(data && data.queued_consumed))
         || div.classList.contains('not-acknowledged')) return;
+    if (pending.entry.busySend) {
+      pending.entry.busySend = false;
+      delete div.dataset.busySend;
+      const view = getConvViewForPane(pending.paneId) || getConvView();
+      if (view) view.appendChild(div);
+      syncQueuedSteerTray(view, pending.paneId || activePaneId(), false);
+    }
     pending.entry.queued = false;
     pending.entry.queuedLabel = '';
     div.classList.remove('pending', 'send-queued', 'server-queued', 'steering-optimistic');
@@ -13340,7 +13376,7 @@
           && !p.element?.isConnected && _normSend(p.text) === normed
           && Number(p.ts) === Number(row.ts));
         const restored = appendPendingSendEcho(text, sid, paneId,
-          detached || { text, sid, ts: Number(row.ts) || now, timer: null, deliveryId: savedId });
+          detached || { text, sid, ts: Number(row.ts) || now, timer: null, deliveryId: savedId, busySend: !!row.busySend });
         if (savedId && restored) bindPendingSendDeliveryId(restored, savedId);
         // Re-create it in the delivered state so it keeps the "✓ Delivered"
         // note and stops re-arming the not-acknowledged timer (CCC-154).
@@ -39655,9 +39691,8 @@
 
   function codexTurnSteerable() {
     if (!currentSession || currentSession.source !== 'codex') return false;
-    if (!liveStatusMatchesOpenConv() || !liveStatus || liveStatus.codexState !== 'working') return false;
-    const writer = liveStatus.codexWriter || null;
-    return writer !== 'desktop' && writer !== 'external' && writer !== 'unknown';
+    // Writer attribution is not authoritative; the native RPC checks the turn.
+    return !!(liveStatusMatchesOpenConv() && liveStatus && liveStatus.codexState === 'working');
   }
 
   // "Could a steer/send be attempted over the shared `devin acp` conn" for
@@ -67242,11 +67277,12 @@
       tray.insertBefore(bar, tray.firstChild);
     }
     const hint = bar.querySelector('.queued-steer-all-hint');
-    if (hint) hint.textContent = cards + ' queued';
+    if (hint) hint.textContent = cards + (tray.querySelector('[data-busy-send="true"]') ? ' pending' : ' queued');
     const allBtn = bar.querySelector('[data-steer-all-queued]');
     if (allBtn) {
       allBtn.dataset.sessionId = sessionId || allBtn.dataset.sessionId || '';
       allBtn.hidden = cards < 2 || canSteerAll === false;
+      allBtn.disabled = !!tray.querySelector('[data-busy-send="true"]');
       allBtn.textContent = 'Steer all ' + cards;
     }
   }
@@ -67423,9 +67459,8 @@
     if (replaceServerCandidates && tray) {
       tray.querySelectorAll('[data-queued-steer-server="true"]').forEach(el => el.remove());
     }
-    // Only durable server queue entries belong here. A local `.pending` row
-    // merely means the browser is awaiting an acknowledgement; showing it as
-    // a queued candidate made an idle session look as though it still had work.
+    // Known-busy follow-ups start here while their POST is in flight. Other
+    // pending sends stay in the transcript so an idle send never looks queued.
     const selected = (conversationsData || []).find(item => item && (
       item.id === conversationId || item.session_id === conversationId
     ));
@@ -67485,7 +67520,7 @@
     const candidates = Array.from($view.querySelectorAll(
       '.event.user_text.pending, .event.user_text.send-queued'
     )).filter(el => el.dataset.queuedSteerServer === 'true'
-      || el.classList.contains('send-queued'))
+      || el.classList.contains('send-queued') || el.dataset.busySend === 'true')
       // A card the user just steered is deliberately standing in the transcript
       // as in-flight. Collecting it back would undo the optimistic move.
       .filter(el => !el.classList.contains('steering-optimistic'))
@@ -67584,6 +67619,16 @@
         steer = null;
       }
       if (canSteer && steer) { steer.disabled = false; }
+      const awaitingQueue = el.dataset.busySend === 'true';
+      cancel.disabled = awaitingQueue;
+      if (steer && awaitingQueue) steer.disabled = true;
+      let sendingNote = el.querySelector('.send-queued-note');
+      if (awaitingQueue && !sendingNote) {
+        sendingNote = document.createElement('div');
+        sendingNote.className = 'send-queued-note';
+        sendingNote.innerHTML = '<span class="send-queued-text">Sending…</span>';
+        el.appendChild(sendingNote);
+      }
       if (!el.querySelector('[data-copy-user-message]')) {
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
@@ -81833,7 +81878,10 @@
       _codexAccountSession = sid;
       badge.textContent = 'Codex account…';
       fetch('/api/codex/accounts?session_id=' + encodeURIComponent(sid)).then(r => r.json()).then(data => {
-        if (_codexAccountSession === sid) badge.textContent = 'Account: ' + data.session_account;
+        if (_codexAccountSession === sid) {
+          const label = data.session_account === 'Codex · current account' ? 'Primary' : data.session_account;
+          badge.textContent = 'Account: ' + label;
+        }
       }).catch(() => { if (_codexAccountSession === sid) badge.textContent = 'Account unavailable'; });
     }
     if (row.hidden || _codexAccountsLoading || Date.now() - _codexAccountsLoadedAt < 30000) return;
@@ -81842,7 +81890,7 @@
       if (!data.ok) throw new Error('Accounts unavailable');
       // Until the user picks one, start on the saved default account.
       const selected = select.dataset.userPicked === '1' ? select.value : (spawnDefaultsState.codex_account_id || '__current__');
-      select.replaceChildren(new Option('Codex (Primary) · current account', '__current__'));
+      select.replaceChildren(new Option('Codex (Primary)', '__current__'));
       for (const account of data.accounts || []) {
         if (!account.current) select.add(new Option('Codex (Secondary) · ' + account.label, account.id));
       }
@@ -82683,15 +82731,32 @@
   // does (engine/model/effort from the composer, optimistic placeholder that
   // auto-selects and follows the spawn). For surfaces outside this closure,
   // e.g. the Jobs tab's "+ Add" (static/jobs-tab.js). Resolves {ok, error?}.
+  // opts.sessionDefaults uses saved new-session defaults; localOnly forces
+  // this server machine even when the usual composer launches over SSH.
   // opts.job ({host, repo, what, when, name?}) routes through POST
   // /api/jobs/add instead, which composes the job prompt server-side.
   window.cccSpawnPromptSession = async function (opts) {
     const job = (opts && opts.job) || null;
-    const prompt = job ? '' : String((opts && opts.prompt) || '').trim();
-    const repoPath = String((opts && opts.repoPath) || '').trim()
+    let prompt = job ? '' : String((opts && opts.prompt) || '').trim();
+    let repoPath = String((opts && opts.repoPath) || '').trim()
       || (typeof getSpawnCwd === 'function' && getSpawnCwd()) || '';
     if (!prompt && !job) return { ok: false, error: 'empty prompt' };
-    const engine = getSpawnEngine();
+    const sessionDefaults = !!(opts && opts.sessionDefaults && !job);
+    let engine = getSpawnEngine();
+    if (sessionDefaults) {
+      try {
+        const response = await fetch('/api/spawn-defaults', {cache:'no-store', cccPriority:'user', signal:AbortSignal.timeout(10000)});
+        if (!response.ok) return {ok:false, error:'Could not read new-session defaults.'};
+        const defaults = await response.json();
+        if (!defaults.engine) return {ok:false, error:'New-session defaults are unavailable.'};
+        engine = normalizeSpawnDefaultEngine(defaults.engine);
+        if (!repoPath && opts.localOnly) {
+          repoPath = String(defaults.setup_cwd || '').trim();
+          if (!repoPath) return {ok:false, error:'The setup workspace is unavailable.'};
+          prompt = 'No project was selected. The starting folder is CCC itself, not the target repository. Ask which GitHub repository to configure; do not assume the CCC repository is the target.\n\n' + prompt;
+        }
+      } catch (_) { return {ok:false, error:'Could not read new-session defaults.'}; }
+    }
     const subject = String((opts && opts.name) || '').trim() || (prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt);
     const tempPid = 'tmp-' + Date.now();
     insertPendingSpawnCard(tempPid, subject, spawnSourceForEngine(engine));
@@ -82710,12 +82775,18 @@
         body = Object.assign({}, job, { engine, cwd: repoPath });
         if (sb.model) body.model = sb.model;
         if (sb.reasoning_effort) body.effort = sb.reasoning_effort;
+      } else if (sessionDefaults) {
+        // Omit engine/model/effort: the normal spawn endpoint resolves the
+        // saved session defaults, independently of composer overrides.
+        body = {prompt, repo_path:repoPath, cwd:repoPath};
+        if (opts.name) body.name = String(opts.name).slice(0, 80);
       } else {
         body = buildSpawnBody({ engine, model: choice.model, effort: choice.effort, prompt, repoPath });
         if (opts && opts.name) body.name = String(opts.name).slice(0, 80);
       }
+      if (opts && opts.localOnly) body.remote = false;
       body.idempotency_key = durableActionId('spawn');
-      const res = await fetch(job ? '/api/jobs/add' : spawnEndpointForEngine(engine), {
+      const res = await fetch(job ? '/api/jobs/add' : sessionDefaults ? '/api/sessions/spawn' : spawnEndpointForEngine(engine), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -83205,10 +83276,12 @@
             markPendingSendQueued(pendingSend, 'Queued - will send when the session finishes its current step.');
             showOpToast('Queued - will send when the session finishes its current step.');
           } else if (data.via === 'codex-steer') {
+            markPendingSendDelivered(pendingSend, data);
             showOpToast('Sent to running Codex turn.');
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
           } else if (data.via === 'codex-app-turn') {
+            markPendingSendDelivered(pendingSend, data);
             showOpToast('Codex follow-up started.');
             setTimeout(refreshConversationList, 1500);
             setTimeout(refreshConversationList, 3500);
@@ -95840,6 +95913,7 @@
       ['defaults', 'Agents', ['defaults','routing']],
       ['queues', 'Queues', ['queues']],
       ['repositories', 'Repositories', ['repositories']],
+      ['ci-runners', 'CI runners', ['ci-runners']],
       ['notifications', 'Notifications & voice', ['notifications','voice']],
       ['vault', 'Vault', ['vault','api-keys','network']],
       ['sessions', 'Usage & budgets', ['sessions','limits']],
@@ -99782,4 +99856,105 @@
   } else {
     boot();
   }
+})();
+
+// Local activity plus the last two completed workflow runs, shared across devices.
+(function initLocalCiProgress() {
+  let busy = false;
+  let lastCompleted = [];
+  const dismissed = new Set();
+  const conclusions = {success:'Passed', failure:'Failed', cancelled:'Cancelled',
+    timed_out:'Timed out', skipped:'Skipped', neutral:'Neutral', action_required:'Action required',
+    startup_failure:'Failed', stale:'Stopped', unknown:'Completed'};
+  function render(data) {
+    const completed = (data.completed || []).filter(job => !dismissed.has(job.id));
+    const entries = [...(data.jobs || []).map(job => ({job, done:false})),
+      ...completed.map(job => ({job, done:true}))];
+    for (const host of document.querySelectorAll('[data-local-ci-host]')) {
+      const focused = host.contains(document.activeElement) ? document.activeElement.dataset.ciDismiss : null;
+      host.replaceChildren();
+      for (const {job, done} of entries) {
+        const entry = document.createElement('div');
+        entry.className = 'local-ci-entry' + (done ? ' is-completed' : '');
+        entry.dataset.runId = job.id || '';
+        const row = document.createElement('a');
+        row.className = 'local-ci-job';
+        if (job.url && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/actions\/runs\/\d+$/.test(job.url)) {
+          row.href = job.url;
+          row.target = '_blank';
+          row.rel = 'noopener';
+        }
+        const label = document.createElement('span');
+        label.className = 'local-ci-label';
+        const name = document.createElement('span');
+        name.className = 'local-ci-name';
+        name.textContent = 'CI · ' + String(job.repo || '').split('/').pop() + ' · ' + job.name;
+        const percent = document.createElement('span');
+        percent.className = 'local-ci-percent';
+        percent.textContent = done ? (conclusions[job.conclusion] || 'Completed')
+          : job.percent == null ? 'Running' : job.percent + '%';
+        const outcome = done ? (job.conclusion === 'success' ? 'success'
+          : ['failure','timed_out','startup_failure','action_required'].includes(job.conclusion) ? 'failure' : 'neutral') : 'active';
+        entry.dataset.outcome = outcome;
+        label.append(name, percent);
+        const bar = document.createElement('progress');
+        bar.max = 100;
+        if (done) bar.value = 100;
+        else if (job.percent != null) bar.value = job.percent;
+        bar.setAttribute('aria-label', name.textContent + ': ' + (done ? percent.textContent : 'completed steps'));
+        const step = document.createElement('span');
+        step.className = 'local-ci-step';
+        step.textContent = done ? 'Completed' + (job.completed_at ? ' · ' + new Date(job.completed_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : job.current_step;
+        row.title = job.repo + ' · ' + (done ? percent.textContent : job.current_step)
+          + (done ? '' : '\n' + job.completed_steps + '/' + job.total_steps + ' steps complete (not time remaining)');
+        row.append(label, bar, step);
+        entry.append(row);
+        if (done) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'local-ci-dismiss';
+          button.dataset.ciDismiss = job.id;
+          button.setAttribute('aria-label', 'Dismiss completed CI run: ' + job.name);
+          button.title = 'Dismiss completed run';
+          button.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+          button.addEventListener('click', async () => {
+            button.disabled = true;
+            try {
+              const response = await fetch('/api/ci/dismiss', {method:'POST', cccPriority:'user',
+                headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:job.id})});
+              if (!response.ok) throw new Error('Dismiss failed');
+              dismissed.add(job.id);
+              render(data);
+            } catch (_) {
+              button.disabled = false;
+              button.title = 'Could not dismiss. Try again.';
+              button.setAttribute('aria-label', 'Could not dismiss CI run. Try again.');
+            }
+          });
+          entry.append(button);
+        }
+        host.append(entry);
+      }
+      host.hidden = !host.childElementCount;
+      if (focused) [...host.querySelectorAll('[data-ci-dismiss]')].find(button => button.dataset.ciDismiss === focused)?.focus({preventScroll:true});
+    }
+  }
+  async function refresh() {
+    if (document.hidden || busy || !document.querySelector('[data-local-ci-host]')) return;
+    busy = true;
+    try {
+      const response = await fetch('/api/ci/local', {cache:'no-store', signal:AbortSignal.timeout(45000)});
+      if (!response.ok) throw new Error('CI progress unavailable');
+      const data = await response.json();
+      if (data.unavailable) throw new Error('CI progress unavailable');
+      lastCompleted = data.completed || [];
+      render(data);
+    } catch (_) {
+      render({jobs:[], completed:lastCompleted});
+    } finally { busy = false; }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', refresh);
+  else refresh();
+  setInterval(refresh, 10000);
+  document.addEventListener('visibilitychange', refresh);
 })();

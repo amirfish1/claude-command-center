@@ -16427,7 +16427,7 @@ def find_all_conversations(
 # v11: Exclude injected setup messages from Codex prompt/title metadata.
 # v12: Reparse session footers so cached rows retain short action labels.
 # v14: Recompute Close gates; inapplicable delivery no longer passes.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 14
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 15
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
@@ -19735,12 +19735,12 @@ def _rehydrate_archive_cached_rows(rows):
             # session" / usage-limit auto-resume): the origin marker only
             # appears in continuation prompts, never in subagent spawns, so
             # this stays empty for ordinary spawned workers.
-            continued_from = _continued_from_session_id_from_text(
+            continued_from = row.get("continued_from_session_id") or _continued_from_session_id_from_text(
                 row.get("first_message")
             )
             if (
                 not continued_from
-                and sid in spawn_registry_by_sid
+                and (sid in spawn_registry_by_sid or (row.get("engine") == "codex" and spawn_parent_id))
                 and row.get("jsonl_path")
             ):
                 continued_from = _continued_from_session_id_from_transcript(
@@ -27862,6 +27862,8 @@ def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False
     # when the reader scrolls past the top of this one.
     try:
         _cont_fp = _resolve_conversation_path(conv_id)
+        if not _cont_fp or not _cont_fp.is_file():
+            _cont_fp = _resolve_codex_rollout_path(conv_id)
         result["continued_from_session_id"] = (
             _continued_from_session_id_from_transcript(_cont_fp)
             if _cont_fp and _cont_fp.is_file() else ""
@@ -33921,6 +33923,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Flight tour welcome chips.
             _q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             self.send_json(_engines_installed(fresh=(_q.get("fresh") or [""])[0] in ("1", "true")))
+        elif path == "/api/ci/setup":
+            from ccc_server.local_ci import local_ci_setup
+            self.send_json(local_ci_setup())
+        elif path == "/api/ci/local":
+            from ccc_server.local_ci import local_ci_progress
+            self.send_json(local_ci_progress())
         elif path == "/api/github/quota":
             # W6-1: authoritative GraphQL quota, read IN BAND. `gh api
             # rate_limit`'s .resources.graphql block is NOT this token's
@@ -34312,6 +34320,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             context = _codex_context_config(auto_compact_k=defaults.get(context_key, 250))
             self.send_json({
                 "ok": True,
+                "setup_cwd": str(CCC_ROOT),
                 **defaults,
                 "stored": SPAWN_DEFAULTS_FILE.exists(),
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
@@ -36981,6 +36990,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "Undo unavailable or incompatible with current policy; refresh history"}, 400)
             except OSError:
                 self.send_json({"ok": False, "error": "Undo could not be saved; refresh history to check the outcome"}, 503)
+            return
+        if path == "/api/ci/dismiss":
+            from ccc_server.local_ci import dismiss_local_ci
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 2048:
+                    self.send_json({"ok": False, "error": "Invalid request size"}, 413)
+                    return
+                payload = json.loads(self.rfile.read(length))
+                found = dismiss_local_ci(payload.get("id") if isinstance(payload, dict) else None)
+                self.send_json({"ok": found}, 200 if found else 404)
+            except (ValueError, OSError, sqlite3.Error):
+                self.send_json({"ok": False, "error": "Could not dismiss this run"}, 400)
             return
         if path == "/api/spawn-defaults":
             length = int(self.headers.get("Content-Length", "0"))
