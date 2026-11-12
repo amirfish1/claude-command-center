@@ -10529,6 +10529,33 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(ctx["repo_path"], str(self.repo))
         self.assertEqual(ctx["cwd"], str(self.repo))
 
+    def test_session_plain_cwd_does_not_require_repo_registration(self):
+        sid = "00000000-0000-4000-8000-000000000119"
+        scratch = pathlib.Path(self.tmp_home, "plain-session").resolve()
+        scratch.mkdir()
+        transcript = self.server._canonical_conversation_path(str(scratch), sid)
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(json.dumps({
+            "type": "user", "cwd": str(scratch), "sessionId": sid,
+            "message": {"role": "user", "content": "hello"},
+        }) + "\n", encoding="utf-8")
+
+        with mock.patch.object(self.server, "_known_repo_paths", return_value=[]):
+            # Caller-supplied paths still pass through the strict repo gate.
+            with self.assertRaises(self.server.RepoContextError) as ctx:
+                self.server.require_repo_context({"cwd": str(scratch)})
+            self.assertEqual(ctx.exception.code, "repo_not_allowed")
+
+            result = self.server.repo_from_session(sid)
+            self.assertEqual(result, {"repo_path": str(scratch), "cwd": str(scratch)})
+            self.assertNotIn(str(scratch), self.server._load_custom_repos())
+
+            # Session provenance does not make deleted directories usable.
+            scratch.rmdir()
+            with self.assertRaises(self.server.RepoContextError) as ctx:
+                self.server.repo_from_session(sid)
+            self.assertEqual(ctx.exception.code, "invalid_cwd")
+
     def test_session_root_cwd_resolves_from_effective_repo_evidence(self):
         sid = "00000000-0000-4000-8000-000000000109"
         subprocess.run(["git", "init"], cwd=self.repo, check=True,

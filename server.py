@@ -8342,6 +8342,12 @@ def repo_from_session(session_id):
     try:
         return _resolve_cwd_context(cwd)
     except RepoContextError as exc:
+        if exc.code == "repo_not_allowed":
+            # Session metadata already establishes this workspace. External
+            # CLI sessions can live in plain folders absent from the picker;
+            # resuming them must not require registering a repository first.
+            # _resolve_cwd_context has checked existence and rejected roots.
+            return {"repo_path": exc.path, "cwd": str(Path(cwd).expanduser().resolve())}
         if exc.code != "invalid_cwd":
             raise
         try:
