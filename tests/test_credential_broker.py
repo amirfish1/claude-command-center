@@ -21,11 +21,29 @@ from ccc_server import credential_broker as cb
 FAKE = "  obvious-test-password-XXXX\n "
 
 
+_PRIVATE_ROOT = [None]
+
+
+def assert_vault_is_private(root):
+    """Fail before any credential operation if a path could reach the host vault."""
+    from ccc_server import vault
+    root = Path(root).resolve()
+    for name in ("_vault_index_path", "_vault_file_store_path", "_vault_seed_path"):
+        path = getattr(vault, name)().resolve()
+        assert root in path.parents, f"{name} escapes the test vault: {path}"
+    assert not vault._vault_keychain_available()
+
+
 @pytest.fixture
 def vault_dir(tmp_path, monkeypatch):
     from ccc_server import paths, vault
+    # Anchor the vault module's own resolver; do not rely on the paths alias,
+    # which a module reload can leave pointing at a stale object.
     monkeypatch.setattr(paths, "COMMAND_CENTER_STATE_DIR", tmp_path)
+    monkeypatch.setattr(vault, "_vault_state_dir", lambda: tmp_path / "vault")
     monkeypatch.setattr(vault, "_vault_keychain_available", lambda: False)
+    assert_vault_is_private(tmp_path)
+    _PRIVATE_ROOT[0] = tmp_path
     return tmp_path / "vault"
 
 
@@ -37,11 +55,26 @@ def broker(vault_dir):
 
 
 def request(instance, **changes):
+    assert_vault_is_private(_PRIVATE_ROOT[0])
     return instance.request(dict(name="example-service", reason="Test login", session_id="test-session", **changes))
 
 
 def capability(created):
     return {k: created[k] for k in ("id", "token")}
+
+
+def test_vault_guard_rejects_a_path_outside_the_private_root(vault_dir, tmp_path_factory):
+    with pytest.raises(AssertionError, match="escapes"):
+        assert_vault_is_private(tmp_path_factory.mktemp("elsewhere"))
+
+
+def test_vault_stays_private_when_the_paths_alias_is_stale(vault_dir, monkeypatch):
+    import types
+    from ccc_server import vault
+    # A reload can leave vault._vault_paths on an object the fixture never patched.
+    monkeypatch.setattr(vault, "_vault_paths",
+                        types.SimpleNamespace(COMMAND_CENTER_STATE_DIR=Path("/nonexistent-host-state")))
+    assert_vault_is_private(_PRIVATE_ROOT[0])
 
 
 def test_ephemeral_one_shot_and_metadata_allowlist(broker, vault_dir):
