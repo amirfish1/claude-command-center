@@ -42,6 +42,22 @@ test('review fallback cannot invent approval or turn arbitrary URL text into an 
   ]) assert.equal(actions({ next_step_user: text }).length, 0, text);
 });
 
+test('review requests can open the single labeled artifact in the current answer', () => {
+  const state = { next_step_user: 'Have an operator review and deploy the release under [Q12:rollout].', next_action: null };
+  const prose = 'Deployment remains blocked. [Private PR #6](https://example.test/team/app/pull/6) is ready.';
+  assert.deepEqual(JSON.parse(JSON.stringify(actions(state, undefined, prose))), [
+    { label: 'Open review', href: 'https://example.test/team/app/pull/6', derived: true },
+  ]);
+  assert.equal(actions(state, undefined, prose + ' [Review](https://example.test/other)').length, 0);
+  assert.equal(actions(state, undefined, '[PR](https://user:password@example.test/review)').length, 0);
+  assert.equal(actions(state, undefined, '<session-state> [PR](https://example.test/old)').length, 0);
+  assert.equal(actions(state, undefined, '[Docs](https://example.test/docs)').length, 0);
+  assert.equal(actions({ next_step_user: 'Deploy the release.' }, undefined, prose).length, 0);
+  assert.equal(actions(state, undefined, '').length, 0);
+  state.next_action = { label: 'Discuss', reply: 'Discuss the review first.' };
+  assert.equal(actions(state, undefined, prose)[0].reply, state.next_action.reply);
+});
+
 test('review chips open the artifact on desktop and phone without sending a session reply', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
@@ -94,6 +110,22 @@ test('review chips open the artifact on desktop and phone without sending a sess
       document.querySelector('.wa-line2 .conv-quick-action').click();
     });
     assert.equal(await page.evaluate(() => opened.length), 2, 'stale links are not opened');
+    await page.evaluate(() => {
+      row.session_state.next_step_user = 'Have an operator review and deploy the release under [Q12:rollout].';
+      row.last_assistant_text = 'Deployment blocked. [Private PR #6](https://example.test/team/app/pull/6) is ready.';
+      syncActions();
+    });
+    for (const [width, height, host] of [[1440, 900, '.conv-outcome'], [390, 844, '.wa-line2']]) {
+      await page.setViewport({ width, height });
+      const selector = host + ' .conv-quick-action';
+      assert.equal(await page.$eval(selector, el => el.textContent), 'Open review');
+      await page.click(selector);
+    }
+    assert.equal(await page.evaluate(() => sent.length), 0);
+    assert.deepEqual(await page.evaluate(() => opened.slice(-2)), [
+      ['https://example.test/team/app/pull/6', '_blank', 'noopener,noreferrer'],
+      ['https://example.test/team/app/pull/6', '_blank', 'noopener,noreferrer'],
+    ]);
     await page.evaluate(() => { row.state='working'; syncActions(); });
     assert.equal(await page.$$eval('.conv-quick-action', els => els.length), 0);
   } finally {

@@ -18821,7 +18821,7 @@
   }
   // Model-authored chips (NEXT_ACTION object or array), else chips derived
   // from a decision's alternatives. Always returns an array.
-  function sessionQuickActions(state, next) {
+  function sessionQuickActions(state, next, assistantText) {
     state = state || {};
     const many = Array.isArray(state.next_actions) ? state.next_actions.map(sessionQuickAction) : [];
     if (many.length && many.every(Boolean)) return many.slice(0, 4);
@@ -18830,6 +18830,17 @@
     const step = String(next == null ? state.next_step_user || '' : next).trim();
     const decisions = decisionQuickActions(step);
     if (decisions.length) return decisions;
+    // A review link may live in the final answer rather than its footer.
+    // Require an explicit review request and one unambiguous labeled artifact;
+    // opening it is navigation only, including when rollout still needs approval.
+    if (/\breview\b/i.test(step) && step.length <= 600 && !/[\x00-\x1f]/.test(step)) {
+      const prose = String(assistantText || '').split('<session-state>')[0];
+      const links = [...prose.matchAll(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g)]
+        .filter(m => /\b(?:PR|pull request|review)\b/i.test(m[1])
+          && /^https?:\/\/[a-z0-9.-]+(?::\d{1,5})?(?:[/?#][^\s<>"`\\]*)?$/i.test(m[2]));
+      const urls = [...new Set(links.map(m => m[2]))];
+      if (urls.length === 1) return [{ label: 'Open review', href: urls[0], derived: true }];
+    }
     // A delivered design can leave the build explicitly outside authorization.
     // Offer that choice to the user; rendering it never authorizes any work.
     const completion = state.completion;
@@ -18854,7 +18865,7 @@
         || c.last_event_type === 'user') return null;
     const info = rowOutcomeView(c);
     let next = String((c.session_state || {}).next_step_user || '').trim();
-    let actions = sessionQuickActions(c.session_state, next);
+    let actions = sessionQuickActions(c.session_state, next, c.last_assistant_text);
     const build = actions.length === 1 && actions[0].build === true;
     if (build) {
       if (!['plan', 'next'].includes(info.kind)) return null;
