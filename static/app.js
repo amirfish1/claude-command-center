@@ -53225,7 +53225,11 @@
             // this streaming turn are reflected in the pill count on the next
             // ffcRefreshForCurrent() call (triggered by renderConversationEvents).
             ffcInvalidate(currentConversation);
-            if (renderConversationEvents(data.events, streamPaneId) !== false) {
+            // SSE tails transcript changes, not a complete input-queue snapshot.
+            // Preserve parked cards until an HTTP queue snapshot or a durable
+            // delivery receipt retires them; otherwise every output tick hides
+            // the tray and the next poll restores it, jolting the transcript.
+            if (renderConversationEvents(data.events, streamPaneId, { queueSnapshot: false }) !== false) {
               convLastLine = data.last_line;
               // Advance the pane's own lastLine so reconnects (post-error
               // or post-watchdog) request events from the right offset

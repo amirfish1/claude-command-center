@@ -179,6 +179,39 @@ test('an authoritative queue snapshot retires a server card that was already del
   assert.deepEqual(out,{tray:false,rows:0});
  }finally{await page.close();}
 });
+test('transcript SSE deltas preserve queued cards and panel height until a queue snapshot drains them',async()=>{
+ const start=app.indexOf('    source.onmessage = (ev) => {',app.indexOf('  function startConvStream('));
+ const handler=app.slice(start,app.indexOf('    source.onerror =',start));
+ assert.ok(start>=0);
+ const page=await fixture();try{
+  const out=await page.evaluate(handler=>{
+   makeRow('Queued release report.\n'+'Build output\n'.repeat(40));
+   makeRow('Second queued message');sync();
+   const tray=document.querySelector('.queued-steer-tray');
+   const before=tray.getBoundingClientRect().height;
+   const source={};const streamPaneId='left',streamConvId='session-one';
+   state.eventSource=source;state.lastLine=0;
+   const bumpWatchdog=()=>{},ffcInvalidate=()=>{},fetchSessionUsage=()=>{};
+   const currentConversation=streamConvId,splitState={activeIndex:0};
+   const paneIndexByPaneId=()=>0;
+   let convLastLine=0;
+   const renderConversationEvents=(events,paneId,opts={})=>{
+    syncQueuedSteerTray(getConvView(),paneId,opts.queueSnapshot!==false);
+    return true;
+   };
+   eval(handler);
+   for(let i=0;i<10;i++)source.onmessage({data:JSON.stringify({events:[{type:'assistant',text:'Still working',line:i+1}],last_line:i+1})});
+   const after=tray.getBoundingClientRect().height;
+   const count=queuedSteerCardCount(document.querySelector('.queued-steer-tray'));
+   const sameTray=tray===document.querySelector('.queued-steer-tray');
+   syncQueuedSteerTray(getConvView(),'left',true);
+   return {count,sameTray,before,after,lastLine:state.lastLine,drained:!document.querySelector('.queued-steer-tray')};
+  },handler);
+  assert.equal(out.count,2);assert.equal(out.sameTray,true);
+  assert.ok(out.before>0);assert.equal(out.after,out.before);
+  assert.equal(out.lastLine,10);assert.equal(out.drained,true);
+ }finally{await page.close();}
+});
 test('coalesced Codex submissions retire each delivered card after a first FIFO acknowledgement',async()=>{
  const page=await fixture();try{
   const out=await page.evaluate(()=>{
