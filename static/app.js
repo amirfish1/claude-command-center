@@ -82736,8 +82736,8 @@
   // /api/jobs/add instead, which composes the job prompt server-side.
   window.cccSpawnPromptSession = async function (opts) {
     const job = (opts && opts.job) || null;
-    const prompt = job ? '' : String((opts && opts.prompt) || '').trim();
-    const repoPath = String((opts && opts.repoPath) || '').trim()
+    let prompt = job ? '' : String((opts && opts.prompt) || '').trim();
+    let repoPath = String((opts && opts.repoPath) || '').trim()
       || (typeof getSpawnCwd === 'function' && getSpawnCwd()) || '';
     if (!prompt && !job) return { ok: false, error: 'empty prompt' };
     const sessionDefaults = !!(opts && opts.sessionDefaults && !job);
@@ -82749,6 +82749,11 @@
         const defaults = await response.json();
         if (!defaults.engine) return {ok:false, error:'New-session defaults are unavailable.'};
         engine = normalizeSpawnDefaultEngine(defaults.engine);
+        if (!repoPath && opts.localOnly) {
+          repoPath = String(defaults.setup_cwd || '').trim();
+          if (!repoPath) return {ok:false, error:'The setup workspace is unavailable.'};
+          prompt = 'No project was selected. The starting folder is CCC itself, not the target repository. Ask which GitHub repository to configure; do not assume the CCC repository is the target.\n\n' + prompt;
+        }
       } catch (_) { return {ok:false, error:'Could not read new-session defaults.'}; }
     }
     const subject = String((opts && opts.name) || '').trim() || (prompt.length > 60 ? prompt.slice(0, 60) + '…' : prompt);

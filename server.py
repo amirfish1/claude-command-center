@@ -34320,6 +34320,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             context = _codex_context_config(auto_compact_k=defaults.get(context_key, 250))
             self.send_json({
                 "ok": True,
+                "setup_cwd": str(CCC_ROOT),
                 **defaults,
                 "stored": SPAWN_DEFAULTS_FILE.exists(),
                 "supported_engines": list(_ORCHESTRATION_SPAWN_ENGINES),
