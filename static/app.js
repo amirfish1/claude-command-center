@@ -60283,21 +60283,20 @@
       const target = row.target || '';
       const sid = sessionIdByConv[currentConversation] || (currentSession && currentSession.id) || '';
       const isHttp = /^https?:\/\//i.test(target);
-      // The proxy only serves CCC's own pasted-image files (and the active
-      // session sandbox). Anything else — absolute paths outside the sandbox,
-      // /tmp, other repos, root-relative web paths like /favicon.png — 403s or
-      // 404s and spams the console for an image that can't be shown anyway.
-      // Only fetch what's actually servable; for the rest, render the icon
-      // placeholder with NO network request (kills the console noise).
+      // Local conversation artifacts use the same image endpoint as the
+      // Markdown viewer; the pasted-image proxy only accepts upload paths.
       const isCccPasted = /\/\.claude\/(?:command-center\/)?pasted-images\/paste-/.test(target);
-      if (isHttp || isCccPasted) {
+      if (target) {
         const img = document.createElement('img');
         img.className = 'sidebar-file-thumb';
         img.alt = row.label;
         img.loading = 'lazy';
+        img.decoding = 'async';
         img.src = isHttp
           ? target
-          : '/api/pasted-image?path=' + encodeURIComponent(target) + (sid ? '&session_id=' + encodeURIComponent(sid) : '');
+          : isCccPasted
+            ? '/api/pasted-image?path=' + encodeURIComponent(target) + (sid ? '&session_id=' + encodeURIComponent(sid) : '')
+            : '/api/local-image?path=' + encodeURIComponent(target);
         img.onerror = () => {
           const placeholder = document.createElement('div');
           placeholder.className = 'sidebar-file-icon-placeholder';
