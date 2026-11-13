@@ -30261,30 +30261,24 @@ def _static_asset_url(name):
     return f"/static/{name}?v={stamp}"
 
 
+_STATIC_URL_RE = re.compile(r'(src|href)="/static/([A-Za-z0-9_./-]+\.(?:js|css))"')
+
+
+def _stamp_static_urls(html_text):
+    """Add ?v=<mtime> to every /static js/css URL in the page.
+
+    The stamp changes with any edit, so the stamped URL is cached for a year
+    (immutable) while a bare URL still revalidates. index.html is re-read per
+    request, so a stale script after an update is impossible.
+    """
+    def _sub(m):
+        return f'{m.group(1)}="{_static_asset_url(m.group(2))}"'
+    return _STATIC_URL_RE.sub(_sub, html_text)
+
+
 def _load_index_html():
     try:
-        html_text = _INDEX_HTML_PATH.read_text(encoding="utf-8")
-        html_text = html_text.replace(
-            'href="/static/app.css"',
-            f'href="{_static_asset_url("app.css")}"',
-        )
-        html_text = html_text.replace(
-            'href="/static/simple.css"',
-            f'href="{_static_asset_url("simple.css")}"',
-        )
-        html_text = html_text.replace(
-            'href="/static/fx.css"',
-            f'href="{_static_asset_url("fx.css")}"',
-        )
-        html_text = html_text.replace(
-            'src="/static/fx.js"',
-            f'src="{_static_asset_url("fx.js")}"',
-        )
-        html_text = html_text.replace(
-            'src="/static/app.js"',
-            f'src="{_static_asset_url("app.js")}"',
-        )
-        return html_text
+        return _stamp_static_urls(_INDEX_HTML_PATH.read_text(encoding="utf-8"))
     except OSError as e:
         return "<h1>index.html missing</h1><pre>" + str(e) + "</pre>"
 HTML_PAGE = _load_index_html()
