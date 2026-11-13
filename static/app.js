@@ -59128,6 +59128,22 @@
     return { top, rest };
   }
 
+  function _ticketVisibleSessionContext() {
+    const ids = new Set();
+    document.querySelectorAll('.conv-pane[data-pane-id]').forEach(el => {
+      const rect = el.getBoundingClientRect();
+      if (!rect.width || !rect.height || rect.bottom <= 0 || rect.right <= 0
+          || rect.top >= window.innerHeight || rect.left >= window.innerWidth
+          || getComputedStyle(el).visibility === 'hidden') return;
+      const pane = paneByPaneId(el.dataset.paneId);
+      const convId = String((pane && pane.conversationId) || '');
+      if (!convId || convId === '__new__' || convId.startsWith('spawning-')) return;
+      const sid = sessionIdByConv[convId] || (pane.currentSession && pane.currentSession.id) || convId;
+      ids.add(sid);
+    });
+    return ids.size ? '\n\nOpen sessions:\n' + [...ids].map(id => '- ' + id).join('\n') : '';
+  }
+
   // opts.queues (array of names) adds a Queue <select> ordered top-3-by-use,
   // divider, then the rest A-Z; the pick is left on
   // openQueueTicketComposer.lastQueue (resolves with the note text as ever).
@@ -59135,6 +59151,7 @@
   // a queue name; it is applied until the user picks one by hand.
   function openQueueTicketComposer(opts) {
     opts = opts || {};
+    const sessionContext = _ticketVisibleSessionContext();
     openQueueTicketComposer.lastQueue = '';
     return new Promise((resolve) => {
       document.querySelectorAll('.fq-ticket-composer').forEach(n => n.remove());
@@ -59177,10 +59194,13 @@
         + '</div>';
       document.body.appendChild(modal);
       const textarea = modal.querySelector('#fqTicketNote');
+      if (textarea) textarea.value = sessionContext;
       const submitBtn = modal.querySelector('[data-fq-ticket-submit]');
       let settled = false;
+      const hasDraft = () => !!textarea && !!textarea.value.trim()
+        && textarea.value.trim() !== sessionContext.trim();
       const refresh = () => {
-        if (submitBtn && textarea) submitBtn.disabled = !(textarea.value || '').trim();
+        if (submitBtn) submitBtn.disabled = !hasDraft();
       };
       const close = (value) => {
         if (settled) return;
@@ -59190,6 +59210,7 @@
         resolve(String(value || '').trim());
       };
       const submit = () => {
+        if (!hasDraft()) return;
         if (!guardComposerSend(textarea)) return;
         const note = textarea ? (textarea.value || '').trim() : '';
         const qSel = modal.querySelector('#fqTicketQueue');
@@ -59199,8 +59220,7 @@
       // CCC-214: a stray click outside the dialog or Esc must not throw away
       // a typed draft. Cancel and × are deliberate and close at once.
       const dismiss = () => {
-        const draft = textarea ? (textarea.value || '').trim() : '';
-        if (draft && !confirm('Discard this ticket draft?')) {
+        if (hasDraft() && !confirm('Discard this ticket draft?')) {
           if (textarea) textarea.focus();
           return;
         }
@@ -59258,7 +59278,10 @@
               modal.querySelector('#fqTicketAttachBtn'), () => textarea);
           }
         } catch (_) {}
-        requestAnimationFrame(() => textarea.focus());
+        requestAnimationFrame(() => {
+          textarea.focus();
+          textarea.setSelectionRange(0, 0);
+        });
       }
       document.addEventListener('keydown', onKey);
       refresh();
