@@ -1,0 +1,1 @@
+- Group ticket-prefixed helper and continuation sessions, historical workers, and their attached lanes under their ticket instead of separate generic Session rows.

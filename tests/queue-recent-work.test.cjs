@@ -178,3 +178,34 @@ test('ticket expansion survives reload and tolerates invalid saved preferences',
   store.set('ccc-workers-ticket-expanded', '{invalid');
   assert.equal(vm.runInContext('_workersTicketExpanded.size', reload()), 0);
 });
+
+test('a single ticket identified by child lanes owns an unlabelled parent tree', () => {
+  const start = app.indexOf('  function _workersPartitionTicketClusters(');
+  const end = app.indexOf('  // Compact history rows', start);
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(start, end), ctx);
+  const cluster = {rows: [
+    {depth: 0, card: {ref: ''}},
+    {depth: 1, card: {ref: 'TEST-7'}},
+    {depth: 1, card: {ref: ''}},
+  ]};
+  const result = ctx._workersPartitionTicketClusters([cluster], new Set(['TEST-7']), c => c.ref);
+  assert.equal(result.matched.get('TEST-7')[0], cluster);
+  assert.equal(result.remaining.length, 0);
+  const ambiguous = {rows: [...cluster.rows, {depth: 1, card: {ref: 'TEST-8'}}]};
+  assert.equal(ctx._workersPartitionTicketClusters([ambiguous], new Set(['TEST-7','TEST-8']), c => c.ref).remaining[0], ambiguous);
+});
+
+test('explicit descendant lanes stay with the owning root without merging unrelated peer roots', () => {
+  const start = app.indexOf('  function _workersPartitionTicketClusters(');
+  const end = app.indexOf('  // Compact history rows', start);
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(start, end), ctx);
+  const rows = [{depth: 0, card: {ref: 'TEST-7'}}, {depth: 1, card: {ref: 'TEST-8'}}];
+  const cluster = {rows};
+  assert.equal(ctx._workersPartitionTicketClusters([cluster], new Set(['TEST-7','TEST-8']), c => c.ref).matched.get('TEST-7')[0], cluster);
+  const peers = {rows: rows.map(row => ({...row, depth: 0}))};
+  assert.equal(ctx._workersPartitionTicketClusters([peers], new Set(['TEST-7','TEST-8']), c => c.ref).remaining[0], peers);
+});

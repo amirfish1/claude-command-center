@@ -255,3 +255,24 @@ test('Workers refresh joins a generic session to its newly claimed ticket before
   assert.equal(ctx._uxFixesWorkerTicketsForRow(generic)[0].ref, 'EXAMPLE-42');
   assert.equal(ctx._uxFixesWorkerTicketsForRow({session_id: 'another-session', display_name: 'EXAMPLE queue worker'}).length, 0);
 });
+
+test('ticket-prefixed helper and continuation titles retain exact ticket identity', () => {
+  const ctx = harness();
+  for (const name of ['#EXAMPLE-42 Implement recovery', 'EXAMPLE-42 Design critique', '🧵 EXAMPLE#42: Fix']) {
+    assert.equal(ctx.workerSelfTicketRef({display_name: name}) || ctx.workerTaskTicketRef({display_name: name}), 'EXAMPLE-42');
+  }
+  assert.equal(ctx.workerTaskTicketRef({display_name: 'Discuss EXAMPLE-42 and EXAMPLE-43'}), '');
+  assert.equal(ctx.workerSelfTicketRef({display_name: '🧵 OTHER#9: Check EXAMPLE-42'}), 'OTHER-9');
+});
+
+test('historical worker identity from its launch matches released ticket history', () => {
+  const ctx = harness();
+  ctx._setUxFixesQueueMeta([ticket(42, {
+    status: 'open', claimed_by: null, claimed_session_id: null, closed_by: null, closed_at: '',
+    history: [{event: 'progress', at: '2026-01-02T12:00:00Z', worker: 'worker-one'}],
+  })]);
+  const generic = {session_id: 'old-session', display_name: 'EXAMPLE queue worker',
+    first_message: 'Drain the EXAMPLE WatchTower queue and keep it empty. Your worker id is worker-one. IDENTITY: use this identity.'};
+  assert.equal(ctx._uxFixesWorkerTicketsForRow(generic)[0].ref, 'EXAMPLE-42');
+  assert.equal(ctx._uxFixesWorkerTicketsForRow({...generic, first_message: 'Someone said: Your worker id is worker-one.'}).length, 0);
+});

@@ -45841,10 +45841,10 @@
       _workersFallbackTickets = [];
       const cachedRefs = new Set(_uxqItemsCache.items.map(_uxqItemRef));
       for (const cluster of _allTabClusters) {
-        const card = cluster.rows[0]?.card;
-        if (!card) continue;
-        const facts = workerRowFacts(card);
-        if (!facts.ticketRef) continue;
+        const ticketRef = _workersClusterTicketRef(cluster, card => workerRowFacts(card).ticketRef);
+        if (!ticketRef) continue;
+        const card = cluster.rows.find(row => workerRowFacts(row.card).ticketRef === ticketRef).card;
+        const facts = { ...workerRowFacts(card), ticketRef };
         _workersAssignedTicketRefs.add(facts.ticketRef);
         if (!cachedRefs.has(facts.ticketRef)) {
           const ticket = _uxFixesWorkerTicketsForRow(card).find(t => t.ref === facts.ticketRef);
@@ -45856,8 +45856,7 @@
       }
       for (const cluster of _allTabClusters) {
         if (!cluster.rows.length) continue;
-        const refs = new Set(cluster.rows.map(r => workerRowFacts(r.card).ticketRef).filter(Boolean));
-        if (refs.size === 1 && workerRowFacts(cluster.rows[0].card).ticketRef) continue;
+        if (_workersClusterTicketRef(cluster, card => workerRowFacts(card).ticketRef)) continue;
         const card = cluster.rows[0].card;
         const sid = card.session_id || card.id;
         if (!sid) continue;
@@ -55937,17 +55936,12 @@
     try { localStorage.setItem('ccc-workers-ticket-expanded', JSON.stringify([..._workersTicketExpanded].slice(-512))); } catch (_) {}
   }
   // Match exact ticket refs, never title similarity or merely the same queue.
-  // Mixed-ticket trees require an explicit session-group representation.
+  // Explicit child lanes stay with their owning tree; mixed peers stay separate.
   function _workersPartitionTicketClusters(clusters, refs, ticketRef) {
     const matched = new Map(), remaining = [];
     for (const cluster of clusters) {
-      const root = cluster.rows && cluster.rows[0];
-      const ref = cluster.activityRef || (root && ticketRef(root.card));
-      const mixed = (cluster.rows || []).some(row => {
-        const childRef = ticketRef(row.card);
-        return childRef && childRef !== ref;
-      });
-      if (!ref || !refs.has(ref) || (!cluster.activityRef && mixed)) {
+      const ref = cluster.activityRef || _workersClusterTicketRef(cluster, ticketRef);
+      if (!ref || !refs.has(ref)) {
         remaining.push(cluster);
         continue;
       }
@@ -55955,6 +55949,16 @@
       matched.get(ref).push(cluster);
     }
     return { matched, remaining };
+  }
+  // A ticket-specific tree stays with its owner even when unlabelled lanes
+  // have no claim. Peer roots with different tickets remain separate topics.
+  function _workersClusterTicketRef(cluster, ticketRef) {
+    const rows = cluster.rows || [];
+    const rootRef = rows[0] && ticketRef(rows[0].card);
+    const refs = new Set(rows.map(row => ticketRef(row.card)).filter(Boolean));
+    if (refs.size === 1) return [...refs][0];
+    if (rootRef && rows.slice(1).every(row => Number(row.depth) > 0)) return rootRef;
+    return '';
   }
   function _workersMeaningfulUpdate(text) {
     const value = String(text || '').trim();
@@ -79588,7 +79592,10 @@
     const keys = [];
     // Include _worker_id if present — Watchtower workers claim tickets via
     // their worker_id (e.g. "ccc-fbbe9e53"), not their session UUID.
-    for (const v of [c.session_id, c.id, c._worker_id, c.display_name, c.ai_title]) {
+    const launch = String(c.first_message || '');
+    const launchedWorker = /^drain the [A-Za-z0-9_-]+ watchtower queue\b/i.test(launch)
+      ? (launch.match(/\bYour worker id is ([A-Za-z0-9_-]+)\b/i) || [])[1] : '';
+    for (const v of [c.session_id, c.id, c._worker_id, launchedWorker, c.display_name, c.ai_title]) {
       const k = _uxFixesIdentityKey(v);
       if (k && keys.indexOf(k) === -1) keys.push(k);
     }
@@ -79837,6 +79844,13 @@
     const m = name.match(_WK_SELF_TICKET_RE);
     return m ? m[1] + '-' + m[2] : '';
   }
+  // Ticket-specific helper and continuation titles use REF-N or #REF-N.
+  // Keep this separate from claimant names used to choose helper parents.
+  function workerTaskTicketRef(c) {
+    const name = String((c && c.display_name) || '').trim();
+    const task = name.replace(/^(?:[\p{Extended_Pictographic}️‍›⤴]\s*)+/u, '').match(/^#?([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-\d+)\b/);
+    return task ? task[1] : '';
+  }
   function _workerRoleFromPrompt(c) {
     const text = String((c && (c.first_message || c.display_name)) || '').trim();
     if (!text) return '';
@@ -79912,6 +79926,7 @@
     // history is the fallback for rows that never renamed themselves.
     let ticketRef = workerSelfTicketRef(c);
     if (!ticketRef && origin && origin.ref) ticketRef = String(origin.ref).trim();
+    if (!ticketRef) ticketRef = workerTaskTicketRef(c);
     if (!ticketRef) {
       const prompt = String((c && c.first_message) || '').match(/watchtower ticket ([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-\d+)/i)
         || String((c && c.first_message) || '').match(/^fix ticket ([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-\d+)/i);
