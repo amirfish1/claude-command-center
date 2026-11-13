@@ -36722,13 +36722,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 500)
             return
         if path.startswith("/api/config-consent/"):
-            # Writing to the user's agent config is local-only: a peer let in
-            # through phone access / a tunnel cannot approve it. The notice
-            # ack writes no agent config, so a remote viewer may dismiss it.
-            if (path != "/api/config-consent/notice-ack"
-                    and phone_access.is_remote_request(self.client_address[0], self.headers)):
-                self.send_json({"ok": False, "error": "config consent is local-only"}, 403)
-                return
+            # Config choices use the dashboard's existing trust boundary:
+            # proxy secret, allowed Origin, and phone PIN (when configured)
+            # were checked above. Trusted remote dashboards can approve the
+            # same proposals as localhost, with backups and per-item consent.
             length = int(self.headers.get("Content-Length", "0") or 0)
             body = self.rfile.read(length) if length > 0 else b""
             try:

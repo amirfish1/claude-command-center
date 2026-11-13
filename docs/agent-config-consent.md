@@ -85,5 +85,9 @@ approved, and marks every item declined.
 - `POST /api/config-consent/revoke` `{"ids": [...]}` (omit for all)
 - `POST /api/config-consent/notice-ack`
 
-The POST routes refuse requests from off the machine or through a proxy
-(phone access, tunnels).
+The POST routes work from localhost and trusted remote dashboards, including
+Tailscale IPs and Phone access. They use the same origin allowlist, configured
+proxy secret, and optional phone PIN as other dashboard actions. A remote
+browser must use an origin the host already trusts, and unlock with the PIN
+if one is configured. Approving config does not grant permission to change
+network access or phone settings; those admin routes remain local-only.
