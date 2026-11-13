@@ -37310,8 +37310,40 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             self.send_json(result)
             return
+        if path == "/api/apps/feed":
+            from ccc_server import app_feed as _app_feed
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length)) if length > 0 else {}
+            except json.JSONDecodeError:
+                payload = None
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            _res, _st = _app_feed.append(payload, USER_APPS_DIR)
+            self.send_json(_res, _st)
+            return
+        if path == "/api/apps/concierge":
+            # One sentence in, a new app and its builder agent out.
+            from ccc_server import app_concierge as _app_concierge
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length)) if length > 0 else {}
+            except json.JSONDecodeError:
+                payload = None
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            result, status = _app_concierge.concierge(
+                payload, self.server.server_address[1], USER_APPS_DIR,
+                docs_path=str(CCC_ROOT / "docs" / "applications.md"))
+            if result.get("ok"):
+                _log_activity("apps", "CONCIERGE", f"app={result.get('app')}")
+            self.send_json(result, status)
+            return
         if path in ("/api/apps/routines/run", "/api/apps/routines/toggle",
-                    "/api/apps/routines/report", "/api/apps/agent"):
+                    "/api/apps/routines/report", "/api/apps/agent",
+                    "/api/apps/routines/update", "/api/apps/routines/delete"):
             # App routines and the app's builder agent. Same-origin already
             # enforced at the top of do_POST. A routine's command comes only
             # from the app's own app.json; callers pick a routine by id.

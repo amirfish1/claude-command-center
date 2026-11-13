@@ -1,0 +1,1 @@
+- Concierge: describe a new app in one sentence at `POST /api/apps/concierge` and an agent sets it up, asking at most three questions and proposing routines.
