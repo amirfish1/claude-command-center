@@ -8,6 +8,8 @@ a temp dir so the debounce state file is isolated.
 """
 
 import http.server
+import importlib.machinery
+import importlib.util
 import json
 import os
 import subprocess
@@ -19,6 +21,14 @@ import unittest
 from pathlib import Path
 
 CCC = str(Path(__file__).resolve().parent.parent / "ccc")
+
+
+def _load_ccc_cli():
+    loader = importlib.machinery.SourceFileLoader("ccc_cli_restart_under_test", CCC)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 class _Stub(http.server.BaseHTTPRequestHandler):
@@ -116,11 +126,13 @@ class CccRestartCliTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("not safe yet (drain in flight)", r.stdout)
         # Retry cadence is 60s in production; the runner honours the due time
-        # recorded in the state file, so pull it in for the test.
+        # recorded in the state file, so pull it in for the test. Use the
+        # CLI's lock: the detached runner also reads and rewrites this file,
+        # and an unlocked edit can be lost or expose partially written JSON.
         state_file = Path(self.home) / ".claude/command-center/restart-debounce.json"
-        state = json.loads(state_file.read_text())
-        state["pending"]["due"] = time.time()
-        state_file.write_text(json.dumps(state))
+        cli = _load_ccc_cli()
+        cli.RESTART_STATE_FILE = str(state_file)
+        cli._restart_state_update(lambda state: state["pending"].update(due=time.time()))
         self.assertEqual(self.wait_posts(2, timeout=45),
                          [("409", "/api/restart/worker"), ("200", "/api/restart/worker")])
 
@@ -135,8 +147,7 @@ class WaitDashboardBackTests(unittest.TestCase):
     """_wait_dashboard_back identifies a new process generation; execvp keeps the pid."""
 
     def setUp(self):
-        from importlib.machinery import SourceFileLoader
-        self.m = SourceFileLoader("ccc_cli_under_test", CCC).load_module()
+        self.m = _load_ccc_cli()
         import time as _t
         self._sleep = _t.sleep
         _t.sleep = lambda s: None
