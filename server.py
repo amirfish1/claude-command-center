@@ -11404,6 +11404,34 @@ _ENGINE_LIVE_TTL = 4.0
 _codex_pool_alive_cache = {"ts": 0.0, "alive": True}
 
 
+def _spawned_engine_session_ids():
+    """Non-Claude sessions this process spawned that are still running.
+    Lives in this process's memory (_spawned_sessions), so a helper process
+    cannot see it (CCC-319)."""
+    sids = set()
+    for s in _spawned_sessions:
+        engine = str(s.get("engine") or "claude").lower()
+        if engine in ("claude", "remote-claude"):
+            continue
+        try:
+            if _poll_spawn_entry(s) is not None:
+                continue
+        except Exception:
+            continue
+        sid = s.get("session_id")
+        if not sid:
+            log = s.get("log")
+            if engine == "codex":
+                sid = _extract_codex_thread_id_from_log(log)
+            elif engine == "gemini":
+                sid = _extract_gemini_session_id_from_log(log)
+            elif engine == "cursor":
+                sid = _extract_cursor_chat_id_from_log(log) or _cursor_session_id_for_spawn_entry(s)
+        if sid:
+            sids.add(sid)
+    return sids
+
+
 def _live_engine_session_ids():
     """Set of session ids for non-Claude engine CLIs currently running.
 
@@ -11425,26 +11453,7 @@ def _live_engine_session_ids():
                 for tok in cmd.split():
                     if len(tok) >= 16 and _command_targets_engine_session(cmd, tok, engine):
                         sids.add(tok)
-        for s in _spawned_sessions:
-            engine = str(s.get("engine") or "claude").lower()
-            if engine in ("claude", "remote-claude"):
-                continue
-            try:
-                if _poll_spawn_entry(s) is not None:
-                    continue
-            except Exception:
-                continue
-            sid = s.get("session_id")
-            if not sid:
-                log = s.get("log")
-                if engine == "codex":
-                    sid = _extract_codex_thread_id_from_log(log)
-                elif engine == "gemini":
-                    sid = _extract_gemini_session_id_from_log(log)
-                elif engine == "cursor":
-                    sid = _extract_cursor_chat_id_from_log(log) or _cursor_session_id_for_spawn_entry(s)
-            if sid:
-                sids.add(sid)
+        sids.update(_spawned_engine_session_ids())
     except Exception:
         # Never let liveness detection break the list; fall back to last cache.
         return cached["sids"]
@@ -11678,6 +11687,56 @@ _LIVE_ACTIVITY_FIELD_KEYS = (
 )
 
 
+def _acp_attached_session_ids():
+    """Attached ACP (kimi/grok) sessions with recent activity. The ACP registry
+    is in this process's memory, so a helper process cannot see it (CCC-319)."""
+    sids = set()
+    # ACP-attached sessions (kimi/grok harnesses) own no per-session OS
+    # process — the harness is one shared stdio process with no session id
+    # on its command line — so neither the registry, the resume-arg scan,
+    # nor Claude sidecars ever nominate them. A live ACP session was
+    # invisible here: kimi always, and grok whenever the harness (not a
+    # `grok --resume` TUI) drives it. The ACP registry is in-memory, so
+    # this union is free; gate on recency with the same window as sidecar
+    # markers so ancient idle sessions don't flood candidacy (every kimi/
+    # grok sid passes the harness-availability liveness probe).
+    try:
+        now = time.time()
+        for harness in (_ACP_HARNESSES or ()):
+            try:
+                if not _acp_harness_enabled(harness):
+                    continue
+                # CCC-142: a busy lock means another thread is loading or
+                # mutating ACP state (~18-30s at boot); take a lock-free
+                # copy and let a later poll load, instead of stalling here.
+                if _ACP_LOCK.acquire(timeout=0.05):
+                    try:
+                        _acp_load_state(harness)
+                        acp_sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
+                    finally:
+                        _ACP_LOCK.release()
+                else:
+                    acp_sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
+            except Exception:
+                continue
+            for acp_sid, acp_state in acp_sessions.items():
+                if not acp_sid or not isinstance(acp_state, dict):
+                    continue
+                if not acp_state.get("attached"):
+                    continue
+                if str(acp_state.get("status") or "") == "closed":
+                    continue
+                try:
+                    updated = float(acp_state.get("updated_at") or 0)
+                except (TypeError, ValueError):
+                    updated = 0.0
+                if updated and (now - updated) < _SIDECAR_LIVE_WINDOW:
+                    sids.add(str(acp_sid))
+    except Exception:
+        pass
+    return sids
+
+
 def _discover_live_session_ids():
     """Session ids that may have live-work indicators right now.
 
@@ -11735,49 +11794,7 @@ def _discover_live_session_ids():
                     sids.add(sid)
         except OSError:
             pass
-    # ACP-attached sessions (kimi/grok harnesses) own no per-session OS
-    # process — the harness is one shared stdio process with no session id
-    # on its command line — so neither the registry, the resume-arg scan,
-    # nor Claude sidecars ever nominate them. A live ACP session was
-    # invisible here: kimi always, and grok whenever the harness (not a
-    # `grok --resume` TUI) drives it. The ACP registry is in-memory, so
-    # this union is free; gate on recency with the same window as sidecar
-    # markers so ancient idle sessions don't flood candidacy (every kimi/
-    # grok sid passes the harness-availability liveness probe).
-    try:
-        now = time.time()
-        for harness in (_ACP_HARNESSES or ()):
-            try:
-                if not _acp_harness_enabled(harness):
-                    continue
-                # CCC-142: a busy lock means another thread is loading or
-                # mutating ACP state (~18-30s at boot); take a lock-free
-                # copy and let a later poll load, instead of stalling here.
-                if _ACP_LOCK.acquire(timeout=0.05):
-                    try:
-                        _acp_load_state(harness)
-                        acp_sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
-                    finally:
-                        _ACP_LOCK.release()
-                else:
-                    acp_sessions = dict(_ACP_SESSION_STATE.get(harness) or {})
-            except Exception:
-                continue
-            for acp_sid, acp_state in acp_sessions.items():
-                if not acp_sid or not isinstance(acp_state, dict):
-                    continue
-                if not acp_state.get("attached"):
-                    continue
-                if str(acp_state.get("status") or "") == "closed":
-                    continue
-                try:
-                    updated = float(acp_state.get("updated_at") or 0)
-                except (TypeError, ValueError):
-                    updated = 0.0
-                if updated and (now - updated) < _SIDECAR_LIVE_WINDOW:
-                    sids.add(str(acp_sid))
-    except Exception:
-        pass
+    sids.update(_acp_attached_session_ids())
     return sids
 
 
@@ -13828,7 +13845,10 @@ def build_live_sessions_activity():
         _t0 = time.perf_counter()
         _c0 = time.thread_time()
         _detail = {}
-        data = _build_live_sessions_activity_uncached(_detail)
+        data, _built_at = _live_activity_via_helper(_detail)
+        if data is None:
+            data = _build_live_sessions_activity_uncached(_detail)
+            _built_at = None
         _build_ms = (time.perf_counter() - _t0) * 1000.0
         # Thread CPU next to wall time: cpu << ms means the build was waiting
         # (GIL convoy, saturated host, subprocess), not computing (CCC-168).
@@ -13842,10 +13862,72 @@ def build_live_sessions_activity():
         except Exception:
             pass
         snap["data"] = data
-        snap["ts"] = time.time()
+        # The status is as old as the helper's read, not the reply: a read
+        # that waited for the dashboard (or the helper) must not look new.
+        snap["ts"] = _built_at or time.time()
         snap["saved_at"] = None
         _save_live_activity_snapshot(data, snap["ts"])
         return data
+
+
+# CCC-319: liveness and activity are built in a separate helper process so a
+# stalled dashboard GIL cannot hold them up. The helper rebuilds when its copy
+# is older than this, so the status is about as fresh as a local build.
+_LIVE_ACTIVITY_HELPER_MAX_AGE_S = 1.0
+
+
+def _live_state_only_in_dashboard():
+    """Sessions whose live state exists only in this process's memory: the
+    attached ACP (kimi/grok) registry and the non-Claude spawns this dashboard
+    started. A helper process cannot see either, so these are always built
+    here; without that they would read idle or ended."""
+    sids = set()
+    for fn in (_acp_attached_session_ids, _spawned_engine_session_ids):
+        try:
+            sids.update(fn())
+        except Exception:
+            pass
+    return sids
+
+
+def _live_activity_via_helper(detail):
+    """(sessions, built_at) from the live-status helper process, or
+    (None, None) when it is off, not ready, slow or failed. The caller then
+    builds in-process, exactly as before the helper existed. Never returns
+    a partial or guessed result."""
+    from ccc_server import bg_helper
+    if bg_helper.is_child() or os.environ.get("CCC_WORKER_PROCESS") == "1":
+        return None, None
+    if not bg_helper.live_enabled():
+        return None, None
+    t0 = time.perf_counter()
+    reply = bg_helper.call(
+        "live_activity", role="live", timeout=bg_helper.LIVE_CALL_TIMEOUT_S,
+        max_age_s=_LIVE_ACTIVITY_HELPER_MAX_AGE_S,
+    )
+    rtt_ms = (time.perf_counter() - t0) * 1000.0
+    data = reply.get("data") if reply else None
+    built_at = reply.get("built_at") if reply else None
+    if not isinstance(data, dict) or not isinstance(built_at, (int, float)):
+        return None, None
+    data = dict(data)
+    local = _live_state_only_in_dashboard()
+    if not _control_plane_routes_engines():
+        # Codex app-server activity is only readable here when no worker owns it.
+        local.update(sid for sid in data if _detect_session_engine(sid) == "codex")
+    for sid in local:
+        if not _archive_session_is_live(sid):
+            data.pop(sid, None)
+            continue
+        raw = _live_activity_entry_for_session(sid)
+        data[sid] = {k: raw.get(k) for k in _LIVE_ACTIVITY_FIELD_KEYS}
+    detail.update(reply.get("detail") or {})
+    detail.update(helper=True, helper_pid=reply.get("pid"),
+                  helper_build_ms=round(float(reply.get("build_ms") or 0.0), 1),
+                  helper_rtt_ms=round(rtt_ms, 1),
+                  helper_age_ms=round(max(0.0, (time.time() - built_at) * 1000.0), 1),
+                  local_sessions=len(local))
+    return data, float(built_at)
 
 
 def _live_activity_saved_path():

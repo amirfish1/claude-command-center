@@ -59,7 +59,18 @@ CHILD_ENV = "CCC_BG_HELPER_CHILD"
 _lock = threading.Lock()
 _state = {"sock": None, "proc": None, "ready": False, "errors": 0,
           "started_at": 0.0}
+# CCC-319: the live-status build (liveness + activity) runs in its own child
+# (role "live"), apart from the warmers above. Those warmers (full FTS and
+# ship-graph index syncs) would compete for that child's GIL and recreate the
+# stalls the move is meant to remove.
+_live_state = {"sock": None, "proc": None, "ready": False, "errors": 0,
+               "started_at": 0.0}
+_STATES = {"main": _state, "live": _live_state}
 _stats = {"calls": 0, "errors": 0}
+# A live build that takes longer than this is treated as a helper failure: the
+# dashboard builds in-process instead of waiting (and the child is recycled
+# after repeated failures).
+LIVE_CALL_TIMEOUT_S = float(os.environ.get("CCC_LIVE_HELPER_TIMEOUT_S", "20") or 20)
 
 
 def enabled():
@@ -71,8 +82,9 @@ def is_child():
     return os.environ.get(CHILD_ENV) == "1"
 
 
-def socket_path(parent_pid=None):
-    return COMMAND_CENTER_STATE_DIR / f"bg-helper-{parent_pid or os.getpid()}.sock"
+def socket_path(parent_pid=None, role="main"):
+    tag = "" if role == "main" else f"-{role}"
+    return COMMAND_CENTER_STATE_DIR / f"bg-helper{tag}-{parent_pid or os.getpid()}.sock"
 
 
 # ---------------------------------------------------------------- dashboard
@@ -84,10 +96,19 @@ def start():
         return None
     with _lock:
         _state["started_at"] = time.monotonic()
+        _live_state["started_at"] = time.monotonic()
+    if live_enabled():
+        threading.Thread(target=_supervise, args=("live",),
+                         name="bg-helper-live-supervisor", daemon=True).start()
     thread = threading.Thread(target=_supervise, name="bg-helper-supervisor",
                               daemon=True)
     thread.start()
     return thread
+
+
+def live_enabled():
+    return (os.environ.get("CCC_LIVE_HELPER", "1").strip().lower()
+            not in ("0", "false", "no", "off"))
 
 
 def ready():
@@ -102,7 +123,7 @@ def starting():
                 and time.monotonic() - _state["started_at"] < READY_TIMEOUT_S)
 
 
-def _spawn(path):
+def _spawn(path, role="main"):
     env = dict(os.environ)
     env[CHILD_ENV] = "1"
     try:
@@ -111,39 +132,40 @@ def _spawn(path):
         pass
     return subprocess.Popen(
         [sys.executable, "-m", "ccc_server.bg_helper",
-         "--sock", str(path), "--parent", str(os.getpid())],
+         "--sock", str(path), "--parent", str(os.getpid()), "--role", role],
         cwd=str(PROJECT_ROOT), env=env, stdin=subprocess.DEVNULL,
     )
 
 
-def _supervise():
-    path = socket_path()
+def _supervise(role="main"):
+    state = _STATES[role]
+    path = socket_path(role=role)
     backoff = 2.0
     while True:
         started = time.monotonic()
         try:
-            proc = _spawn(path)
+            proc = _spawn(path, role)
         except Exception as exc:
-            print(f"  [bg-helper] spawn failed: {exc}", flush=True)
+            print(f"  [bg-helper:{role}] spawn failed: {exc}", flush=True)
             time.sleep(backoff)
             backoff = min(backoff * 2, 60.0)
             continue
         with _lock:
-            _state.update(sock=str(path), proc=proc, ready=False, errors=0)
+            state.update(sock=str(path), proc=proc, ready=False, errors=0)
         deadline = time.monotonic() + READY_TIMEOUT_S
         while proc.poll() is None and time.monotonic() < deadline:
             if path.exists():
                 with _lock:
-                    _state["ready"] = True
-                print(f"  [bg-helper] pid {proc.pid} ready on {path}", flush=True)
+                    state["ready"] = True
+                print(f"  [bg-helper:{role}] pid {proc.pid} ready on {path}", flush=True)
                 break
             time.sleep(0.1)
         if proc.poll() is None and not path.exists():
             proc.kill()
         proc.wait()
         with _lock:
-            _state.update(ready=False, proc=None)
-        print(f"  [bg-helper] pid {proc.pid} exited rc={proc.returncode}",
+            state.update(ready=False, proc=None)
+        print(f"  [bg-helper:{role}] pid {proc.pid} exited rc={proc.returncode}",
               flush=True)
         if time.monotonic() - started > 300:
             backoff = 2.0
@@ -151,23 +173,25 @@ def _supervise():
         backoff = min(backoff * 2, 60.0)
 
 
-def _note_error():
+def _note_error(state=None):
+    state = _state if state is None else state
     with _lock:
         _stats["errors"] += 1
-        _state["errors"] += 1
-        proc = _state.get("proc")
-        if _state["errors"] >= MAX_CONSECUTIVE_ERRORS and proc is not None:
-            _state["ready"] = False
+        state["errors"] += 1
+        proc = state.get("proc")
+        if state["errors"] >= MAX_CONSECUTIVE_ERRORS and proc is not None:
+            state["ready"] = False
             try:
                 proc.kill()
             except Exception:
                 pass
 
 
-def call(op, timeout=None, **fields):
+def call(op, timeout=None, role="main", **fields):
     """The child's JSON reply to `op`, or None (caller runs in-process)."""
+    state = _STATES[role]
     with _lock:
-        path = _state["sock"] if _state["ready"] else None
+        path = state["sock"] if state["ready"] else None
     if not path:
         return None
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -181,21 +205,25 @@ def call(op, timeout=None, **fields):
         if not isinstance(reply, dict) or not reply.get("ok"):
             raise ConnectionError(f"bg helper declined {op}")
     except Exception:
-        _note_error()
+        _note_error(state)
         return None
     finally:
         sock.close()
     with _lock:
         _stats["calls"] += 1
-        _state["errors"] = 0
+        state["errors"] = 0
     return reply
 
 
 def status():
     with _lock:
         proc = _state.get("proc")
+        live_proc = _live_state.get("proc")
         return {"enabled": enabled(), "ready": bool(_state["ready"]),
-                "pid": proc.pid if proc is not None else None, **dict(_stats)}
+                "pid": proc.pid if proc is not None else None,
+                "live_ready": bool(_live_state["ready"]),
+                "live_pid": live_proc.pid if live_proc is not None else None,
+                **dict(_stats)}
 
 
 # -------------------------------------------------------------------- child
@@ -211,6 +239,8 @@ class _Child:
         self.board_rev = 0
         self.ux_lock = threading.Lock()
         self.ux = {"ts": 0.0, "body": None, "rev": 0}
+        self.live_lock = threading.Lock()
+        self.live = {"ts": 0.0, "data": None, "detail": None, "ms": 0.0}
 
     # gh-queue-watch ------------------------------------------------------
     def gh_tick(self, req):
@@ -266,6 +296,27 @@ class _Child:
             reply["data"] = json.loads(body)
         return reply
 
+    # live-activity (CCC-319) ---------------------------------------------
+    def live_activity(self, req):
+        """Liveness + activity for every candidate session, built on this
+        process's own GIL. One build at a time; a build newer than
+        ``max_age_s`` is shared, so concurrent callers do not stack builds.
+        ``built_at`` is when the data was read, so the dashboard can report
+        its true age rather than the age of the reply."""
+        max_age = max(0.0, float(req.get("max_age_s") or 0.0))
+        with self.live_lock:
+            live = self.live
+            if live["data"] is None or time.time() - live["ts"] >= max_age:
+                detail = {}
+                t0 = time.perf_counter()
+                started = time.time()
+                data = self.server._build_live_sessions_activity_uncached(detail)
+                live.update(ts=started, data=data, detail=detail,
+                            ms=(time.perf_counter() - t0) * 1000.0)
+            return {"ok": True, "built_at": live["ts"], "build_ms": live["ms"],
+                    "detail": live["detail"], "data": live["data"],
+                    "pid": os.getpid()}
+
     # ship-graph-warm -----------------------------------------------------
     def ship_sync(self, req):
         from ccc_server import ship_graph
@@ -285,6 +336,7 @@ class _Child:
             op = str(req.get("op") or "")
             fn = {"gh_tick": self.gh_tick, "ux_health": self.ux_health,
                   "ship_sync": self.ship_sync, "fts_sync": self.fts_sync,
+                  "live_activity": self.live_activity,
                   "ping": lambda r: {"ok": True}}.get(op)
             try:
                 reply = fn(req) if fn else {"ok": False, "error": "unknown op"}
@@ -329,7 +381,7 @@ def _watch_parent(parent_pid, path, inode=None):
         time.sleep(1.0)
 
 
-def serve(path, parent_pid):
+def serve(path, parent_pid, role="main"):
     os.umask(0o077)
     path = Path(path)
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -337,8 +389,9 @@ def serve(path, parent_pid):
     memory_release.start()
     import server as server_mod  # noqa: E402  (heavy; child only)
     child = _Child(server_mod)
-    threading.Thread(target=child.gh_reaper, name="bg-helper-gh-reaper",
-                     daemon=True).start()
+    if role == "main":
+        threading.Thread(target=child.gh_reaper, name="bg-helper-gh-reaper",
+                         daemon=True).start()
     try:
         path.unlink()
     except OSError:
@@ -357,7 +410,7 @@ def serve(path, parent_pid):
                      name="bg-helper-parent-watch", daemon=True).start()
     # The dashboard defers its boot-time ship-graph and session-fts warms
     # to this process.
-    for warm in (child.ship_sync, child.fts_sync):
+    for warm in (child.ship_sync, child.fts_sync) if role == "main" else ():
         try:
             warm({})
         except Exception:
@@ -372,7 +425,8 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     path = argv[argv.index("--sock") + 1]
     parent = int(argv[argv.index("--parent") + 1])
-    serve(path, parent)
+    role = argv[argv.index("--role") + 1] if "--role" in argv else "main"
+    serve(path, parent, role)
 
 
 if __name__ == "__main__":

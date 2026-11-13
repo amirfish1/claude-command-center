@@ -1,0 +1,1 @@
+- Live session status (working/idle chips) is now built in its own helper process, so a busy or stalled dashboard no longer delays it. If the helper is down or slow, the dashboard builds it itself as before.
