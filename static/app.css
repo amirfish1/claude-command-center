@@ -17262,15 +17262,10 @@
       transform: translateX(0);
     }
 
-    /* Between the rail's own 700px cutoff (app-rail.js) and this 1200px
-       breakpoint, the app-rail is still visible and fixed at left:0 above
-       .main's z-index:800 — .main's left:0 above puts its content straight
-       under the rail. Below 700px the rail is gone and left:0 is correct
-       as-is. */
-    @media (min-width: 701px) {
-      body:not(.kanban-split) .main {
-        left: var(--ccc-rail-w, 76px);
-      }
+    /* Advanced keeps the app rail even on phones. Simple mode sets the
+       rail width to zero while its bottom navigation is present. */
+    body:not(.kanban-split) .main {
+      left: var(--ccc-rail-w, 76px);
     }
 
     .mobile-back-btn {
@@ -28955,9 +28950,6 @@ body.ccc-mobile-redesign .conv-item .mobile-details-panel .conv-goal-icon-only {
   background: var(--bg, #0d1117);
 }
 .ccc-core-app-frame:not([hidden]) { display: block; }
-@media (max-width: 700px) {
-  .ccc-core-app-frame { left: 0; width: 100%; }
-}
 body.has-mobile-bottom-nav .ccc-core-app-frame {
   height: calc(100% - 64px - env(safe-area-inset-bottom, 0px));
 }

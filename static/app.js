@@ -22448,13 +22448,9 @@
     if (!isMobileRedesign() || isSimpleMode()) _setMobileAskOpen(false);
   });
   function _mobileBottomNavShouldShow() {
-    if (!isMobileRedesign()) return false;
-    if (isSimpleMode()) return true;
-    if (document.body.classList.contains('conversation-popout')) return false;
-    if (document.body.classList.contains('flow-popout')) return false;
-    if (typeof isFlowView === 'function' && isFlowView()) return false;
-    if (document.body.classList.contains('kanban-split')) return false;
-    return true;
+    // Advanced uses the app rail at every width. Only Simple mode owns
+    // the Home / Tasks / Helpers / More bottom navigation.
+    return isMobileChromeActive();
   }
   // Sidebar Jobs tab badge: failed + stale jobs (blank when all healthy or unloaded).
   function _jobsTabCount() {

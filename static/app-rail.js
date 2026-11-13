@@ -235,10 +235,10 @@
     ".ccc-account-pop .acc-btn:disabled { opacity: .55; cursor: default; }",
     /* Morning's own wrappers hug the old nav; keep them off the rail. */
     ".mv-wrap, .mk-wrap { padding-left: 20px !important; }",
-    /* Phones and the PWA have no room for the gutter. */
+    /* Simple mode owns its bottom navigation; Advanced keeps the app rail. */
     "@media (max-width: 700px) {",
-    "  .ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag, .ccc-account-wrap, .ccc-account-pop { display: none; }",
-    "  body { padding-left: 0; }",
+    "  body.has-mobile-bottom-nav :is(.ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag, .ccc-account-wrap, .ccc-account-pop) { display: none; }",
+    "  body.has-mobile-bottom-nav { padding-left: 0; }",
     "}"
   ].join("\n");
   document.head.appendChild(style);
