@@ -32766,8 +32766,8 @@ body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
    hairline, no accent glow or ">" glyph, sans-serif text, and round buttons
    (+ menu on the left, Send/mic slot on the right). Prefixed with
    html body .conv-split so it outranks conversation themes' !important
-   rules (e.g. Stitch's square corners and monospace) on touch only. */
-@media (pointer: coarse) {
+   rules (e.g. Stitch's square corners and monospace) on touch or narrow screens. */
+@media (pointer: coarse), (max-width: 1200px) {
   html body .conv-split .conv-pane .conv-input-bar.visible {
     background: color-mix(in srgb, var(--text, #e5e2e3) 8%, var(--bg, #0a0a0b)) !important;
     border: 1px solid color-mix(in srgb, var(--text, #e5e2e3) 14%, transparent) !important;
@@ -32862,18 +32862,14 @@ body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
 /* Floating speaker while being dragged: no slide transition lag. */
 .conv-scroll-speak-btn.is-dragging { transition: none !important; opacity: 0.85; }
 
-/* ── Phone composer, iMessage layout ───────────────────────────────────────
-   The + sits outside the card on the left; the card is only the text, with
-   expand + Send/mic tucked into its bottom-right corner, so every line of the
-   card is text. The textarea grows with what you type up to ~30% of the
-   visible height (expand mode keeps its own size). Overrides the card block
-   above: same selector weight, later in the file. */
-@media (pointer: coarse) {
+/* Compact composer on touch and narrow screens: text, + and Send share
+   one line initially; the textarea still grows naturally with the draft. */
+@media (pointer: coarse), (max-width: 1200px) {
   html body .conv-split .conv-pane .conv-input-bar.visible {
-    display: grid !important;
-    grid-template-columns: auto minmax(0, 1fr);
-    column-gap: 8px;
-    row-gap: 6px;
+    display: flex !important;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px 8px;
     align-items: end;
     background: transparent !important;
     border: 0 !important;
@@ -32883,12 +32879,12 @@ body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
   }
   html body .conv-split .conv-pane .conv-input-bar.visible:focus-within { border: 0 !important; }
   html body .conv-split .conv-pane .conv-input-bar > .conv-input-row-top {
-    grid-column: 2;
-    grid-row: 1;
-    display: flex;
-    align-items: center;
+    flex: 1 1 160px;
+    order: 2;
+    width: auto;
+    min-width: min(160px, calc(100% - 144px));
     min-height: 44px;
-    padding: 9px 84px 9px 14px;
+    padding: 9px 14px;
     background: color-mix(in srgb, var(--text, #e5e2e3) 8%, var(--bg, #0a0a0b));
     border: 1px solid color-mix(in srgb, var(--text, #e5e2e3) 14%, transparent);
     border-radius: 22px;
@@ -32900,56 +32896,33 @@ body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
   html body .conv-split .conv-pane .conv-input-bar:not([data-composer-mode="expand"]) #convInput {
     max-height: calc(var(--app-vh, 100vh) * 0.3) !important;
   }
-  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom { display: contents; }
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom,
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons { display: contents; }
   html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > *,
-  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > * {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > * { order: 4; }
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > .attach-btn,
   html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > .conv-actions-group {
-    grid-column: 1;
-    grid-row: 1;
-    align-self: end;
+    order: 1;
+    flex: 0 0 auto;
     margin: 0;
   }
-  /* Send lives in .conv-send-group (with its hidden caret/menu); place the
-     group, and the bare mic, in the card's bottom-right corner. */
   html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .conv-send-group,
   html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: end;
-    align-self: end;
-    z-index: 2;
-    margin: 0 4px 4px 0;
+    order: 3;
+    flex: 0 0 auto;
   }
-  html body .conv-split .conv-pane .conv-input-bar:not(.has-text) .conv-input-buttons > .conv-send-group { display: none; }
-  html body .conv-split .conv-pane .conv-input-bar .conv-send-group > .send-btn,
-  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn {
-    width: 36px !important;
-    height: 36px !important;
-    min-width: 36px !important;
-    min-height: 36px !important;
-  }
-  html body .conv-split .conv-pane .conv-input-bar .conv-send-group > .send-btn svg,
-  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .mic-btn svg { width: 20px; height: 20px; }
-  /* Cold-session gate ("Large and stale" rail + Continue new pill): the rail
-     needs its own full-width row, or auto-placement drops it into the narrow
-     `auto` column, widens that column to the rail's text and shoves the card
-     off-screen. The card moves to the last row so the absolutely placed
-     expand arrow still lands in its corner. */
-  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) > .f2c-rail {
-    grid-column: 1 / -1;
-    grid-row: 1;
+  html body .conv-split .conv-pane .conv-input-bar:not(.has-text) .conv-input-buttons > .conv-send-group,
+  html body .conv-split .conv-pane .conv-input-bar.has-text .mic-btn:not(.recording) { display: none; }
+  /* The cold-session notice and route choice keep their own full-width rows. */
+  html body .conv-split .conv-pane .conv-input-bar > .f2c-rail:not([hidden]) {
+    order: 0;
+    flex: 1 0 100%;
     min-width: 0;
     padding-bottom: 0;
     border-bottom: 0;
   }
-  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) > .conv-input-row-top,
-  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-row-bottom > .conv-actions-group,
-  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-buttons > .conv-send-group,
-  html body .conv-split .conv-pane .conv-input-bar:has(> .f2c-rail:not([hidden])) .conv-input-buttons > .mic-btn {
-    grid-row: 3;
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > .f2c-panel:not([hidden]) {
+    flex: 1 0 100%;
   }
 }
 
