@@ -1,0 +1,1 @@
+- Routine alerts can also be delivered outside the dashboard through opt-in channels (WhatsApp to your own chat, dry run by default); set up in `app-channels.json`.

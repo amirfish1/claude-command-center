@@ -283,9 +283,14 @@ def _post_json(port, path, body, timeout=60):
 
 
 def _notify(port, app_id, routine, note, alert):
+    title = str((note or {}).get("title") or routine["name"])
+    try:
+        from ccc_server import app_channels
+        app_channels.deliver(title, str((note or {}).get("body") or ""), f"/view/{app_id}")
+    except Exception:
+        pass  # a channel must never break a routine
     if not port:
         return
-    title = str((note or {}).get("title") or routine["name"])
     _post_json(port, "/api/notify", {
         "title": title, "body": str((note or {}).get("body") or ""),
         "kind": "needs_input" if alert else "info", "url": f"/view/{app_id}",
@@ -422,6 +427,70 @@ def set_enabled(app_id, rid, enabled, apps_dir=None):
         return {"ok": False, "error": "unknown routine"}, 404
     _update_routine_state(folder, rid, enabled=bool(enabled))
     return {"ok": True, "enabled": bool(enabled)}, 200
+
+
+def _rewrite_manifest(folder, rid, change):
+    """Atomically rewrite only routine `rid` in app.json. `change(entry)` edits
+    the entry in place, or returns "delete" to drop it. Returns False when the
+    routine is not there."""
+    path = Path(folder) / "app.json"
+    with _lock:
+        meta = _read_json(path, {})
+        raw = meta.get("routines")
+        if not isinstance(raw, list):
+            return False
+        for i, entry in enumerate(raw):
+            if isinstance(entry, dict) and entry.get("id") == rid:
+                if change(entry) == "delete":
+                    del raw[i]
+                _write_json_atomic(path, meta)
+                return True
+    return False
+
+
+def update_routine(payload, apps_dir=None):
+    """Edit a routine's name, icon or schedule. Returns (result, http_status)."""
+    folder = app_dir(payload.get("app"), apps_dir)
+    if folder is None:
+        return {"ok": False, "error": "unknown app"}, 404
+    rid = payload.get("id")
+    if not any(r["id"] == rid for r in load_routines(folder)[0]):
+        return {"ok": False, "error": "unknown routine"}, 404
+    edits = {}
+    if "name" in payload:
+        name = " ".join(str(payload["name"] or "").split())[:80]
+        if not name:
+            return {"ok": False, "error": "The name cannot be empty"}, 400
+        edits["name"] = name
+    if "icon" in payload:
+        icon = str(payload["icon"] or "").strip()[:8]
+        if not icon:
+            return {"ok": False, "error": "Pick an icon"}, 400
+        edits["icon"] = icon
+    if "schedule" in payload:
+        sched = " ".join(str(payload["schedule"] or "").lower().split())
+        if sched and parse_schedule(sched) is None:
+            return {"ok": False, "error": "That schedule is not valid (at least every 5 minutes)"}, 400
+        edits["schedule"] = sched
+    if not edits:
+        return {"ok": False, "error": "nothing to change"}, 400
+    if not _rewrite_manifest(folder, rid, lambda e: e.update(edits)):
+        return {"ok": False, "error": "unknown routine"}, 404
+    return {"ok": True, **edits}, 200
+
+
+def delete_routine(app_id, rid, apps_dir=None):
+    """Remove a routine from app.json and forget its saved state."""
+    folder = app_dir(app_id, apps_dir)
+    if folder is None:
+        return {"ok": False, "error": "unknown app"}, 404
+    if not _rewrite_manifest(folder, rid, lambda e: "delete"):
+        return {"ok": False, "error": "unknown routine"}, 404
+    with _lock:
+        state = load_state(folder)
+        if state["routines"].pop(rid, None) is not None:
+            _write_json_atomic(folder / STATE_NAME, state)
+    return {"ok": True}, 200
 
 
 def report(payload, port, apps_dir=None):

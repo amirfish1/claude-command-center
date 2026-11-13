@@ -101,7 +101,8 @@ The kit adds two things:
   "Start the agent". Ask it to change the page or add a routine.
 - **Routines.** One card per routine with its schedule, its last result, an
   on/off switch and "Run now", plus a box that asks the agent to build a new
-  one. Put `data-ccc-routines` on the element that should hold the cards;
+  one. Click a card to see its last 10 runs and edit its name, icon and
+  schedule or delete it. Put `data-ccc-routines` on the element that should hold the cards;
   otherwise they go at the end of the page.
 
 A routine is a named, scheduled job declared in `app.json`:
@@ -146,8 +147,49 @@ app's folder; `app.json` stays yours.
 
 Endpoints: `GET /api/apps/routines?app=<id>` (omit `app` for a per-app
 summary), `POST /api/apps/routines/run` and `/toggle` with `{app, id}`,
-`POST /api/apps/routines/report` with `{app, id, summary, alert}`, and
+`POST /api/apps/routines/report` with `{app, id, summary, alert}`,
+`POST /api/apps/routines/update` with `{app, id, name?, icon?, schedule?}`
+(rewrites only that routine in `app.json`; the schedule must parse),
+`POST /api/apps/routines/delete` with `{app, id}`, and
 `POST /api/apps/agent` with `{app}`.
+
+### Alerts outside the dashboard
+
+Routine notifications can also go to your phone. Create
+`~/.claude/command-center/app-channels.json`; nothing is on until you turn it on:
+
+```json
+{ "whatsapp": { "enabled": true, "dry_run": true,
+                "chat_id": "15551234567@s.whatsapp.net" } }
+```
+
+- `whatsapp` messages **only your own chat** through a local WhatsApp bridge
+  (`bridge`, default `http://127.0.0.1:3000`). Groups and broadcasts are
+  refused. `dry_run` defaults to on: nothing is sent until you set it to `false`.
+- A channel that fails is skipped; the routine and the dashboard
+  notification are never affected.
+
+### A findings feed for research bots
+
+For an app whose routines look things up, add a feed: a timeline of cards,
+newest first, with an image when there is one. It refreshes on its own.
+
+```html
+<div data-ccc-feed></div>
+<script src="/static/app-feed.js" data-app="my-app" defer></script>
+```
+
+Routines append a card with `POST /api/apps/feed`:
+
+```bash
+curl -s -X POST http://127.0.0.1:8090/api/apps/feed -H 'Content-Type: application/json' \
+  -d '{"app":"my-app","title":"Price dropped","body":"Now $212.","url":"https://example.com/x","image":"https://example.com/x.jpg","routine":"price-watch"}'
+```
+
+Only `app` and `title` are required. `url` and `image` must be `http(s)` (an
+image may also be a `/app-static/...` path). The cards live in `feed.json` in
+the app's folder: the newest 200 are kept, writes are atomic. `GET
+/api/apps/feed?app=<id>` returns them.
 
 ## Embedding a dashboard that runs on another port
 
