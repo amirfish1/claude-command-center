@@ -39,7 +39,7 @@ class TemplatesTest(unittest.TestCase):
                     out = subprocess.run([sys.executable] + r["run"][1:], cwd=folder,
                                          capture_output=True, text=True, timeout=30)
                     self.assertEqual(out.returncode, 0, out.stderr)
-                    self.assertIn("summary", ar.parse_script_output(out.stdout))
+                    self.assertNotEqual(ar.parse_script_output(out.stdout)[0], "Done")
                 else:
                     self.assertTrue(r["prompt"])
 

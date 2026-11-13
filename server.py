@@ -34006,6 +34006,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _qs = urllib.parse.parse_qs(parsed.query)
             _res, _st = _app_feed.read((_qs.get("app", [""])[0] or "").strip(), USER_APPS_DIR)
             self.send_json(_res, _st)
+        elif path == "/api/apps/templates":
+            from ccc_server import app_templates as _app_templates
+            self.send_json({"ok": True, "templates": _app_templates.list_templates()})
         elif path == "/api/apps/routines":
             # An app's routines and builder agent (?app=<id>), or a one-line
             # summary per app for the Apps home. A few small file reads in the
@@ -37413,6 +37416,27 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "invalid JSON"}, 400)
                 return
             result, status = _app_previews.request(payload, self.server.server_address[1], USER_APPS_DIR)
+            self.send_json(result, status)
+            return
+        if path == "/api/apps/create":
+            # Copy a default template (app_templates/) into the user's apps folder.
+            from ccc_server import app_templates as _app_templates
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = None
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            result, status = _app_templates.create(
+                payload, USER_APPS_DIR, {a["id"] for a in _resolve_apps(include_disabled=True)})
+            if result.get("ok"):
+                order = [a["id"] for a in _resolve_apps(include_disabled=True)]
+                _apps_config_mutate(lambda cfg: cfg.__setitem__(
+                    "app_order", [i for i in order if i != result["id"]] + [result["id"]]))
+                _log_activity("apps", "CREATE", f"app={result['id']} template={result['template']}")
             self.send_json(result, status)
             return
         if path in ("/api/apps/add", "/api/apps/remove", "/api/apps/arrange"):
