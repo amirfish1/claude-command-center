@@ -227,3 +227,31 @@ test('pane titles replace drain prompts with the worker headline and preserve ow
   assert.equal(ctx.paneTitleForRow({...worker, continued_from_session_id: 'origin', display_name: 'Continue my task'}), 'Continue my task');
   assert.equal(ctx.paneTitleForRow({display_name: 'Ordinary session'}), 'Ordinary session');
 });
+
+
+test('Workers refresh joins a generic session to its newly claimed ticket before the history poll', async () => {
+  const ctx = harness();
+  const claimed = ticket(42, {status: 'in_progress', closed_at: '', claimed_at: '2026-01-02T12:00:00Z'});
+  Object.assign(ctx, {
+    _uxqItemsLoaded: false, _uxqItemsCache: {ts: 0, items: []}, _uxqItemsPromise: null,
+    _uxqItemsVersion: 0, _uxqKnownItemRefs: null, _uxqNewItemExpires: new Map(),
+    _UXQ_NEW_ITEM_GLOW_MS: 1000, _uxqItemRef: item => item.ref,
+    _queueSnapshotIsForeground: () => false,
+    _queueListFetch: async () => ({items: [claimed]}),
+  });
+  const paints = [];
+  ctx._scheduleSidebarRender = options => paints.push(options);
+  const start = app.indexOf('  function _uxqSyncTicketMeta(');
+  const end = app.indexOf('  // Per-project queue-health snapshot', start);
+  vm.runInContext(app.slice(start, end), ctx);
+  const generic = {session_id: 'session-one', display_name: 'EXAMPLE queue worker'};
+  assert.equal(ctx._uxFixesWorkerTicketsForRow(generic).length, 0);
+  await ctx._fetchUxqItems(false, true);
+  assert.equal(paints.length, 1, 'new claim schedules regrouping of existing session rows');
+  assert.equal(paints[0].lifecycle, true);
+  await ctx._fetchUxqItems(false, true);
+  assert.equal(paints.length, 1, 'unchanged claims do not schedule another structural repaint');
+  assert.equal(ctx._uxqItemsCache.items[0].ref, 'EXAMPLE-42');
+  assert.equal(ctx._uxFixesWorkerTicketsForRow(generic)[0].ref, 'EXAMPLE-42');
+  assert.equal(ctx._uxFixesWorkerTicketsForRow({session_id: 'another-session', display_name: 'EXAMPLE queue worker'}).length, 0);
+});

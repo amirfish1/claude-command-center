@@ -34892,3 +34892,19 @@ a.local-ci-job:hover { color: var(--accent); }
 }
 
 .conv-workers-activity .fq-recent-row.is-brief .fq-recent-meta > .conv-working-age { display: inline-flex; }
+
+/* Ticket details and session expansion have separate native controls. */
+.workers-ticket-link, .workers-ticket-title {
+  appearance: none; border: 0; border-radius: 0; padding: 0;
+  background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.workers-ticket-link { flex: 0 0 auto; font-family: 'JetBrains Mono', ui-monospace, monospace; }
+.workers-ticket-link:hover { text-decoration: underline; }
+.fq-recent-row.is-brief .fq-recent-title { display: flex; align-items: baseline; gap: 4px; }
+.workers-ticket-title {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+[data-workers-ticket-row] { cursor: pointer; }
+.workers-ticket-link:focus-visible, .workers-ticket-title:focus-visible {
+  outline: 2px solid var(--accent, #58a6ff); outline-offset: 2px;
+}

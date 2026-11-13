@@ -11,6 +11,9 @@ const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8')
 function itemsHarness(fetchImpl) {
   const ctx = vm.createContext({
     backgroundApiFetch: fetchImpl,
+    uxFixesQueueMeta: {},
+    _setUxFixesQueueMeta: () => ({_sig: 'items'}),
+    _scheduleSidebarRender: () => {},
     _queueSnapshotIsForeground: () => false,
     _uxqItemRef: it => it && it.ref,
     Date, Set, Map, Promise,

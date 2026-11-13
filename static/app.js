@@ -53885,6 +53885,11 @@
     })().finally(() => { _queueListMirrorPromise = null; });
     return _queueListMirrorPromise;
   }
+  function _uxqSyncTicketMeta(items) {
+    const previous = uxFixesQueueMeta && uxFixesQueueMeta._sig;
+    const meta = _setUxFixesQueueMeta(items);
+    if (meta._sig !== previous) _scheduleSidebarRender({ lifecycle: true });
+  }
   async function _fetchUxqItems(allowStale, force = false) {
     // Scope changes only filter this already-complete snapshot. Let that
     // interaction repaint immediately even when the normal TTL has elapsed;
@@ -53915,6 +53920,9 @@
       // this response (may be older than `now` under stale-while-revalidate).
       const syncedAt = typeof (data && data.synced_at) === 'number' ? data.synced_at * 1000 : now;
       _uxqItemsCache = { ts: now, items, syncedAt };
+      // Group sessions from the same snapshot as the visible ticket rows.
+      // Waiting for the separate history poll briefly duplicates new claims.
+      _uxqSyncTicketMeta(items);
       _uxqItemsLoaded = true;
     } catch (_) { /* keep stale cache */ }
     finally { _uxqItemsPromise = null; }
@@ -55987,7 +55995,7 @@
       })[0];
       const outcome = latestCard ? rowOutcomeView(latestCard) : null;
       const update = _workersMeaningfulUpdate((outcome && outcome.text) || row.summary);
-      const updateHtml = update ? '<div class="workers-ticket-update" title="' + escapeAttr(update) + '">'
+      const updateHtml = update ? '<div class="workers-ticket-update"' + (sessions ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '') + ' title="' + escapeAttr(update) + '">'
         + escapeHtml(update) + '</div>' : '';
       const timerHtml = working && latestCard ? wipAgeChipHtml(latestCard) : '';
       const absolute = new Date(row.at).toLocaleString();
@@ -55995,11 +56003,14 @@
       // Full evidence remains in ticket details; the tooltip previews the summary.
       const brief = i >= WORKERS_RECENT_DETAILED;
       const briefTitle = brief && row.summary ? '\n\n' + row.summary : '';
-      const ticketButton = '<button type="button" class="fq-recent-row' + (brief ? ' is-brief' : ' is-detailed') + '"'
-        + ' data-uxq-recent-ref="' + escapeAttr(ref) + '"'
+      const expanded = _workersTicketExpanded.has(ref);
+      const toggleAttrs = sessions ? ' data-workers-ticket-toggle="' + escapeAttr(ref) + '" aria-expanded="' + expanded + '"' : '';
+      const ticketButton = '<div class="fq-recent-row' + (brief ? ' is-brief' : ' is-detailed') + '"'
+        + (sessions ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '')
         + (brief ? ' title="' + escapeAttr(state + ' · ' + _uxqRelTime(row.at) + briefTitle) + '"' : '')
-        + ' aria-label="Open full details for ' + escapeAttr(ref + ': ' + title) + '">'
-        + '<span class="fq-recent-title"><span class="fq-recent-ref">' + escapeHtml(item._sessionOnly ? 'Session' : ref) + '</span> ' + escapeHtml(title) + '</span>'
+        + '>'
+        + '<span class="fq-recent-title"><button type="button" class="fq-recent-ref workers-ticket-link" data-uxq-recent-ref="' + escapeAttr(ref) + '" aria-label="Open ' + escapeAttr(item._sessionOnly ? 'session' : ref + ' details') + '">' + escapeHtml(item._sessionOnly ? 'Session' : ref) + '</button> '
+        + (sessions ? '<button type="button" class="workers-ticket-title"' + toggleAttrs + '>' + escapeHtml(title) + '</button>' : escapeHtml(title)) + '</span>'
         + '<span class="fq-recent-meta"><span class="fq-recent-state' + (needsYou ? ' is-needs-you' : working ? ' is-working' : row.resolved ? ' is-resolved' : '') + '">' + escapeHtml(state) + '</span>'
         + (timerHtml || '<time class="fq-recent-resolved" datetime="' + escapeAttr(row.at) + '" title="Last activity: ' + escapeAttr(absolute) + '">'
           + escapeHtml(_uxqRelTime(row.at)) + '</time>')
@@ -56011,13 +56022,12 @@
         + '<span class="fq-recent-rel">' + escapeHtml(_uxqRelTime(row.at)) + '</span>'
         + '<span class="fq-recent-abs"> · ' + escapeHtml(absolute) + '</span></time>'
         + (row.summary ? '<span class="fq-recent-summary">' + escapeHtml(row.summary) + '</span>' : '')
-        + '<span class="fq-recent-details">Full details ↗</span></button>';
+        + '</div>';
       if (!sessions) return '<div class="workers-ticket-entry">' + ticketButton + updateHtml + '</div>';
       const label = sessions.count + (sessions.count === 1 ? ' session' : ' sessions')
         + (sessions.lanes ? ' · ' + sessions.lanes + (sessions.lanes === 1 ? ' lane' : ' lanes') : '');
-      const expanded = _workersTicketExpanded.has(ref);
       return '<div class="workers-ticket-entry' + (sessions.lanes ? ' has-lanes' : '') + '" data-workers-ticket="' + escapeAttr(ref) + '">'
-        + '<div class="workers-ticket-heading">' + ticketButton
+        + '<div class="workers-ticket-heading" data-workers-ticket-row="' + escapeAttr(ref) + '">' + ticketButton
         + '<button type="button" class="workers-ticket-toggle" data-workers-ticket-toggle="' + escapeAttr(ref) + '"'
         + ' aria-expanded="' + expanded + '" aria-label="' + escapeAttr('Session and lane details for ' + ref) + '">'
         + escapeHtml(label) + '</button></div>' + updateHtml
@@ -56039,14 +56049,16 @@
       if ($el.dataset.recentWorkBound) return;
       $el.dataset.recentWorkBound = '1';
       $el.addEventListener('click', ev => {
-        const toggle = ev.target.closest && ev.target.closest('[data-workers-ticket-toggle]');
+        const ticketLink = ev.target.closest && ev.target.closest('[data-uxq-recent-ref]');
+        const toggle = !ticketLink && ev.target.closest && ev.target.closest('[data-workers-ticket-toggle], [data-workers-ticket-row]');
         if (toggle) {
           ev.preventDefault();
           ev.stopPropagation();
-          const ref = toggle.dataset.workersTicketToggle;
-          const body = toggle.closest('.workers-ticket-entry').querySelector('.workers-ticket-session-body');
-          const expanded = toggle.getAttribute('aria-expanded') !== 'true';
-          toggle.setAttribute('aria-expanded', String(expanded));
+          const ref = toggle.dataset.workersTicketToggle || toggle.dataset.workersTicketRow;
+          const entry = toggle.closest('.workers-ticket-entry');
+          const body = entry.querySelector('.workers-ticket-session-body');
+          const expanded = body.hidden;
+          entry.querySelectorAll('[data-workers-ticket-toggle]').forEach(button => button.setAttribute('aria-expanded', String(expanded)));
           body.hidden = !expanded;
           _workersRememberTicketExpansion(ref, expanded);
           return;
@@ -56692,6 +56704,7 @@
     // A single-ticket patch, not a real resync — keep the last known
     // syncedAt so "Last synced" doesn't claim a full refresh just happened.
     _uxqItemsCache = { ts: Date.now(), items: freshItems, syncedAt: _uxqItemsCache.syncedAt };
+    _uxqSyncTicketMeta(freshItems);
     return true;
   }
   async function _uxqOpenItemDetail(ref) {
@@ -58882,6 +58895,7 @@
             const syncedAt = typeof data.synced_at === 'number' ? data.synced_at * 1000 : Date.now();
             _uxqItemsVersion += 1;
             _uxqItemsCache = { ts: Date.now(), items, syncedAt };
+            _uxqSyncTicketMeta(items);
           } else {
             showOpToast('Refresh failed: ' + ((data && data.error) || res.status), 'error');
           }
