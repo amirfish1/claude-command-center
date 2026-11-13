@@ -23559,6 +23559,8 @@ def _resolve_apps(include_disabled=False):
     config reorders by id; anything unlisted keeps its natural position at the
     end. Disabled apps are dropped unless the settings page asks for them."""
     apps = [
+        {"id": "apps", "label": "Apps", "icon": "\N{BLACK SQUARE}",
+         "url": "/apps", "builtin": True},
         {"id": "sessions", "label": "Sessions", "icon": "\N{SPEECH BALLOON}",
          "url": "/", "builtin": True},
         {"id": "queues", "label": "Queues", "icon": "\N{CLIPBOARD}",
@@ -33689,6 +33691,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
+        elif path in ("/apps", "/apps.html"):
+            # Apps home: card grid + side panel (static/apps-home.html).
+            try:
+                body = (STATIC_DIR / "apps-home.html").read_bytes()
+            except OSError as e:
+                self.send_json({"error": "apps-home.html missing", "detail": str(e)}, 500)
+                return
+            body, enc = self._maybe_gzip(body, "text/html")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.send_header("Content-Length", str(len(body)))
+            if enc:
+                self.send_header("Content-Encoding", enc)
+                self.send_header("Vary", "Accept-Encoding")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/applications":
             # Applications settings: add, reorder, switch off, remove. Its own
             # page rather than a section of the dashboard settings modal so it
@@ -33982,6 +34001,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Superseded by /api/apps and the Applications rail. Still served
             # because /api/* is a stable contract external tooling binds to.
             self.send_json({"links": _custom_links_config()[0]})
+        elif path == "/api/apps/feed":
+            from ccc_server import app_feed as _app_feed
+            _qs = urllib.parse.parse_qs(parsed.query)
+            _res, _st = _app_feed.read((_qs.get("app", [""])[0] or "").strip(), USER_APPS_DIR)
+            self.send_json(_res, _st)
         elif path == "/api/apps/routines":
             # An app's routines and builder agent (?app=<id>), or a one-line
             # summary per app for the Apps home. A few small file reads in the
@@ -37366,12 +37390,29 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     app_id, rid, payload.get("enabled") is not False, USER_APPS_DIR)
             elif path == "/api/apps/routines/report":
                 result, status = _app_routines.report(payload, port, USER_APPS_DIR)
+            elif path == "/api/apps/routines/update":
+                result, status = _app_routines.update_routine(payload, USER_APPS_DIR)
+            elif path == "/api/apps/routines/delete":
+                result, status = _app_routines.delete_routine(app_id, rid, USER_APPS_DIR)
             else:
                 result, status = _app_routines.ensure_agent(
                     app_id, port, fresh=payload.get("fresh") is True, apps_dir=USER_APPS_DIR,
                     docs_path=str(CCC_ROOT / "docs" / "applications.md"))
             if result.get("ok") and path != "/api/apps/routines/report":
                 _log_activity("apps", path.rsplit("/", 1)[-1].upper(), f"app={app_id} id={rid or ''}")
+            self.send_json(result, status)
+            return
+        if path == "/api/apps/preview":
+            from ccc_server import app_previews as _app_previews
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length)) if length > 0 else {}
+            except json.JSONDecodeError:
+                payload = None
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            result, status = _app_previews.request(payload, self.server.server_address[1], USER_APPS_DIR)
             self.send_json(result, status)
             return
         if path in ("/api/apps/add", "/api/apps/remove", "/api/apps/arrange"):
@@ -48177,6 +48218,10 @@ def main():
             from ccc_server import app_routines as _app_routines
             _app_routines.loop(port)
         threading.Thread(target=_app_routines_loop, daemon=True, name="ccc-app-routines").start()
+        def _app_previews_loop():
+            from ccc_server import app_previews as _app_previews
+            _app_previews.loop(port)
+        threading.Thread(target=_app_previews_loop, daemon=True, name="ccc-app-previews").start()
     # Self-serve-loop health check: periodic self-probe + SIGUSR2 stack dump
     # on repeated misses. See `_self_health_check_loop` docstring for the
     # 2026-08-28 sleep/wake silent-hang incident this instruments for.
