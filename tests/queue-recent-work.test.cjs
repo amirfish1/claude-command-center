@@ -209,3 +209,17 @@ test('explicit descendant lanes stay with the owning root without merging unrela
   const peers = {rows: rows.map(row => ({...row, depth: 0}))};
   assert.equal(ctx._workersPartitionTicketClusters([peers], new Set(['TEST-7','TEST-8']), c => c.ref).remaining[0], peers);
 });
+
+
+test('Workers hides independent sessions and manual ticket queues even when assigned', () => {
+  const start = app.indexOf('  function _uxqWithMachine(');
+  const end = app.indexOf('  // Compact history rows', start);
+  const items = ['TEST-1', 'IDEAS-2', 'SMALL-BUGS-3', 'session:orphan'].map(ref => ({
+    ref, status: 'open', claimed_at: '2026-01-01T12:00:00Z', _sessionOnly: ref.startsWith('session:'),
+  }));
+  const ctx = {_uxqItemsCache: {items}, _uxqItemRef: item => item.ref};
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(start, end), ctx);
+  const refs = vm.runInContext("_workersAssignedTicketRefs = new Set(['IDEAS-2','SMALL-BUGS-3','session:orphan']); _workersActivityRows().map(row => row.item.ref)", ctx);
+  assert.deepEqual(Array.from(refs), ['TEST-1']);
+});

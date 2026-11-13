@@ -34911,3 +34911,20 @@ a.local-ci-job:hover { color: var(--accent); }
 @container sidebar (max-width: 420px) {
   #convList.workers-view .workers-ticket-heading .fq-recent-row.is-brief { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Workers is a ticket list; independent sessions remain available elsewhere. */
+#convList.workers-view .conv-archived-list,
+#convList.workers-view .conv-archived-tools,
+#convList.workers-view .conv-workers-uniform,
+#convList.workers-view .conv-wt-pending { display: none; }
+#convList.workers-view .conv-workers-activity {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden;
+}
+#convList.workers-view .conv-workers-activity .fq-recent-work {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+}
+#convList.workers-view .conv-workers-activity .fq-recent-rows {
+  flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: contain;
+}
+#convList.workers-view .conv-workers-activity .fq-recent-state.is-open { color: var(--red, #da3633); font-weight: 600; }
+#convList.workers-view .conv-workers-activity .fq-recent-rows:has(.workers-ticket-session-body:not([hidden])) { max-height: none; }

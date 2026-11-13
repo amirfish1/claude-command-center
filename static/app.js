@@ -3959,6 +3959,7 @@
     }
     // Live activity invalidates any pending one-tap reply immediately.
     syncRowQuickActions(sid);
+    _workersPaintTicketUpdate(sid);
   }
   function _ultraFreshAccept(update, generation = _ultraFresh.generation) {
     const sid = String(update.session_id || '');
@@ -4038,6 +4039,17 @@
       // scrolling its row away while delivery is acknowledged in the pane.
       const selected = typeof currentConversation === 'string' ? currentConversation : '';
       if (eligible(byId.get(selected), selected)) ids.push(selected);
+      // Collapsed ticket groups still own visible live message slots.
+      for (const heading of list.querySelectorAll('[data-workers-ticket] .workers-ticket-heading')) {
+        if (ids.length === 4) break;
+        const group = heading.closest('[data-workers-ticket]');
+        const card = _workersLatestTicketCard(_workersTicketSessions.get(group.dataset.workersTicket));
+        const sid = card && String(card.session_id || card.id);
+        if (!sid || !eligible(card, sid)) continue;
+        const rect = heading.getBoundingClientRect();
+        if (rect.height <= 0 || rect.bottom <= Math.max(0, bounds.top) || rect.top >= Math.min(innerHeight, bounds.bottom)) continue;
+        if (!ids.includes(sid)) ids.push(sid);
+      }
       for (const row of list.querySelectorAll('.conv-item[data-session-id]')) {
         if (ids.length === 4) break;
         const sid = row.dataset.sessionId;
@@ -55921,7 +55933,9 @@
     const items = [..._uxqItemsCache.items];
     const refs = new Set(items.map(_uxqItemRef));
     for (const item of _workersFallbackTickets) if (!refs.has(item.ref)) { items.push(item); refs.add(item.ref); }
-    return _uxqRecentWorkItems(items, Infinity).filter((row, i) => i < 10 || _workersAssignedTicketRefs.has(_uxqItemRef(row.item)));
+    const workerTickets = items.filter(item => !item._sessionOnly
+      && !/^(?:IDEAS|SMALL-BUGS)-\d+$/.test(_uxqItemRef(item)));
+    return _uxqRecentWorkItems(workerTickets, Infinity).filter((row, i) => i < 10 || _workersAssignedTicketRefs.has(_uxqItemRef(row.item)));
   }
   let _workersTicketSessions = new Map();
   let _workersTicketRecentSignature = '';
@@ -55964,7 +55978,35 @@
     const value = String(text || '').trim();
     return /^(?:completion assessment pending|working)\s*[.\u2026]*$/i.test(value) ? '' : value;
   }
-  // Compact history rows keep the live sessions in view; full evidence opens on click.
+  function _workersLatestTicketCard(sessions) {
+    const cards = sessions ? sessions.cards.map(card => _ultraFreshCurrent(_applyLiveOverlayToRow(card))) : [];
+    const rank = card => workerStateBucket(card) === 'needs-you' ? 0 : workerStateBucket(card) === 'working' ? 1 : 2;
+    const recency = card => Math.max(Number(card.last_event_ts) || 0, Number(card.modified) || 0);
+    return cards.sort((a, b) => rank(a) - rank(b) || recency(b) - recency(a))[0];
+  }
+  // Patch only the ticket's text on the same animation frame as its session.
+  // Rebuilding the list here would discard expanded lanes and keyboard focus.
+  function _workersPaintTicketUpdate(sid) {
+    for (const [ref, sessions] of _workersTicketSessions) {
+      if (!sessions.cards.some(card => String(card.session_id || card.id) === String(sid))) continue;
+      const latest = _workersLatestTicketCard(sessions);
+      const update = _workersMeaningfulUpdate(latest && rowOutcomeView(latest).text);
+      for (const entry of document.querySelectorAll('[data-workers-ticket]')) {
+        if (entry.dataset.workersTicket !== ref) continue;
+        let node = entry.querySelector('.workers-ticket-update');
+        if (!update) { if (node) node.remove(); continue; }
+        if (!node) {
+          node = document.createElement('div');
+          node.className = 'workers-ticket-update';
+          node.dataset.workersTicketRow = ref;
+          entry.querySelector('.workers-ticket-heading').after(node);
+        }
+        if (node.textContent !== update) node.textContent = update;
+        node.title = update;
+      }
+    }
+  }
+  // Compact history rows: ticket numbers open details; the row toggles sessions.
   const WORKERS_RECENT_DETAILED = 0;
   // Rendered into EVERY mounted host rather than one id. The block lives in the
   // Workers lane now, whose list renderConversationList rebuilds wholesale — so
@@ -55986,17 +56028,11 @@
         .replace(/(?:file:\/\/)?\/[^\s]*\/(?:pasted-images|attachments)\/[^\s]+/g, '')
         .trim() || 'Attached report';
       const sessions = _workersTicketSessions.get(ref);
-      const needsYou = sessions && sessions.cards.some(c => workerStateBucket(c) === 'needs-you');
-      const working = sessions && sessions.cards.some(c => workerStateBucket(c) === 'working');
-      const fallbackState = item.status === 'status unavailable' && sessions
-        ? (sessions.cards.every(c => workerStateBucket(c) === 'done') ? 'Session finished' : 'Standing by')
+      const working = item.status === 'in_progress';
+      // This is ticket lifecycle, not whether its agent process is alive.
+      const state = row.resolved ? 'Resolved' : working ? 'Working'
         : capitalizeSessionTitleStart(String(item.status || 'open').replace(/_/g, ' '));
-      const state = needsYou ? 'Needs you' : working ? 'Working' : row.resolved ? 'Resolved' : fallbackState;
-      const liveCards = sessions ? sessions.cards.map(_applyLiveOverlayToRow) : [];
-      const latestCard = liveCards.sort((a, b) => {
-        const rank = c => workerStateBucket(c) === 'needs-you' ? 0 : workerStateBucket(c) === 'working' ? 1 : 2;
-        return rank(a) - rank(b) || Number(b.last_event_ts || b.modified || 0) - Number(a.last_event_ts || a.modified || 0);
-      })[0];
+      const latestCard = _workersLatestTicketCard(sessions);
       const outcome = latestCard ? rowOutcomeView(latestCard) : null;
       const update = _workersMeaningfulUpdate((outcome && outcome.text) || row.summary);
       const updateHtml = update ? '<div class="workers-ticket-update"' + (sessions ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '') + ' title="' + escapeAttr(update) + '">'
@@ -56015,7 +56051,7 @@
         + '>'
         + '<span class="fq-recent-title"><button type="button" class="fq-recent-ref workers-ticket-link" data-uxq-recent-ref="' + escapeAttr(ref) + '" aria-label="Open ' + escapeAttr(item._sessionOnly ? 'session' : ref + ' details') + '">' + escapeHtml(item._sessionOnly ? 'Session' : ref) + '</button> '
         + (sessions ? '<button type="button" class="workers-ticket-title"' + toggleAttrs + '>' + escapeHtml(title) + '</button>' : escapeHtml(title)) + '</span>'
-        + '<span class="fq-recent-meta"><span class="fq-recent-state' + (needsYou ? ' is-needs-you' : working ? ' is-working' : row.resolved ? ' is-resolved' : '') + '">' + escapeHtml(state) + '</span>'
+        + '<span class="fq-recent-meta"><span class="fq-recent-state' + (row.resolved ? ' is-resolved' : item.status === 'open' ? ' is-open' : working ? ' is-working' : '') + '">' + escapeHtml(state) + '</span>'
         + (timerHtml || '<time class="fq-recent-resolved" datetime="' + escapeAttr(row.at) + '" title="Last activity: ' + escapeAttr(absolute) + '">'
           + escapeHtml(_uxqRelTime(row.at)) + '</time>')
         + '<span>' + escapeHtml(row.worker || 'Worker not recorded') + '</span></span>'

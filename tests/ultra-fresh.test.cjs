@@ -5,7 +5,9 @@ const vm = require('node:vm');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync('static/app.js', 'utf8');
-const block = app.slice(app.indexOf('  // Ultra-fresh:'), app.indexOf('  // The server derives readiness'));
+const ticketPaint = app.slice(app.indexOf('  function _workersMeaningfulUpdate('), app.indexOf('  // Compact history rows'));
+const block = app.slice(app.indexOf('  // Ultra-fresh:'), app.indexOf('  // The server derives readiness'))
+  + '\nconst _workersTicketSessions = new Map();\n' + ticketPaint;
 const rowActions = app.slice(app.indexOf('  // Row actions are model-authored replies'), app.indexOf('  // CCC-1218:'));
 
 test('a submitted turn survives delivery acknowledgment over an old finished snapshot', () => {
@@ -91,6 +93,7 @@ test('streamed attention changes reorder within Active despite a permanent hover
       const sessionReadyToClose = () => false;
       const sessionQuickActions = () => [];
       const syncRowQuickActions = () => {};
+      const workerStateBucket = () => 'idle';
       const readyToCloseArchiveHtml = () => '';
       const _ttsDirectBtn = null;
       const _pausePeriodicSidebarRender = () => true;
@@ -112,6 +115,14 @@ test('streamed attention changes reorder within Active despite a permanent hover
       window.uf = {accept:_ultraFreshAccept,state:_ultraFresh};
     ` });
     await page.waitForFunction(() => window.uf?.state.entries.has('s0'));
+    await page.evaluate(() => {
+      const entry = document.createElement('div');
+      entry.dataset.workersTicket = 'TASK-1';
+      entry.innerHTML = '<div class="workers-ticket-heading">TASK-1</div><div class="workers-ticket-session-body"><button id="stable-ticket-child">Expanded child</button></div>';
+      document.body.append(entry);
+      window.stableTicketChild = document.getElementById('stable-ticket-child');
+      _workersTicketSessions.set('TASK-1', {cards: conversationsData});
+    });
     const elapsed = await page.evaluate(async () => {
       const start = performance.now();
       _scheduleSidebarRender();
@@ -126,6 +137,9 @@ test('streamed attention changes reorder within Active despite a permanent hover
     assert.equal(await page.$eval('section',el=>el.firstElementChild.dataset.sessionId),'s0');
     assert.match(await page.$eval('.wa-preview',el=>el.textContent), /Decision needed: Choose the publication scope/);
     assert.deepEqual(await page.evaluate(()=>renders), [{force:true}]);
+    assert.match(await page.$eval('[data-workers-ticket] .workers-ticket-update', el=>el.textContent), /Choose the publication scope/);
+    assert.equal(await page.evaluate(()=>document.getElementById('stable-ticket-child') === stableTicketChild), true,
+      'live ticket text must not replace expanded child DOM');
     assert.ok(elapsed < 1000, 'section must follow the stream without a list poll or hover release');
     await page.evaluate(() => uf.accept({session_id:'s0',clear:true,user_ts:'2099-01-02T00:00:00Z'}));
     await page.waitForFunction(() => document.querySelector('.conv-item').dataset.lifecycleGroup === 'active');
@@ -134,6 +148,17 @@ test('streamed attention changes reorder within Active despite a permanent hover
     await page.evaluate(() => _ultraFreshPaint('s0'));
     await new Promise(resolve=>setTimeout(resolve,100));
     assert.equal(await page.evaluate(()=>renders.length),renderCount,'unchanged group must not cause a render loop');
+    await page.evaluate(() => {
+      document.querySelector('section').hidden = true;
+      document.getElementById('convList').prepend(document.querySelector('[data-workers-ticket]'));
+      document.querySelector('.workers-ticket-session-body').hidden = true;
+      _ultraFreshSync();
+    });
+    assert.equal(await page.evaluate(()=>uf.state.ids), 's0', 'collapsed ticket header retains its live stream');
+    await page.evaluate(() => uf.accept({session_id:'s0', text:'Fresh collapsed ticket update.', ts:'2099-01-03T00:00:00Z'}));
+    await page.waitForFunction(() => document.querySelector('.workers-ticket-update')?.textContent === 'Fresh collapsed ticket update.', {timeout: 2500}).catch(async error => { throw new Error(error.message + JSON.stringify(await page.evaluate(()=>({text:document.querySelector('.workers-ticket-update')?.textContent, entry:uf.state.entries.get('s0'), current:_ultraFreshCurrent(conversationsData[0])})))); });
+    assert.equal(await page.$eval('.workers-ticket-session-body', el=>el.hidden), true);
+
   } finally { await browser.close(); }
 });
 
