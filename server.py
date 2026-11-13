@@ -34014,6 +34014,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _qs = urllib.parse.parse_qs(parsed.query)
             _res, _st = _app_feed.read((_qs.get("app", [""])[0] or "").strip(), USER_APPS_DIR)
             self.send_json(_res, _st)
+        elif path == "/api/apps/data":
+            from ccc_server import app_data as _app_data
+            _qs = urllib.parse.parse_qs(parsed.query)
+            _res, _st = _app_data.read((_qs.get("app", [""])[0] or "").strip(),
+                                       (_qs.get("key", [""])[0] or "").strip(), USER_APPS_DIR)
+            self.send_json(_res, _st)
         elif path == "/api/apps/templates":
             from ccc_server import app_templates as _app_templates
             self.send_json({"ok": True, "templates": _app_templates.list_templates()})
@@ -37353,6 +37359,24 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "invalid JSON"}, 400)
                 return
             _res, _st = _app_feed.append(payload, USER_APPS_DIR)
+            self.send_json(_res, _st)
+            return
+        if path == "/api/apps/data":
+            # Per-app JSON the app's page saves (ticks, hidden rows, notes).
+            # Same-origin already enforced at the top of do_POST.
+            from ccc_server import app_data as _app_data
+            length = int(self.headers.get("Content-Length", "0"))
+            if length < 1 or length > _app_data.MAX_VALUE_BYTES + 4096:
+                self.send_json({"ok": False, "error": "request too large"}, 413)
+                return
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except (ValueError, UnicodeDecodeError):
+                payload = None
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            _res, _st = _app_data.write(payload, USER_APPS_DIR)
             self.send_json(_res, _st)
             return
         if path == "/api/apps/concierge":
