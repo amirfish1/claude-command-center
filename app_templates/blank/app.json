@@ -1,0 +1,10 @@
+{
+  "label": "App",
+  "icon": "✨",
+  "description": "An empty app with an agent. You decide what it does.",
+  "routines": [
+    {"id": "hello", "name": "Hello", "icon": "👋",
+     "does": "A sample routine. Replace it with something useful.",
+     "kind": "script", "run": ["python3", "hello.py"]}
+  ]
+}

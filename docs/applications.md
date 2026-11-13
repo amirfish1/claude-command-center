@@ -191,6 +191,25 @@ image may also be a `/app-static/...` path). The cards live in `feed.json` in
 the app's folder: the newest 200 are kept, writes are atomic. `GET
 /api/apps/feed?app=<id>` returns them.
 
+### Start from a template
+
+Four ready-made apps, each with its own agent and a routine:
+
+| Template | What it does |
+|---|---|
+| `tracker` | Dates and deadlines, closest first. A script routine warns you each morning before one arrives. |
+| `research` | An agent routine researches the question in `question.json` on a schedule and appends findings to `feed.json`. |
+| `watch` | An agent routine checks the prices or pages in `watches.json` and alerts you when one changes. |
+| `blank` | An empty page and a sample routine to build on. |
+
+`GET /api/apps/templates` lists them. `POST /api/apps/create` with
+`{"template": "tracker", "label": "Taxes", "icon": "💸", "id": "taxes"}` copies
+one into your apps folder and returns `{"ok": true, "id": "taxes"}`. Only
+`template` is required; `id` defaults to a slug of the label (a taken id gets
+`-2`). The new app lands at the end of the rail. Templates live in
+`app_templates/`; add a folder there with an `app.json` and it shows up.
+`{{label}}`, `{{icon}}` and `{{app_id}}` in a template's HTML are filled in.
+
 ## Embedding a dashboard that runs on another port
 
 A browser iframe pointed at another localhost port renders blank inside the

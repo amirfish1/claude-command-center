@@ -1,0 +1,11 @@
+{
+  "label": "Watch",
+  "icon": "👀",
+  "description": "An agent checks prices or pages and alerts you when they change.",
+  "routines": [
+    {"id": "check", "name": "Check", "icon": "👀",
+     "does": "Checks each watched page or price and tells you what changed.",
+     "schedule": "every 12h", "kind": "agent",
+     "prompt": "Read watches.json in this folder: a JSON list of {name, url, what, current, history, changed, checked}. For each entry, open the url and find what it asks for (a price, a status, a headline). Compare with the previous current value. Update the entry: push the old current onto history (keep the last 10), set current, checked (today's date), and changed (true only if the value is different now, otherwise false). Write the file back as valid JSON. In your result, say in one sentence what changed, or that nothing did, and set alert only when a value changed in a way the owner would want to know about (a price drop, an item back in stock). Entries with no url are samples: skip them."}
+  ]
+}

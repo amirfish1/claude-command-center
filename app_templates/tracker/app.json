@@ -1,0 +1,11 @@
+{
+  "label": "Tracker",
+  "icon": "📅",
+  "description": "Dates and deadlines with a morning reminder.",
+  "routines": [
+    {"id": "reminder", "name": "Reminder", "icon": "🛎",
+     "does": "Warns you in the days before a date arrives.",
+     "schedule": "daily 08:00", "kind": "script",
+     "run": ["python3", "reminder.py"]}
+  ]
+}

@@ -1,0 +1,4 @@
+[
+  {"title": "Example: renew passport", "date": "2030-01-15", "note": "Sample entry. Ask the agent to replace it.", "warn_days": 30},
+  {"title": "Example: dentist", "date": "2030-02-03", "note": "Delete me", "warn_days": 3}
+]

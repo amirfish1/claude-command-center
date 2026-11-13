@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{label}} · CCC</title>
+<script>try{document.documentElement.dataset.theme=localStorage.getItem("ccc-theme")||"dark"}catch(_){}</script>
+<script src="/static/app-rail.js" defer></script>
+<script src="/static/app-kit.js" data-app="{{app_id}}" defer></script>
+<style>
+:root{--bg:#0f1115;--panel:#161a21;--line:#2b323d;--text:#edf0f5;--muted:#a8b2c2;--accent:#80b9ff;--good:#8bd8ac;--warn:#f5c67c;--bad:#ff8f8f}
+[data-theme="light"]{--bg:#f5f6f8;--panel:#fff;--line:#d9dee6;--text:#1a1f29;--muted:#5d6878;--accent:#1f6fd0;--good:#1c8a50;--warn:#a26200;--bad:#c62828}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{padding:24px 26px 60px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.row{display:flex;gap:12px;align-items:center}
+.grow{flex:1;min-width:0}
+.pill{font-size:12px;padding:2px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.pill.bad{color:var(--bad);border-color:var(--bad)}.pill.warn{color:var(--warn);border-color:var(--warn)}.pill.good{color:var(--good);border-color:var(--good)}
+.empty{color:var(--muted);text-align:center;padding:28px 10px}
+.empty b{display:block;font-size:30px;margin-bottom:6px}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<main data-ccc-content>
+<h1>{{icon}} {{label}}</h1>
+<p class="sub">Prices and pages the agent keeps an eye on. It alerts you when something changes.</p>
+<div id="list"></div>
+<div data-ccc-routines></div>
+</main>
+<script>
+(async function () {
+  var items = [];
+  try { items = await (await fetch('watches.json', {cache: 'no-store'})).json(); } catch (e) {}
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
+  var el = document.getElementById('list');
+  if (!items.length) { el.innerHTML = '<div class="card empty"><b>👀</b>Nothing watched yet. Ask the agent what to watch.</div>'; return; }
+  el.innerHTML = items.map(function (w) {
+    var ch = w.changed ? '<span class="pill warn">changed</span>' : '<span class="pill good">same</span>';
+    var hist = (w.history || []).slice(-6);
+    return '<div class="card"><div class="row"><b class="grow">' + esc(w.name) + '</b>' + ch + '</div>' +
+      '<div class="sub" style="margin:6px 0 0">Now: <b style="color:var(--text)">' + esc(w.current || 'not checked yet') + '</b>' + (w.checked ? ' · checked ' + esc(w.checked) : '') + '</div>' +
+      (hist.length ? '<div class="sub" style="margin:4px 0 0">Before: ' + hist.map(esc).join(' → ') + '</div>' : '') +
+      (w.url ? '<div class="sub" style="margin:4px 0 0"><a href="' + esc(w.url) + '" target="_blank" rel="noopener">' + esc(w.url) + '</a></div>' : '') + '</div>';
+  }).join('');
+})();
+</script>
+</body>
+</html>

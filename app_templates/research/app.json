@@ -1,0 +1,11 @@
+{
+  "label": "Research",
+  "icon": "🔬",
+  "description": "An agent researches a question on a schedule and keeps a feed of findings.",
+  "routines": [
+    {"id": "research", "name": "Research", "icon": "🔬",
+     "does": "Looks into the question and adds new findings to the feed.",
+     "schedule": "daily 07:00", "kind": "agent",
+     "prompt": "Read question.json in this folder: it holds the question to research. Search the web for what is new or still unanswered. Read feed.json (a JSON list) so you do not repeat a finding. Append 1 to 3 NEW findings as objects {\"title\": \"short headline\", \"finding\": \"two plain sentences\", \"sources\": [\"https://...\"], \"date\": \"YYYY-MM-DD\"} and write the file back as valid JSON. If question.json has no question, do not invent one: report that it is empty. If there is nothing new, add nothing."}
+  ]
+}
