@@ -583,16 +583,7 @@
   }
   function _setCccSoundsEnabled(on) {
     try { localStorage.setItem(_CCC_SOUNDS_LS, on ? '1' : '0'); } catch (_) {}
-    _renderSoundToggle();
-    // Keep the Settings > Appearance switch in sync when the footer pill is
-    // the thing that was clicked (either control can flip the pref).
     try { refreshAppearanceChecks(); } catch (_) {}
-  }
-  function _renderSoundToggle() {
-    if (!_soundToggleBtn) return;
-    const on = _cccSoundsEnabled();
-    _soundToggleBtn.textContent = on ? 'sound' : 'mute';
-    _soundToggleBtn.style.opacity = on ? '0.85' : '0.5';
   }
   // Reinitialize every consumer from the applied browser preferences, including
   // startup-only layout choices. The workbench previews this reload.
@@ -601,7 +592,7 @@
     url.searchParams.set('ccc_settings', 'preferences');
     window.location.replace(url.href);
   });
-  document.addEventListener('ccc:notification-policy-changed', () => { _renderSoundToggle(); refreshAppearanceChecks(); });
+  document.addEventListener('ccc:notification-policy-changed', () => { refreshAppearanceChecks(); });
   function _cccBeep(freq, durationMs, type, delayMs) {
     if (!_cccSoundsEnabled()) return;
     const ctx = _ensureAudioCtx();
@@ -1634,8 +1625,8 @@
         '#pollerWrap{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;gap:2px 6px;padding:0 4px;}' +
         '#pollerWrap::-webkit-scrollbar{display:none;}' +
         '#cccHealth{gap:4px;font-size:9px;}' +
-        '#pollerToggle,#cccSoundToggle{font-size:9px !important;padding:1px 4px !important;}' +
-        '#cccProductivityPill,#cccSystemPill,#cccThroughputPill,#cccFleetPill{' +
+        '#pollerToggle{font-size:9px !important;padding:1px 4px !important;}' +
+        '#cccFleetPill{' +
         'font-size:10px !important;padding:2px 6px !important;gap:3px !important;}}';
       document.head.appendChild(st);
     }
@@ -1694,21 +1685,6 @@
       _syncStripTicker();
     };
     _applyToggle();
-    // Sound toggle: small footer button to enable/disable session-completion chirps.
-    const soundToggle = document.createElement('div');
-    soundToggle.id = 'cccSoundToggle';
-    soundToggle.style.cssText = 'flex:0 0 auto;cursor:pointer;user-select:none;' +
-      'font:600 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;' +
-      'padding:2px 6px;border-radius:5px;border:1px solid transparent;' +
-      'color:var(--text-secondary,#9aa);';
-    soundToggle.title = 'Toggle session-completion sounds (turn end / work done).';
-    soundToggle.onclick = () => {
-      _setCccSoundsEnabled(!_cccSoundsEnabled());
-      // Play a tiny preview so the user hears the change immediately.
-      if (_cccSoundsEnabled()) _cccPlayTurnEnd();
-    };
-    _soundToggleBtn = soundToggle;
-    _renderSoundToggle();
     wrap.appendChild(health);
     // design_handoff_sidebar_session_list (§5): the footer carries a
     // "needs you N" counter beside the triggers toggle. Deliberately NOT
@@ -1728,46 +1704,46 @@
       }
     });
     wrap.appendChild(needsYouPill);
-    wrap.appendChild(soundToggle);
+    // Completion sounds live in Settings > Notifications & voice.
+    const tools = document.createElement('nav');
+    tools.className = 'sidebar-footer-tools';
+    tools.setAttribute('aria-label', 'Workspace dashboards');
+    const footerIcon = (paths) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths + '</svg>';
     // Productivity is deliberately separate from token Throughput: it opens a
     // project/day outcome dashboard and performs no background polling here.
-    const productivityPill = document.createElement('div');
+    const productivityPill = document.createElement('a');
     productivityPill.id = 'cccProductivityPill';
+    productivityPill.className = 'sidebar-footer-tool';
+    productivityPill.href = '/productivity.html';
+    productivityPill.target = '_blank';
+    productivityPill.rel = 'noopener';
     productivityPill.title = 'Productivity Dashboard - delivered features and fixes, projects, time, and agent leverage. Click to open.';
-    productivityPill.style.cssText = 'display:flex;align-items:center;gap:3px;flex:0 0 auto;cursor:pointer;' +
-      'font:600 10px/1 ui-monospace,Menlo,monospace;padding:2px 5px;border-radius:6px;' +
-      'border:1px solid var(--border-color,#30363d);opacity:.8;';
-    productivityPill.innerHTML = '<span style="opacity:.7;">&#10003;</span><span>productivity</span>';
-    productivityPill.addEventListener('click', function () { window.open('/productivity.html', '_blank'); });
-    productivityPill.addEventListener('mouseenter', function () { productivityPill.style.opacity = '1'; });
-    productivityPill.addEventListener('mouseleave', function () { productivityPill.style.opacity = '.8'; });
-    wrap.appendChild(productivityPill);
+    productivityPill.innerHTML = footerIcon('<path d="m5 12 4 4L19 6"/>') + '<span>Productivity</span>';
+    tools.appendChild(productivityPill);
 
-    const systemPill = document.createElement('div');
+    const systemPill = document.createElement('button');
     systemPill.id = 'cccSystemPill';
+    systemPill.type = 'button';
+    systemPill.className = 'sidebar-footer-tool';
+    systemPill.setAttribute('aria-haspopup', 'dialog');
     systemPill.title = 'System Status - dev servers, memory, CPU, and running processes. Click to open.';
-    systemPill.style.cssText = 'display:flex;align-items:center;gap:3px;flex:0 0 auto;cursor:pointer;' +
-      'font:600 10px/1 ui-monospace,Menlo,monospace;padding:2px 5px;border-radius:6px;' +
-      'border:1px solid var(--border-color,#30363d);opacity:.8;';
-    systemPill.innerHTML = '<span style="opacity:.7;">&#128187;</span><span>system</span>';
+    systemPill.innerHTML = footerIcon('<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>') + '<span>System</span>';
     systemPill.addEventListener('click', _openSystemHealth);
-    systemPill.addEventListener('mouseenter', function () { systemPill.style.opacity = '1'; });
-    systemPill.addEventListener('mouseleave', function () { systemPill.style.opacity = '.8'; });
-    wrap.appendChild(systemPill);
+    tools.appendChild(systemPill);
     // Throughput pill: opens the standalone throughput dashboard tab; badge
     // shows today's total token count fetched from the history endpoint.
-    const tputPill = document.createElement('div');
+    const tputPill = document.createElement('a');
     tputPill.id = 'cccThroughputPill';
+    tputPill.className = 'sidebar-footer-tool';
+    tputPill.href = '/throughput.html';
+    tputPill.target = '_blank';
+    tputPill.rel = 'noopener';
+    tputPill.setAttribute('aria-label', 'Throughput dashboard');
     tputPill.title = 'Throughput Dashboard - daily token usage, output speed, and session rankings. Click to open.';
-    tputPill.style.cssText = 'display:flex;align-items:center;gap:3px;flex:0 0 auto;cursor:pointer;' +
-      'font:600 10px/1 ui-monospace,Menlo,monospace;padding:2px 5px;border-radius:6px;' +
-      'border:1px solid var(--border-color,#30363d);opacity:.8;';
-    tputPill.innerHTML = '<span style="opacity:.7;">&#128202;</span>' +
-      '<span class="ccc-tput-val">throughput</span>';
-    tputPill.addEventListener('click', function () { window.open('/throughput.html', '_blank'); });
-    tputPill.addEventListener('mouseenter', function () { tputPill.style.opacity = '1'; });
-    tputPill.addEventListener('mouseleave', function () { tputPill.style.opacity = '.8'; });
-    wrap.appendChild(tputPill);
+    tputPill.innerHTML = footerIcon('<path d="M5 20v-6m7 6V4m7 16V9"/>') +
+      '<span class="ccc-tput-val">Throughput</span>';
+    tools.appendChild(tputPill);
+    wrap.appendChild(tools);
     // Fleet pill: opens the standalone repo × node matrix. Same treatment as
     // throughput — a fleet scan is slow enough that it must never run inside
     // the dashboard, only in its own tab.
@@ -1802,7 +1778,7 @@
             var val = el.querySelector('.ccc-tput-val');
             if (!val) return;
             var tot = bucket ? (bucket.total_tokens || 0) : 0;
-            val.textContent = tot > 0 ? (_formatTokens(tot) + ' today') : 'throughput';
+            val.textContent = tot > 0 ? (_formatTokens(tot) + ' today') : 'Throughput';
           })
           .catch(function () {});
       };
@@ -4955,8 +4931,6 @@
   // Single-read hysteresis counters for refreshLiveStatus (CCC-147).
   let _codexWorkingHoldCount = 0;
   let _liveStatusFailHoldCount = 0;
-  // Footer sound-toggle button element; updated when preference changes.
-  let _soundToggleBtn = null;
   const CODEX_WAKE_TEXT = 'Status check: your last tool call has not returned for a while. If you are stuck, say what you were waiting on, stop polling that command, and continue with the next concrete step.';
   // Separate 1s tick that just re-renders the live-tool strip + inline
   // indicator from the cached liveStatus. The 5s poller refreshes the
@@ -97813,7 +97787,7 @@
     settingsPreferenceClick = function handleSettingsPreferenceClick(e) {
       const destination = e.target.closest('[data-settings-go]');
       if (destination) { clearSettingsSearch(); setActiveSettingsRailSection(destination.dataset.settingsGo); return; }
-      const themeBtn = e.target.closest('[data-theme]');
+      const themeBtn = e.target.closest('button[data-theme]');
       if (themeBtn) {
         const v = themeBtn.getAttribute('data-theme');
         localStorage.setItem('ccc-theme', v);

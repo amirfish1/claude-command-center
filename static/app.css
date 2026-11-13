@@ -17888,6 +17888,45 @@
   .sidebar-footer-btn:hover { background: var(--surface-2); color: var(--text); }
   .sidebar-footer-btn svg { width: 16px; height: 16px; display: block; }
   .sidebar-footer-spacer { flex: 1; }
+  .sidebar-footer-tools {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+  }
+  .sidebar-footer-tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-height: 32px;
+    padding: 6px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    font: 500 11px/1.2 var(--font-ui);
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .sidebar-footer-tool:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .sidebar-footer-tool:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    color: var(--text);
+  }
+  .sidebar-footer-tool svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+  }
+  @media (pointer: coarse) {
+    .sidebar-footer-tool { min-height: 44px; }
+  }
   /* Active-coordinations pill — bottom-left of the sidebar footer. Same
      visual rhythm as the rest of the footer but with a brighter accent
      so the "you have N chats waiting" signal is easy to spot. Hidden

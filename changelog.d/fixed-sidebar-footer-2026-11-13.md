@@ -1,0 +1,1 @@
+- Simplify the sidebar footer with consistent, keyboard-accessible dashboard controls. Keep completion sounds in Settings and show Usage & diagnostics only in Debug mode.
