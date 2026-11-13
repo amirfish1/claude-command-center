@@ -50349,14 +50349,23 @@
     return pane ? pane.querySelector('.conv-input-bar') : null;
   }
 
+  // The pane and popout use the same worker headline as the Workers list,
+  // including before the server replaces a drain prompt with a ticket name.
+  function workerTitleForPane(row, title) {
+    if (!row || row.name_overridden || row.continued_from_session_id) return title;
+    const worker = row.is_watchtower_worker || row._worker_id || row.worker_origin
+      || _WT_LAUNCH_PROMPT_RE.test(String(row.first_message || '').trim().toLowerCase())
+      || _WT_LAUNCH_PROMPT_RE.test(String(title || '').trim().toLowerCase());
+    return worker ? workerRowFacts(row, title).title : title;
+  }
   function paneTitleForRow(row) {
     if (!row) return '';
     const explicit = row.display_name || row.title || '';
-    if (explicit) return stripTitle(stripGhIssueProjectTag(String(explicit))).trim();
+    if (explicit) return workerTitleForPane(row, stripTitle(stripGhIssueProjectTag(String(explicit))).trim());
     const first = row.first_message || row.prompt || row.last_prompt || '';
-    if (first) return firstSentenceOf(cleanIssuePrompt(first), 96);
+    if (first) return workerTitleForPane(row, firstSentenceOf(cleanIssuePrompt(first), 96));
     const sid = row.session_id || row.id || '';
-    return sid ? shortSessionId(sid) : '';
+    return workerTitleForPane(row, sid ? shortSessionId(sid) : '');
   }
 
   function sourceLabelForPane(row) {
@@ -50506,8 +50515,8 @@
         rowName = continuationBackstopTitle(fullRow, rowRawTitle(fullRow).rawTitle);
       }
     } catch (_) {}
-    rowName = String(rowName || title || '').trim();
-    const headerTitle = opts.title !== undefined ? String(title || '').trim() : rowName;
+    rowName = workerTitleForPane(fullRow, String(rowName || title || '').trim());
+    const headerTitle = opts.title !== undefined ? workerTitleForPane(fullRow, String(title || '').trim()) : rowName;
     // CCC-149: the single-pane desktop header borrows the phone toolbar's
     // look (avatar + session name), so carry the sidebar row's avatar.
     const avatarEl = pane.querySelector('[data-role="pane-avatar"]');

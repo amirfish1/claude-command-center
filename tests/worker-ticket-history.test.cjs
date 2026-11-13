@@ -200,3 +200,29 @@ test('a chip only drops its prefix after a chip from the same project', () => {
   // EXAMPLE-994 follows a CCC chip, so it has to reprint its own prefix.
   assert.deepEqual(labels, ['EXAMPLE-996', 'CCC-12', 'EXAMPLE-994']);
 });
+
+
+test('pane titles replace drain prompts with the worker headline and preserve owner names', () => {
+  const ctx = harness();
+  Object.assign(ctx, {
+    sessionIsActivelyWorking: c => c.state === 'working',
+    _applyLiveOverlayToRow: c => c,
+    stripTitle: s => s, stripGhIssueProjectTag: s => s,
+    firstSentenceOf: (s, limit) => s.slice(0, limit), cleanIssuePrompt: s => s,
+    shortSessionId: s => s.slice(0, 8),
+  });
+  const matcher = app.slice(app.indexOf('  const _WT_LAUNCH_PROMPT_RE ='), app.indexOf('\n', app.indexOf('  const _WT_LAUNCH_PROMPT_RE =')));
+  const titles = app.slice(app.indexOf('  function workerTitleForPane('), app.indexOf('  function sourceLabelForPane('));
+  vm.runInContext(matcher + '\n' + titles, ctx);
+  const prompt = 'Drain the EXAMPLE WatchTower queue and keep it empty. Work in the repo.';
+  const worker = {...row, display_name: prompt, first_message: prompt, is_live: true, state: 'working'};
+  ctx._setUxFixesQueueMeta([ticket(1, {title: 'Repair session titles', status: 'in_progress'})]);
+  assert.equal(ctx.paneTitleForRow(worker), 'Repair session titles');
+  assert.equal(ctx.workerTitleForPane(worker, prompt), 'Repair session titles');
+  ctx._setUxFixesQueueMeta([]);
+  assert.equal(ctx.paneTitleForRow(worker), 'Working on the EXAMPLE queue');
+  assert.equal(ctx.paneTitleForRow({session_id: 'cold', display_name: prompt, first_message: prompt}), 'EXAMPLE worker · drained the queue, nothing claimed');
+  assert.equal(ctx.paneTitleForRow({...worker, name_overridden: true, display_name: 'My worker'}), 'My worker');
+  assert.equal(ctx.paneTitleForRow({...worker, continued_from_session_id: 'origin', display_name: 'Continue my task'}), 'Continue my task');
+  assert.equal(ctx.paneTitleForRow({display_name: 'Ordinary session'}), 'Ordinary session');
+});
