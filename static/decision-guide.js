@@ -10,6 +10,11 @@
   let storageReady = true, rows = [], model = null, loading = false, loaded = false, readError = '', active = null, confirming = null;
   const notices = new Map();
   document.documentElement.classList.toggle('embedded', parent !== window);
+  $('questionHistory').addEventListener('click', event => {
+    if (parent === window) return;
+    event.preventDefault();
+    parent.postMessage({type:'ccc:question-history'}, location.origin);
+  });
   function validAnswer(answer) {
     return answer && uuid(answer.answer_id) && states.includes(answer.state) && typeof answer.text === 'string' && revision(answer.expected_revision);
   }

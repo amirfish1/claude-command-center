@@ -72,6 +72,11 @@ reference, and opens the ticket in CCC. The Q number stays searchable and in
 the chip's tooltip. **Needs you** gains **Talk to worker**, which opens the
 worker's session with the cursor in the composer and sends nothing.
 
+Open **Decisions → Question history** to review questions found in session
+transcripts. Recent questions outside Decisions appear first; older unresolved
+tags are collapsed. The Decisions count tracks its current queue, while history
+remains available through the labeled header link.
+
 The ticket decides whether the question is open: it stays open while the ticket
 is blocked on it, however the chat mentions the tag. Answer in the ticket's
 **Your Decision** box, or with a reply chip such as **Approve plan**: while the

@@ -3,10 +3,8 @@
  * explanation) without scrolling up.
  * Backed by GET /api/question-tags (ccc_server/question_tags.py).
  *
- * The floating pill is NOT a tag counter. Its number is the Decisions count
- * (needs_answer_count from GET /api/decision-inbox/requests, the same field that
- * badges the tab), and clicking it opens Decisions: the one queue the owner
- * works through. Tags found in transcripts are history (see classify()).
+ * Decisions owns the current queue count. Question history is reached from
+ * its header, while tags found in transcripts remain history (see classify()).
  *
  * A question a ticket blocked on goes by that ticket instead: its chip shows
  * the ticket ref and opens the ticket, and "Needs you" gains Talk to worker.
@@ -77,7 +75,7 @@
 
   // Where one transcript tag stands relative to the owner queue:
   //   answered  settled
-  //   queue     in Decisions (counted by the pill)
+  //   queue     in Decisions (counted by the tab)
   //   ticket    tied to an open ticket that is not an owner wait
   //   recent    asked in the last 48h, never reached the queue (may be live)
   //   history   older and unresolved; nothing tracks it as a to-do
@@ -95,8 +93,8 @@
     return out;
   }
 
-  // The pill's number: Decisions's, nothing else.
-  function pillCount() { return queue.count; }
+  // The verified Decisions count, never the transcript backlog.
+  function queueCount() { return queue.count; }
 
   function loadQueue() {
     var generation = ++queueGeneration;
@@ -109,7 +107,7 @@
         queue.rows = rows.filter(function (r) { return r.needs_answer; });
         queue.at = Date.now();
       }
-      updatePill();
+      updateQueueControls();
       return queue;
     }).catch(function () { return queue; });
   }
@@ -224,92 +222,17 @@
       index.refreshing = !!d.refreshing;
       index.at = Date.now();
       paintChips();
-      updatePill();
+      updateQueueControls();
       return index;
     }).catch(function () { return index; });
   }
 
   /* ---------------- UI ---------------- */
-  var sheet, pill, activeQuestion;
-  var pillHidden = false, pillPosition = null;
-  var PILL_PREFS = 'ccc-question-pill';
-
-  function savePill() {
-    try { localStorage.setItem(PILL_PREFS, JSON.stringify({ hidden: pillHidden, position: pillPosition })); } catch (_) {}
-  }
-
-  function positionPill() {
-    if (!pillPosition || !pill || pill.hidden || !pill.offsetWidth) return;
-    var viewport = window.visualViewport;
-    var left = viewport ? viewport.offsetLeft : 0, top = viewport ? viewport.offsetTop : 0;
-    var width = viewport ? viewport.width : window.innerWidth;
-    var height = viewport ? viewport.height : window.innerHeight;
-    pill.style.left = Math.max(left + 8, Math.min(pillPosition.x, left + width - pill.offsetWidth - 8)) + 'px';
-    pill.style.top = Math.max(top + 8, Math.min(pillPosition.y, top + height - pill.offsetHeight - 8)) + 'px';
-    pill.style.right = 'auto';
-    pill.style.bottom = 'auto';
-  }
-
-  function bindPillGestures() {
-    var drag, timer, suppressClick = false, suppressTimer;
-    function suppress() {
-      suppressClick = true;
-      clearTimeout(suppressTimer);
-      suppressTimer = setTimeout(function () { suppressClick = false; }, 400);
-    }
-    function options() {
-      clearTimeout(timer);
-      drag = null;
-      suppress();
-      showPanel();
-      var toggle = sheet.querySelector('[data-qpill-toggle]');
-      if (toggle) toggle.focus();
-    }
-    pill.addEventListener('pointerdown', function (ev) {
-      if (!ev.isPrimary || ev.button !== 0 || drag) return;
-      var rect = pill.getBoundingClientRect();
-      drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, left: rect.left, top: rect.top, moved: false };
-      timer = setTimeout(options, 600);
-      try { pill.setPointerCapture(ev.pointerId); } catch (_) {}
-    });
-    window.addEventListener('pointermove', function (ev) {
-      if (!drag || ev.pointerId !== drag.id) return;
-      var dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
-      if (!drag.moved && Math.hypot(dx, dy) < 8) return;
-      clearTimeout(timer);
-      drag.moved = true;
-      ev.preventDefault();
-      pillPosition = { x: drag.left + dx, y: drag.top + dy };
-      positionPill();
-    }, { passive: false });
-    function end(ev) {
-      if (!drag || ev.pointerId !== drag.id) return;
-      clearTimeout(timer);
-      if (drag.moved) { savePill(); suppress(); }
-      drag = null;
-    }
-    window.addEventListener('pointerup', end);
-    window.addEventListener('pointercancel', end);
-    pill.addEventListener('lostpointercapture', end);
-    pill.addEventListener('contextmenu', function (ev) { ev.preventDefault(); options(); });
-    pill.addEventListener('keydown', function (ev) {
-      if (ev.key === 'ContextMenu' || (ev.shiftKey && ev.key === 'F10')) { ev.preventDefault(); options(); }
-    });
-    pill.addEventListener('click', function (ev) {
-      if (suppressClick) { suppressClick = false; ev.preventDefault(); return; }
-      openQueue();
-    });
-    window.addEventListener('blur', function () { clearTimeout(timer); drag = null; });
-    window.addEventListener('resize', positionPill);
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', positionPill);
-      window.visualViewport.addEventListener('scroll', positionPill);
-    }
-  }
+  var sheet, activeQuestion, booted = false;
 
   function questionName(q) { return q.ticket ? q.ticket.ref : q.tag; }
 
-  // The pill and the "Open questions" menu items go to the one queue.
+  // The Decisions menu items go to the current queue.
   function openQueue() {
     if (sheet) sheet.hidden = true;
     var tab = document.querySelector('[data-conv-tab="decisions2"]');
@@ -383,14 +306,6 @@
     sheet.hidden = true;
     sheet.addEventListener('click', function (ev) {
       if (ev.target === sheet || ev.target.closest('.qtag-close')) { sheet.hidden = true; return; }
-      if (ev.target.closest('[data-qpill-toggle]')) {
-        pillHidden = !pillHidden;
-        savePill();
-        updatePill();
-        sheet.hidden = true;
-        if (!pill.hidden) pill.focus();
-        return;
-      }
       var jump = ev.target.closest('[data-qjump]');
       if (jump) { jumpTo(+jump.getAttribute('data-qjump')); return; }
       if (ev.target.closest('[data-qlist]')) { showPanel(); return; }
@@ -422,6 +337,7 @@
   function showQuestion(n, waiting) {
     var q = index.byN[n];
     var s = ensureSheet();
+    s.removeAttribute('data-qhistory');
     var body;
     if (!q) {
       body = '<p class="qtag-empty">' + (waiting ? 'Looking for Q' + n + '…' : 'No explanation found for Q' + n + ' yet.') + '</p>';
@@ -505,22 +421,22 @@
   function showPanel() {
     activeQuestion = null;
     var s = ensureSheet();
+    s.setAttribute('data-qhistory', '1');
     var g = groups(index.list, queue.rows);
     var live = g.recent.concat(g.ticket).sort(byRecent), old = g.history.sort(byRecent);
-    var count = pillCount();
+    var count = queueCount();
     s.innerHTML = '<div class="qtag-card"><div class="qtag-head"><strong>Question history</strong>'
       + '<button type="button" class="qtag-close" aria-label="Close">×</button></div>'
       + '<p class="qtag-intro">Your to-do list is <strong>Decisions</strong>'
       + (count === null ? '.' : ': ' + (count ? count + ' need' + (count === 1 ? 's' : '') + ' you' : 'nothing needs you') + '.')
       + ' This page is only a record of questions found in session transcripts.</p>'
       + '<button type="button" class="qtag-btn qtag-primary" data-qqueue="1">Open Decisions</button>'
-      + '<button type="button" class="qtag-btn qtag-pill-toggle" data-qpill-toggle style="margin-top:8px">' + (pillHidden ? 'Show floating question button' : 'Hide floating question button') + '</button>'
       + (live.length ? '<h4 class="qtag-h">Asked in a session, not in Decisions (' + live.length + ')</h4>'
-        + '<p class="qtag-note">Recent questions, or ones tied to an open ticket that is not waiting on you. Not counted in the number.</p>'
+        + '<p class="qtag-note">Recent questions, or ones tied to an open ticket that is not waiting on you. Not included in the Decisions count.</p>'
         + '<ul class="qtag-list">' + live.map(historyRow).join('') + '</ul>' : '')
       + (old.length ? '<details class="qtag-old"><summary>Older tagged questions (' + old.length + ') — history, not a to-do list</summary>'
         + '<ul class="qtag-list">' + old.map(historyRow).join('') + '</ul></details>' : '')
-      + (!live.length && !old.length ? '<p class="qtag-empty">' + (index.scanning ? 'Building the question index (first run only)…' : 'No unresolved tagged questions outside Decisions.') + '</p>' : '')
+      + (!live.length && !old.length ? '<p class="qtag-empty">' + (!index.at || index.scanning ? 'Loading question history…' : 'No unresolved tagged questions outside Decisions.') + '</p>' : '')
       + '</div>';
     s.hidden = false;
   }
@@ -577,18 +493,10 @@
     })();
   }
 
-  function updatePill() {
-    if (!pill) return;
-    var n = pillCount();
+  function updateQueueControls() {
+    var n = queueCount();
     var known = n !== null;
-    pill.hidden = !known || n === 0 || pillHidden;
-    var label = (known ? n : 0) + ' need' + (n === 1 ? 's' : '') + ' you';
-    pill.textContent = '? ' + (known ? n : '');
-    pill.title = label + ' in Decisions — click to answer; drag to move; hold for options';
-    pill.setAttribute('aria-label', pill.title);
-    positionPill();
-    // Menu copies (phones fold the pill into the ⋮ menus) and the count
-    // badge on those menus' buttons.
+    // Phone menu entries retain the current Decisions count.
     document.querySelectorAll('[data-qtag-menu]').forEach(function (el) {
       el.hidden = !known || n === 0;
       el.textContent = 'Decisions (' + (known ? n : 0) + ')';
@@ -599,21 +507,15 @@
   }
 
   function boot() {
-    if (document.querySelector('.qtag-pill')) return;
-    pill = document.createElement('button');
-    pill.type = 'button';
-    pill.className = 'qtag-pill';
-    pill.id = 'qtagPill';
-    pill.hidden = true;
-    try {
-      var prefs = JSON.parse(localStorage.getItem(PILL_PREFS) || 'null');
-      pillHidden = !!(prefs && prefs.hidden);
-      if (prefs && prefs.position && Number.isFinite(prefs.position.x) && Number.isFinite(prefs.position.y)) pillPosition = prefs.position;
-    } catch (_) {}
-    bindPillGestures();
-    document.body.appendChild(pill);
+    if (booted) return;
+    booted = true;
 
     document.addEventListener('click', function (ev) {
+      if (ev.target.closest && ev.target.closest('[data-qtag-menu]')) {
+        ev.preventDefault();
+        openQueue();
+        return;
+      }
       var talk = ev.target.closest && ev.target.closest('[data-qtalk]');
       if (talk) {
         ev.preventDefault();
@@ -668,12 +570,21 @@
     load(true);
     loadQueue();
     // Decisions reports its own count the moment it changes (an answer, a
-    // close); take it so the pill never lags the tab badge, then confirm.
+    // close); keep menu controls current, then confirm against the source.
     window.addEventListener('ccc:decision-count', function (ev) {
       var c = ev.detail && ev.detail.count;
-      if (Number.isInteger(c) && c >= 0) { queue.count = c; updatePill(); loadQueue(); }
+      if (Number.isInteger(c) && c >= 0) { queue.count = c; updateQueueControls(); loadQueue(); }
     });
+    if (new URLSearchParams(window.location.search).get('question_history') === '1') openHistory();
     setInterval(function () { if (!document.hidden) { load(true); loadQueue(); } }, POLL_MS);
+  }
+
+  function openHistory() {
+    showPanel();
+    var refresh = function () {
+      if (sheet && !sheet.hidden && sheet.hasAttribute('data-qhistory')) showPanel();
+    };
+    return Promise.all([load(true).then(refresh), loadQueue().then(refresh)]);
   }
 
   function open(n, sid) {
@@ -682,10 +593,10 @@
   }
 
   return {
-    open: open, answerTicket: answerTicket, boot: boot, splitTags: splitTags, openQuestions: openQuestions, chipify: chipify,
+    open: open, history: openHistory, queue: openQueue, answerTicket: answerTicket, boot: boot, splitTags: splitTags, openQuestions: openQuestions, chipify: chipify,
     classify: classify, groups: groups, queueKeys: queueKeys, plain: plain,
-    // Test seams: the pill number and the queue it reads.
+    // Test seams: the verified count and the queue it reads.
     _setQueue: function (count, rows) { queue.count = count; queue.rows = rows || []; },
-    _pillCount: pillCount,
+    _pillCount: queueCount,
   };
 });

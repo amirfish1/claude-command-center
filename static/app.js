@@ -23019,8 +23019,7 @@
           showOpToast(ok ? 'Copied ' + label : 'Copy failed - try again', ok ? 'ok' : 'error');
         });
       } else if (action === 'questions') {
-        const pill = document.getElementById('qtagPill');
-        if (pill) pill.click();
+        window.cccQuestionTags?.queue();
       } else if (action === 'stop') {
         _simpleStopTask();
       } else if (action === 'font-minus') {

@@ -1,5 +1,5 @@
-// The floating pill counts what needs the owner now: the Decisions count,
-// never unanswered transcript tags. Clicking it opens Decisions.
+// Decisions menu counts reflect the current source, while Question history
+// has an explicit entry point without a floating control.
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -37,7 +37,7 @@ async function load(browser, {questions, decision}) {
   const page = await browser.newPage();
   await page.setViewport({width: 1200, height: 800});
   await page.setContent('<style>' + fs.readFileSync('static/question-tags.css', 'utf8') + '</style>'
-    + '<button data-conv-tab="decisions2" id="d2" onclick="window.d2clicks=(window.d2clicks||0)+1">Decisions</button>');
+    + '<button data-conv-tab="decisions2" id="d2" onclick="window.d2clicks=(window.d2clicks||0)+1">Decisions</button><button data-qtag-menu hidden></button>');
   await page.evaluate((questions, decision) => {
     window.decision = decision;
     window.fetch = async (url) => ({json: async () => String(url).includes('decision-inbox')
@@ -46,39 +46,40 @@ async function load(browser, {questions, decision}) {
   await page.addScriptTag({path: 'static/question-tags.js'});
   return page;
 }
-const pillText = (page) => page.$eval('#qtagPill', p => p.hidden ? 'hidden' : p.textContent);
+const menuText = (page) => page.$eval('[data-qtag-menu]', p => p.hidden ? 'hidden' : p.textContent);
 
-test('pill shows the Decisions count, not the tag backlog, and tracks it while it refreshes', async () => {
+test('Decisions menu keeps the verified count without a floating control', async () => {
   const stale = Array.from({length: 295}, (_, i) => q(i + 1));
   const decision = {ok: true, source_current: true, needs_answer_count: 54,
     requests: Array.from({length: 54}, (_, i) => row('WT-' + i, 'ask ' + i))};
   const browser = await puppeteer.launch({executablePath: findChromePath(), args: ['--no-sandbox']});
   try {
     const page = await load(browser, {questions: stale, decision});
-    await page.waitForFunction(() => document.getElementById('qtagPill') && !document.getElementById('qtagPill').hidden);
-    assert.equal(await pillText(page), '? 54', 'not 295');
+    await page.waitForSelector('[data-qtag-menu]:not([hidden])');
+    assert.equal(await menuText(page), 'Decisions (54)', 'not 295');
     assert.equal(await page.evaluate(() => window.cccQuestionTags._pillCount()), 54);
 
-    // Decisions reports a new count: the pill follows at once.
+    assert.equal(await page.$('#qtagPill'), null, 'no floating question button');
+    // Decisions reports a new count: the menu follows at once.
     await page.evaluate(() => { window.decision = {ok: true, source_current: true, needs_answer_count: 53, requests: []};
       window.dispatchEvent(new CustomEvent('ccc:decision-count', {detail: {count: 53}})); });
-    assert.equal(await pillText(page), '? 53');
+    assert.equal(await menuText(page), 'Decisions (53)');
     await page.waitForFunction(() => window.cccQuestionTags._pillCount() === 53);
 
     // An unverified source (no count) never replaces the last verified number.
     await page.evaluate(() => { window.decision = {ok: true, source_current: false, needs_answer_count: null, requests: []};
       window.dispatchEvent(new CustomEvent('ccc:decision-count', {detail: {count: null}})); });
     await new Promise(r => setTimeout(r, 300));
-    assert.equal(await pillText(page), '? 53');
+    assert.equal(await menuText(page), 'Decisions (53)');
 
-    // Zero hides the pill.
+    // Zero hides the redundant menu entry.
     await page.evaluate(() => { window.decision = {ok: true, source_current: true, needs_answer_count: 0, requests: []};
       window.dispatchEvent(new CustomEvent('ccc:decision-count', {detail: {count: 0}})); });
-    assert.equal(await pillText(page), 'hidden');
+    assert.equal(await menuText(page), 'hidden');
   } finally { await browser.close(); }
 });
 
-test('clicking the pill opens Decisions; history is separate, labelled, and loses nothing', async () => {
+test('menu opens Decisions; explicit history entry is labelled and loses nothing', async () => {
   const questions = [
     q(1), // queue
     q(3, {ticket: {ref: 'WT-3', title: 'Open ticket question', open: true}}),
@@ -89,15 +90,15 @@ test('clicking the pill opens Decisions; history is separate, labelled, and lose
   const browser = await puppeteer.launch({executablePath: findChromePath(), args: ['--no-sandbox']});
   try {
     const page = await load(browser, {questions, decision});
-    await page.waitForFunction(() => document.getElementById('qtagPill') && !document.getElementById('qtagPill').hidden);
-    await page.click('#qtagPill');
+    await page.waitForSelector('[data-qtag-menu]:not([hidden])');
+    await page.click('[data-qtag-menu]');
     assert.equal(await page.evaluate(() => window.d2clicks), 1, 'click goes to Decisions');
     assert.equal(await page.$eval('.qtag-sheet', s => s ? s.hidden : true).catch(() => true), true, 'no competing list on click');
 
-    // The history view (options menu / chip "Question history").
-    await page.evaluate(() => window.cccQuestionTags.open(6, 'sid6'));
-    await page.waitForSelector('.qtag-sheet:not([hidden]) [data-qlist]');
-    await page.click('[data-qlist]');
+    // The same entry point used by the Decisions header.
+    await page.evaluate(() => window.cccQuestionTags.history());
+    await page.waitForSelector('.qtag-sheet:not([hidden])');
+    assert.equal(await page.$('[data-qpill-toggle]'), null, 'obsolete floating-button preferences removed');
     const text = await page.$eval('.qtag-card', c => c.innerText);
     assert.match(text, /Your to-do list is Decisions: 1 needs you/);
     assert.match(text, /Asked in a session, not in Decisions \(2\)/);
@@ -107,5 +108,14 @@ test('clicking the pill opens Decisions; history is separate, labelled, and lose
     assert.equal(await page.$eval('details.qtag-old', d => d.open), false, 'old backlog collapsed');
     assert.match(await page.$eval('details.qtag-old summary', s => s.textContent), /Older tagged questions \(1\).*not a to-do list/);
     assert.doesNotMatch(text, /Pick one\?/, 'queue items are not repeated as a second to-do list');
+    await page.click('.qtag-close');
+    await page.evaluate(() => {
+      window.fetch = url => String(url).includes('decision-inbox') ? new Promise(() => {})
+        : Promise.resolve({json: async () => ({ok:true, questions:[{n:99,tag:'[Q99:refresh]',slug:'refresh',answered:false,mentions:[],
+          first:{sid:'session',ts:new Date().toISOString(),uuid:'refresh',text:'Fresh history before the Decisions count arrives?'}}]})});
+      window.cccQuestionTags.history();
+    });
+    await page.waitForFunction(() => document.querySelector('.qtag-card').textContent.includes('Fresh history before'));
+    assert.equal(await page.$eval('.qtag-sheet', s => s.hidden), false, 'slow Decisions reads do not hold history behind loading');
   } finally { await browser.close(); }
 });

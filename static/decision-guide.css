@@ -4,6 +4,8 @@ html,body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.55 var
 body { overflow-wrap:anywhere; }
 .guide { max-width:760px; padding:24px 24px 40px; margin:auto; }
 header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+header { flex-wrap:wrap; }
+.history-link { display:inline-flex; align-items:center; min-height:44px; margin-left:auto; font-size:13px; }
 h1 { margin:0; font-size:22px; letter-spacing:-.01em; }
 h2 { margin:10px 0 6px; font-size:16px; line-height:1.4; }
 p { margin:8px 0 16px; }

@@ -82,6 +82,9 @@
     if (event.origin !== location.origin || !event.data) return;
     const native = views.some(view => view.frame && event.source === view.frame.contentWindow);
     const mobile = document.getElementById('cccMobileAppFrame');
+    if (event.data.type === 'ccc:question-history' && (native || (mobile && event.source === mobile.contentWindow))) {
+      window.cccQuestionTags?.history(); return;
+    }
     if (event.data.type === 'ccc:open-ticket' && (native || (mobile && event.source === mobile.contentWindow))
         && typeof window.cccOpenTicket === 'function') {
       window.cccOpenTicket(event.data.ref); return;

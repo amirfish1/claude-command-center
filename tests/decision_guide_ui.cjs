@@ -453,6 +453,14 @@ const summary = (state, text=exact, aid=answerId) => ({answer_id:aid, state, tex
         (0,eval)(script);
       },tabScript);
       await page.waitForFunction(()=>document.querySelector('#cccDecisionGuideFrame')?.contentDocument.querySelector('#current article'));
+      await page.evaluate(()=>{window.historyOpens=0;window.cccQuestionTags={history:()=>{window.historyOpens++;}};});
+      const guideFrame = page.frames().find(frame=>frame.parentFrame() && frame.url().endsWith('/decision-guide.html'));
+      assert.ok(guideFrame, 'embedded guide is mounted');
+      await guideFrame.evaluate(()=>document.querySelector('#questionHistory').click());
+      await page.waitForFunction(()=>window.historyOpens===1);
+      assert.equal(posts.length,0,'history navigation never sends an answer');
+      await page.evaluate(()=>window.dispatchEvent(new MessageEvent('message',{origin:location.origin,source:window,data:{type:'ccc:question-history'}})));
+      assert.equal(await page.evaluate(()=>window.historyOpens),1,'unrecognized frames cannot open history');
       await page.evaluate(()=>{document.querySelector('#sidebarDecisionGuideHost').remove();window.CCCDecisionTab.mount();});
       model.requests[0]={...base,status:'withdrawn',needs_answer:false,answer:summary('accepted')}; model.needs_answer_count=1;
       await page.evaluate(()=>{
