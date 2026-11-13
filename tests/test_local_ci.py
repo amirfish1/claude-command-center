@@ -7,10 +7,13 @@ from unittest.mock import patch
 
 from ccc_server import local_ci
 
+_discover_hosted = local_ci._hosted_identities
+
 
 @pytest.fixture(autouse=True)
 def isolated_ci_store(tmp_path, monkeypatch):
     monkeypatch.setattr(local_ci, 'DB_PATH', tmp_path / 'ci.sqlite3')
+    monkeypatch.setattr(local_ci, "_hosted_identities", lambda: [])
     discover = local_ci._recent_identities
     monkeypatch.setattr(local_ci, '_recent_identities', lambda: [])
     monkeypatch.setattr(local_ci, '_checked', 0)
@@ -176,3 +179,45 @@ def test_recent_discovery_counts_distinct_runs_not_job_logs(tmp_path, monkeypatc
         'repo':'example/project', 'runner':'local', 'attempt':1,
         'run_id':'123' if log.name in ('Worker_003.log','Worker_002.log') else '122'})
     assert [row['run_id'] for row in isolated_ci_store()] == ['123','122']
+
+
+def test_hosted_run_visible_without_local_runner(monkeypatch):
+    identity = {'repo':'example/project', 'runner':'', 'run_id':'987', 'attempt':1, 'hosted':True}
+    monkeypatch.setattr(local_ci, '_worker_roots', lambda: [])
+    monkeypatch.setattr(local_ci, '_hosted_identities', lambda: [identity])
+    def api(route):
+        if '/jobs?' in route:
+            return {'jobs':[{'runner_name':'GitHub Actions 123', 'status':'in_progress',
+                'name':'unittest', 'steps':[{'status':'completed','name':'Checkout'},
+                                          {'status':'in_progress','name':'Tests'}]}]}
+        return {'status':'in_progress', 'run_started_at':'2026-01-01T12:00:00Z'}
+    monkeypatch.setattr(local_ci, '_api', api)
+    result = local_ci._collect()
+    assert len(result['jobs']) == 1
+    assert result['jobs'][0]['name'] == 'unittest'
+    assert result['jobs'][0]['current_step'] == 'Tests'
+    assert result['jobs'][0]['percent'] == 50
+    assert local_ci._collect()['jobs'], 'hosted jobs stay visible between polls'
+    monkeypatch.setattr(local_ci, '_hosted_identities', lambda: [])
+    records = local_ci._load_records()
+    for record in records.values(): record['polled_at'] = 0
+    local_ci._save_records(records)
+    monkeypatch.setattr(local_ci, '_api', lambda route: {'status':'completed','name':'CI',
+        'conclusion':'success', 'updated_at':'2026-01-01T12:30:00Z'})
+    result = local_ci._collect()
+    assert not result['jobs']
+    assert result['completed'][0]['conclusion'] == 'success'
+
+
+@pytest.mark.parametrize('remote', ['https://github.com/example/project.git', 'git@github.com:example/project.git'])
+def test_hosted_discovery_uses_checkout_origin_and_includes_queued(remote, monkeypatch):
+    monkeypatch.setattr(local_ci.subprocess, 'run', lambda *a, **k: SimpleNamespace(returncode=0, stdout=remote))
+    routes = []
+    def api(route):
+        routes.append(route)
+        return {'workflow_runs':[{'id':123 if 'in_progress' in route else 124, 'run_attempt':2}]}
+    monkeypatch.setattr(local_ci, '_api', api)
+    identities = _discover_hosted()
+    assert [identity['run_id'] for identity in identities] == ['123', '124']
+    assert all(identity['repo'] == 'example/project' and identity['hosted'] for identity in identities)
+    assert all(route.startswith('repos/example/project/actions/runs?') for route in routes)

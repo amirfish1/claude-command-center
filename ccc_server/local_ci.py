@@ -1,6 +1,6 @@
-"""Read-only progress for GitHub Actions jobs executing on this host.
+"""Read-only progress for local runners and the server repository on GitHub.
 
-Discover active runner workers rather than polling every repository. Runner
+Discover active runner workers and hosted runs for this checkout. Runner
 configuration and a bounded diagnostic prefix supply identity only; job/step
 state comes from GitHub through the existing gh authentication.
 """
@@ -131,6 +131,28 @@ def _recent_identities():
     return identities
 
 
+def _hosted_identities():
+    """Include hosted Actions for the checkout running this dashboard."""
+    try:
+        remote = subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parent.parent),
+             "remote", "get-url", "origin"], capture_output=True, text=True, timeout=3)
+        match = re.fullmatch(r"(?:https://github\.com/|git@github\.com:)([\w.-]+/[\w.-]+?)(?:\.git)?/?", remote.stdout.strip())
+        if remote.returncode or not match:
+            return []
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    repo = match[1]
+    identities = []
+    for status in ("in_progress", "queued"):
+        payload = _api(f"repos/{repo}/actions/runs?status={status}&per_page=20") or {}
+        for run in payload.get("workflow_runs", []):
+            if run.get("id"):
+                identities.append({"repo":repo, "runner":"", "run_id":str(run["id"]),
+                                   "attempt":int(run.get("run_attempt") or 1), "hosted":True})
+    return identities
+
+
 def _collect():
     records = _load_records()
     active = []
@@ -141,7 +163,7 @@ def _collect():
                 active.append(identity)
         except (OSError, ValueError, KeyError):
             continue
-    discovered = active + _recent_identities()
+    discovered = active + _recent_identities() + _hosted_identities()
     active_names = {}
     for identity in discovered:
         if not identity.get("run_id"):
@@ -150,6 +172,8 @@ def _collect():
         attempt = identity.get("attempt", 1)
         key = f"{repo}:{run_id}:{attempt}"
         record = records.setdefault(key, dict(identity, attempt=attempt, status="pending", runners=[]))
+        if identity.get("hosted"):
+            record["hosted"] = True
         if identity["runner"] not in record["runners"]:
             record["runners"].append(identity["runner"])
         if identity in active:
@@ -158,11 +182,11 @@ def _collect():
                  current_step="Reading job progress", url="")
             for identity in active if not identity.get("run_id")]
     started = time.monotonic()
-    for key, record in sorted(records.items(), key=lambda item: item[0] not in active_names):
+    for key, record in sorted(records.items(), key=lambda item: not (item[0] in active_names or item[1].get("hosted"))):
         if record.get("status") == "completed":
             continue
         local_names = active_names.get(key, set())
-        if not local_names and time.time() - record.get("polled_at", 0) < 30:
+        if not local_names and not record.get("hosted") and time.time() - record.get("polled_at", 0) < 30:
             continue
         if time.monotonic() - started > 12:
             # Bound bootstrap work; the next refresh handles the remaining runs.
@@ -180,14 +204,14 @@ def _collect():
                           completed_at=run.get("updated_at") or run.get("run_started_at") or "",
                           url=url, current_step=run.get("conclusion") or "Completed")
             continue
-        if not local_names:
+        if not local_names and not record.get("hosted"):
             continue
         payload = _api(route + "/jobs?per_page=100") or {}
-        jobs = [job for job in payload.get("jobs", []) if job.get("runner_name") in local_names
-                and job.get("status") == "in_progress"]
+        jobs = [job for job in payload.get("jobs", []) if (record.get("hosted") or job.get("runner_name") in local_names)
+                and job.get("status") in ("in_progress", "queued")]
         if not jobs:
             rows.append(dict(record, id=key, name="CI", percent=None, completed_steps=0,
-                             total_steps=0, current_step="Reading job progress", url=url))
+                             total_steps=0, current_step="Queued" if run and run.get("status") == "queued" else "Reading job progress", url=url))
         for job in jobs:
             steps = job.get("steps") or []
             done = sum(step.get("status") == "completed" for step in steps)

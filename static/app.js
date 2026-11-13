@@ -46642,7 +46642,7 @@
       // `||` fallback keeps the empty-state text when BOTH are empty while
       // still showing ready-to-merge rows when only In-progress is empty.
       : ((_readyToMergeHtml + _forceOpen(_inProgressHtml, 'conv-inprogress-section')) || _tabEmpty('in-progress sessions'));
-    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_ipSearchActive || (_sidebarTab !== 'decisions' && _sidebarTab !== 'decisions2' && _sidebarTab !== 'jobs')))
+    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_sidebarTab !== 'workers' || _ipSearchActive) && (_ipSearchActive || (_sidebarTab !== 'decisions' && _sidebarTab !== 'decisions2' && _sidebarTab !== 'jobs')))
       ? '<div class="archive-empty-state"><button type="button" class="conv-window-btn" data-role="sidebar-show-more">Show '
         + Math.min(SIDEBAR_RENDER_MORE_ROWS, _sidebarRowsOmitted)
         + ' more sessions</button><div>' + _sidebarRowsOmitted + ' older rows are not rendered yet.</div></div>'
@@ -55935,7 +55935,10 @@
     for (const item of _workersFallbackTickets) if (!refs.has(item.ref)) { items.push(item); refs.add(item.ref); }
     const workerTickets = items.filter(item => !item._sessionOnly
       && !/^(?:IDEAS|SMALL-BUGS)-\d+$/.test(_uxqItemRef(item)));
-    return _uxqRecentWorkItems(workerTickets, Infinity).filter((row, i) => i < 10 || _workersAssignedTicketRefs.has(_uxqItemRef(row.item)));
+    return _uxqRecentWorkItems(workerTickets, Infinity)
+      .map(row => ({...row, workerState:_workersTicketState(row.item)}))
+      .sort((a, b) => a.workerState.rank - b.workerState.rank || b.ms - a.ms)
+      .filter((row, i) => i < 10 || _workersAssignedTicketRefs.has(_uxqItemRef(row.item)));
   }
   let _workersTicketSessions = new Map();
   let _workersTicketRecentSignature = '';
@@ -55980,9 +55983,21 @@
   }
   function _workersLatestTicketCard(sessions) {
     const cards = sessions ? sessions.cards.map(card => _ultraFreshCurrent(_applyLiveOverlayToRow(card))) : [];
-    const rank = card => workerStateBucket(card) === 'needs-you' ? 0 : workerStateBucket(card) === 'working' ? 1 : 2;
+    const rank = card => workerStateBucket(card) === 'working' ? 0 : workerStateBucket(card) === 'needs-you' ? 1 : 2;
     const recency = card => Math.max(Number(card.last_event_ts) || 0, Number(card.modified) || 0);
     return cards.sort((a, b) => rank(a) - rank(b) || recency(b) - recency(a))[0];
+  }
+  function _workersTicketState(item) {
+    if (item.status === 'closed' || item.closed_at) return {label:'Resolved', rank:4, css:'is-resolved'};
+    const sessions = _workersTicketSessions.get(_uxqItemRef(item));
+    const card = _workersLatestTicketCard(sessions);
+    const outcome = card && rowOutcomeView(card);
+    if (sessions && sessions.cards.some(c => rowOutcomeView(_ultraFreshCurrent(_applyLiveOverlayToRow(c))).kind === 'working')) return {label:'Working', rank:0, css:'is-working'};
+    if (item.status === 'open') return {label:'Open', rank:2, css:'is-open'};
+    if (item.needs_input || item.status === 'needs_input' || (card && workerStateBucket(card) === 'needs-you')
+        || (outcome && outcome.kind === 'next')) return {label:'Needs you', rank:1, css:'is-waiting'};
+    if (item.status === 'in_progress') return {label:outcome && outcome.kind === 'plan' ? outcome.label : card ? 'Idle' : 'Claimed', rank:3, css:''};
+    return {label:capitalizeSessionTitleStart(String(item.status || 'open').replace(/_/g, ' ')), rank:3, css:''};
   }
   // Patch only the ticket's text on the same animation frame as its session.
   // Rebuilding the list here would discard expanded lanes and keyboard focus.
@@ -55993,6 +56008,13 @@
       const update = _workersMeaningfulUpdate(latest && rowOutcomeView(latest).text);
       for (const entry of document.querySelectorAll('[data-workers-ticket]')) {
         if (entry.dataset.workersTicket !== ref) continue;
+        const item = _uxqItemsCache.items.find(item => _uxqItemRef(item) === ref);
+        const stateNode = entry.querySelector('.fq-recent-state');
+        if (item && stateNode) {
+          const state = _workersTicketState(item);
+          stateNode.textContent = state.label;
+          stateNode.className = 'fq-recent-state' + (state.css ? ' ' + state.css : '');
+        }
         let node = entry.querySelector('.workers-ticket-update');
         if (!update) { if (node) node.remove(); continue; }
         if (!node) {
@@ -56028,10 +56050,9 @@
         .replace(/(?:file:\/\/)?\/[^\s]*\/(?:pasted-images|attachments)\/[^\s]+/g, '')
         .trim() || 'Attached report';
       const sessions = _workersTicketSessions.get(ref);
-      const working = item.status === 'in_progress';
-      // This is ticket lifecycle, not whether its agent process is alive.
-      const state = row.resolved ? 'Resolved' : working ? 'Working'
-        : capitalizeSessionTitleStart(String(item.status || 'open').replace(/_/g, ' '));
+      const ticketState = row.workerState;
+      const working = ticketState.label === 'Working';
+      const state = ticketState.label;
       const latestCard = _workersLatestTicketCard(sessions);
       const outcome = latestCard ? rowOutcomeView(latestCard) : null;
       const update = _workersMeaningfulUpdate((outcome && outcome.text) || row.summary);
@@ -56051,7 +56072,7 @@
         + '>'
         + '<span class="fq-recent-title"><button type="button" class="fq-recent-ref workers-ticket-link" data-uxq-recent-ref="' + escapeAttr(ref) + '" aria-label="Open ' + escapeAttr(item._sessionOnly ? 'session' : ref + ' details') + '">' + escapeHtml(item._sessionOnly ? 'Session' : ref) + '</button> '
         + (sessions ? '<button type="button" class="workers-ticket-title"' + toggleAttrs + '>' + escapeHtml(title) + '</button>' : escapeHtml(title)) + '</span>'
-        + '<span class="fq-recent-meta"><span class="fq-recent-state' + (row.resolved ? ' is-resolved' : item.status === 'open' ? ' is-open' : working ? ' is-working' : '') + '">' + escapeHtml(state) + '</span>'
+        + '<span class="fq-recent-meta"><span class="fq-recent-state' + (ticketState.css ? ' ' + ticketState.css : '') + '">' + escapeHtml(state) + '</span>'
         + (timerHtml || '<time class="fq-recent-resolved" datetime="' + escapeAttr(row.at) + '" title="Last activity: ' + escapeAttr(absolute) + '">'
           + escapeHtml(_uxqRelTime(row.at)) + '</time>')
         + '<span>' + escapeHtml(row.worker || 'Worker not recorded') + '</span></span>'

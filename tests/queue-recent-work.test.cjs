@@ -223,3 +223,28 @@ test('Workers hides independent sessions and manual ticket queues even when assi
   const refs = vm.runInContext("_workersAssignedTicketRefs = new Set(['IDEAS-2','SMALL-BUGS-3','session:orphan']); _workersActivityRows().map(row => row.item.ref)", ctx);
   assert.deepEqual(Array.from(refs), ['TEST-1']);
 });
+
+test('active workers lead resolved activity and a parked claim is not Working', () => {
+  const start = app.indexOf('  function _uxqWithMachine(');
+  const end = app.indexOf('  // Compact history rows', start);
+  const items = [
+    {ref:'TEST-1', status:'closed', closed_at:'2026-01-01T12:00:00Z'},
+    {ref:'TEST-2', status:'in_progress', claimed_at:'2026-01-01T10:00:00Z'},
+    {ref:'TEST-3', status:'in_progress', claimed_at:'2026-01-01T11:00:00Z'},
+  ];
+  const ctx = {_uxqItemsCache:{items}, _uxqItemRef:item=>item.ref,
+    _ultraFreshCurrent:c=>c, _applyLiveOverlayToRow:c=>c,
+    workerStateBucket:c=>c.bucket, rowOutcomeView:c=>c.outcome};
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(start, end), ctx);
+  vm.runInContext(`_workersTicketSessions.set('TEST-2', {cards:[{bucket:'working',outcome:{kind:'working'}}]});
+    _workersTicketSessions.set('TEST-3', {cards:[{bucket:'idle',outcome:{kind:'next'}}]});`, ctx);
+  assert.deepEqual(Array.from(ctx._workersActivityRows(), r=>r.item.ref), ['TEST-2','TEST-3','TEST-1']);
+  assert.equal(ctx._workersTicketState(items[1]).label, 'Working');
+  assert.equal(ctx._workersTicketState(items[2]).label, 'Needs you');
+  assert.equal(ctx._workersTicketState(items[0]).label, 'Resolved');
+  vm.runInContext(`_workersTicketSessions.get('TEST-3').cards[0].outcome = {kind:'update'};`, ctx);
+  assert.equal(ctx._workersTicketState(items[2]).label, 'Idle');
+  vm.runInContext(`_workersTicketSessions.clear()`, ctx);
+  assert.equal(ctx._workersTicketState(items[1]).label, 'Claimed');
+});

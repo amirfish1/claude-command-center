@@ -7,7 +7,7 @@ const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync('static/app.js', 'utf8');
 const ticketPaint = app.slice(app.indexOf('  function _workersMeaningfulUpdate('), app.indexOf('  // Compact history rows'));
 const block = app.slice(app.indexOf('  // Ultra-fresh:'), app.indexOf('  // The server derives readiness'))
-  + '\nconst _workersTicketSessions = new Map();\n' + ticketPaint;
+  + '\nconst _workersTicketSessions = new Map(); const _uxqItemsCache = {items:[]}; const _uxqItemRef = item => item.ref;\n' + ticketPaint;
 const rowActions = app.slice(app.indexOf('  // Row actions are model-authored replies'), app.indexOf('  // CCC-1218:'));
 
 test('a submitted turn survives delivery acknowledgment over an old finished snapshot', () => {
