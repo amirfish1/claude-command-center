@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Queued after-turn inputs held by an explicit Stop (CCC-237).
 
 `ccc send` (mode=send) parks text in the durable queue to run *after* the

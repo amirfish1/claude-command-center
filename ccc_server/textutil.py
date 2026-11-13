@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Leaf module for text utilities, slugification, and string sanitization.
 
 Stdlib-only. No imports from server or ccc_server.core.

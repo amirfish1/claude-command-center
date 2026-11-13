@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Perf-event telemetry sink + breach-pattern ticket filer.
 
 The frontend beacons two kinds of client-measured timings here:

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """One tick runs On-call end to end; the loop calls it every few seconds.
 
 A tick: read new messages on every channel and route them, poll the

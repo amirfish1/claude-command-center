@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Runaway sessions: sessions that keep working long after anyone asked.
 
 The brakes CCC already has (wake_guard, the inject circuit breaker, the idle

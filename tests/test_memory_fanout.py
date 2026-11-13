@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Multi-machine S4: memory fan-out across paired peers and the merge.
 
 No real peers: federation.PeerClient is swapped for a fake whose behaviour

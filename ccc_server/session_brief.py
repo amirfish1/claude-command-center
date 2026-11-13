@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """`ccc brief <session>` / GET /api/memory/brief/<session> (MEMO-FIX-20):
 answers "where did this work stop and how do I resume?" for one session.
 

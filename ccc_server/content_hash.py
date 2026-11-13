@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Single source of truth for the worker-staleness fingerprint.
 
 server.py was decomposed into ccc_server/*.py (17+ extracted subsystem

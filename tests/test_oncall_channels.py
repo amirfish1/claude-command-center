@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """On-call channels: every transport against a fake, never the network."""
 
 from __future__ import annotations
@@ -1417,7 +1417,7 @@ def test_module_header_and_plain_strings():
     source = open(channels.__file__, encoding="utf-8").read()
     lines = source.splitlines()
     assert lines[0] == "# Copyright (c) 2026 Amir Fish. All rights reserved."
-    assert lines[1] == "# SPDX-License-Identifier: LicenseRef-CCC-Software-License"
+    assert lines[1] == "# SPDX-License-Identifier: FSL-1.1-MIT"
     assert "—" not in source and "–" not in source
     assert "from __future__ import annotations" in source
 

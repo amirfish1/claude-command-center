@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Multi-machine S6 remainder (MEMORY-16): continuation origins across nodes.
 
 Two isolated node fixtures, each with its own ship_graph session_meta DB.

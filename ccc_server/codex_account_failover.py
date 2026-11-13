@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Move a Codex session off an account that refuses its model.
 
 A lapsed subscription keeps its login but loses models, so the turn dies at

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """MEMO-FIX-19: session_fts coverage for Kimi Code, Gemini CLI and Cursor
 (previously only Claude Code + Codex), plus the file_cache schema migration
 and search_sessions_enriched -- the shared retrieval primitive now behind

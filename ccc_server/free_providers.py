@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Free-LLM provider registry and guided key setup for the managed router.
 
 The registry below is the novice-facing catalog used by the free-key wizard

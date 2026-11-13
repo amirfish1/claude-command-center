@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """On-call transports: send one message, poll for new inbound messages.
 
 A channel knows how to reach one provider and nothing about what a message

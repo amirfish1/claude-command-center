@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """The WatchTower calls On-call makes, in one place.
 
 On-call never imports WatchTower: it runs the ``wt`` command, so it works with

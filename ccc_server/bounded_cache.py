@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """An LRU cache bounded by estimated bytes as well as by entry count.
 
 An entry cap alone does not bound memory: the same 512 entries are 5 MB on a

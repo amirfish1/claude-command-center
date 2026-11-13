@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Persistent SSH pipe for federated memory reads (multi-machine S5).
 
 A per-call SSH peer request pays ~90 ms for the ssh session and ~270 ms to

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Free-model benchmark: races catalog models through five tiny coding tasks.
 
 Talks Anthropic wire format to the local freellmapi router

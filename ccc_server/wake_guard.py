@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """RESIL-5: one ledger every automatic session wake goes through.
 
 An automatic wake is anything CCC does to a session nobody asked it to touch

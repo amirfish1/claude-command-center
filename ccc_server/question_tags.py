@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Index of owner-question tags `[Q<n>:<slug>]` across agent transcripts.
 
 Agents tag every question to the owner as `[Q33:gap-month]`; the FIRST

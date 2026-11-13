@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Recent-session content search across every agent harness.
 
 Powers the sidebar conversation search (/api/search-recall-sessions) and the

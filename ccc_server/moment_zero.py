@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Fresh-install detection for the Moment Zero onboarding shell.
 
 The onboarding overlay (static/onboarding/onboarding.js) auto-opens only for

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """On-call state: one config file, one SQLite file, the shared message types.
 
 Layout under ``<state dir>/oncall/``:

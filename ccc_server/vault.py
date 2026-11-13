@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Vault: local storage for any kind of secret (API keys, tokens, logins).
 
 BYOK (ccc_server/byok.py) is scoped to LLM providers and spawn-time env

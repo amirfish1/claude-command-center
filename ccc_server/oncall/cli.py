@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """``ccc oncall``: set On-call up and drive it from a terminal.
 
 Every command talks to the running CCC over its local HTTP API, so a person

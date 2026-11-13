@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Ask tab — retrieval-then-answer assistant over CCC's session corpus.
 
 Powers POST /api/assistant/ask (the right-rail Ask tab). Stage 1 gathers

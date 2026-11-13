@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Unified, local session-usage database (the "Throughput" DB).
 
 One normalized ``sessions`` row per logical session across Claude Code, Codex

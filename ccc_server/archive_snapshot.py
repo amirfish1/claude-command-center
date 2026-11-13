@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Publish archive snapshots safely across detached refresh processes.
 
 Readers need no lock: replacement exposes either complete snapshot. Writers

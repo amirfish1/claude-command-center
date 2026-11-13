@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Notifications: intake, scheduling and fan-out to connected dashboards.
 
 POST /api/notify records a notification and publishes it on the /api/events

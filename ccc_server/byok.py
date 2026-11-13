@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """BYOK (bring-your-own-key) profile storage, provider catalog, spawn-time
 env injection, and a lightweight usage/cost ledger.
 

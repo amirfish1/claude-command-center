@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Instinct: a proactive daily brief across your repos (stdlib-only).
 
 Instead of waiting to be asked, Instinct looks at what happened since the last

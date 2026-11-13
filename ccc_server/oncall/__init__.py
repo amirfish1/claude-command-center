@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """On-call: agents fix reported bugs and reach a person only when they must.
 
 Preview feature, off unless the ``oncall`` preview flag is on.

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """CCC-237: an explicit Stop holds queued after-turn input.
 
 Repro (OPS-155): two `ccc send` calls queue behind a running Codex turn, then

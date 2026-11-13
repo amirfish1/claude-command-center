@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Savings engine — the numbers behind ``GET /api/savings`` (lane L12).
 
 Answers three money questions from the transcript record:

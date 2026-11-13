@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Durable delivery receipts for queued injects (CCC-27/CCC-28).
 
 `/api/inject-input` recording an "interaction" only proves the user clicked

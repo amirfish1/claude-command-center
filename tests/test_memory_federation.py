@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """MEMORY-8 (multi-machine S3): memory_recall/memory_shipped/memory_brief/
 memory_file_history federation route actions.
 

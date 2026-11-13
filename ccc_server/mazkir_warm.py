@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Warm Mazkir: one long-lived `claude -p` fed one Ask at a time.
 
 A cold Ask boots a fresh `claude -p` plus its two MCP servers before the model

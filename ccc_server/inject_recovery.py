@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Bounded auto-recovery for live sessions that never consume queued input.
 
 A live `claude -p` child can sit idle with a user's message parked in CCC's

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Restart recovery: find sessions a machine restart cut off mid-turn.
 
 A reboot (a laptop update, a crash, a preempted cloud VM) SIGTERMs every

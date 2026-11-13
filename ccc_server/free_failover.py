@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Limit-hit failover: keep working on a $0 model, with explicit approval.
 
 When the usage-limit watcher (ccc_server/usage_limit.py) parks a session on a

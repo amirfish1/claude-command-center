@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Free-model router lifecycle: CCC's managed freellmapi install.
 
 CCC runs a private freellmapi (MIT, github.com/tashfeenahmed/freellmapi)

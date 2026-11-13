@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Jobs feed: the outcome-oriented view of scheduled jobs behind the Jobs tab.
 
 Sources (read-only; CCC surfaces scheduling, it does not own execution):

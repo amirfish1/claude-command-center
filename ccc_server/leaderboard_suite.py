@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Free-model leaderboard suite: 15 fixed coding tasks x $0 models.
 
 The in-app benchmark (``free_eval``) races five tasks through the local free

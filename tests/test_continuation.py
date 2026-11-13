@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Unit coverage for ccc_server/continuation.py: `ccc spawn --continue-from`,
 `ccc send --new-if-large-and-stale`, and the delivery-time lineage forward
 every continuation entry point shares (MEMO-FIX-lineage).

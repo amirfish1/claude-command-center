@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Static import-closure fingerprint for the worker-staleness check.
 
 content_hash.py hashes server.py plus every ccc_server/*.py, so any dashboard

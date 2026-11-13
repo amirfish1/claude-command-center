@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """The HTTP surface of On-call, as plain functions the server routes to.
 
 ``handle(method, path, body)`` returns ``(status, payload)``. The server only

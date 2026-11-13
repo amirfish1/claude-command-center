@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Tests for ccc_server.codex_cloud_threads — Codex cloud (dot/aeon) threads.
 
 The fake backend is an in-process RFC 6455 server on loopback speaking just

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """What needs the owner becomes one numbered message per incident.
 
 ``collect_*`` turn facts (a parked ticket, a dead session, a held report)

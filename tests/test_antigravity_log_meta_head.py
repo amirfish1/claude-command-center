@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """AGY spawn identity must survive a log that outgrew the 64 KB tail window.
 
 `Created conversation <uuid>`, the workspace line and the model label are all

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Guess which repo a new session belongs in from its first prompt.
 
 ``POST /api/repo/guess`` -> ``repo_guess_request(body)``. Two passes:

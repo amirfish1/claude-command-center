@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Leaf module for the unified activity log and the recent-error ring.
 
 Stdlib-only. Anything a test patches on `server` (or that still lives there)

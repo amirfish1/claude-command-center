@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Propose/confirm actions for the Ask agent (Mazkir's "hands").
 
 The agent can never execute an outward-facing action. Its action tools only

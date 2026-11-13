@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Shared read-only helpers for the engine-ingestion modules.
 
 The per-engine adapters (opencode, kilo, grok, hermes, copilot_cli, …) all read

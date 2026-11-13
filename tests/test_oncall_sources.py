@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """On-call sources: GitHub issues, Sentry, PostHog, URL and command checks.
 
 No network and no real accounts: every source gets a fake ``http`` callable, a
@@ -843,7 +843,7 @@ def test_module_has_no_em_dashes_and_starts_with_the_license():
     text = open(sources.__file__, encoding="utf-8").read()
     lines = text.splitlines()
     assert lines[0] == "# Copyright (c) 2026 Amir Fish. All rights reserved."
-    assert lines[1] == "# SPDX-License-Identifier: LicenseRef-CCC-Software-License"
+    assert lines[1] == "# SPDX-License-Identifier: FSL-1.1-MIT"
     assert chr(0x2014) not in text and chr(0x2013) not in text
 
 

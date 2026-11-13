@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Consent gate for every change CCC makes to agent config it does not own.
 
 CCC used to write its hooks into ~/.claude/settings.json and ~/.codex/hooks.json

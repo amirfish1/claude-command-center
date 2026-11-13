@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Pop-up approvals: every promo pop-up stays off until it is approved here.
 
 Each unsolicited pop-up (toast, banner, modal, floating card, OS

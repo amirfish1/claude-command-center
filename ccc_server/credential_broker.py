@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Bounded, one-shot credential requests. No transcript, event or log writes.
 
 Only explicitly remembered values are persisted, and only in the CCC Vault

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Optional 'brain' plugin hook (MEMORY-1).
 
 CCC ships no second-brain logic of its own. This is a generic, opt-in,

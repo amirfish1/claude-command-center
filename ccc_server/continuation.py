@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """MEMO-FIX-lineage: `ccc spawn --continue-from` and `ccc send
 --new-if-large-and-stale`, plus the one delivery-time hook (`forward_target`)
 that lets every continuation entry point (this module, the F2 "Continue in a

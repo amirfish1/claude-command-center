@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Multi-machine S6: `ccc_server.fleet._federation_record_cross_node_spawn_edge`.
 
 After `/api/sessions/spawn` proxies a spawn to a peer via

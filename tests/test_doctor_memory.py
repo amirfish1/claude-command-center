@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Tests for server.build_memory_doctor() (MEMO-FIX-24): the memory-health
 section of `ccc doctor` -- session index / embeddings coverage, ship-graph
 freshness, and decision-extraction last-run. A real incident (Ollama's model

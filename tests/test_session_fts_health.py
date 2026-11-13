@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Unit tests for ccc_server/session_fts.index_health() (MEMO-FIX-24):
 the memory-health snapshot `ccc doctor` surfaces for the session index and
 its optional local-embeddings channel. All Ollama I/O is mocked -- these

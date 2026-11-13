@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Tests for ccc_server/realtime_voice.py — the Codex realtime voice lane.
 
 Drives a real subprocess: tests/fake_voice_appserver.py, a stdlib script

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """The On-call home screen: what needs you, what is being worked on, what got fixed.
 
 ``summary`` is the whole screen as data, read from On-call's own store only:

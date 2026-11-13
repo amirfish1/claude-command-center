@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Rebindable return addresses for spawned sessions (CCC-1202).
 
 A `report_to` spawn used to bake the dispatcher's session id straight into

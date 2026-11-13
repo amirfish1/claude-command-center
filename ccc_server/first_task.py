@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """First magic task — a novice's first real agent run.
 
 Creates ~/CCC-Playground (a tiny git repo holding a small web page plus a

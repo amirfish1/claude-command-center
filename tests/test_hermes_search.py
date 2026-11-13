@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Amir Fish. All rights reserved.
-# SPDX-License-Identifier: LicenseRef-CCC-Software-License
+# SPDX-License-Identifier: FSL-1.1-MIT
 """Unit tests for the Hermes messages_fts search channel (multi-machine S9):
 ccc_server.hermes.search_hermes_messages()/hermes_meta_for_sids(), and their
 wiring into ccc_server.session_fts.search_sessions()/search_sessions_enriched()
