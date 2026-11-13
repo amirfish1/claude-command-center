@@ -32897,7 +32897,15 @@ body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
     max-height: calc(var(--app-vh, 100vh) * 0.3) !important;
   }
   html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom,
-  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons { display: contents; }
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons,
+  html body .conv-split .conv-pane .conv-input-bar .conv-input-selectors { display: contents; }
+  /* Hidden session selectors must not leave a growing flex spacer between
+     the input and controls. New-session picks still share their own row. */
+  html body .conv-split .conv-pane .conv-input-bar.is-new-session-launch .conv-input-selectors {
+    display: flex;
+    flex: 1 1 100%;
+    order: 0;
+  }
   html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > *,
   html body .conv-split .conv-pane .conv-input-bar .conv-input-buttons > * { order: 4; }
   html body .conv-split .conv-pane .conv-input-bar .conv-input-row-bottom > .attach-btn,
