@@ -86489,9 +86489,6 @@
   const $annotationScreenBtn = document.getElementById('annotationScreenBtn');
   const $annotationNotesBtn = document.getElementById('annotationNotesBtn');
   let annotationState = null;
-  let annTabCaptureStream = null;
-  let annTabCapturePending = null;
-  let annTabCaptureLastError = null;
 
   function annCssEscape(value) {
     const s = String(value == null ? '' : value);
@@ -86680,119 +86677,6 @@
       chrome_offset_y: chromeY,
       device_pixel_ratio: dpr,
     };
-  }
-
-  function annReleaseTabCaptureStream() {
-    annTabCapturePending = null;
-    annTabCaptureLastError = null;
-    if (!annTabCaptureStream) return;
-    try {
-      annTabCaptureStream.getTracks().forEach((track) => track.stop());
-    } catch (_) {}
-    annTabCaptureStream = null;
-  }
-
-  function annTabCaptureSupported() {
-    // WKWebView in the .app shell does not expose a working getDisplayMedia picker.
-    if (typeof isCccMacApp === 'function' && isCccMacApp()) return false;
-    return !!(navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function');
-  }
-
-  /** Start getDisplayMedia synchronously (must run inside a user-gesture handler). */
-  function annBeginTabCaptureRequest() {
-    if (!annTabCaptureSupported()) return null;
-    if (annTabCaptureStream) {
-      const tracks = annTabCaptureStream.getVideoTracks();
-      if (tracks.length && tracks[0].readyState === 'live') {
-        return Promise.resolve(annTabCaptureStream);
-      }
-      annReleaseTabCaptureStream();
-    }
-    if (annTabCapturePending) return annTabCapturePending;
-    annTabCaptureLastError = null;
-    const request = navigator.mediaDevices.getDisplayMedia({
-      video: {
-        displaySurface: 'browser',
-        width: { ideal: window.innerWidth },
-        height: { ideal: window.innerHeight },
-      },
-      audio: false,
-      preferCurrentTab: true,
-      selfBrowserSurface: 'include',
-    });
-    annTabCapturePending = request
-      .then((stream) => {
-        annTabCapturePending = null;
-        const track = stream.getVideoTracks()[0];
-        if (!track) {
-          stream.getTracks().forEach((t) => t.stop());
-          return null;
-        }
-        track.addEventListener('ended', annReleaseTabCaptureStream);
-        annTabCaptureStream = stream;
-        return stream;
-      })
-      .catch((err) => {
-        annTabCapturePending = null;
-        annTabCaptureLastError = err;
-        return null;
-      });
-    return annTabCapturePending;
-  }
-
-  async function annCaptureTabRegionB64(rect) {
-    if (!rect || rect.width < 2 || rect.height < 2) return null;
-    const pending = annBeginTabCaptureRequest();
-    const stream = pending ? await pending : null;
-    if (!stream) return null;
-    const track = stream.getVideoTracks()[0];
-    if (!track || track.readyState !== 'live') return null;
-    const video = document.createElement('video');
-    video.muted = true;
-    video.playsInline = true;
-    video.srcObject = stream;
-    try {
-      await video.play();
-      await new Promise((resolve) => {
-        if (typeof video.requestVideoFrameCallback === 'function') {
-          video.requestVideoFrameCallback(() => resolve());
-        } else if (video.readyState >= 2) {
-          resolve();
-        } else {
-          video.addEventListener('loadeddata', () => resolve(), { once: true });
-          setTimeout(resolve, 200);
-        }
-      });
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-      if (!vw || !vh) return null;
-      const scaleX = vw / window.innerWidth;
-      const scaleY = vh / window.innerHeight;
-      const sx = Math.max(0, Math.round(rect.x * scaleX));
-      const sy = Math.max(0, Math.round(rect.y * scaleY));
-      const sw = Math.max(1, Math.min(vw - sx, Math.round(rect.width * scaleX)));
-      const sh = Math.max(1, Math.min(vh - sy, Math.round(rect.height * scaleY)));
-      const canvas = document.createElement('canvas');
-      canvas.width = sw;
-      canvas.height = sh;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return null;
-      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
-      const dataUrl = canvas.toDataURL('image/png');
-      const comma = dataUrl.indexOf(',');
-      return comma >= 0 ? dataUrl.slice(comma + 1) : null;
-    } catch (_) {
-      return null;
-    } finally {
-      video.srcObject = null;
-    }
-  }
-
-  async function annCaptureRegionB64(rect, element) {
-    const dom = await annCaptureDomRegionB64(rect, element);
-    if (dom) return dom;
-    if (annTabCaptureSupported()) return annCaptureTabRegionB64(rect);
-    return null;
   }
 
   // Walk up the DOM until we find an ancestor at least ~1.8x the area of
@@ -86994,7 +86878,6 @@
     if ($annotationStartBtn) $annotationStartBtn.classList.remove('active');
     if ($annotationFabBtn) $annotationFabBtn.classList.remove('active');
     annotationState = null;
-    annReleaseTabCaptureStream();
   }
 
   function annPositionEditor(editor, rect) {
@@ -87416,10 +87299,8 @@
       '<textarea class="ann-editor-note" rows="4" placeholder="Write a note for Claude…"></textarea>' +
       '<div class="ann-editor-meta">' + escapeHtml(summary.selector || summary.tag || 'selected area') + '</div>' +
       '<div class="ann-editor-shot-preview" hidden><img alt="Annotation screenshot preview"></div>' +
-      '<div class="ann-editor-shot-hint" hidden></div>' +
       '<div class="ann-editor-error" hidden></div>' +
       '<div class="ann-editor-actions">' +
-        '<button type="button" class="ann-btn" data-ann-enable-shot hidden>Allow screenshot</button>' +
         '<button type="button" class="ann-btn" data-ann-cancel>Cancel</button>' +
         '<button type="button" class="ann-btn" data-ann-open-session>Open new session</button>' +
         // CCC-179: split the single "Add to UX fixes queue" into two — a 1-click
@@ -87460,67 +87341,7 @@
     const openSessionBtn = editor.querySelector('[data-ann-open-session]');
     const uxQueueBtn = editor.querySelector('[data-ann-ux-queue]');
     const uxQueueNowBtn = editor.querySelector('[data-ann-ux-queue-now]');
-    const enableShotBtn = editor.querySelector('[data-ann-enable-shot]');
-    const shotHintEl = editor.querySelector('.ann-editor-shot-hint');
     let savedAnnotation = null;
-    const annRefreshScreenshotUi = () => {
-      const macApp = typeof isCccMacApp === 'function' && isCccMacApp();
-      const supported = annTabCaptureSupported();
-      const live = !!(annTabCaptureStream
-        && annTabCaptureStream.getVideoTracks()[0]
-        && annTabCaptureStream.getVideoTracks()[0].readyState === 'live');
-      if (shotHintEl) {
-        if (macApp) {
-          shotHintEl.textContent = 'CCC will try to attach a screenshot automatically. If it does not, use the Screen button for a manual region capture.';
-          shotHintEl.hidden = false;
-        } else if (supported && !live) {
-          shotHintEl.textContent = 'Click “Allow screenshot” and choose this tab in the browser prompt.';
-          shotHintEl.hidden = false;
-        } else if (supported && live) {
-          shotHintEl.textContent = 'Screenshot capture is enabled for this annotation.';
-          shotHintEl.hidden = false;
-        } else {
-          shotHintEl.hidden = true;
-        }
-      }
-      if (enableShotBtn) {
-        enableShotBtn.hidden = !supported || live;
-      }
-    };
-    annRefreshScreenshotUi();
-    if (enableShotBtn) {
-      enableShotBtn.addEventListener('click', () => {
-        const pending = annBeginTabCaptureRequest();
-        if (!pending) {
-          // The WebKit-based native CCC app doesn't expose
-          // getDisplayMedia (the browser tab-capture API), so the
-          // in-page "Allow screenshot" path can't work here. Direct
-          // the user to the topbar "Screen" button instead — that
-          // uses the macOS native `screencapture` picker, which works
-          // whenever Screen Recording is granted to Claude Command
-          // Center in System Settings → Privacy → Screen Recording.
-          errEl.innerHTML = 'In-page tab capture is not available in this app shell. '
-            + 'Use the <strong>Screen</strong> button at the top right instead - '
-            + 'it triggers the macOS area screenshot picker (granted via '
-            + '<em>System Settings → Privacy → Screen Recording → Claude Command Center</em>).';
-          errEl.hidden = false;
-          return;
-        }
-        pending.then((stream) => {
-          annRefreshScreenshotUi();
-          if (stream) {
-            errEl.hidden = true;
-            showOpToast('Screenshot capture enabled', 'success');
-          } else {
-            const denied = annTabCaptureLastError && annTabCaptureLastError.name === 'NotAllowedError';
-            errEl.textContent = denied
-              ? 'Tab capture was blocked - allow it in the browser prompt and choose this tab.'
-              : 'Tab capture failed - try again.';
-            errEl.hidden = false;
-          }
-        });
-      });
-    }
     const copySaved = async () => {
       if (!savedAnnotation) return;
       try {
@@ -87689,8 +87510,6 @@
     annUpdateSelection(annotationState.rect);
     if (annotationState.hoverLabelEl) annotationState.hoverLabelEl.hidden = true;
     annotationState.preEditorScreenshotPromise = annBeginPreEditorScreenshotCapture();
-    // Fire the tab-capture prompt while the click gesture is still active.
-    annBeginTabCaptureRequest();
     await annotationState.preEditorScreenshotPromise;
     if (!annotationState) return;
     annShowEditor();
