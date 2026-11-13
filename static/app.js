@@ -96178,8 +96178,8 @@
     // Engines is last: a reference list of what CCC supports, set up once.
     const destinations = [
       ['appearance', 'Appearance', ['appearance','layout']],
-      ['defaults', 'Agents', ['defaults','routing']],
-      ['queues', 'Queues', ['queues']],
+      ['defaults', 'Agents', ['defaults']],
+      ['queues', 'Queues', ['queues','routing']],
       ['repositories', 'Repositories', ['repositories']],
       ['ci-runners', 'CI runners', ['ci-runners']],
       ['notifications', 'Notifications & voice', ['notifications','voice']],
@@ -96319,11 +96319,10 @@
   }
   organizeSettings();
 
-  // Agents at a glance: the whole Agents tab. Engines (pick defaults, model,
-  // effort; setup in a pop-up) and queues (one row each, engine only). The
-  // detailed legacy sections stay in the DOM for search and deep links but
-  // are folded away; rare routing settings open in a pop-up. Polls only
-  // while Agents is visible.
+  // Shared overviews for session defaults, queue workers and engine setup.
+  // Queue worker defaults and the inline fallback editor live on Queues.
+  // Legacy sections retain their nodes for search and deep links.
+  // Poll only while one of these pages is visible.
   const AGENTS_OVERVIEW_POLL_MS = 15000;
   const AO_FOLDED = ['defaults', 'engines', 'queues'];
   let _agentsOverviewQueues = null, _agentsOverviewCodex = null, _agentsOverviewTimer = null, _agentsOverviewSig = '';
@@ -96351,7 +96350,8 @@
     const boxes = [
       block('defaults', 'agentsOverview', head('aoDefTitle', 'Launch defaults', 'aoDefSub', '')
         + '<div class="ao-defaults-bar" id="aoDefaultsBar"></div>'),
-      block('queues', 'agentsOverviewQueues', head('aoQueueTitle', 'Queues', 'aoQueueSub', 'Loading queues…',
+      block('queues', 'agentsOverviewQueues', '<div class="ao-defaults-bar" id="aoWorkerDefaultsBar"></div>'
+        + head('aoQueueTitle', 'Queues', 'aoQueueSub', 'Loading queues…',
           '<button type="button" class="settings-action-btn" id="aoQueueAdd" data-ao-queue-add>+ Add</button>')
         + '<form class="ao-q-add" id="aoQueueAddForm" hidden>'
         + '<input type="text" class="settings-text-input" id="aoQueueAddName" placeholder="Name" aria-label="Queue name" autocomplete="off" spellcheck="false" maxlength="64">'
@@ -96741,7 +96741,7 @@
     return '<select class="ao-select" data-ao-field="' + field + '" data-ao-engine="' + escapeHtml(engine) + '" aria-label="Effort"><option value="">Engine default effort</option>'
       + levels.map(l => '<option value="' + escapeHtml(l.id) + '"' + (l.id === current ? ' selected' : '') + '>' + escapeHtml(l.label || l.id) + '</option>').join('') + '</select>';
   }
-  function aoDefaultsBarHtml() {
+  function aoDefaultsBarHtml(which = 'session') {
     const s = spawnDefaultsState, inherit = s.worker_inherit_session === true;
     const session = '<div class="ao-def-row"><span class="ao-def-label">New sessions</span>' + aoChipsHtml('session') + '</div>'
       + '<div class="ao-def-row ao-def-fine"><span class="ao-def-label"></span>' + aoMono(s.engine)
@@ -96758,7 +96758,7 @@
     const compact = '<div class="ao-def-row"><span class="ao-def-label">Claude autocompact</span>'
       + '<input class="ao-select ao-num" type="number" min="50" max="1000" step="10" inputmode="numeric" data-ao-field="autocompact" value="' + (k || 250) + '" aria-label="Claude autocompact, thousands of tokens">'
       + '<span class="ao-def-follow">K tokens</span></div>';
-    return session + worker + compact;
+    return which === 'worker' ? worker : session + compact;
   }
   // Model or effort for one queue: "Default" follows the queue worker setup.
   function aoQueueFieldSelect(q, field) {
@@ -96810,6 +96810,7 @@
     if (document.activeElement && document.activeElement.closest?.('.agents-overview :is(select, input)')) return;   // don't yank an open picker
     _agentsOverviewSig = sig;
     document.getElementById('aoDefaultsBar').innerHTML = aoDefaultsBarHtml();
+    document.getElementById('aoWorkerDefaultsBar').innerHTML = aoDefaultsBarHtml('worker');
     const ready = rows.filter(r => r.state === 'ready');
     if (rows.length) {
       const order = Object.keys(ENGINE_HUB_META);
@@ -96960,9 +96961,9 @@
     _settingsCurrentSection = sectionId;
 
     if (sectionId === 'queues') refreshSettingsQueues();
-    // Default routes are the launch defaults at the top of Agents; the
-    // editor below opens on what only lives there.
-    if (destination === 'defaults') {
+    // Queues leads with worker defaults; its shared policy editor opens
+    // on fallback rather than repeating the detailed default routes.
+    if (destination === 'queues') {
       const ctx = document.getElementById('routingPolicyContext');
       if (ctx && ctx.value === 'defaults') { ctx.value = 'worker_fallback'; ctx.dispatchEvent(new Event('change', {bubbles: true})); }
     }
