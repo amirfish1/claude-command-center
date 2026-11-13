@@ -1,0 +1,1 @@
+- Research apps get a findings feed: add `<script src="/static/app-feed.js" data-app="...">` and a `[data-ccc-feed]` element; routines append cards with `POST /api/apps/feed`.
