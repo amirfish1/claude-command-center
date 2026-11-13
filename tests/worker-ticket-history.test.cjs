@@ -133,6 +133,7 @@ test('ticket issue headlines strip attachment boilerplate and handle missing des
   assert.equal(ctx.workerTicketIssueTitle({type: 'feature', title: 'FR: Export appointments'}), 'FR: Export appointments');
   assert.equal(ctx.workerTicketIssueTitle({type: 'task', text: 'Check export errors'}), 'Check export errors');
   assert.equal(ctx.workerTicketIssueTitle({type: 'bug', title: ' ', note: 'https://example.com/screen.png', text: 'Empty invoice'}), 'Bug: Empty invoice');
+  assert.equal(ctx.workerTicketIssueTitle({type: 'bug', note: '/tmp/attachments/report.heic Button does nothing'}), 'Bug: Button does nothing');
   assert.equal(ctx.workerTicketIssueTitle({type: 'bug'}), '');
   assert.equal(ctx.workerTicketIssueTitle({type: 'bug', note: '/tmp/issue.png'}), 'Bug: Screenshot report');
 });

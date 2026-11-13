@@ -16262,10 +16262,31 @@
   .wa-chip.is-warn b { color: #e3b341; }
   .wa-chip.is-bad { border-color: #5c2626; background: #1f1010; color: #f0776c; }
   .wa-chip.is-bad b { color: #ff9f97; }
-  /* Tall enough that all three detailed cards AND the brief tier below them
-     are on screen at once — the tier split is pointless if the brief rows sit
-     under a scroll fold. */
-  .conv-workers-activity .fq-recent-rows { max-height: 600px; }
+  /* History is secondary to live sessions, even when expanded. */
+  .conv-workers-activity .fq-recent-rows { max-height: 220px; gap: 0; }
+  .conv-workers-activity .fq-recent-work {
+    background: transparent; border: 0; border-bottom: 1px solid var(--border);
+    border-radius: 0; padding: 8px 10px;
+  }
+  .conv-workers-activity .fq-recent-work > summary { color: var(--text); font-size: 12px; }
+  .conv-workers-activity .fq-recent-work > summary > span { color: var(--text-muted); }
+  .conv-workers-activity .fq-recent-work > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .conv-workers-activity .fq-recent-row.is-brief {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px;
+    padding: 9px 0; border: 0; border-bottom: 1px solid var(--border);
+    border-radius: 0; background: transparent;
+  }
+  .conv-workers-activity .fq-recent-row:hover { background: var(--surface-2); }
+  .conv-workers-activity .fq-recent-title { color: var(--text); }
+  .conv-workers-activity .fq-recent-ref,
+  .conv-workers-activity .fq-recent-meta,
+  .conv-workers-activity .fq-recent-resolved { color: var(--text-muted); }
+  .conv-workers-activity .fq-recent-row.is-brief .fq-recent-meta { gap: 8px; }
+  .conv-workers-activity .fq-recent-state { color: var(--text-muted); }
+  .conv-workers-activity .fq-recent-state.is-resolved { color: var(--text-muted); }
+  @media (max-width: 480px) {
+    .conv-workers-activity .fq-recent-row.is-brief { grid-template-columns: minmax(0, 1fr); }
+  }
   /* Three pieces of per-card chrome cost more than they pay for in this
      column, so the detailed tier drops them: the absolute timestamp (still in
      the tooltip, and the relative one is what you scan), the "Full details"
@@ -16316,7 +16337,7 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .fq-recent-row.is-brief .fq-recent-meta {
-    flex: 0 0 auto; gap: 0; font-size: 10px; flex-wrap: nowrap;
+    flex: 0 0 auto; gap: 8px; font-size: 10px; flex-wrap: nowrap;
   }
   .fq-recent-row.is-brief .fq-recent-meta > span:not(.fq-recent-state) { display: none; }
   .fq-recent-row.is-brief .fq-recent-resolved { display: inline; }
@@ -31108,7 +31129,7 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .conv-workers-uniform {
   display: flex;
   align-items: baseline;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 6px;
   flex-wrap: wrap;
   margin: 2px 8px 4px;
@@ -31122,7 +31143,7 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   color: var(--fg, #d8e2ec);
 }
 .conv-workers-uniform-note {
-  opacity: 0.6;
+  color: var(--text-muted);
   font-size: 10px;
 }
 .conv-workers-uniform-sep { opacity: 0.4; }
@@ -31150,7 +31171,7 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .conv-workers-uniform .conv-workers-starting b { color: #39d2c0; }
 .conv-workers-uniform .conv-workers-idle,
 .conv-workers-uniform .conv-workers-done { opacity: 0.75; }
-.conv-workers-uniform .conv-workers-uniform-note { flex-basis: 100%; text-align: center; }
+.conv-workers-uniform .conv-workers-uniform-note { flex-basis: 100%; text-align: left; }
 
 /* Section heads: a coloured dot, a small-caps label, the count, and a rule
    that runs to the edge. Sticky so a long Finished section still says what
@@ -31276,6 +31297,27 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   border-radius: 4px;
   color: var(--text-muted);
   cursor: default;
+}
+
+/* Cozy Workers keeps titles and work previews compact across row presets.
+   Match the shared desktop inline-step selector before adding lane specificity. */
+#convList#convList.workers-cozy .conv-item,
+#convList#convList.workers-cozy .conv-item:has(.conv-main-row.has-inline-step) {
+  padding-top: 7px !important;
+  padding-bottom: 7px !important;
+  margin-bottom: 2px !important;
+  min-width: 0;
+}
+#convList#convList.workers-cozy .conv-item .conv-title,
+#convList#convList.workers-cozy .conv-item .conv-main-row.has-inline-step .conv-title {
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+}
+#convList#convList.workers-cozy .conv-item .conv-last,
+#convList#convList.workers-cozy .conv-item .conv-outcome,
+#convList#convList.workers-cozy .conv-item .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step {
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 /* Readable log entries keep severity and summaries visible, diagnostics expandable. */

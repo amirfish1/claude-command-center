@@ -1,0 +1,1 @@
+Workers now shows compact, theme-aware ticket history with a bounded expanded list, keeps time filters above activity, and avoids repeating status labels and section counts. Queue warnings remain visible, and ticket details retain the full work history. Cozy worker rows use tighter typography, and activity labels show the current status without the confusing “Worked” prefix.

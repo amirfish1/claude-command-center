@@ -46408,7 +46408,7 @@
           : '';
         _workersUniformHtml = '<div class="conv-workers-uniform" data-role="workers-uniform"'
           + ' title="' + escapeAttr('Working now counts sessions mid-turn, the same signal the Queues tab shows. Needs you = alive and waiting on an answer or approval. Standing by = alive with no turn running. Finished = process gone. Engine and cost are stated once here and dropped from rows that match; any row that differs keeps its own glyph.') + '">'
-          + live + bits.map(b => sep + b).join('') + note
+          + (_wkSectionCounts ? '' : live + bits.map(b => sep + b).join('')) + note
           + '</div>';
         // Starting workers get their own section head so they read as a
         // state, not as stray rows above the list.
@@ -46427,9 +46427,7 @@
       // below — every clock tick would rebuild the whole list. _uxqRender-
       // WorkingNow() fills them by DOM after the innerHTML reset and again on
       // every health poll, so they stay live without touching the signature.
-      // CCC-1163: the block is the section's first child and the strip leads
-      // it — WORKING NOW is the lane's headline, so it sits directly under
-      // the tab bar ahead of the tools row, the health chips, and the list.
+      // Filters lead; compact ticket history is secondary to live session rows.
       let _workersActivityHtml = '';
       if (_allTabView === 'workers') {
         _wtWarmActivityForWorkersLane();
@@ -46438,7 +46436,7 @@
           + '<div class="wa-health" data-role="workers-queue-health"></div>'
           + '<details class="fq-recent-work wa-recent" data-role="workers-recent-work"'
           +   (recentOpen ? ' open' : '') + '>'
-          +   '<summary>Recently worked tickets <span>All queues</span></summary>'
+          +   '<summary>Ticket activity <span>Latest 10 · all queues</span></summary>'
           +   '<div class="fq-recent-rows"></div>'
           + '</details>'
           + '</div>';
@@ -46504,8 +46502,8 @@
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
-        + _workersActivityHtml
         + _arcTools
+        + _workersActivityHtml
         + _workersUniformHtml
         + _wtPendingHtml
         + _allHermesTabBarHtml
@@ -46600,6 +46598,7 @@
     // a class on the section wrapper does not survive every render path (that
     // was the bug that left Dense inert). Set before the flicker guard's early
     // return so a volatile-only tick can't leave them stale.
+    $convList.classList.toggle('workers-cozy', _sidebarTab === 'workers' && sessionDensity('workers') === 'cozy' && !_ipSearchActive);
     $convList.classList.toggle('workers-hoist-engine', !!_workersHoist.engine);
     $convList.classList.toggle('workers-hoist-cost', !!_workersHoist.tier);
     // The icon column can only shrink when NOTHING in it renders on any row.
@@ -55857,12 +55856,8 @@
       };
     }).filter(Boolean).sort((a, b) => b.ms - a.ms).slice(0, 10);
   }
-  // The first N rows carry the full ticket body, state and timestamp; the rest
-  // collapse to one line. The detail is the whole point of this list — it is
-  // how you tell whether a ticket is actually progressing rather than just
-  // being touched — but ten detailed cards buried the session feed under them,
-  // and recency is the right thing to spend the pixels on (CCC-1061).
-  const WORKERS_RECENT_DETAILED = 3;
+  // Compact history rows keep the live sessions in view; full evidence opens on click.
+  const WORKERS_RECENT_DETAILED = 0;
   const WORKERS_RECENT_OPEN_KEY = 'ccc-workers-recent-open';
   function _workersRecentOpen() {
     // Closed by default: open, the ten-card list pushed the worker rows --
@@ -55883,12 +55878,13 @@
     const html = rows.map((row, i) => {
       const item = row.item;
       const ref = _uxqItemRef(item);
-      const title = String(item.title || item.note || item.text || '').split('\n')[0];
-      const state = row.resolved ? 'Resolved' : 'Worked · ' + String(item.status || 'open').replace(/_/g, ' ');
+      const title = String(item.title || item.note || item.text || '').split('\n')[0]
+        .replace(/(?:file:\/\/)?\/[^\s]*\/(?:pasted-images|attachments)\/[^\s]+/g, '')
+        .trim() || 'Attached report';
+      const state = row.resolved ? 'Resolved' : capitalizeSessionTitleStart(String(item.status || 'open').replace(/_/g, ' '));
       const absolute = new Date(row.at).toLocaleString();
       const dates = [item.claimed_at ? 'Claimed: ' + item.claimed_at : '', item.closed_at ? 'Closed: ' + item.closed_at : ''].filter(Boolean).join('\n');
-      // Brief rows still carry their body in the tooltip, so nothing is lost
-      // by demoting them — only the room they took.
+      // Full evidence remains in ticket details; the tooltip previews the summary.
       const brief = i >= WORKERS_RECENT_DETAILED;
       const briefTitle = brief && row.summary ? '\n\n' + row.summary : '';
       return '<button type="button" class="fq-recent-row' + (brief ? ' is-brief' : ' is-detailed') + '"'
@@ -55897,8 +55893,8 @@
         + ' aria-label="Open full details for ' + escapeAttr(ref + ': ' + title) + '">'
         + '<span class="fq-recent-title"><span class="fq-recent-ref">' + escapeHtml(ref) + '</span> ' + escapeHtml(title) + '</span>'
         + '<span class="fq-recent-meta"><span class="fq-recent-state' + (row.resolved ? ' is-resolved' : '') + '">' + escapeHtml(state) + '</span>'
-        + (row.resolved ? '<time class="fq-recent-resolved" datetime="' + escapeAttr(item.closed_at || row.at) + '" title="Resolved: ' + escapeAttr(new Date(item.closed_at || row.at).toLocaleString()) + '">'
-          + escapeHtml('resolved ' + _uxqRelTime(item.closed_at || row.at)) + '</time>' : '')
+        + '<time class="fq-recent-resolved" datetime="' + escapeAttr(row.at) + '" title="Last activity: ' + escapeAttr(absolute) + '">'
+        + escapeHtml(_uxqRelTime(row.at)) + '</time>'
         + '<span>' + escapeHtml(row.worker || 'Worker not recorded') + '</span></span>'
         // Relative and absolute are separate spans so the narrow Workers lane
         // can drop the absolute stamp (still in the tooltip) without losing
@@ -56094,7 +56090,7 @@
       chips.push(chip('is-quiet', '<b>' + idleN + '</b> idle workers',
         'Alive but holding no ticket: ' + [...per].map(([q, n]) => q + (n > 1 ? ' x' + n : '')).join(', ')));
     }
-    const html = chips.join('');
+    const html = chips.filter(c => !c.includes('is-quiet')).join('');
     hosts.forEach($el => {
       if ($el.innerHTML !== html) $el.innerHTML = html;
       $el.classList.toggle('has-alarm', !!(stuck.length || stalled.length || loopers.length));
@@ -79740,6 +79736,7 @@
         .replace(/Fix the following UX issue based on this annotation:\s*/gi, '')
         .replace(/^\s*Annotation:\s*/gim, '')
         .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+        .replace(/(?:file:\/\/)?\/[^\s]*\/(?:pasted-images|attachments)\/[^\s]+/g, '')
         .replace(/(?:https?:\/\/\S+|(?:\/[\w.~-]+)+)\.(?:png|jpe?g|webp|gif)(?:\?\S*)?/gi, '')
         .replace(/^\s*#+\s*/gm, '')
         .replace(/\s+/g, ' ').trim();

@@ -190,6 +190,7 @@ class TestQueueHeaderLayout(unittest.TestCase):
         app_css = (PROJECT_ROOT / "static" / "app.css").read_text(encoding="utf-8")
 
         self.assertIn("fq-recent-resolved", app_js)
-        self.assertIn("item.closed_at || row.at", app_js)
-        self.assertIn("'resolved ' + _uxqRelTime(item.closed_at || row.at)", app_js)
+        self.assertIn("Last activity: ", app_js)
+        self.assertIn("escapeHtml(_uxqRelTime(row.at))", app_js)
+        self.assertNotIn("'resolved ' + _uxqRelTime(item.closed_at || row.at)", app_js)
         self.assertIn(".fq-recent-row.is-brief .fq-recent-resolved", app_css)

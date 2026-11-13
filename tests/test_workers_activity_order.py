@@ -20,13 +20,12 @@ def test_workers_lane_has_no_separate_working_now_strip():
         < block.index('data-role="workers-recent-work"')
 
 
-def test_workers_activity_is_the_archived_sections_first_child():
-    """The activity block sits directly under the tab bar — ahead of the
-    archived tools row, the uniform banner, and the pending-worker rows."""
+def test_workers_tools_precede_secondary_ticket_activity():
+    """Time filters precede secondary ticket history so they remain easy to reach."""
     app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
     section = app_js.index("'<div class=\"conv-archived-section\"")
     activity = app_js.index("+ _workersActivityHtml", section)
     tools = app_js.index("+ _arcTools", section)
 
-    assert activity < tools
+    assert tools < activity
