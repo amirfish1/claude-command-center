@@ -96,9 +96,9 @@
   // The verified Decisions count, never the transcript backlog.
   function queueCount() { return queue.count; }
 
-  function loadQueue() {
+  function loadQueue(userInitiated) {
     var generation = ++queueGeneration;
-    return fetch('/api/decision-inbox/requests').then(function (r) { return r.json(); }).then(function (d) {
+    return fetch('/api/decision-inbox/requests', userInitiated ? {cccPriority:'user'} : undefined).then(function (r) { return r.json(); }).then(function (d) {
       if (generation !== queueGeneration || !d || !d.ok) return queue;
       var rows = d.requests || [];
       // An unverified source reports no count: keep what was last verified.
@@ -205,10 +205,10 @@
     paintNeedsYou();
   }
 
-  function load(force) {
+  function load(force, userInitiated) {
     if (!force && Date.now() - index.at < 5000) return Promise.resolve(index);
     var generation = ++loadGeneration;
-    return fetch('/api/question-tags').then(function (r) { return r.json(); }).then(function (d) {
+    return fetch('/api/question-tags', userInitiated ? {cccPriority:'user'} : undefined).then(function (r) { return r.json(); }).then(function (d) {
       if (generation !== loadGeneration) return index;
       if (!d || !d.ok) return index;
       var before = index.list.length;
@@ -584,7 +584,7 @@
     var refresh = function () {
       if (sheet && !sheet.hidden && sheet.hasAttribute('data-qhistory')) showPanel();
     };
-    return Promise.all([load(true).then(refresh), loadQueue().then(refresh)]);
+    return Promise.all([load(true, true).then(refresh), loadQueue(true).then(refresh)]);
   }
 
   function open(n, sid) {
