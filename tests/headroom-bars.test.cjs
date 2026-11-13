@@ -238,6 +238,7 @@ test('missing mount is quiet and boot is idempotent', async () => {
   b.api.boot();
   await b.api.poll();
   assert.equal(b.calls.length, 1);
+  assert.equal(b.calls[0][1].cccPriority, 'user', 'visible usage must bypass the longer startup gate');
   assert.deepEqual(b.intervals.map(timer => timer.ms), [60000, 30000]);
 });
 
