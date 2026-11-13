@@ -8,7 +8,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 def test_batch_groups_match_task_and_preserve_boundaries():
     source = (ROOT / 'static/app.js').read_text()
     keys = source[source.index('    const _repeatGroupRawTitle ='):source.index('    const _repeatGroupStorageKey =')]
-    fold = source[source.index('    const _foldRepeatTaskClusters ='):source.index('    const _allTabClusters =')]
+    fold = source[source.index('    const _foldRepeatTaskClusters ='):source.index('    let _allTabClusters =')]
     script = '''
 const assert = require('node:assert/strict');
 const rowRawTitle = c => ({rawTitle:c.display_name});

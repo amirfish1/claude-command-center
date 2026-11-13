@@ -1944,7 +1944,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _trashConvs = _archivedConvs.filter(c => !!c.trashed);", app_js)
         self.assertIn("const _mainArchivedConvs = _archivedConvs.filter(c => !c.trashed);", app_js)
         self.assertIn("const _arcHasFolderChips = _allTabMainConvs.concat(_allTabTrashConvs).some(c => c.folder_label_chip);", app_js)
-        self.assertIn("const _allTabClusters = _foldRepeatTaskClusters(_allTabRowsToClusters(_allTabTreeRows));", app_js)
+        self.assertIn("let _allTabClusters = _foldRepeatTaskClusters(_allTabRowsToClusters(_allTabTreeRows));", app_js)
         self.assertIn("for (const cluster of _allTabClusters)", app_js)
         self.assertIn('data-role="trash-section"', app_js)
         self.assertIn('data-role="trash-toggle"', app_js)
@@ -2051,7 +2051,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const parent = _allTabById.get(_allTabParentId(c));", app_js)
         self.assertIn("if (parent) return _allTabLaneFor(parent, seen);", app_js)
         self.assertIn("const _allTabTreeRows = _allTabTreeRowsFor(_allTabMainConvs);", app_js)
-        self.assertIn("const _allTabClusters = _foldRepeatTaskClusters(_allTabRowsToClusters(_allTabTreeRows));", app_js)
+        self.assertIn("let _allTabClusters = _foldRepeatTaskClusters(_allTabRowsToClusters(_allTabTreeRows));", app_js)
         self.assertIn("const _allTabClusterPinRank = (cluster) =>", app_js)
         self.assertIn("clusters.sort((a, b) => {", app_js)
         self.assertIn("const pinDelta = _allTabClusterPinRank(a) - _allTabClusterPinRank(b);", app_js)
@@ -4625,8 +4625,9 @@ class TestServerImports(unittest.TestCase):
             app_js.index("// Selecting a ticket from the picker:", app_js.index("function _uxqPickerPickQueue(name)"))
         ]
 
-        self.assertIn("async function _fetchUxqItems(allowStale)", items_fetch)
+        self.assertIn("async function _fetchUxqItems(allowStale, force = false)", items_fetch)
         self.assertIn("if (allowStale && _uxqItemsLoaded) return _uxqItemsCache.items;", items_fetch)
+        self.assertIn("if (!force && Date.now() - _uxqItemsCache.ts < 15000) return _uxqItemsCache.items;", items_fetch)
         self.assertIn("async function _fetchUxqHealth(allowStale, force)", health_fetch)
         self.assertIn("if (allowStale && _uxqHealthLoaded) return _uxqHealthCache;", health_fetch)
         self.assertIn("_uxqSetScopeOverride(name);", scope_handler)
