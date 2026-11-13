@@ -1,0 +1,1 @@
+- Pages open faster: every script and stylesheet is now cached by the browser until it changes, so reloads and the agent pane stop re-fetching 100+ files.
