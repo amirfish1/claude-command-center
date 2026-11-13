@@ -398,3 +398,36 @@ class TestCodexExtractorIncremental(unittest.TestCase):
         pdfs = {r["target"]: r for r in result["groups"]["pdfs"]}
         self.assertEqual(pdfs["/Users/testuser/Desktop/c.pdf"]["first_line"], 3)
         self.assertEqual(result["count"], 3)
+
+    def test_current_rollout_messages_custom_tools_and_structured_outputs(self):
+        payloads = [
+            {"type": "message", "role": "assistant", "content": [
+                {"type": "output_text", "text": "Report: /tmp/report.md"}]},
+            {"type": "message", "role": "user", "content": [
+                {"type": "input_image", "image_url": "https://example.com/photo.png"}]},
+            {"type": "custom_tool_call", "input": 'view_image({path: "/tmp/screen.png"})'},
+            {"type": "custom_tool_call_output", "output": [
+                {"type": "text", "text": "Saved /tmp/result.pdf"}]},
+            {"type": "function_call_output", "output": [
+                {"type": "text", "text": "Saved /tmp/chart.svg"}]},
+            {"type": "message", "role": "developer", "content": [
+                {"type": "input_text", "text": "/tmp/instructions.md"}]},
+            {"type": "custom_tool_call", "input": "/tmp/script.sh"},
+        ]
+        self.path.write_text("".join(self._orig_json.dumps({
+            "type": "response_item", "payload": p}) + "\n" for p in payloads))
+        result = self.server._extract_files_from_codex_conversation("t1")
+        targets = {r["target"] for rows in result["groups"].values() for r in rows}
+        self.assertEqual(targets, {"/tmp/report.md", "https://example.com/photo.png",
+                                   "/tmp/screen.png", "/tmp/result.pdf", "/tmp/chart.svg"})
+        self.cj.loads_calls = 0
+        self.assertEqual(result, self.server._extract_files_from_codex_conversation("t1"))
+        self.assertEqual(self.cj.loads_calls, 0)
+
+    def test_event_message_image_attachments(self):
+        self.path.write_text(self._orig_json.dumps({"type": "event_msg", "payload": {
+            "type": "user_message", "message": "Look at these",
+            "images": ["https://example.com/remote.jpg"],
+            "local_images": ["/tmp/local.png"],
+        }}) + "\n")
+        self.assertEqual(self.server._extract_files_from_codex_conversation("t1")["count"], 2)

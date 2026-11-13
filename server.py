@@ -29069,8 +29069,21 @@ def _extract_files_from_codex_conversation(thread_id):
         if ev.get("type") == "event_msg":
             consider_text(payload.get("message"))
             consider_text(payload.get("last_agent_message"))
+            for text in _ffc_flatten_strings(payload.get("images")):
+                consider_text(text)
+            for text in _ffc_flatten_strings(payload.get("local_images")):
+                consider_text(text)
         elif ev.get("type") == "response_item":
-            if ptype == "function_call":
+            if ptype == "message" and payload.get("role") in ("user", "assistant"):
+                for part in payload.get("content") or []:
+                    if not isinstance(part, dict):
+                        continue
+                    consider_text(part.get("text"))
+                    for text in _ffc_flatten_strings(part.get("image_url")):
+                        consider_text(text)
+            elif ptype == "custom_tool_call":
+                consider_text(payload.get("input"))
+            elif ptype == "function_call":
                 args = _codex_args(payload.get("arguments"))
                 for fld in ("path", "file_path", "filename"):
                     val = args.get(fld) if isinstance(args, dict) else None
@@ -29078,8 +29091,9 @@ def _extract_files_from_codex_conversation(thread_id):
                         consider(val, "path")
                 for raw_s in _ffc_flatten_strings(args):
                     consider_text(raw_s)
-            elif ptype == "function_call_output":
-                consider_text(payload.get("output"))
+            elif ptype in ("function_call_output", "custom_tool_call_output"):
+                for text in _ffc_flatten_strings(payload.get("output")):
+                    consider_text(text)
         return truncated
 
     walked = _ffc_walk_incremental(("codex", str(thread_id)), path, scan)
