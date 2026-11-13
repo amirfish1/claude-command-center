@@ -46,9 +46,19 @@ class TestQueueCloseRefreshRace(unittest.TestCase):
 const vm = require('vm');
 let resolveOlder;
 let calls = 0;
+const metadataSnapshots = [];
+const sidebarRenders = [];
 const older = new Promise(resolve => { resolveOlder = resolve; });
 const context = {
   Date, Set, Map, Promise,
+  // Sidebar/visibility dependencies live outside the extracted queue code.
+  uxFixesQueueMeta: { _sig: '' },
+  _queueSnapshotIsForeground: () => false,
+  _setUxFixesQueueMeta: items => {
+    metadataSnapshots.push(items.map(item => ({ ...item })));
+    return context.uxFixesQueueMeta = { _sig: JSON.stringify(items) };
+  },
+  _scheduleSidebarRender: options => sidebarRenders.push(options),
   backgroundApiFetch: async () => {
     calls += 1;
     if (calls === 1) return older;
@@ -69,13 +79,19 @@ globalThis.queueRace = {
   context.queueRace.seed([{ ref: 'CCC-9', status: 'open' }]);
   context.queueRace.expire();
   const inflight = context.queueRace.fetch(false);
-  context.queueRace.replace({ ref: 'CCC-9', status: 'closed' });
+  if (calls !== 1) throw new Error('older list request never started');
+  if (!context.queueRace.replace({ ref: 'CCC-9', status: 'closed' })) throw new Error('close did not replace cached ticket');
+  if (metadataSnapshots.length !== 1 || metadataSnapshots[0][0].status !== 'closed') throw new Error('close did not sync sidebar metadata');
   resolveOlder({ json: async () => ({ items: [{ ref: 'CCC-9', status: 'open' }] }) });
   await inflight;
   if (context.queueRace.items()[0].status !== 'closed') throw new Error('older response reverted close');
+  if (metadataSnapshots.length !== 1) throw new Error('older response overwrote sidebar metadata');
   context.queueRace.expire();
   await context.queueRace.fetch(false);
+  if (calls !== 2) throw new Error('fresh list request never started');
   if (context.queueRace.items()[0].status !== 'closed') throw new Error('fresh response did not preserve close');
+  if (metadataSnapshots.length !== 2 || metadataSnapshots[1][0].status !== 'closed') throw new Error('fresh response did not sync sidebar metadata');
+  if (sidebarRenders.length !== 1 || !sidebarRenders[0].lifecycle) throw new Error('sidebar should repaint only when metadata changes');
 })().catch(err => { console.error(err); process.exit(1); });
 """ % (json.dumps(app_js[item_ref_start:item_ref_end]), json.dumps(fetch_code), json.dumps(app_js[replace_start:replace_end]))
 
