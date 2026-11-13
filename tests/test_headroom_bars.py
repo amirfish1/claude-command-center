@@ -30,16 +30,17 @@ class PanelParser(HTMLParser):
                 break
 
 
-def test_panel_is_hidden_in_sidebar_usage_drawer():
+def test_panel_is_in_sidebar_header_outside_debug_drawer():
     html = (ROOT / "static/index.html").read_text()
     parser = PanelParser()
     parser.feed(html)
     assert parser.panel_attrs is not None
     assert "hidden" in parser.panel_attrs
     assert parser.panel_attrs["aria-label"] == "Plan usage left"
-    # Capacity remains available without occupying the session-list header.
-    assert parser.panel_parents[-1][1].get("class", "").split() == ["session-usage-drawer"]
-    assert parser.panel_parents[-1][0] == "details"
+    # The initial hidden state is cleared by the quota renderer when rows arrive.
+    assert parser.panel_parents[-1][1].get("class") == "sidebar-header"
+    assert all("data-debug-hide" not in attrs for _, attrs in parser.panel_parents)
+    assert all(tag != "details" for tag, _ in parser.panel_parents)
     assert html.count('id="headroomBars"') == 1
     assert html.count('href="/static/headroom-bars.css"') == 1
     assert html.count('src="/static/headroom-bars.js"') == 1

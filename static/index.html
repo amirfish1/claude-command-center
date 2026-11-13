@@ -887,6 +887,7 @@
              flip the palette via CSS so no chip needs to re-render. -->
         <button id="chipsColorToggle" class="sh-btn" title="Toggle folder chip color mode" aria-label="Toggle folder chip color mode"><span aria-hidden="true" id="chipsColorIcon">&#9899;</span></button>
       </div>
+      <div id="headroomBars" class="headroom-bars" role="group" aria-label="Plan usage left" hidden></div>
     </div>
 
     <div class="new-session-panel">
@@ -1018,8 +1019,7 @@
 
     <!-- Bottom-mounted settings strip, Claude-Desktop-style -->
     <details class="session-usage-drawer" data-debug-hide>
-      <summary>Usage &amp; diagnostics</summary>
-      <div id="headroomBars" class="headroom-bars" role="group" aria-label="Plan usage left" hidden></div>
+      <summary>Diagnostics</summary>
     </details>
     <div class="sidebar-footer">
       <!-- Active group-chat coordinations pill. Lives bottom-left so it's
