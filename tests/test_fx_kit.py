@@ -66,9 +66,13 @@ def test_index_html_loads_the_kit():
 
 
 def test_index_html_asset_urls_get_cache_stamps():
-    server = SERVER.read_text(encoding="utf-8")
-    assert '_static_asset_url("fx.css")' in server
-    assert '_static_asset_url("fx.js")' in server
+    import server
+
+    html = server._load_index_html()
+    for asset in (FX_CSS, FX_JS):
+        stamp = int(asset.stat().st_mtime)
+        assert f'"/static/{asset.name}?v={stamp}"' in html
+        assert f'"/static/{asset.name}"' not in html
 
 
 def test_fx_demo_route_registered():
