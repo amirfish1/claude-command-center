@@ -100132,8 +100132,17 @@
 // Local activity plus the last two completed workflow runs, shared across devices.
 (function initLocalCiProgress() {
   let busy = false;
-  let lastCompleted = [];
   let lastData = {jobs:[], completed:[]};
+  const snapshotKey = 'ccc-ci-progress-v1';
+  const snapshotMaxAge = 5 * 60 * 1000;
+  let snapshotAt = 0;
+  let showingSaved = false;
+  function saveSnapshot(data) {
+    try {
+      sessionStorage.setItem(snapshotKey, JSON.stringify({at:snapshotAt,
+        data:{jobs:data.jobs || [], completed:(data.completed || []).filter(job => !dismissed.has(job.id))}}));
+    } catch (_) { /* Storage may be disabled or full; live progress still works. */ }
+  }
   let deploymentJob = null;
   window.addEventListener('ccc-vercel-progress', event => {
     const {repoPath, deployment:d} = event.detail;
@@ -100212,7 +100221,7 @@
         bar.setAttribute('aria-label', name.textContent + ': ' + (job.provider === 'vercel' ? job.status : done ? percent.textContent : 'completed steps'));
         const step = document.createElement('span');
         step.className = 'local-ci-step';
-        step.textContent = job.provider === 'vercel' ? job.current_step : done ? 'Completed' + (job.completed_at ? ' · ' + new Date(job.completed_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : job.current_step;
+        step.textContent = job.provider === 'vercel' ? job.current_step : (showingSaved ? 'Saved · ' : '') + (done ? 'Completed' + (job.completed_at ? ' · ' + new Date(job.completed_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : job.current_step);
         row.title = job.repo + ' · ' + (done ? percent.textContent : job.current_step)
           + (done || job.provider === 'vercel' ? '' : '\n' + job.completed_steps + '/' + job.total_steps + ' steps complete (not time remaining)');
         const detail = document.createElement('span');
@@ -100247,6 +100256,7 @@
                 headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:job.id})});
               if (!response.ok) throw new Error('Dismiss failed');
               dismissed.add(job.id);
+              saveSnapshot(lastData);
               render(data);
             } catch (_) {
               button.disabled = false;
@@ -100259,10 +100269,23 @@
         host.append(entry);
       }
       host.hidden = !host.childElementCount;
+      host.title = showingSaved ? 'Saved CI progress; waiting for a live update' : '';
       if (focused) [...host.querySelectorAll('[data-ci-dismiss]')].find(button => button.dataset.ciDismiss === focused)?.focus({preventScroll:true});
     }
     updateTimers();
   }
+  // Paint the tab's recent progress before the startup read gate or GitHub
+  // polling finishes. Never revive an old snapshot after a long absence.
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(snapshotKey));
+    const age = saved && Date.now() - saved.at;
+    if (saved && Number.isFinite(saved.at) && age >= 0 && age < snapshotMaxAge
+        && Array.isArray(saved.data?.jobs) && Array.isArray(saved.data?.completed)) {
+      snapshotAt = saved.at;
+      showingSaved = true;
+      render(saved.data);
+    }
+  } catch (_) { /* Missing or invalid saved progress is a normal cold start. */ }
   async function refresh() {
     updateTimers();
     if (document.hidden || busy || !document.querySelector('[data-local-ci-host]')) return;
@@ -100272,10 +100295,13 @@
       if (!response.ok) throw new Error('CI progress unavailable');
       const data = await response.json();
       if (data.unavailable) throw new Error('CI progress unavailable');
-      lastCompleted = data.completed || [];
+      snapshotAt = Date.now();
+      showingSaved = false;
+      saveSnapshot(data);
       render(data);
     } catch (_) {
-      render({jobs:[], completed:lastCompleted});
+      showingSaved = true;
+      render(lastData);
     } finally { busy = false; }
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', refresh);
