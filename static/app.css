@@ -34908,3 +34908,6 @@ a.local-ci-job:hover { color: var(--accent); }
 .workers-ticket-link:focus-visible, .workers-ticket-title:focus-visible {
   outline: 2px solid var(--accent, #58a6ff); outline-offset: 2px;
 }
+@container sidebar (max-width: 420px) {
+  #convList.workers-view .workers-ticket-heading .fq-recent-row.is-brief { grid-template-columns: minmax(0, 1fr); }
+}
