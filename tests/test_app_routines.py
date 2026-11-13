@@ -125,6 +125,25 @@ class RoutineTests(unittest.TestCase):
         self.assertEqual((row["status"], row["summary"]), ("ok", "Prices unchanged"))
         self.assertIn("/api/apps/routines/report", ar.agent_prompt("demo", "Demo", {"id": "watch", "name": "W", "prompt": "p"}, 8090))
 
+    def test_update_and_delete(self):
+        d = make_app(self.base, [SCRIPT, dict(SCRIPT, id="two", name="Two")])
+        res, st = ar.update_routine({"app": "demo", "id": "hello", "name": "  Morning  hi ",
+                                     "icon": "☀", "schedule": "Every 6H"}, self.base)
+        self.assertEqual(st, 200)
+        meta = json.loads((d / "app.json").read_text())
+        first = meta["routines"][0]
+        self.assertEqual((first["name"], first["icon"], first["schedule"]), ("Morning hi", "☀", "every 6h"))
+        self.assertEqual(first["run"], SCRIPT["run"])  # untouched fields stay
+        self.assertEqual(meta["routines"][1]["name"], "Two")
+        for bad in ({"schedule": "every 1m"}, {"schedule": "whenever"}, {"name": " "}, {"icon": ""}, {}):
+            self.assertEqual(ar.update_routine(dict(bad, app="demo", id="hello"), self.base)[1], 400, bad)
+        self.assertEqual(ar.update_routine({"app": "demo", "id": "nope", "name": "x"}, self.base)[1], 404)
+        ar.set_enabled("demo", "two", False, self.base)
+        self.assertEqual(ar.delete_routine("demo", "two", self.base)[1], 200)
+        self.assertEqual([r["id"] for r in ar.describe("demo", self.base)["routines"]], ["hello"])
+        self.assertNotIn("two", ar.load_state(d)["routines"])
+        self.assertEqual(ar.delete_routine("demo", "two", self.base)[1], 404)
+
 
 if __name__ == "__main__":
     unittest.main()

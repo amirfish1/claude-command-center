@@ -9,8 +9,9 @@
 //   1. The app's one builder agent in a resizable pane on the right
 //      (started on first use; the session stays loaded).
 //   2. A Routines section: one card per routine in app.json with its
-//      schedule, last result, an on/off switch and "Run now", plus a box
-//      that asks the agent to build a new routine.
+//      schedule, last result, an on/off switch and "Run now". Click a card
+//      for its last runs, to edit it or delete it. The last card asks the
+//      agent to build a new routine.
 //
 // Mark the page's own content with data-ccc-content (default: <main>) and,
 // optionally, where the routine cards go with data-ccc-routines.
@@ -70,6 +71,20 @@
     '.ccck-sw::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}',
     '.ccck-sw[aria-checked="true"]{background:var(--k-good)}.ccck-sw[aria-checked="true"]::after{left:19px}',
     '.ccck-new{border-style:dashed;flex-direction:column;gap:8px}',
+    '.ccck-r{transition:border-color .15s,transform .15s}.ccck-r:not(.ccck-new):hover{border-color:var(--k-accent);transform:translateY(-1px)}',
+    '.ccck-ico,.ccck-head{cursor:pointer}.ccck-chev{margin-left:6px;color:var(--k-muted);font-size:11px}',
+    '.ccck-r.open{grid-column:1/-1}',
+    '.ccck-more{margin-top:12px;border-top:1px solid var(--k-line);padding-top:10px}',
+    '.ccck-sub,.ccck-lab{font-size:12px;font-weight:600;color:var(--k-muted);text-transform:uppercase;letter-spacing:.04em;margin:8px 0 4px}',
+    '.ccck-run{display:flex;gap:10px;align-items:baseline;font-size:13px;padding:3px 0}.ccck-rwhen{flex:none;width:76px;color:var(--k-muted)}.ccck-rsum{min-width:0;overflow-wrap:anywhere}',
+    '.ccck-dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--k-muted);align-self:center}.ccck-dot.good{background:var(--k-good)}.ccck-dot.bad{background:var(--k-bad)}.ccck-dot.warn{background:#e0a030}',
+    '.ccck-btn.danger{color:var(--k-bad)}.ccck-btn.danger:hover{border-color:var(--k-bad)}',
+    '.ccck-edit label{display:block;font-size:12px;font-weight:600;color:var(--k-muted);text-transform:uppercase;letter-spacing:.04em}',
+    '.ccck-edit input,.ccck-edit select{font:inherit;font-size:14px;color:var(--k-text);background:var(--k-bg);border:1px solid var(--k-line);border-radius:8px;padding:6px 9px}',
+    '.ccck-edit label input{display:block;width:100%;box-sizing:border-box;margin-top:4px;font-weight:400;text-transform:none;letter-spacing:0}',
+    '.ccck-icons{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.ccck-icons input{width:64px;text-align:center}',
+    '.ccck-ic{font-size:20px;width:38px;height:38px;border-radius:10px;border:1px solid var(--k-line);background:var(--k-tile);cursor:pointer;padding:0}.ccck-ic:hover,.ccck-ic[aria-pressed="true"]{border-color:var(--k-accent);box-shadow:0 0 0 1px var(--k-accent)}',
+    '.ccck-when-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.ccck-when-row input[type=number]{width:72px}[hidden]{display:none!important}',
     '.ccck-new textarea{width:100%;min-height:54px;resize:vertical;font:inherit;color:var(--k-text);background:var(--k-bg);border:1px solid var(--k-line);border-radius:10px;padding:8px 10px}',
     '.ccck-note{color:var(--k-muted);font-size:13px;margin-top:8px}'
   ].join('\n');
@@ -140,9 +155,48 @@
   }
 
   // ---- routines ----------------------------------------------------------
-  var list = null, lastDrawn = '';
+  var list = null, addCard = null, lastDrawn = '';
+  var openIds = {}, editId = '', editSched = null;
+  var ICONS = ['⏰', '🛎', '🔎', '📬', '☀️', '🌙', '💸', '🧳', '⛷️', '🌦', '📈', '🧹', '🔔', '🤖', '🎯', '✨'];
+  var UNITS = { m: 'minutes', h: 'hours', d: 'days' };
+  // 'daily 08:00' / 'every 6h' / '' -> the picker's model.
+  function schedModel(t) {
+    var m = /^daily\s+(\d{1,2}):(\d{2})$/i.exec(t || '');
+    if (m) return { mode: 'daily', time: ('0' + m[1]).slice(-2) + ':' + m[2], n: 6, unit: 'h' };
+    m = /^every\s+(\d+)\s*(m|min|h|d)$/i.exec(t || '');
+    if (m) return { mode: 'every', time: '08:00', n: +m[1], unit: m[2] === 'min' ? 'm' : m[2].toLowerCase() };
+    return { mode: t ? 'every' : 'none', time: '08:00', n: 6, unit: 'h' };
+  }
+  function schedString(m) {
+    if (m.mode === 'none') return '';
+    if (m.mode === 'daily') return 'daily ' + m.time;
+    return 'every ' + Math.max(1, m.n | 0) + m.unit;
+  }
+  function history(r) {
+    var h = (r.history || []).slice(0, 10);
+    if (!h.length) return '<div class="ccck-hist"><div class="ccck-note">No runs yet. Press Run now to try it.</div></div>';
+    return '<div class="ccck-hist"><div class="ccck-sub">Last ' + h.length + ' run' + (h.length > 1 ? 's' : '') + '</div>' + h.map(function (x) {
+      var bad = x.status === 'failed';
+      return '<div class="ccck-run"><span class="ccck-dot ' + (bad ? 'bad' : x.alert ? 'warn' : 'good') + '" title="' + (bad ? 'Failed' : 'Worked') + '"></span><span class="ccck-rwhen">' + esc(rel(x.at)) + '</span><span class="ccck-rsum">' + esc(x.summary) + '</span></div>';
+    }).join('') + '</div>';
+  }
+  function editor(r) {
+    var m = editSched || schedModel(r.schedule);
+    var opts = ICONS.map(function (i) { return '<button type="button" class="ccck-ic" data-ico="' + i + '" aria-pressed="' + (i === r.icon) + '">' + i + '</button>'; }).join('');
+    var sel = function (v, label) { return '<option value="' + v + '"' + (m.mode === v ? ' selected' : '') + '>' + label + '</option>'; };
+    var unit = function (v) { return '<option value="' + v + '"' + (m.unit === v ? ' selected' : '') + '>' + UNITS[v] + '</option>'; };
+    return '<div class="ccck-edit"><label>Name<input data-f="name" maxlength="80" value="' + esc(r.name) + '"></label>' +
+      '<div class="ccck-lab">Icon</div><div class="ccck-icons">' + opts + '<input data-f="icon" maxlength="4" value="' + esc(r.icon) + '" aria-label="Or type your own icon"></div>' +
+      '<div class="ccck-lab">When</div><div class="ccck-when-row"><select data-f="mode" aria-label="How often">' + sel('daily', 'Every day at') + sel('every', 'Every') + sel('none', 'Only when I press Run now') + '</select>' +
+      '<input type="time" data-f="time" value="' + esc(m.time) + '"' + (m.mode === 'daily' ? '' : ' hidden') + '>' +
+      '<input type="number" min="1" max="999" data-f="n" value="' + m.n + '"' + (m.mode === 'every' ? '' : ' hidden') + '>' +
+      '<select data-f="unit"' + (m.mode === 'every' ? '' : ' hidden') + '>' + unit('m') + unit('h') + unit('d') + '</select></div>' +
+      '<div class="ccck-note" data-f="err" hidden></div>' +
+      '<div class="ccck-acts"><button type="button" class="ccck-btn pri" data-k="save">Save</button><button type="button" class="ccck-btn" data-k="cancel">Cancel</button></div></div>';
+  }
   function card(r) {
-    var cls = 'ccck-r' + (r.alert ? ' alert' : '') + (r.enabled ? '' : ' off') + (r.running ? ' running' : '') + (r.status === 'failed' ? ' failed' : '');
+    var open = !!openIds[r.id] && !thumb, editing = editId === r.id && open;
+    var cls = 'ccck-r' + (r.alert ? ' alert' : '') + (r.enabled ? '' : ' off') + (r.running ? ' running' : '') + (r.status === 'failed' ? ' failed' : '') + (open ? ' open' : '');
     var say = r.running ? (r.kind === 'agent' ? 'An agent is on it…' : 'Running…')
       : r.status === 'never' ? 'Has not run yet.'
       : (r.status === 'failed' ? 'Failed: ' : '') + r.summary;
@@ -150,19 +204,29 @@
     if (r.last_run && !r.running) when.push('last ran ' + rel(r.last_run));
     if (!r.enabled) when.push('switched off');
     else if (r.next_run && !r.running) when.push(r.next_run <= Date.now() / 1000 ? 'due now' : 'next ' + rel(r.next_run));
-    return '<div class="' + cls + '" data-id="' + esc(r.id) + '"><div class="ccck-ico">' + esc(r.icon) + '</div><div class="ccck-main">' +
-      '<div class="ccck-name">' + esc(r.name) + '</div><div class="ccck-does">' + esc(r.does) + '</div>' +
+    var more = '';
+    if (open) {
+      more = '<div class="ccck-more">' + (editing ? editor(r) : history(r) +
+        '<div class="ccck-acts"><button type="button" class="ccck-btn" data-k="edit">Edit</button><button type="button" class="ccck-btn danger" data-k="delete">Delete</button></div>') + '</div>';
+    }
+    return '<div class="' + cls + '" data-id="' + esc(r.id) + '"><div class="ccck-ico" data-k="expand" title="Show history">' + esc(r.icon) + '</div><div class="ccck-main">' +
+      '<div class="ccck-head" data-k="expand" role="button" tabindex="0" aria-expanded="' + open + '"><div class="ccck-name">' + esc(r.name) + '<span class="ccck-chev">' + (open ? '▴' : '▾') + '</span></div><div class="ccck-does">' + esc(r.does) + '</div></div>' +
       '<div class="ccck-say">' + esc(say) + '</div><div class="ccck-when">' + esc(when.join(' · ')) + '</div>' +
       '<div class="ccck-acts"><button type="button" class="ccck-sw" role="switch" aria-checked="' + r.enabled + '" aria-label="' + esc(r.name) + ' on or off" data-k="toggle"></button>' +
       '<button type="button" class="ccck-btn" data-k="run"' + (r.running ? ' disabled' : '') + '>Run now</button>' +
       (r.kind === 'agent' && r.session_id && !thumb ? '<button type="button" class="ccck-btn" data-k="open">See its work</button>' : '') +
-      '</div></div></div>';
+      '</div>' + more + '</div></div>';
   }
-  function draw() {
+  function draw(force) {
     if (!list || !state) return;
     var html = state.routines.map(card).join('');
-    if (html === lastDrawn) return;
-    lastDrawn = html; list.innerHTML = html;
+    if (html === lastDrawn && !force) return;
+    // Leave an open editor alone so a background refresh never eats typing.
+    if (editId && list.querySelector('.ccck-edit') && !force) return;
+    lastDrawn = html;
+    Array.prototype.slice.call(list.children).forEach(function (c) { if (c !== addCard) list.removeChild(c); });
+    var t = $('div', null, html);
+    while (t.firstChild) list.insertBefore(t.firstChild, addCard);
   }
   function refresh() {
     return api('/api/apps/routines?app=' + encodeURIComponent(APP)).then(function (r) {
@@ -173,6 +237,28 @@
       else if (shell && !id && !hero.dataset.asked) { hero.dataset.asked = '1'; noAgent(); }
     });
   }
+  function readEditor(c) {
+    var g = function (f) { return c.querySelector('[data-f="' + f + '"]'); };
+    var m = { mode: g('mode').value, time: g('time').value || '08:00', n: +g('n').value || 1, unit: g('unit').value };
+    return { name: g('name').value.trim(), icon: g('icon').value.trim(), model: m };
+  }
+  function showEditorMode(c) {
+    var e = readEditor(c), g = function (f) { return c.querySelector('[data-f="' + f + '"]'); };
+    g('time').hidden = e.model.mode !== 'daily'; g('n').hidden = g('unit').hidden = e.model.mode !== 'every';
+    editSched = e.model;
+  }
+  function saveEdit(c, id, b) {
+    var e = readEditor(c), err = c.querySelector('[data-f="err"]');
+    var fail = function (t) { err.hidden = false; err.textContent = t; err.style.color = 'var(--k-bad)'; };
+    if (!e.name) return fail('Give it a name.');
+    if (!e.icon) return fail('Pick an icon.');
+    b.disabled = true;
+    api('/api/apps/routines/update', { app: APP, id: id, name: e.name, icon: e.icon, schedule: schedString(e.model) }).then(function (r) {
+      if (!r.ok) { b.disabled = false; return fail(r.error || 'Could not save.'); }
+      editId = ''; editSched = null;
+      return refresh().then(function () { draw(true); });
+    });
+  }
   function buildRoutines(content) {
     var host = content.querySelector('[data-ccc-routines]');
     if (!host) { host = $('section'); host.innerHTML = '<h2>Routines</h2>'; content.appendChild(host); }
@@ -180,18 +266,50 @@
     list = $('div', 'ccck-list');
     box.appendChild(list);
     host.appendChild(box);
+    addCard = $('div', 'ccck-r ccck-new', '<div class="ccck-name">＋ New routine</div><textarea placeholder="What should it do, and how often? For example: every morning, tell me if hotel prices dropped." aria-label="Describe the new routine"></textarea><div class="ccck-acts"><button type="button" class="ccck-btn pri">Ask the agent to build it</button></div><div class="ccck-note" hidden></div>');
+    if (!thumb) list.appendChild(addCard);
+    function toggleOpen(id) {
+      if (openIds[id]) { delete openIds[id]; if (editId === id) { editId = ''; editSched = null; } } else openIds[id] = 1;
+      draw(true);
+    }
+    list.addEventListener('keydown', function (e) {
+      var h = e.target.closest('.ccck-head');
+      if (h && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggleOpen(h.closest('.ccck-r').dataset.id); }
+    });
+    list.addEventListener('change', function (e) {
+      var c = e.target.closest('.ccck-edit');
+      if (c && e.target.matches('[data-f="mode"],[data-f="unit"],[data-f="n"],[data-f="time"]')) showEditorMode(c);
+    });
     list.addEventListener('click', function (e) {
+      var ico = e.target.closest('[data-ico]');
+      if (ico) {
+        var ed = ico.closest('.ccck-edit');
+        ed.querySelector('[data-f="icon"]').value = ico.dataset.ico;
+        ed.querySelectorAll('[data-ico]').forEach(function (x) { x.setAttribute('aria-pressed', String(x === ico)); });
+        return;
+      }
       var b = e.target.closest('[data-k]'), c = e.target.closest('.ccck-r');
-      if (!b || !c) return;
+      if (!b || !c || c === addCard) return;
       var id = c.dataset.id, r = state.routines.filter(function (x) { return x.id === id; })[0];
-      if (b.dataset.k === 'run') { b.disabled = true; api('/api/apps/routines/run', { app: APP, id: id }).then(function () { setTimeout(refresh, 400); setTimeout(refresh, 2500); }); }
-      else if (b.dataset.k === 'toggle') api('/api/apps/routines/toggle', { app: APP, id: id, enabled: !r.enabled }).then(refresh);
-      else if (b.dataset.k === 'open' && shell) { showSession(r.session_id, r.name); setMode('agent'); }
+      if (!r) return;
+      var k = b.dataset.k;
+      if (k === 'expand') { if (!thumb) toggleOpen(id); }
+      else if (k === 'run') { b.disabled = true; api('/api/apps/routines/run', { app: APP, id: id }).then(function () { setTimeout(refresh, 400); setTimeout(refresh, 2500); }); }
+      else if (k === 'toggle') api('/api/apps/routines/toggle', { app: APP, id: id, enabled: !r.enabled }).then(refresh);
+      else if (k === 'open' && shell) { showSession(r.session_id, r.name); setMode('agent'); }
+      else if (k === 'edit') { editId = id; editSched = null; draw(true); var f = list.querySelector('.ccck-edit [data-f="name"]'); if (f) f.focus(); }
+      else if (k === 'cancel') { editId = ''; editSched = null; draw(true); }
+      else if (k === 'save') saveEdit(c.querySelector('.ccck-edit'), id, b);
+      else if (k === 'delete' && confirm('Delete "' + r.name + '"? It stops running and its history is erased.')) {
+        api('/api/apps/routines/delete', { app: APP, id: id }).then(function (res) {
+          if (!res.ok) { alert(res.error || 'Could not delete.'); return; }
+          delete openIds[id]; editId = '';
+          return refresh().then(function () { draw(true); });
+        });
+      }
     });
     if (thumb) return;
-    var add = $('div', 'ccck-r ccck-new', '<div class="ccck-name">＋ New routine</div><textarea placeholder="What should it do, and how often? For example: every morning, tell me if hotel prices dropped." aria-label="Describe the new routine"></textarea><div class="ccck-acts"><button type="button" class="ccck-btn pri">Ask the agent to build it</button></div><div class="ccck-note" hidden></div>');
-    box.appendChild(add);
-    var ta = add.querySelector('textarea'), go = add.querySelector('button'), note = add.querySelector('.ccck-note');
+    var ta = addCard.querySelector('textarea'), go = addCard.querySelector('button'), note = addCard.querySelector('.ccck-note');
     go.addEventListener('click', function () {
       var want = ta.value.trim();
       if (!want) { ta.focus(); return; }

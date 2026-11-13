@@ -1,0 +1,1 @@
+- Routine cards expand to their last 10 runs and can be edited (name, icon, schedule) or deleted; the New routine card sits in the same grid.
