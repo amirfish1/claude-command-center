@@ -35,7 +35,14 @@ for (const width of [1280, 390]) test('CI survives refresh before live status re
       res.end(`<style>${css}</style><div style="width:${Math.min(width, 330)}px;padding:12px;box-sizing:border-box">
         <div data-local-ci-host id="localCiProgress" hidden></div>
         <div class="sidebar"><div data-local-ci-host class="local-ci-mobile" id="localCiMobileList" hidden></div></div>
-        </div><script>${progress}</script>`);
+        </div><script>
+          const nativeFetch = window.fetch.bind(window);
+          window.ciReadPriorities = [];
+          window.fetch = (input, init) => {
+            if (input === '/api/ci/local') ciReadPriorities.push(init?.cccPriority || 'background');
+            return nativeFetch(input, init);
+          };
+          ${progress}</script>`);
     }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -48,6 +55,7 @@ for (const width of [1280, 390]) test('CI survives refresh before live status re
     const host = width === 390 ? '#localCiMobileList' : '#localCiProgress';
     await page.goto(`http://127.0.0.1:${server.address().port}`, {waitUntil:'domcontentloaded'});
     await page.waitForSelector(host + ' progress[value="50"]');
+    assert.equal(await page.evaluate(() => ciReadPriorities[0]), 'user', 'cold CI read bypasses startup background queue');
     hold = true;
     await page.reload({waitUntil:'domcontentloaded'});
     // No waitForSelector: saved progress must already exist at DOM ready,

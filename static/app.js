@@ -100515,7 +100515,9 @@
     if (document.hidden || busy || !document.querySelector('[data-local-ci-host]')) return;
     busy = true;
     try {
-      const response = await fetch('/api/ci/local', {cache:'no-store', signal:AbortSignal.timeout(45000)});
+      // The first visible reading must not wait behind archive hydration.
+      const response = await fetch('/api/ci/local', {cache:'no-store',
+        cccPriority:snapshotAt ? undefined : 'user', signal:AbortSignal.timeout(45000)});
       if (!response.ok) throw new Error('CI progress unavailable');
       const data = await response.json();
       if (data.unavailable) throw new Error('CI progress unavailable');
