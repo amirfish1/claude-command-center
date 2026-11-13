@@ -21176,11 +21176,12 @@
 
   // A ticket ref is durable navigation, not merely a status label. Keep the
   // conversion after normal markdown links so an author's explicit link
-  // remains authoritative instead of becoming a nested anchor.
+  // remains authoritative instead of becoming a nested anchor. Protect tags
+  // too: a ticket ref in an image URL or alt text must not corrupt its HTML.
   const WATCHTOWER_TICKET_REF_RE = /\b([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*)-(\d+)\b/g;
   function linkifyWatchtowerTicketRefs(html) {
     const anchors = [];
-    const protectedHtml = String(html || '').replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, match => {
+    const protectedHtml = String(html || '').replace(/<a\b[^>]*>[\s\S]*?<\/a>|<[^>]+>/gi, match => {
       const token = '\u0000WTANCHOR' + anchors.length + '\u0000';
       anchors.push(match);
       return token;
