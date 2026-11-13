@@ -23,7 +23,9 @@ class SplitFocusHighlightTests(unittest.TestCase):
         self.assertIn('.conv-split[data-orientation="vertical"] .conv-pane.is-active > .conv-pane-header,', APP_CSS)
 
     def test_desktop_pane_title_uses_sidebar_row_name(self):
-        self.assertIn("const headerTitle = opts.title !== undefined ? String(title || '').trim() : rowName;", APP_JS)
+        self.assertIn("rowName = continuationBackstopTitle(fullRow, rowRawTitle(fullRow).rawTitle);", APP_JS)
+        self.assertIn("rowName = workerTitleForPane(fullRow, String(rowName || title || '').trim());", APP_JS)
+        self.assertIn("const headerTitle = opts.title !== undefined ? workerTitleForPane(fullRow, String(title || '').trim()) : rowName;", APP_JS)
         self.assertIn("titleEl.textContent = headerTitle;", APP_JS)
 
     def test_ticket_composer_docks_left_with_light_dim(self):
