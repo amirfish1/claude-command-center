@@ -1,0 +1,1 @@
+- Bulk archive/trash bursts no longer start a new background archive rebuild on every poll (at most one per two minutes, unless a new transcript lands), which stalled the session list for tens of seconds.

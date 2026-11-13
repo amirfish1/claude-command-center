@@ -1398,6 +1398,7 @@ def isolated_archive_cache(monkeypatch, tmp_path):
     server._ARCHIVE_BUILD_LOCKS.clear()
     server._archive_serve_cache.clear()
     server._archive_serve_refreshing.clear()
+    server._archive_refresh_last_start.clear()  # CCC-142 min-gap state
     # The detached-refresh spawn is load-gated (CCC-1154 option C) on the
     # host's real 1-minute loadavg. Pin it to "not saturated" so these tests
     # assert CCC's scheduling, not the CI box's load: on a busy VM (load 30 on
@@ -1413,6 +1414,7 @@ def isolated_archive_cache(monkeypatch, tmp_path):
     server._ARCHIVE_RESPONSE_CACHE_LOADED = False
     server._archive_serve_cache.clear()
     server._archive_serve_refreshing.clear()
+    server._archive_refresh_last_start.clear()  # CCC-142 min-gap state
     _reset_short_ttl_memos()
 
 
@@ -2096,6 +2098,7 @@ def test_cold_persisted_snapshot_does_not_eagerly_rebuild(isolated_archive_cache
 
     server._archive_serve_cache.clear()
     server._archive_serve_refreshing.clear()
+    server._archive_refresh_last_start.clear()  # CCC-142 min-gap state
     server._archive_serve_rows_versioned(
         _ALL_KEY,
         _ALL_OPTS,

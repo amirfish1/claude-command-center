@@ -17479,6 +17479,13 @@ def _archive_list_warm(cache_options, window, stale_ok):
         (body_ver, delta["ctx"]) if delta is not None else body_ver)
 
 
+try:
+    _ARCHIVE_REFRESH_MIN_GAP_S = max(0.0, float(os.environ.get("CCC_ARCHIVE_REFRESH_MIN_GAP_S", "120")))
+except ValueError:
+    _ARCHIVE_REFRESH_MIN_GAP_S = 120.0
+_archive_refresh_last_start = {}  # key -> epoch of the last detached refresh start
+
+
 def _archive_refresh_slot_available(key, now):
     """True if `key` has no background refresh in flight, or the one it has
     has been running past _ARCHIVE_REFRESH_WATCHDOG_S -- treated as abandoned
@@ -17486,7 +17493,23 @@ def _archive_refresh_slot_available(key, now):
     be called with _archive_serve_lock already held (same lock guards
     _archive_serve_refreshing everywhere else)."""
     started = _archive_serve_refreshing.get(key)
-    return started is None or (now - started) > _ARCHIVE_REFRESH_WATCHDOG_S
+    if not (started is None or (now - started) > _ARCHIVE_REFRESH_WATCHDOG_S):
+        return False
+    # CCC-142 (Q980): a mutation restamp clears the in-flight slot and ages the
+    # snapshot, so a bulk archive/trash burst started a fresh 27-200s detached
+    # rebuild per poll, each discarded by the next mutation. Measured: 761
+    # rebuilds in 11h (median gap 46s), worst stalls inside those bursts.
+    # A new transcript still refreshes at once (the gate-bypass grace).
+    if now < _ARCHIVE_REFRESH_GATE_BYPASS_UNTIL[0]:
+        return True
+    last = _archive_refresh_last_start.get(key)
+    return last is None or (now - last) >= _ARCHIVE_REFRESH_MIN_GAP_S
+
+
+def _archive_refresh_mark_started(key, now):
+    """Record a refresh start (call with _archive_serve_lock held)."""
+    _archive_serve_refreshing[key] = now
+    _archive_refresh_last_start[key] = now
 
 
 # CCC-1154 option C: when the box itself is saturated, the detached
@@ -19508,7 +19531,7 @@ def _archive_serve_rows_versioned(
             snap_ver = sc.get("ver", 0)
             stale = force_refresh or (now - sc.get("ts", 0)) >= _ARCHIVE_SERVE_TTL
             if stale and not load_blocked and _archive_refresh_slot_available(key, now):
-                _archive_serve_refreshing[key] = now
+                _archive_refresh_mark_started(key, now)
                 spawn = True
             else:
                 spawn = False
@@ -19562,7 +19585,7 @@ def _archive_serve_rows_versioned(
                 and not load_blocked
                 and _archive_refresh_slot_available(key, now)
             ):
-                _archive_serve_refreshing[key] = now
+                _archive_refresh_mark_started(key, now)
                 spawn = True
             else:
                 spawn = False
