@@ -64,7 +64,7 @@
   async function load() {
     const [appsRes, census, rout, concierge] = await Promise.all([
       getJSON('/api/apps'), getJSON('/api/sessions/census'), getJSON('/api/apps/routines'),
-      fetch('/static/app-concierge.js', {method: 'HEAD'}).then(r => r.ok).catch(() => false)]);
+      fetch('/static/app-concierge.js').then(r => r.ok).catch(() => false)]);
     const over = (rout && rout.apps) || {};
     const apps = ((appsRes && appsRes.apps) || []).filter(a => a.id !== 'home' && a.id !== 'apps');
     const sessions = (census && census.sessions) || [];
