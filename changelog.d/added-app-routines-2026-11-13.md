@@ -1,0 +1,1 @@
+Apps can have an agent and routines: add `app-kit.js` to an app page for a resizable agent pane and routine cards, and declare scheduled script or agent routines in `app.json` (see `docs/applications.md`).

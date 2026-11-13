@@ -85,6 +85,70 @@ would run with your full CCC authority: your sessions, your queues, your repo
 paths, and the ability to spawn agents. Only install apps you wrote or have
 read.
 
+## An app with an agent and routines
+
+Add one line to the app's `index.html` and it gets the standard app shell:
+
+```html
+<main data-ccc-content> ...your page... </main>
+<script src="/static/app-kit.js" data-app="my-app" defer></script>
+```
+
+The kit adds two things:
+
+- **One agent, on the right.** A resizable pane holding the app's builder
+  agent: a normal session started in the app's folder the first time you press
+  "Start the agent". Ask it to change the page or add a routine.
+- **Routines.** One card per routine with its schedule, its last result, an
+  on/off switch and "Run now", plus a box that asks the agent to build a new
+  one. Put `data-ccc-routines` on the element that should hold the cards;
+  otherwise they go at the end of the page.
+
+A routine is a named, scheduled job declared in `app.json`:
+
+```json
+{
+  "label": "Trips",
+  "icon": "🧳",
+  "tz": "America/Los_Angeles",
+  "routines": [
+    {"id": "booking-reminder", "name": "Booking Reminder", "icon": "🛎",
+     "does": "Warns before a booking stops being refundable.",
+     "schedule": "daily 08:00", "kind": "script",
+     "run": ["python3", "booking_reminder.py"]},
+    {"id": "price-watch", "name": "Price Watch", "icon": "🔎",
+     "does": "Checks whether prices dropped.",
+     "schedule": "every 12h", "kind": "agent",
+     "prompt": "Look up today's prices, compare with prices.json, update it."}
+  ]
+}
+```
+
+- `id`: lowercase letters, digits, `-` and `_`.
+- `schedule`: `daily HH:MM` (in the app's `tz`, else the machine's local time)
+  or `every N` followed by `m`, `h` or `d` (five minutes at the least). A daily
+  slot missed while CCC was not running runs once when it comes back. Leave it
+  out for a routine that only runs from "Run now".
+- `kind: "script"`: `run` is a command as a list of arguments (never a shell
+  string), started in the app's folder. The last line it prints may be JSON:
+  `{"summary": "one sentence", "alert": true, "notify": {"title": "...", "body": "..."}}`.
+  `alert` turns the card red and sends a notification; `notify` alone sends one
+  without the alert. A plain last line becomes the summary. A non-zero exit
+  shows as failed and notifies. Scripts stop after five minutes.
+- `kind: "agent"`: each run starts a fresh session in the app's folder with
+  `prompt`. CCC tells it how to report its one-sentence result, and the card
+  shows "See its work" to open that session.
+
+Pick a script when the check is mechanical (dates, thresholds, a known API)
+and an agent when the run needs judgement or looking things up. CCC keeps what
+it learns (on/off, last result, the app's agent) in `ccc-state.json` in the
+app's folder; `app.json` stays yours.
+
+Endpoints: `GET /api/apps/routines?app=<id>` (omit `app` for a per-app
+summary), `POST /api/apps/routines/run` and `/toggle` with `{app, id}`,
+`POST /api/apps/routines/report` with `{app, id, summary, alert}`, and
+`POST /api/apps/agent` with `{app}`.
+
 ## Embedding a dashboard that runs on another port
 
 A browser iframe pointed at another localhost port renders blank inside the

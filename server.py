@@ -33982,6 +33982,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Superseded by /api/apps and the Applications rail. Still served
             # because /api/* is a stable contract external tooling binds to.
             self.send_json({"links": _custom_links_config()[0]})
+        elif path == "/api/apps/routines":
+            # An app's routines and builder agent (?app=<id>), or a one-line
+            # summary per app for the Apps home. A few small file reads in the
+            # user's apps folder: no session scan, no subprocess.
+            from ccc_server import app_routines as _app_routines
+            qs = urllib.parse.parse_qs(parsed.query)
+            app_id = (qs.get("app", [""])[0] or "").strip()
+            if not app_id:
+                self.send_json({"ok": True, "apps": _app_routines.overview(USER_APPS_DIR)})
+            else:
+                info = _app_routines.describe(app_id, USER_APPS_DIR)
+                if info is None:
+                    self.send_json({"ok": False, "error": "unknown app"}, 404)
+                else:
+                    self.send_json(info)
         elif path == "/api/apps":
             # Ordered app list for the left Applications rail: built-ins, then
             # feature-gated surfaces, then the user's own apps. One small file
@@ -37294,6 +37309,38 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "Could not save allowance ledger"}, 500)
                 return
             self.send_json(result)
+            return
+        if path in ("/api/apps/routines/run", "/api/apps/routines/toggle",
+                    "/api/apps/routines/report", "/api/apps/agent"):
+            # App routines and the app's builder agent. Same-origin already
+            # enforced at the top of do_POST. A routine's command comes only
+            # from the app's own app.json; callers pick a routine by id.
+            from ccc_server import app_routines as _app_routines
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length) if length > 0 else b""
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = None
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            port = self.server.server_address[1]
+            app_id, rid = payload.get("app"), payload.get("id")
+            if path == "/api/apps/routines/run":
+                result, status = _app_routines.run_now(app_id, rid, port, USER_APPS_DIR)
+            elif path == "/api/apps/routines/toggle":
+                result, status = _app_routines.set_enabled(
+                    app_id, rid, payload.get("enabled") is not False, USER_APPS_DIR)
+            elif path == "/api/apps/routines/report":
+                result, status = _app_routines.report(payload, port, USER_APPS_DIR)
+            else:
+                result, status = _app_routines.ensure_agent(
+                    app_id, port, fresh=payload.get("fresh") is True, apps_dir=USER_APPS_DIR,
+                    docs_path=str(CCC_ROOT / "docs" / "applications.md"))
+            if result.get("ok") and path != "/api/apps/routines/report":
+                _log_activity("apps", path.rsplit("/", 1)[-1].upper(), f"app={app_id} id={rid or ''}")
+            self.send_json(result, status)
             return
         if path in ("/api/apps/add", "/api/apps/remove", "/api/apps/arrange"):
             # Applications settings writes. Same-origin already enforced at
@@ -48093,6 +48140,11 @@ def main():
             from ccc_server import notify as _notify
             _notify.scheduler_loop(base_url=f"http://127.0.0.1:{port}")
         threading.Thread(target=_notify_scheduled_loop, daemon=True, name="ccc-notify").start()
+        # App routines: scheduled jobs declared by user apps (app.json).
+        def _app_routines_loop():
+            from ccc_server import app_routines as _app_routines
+            _app_routines.loop(port)
+        threading.Thread(target=_app_routines_loop, daemon=True, name="ccc-app-routines").start()
     # Self-serve-loop health check: periodic self-probe + SIGUSR2 stack dump
     # on repeated misses. See `_self_health_check_loop` docstring for the
     # 2026-08-28 sleep/wake silent-hang incident this instruments for.
