@@ -34714,6 +34714,8 @@ a.local-ci-job:hover { color: var(--accent); }
 .local-ci-job progress::-webkit-progress-bar { background: var(--border); }
 .local-ci-job progress::-webkit-progress-value { background: var(--accent); }
 .local-ci-job progress::-moz-progress-bar { background: var(--accent); }
+.local-ci-detail { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.local-ci-elapsed { flex: none; font-size: 11px; color: var(--text-secondary, var(--text)); font-variant-numeric: tabular-nums; }
 .local-ci-step { display: block; font-size: 11px; color: var(--text-secondary, var(--text)); }
 
 #ciRunnerSetupStatus ul { padding-inline-start: 20px; line-height: 1.6; }

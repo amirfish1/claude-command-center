@@ -41,7 +41,7 @@ def test_only_local_active_job_counts_and_no_fake_percentage_on_api_failure():
     jobs = [
         {'runner_name': 'elsewhere', 'status': 'in_progress', 'name': 'remote'},
         {'runner_name': 'local', 'status': 'completed', 'name': 'old'},
-        {'runner_name': 'local', 'status': 'in_progress', 'name': 'test', 'steps': [
+        {'runner_name': 'local', 'status': 'in_progress', 'name': 'test', 'started_at': '2026-01-01T12:00:00Z', 'steps': [
             {'status': 'completed', 'name': 'Checkout'},
             {'status': 'in_progress', 'name': 'Tests'},
             {'status': 'queued', 'name': 'Cleanup'}]}]
@@ -53,6 +53,7 @@ def test_only_local_active_job_counts_and_no_fake_percentage_on_api_failure():
         assert len(rows) == 1
         assert rows[0]['percent'] == 33
         assert rows[0]['current_step'] == 'Tests'
+        assert rows[0]['started_at'] == '2026-01-01T12:00:00Z'
         run.return_value = SimpleNamespace(returncode=1, stdout='')
         assert local_ci._collect()['jobs'][0]['percent'] is None
 
@@ -121,10 +122,11 @@ def test_completion_survives_runner_exit_restart_and_dismissal(monkeypatch):
     records = local_ci._load_records()
     for record in records.values(): record['polled_at'] = 0
     local_ci._save_records(records)
-    monkeypatch.setattr(local_ci, '_api', lambda route: {'status':'completed', 'conclusion':'failure', 'name':'CI', 'updated_at':'2026-01-01T12:00:00Z'})
+    monkeypatch.setattr(local_ci, '_api', lambda route: {'status':'completed', 'conclusion':'failure', 'name':'CI', 'run_started_at':'2026-01-01T11:58:00Z', 'updated_at':'2026-01-01T12:00:00Z'})
     result = local_ci._collect()
     assert not result['jobs']
     assert result['completed'][0]['conclusion'] == 'failure'
+    assert result['completed'][0]['started_at'] == '2026-01-01T11:58:00Z'
     # A fresh reader obtains persisted history without re-querying GitHub.
     monkeypatch.setattr(local_ci, '_api', lambda route: pytest.fail('Completed runs must not keep polling GitHub'))
     assert local_ci._collect()['completed'][0]['id'] == 'example/project:123:1'

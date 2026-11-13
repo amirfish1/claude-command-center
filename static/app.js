@@ -100325,7 +100325,8 @@
       status:states[d.state], current_step:states[d.state] + (d.commit_sha ? ' · ' + d.commit_sha : ''),
       done:['READY','ERROR','CANCELED','CANCELLED'].includes(d.state),
       conclusion:d.state === 'READY' ? 'success' : d.state === 'ERROR' ? 'failure' : 'cancelled',
-      completed_at:d.ready_at || null, percent:null,
+      started_at:d.created_at ? new Date(d.created_at).toISOString() : null,
+      completed_at:d.ready_at ? new Date(d.ready_at).toISOString() : null, percent:null,
     } : null;
     render(lastData);
   });
@@ -100333,6 +100334,19 @@
   const conclusions = {success:'Passed', failure:'Failed', cancelled:'Cancelled',
     timed_out:'Timed out', skipped:'Skipped', neutral:'Neutral', action_required:'Action required',
     startup_failure:'Failed', stale:'Stopped', unknown:'Completed'};
+  function updateTimers() {
+    if (document.hidden) return;
+    for (const timer of document.querySelectorAll('[data-ci-started-at]')) {
+      const end = timer.dataset.ciCompletedAt ? Date.parse(timer.dataset.ciCompletedAt) : Date.now();
+      const seconds = Math.max(0, Math.floor((end - Date.parse(timer.dataset.ciStartedAt)) / 1000));
+      if (!Number.isFinite(seconds)) { timer.textContent = ''; continue; }
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor(seconds / 60) % 60;
+      timer.textContent = (hours ? hours + ':' + String(minutes).padStart(2, '0') : String(minutes))
+        + ':' + String(seconds % 60).padStart(2, '0');
+      timer.title = timer.dataset.ciCompletedAt ? 'Total duration' : 'Time elapsed';
+    }
+  }
   function render(data) {
     lastData = data;
     const completed = (data.completed || []).filter(job => !dismissed.has(job.id));
@@ -100379,7 +100393,17 @@
         step.textContent = job.provider === 'vercel' ? job.current_step : done ? 'Completed' + (job.completed_at ? ' · ' + new Date(job.completed_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : job.current_step;
         row.title = job.repo + ' · ' + (done ? percent.textContent : job.current_step)
           + (done || job.provider === 'vercel' ? '' : '\n' + job.completed_steps + '/' + job.total_steps + ' steps complete (not time remaining)');
-        row.append(label, bar, step);
+        const detail = document.createElement('span');
+        detail.className = 'local-ci-detail';
+        detail.append(step);
+        if (job.started_at && Number.isFinite(Date.parse(job.started_at)) && (!done || job.completed_at)) {
+          const timer = document.createElement('span');
+          timer.className = 'local-ci-elapsed';
+          timer.dataset.ciStartedAt = job.started_at;
+          if (done) timer.dataset.ciCompletedAt = job.completed_at;
+          detail.append(timer);
+        }
+        row.append(label, bar, detail);
         entry.append(row);
         if (done) {
           const button = document.createElement('button');
@@ -100415,8 +100439,10 @@
       host.hidden = !host.childElementCount;
       if (focused) [...host.querySelectorAll('[data-ci-dismiss]')].find(button => button.dataset.ciDismiss === focused)?.focus({preventScroll:true});
     }
+    updateTimers();
   }
   async function refresh() {
+    updateTimers();
     if (document.hidden || busy || !document.querySelector('[data-local-ci-host]')) return;
     busy = true;
     try {
@@ -100433,5 +100459,6 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', refresh);
   else refresh();
   setInterval(refresh, 10000);
+  setInterval(updateTimers, 1000);
   document.addEventListener('visibilitychange', refresh);
 })();

@@ -172,6 +172,8 @@ def _collect():
         run = _api(route)
         record["polled_at"] = time.time()
         url = f"https://github.com/{repo}/actions/runs/{run_id}"
+        if run and run.get("run_started_at"):
+            record["started_at"] = run["run_started_at"]
         if run and run.get("status") == "completed":
             record.update(status="completed", name=run.get("name") or "CI",
                           conclusion=run.get("conclusion") or "unknown", percent=100,
@@ -193,6 +195,7 @@ def _collect():
                             if step.get("status") == "in_progress"), "Starting job")
             rows.append(dict(record, id=key, name=job.get("name") or "CI",
                              runner=job.get("runner_name") or record.get("runner", ""),
+                             started_at=job.get("started_at"),
                              percent=min(99, int(done * 100 / len(steps))) if steps else None,
                              completed_steps=done, total_steps=len(steps), current_step=current, url=url))
     _save_records(records)

@@ -20,7 +20,9 @@ for (const width of [1280, 390]) test('Vercel phases share CI progress at ' + wi
     page.on('pageerror', e => errors.push(e.message));
     await page.addScriptTag({content:`
       window.repo = '/example/project';
-      window.deployment = {state:'BUILDING', url:'example.vercel.app', project:'example', commit_sha:'abc1234', commit_msg:'Update layout'};
+      window.clock = Date.now();
+      Date.now = () => window.clock;
+      window.deployment = {created_at:window.clock - 65000, state:'BUILDING', url:'example.vercel.app', project:'example', commit_sha:'abc1234', commit_msg:'Update layout'};
       const activeConvRepoPath = () => window.repo;
       const repoUrl = (url, repo) => url + '?repo_path=' + encodeURIComponent(repo);
       const timeAgo = () => 'now';
@@ -28,7 +30,7 @@ for (const width of [1280, 390]) test('Vercel phases share CI progress at ' + wi
       window.posts = [];
       window.fetch = async (url, opts={}) => {
         if (opts.method === 'POST') posts.push(url);
-        return {ok:true,json:async () => ({jobs:[{id:'ci1',repo:'example/project',name:'Tests',percent:50,current_step:'Run tests',completed_steps:1,total_steps:2}],completed:[]})};
+        return {ok:true,json:async () => ({jobs:[{id:'ci1',repo:'example/project',name:'Tests',started_at:new Date(window.clock - 125000).toISOString(),percent:50,current_step:'Run tests',completed_steps:1,total_steps:2}],completed:[]})};
       };
       ${poll}
       ${progress}
@@ -42,12 +44,20 @@ for (const width of [1280, 390]) test('Vercel phases share CI progress at ' + wi
     assert.equal(await page.$eval(host + ' a', e => e.href), 'https://example.vercel.app/');
     assert.doesNotMatch(await page.$eval(host + ' a', e => e.title), /undefined|steps complete/);
     assert.equal(await page.$eval(host, e => e.getBoundingClientRect().right <= innerWidth), true);
+    assert.deepEqual(await page.$$eval(host + ' .local-ci-elapsed', nodes => nodes.map(e => e.textContent)), ['1:05', '2:05']);
+    await page.evaluate(() => {window.clock += 2000;});
+    await page.waitForFunction(selector => document.querySelector(selector + ' .local-ci-elapsed').textContent === '1:07', {}, host);
+    assert.equal(await page.$eval(host + ' .local-ci-elapsed', e => e.getBoundingClientRect().right <= innerWidth), true);
     await page.screenshot({path:'/tmp/ccc-vercel-progress-' + width + '.png'});
     for (const [state, label, outcome] of [['QUEUED','Queued','active'],['INITIALIZING','Initializing','active'],['READY','Ready','success'],['ERROR','Failed','failure'],['CANCELED','Cancelled','neutral']]) {
-      await page.evaluate(async state => {deployment.state=state;await checkDeployment();}, state);
+      await page.evaluate(async state => {deployment.state=state;deployment.ready_at=clock;await checkDeployment();}, state);
       assert.equal(await page.$eval(host + ' .local-ci-percent', e => e.textContent), label);
       assert.equal(await page.$eval(host + ' .local-ci-entry', e => e.dataset.outcome), outcome);
     }
+    assert.equal(await page.$eval(host + ' .local-ci-elapsed', e => e.textContent), '1:07');
+    await page.evaluate(() => {window.clock += 3600000;});
+    await page.waitForFunction(selector => document.querySelectorAll(selector + ' .local-ci-elapsed')[1].textContent === '1:02:07', {}, host);
+    assert.equal(await page.$eval(host + ' .local-ci-elapsed', e => e.textContent), '1:07');
     await page.click(host + ' .local-ci-dismiss');
     assert.doesNotMatch(await page.$eval(host, e => e.textContent), /Vercel/);
     assert.deepEqual(await page.evaluate(() => posts), []);
