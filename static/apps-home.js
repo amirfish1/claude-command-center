@@ -78,7 +78,15 @@
     }));
     if (concierge) {
       const s = document.createElement('script'); s.src = '/static/app-concierge.js';
-      s.onload = () => { const n = document.getElementById('newapp'); if (n && window.CCCAppConcierge && window.CCCAppConcierge.open) n.addEventListener('click', e => { e.preventDefault(); window.CCCAppConcierge.open(); }); };
+      s.onload = () => {
+        const n = document.getElementById('newapp');
+        if (!n || !window.cccConcierge) return;
+        const box = document.createElement('div');
+        box.className = 'card new'; box.id = 'newapp';
+        box.innerHTML = '<div class="plus">+</div><div>New app</div><div data-ccc-concierge style="padding:0 14px 14px;width:100%"></div>';
+        n.replaceWith(box);
+        window.cccConcierge.mount(box.querySelector('[data-ccc-concierge]'));
+      };
       document.body.appendChild(s);
     }
     const open = id => {
