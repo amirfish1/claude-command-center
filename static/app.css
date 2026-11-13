@@ -19399,15 +19399,10 @@
     border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   }
 
-  /* Hide the optional Morning plugin's left rail (`.ccc-side-nav`, 52px)
-     in standalone mode. We also guard this in index.html by skipping the
-     script load entirely in standalone, but keep the CSS as belt-and-
-     suspenders. Reset the layout offsets the rail installs so the main
-     pane reclaims the full width. The core repo rail was deleted entirely;
-     no rule is needed for it. */
-  .ccc-side-nav { display: none !important; }
-  body,
-  body.has-side-nav { padding-left: 0 !important; }
+  /* Installed windows use the same app navigation as the browser.
+     Only Simple mode replaces the rail with bottom navigation. */
+  body.has-mobile-bottom-nav .ccc-side-nav { display: none !important; }
+  body.has-mobile-bottom-nav { padding-left: 0 !important; }
   body.has-side-nav #termPanel { left: 0 !important; }
 
   /* Resize handle — visually killed entirely. The slight bg step between
