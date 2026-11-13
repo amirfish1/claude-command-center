@@ -458,6 +458,55 @@
   function _loafReadTag() {
     try { return _ttsActive && !_ttsPaused ? 1 : 0; } catch (_) { return 0; }
   }
+  // Cumulative snapshots bypass _clientLog's five-second dedupe. Counts alone
+  // cannot establish a jank rate without exposure on the same page/build.
+  // State is sampled each second: read_ms means active/unpaused, not audible
+  // audio time. max_gap_ms exposes suspension and delayed sampling uncertainty.
+  const _readPerf = {
+    last: performance.now(), reading: 0, read_ms: 0, max_gap_ms: 0,
+    longtasks: 0, longtask_ms: 0, loafs: 0, sources: Object.create(null),
+    seq: 0, sentAt: 0, sentMs: 0, sentCount: 0,
+  };
+  function _readPerfSample(flush = false) {
+    const now = performance.now();
+    const gap = Math.max(0, now - _readPerf.last);
+    if (_readPerf.reading) {
+      _readPerf.read_ms += gap;
+      _readPerf.max_gap_ms = Math.max(_readPerf.max_gap_ms, gap);
+    }
+    const reading = _loafReadTag();
+    const stopped = _readPerf.reading && !reading;
+    _readPerf.reading = reading;
+    _readPerf.last = now;
+    const count = _readPerf.longtasks + _readPerf.loafs;
+    if ((_readPerf.read_ms <= _readPerf.sentMs && count === _readPerf.sentCount)
+        || (!flush && !stopped && now - _readPerf.sentAt < 30000)) return;
+    _readPerf.sentAt = now;
+    _readPerf.sentMs = _readPerf.read_ms;
+    _readPerf.sentCount = count;
+    const script = document.querySelector('script[src*="app.js"]');
+    const row = {
+      boot_id: _cccBootId, build: script ? String(script.getAttribute('src')).slice(-64) : '',
+      seq: ++_readPerf.seq, read_ms: Math.round(_readPerf.read_ms),
+      max_gap_ms: Math.round(_readPerf.max_gap_ms),
+      longtasks: _readPerf.longtasks, longtask_ms: Math.round(_readPerf.longtask_ms),
+      loafs: _readPerf.loafs, sources: _readPerf.sources,
+      longtask_supported: typeof PerformanceObserver === 'function'
+        && (PerformanceObserver.supportedEntryTypes || []).includes('longtask'),
+      loaf_supported: typeof PerformanceObserver === 'function'
+        && (PerformanceObserver.supportedEntryTypes || []).includes('long-animation-frame'),
+    };
+    try {
+      fetch('/api/client-log', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ msg: '[READ-PERF] ' + JSON.stringify(row) }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_) {}
+  }
+  setInterval(_readPerfSample, 1000);
+  document.addEventListener('visibilitychange', () => _readPerfSample(true));
+  window.addEventListener('pagehide', () => _readPerfSample(true));
   // Catch-all for client-side jank that no single poller owns (render/reshuffle
   // thrash, GC pauses): any main-thread block >= 200ms surfaces once per 5s.
   try {
@@ -467,6 +516,10 @@
           _perfLongTasks.push([entry.startTime, entry.startTime + entry.duration]);
           if (_perfLongTasks.length > 300) _perfLongTasks.shift();
           if (entry.duration >= 200) {
+            if (_loafReadTag()) {
+              _readPerf.longtasks++;
+              _readPerf.longtask_ms += entry.duration;
+            }
             _clientLog('[LONGTASK] ' + Math.round(entry.duration) + 'ms blocking frame read=' + _loafReadTag());
           }
         }
@@ -484,10 +537,20 @@
       new PerformanceObserver((list) => {
         for (const e of list.getEntries()) {
           if (e.duration < 200) continue;
+          const sc = (e.scripts || []).slice().sort((x, y) => y.duration - x.duration)[0];
+          if (_loafReadTag()) {
+            _readPerf.loafs++;
+            // Four categories keep snapshots within the client-log sink's
+            // 500-character limit. Existing LOAF lines retain source offsets.
+            const source = String(sc && (sc.invoker || sc.type) || '');
+            const key = /FrameRequestCallback/.test(source) ? 'raf'
+              : /Response\.json/.test(source) ? 'json'
+              : /TimerHandler/.test(source) ? 'timer' : 'other';
+            _readPerf.sources[key] = (_readPerf.sources[key] || 0) + 1;
+          }
           const now = Date.now();
           if (now - _loafLast < 2000) continue;
           _loafLast = now;
-          const sc = (e.scripts || []).slice().sort((x, y) => y.duration - x.duration)[0];
           // fn= is the function name: char offsets shift on every build, names don't.
           const src = sc ? ((sc.invoker || sc.sourceFunctionName || sc.type || '?')
             + ' @' + String(sc.sourceURL || '').split('/').pop() + ':' + (sc.sourceCharPosition || 0)
