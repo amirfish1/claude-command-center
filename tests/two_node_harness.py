@@ -139,6 +139,10 @@ class CCCNode:
             # 300s by default; tests write transcripts and expect the next
             # poll cycle to see them, so keep the snapshot short-lived here.
             "CCC_ARCHIVE_SERVE_TTL_SEC": "1",
+            # Keep the detached rebuild cadence on the same test clock as
+            # the serve TTL. HTTP-only nodes have no dashboard event-stream
+            # subscriber to announce new transcripts and bypass this gap.
+            "CCC_ARCHIVE_REFRESH_MIN_GAP_S": "1",
             # Synthetic archives must refresh even when unrelated workloads
             # saturate the test host. Load-gate behavior has its own tests.
             "CCC_ARCHIVE_REFRESH_GATE_LOAD_PER_CPU": "1000000",
