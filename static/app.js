@@ -45713,6 +45713,9 @@
     // needs a nested Coding/Workers/Messages/Group-chats filter -- it always
     // shows the leftover lanes (Hermes messages + group chats) together.
     const _allTabView = _topLevelLaneOverride || 'other';
+    const _workersEntering = _allTabView === 'workers' && !_workersTabWasActive;
+    _workersTabWasActive = _allTabView === 'workers';
+    if (_workersEntering) _wtWarmActivityForWorkersLane(true);
     const _allTabMainConvs = _allTabView === 'workers'
       ? _allTabWorkerConvs
       : _allTabView === 'ideas' ? _allTabIdeaConvs
@@ -45772,7 +45775,7 @@
       }
       return out;
     };
-    const _allTabClusters = _foldRepeatTaskClusters(_allTabRowsToClusters(_allTabTreeRows));
+    let _allTabClusters = _foldRepeatTaskClusters(_allTabRowsToClusters(_allTabTreeRows));
     const _allTabClusterPinRank = (cluster) => (cluster.rows || []).reduce((best, item) => (
       item.card.pinned ? Math.min(best, _pinRankValue(item.card)) : best
     ), Infinity);
@@ -45834,6 +45837,56 @@
       flushRepeats();
       return chunks.join('');
     };
+    // Keep a session tree intact: it either lives under its ticket or remains
+    // in the session list. Search never hides rows behind ticket disclosures.
+    _workersTicketSessions = new Map();
+    if (_allTabView === 'workers' && !_ipSearchActive) {
+      _workersAssignedTicketRefs = new Set();
+      _workersFallbackTickets = [];
+      const cachedRefs = new Set(_uxqItemsCache.items.map(_uxqItemRef));
+      for (const cluster of _allTabClusters) {
+        const card = cluster.rows[0]?.card;
+        if (!card) continue;
+        const facts = workerRowFacts(card);
+        if (!facts.ticketRef) continue;
+        _workersAssignedTicketRefs.add(facts.ticketRef);
+        if (!cachedRefs.has(facts.ticketRef)) {
+          const ticket = _uxFixesWorkerTicketsForRow(card).find(t => t.ref === facts.ticketRef);
+          const ms = ticket?.workedAt || ticket?.closedAt || ticket?.claimedAt || _allTabClusterMtime(cluster) * 1000;
+          _workersFallbackTickets.push({ ref: facts.ticketRef, title: ticket?.title || facts.prose || facts.title,
+            status: ticket?.status || 'status unavailable',
+            claimed_at: new Date(ms || Date.now()).toISOString() });
+        }
+      }
+      for (const cluster of _allTabClusters) {
+        if (!cluster.rows.length) continue;
+        const refs = new Set(cluster.rows.map(r => workerRowFacts(r.card).ticketRef).filter(Boolean));
+        if (refs.size === 1 && workerRowFacts(cluster.rows[0].card).ticketRef) continue;
+        const card = cluster.rows[0].card;
+        const sid = card.session_id || card.id;
+        if (!sid) continue;
+        const ref = 'session:' + sid;
+        cluster.activityRef = ref;
+        _workersAssignedTicketRefs.add(ref);
+        _workersFallbackTickets.push({ref, _sessionOnly: true, _sessionId: card.id || sid,
+          title: workerRowFacts(card).title || card.display_name || 'Worker session',
+          status: cluster.rows.some(r => workerStateBucket(r.card) === 'idle') ? 'standing by' : 'finished',
+          claimed_at: new Date(_allTabClusterMtime(cluster) * 1000 || Date.now()).toISOString()});
+      }
+      const recentRefs = new Set(_workersActivityRows().map(r => _uxqItemRef(r.item)));
+      _workersTicketRecentSignature = [...recentRefs].join('|');
+      const partition = _workersPartitionTicketClusters(_allTabClusters, recentRefs,
+        card => workerRowFacts(card).ticketRef);
+      for (const [ref, clusters] of partition.matched) {
+        const cards = clusters.flatMap(c => c.rows.map(r => r.card));
+        const lanes = clusters.reduce((n, c) => n + _subagentClusterPresentation(c).total, 0);
+        _workersTicketSessions.set(ref, {
+          cards, lanes, count: clusters.length,
+          html: _renderAllTabClusters(clusters, true, true),
+        });
+      }
+      _allTabClusters = partition.remaining;
+    }
     const _arcHasFolderChips = _allTabMainConvs.concat(_allTabTrashConvs).some(c => c.folder_label_chip);
     const _archivedGroupChatsForRender = _hideGroupChatsForSearch
       ? []
@@ -46079,7 +46132,9 @@
       // filtering out every session) rendered the tools header (Now/1d/7d/
       // All + engine icons) over a blank body — no text explained why the
       // list looked empty, reading as "the conv list view disappeared."
-      _arcRows = '<div class="archive-empty-state">No sessions in this view.</div>';
+      _arcRows = '<div class="archive-empty-state">'
+        + (_allTabView === 'workers' && _workersTicketSessions.size
+          ? 'Matching sessions are shown with their tickets above.' : 'No sessions in this view.') + '</div>';
     }
     const _allTabTotalCount = _allTabConvs.length + _archivedGroupChatsForRender.length + _allTabGroupChatItems.length + _allTabTrashConvs.length;
     _arcCount = _allTabTotalCount;
@@ -46427,18 +46482,14 @@
       // below — every clock tick would rebuild the whole list. _uxqRender-
       // WorkingNow() fills them by DOM after the innerHTML reset and again on
       // every health poll, so they stay live without touching the signature.
-      // Filters lead; compact ticket history is secondary to live session rows.
+      // Ticket activity leads; time filters govern the remaining sessions below.
       let _workersActivityHtml = '';
       if (_allTabView === 'workers') {
         _wtWarmActivityForWorkersLane();
-        const recentOpen = _workersRecentOpen();
         _workersActivityHtml = '<div class="conv-workers-activity" data-role="workers-activity">'
-          + '<div class="wa-health" data-role="workers-queue-health"></div>'
-          + '<details class="fq-recent-work wa-recent" data-role="workers-recent-work"'
-          +   (recentOpen ? ' open' : '') + '>'
-          +   '<summary>Ticket activity <span>Latest 10 · all queues</span></summary>'
+          + '<div class="fq-recent-work wa-recent" data-role="workers-recent-work" role="region" aria-label="Worker tickets and sessions">'
           +   '<div class="fq-recent-rows"></div>'
-          + '</details>'
+          + '</div>'
           + '</div>';
       }
       const _arcToolsLeft = _arcExpandAllToggle
@@ -46502,8 +46553,8 @@
           + '</div>';
       _archivedHtml =
         '<div class="conv-archived-section" data-role="archived-section">'
-        + _arcTools
         + _workersActivityHtml
+        + _arcTools
         + _workersUniformHtml
         + _wtPendingHtml
         + _allHermesTabBarHtml
@@ -46598,6 +46649,7 @@
     // a class on the section wrapper does not survive every render path (that
     // was the bug that left Dense inert). Set before the flicker guard's early
     // return so a volatile-only tick can't leave them stale.
+    $convList.classList.toggle('workers-view', _sidebarTab === 'workers' && !_ipSearchActive);
     $convList.classList.toggle('workers-cozy', _sidebarTab === 'workers' && sessionDensity('workers') === 'cozy' && !_ipSearchActive);
     $convList.classList.toggle('workers-hoist-engine', !!_workersHoist.engine);
     $convList.classList.toggle('workers-hoist-cost', !!_workersHoist.tier);
@@ -46643,6 +46695,7 @@
     try { if (typeof updateOrchestrationPane === 'function') updateOrchestrationPane(currentConversation); } catch (_) {}
     if (_convListRenderSig === _structSig && $convList.childElementCount > 0) {
       _patchVolatileTimes(_convListHtml);
+      if (_allTabView === 'workers') _uxqRenderRecentWork();
       return;
     }
     _convListRenderSig = _structSig;
@@ -46691,6 +46744,7 @@
     const _focusInputBefore = (_activeEl && _activeEl.tagName === 'INPUT' && _userIsTyping)
       ? _activeEl
       : null;
+    const _workersScrollTop = $convList.querySelector('.conv-archived-list')?.scrollTop || 0;
     const _focusInputCaretStart = _focusInputBefore ? _focusInputBefore.selectionStart : null;
     const _focusInputCaretEnd = _focusInputBefore ? _focusInputBefore.selectionEnd : null;
     const _currentSessionsScrollBefore = _objectsSplitActive
@@ -46749,6 +46803,7 @@
       if (!el) return;
       el.scrollTop = Math.min(top, Math.max(0, el.scrollHeight - el.clientHeight));
     };
+    if (_sidebarTab === 'workers') _restoreSplitScrollTop($convList.querySelector('.conv-archived-list'), _workersScrollTop);
     _restoreSplitScrollTop(_currentSessionsScrollAfter, _currentSessionsScrollTop);
     _restoreSplitScrollTop(_projectTreeScrollAfter, _projectTreeScrollTop);
     if (_focusInputBefore && document.activeElement !== _focusInputBefore && document.contains(_focusInputBefore)) {
@@ -53834,12 +53889,12 @@
     })().finally(() => { _queueListMirrorPromise = null; });
     return _queueListMirrorPromise;
   }
-  async function _fetchUxqItems(allowStale) {
+  async function _fetchUxqItems(allowStale, force = false) {
     // Scope changes only filter this already-complete snapshot. Let that
     // interaction repaint immediately even when the normal TTL has elapsed;
     // the live poll can finish any refresh independently.
     if (allowStale && _uxqItemsLoaded) return _uxqItemsCache.items;
-    if (Date.now() - _uxqItemsCache.ts < 15000) return _uxqItemsCache.items;
+    if (!force && Date.now() - _uxqItemsCache.ts < 15000) return _uxqItemsCache.items;
     if (_uxqItemsPromise) return _uxqItemsPromise;
     const requestVersion = _uxqItemsVersion;
     _uxqItemsPromise = (async () => {
@@ -55826,7 +55881,7 @@
   }
   // Select work evidence, not edits or newly filed tickets. Timeline claims
   // retain history when reopening clears the current claim fields.
-  function _uxqRecentWorkItems(items) {
+  function _uxqRecentWorkItems(items, limit = 10) {
     return (Array.isArray(items) ? items : []).filter(Boolean).map(item => {
       const events = [
         ...(Array.isArray(item.timeline) ? item.timeline : []),
@@ -55854,16 +55909,55 @@
           by.machine || (resolved ? item.closed_machine : '') || item.claimed_machine || ''),
         summary: Array.isArray(summary) ? summary.filter(Boolean).join('\n') : String(summary),
       };
-    }).filter(Boolean).sort((a, b) => b.ms - a.ms).slice(0, 10);
+    }).filter(Boolean).sort((a, b) => b.ms - a.ms).slice(0, limit);
+  }
+  let _workersTabWasActive = false;
+  let _workersAssignedTicketRefs = new Set();
+  let _workersFallbackTickets = [];
+  function _workersActivityRows() {
+    const items = [..._uxqItemsCache.items];
+    const refs = new Set(items.map(_uxqItemRef));
+    for (const item of _workersFallbackTickets) if (!refs.has(item.ref)) { items.push(item); refs.add(item.ref); }
+    return _uxqRecentWorkItems(items, Infinity).filter((row, i) => i < 10 || _workersAssignedTicketRefs.has(_uxqItemRef(row.item)));
+  }
+  let _workersTicketSessions = new Map();
+  let _workersTicketRecentSignature = '';
+  const _workersTicketExpanded = (() => {
+    try {
+      const refs = JSON.parse(localStorage.getItem('ccc-workers-ticket-expanded') || '[]');
+      return new Set(Array.isArray(refs) ? refs.filter(ref => typeof ref === 'string').slice(-512) : []);
+    } catch (_) { return new Set(); }
+  })();
+  function _workersRememberTicketExpansion(ref, expanded) {
+    if (expanded) _workersTicketExpanded.add(ref); else _workersTicketExpanded.delete(ref);
+    try { localStorage.setItem('ccc-workers-ticket-expanded', JSON.stringify([..._workersTicketExpanded].slice(-512))); } catch (_) {}
+  }
+  // Match exact ticket refs, never title similarity or merely the same queue.
+  // Mixed-ticket trees require an explicit session-group representation.
+  function _workersPartitionTicketClusters(clusters, refs, ticketRef) {
+    const matched = new Map(), remaining = [];
+    for (const cluster of clusters) {
+      const root = cluster.rows && cluster.rows[0];
+      const ref = cluster.activityRef || (root && ticketRef(root.card));
+      const mixed = (cluster.rows || []).some(row => {
+        const childRef = ticketRef(row.card);
+        return childRef && childRef !== ref;
+      });
+      if (!ref || !refs.has(ref) || (!cluster.activityRef && mixed)) {
+        remaining.push(cluster);
+        continue;
+      }
+      if (!matched.has(ref)) matched.set(ref, []);
+      matched.get(ref).push(cluster);
+    }
+    return { matched, remaining };
+  }
+  function _workersMeaningfulUpdate(text) {
+    const value = String(text || '').trim();
+    return /^(?:completion assessment pending|working)\s*[.\u2026]*$/i.test(value) ? '' : value;
   }
   // Compact history rows keep the live sessions in view; full evidence opens on click.
   const WORKERS_RECENT_DETAILED = 0;
-  const WORKERS_RECENT_OPEN_KEY = 'ccc-workers-recent-open';
-  function _workersRecentOpen() {
-    // Closed by default: open, the ten-card list pushed the worker rows --
-    // the one thing this tab exists to show -- below the fold.
-    try { return localStorage.getItem(WORKERS_RECENT_OPEN_KEY) === 'on'; } catch (_) { return false; }
-  }
   // Rendered into EVERY mounted host rather than one id. The block lives in the
   // Workers lane now, whose list renderConversationList rebuilds wholesale — so
   // the host is a brand-new element on most ticks, and a lookup pinned to a
@@ -55874,27 +55968,45 @@
   function _uxqRenderRecentWork() {
     const hosts = _uxqRecentWorkHosts();
     if (!hosts.length) return;
-    const rows = _uxqRecentWorkItems(_uxqItemsCache.items);
+    const rows = _workersActivityRows();
+    const signature = rows.map(r => _uxqItemRef(r.item)).join('|');
+    if (_workersTicketRecentSignature !== signature) _scheduleSidebarRender({ lifecycle: true });
     const html = rows.map((row, i) => {
       const item = row.item;
       const ref = _uxqItemRef(item);
       const title = String(item.title || item.note || item.text || '').split('\n')[0]
         .replace(/(?:file:\/\/)?\/[^\s]*\/(?:pasted-images|attachments)\/[^\s]+/g, '')
         .trim() || 'Attached report';
-      const state = row.resolved ? 'Resolved' : capitalizeSessionTitleStart(String(item.status || 'open').replace(/_/g, ' '));
+      const sessions = _workersTicketSessions.get(ref);
+      const needsYou = sessions && sessions.cards.some(c => workerStateBucket(c) === 'needs-you');
+      const working = sessions && sessions.cards.some(c => workerStateBucket(c) === 'working');
+      const fallbackState = item.status === 'status unavailable' && sessions
+        ? (sessions.cards.every(c => workerStateBucket(c) === 'done') ? 'Session finished' : 'Standing by')
+        : capitalizeSessionTitleStart(String(item.status || 'open').replace(/_/g, ' '));
+      const state = needsYou ? 'Needs you' : working ? 'Working' : row.resolved ? 'Resolved' : fallbackState;
+      const liveCards = sessions ? sessions.cards.map(_applyLiveOverlayToRow) : [];
+      const latestCard = liveCards.sort((a, b) => {
+        const rank = c => workerStateBucket(c) === 'needs-you' ? 0 : workerStateBucket(c) === 'working' ? 1 : 2;
+        return rank(a) - rank(b) || Number(b.last_event_ts || b.modified || 0) - Number(a.last_event_ts || a.modified || 0);
+      })[0];
+      const outcome = latestCard ? rowOutcomeView(latestCard) : null;
+      const update = _workersMeaningfulUpdate((outcome && outcome.text) || row.summary);
+      const updateHtml = update ? '<div class="workers-ticket-update" title="' + escapeAttr(update) + '">'
+        + escapeHtml(update) + '</div>' : '';
+      const timerHtml = working && latestCard ? wipAgeChipHtml(latestCard) : '';
       const absolute = new Date(row.at).toLocaleString();
       const dates = [item.claimed_at ? 'Claimed: ' + item.claimed_at : '', item.closed_at ? 'Closed: ' + item.closed_at : ''].filter(Boolean).join('\n');
       // Full evidence remains in ticket details; the tooltip previews the summary.
       const brief = i >= WORKERS_RECENT_DETAILED;
       const briefTitle = brief && row.summary ? '\n\n' + row.summary : '';
-      return '<button type="button" class="fq-recent-row' + (brief ? ' is-brief' : ' is-detailed') + '"'
+      const ticketButton = '<button type="button" class="fq-recent-row' + (brief ? ' is-brief' : ' is-detailed') + '"'
         + ' data-uxq-recent-ref="' + escapeAttr(ref) + '"'
         + (brief ? ' title="' + escapeAttr(state + ' · ' + _uxqRelTime(row.at) + briefTitle) + '"' : '')
         + ' aria-label="Open full details for ' + escapeAttr(ref + ': ' + title) + '">'
-        + '<span class="fq-recent-title"><span class="fq-recent-ref">' + escapeHtml(ref) + '</span> ' + escapeHtml(title) + '</span>'
-        + '<span class="fq-recent-meta"><span class="fq-recent-state' + (row.resolved ? ' is-resolved' : '') + '">' + escapeHtml(state) + '</span>'
-        + '<time class="fq-recent-resolved" datetime="' + escapeAttr(row.at) + '" title="Last activity: ' + escapeAttr(absolute) + '">'
-        + escapeHtml(_uxqRelTime(row.at)) + '</time>'
+        + '<span class="fq-recent-title"><span class="fq-recent-ref">' + escapeHtml(item._sessionOnly ? 'Session' : ref) + '</span> ' + escapeHtml(title) + '</span>'
+        + '<span class="fq-recent-meta"><span class="fq-recent-state' + (needsYou ? ' is-needs-you' : working ? ' is-working' : row.resolved ? ' is-resolved' : '') + '">' + escapeHtml(state) + '</span>'
+        + (timerHtml || '<time class="fq-recent-resolved" datetime="' + escapeAttr(row.at) + '" title="Last activity: ' + escapeAttr(absolute) + '">'
+          + escapeHtml(_uxqRelTime(row.at)) + '</time>')
         + '<span>' + escapeHtml(row.worker || 'Worker not recorded') + '</span></span>'
         // Relative and absolute are separate spans so the narrow Workers lane
         // can drop the absolute stamp (still in the tooltip) without losing
@@ -55904,31 +56016,61 @@
         + '<span class="fq-recent-abs"> · ' + escapeHtml(absolute) + '</span></time>'
         + (row.summary ? '<span class="fq-recent-summary">' + escapeHtml(row.summary) + '</span>' : '')
         + '<span class="fq-recent-details">Full details ↗</span></button>';
+      if (!sessions) return '<div class="workers-ticket-entry">' + ticketButton + updateHtml + '</div>';
+      const label = sessions.count + (sessions.count === 1 ? ' session' : ' sessions')
+        + (sessions.lanes ? ' · ' + sessions.lanes + (sessions.lanes === 1 ? ' lane' : ' lanes') : '');
+      const expanded = _workersTicketExpanded.has(ref);
+      return '<div class="workers-ticket-entry' + (sessions.lanes ? ' has-lanes' : '') + '" data-workers-ticket="' + escapeAttr(ref) + '">'
+        + '<div class="workers-ticket-heading">' + ticketButton
+        + '<button type="button" class="workers-ticket-toggle" data-workers-ticket-toggle="' + escapeAttr(ref) + '"'
+        + ' aria-expanded="' + expanded + '" aria-label="' + escapeAttr('Session and lane details for ' + ref) + '">'
+        + escapeHtml(label) + '</button></div>' + updateHtml
+        + '<div class="workers-ticket-session-body"' + (expanded ? '' : ' hidden') + '>' + sessions.html + '</div></div>';
+
+
     }).join('') || '<div class="fq-recent-empty">No recorded work yet.</div>';
     hosts.forEach($el => {
       const $rows = $el.querySelector('.fq-recent-rows');
       // Skip the write when nothing moved: this runs on every health poll, and
       // a needless innerHTML swap drops :hover and restarts the enter fade.
-      if ($rows && $rows.innerHTML !== html) $rows.innerHTML = html;
+      if ($rows && $rows.innerHTML !== html) {
+        const scrollTop = $rows.scrollTop;
+        $rows.innerHTML = html;
+        $rows.scrollTop = scrollTop;
+      }
       // Delegate from the stable container; native buttons also support Enter
       // and Space, and the detail view hydrates the complete ticket timeline.
       if ($el.dataset.recentWorkBound) return;
       $el.dataset.recentWorkBound = '1';
       $el.addEventListener('click', ev => {
+        const toggle = ev.target.closest && ev.target.closest('[data-workers-ticket-toggle]');
+        if (toggle) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const ref = toggle.dataset.workersTicketToggle;
+          const body = toggle.closest('.workers-ticket-entry').querySelector('.workers-ticket-session-body');
+          const expanded = toggle.getAttribute('aria-expanded') !== 'true';
+          toggle.setAttribute('aria-expanded', String(expanded));
+          body.hidden = !expanded;
+          _workersRememberTicketExpansion(ref, expanded);
+          return;
+        }
+        const sessionRow = ev.target.closest && ev.target.closest('.workers-ticket-session-body .conv-item[data-id]');
+        if (sessionRow && !ev.target.closest('button, a, input, select, textarea, [role="button"]')) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          selectConversation(sessionRow.dataset.id);
+          return;
+        }
         const $row = ev.target.closest && ev.target.closest('[data-uxq-recent-ref]');
         if (!$row) return;
         const ref = $row.getAttribute('data-uxq-recent-ref');
-        const item = _uxqItemForRef(ref);
+        const item = _uxqItemForRef(ref) || _workersFallbackTickets.find(t => t.ref === ref);
+        if (item?._sessionOnly) { selectConversation(item._sessionId); return; }
         if (item) _uxqPickerPickTicket(ref, item);
         else _uxqOpenItemDetail(ref);
       });
-      // Persist collapse across the lane's wholesale rebuilds, which would
-      // otherwise re-open it from markup every render tick.
-      if ($el.tagName === 'DETAILS') {
-        $el.addEventListener('toggle', () => {
-          try { localStorage.setItem(WORKERS_RECENT_OPEN_KEY, $el.open ? 'on' : 'off'); } catch (_) {}
-        });
-      }
+
     });
   }
   function _uxqBindWorkingStrip($working) {
@@ -56311,12 +56453,12 @@
   // the Workers tab would see an empty recent-work list until they opened
   // Queues once. Warm it on the same terms as the worker-health poll.
   let _wtActivityWarmInFlight = false;
-  function _wtWarmActivityForWorkersLane() {
+  function _wtWarmActivityForWorkersLane(force = false) {
     if (_wtActivityWarmInFlight) return;
-    if (Date.now() - (_uxqItemsCache.ts || 0) < 15000) return;
+    if (!force && Date.now() - (_uxqItemsCache.ts || 0) < 15000) return;
     _wtActivityWarmInFlight = true;
-    _fetchUxqItems(false)
-      .then(() => { try { _uxqRenderWorkingNow(); } catch (_) {} })
+    Promise.all([_fetchUxqItems(false, force), _fetchUxqHealth(false, force)])
+      .then(() => { _scheduleSidebarRender({ lifecycle: true }); })
       .catch(() => {})
       .then(() => { _wtActivityWarmInFlight = false; });
   }

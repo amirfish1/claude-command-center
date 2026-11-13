@@ -149,7 +149,7 @@ class TestQueueHeaderLayout(unittest.TestCase):
         app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
 
         start = app_js.index('function _uxqRenderQueueTrigger(items, currentScope)')
-        trigger = app_js[start:app_js.index('function _uxqRecentWorkItems(items)', start)]
+        trigger = app_js[start:app_js.index('function _uxqRecentWorkItems(items', start)]
 
         # The sub-queue filter remains available, but it belongs with the
         # compact status controls at the trailing edge, not between the queue

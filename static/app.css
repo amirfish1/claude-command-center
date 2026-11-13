@@ -21767,7 +21767,7 @@ body.status-pos-right #convToolbar {
      syncBannerOffset in index.html) rather than sliding in behind it. */
   top: var(--injection-banner-h, 39px); left: 0; right: 0;
   z-index: 9999;
-  max-height: 40vh;
+  max-height: 60vh;
   overflow-y: auto;
   background: var(--surface, #161b22);
   color: var(--text, #e6edf3);
@@ -34859,3 +34859,49 @@ a.local-ci-job:hover { color: var(--accent); }
 }
 .session-ref-chip:hover { text-decoration: underline; }
 .session-ref-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* A represented ticket owns its session tree; unmatched sessions stay below. */
+.conv-workers-activity .fq-recent-state.is-working { color: var(--green); font-weight: 700; }
+.conv-workers-activity .fq-recent-state.is-needs-you { color: var(--orange); font-weight: 700; }
+.workers-ticket-entry { min-width: 0; border-bottom: 1px solid var(--border); }
+.conv-workers-activity .workers-ticket-entry .fq-recent-row { border-bottom: 0; }
+ .workers-ticket-heading { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.workers-ticket-heading .fq-recent-row { flex: 1 1 auto; min-width: 0; }
+.workers-ticket-toggle {
+  flex: 0 0 auto; padding: 3px 5px; font: inherit; font-size: 10px;
+  color: var(--accent); background: transparent; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 4px; white-space: nowrap;
+}
+.workers-ticket-toggle[aria-expanded="true"], .workers-ticket-toggle:hover { background: var(--surface-2); }
+.workers-ticket-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.workers-ticket-session-body { min-width: 0; }
+.workers-ticket-session-body .conv-subagent-cluster-body { display: block !important; }
+.workers-ticket-session-body [data-role="subagent-cluster-toggle"] { display: none !important; }
+.conv-workers-activity .fq-recent-rows:has(.workers-ticket-session-body:not([hidden])) { max-height: 60vh; }
+
+#convList.workers-view { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+#convList.workers-view > .conv-tab-bar { flex: 0 0 auto; }
+#convList.workers-view > .conv-archived-section {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden;
+}
+#convList.workers-view .conv-workers-activity,
+#convList.workers-view .conv-archived-tools,
+#convList.workers-view .conv-workers-uniform { flex: 0 0 auto; }
+#convList.workers-view .conv-archived-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+#convList.workers-view .conv-workers-activity .fq-recent-rows { max-height: min(330px, 52.5vh); }
+#convList.workers-view .conv-workers-activity .fq-recent-rows:has(.workers-ticket-session-body:not([hidden])) { max-height: 60vh; }
+
+#convList.workers-view .fq-recent-row.is-brief { grid-template-columns: minmax(0, 1fr) auto; }
+#convList.workers-view .workers-ticket-session-body[hidden] { display: none; }
+@container sidebar (max-width: 420px) {
+  .workers-ticket-entry.has-lanes .workers-ticket-heading { flex-wrap: wrap; }
+  .workers-ticket-entry.has-lanes .workers-ticket-heading .fq-recent-row { flex-basis: 100%; }
+  .workers-ticket-entry.has-lanes .workers-ticket-toggle { margin-bottom: 6px; }
+}
+
+.workers-ticket-update {
+  margin: -3px 0 6px; font-size: 10px; line-height: 1.35; color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.conv-workers-activity .fq-recent-row.is-brief .fq-recent-meta > .conv-working-age { display: inline-flex; }

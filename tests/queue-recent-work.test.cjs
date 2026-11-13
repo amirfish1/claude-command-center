@@ -80,3 +80,101 @@ test('list cache history and progress notes supply work times and close actor', 
   assert.equal(rows[1].worker, 'history-worker');
   assert.equal(rows[2].worker, 'finishing-worker');
 });
+
+test('ticket activity moves only complete matching trees and keeps other sessions', () => {
+  const start = app.indexOf('  function _workersPartitionTicketClusters(');
+  const end = app.indexOf('  // Compact history rows', start);
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(start, end), ctx);
+  const tree = (...refs) => ({rows: refs.map(ref => ({card: {ref}}))});
+  const matching = tree('TEST-1', 'TEST-1', '');
+  const absent = tree('TEST-2');
+  const mixed = tree('TEST-1', 'TEST-3');
+  const unknown = tree('');
+  const repeated = {...tree('TEST-1'), repeatKey: 'batch'};
+  const input = [matching, absent, mixed, unknown, repeated];
+  const result = ctx._workersPartitionTicketClusters(input, new Set(['TEST-1']), c => c.ref);
+  assert.deepEqual(Array.from(result.matched.keys()), ['TEST-1']);
+  assert.equal(result.matched.get('TEST-1')[0], matching);
+  assert.deepEqual(Array.from(result.remaining), [absent, mixed, unknown]);
+  assert.equal(result.matched.get('TEST-1')[1], repeated);
+  assert.equal(input.length, 5);
+  const agedOut = ctx._workersPartitionTicketClusters(input, new Set(), c => c.ref);
+  assert.deepEqual(Array.from(agedOut.remaining), input);
+});
+
+test('assigned finished tickets stay in activity beyond the recent-ten window', () => {
+  const start = app.indexOf('  function _uxqWithMachine(');
+  const end = app.indexOf('  // Compact history rows', start);
+  const items = Array.from({length: 14}, (_, i) => ({ref: `TEST-${i}`, status: 'closed', closed_at: new Date(1700000000000 + i * 1000).toISOString()}));
+  const ctx = {_uxqItemsCache: {items}, _uxqItemRef: item => item.ref};
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(start, end), ctx);
+  const refs = vm.runInContext("_workersAssignedTicketRefs = new Set(['TEST-0']); _workersActivityRows().map(r => r.item.ref)", ctx);
+  assert.equal(refs.length, 11);
+  assert.ok(refs.includes('TEST-0'));
+  assert.ok(!refs.includes('TEST-1'));
+});
+
+test('entering Workers bypasses the fresh-cache TTL and schedules an immediate repaint', async () => {
+  const start = app.indexOf('  function _wtWarmActivityForWorkersLane(');
+  const end = app.indexOf('  // ── picker card', start);
+  const calls = [];
+  const ctx = {_wtActivityWarmInFlight: false, _uxqItemsCache: {ts: Date.now()},
+    _fetchUxqItems: async (...args) => calls.push(['items', ...args]),
+    _fetchUxqHealth: async (...args) => calls.push(['health', ...args]),
+    _scheduleSidebarRender: opts => calls.push(['render', opts.lifecycle])};
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(start, end), ctx);
+  ctx._wtWarmActivityForWorkersLane();
+  assert.equal(calls.length, 0);
+  ctx._wtWarmActivityForWorkersLane(true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, [['items', false, true], ['health', false, true], ['render', true]]);
+});
+
+
+test('finished mixed or unassigned trees can be represented explicitly as sessions', () => {
+  const start = app.indexOf('  function _workersPartitionTicketClusters(');
+  const end = app.indexOf('  // Compact history rows', start);
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(start, end), ctx);
+  const tree = {activityRef: 'session:example', rows: [{card:{ref:'TEST-1'}}, {card:{ref:'TEST-2'}}]};
+  const result = ctx._workersPartitionTicketClusters([tree], new Set(['session:example']), c => c.ref);
+  assert.equal(result.matched.get('session:example')[0], tree);
+  assert.equal(result.remaining.length, 0);
+});
+
+test('placeholder updates are hidden without suppressing meaningful progress', () => {
+  const start = app.indexOf('  function _workersMeaningfulUpdate(');
+  const end = app.indexOf('  // Compact history rows', start);
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(start, end), ctx);
+  for (const text of ['Completion assessment pending.', 'Working...', 'Working…', ' working ', '']) {
+    assert.equal(ctx._workersMeaningfulUpdate(text), '');
+  }
+  assert.equal(ctx._workersMeaningfulUpdate('Working through the remaining tests.'), 'Working through the remaining tests.');
+});
+
+test('ticket expansion survives reload and tolerates invalid saved preferences', () => {
+  const start = app.indexOf('  const _workersTicketExpanded =');
+  const end = app.indexOf('  // Match exact ticket refs', start);
+  const store = new Map();
+  const reload = () => {
+    const ctx = {localStorage: {getItem: key => store.get(key), setItem: (key, value) => store.set(key, value)}};
+    vm.createContext(ctx);
+    vm.runInContext(app.slice(start, end), ctx);
+    return ctx;
+  };
+  let ctx = reload();
+  ctx._workersRememberTicketExpansion('TEST-1', true);
+  ctx = reload();
+  assert.equal(vm.runInContext("_workersTicketExpanded.has('TEST-1')", ctx), true);
+  ctx._workersRememberTicketExpansion('TEST-1', false);
+  assert.equal(vm.runInContext('_workersTicketExpanded.size', reload()), 0);
+  store.set('ccc-workers-ticket-expanded', '{invalid');
+  assert.equal(vm.runInContext('_workersTicketExpanded.size', reload()), 0);
+});
