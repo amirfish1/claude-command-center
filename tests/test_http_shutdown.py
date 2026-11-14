@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import site
 import socket
 import subprocess
 import sys
@@ -48,7 +49,9 @@ httpd = server.ThreadedHTTPServer(('127.0.0.1', 0), Handler)
 print(httpd.server_port, flush=True)
 server._serve_http(httpd)
 ''')
-    env = dict(os.environ, HOME=str(tmp_path), CCC_EPHEMERAL='1',
+    # Keep installed dependencies visible when the fixture isolates HOME.
+    env = dict(os.environ, PYTHONUSERBASE=site.getuserbase(),
+               HOME=str(tmp_path), CCC_EPHEMERAL='1',
                CCC_ONCALL_STATE_DIR=str(tmp_path / 'oncall'),
                CCC_SHIP_GRAPH_DB=str(tmp_path / 'ship.sqlite'),
                CCC_CONV_META_CACHE_FILE=str(tmp_path / 'meta.json'))
