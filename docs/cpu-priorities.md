@@ -13,7 +13,14 @@ not prevent startup. Restart the dashboard to apply a changed setting.
 
 The local speech queue already serves waiting foreground requests before
 background preparation, between synthesized pieces. A piece already running
-finishes first. Foreground work in the main dashboard process shares Python's
+finishes first. On hosts whose one-minute load reaches the CPU count,
+background preparation pauses between pieces to target 0.5 CPU cores on
+average. `CCC_TTS_BACKGROUND_CPU` changes that target (`0` disables it).
+Individual pauses are capped at 30 seconds to avoid streaming timeouts, so this
+is a best-effort average budget rather than a hard cap. Idle hosts prepare at
+full speed; foreground speech bypasses these pauses.
+
+Foreground work in the main dashboard process shares Python's
 GIL with background threads; process priority cannot remove that contention.
 
 Nice values are relative weights under CPU contention, not CPU usage limits.

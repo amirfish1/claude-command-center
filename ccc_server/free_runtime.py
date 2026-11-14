@@ -464,7 +464,7 @@ def _local_tts_health():
 # SERVER_REV). An older process (nice 10, no fg/bg priority; rev 2's 300-char
 # pieces ran at half real time; rev 3's close-delimited stream hid mid-clip
 # failures; rev 4 let bg pieces interleave with a fg stream's) is replaced.
-_LOCAL_TTS_REV = 6
+_LOCAL_TTS_REV = 7
 
 
 def _local_tts_current(health):

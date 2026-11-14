@@ -32,7 +32,7 @@ MAX_CHARS = 2000
 
 # Bumped when the process's runtime contract changes (priority, threads), so
 # CCC replaces an older process left running from before an upgrade.
-SERVER_REV = 6
+SERVER_REV = 7
 # Normal priority: at nice 10 a loaded machine starved the voice for tens of
 # seconds. Background work is kept polite by the fg-first lock instead.
 
@@ -88,6 +88,22 @@ class _PriorityLock:
     """
 
     FG_GRACE_S = 0.5
+    BG_MAX_PAUSE_S = 30.0  # keep streaming readers inside their 60s timeout
+
+    @staticmethod
+    def _background_budget():
+        import math
+        import os
+        try:
+            budget = float(os.environ.get("CCC_TTS_BACKGROUND_CPU", "0.5"))
+            if not math.isfinite(budget) or budget < 0:
+                budget = 0.5
+        except ValueError:
+            budget = 0.5
+        try:
+            return budget if os.getloadavg()[0] >= (os.cpu_count() or 1) else 0.0
+        except (AttributeError, OSError):
+            return 0.0
 
     def __init__(self):
         self._cond = threading.Condition()
@@ -95,6 +111,9 @@ class _PriorityLock:
         self._fg_waiting = 0
         self._fg_released = 0.0
         self._holder_fg = False
+        self._bg_ready_at = 0.0
+        self._started_wall = self._started_cpu = 0.0
+        self._budget = 0.0
 
     def acquire(self, fg):
         with self._cond:
@@ -107,18 +126,30 @@ class _PriorityLock:
                     self._fg_waiting -= 1
             else:
                 while True:
-                    idle = time.monotonic() - self._fg_released
-                    if not self._busy and not self._fg_waiting and idle >= self.FG_GRACE_S:
+                    now = time.monotonic()
+                    budget = self._background_budget()
+                    pause = max(self.FG_GRACE_S - (now - self._fg_released),
+                                self._bg_ready_at - now if budget else 0.0)
+                    if not self._busy and not self._fg_waiting and pause <= 0:
                         break
-                    self._cond.wait(None if self._busy or self._fg_waiting else self.FG_GRACE_S - idle)
+                    self._cond.wait(None if self._busy or self._fg_waiting else min(1.0, max(0.001, pause)))
             self._busy = True
             self._holder_fg = fg
+            self._budget = 0.0 if fg else self._background_budget()
+            self._started_wall = time.monotonic()
+            self._started_cpu = time.process_time()
 
     def release(self):
         with self._cond:
+            now = time.monotonic()
+            if not self._holder_fg and self._budget:
+                cpu = max(0.0, time.process_time() - self._started_cpu)
+                elapsed = max(0.0, now - self._started_wall)
+                pause = min(self.BG_MAX_PAUSE_S, max(0.0, cpu / self._budget - elapsed))
+                self._bg_ready_at = max(self._bg_ready_at, now + pause)
             self._busy = False
             if self._holder_fg:
-                self._fg_released = time.monotonic()
+                self._fg_released = now
             self._cond.notify_all()
 
 
@@ -224,7 +255,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._json(200, {"ok": True, "model": os.path.basename(model_path()), "stream": lameenc is not None,
                              "rev": SERVER_REV, "pid": os.getpid(), "nice": os.nice(0),
-                             "threads": int(os.environ.get("CCC_KOKORO_THREADS", "").strip() or "4")})
+                             "threads": int(os.environ.get("CCC_KOKORO_THREADS", "").strip() or "4"),
+                             "background_cpu_budget": _SYNTH_LOCK._background_budget(),
+                             "background_wait_s": round(max(0.0, _SYNTH_LOCK._bg_ready_at - time.monotonic()), 2)})
         else:
             self._json(404, {"ok": False})
 
