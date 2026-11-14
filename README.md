@@ -270,18 +270,11 @@ Use `./run.sh` in the foreground or `./run.sh --install-service` for a systemd u
 
 ### Your agent config
 
-CCC includes [question numbering and tagging guidance](docs/user-question-tags.md)
-for sessions it starts. It asks before adding that guidance, hooks or skills to
-your global agent config.
-You can skip them, review the diff, or remove them later in Settings.
-[What changes, and how to undo it](docs/agent-config-consent.md).
+CCC includes [question numbering and tagging guidance](docs/user-question-tags.md) for sessions it starts. It asks before adding that guidance, hooks or skills to your global agent config. You can skip them, review the diff, or remove them later in Settings. [What changes, and how to undo it](docs/agent-config-consent.md).
 
 ## Engine support
 
-All nine engines can start sessions from CCC. Follow-up and model controls
-vary; Kilo Code has no resume, and Cursor IDE sync is metadata-only.
-**GitHub Copilot CLI** and **VS Code Copilot Chat** are read-only,
-as are Devin cloud sessions. [Full engine support matrix](docs/engine-support.md).
+All nine engines can start sessions from CCC. Follow-up and model controls vary; Kilo Code has no resume, and Cursor IDE sync is metadata-only. **GitHub Copilot CLI** and **VS Code Copilot Chat** are read-only, as are Devin cloud sessions. [Full engine support matrix](docs/engine-support.md).
 
 ## Share your fleet
 
