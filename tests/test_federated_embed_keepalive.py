@@ -69,7 +69,47 @@ class TestEmbedMessageContract(unittest.TestCase):
         self.assertRegex(fn, re.escape("/^[A-Za-z0-9_.:-]{1,200}$/"))
         # Replies go to the sender's origin, never '*'.
         self.assertNotIn("'*'", fn)
-        self.assertEqual(APP_JS.count("postMessage({ type: 'ccc:embed-"), 2)
+        # Boot also emits embed-ready; count only this listener's replies.
+        self.assertEqual(fn.count("postMessage({ type: 'ccc:embed-"), 2)
+
+    def test_popout_messages_only_reply_to_trusted_parent(self):
+        functions = "\n".join(_function_source(APP_JS, name) for name in (
+            "embedHostOriginTrusted", "wireEmbedHostMessages"))
+        program = """
+            const replies = [], switches = [];
+            let listener;
+            const window = {
+                location: { origin: 'https://box.tail1a2b.ts.net', hostname: 'box.tail1a2b.ts.net' },
+                parent: { postMessage: (data, origin) => replies.push({ data, origin }) },
+                addEventListener: (type, handler) => {
+                    if (type === 'message') listener = handler;
+                },
+            };
+            const CONV_POPOUT_MODE = true;
+            const switchPopoutConversation = conv => switches.push(conv);
+        """ + functions + """
+            wireEmbedHostMessages();
+            const origin = 'https://mac.tail1a2b.ts.net';
+            const send = (data, source = window.parent, senderOrigin = origin) =>
+                listener({ data, source, origin: senderOrigin });
+            send({ type: 'ccc:embed-hello' }, {});
+            send({ type: 'ccc:embed-open', conv: 'untrusted' }, window.parent, 'https://example.com');
+            for (const data of [null, 'hello', {}, { type: 'ccc:embed-ready' },
+                ...['__new__', '', 'bad/id', 'x'.repeat(201), 42].map(conv => ({ type: 'ccc:embed-open', conv }))]) {
+                send(data);
+            }
+            send({ type: 'ccc:embed-hello' });
+            send({ type: 'ccc:embed-open', conv: ' session-1:agent-2 ' });
+            console.log(JSON.stringify({ replies, switches }));
+        """
+        out = subprocess.run(["node", "-e", program], capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(out.stdout), {
+            "replies": [
+                {"data": {"type": "ccc:embed-hello", "open": True}, "origin": "https://mac.tail1a2b.ts.net"},
+                {"data": {"type": "ccc:embed-opened", "conv": "session-1:agent-2"}, "origin": "https://mac.tail1a2b.ts.net"},
+            ],
+            "switches": ["session-1:agent-2"],
+        })
 
     def test_host_reuses_one_frame_per_machine(self):
         self.assertIn("frames[node.node_id]", SIDEBAR_JS)
