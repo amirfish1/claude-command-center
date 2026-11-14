@@ -11,6 +11,7 @@ function load(rows) {
     firstSentenceOf: (s, limit) => s.slice(0, limit),
     stripGhIssueProjectTag: s => s,
     _uxFixesWorkerDisplayTitle: (_c, s) => s,
+    _withTicketPrefix: (_c, s) => s,
     continuationParentId: c => c.continued_from_session_id || '',
     _continuationRowForSid: sid => rows.find(r => r.session_id === sid),
     isContinuationBoilerplateTitle: s => /^You are continuing a task/.test(s),

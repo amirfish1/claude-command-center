@@ -80515,7 +80515,8 @@
     try {
       const t = String(title || '');
       if (!c || !t || c.name_overridden || c.idea_ticket || t.startsWith('\u{1F9F5}')) return title;
-      const top = _uxFixesWorkerTicketsForRow(c, 1)[0];
+      const tickets = _uxFixesWorkerTicketsForRow(c);
+      const top = tickets.find(ticket => ticket.currentClaimed) || tickets[0];
       const m = top && String(top.ref || '').match(/^([A-Z][A-Z0-9_]*)-(\d+)$/);
       if (!m) return title;
       const tag = m[1] + '#' + m[2];
@@ -80524,25 +80525,25 @@
     } catch (e) { return title; }
   }
   function _uxFixesWorkerDisplayTitle(c, rawTitle) {
-    // Explicit user names and custom terminal names remain authoritative.
+    // Explicit names and continued interactive sessions keep their identity.
     if (!c || c.name_overridden || c.continued_from_session_id) return rawTitle;
-    const generated = String(rawTitle || '').match(/^🧵\s*([A-Z][A-Z0-9_ -]*)#\d+(?::\s*(.*))?$/u);
-    if (!generated) return rawTitle;
-    if (!c._worker_id && !c.is_watchtower_worker) {
-      // The Workers lane claims rows on broader evidence than this function
-      // does (a known worker session id, or a worker-shaped title), so a row
-      // can land on the Workers tab without qualifying for the stable
-      // "<QUEUE> worker · <id>" identity below. Those rows still print their
-      // ticket twice — "OPS#996:" in the title and an OPS-996 chip underneath.
-      // Drop the prefix and keep the prose, which is the half that says what
-      // the session is doing. Only when a chip is actually there to carry the
-      // ref; otherwise the title would be the only place the ticket appears.
-      const prose = String(generated[2] || '').trim();
-      if (prose && _uxFixesWorkerTicketsForRow(c).length) return prose;
-      return rawTitle;
+    const raw = String(rawTitle || '').trim();
+    const generated = raw.match(/^🧵\s*([A-Z][A-Z0-9_ -]*)#\d+(?::\s*(.*))?$/u);
+    const prose = raw.replace(/^(?:🧵\s*)?(?:[A-Z][A-Z0-9_-]*#\d+:?\s*)+/, '').trim();
+    const generic = !prose || _WK_GENERIC_TITLE_RE.test(prose);
+    if (!generated && !generic) return rawTitle;
+    const tickets = _uxFixesWorkerTicketsForRow(c);
+    // A later close/progress event on old work must not hide the live claim.
+    const current = tickets.find(ticket => ticket.currentClaimed) || tickets[0];
+    if (current) {
+      const description = uxFixesQueueMeta?.ticketsByRef?.get(current.ref)
+        || workerTicketIssueTitle(current);
+      if (description) return description;
     }
-    const identity = String(c._worker_id || c.session_id || c.id || '').split('-').pop().slice(0, 8);
-    return '🧵 ' + generated[1].trim() + ' worker' + (identity ? ' · ' + identity : '');
+    // Already-enriched server rows remain useful before queue metadata loads.
+    if (generated && prose && !generic) return rawTitle;
+    const queue = workerQueueOf(c, current && current.ref);
+    return (queue ? queue + ' ' : '') + 'worker';
   }
 
   // Second line of an idea-ticket row: its ticket chip, plus the recorded-

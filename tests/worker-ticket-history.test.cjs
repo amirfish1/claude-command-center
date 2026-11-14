@@ -67,31 +67,41 @@ test('historical claim/progress/close actors retain credit after reassignment an
   assert.equal(ctx._uxFixesHandledTicketsForRow(row).length, 0);
 });
 
-test('worker names stay stable across tickets and preserve explicit names', () => {
+test('worker names follow ticket descriptions and preserve explicit names', () => {
   const ctx = harness();
-  assert.equal(typeof ctx._uxFixesWorkerDisplayTitle, 'function');
-  const stable = ctx._uxFixesWorkerDisplayTitle(row, row.display_name);
-  assert.equal(stable, ctx._uxFixesWorkerDisplayTitle(row, '🧵 EXAMPLE#99: New task'));
-  assert.match(stable, /worker/);
+  ctx._setUxFixesQueueMeta([ticket(1)]);
+  assert.equal(ctx._uxFixesWorkerDisplayTitle(row, row.display_name), 'Task 1');
+  assert.equal(ctx._uxFixesWorkerDisplayTitle(row, 'Drain the EXAMPLE WatchTower queue and keep it empty.'), 'Task 1');
   assert.equal(ctx._uxFixesWorkerDisplayTitle({...row, name_overridden: true}, 'My worker'), 'My worker');
   assert.equal(ctx._uxFixesWorkerDisplayTitle(row, 'Custom terminal name'), 'Custom terminal name');
+  assert.equal(ctx._uxFixesWorkerDisplayTitle({...row, continued_from_session_id:'origin'}, 'Continued topic'), 'Continued topic');
 });
 
-test('a row without worker identity drops the ticket prefix its chips already carry', () => {
+test('current claim wins over a later progress event on old work and updates without a new session', () => {
+  const ctx = harness();
+  ctx._setUxFixesQueueMeta([ticket(1, {closed_at:'2099-01-01T00:00:00Z'}),
+    ticket(2, {status:'in_progress', claimed_at:new Date().toISOString(), closed_by:'',closed_at:''})]);
+  assert.equal(ctx._uxFixesWorkerDisplayTitle(row, 'EXAMPLE#1 Drain the EXAMPLE WatchTower queue and keep it empty'), 'Task 2');
+  assert.equal(ctx._withTicketPrefix(row, ctx._uxFixesWorkerDisplayTitle(row, row.display_name)), 'EXAMPLE#2 Task 2');
+  ctx._setUxFixesQueueMeta([ticket(3, {title:'',note:'Make replies survive a restart',status:'in_progress',claimed_at:new Date().toISOString()})]);
+  assert.equal(ctx._uxFixesWorkerDisplayTitle(row, row.display_name), 'Make replies survive a restart');
+});
+
+test('ticket metadata enriches generated names without depending on worker identity', () => {
   const ctx = harness();
   ctx._setUxFixesQueueMeta([ticket(1)]);
   // The Workers lane claims rows on broader evidence than the identity rule,
   // so these reach the tab with "EXAMPLE#1:" printed in the title AND as an
   // EXAMPLE-1 chip below. Keep the prose, drop the duplicated ref.
   const chipped = { session_id: 'session-one', display_name: '🧵 EXAMPLE#1: Old ticket' };
-  assert.equal(ctx._uxFixesWorkerDisplayTitle(chipped, chipped.display_name), 'Old ticket');
+  assert.equal(ctx._uxFixesWorkerDisplayTitle(chipped, chipped.display_name), 'Task 1');
 
   // With no chip to carry it, the title is the only place the ref appears.
   const noChips = { session_id: 'session-nine', display_name: '🧵 EXAMPLE#1: Old ticket' };
   assert.equal(ctx._uxFixesWorkerDisplayTitle(noChips, noChips.display_name), '🧵 EXAMPLE#1: Old ticket');
 
-  // A real worker still gets the stable identity name, prose and all.
-  assert.match(ctx._uxFixesWorkerDisplayTitle(row, row.display_name), /worker/);
+  // Registered workers receive the same task description.
+  assert.equal(ctx._uxFixesWorkerDisplayTitle(row, row.display_name), 'Task 1');
 });
 
 test('changes to attributed ticket history invalidate the sidebar content signature', () => {
