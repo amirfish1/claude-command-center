@@ -46646,6 +46646,9 @@
       // twice and none is filtered.
       let _wtPending = [];
       if (_allTabView === 'workers') {
+        const _visibleWorkingClaims = new Set(_workersActivityRows()
+          .filter(row => row.workerState.label === 'Working')
+          .flatMap(row => [row.item.claimed_by, row.item.claimed_session_id]).filter(Boolean));
         const _knownSids = new Set();
         _allTabConvs.forEach(c => {
           const sid = String((c && (c.id || c.session_id)) || '').trim();
@@ -46656,6 +46659,7 @@
           const sid = String(w.session_id || '').trim();
           const wid = String(w.worker_id || '').trim();
           const mapSid = String((((_uxqHealthCache || {}).worker_session_map) || {})[wid] || '').trim();
+          if (_visibleWorkingClaims.has(wid) || _visibleWorkingClaims.has(sid)) return false;
           const candidates = [sid, mapSid];
           // WT stores a devin worker's session_id as the raw CLI slug while
           // the conversation row id is devincli-<slug> (CCC-1176/CCC-1180) —
@@ -46689,8 +46693,8 @@
           + ' data-wt-queue="' + escapeAttr(queue) + '"'
           + (_pendSid ? ' data-wt-sid="' + escapeAttr(_pendSid) + '"' : '')
           + ' title="' + escapeAttr((wid || 'This worker') + ' is registered on the '
-              + (queue || 'WatchTower') + ' queue but no transcript exists yet'
-              + (_isFresh ? ' (it is still starting up).' : '; its engine session never opened or is not visible here.')
+              + (queue || 'WatchTower') + ' queue but its session details are not loaded'
+              + (_isFresh ? ' (it may still be starting up).' : ' in this view.')
               + (_pendSid ? ' Click to try opening its session.' : '')) + '">'
           // Same nesting as a real row -- .conv-title-row outside .conv-main-row.
           // The table flattens both with display:contents so the cells below
@@ -46699,7 +46703,7 @@
           + '<div class="conv-title-row"><div class="conv-main-row">'
           +   icon
           +   '<span class="conv-title">' + escapeHtml((queue || 'WatchTower') + ' worker')
-          +     ' <span class="conv-wt-pending-note">' + (_isFresh ? 'starting\u2026' : 'no session yet') + '</span></span>'
+          +     ' <span class="conv-wt-pending-note">' + (_isFresh ? 'starting\u2026' : 'session details loading') + '</span></span>'
           +   '<div class="conv-meta-col"><span class="conv-wt-pending-id">'
           +     escapeHtml(wid || 'worker') + '</span></div>'
           +   '<span class="conv-row-end"><span class="conv-rel" data-role="rel" title="Started">'
@@ -46725,7 +46729,8 @@
           : '<span class="conv-workers-live is-idle"><span class="conv-workers-live-dot"></span>none working now</span>';
         const bits = [];
         if (counts['needs-you']) bits.push('<span class="conv-workers-needs"><b>' + counts['needs-you'] + '</b> need' + (counts['needs-you'] === 1 ? 's' : '') + ' you</span>');
-        if (_wtPending.length) bits.push('<span class="conv-workers-starting"><b>' + _wtPending.length + '</b> starting</span>');
+        if (_wtPending.length) bits.push('<span class="conv-workers-starting"><b>' + _wtPending.length + '</b> '
+          + (_wtPending.every(w => Date.now() - Date.parse(w.started_at || '') < 5 * 60 * 1000) ? 'starting' : 'loading session details') + '</span>');
         if (counts.idle) bits.push('<span class="conv-workers-idle"><b>' + counts.idle + '</b> standing by</span>');
         if (counts.done) bits.push('<span class="conv-workers-done"><b>' + counts.done + '</b> finished</span>');
         const parts = [];
@@ -46744,7 +46749,10 @@
           + '</div>';
         // Starting workers get their own section head so they read as a
         // state, not as stray rows above the list.
-        if (_wtPendingHtml) _wtPendingHtml = workerSectionHeaderHtml('starting', _wtPending.length) + _wtPendingHtml;
+        if (_wtPendingHtml) {
+          const fresh = _wtPending.every(w => Date.now() - Date.parse(w.started_at || '') < 5 * 60 * 1000);
+          _wtPendingHtml = workerSectionHeaderHtml('starting', _wtPending.length, fresh ? '' : 'Session details loading') + _wtPendingHtml;
+        }
       }
       // CCC-1061: the Workers lane owns TIME. WORKING NOW (who is live right
       // now) and the recent-work list (which tickets moved, with their body
@@ -56292,11 +56300,24 @@
     const recency = card => Math.max(Number(card.last_event_ts) || 0, Number(card.modified) || 0);
     return cards.sort((a, b) => rank(a) - rank(b) || recency(b) - recency(a))[0];
   }
+  function _workersActiveClaim(item) {
+    if (item.status !== 'in_progress' || item.needs_input || item.closed_at) return null;
+    const health = (typeof _uxqHealthCache === 'undefined' ? null : _uxqHealthCache) || {};
+    return (health.wt_workers || []).find(w => {
+      if (w.alive !== true || w.released_at || w.idle_seconds == null) return false;
+      const idle = Number(w.idle_seconds);
+      if (!Number.isFinite(idle) || idle < 0 || idle >= 60) return false;
+      if (item.project && String(w.queue).toUpperCase() !== String(item.project).toUpperCase()) return false;
+      return !!((item.claimed_by && item.claimed_by === w.worker_id)
+        || (item.claimed_session_id && item.claimed_session_id === w.session_id));
+    }) || null;
+  }
   function _workersTicketState(item) {
     if (item.status === 'closed' || item.closed_at) return {label:'Resolved', rank:4, css:'is-resolved'};
     const attention = _uxqTicketAttention(item);
     if (attention && attention.blocked) return {label:attention.owner ? 'Needs you' : attention.key === 'worker' ? 'Waiting for worker' : attention.label,
       rank:attention.owner ? 1 : 3, css:attention.owner ? 'is-needs-you' : ''};
+    if (_workersActiveClaim(item)) return {label:'Working', rank:0, css:'is-working'};
     const sessions = _workersTicketSessions.get(_uxqItemRef(item));
     const card = _workersLatestTicketCard(sessions);
     const outcome = card && rowOutcomeView(card);
@@ -56310,6 +56331,7 @@
     const QA = window.QueueAttention;
     const reason = QA && QA.blockReason(item);
     if (reason) return reason;
+    if (!card && _workersActiveClaim(item)) return {text:'Working on this ticket. Session details are loading.', category:''};
     const outcome = card && rowOutcomeView(card);
     // Terminal worker sign-offs describe its drained queue, not this ticket.
     return outcome && outcome.kind === 'working'
@@ -56432,7 +56454,9 @@
       const state = ticketState.label;
       const latestCard = _workersLatestTicketCard(sessions);
       const updateHtml = _workersTicketContextHtml(item, latestCard, row.summary);
-      const timerHtml = working && latestCard ? wipAgeChipHtml(latestCard) : '';
+      const claimSince = Date.parse(item.claimed_at || '') / 1000;
+      const timerHtml = working ? wipAgeChipHtml(Number.isFinite(claimSince)
+        ? {working_since:claimSince} : latestCard) : '';
       const absolute = new Date(row.at).toLocaleString();
       const dates = [item.claimed_at ? 'Claimed: ' + item.claimed_at : '', item.closed_at ? 'Closed: ' + item.closed_at : ''].filter(Boolean).join('\n');
       // Full evidence remains in ticket details; the tooltip previews the summary.
@@ -56458,7 +56482,8 @@
         + '<span class="fq-recent-abs"> · ' + escapeHtml(absolute) + '</span></time>'
         + (row.summary ? '<span class="fq-recent-summary">' + escapeHtml(row.summary) + '</span>' : '')
         + '</div>';
-      if (!sessions) return '<div class="workers-ticket-entry">' + ticketButton + updateHtml + '</div>';
+      if (!sessions) return '<div class="workers-ticket-entry" data-workers-ticket="' + escapeAttr(ref) + '">'
+        + '<div class="workers-ticket-heading">' + ticketButton + '</div>' + updateHtml + '</div>';
       const label = sessions.count + (sessions.count === 1 ? ' session' : ' sessions')
         + (sessions.lanes ? ' · ' + sessions.lanes + (sessions.lanes === 1 ? ' lane' : ' lanes') : '');
       return '<div class="workers-ticket-entry' + (sessions.lanes ? ' has-lanes' : '') + '" data-workers-ticket="' + escapeAttr(ref) + '">'
@@ -80469,10 +80494,10 @@
       + ' title="' + escapeAttr('Ticket ' + ref + ' · click to open') + '" aria-label="' + escapeAttr('Open ticket ' + ref) + '">'
       + escapeHtml(label) + '</button>';
   }
-  function workerSectionHeaderHtml(bucket, count) {
+  function workerSectionHeaderHtml(bucket, count, label) {
     return '<div class="conv-worker-section wk-' + escapeAttr(bucket) + '" data-role="worker-section" data-bucket="' + escapeAttr(bucket) + '">'
       + '<span class="wk-sec-dot" aria-hidden="true"></span>'
-      + '<span class="wk-sec-label">' + escapeHtml(WORKER_BUCKET_LABELS[bucket] || bucket) + '</span>'
+      + '<span class="wk-sec-label">' + escapeHtml(label || WORKER_BUCKET_LABELS[bucket] || bucket) + '</span>'
       + '<span class="wk-sec-count">' + Number(count || 0) + '</span>'
       + '<span class="wk-sec-line" aria-hidden="true"></span>'
       + '</div>';

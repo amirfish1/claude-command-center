@@ -46,6 +46,21 @@ test('literal choices preserve question tag and unsafe or stale session choices 
   assert.equal(ctx._workersTicketChoices(free,card).length,1);
 });
 
+test('live claims remain visible while session details load, without inventing activity', () => {
+  const worker = {worker_id:'worker-1',session_id:'session-1',queue:'TEST',alive:true,idle_seconds:2};
+  const ctx = setup({_uxqHealthCache:{wt_workers:[worker]}});
+  const item = {ref:'TEST-2',project:'TEST',status:'in_progress',claimed_by:'worker-1'};
+  assert.equal(ctx._workersTicketState(item).label, 'Working');
+  assert.match(ctx._workersTicketContext(item, null).text, /Session details are loading/);
+  for (const patch of [{alive:false},{released_at:'2026-01-01'},{idle_seconds:61},{idle_seconds:null},{queue:'OTHER'},{worker_id:'another-worker'}]) {
+    ctx._uxqHealthCache.wt_workers = [{...worker,...patch}];
+    assert.equal(ctx._workersTicketState(item).label, 'Claimed', JSON.stringify(patch));
+  }
+  ctx._uxqHealthCache.wt_workers = [worker];
+  assert.equal(ctx._workersTicketState({...block,claimed_by:'worker-1'}).label, 'Needs you');
+  assert.equal(ctx._workersTicketState({...item,status:'closed'}).label, 'Resolved');
+});
+
 
 test('approval questions get scoped binary answers; ambiguous and offline questions do not', () => {
   const ctx = setup();
