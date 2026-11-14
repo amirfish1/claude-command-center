@@ -1,0 +1,1 @@
+- On-call home reuses one Vault scan per response, avoiding repeated decryption for every alert and reply choice while refreshing redaction secrets on every request.

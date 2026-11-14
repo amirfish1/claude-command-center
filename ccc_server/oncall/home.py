@@ -71,6 +71,9 @@ def summary(eng):
                if (a["needs_reply"] or a["kind"] == "stuck" or (a.get("meta") or {}).get("at_keyboard"))
                and not (a["kind"] == "fixed" and not (a.get("meta") or {}).get("notify"))]
     needs = []
+    # Vault reads decrypt the file on Linux. Share a snapshot within this
+    # response so each alert/choice does not repeat the entire Vault scan.
+    mask = secret_filter.masker() if waiting else None
     for alert in sorted(waiting, key=lambda a: a["created_at"]):   # oldest first: answer in the order asked
         session_only = alert['kind'] == 'permission' or bool((alert.get('meta') or {}).get('at_keyboard'))
         home_alert = alert
@@ -80,10 +83,10 @@ def summary(eng):
         _head, message, _options = alerts.render(home_alert)
         reply_help = ('Open this session in CCC to read the prompt and answer there.' if session_only
                       else message.rsplit('\n\n', 1)[-1])
-        headline, detail, message, reply_help, _hit = secret_filter.mask(headline, detail, message, reply_help)
+        headline, detail, message, reply_help, _hit = mask(headline, detail, message, reply_help)
         safe_choices = []
         for option in ([] if session_only else _choices(alert)):
-            name, reply, hit = secret_filter.mask(option['label'], option['reply'])
+            name, reply, hit = mask(option['label'], option['reply'])
             if not hit:
                 safe_choices.append({'label': name, 'reply': reply})
         needs.append({

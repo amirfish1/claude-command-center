@@ -120,6 +120,41 @@ def test_a_fixed_notice_with_nothing_to_decide_is_not_listed_as_needing_you(eng)
         [{"label": "Tell them", "reply": "yes"}, {"label": "Skip", "reply": "no"}]]
 
 
+def test_home_reads_each_secret_once_and_refreshes_it_for_the_next_response(eng, monkeypatch):
+    from ccc_server import vault
+
+    reads = []
+    current = ["synthetic-private-first"]
+    monkeypatch.setattr(vault, "vault_list_entries", lambda: [{"name": "fixture"}])
+
+    def read(name):
+        reads.append(name)
+        return current[0]
+
+    monkeypatch.setattr(vault, "vault_get_value", read)
+    for i in range(3):
+        eng.store.alert_upsert(str(i), kind="plain_question", title=current[0],
+                               body=current[0], session_id="s1",
+                               meta={"choices": [["Safe", "continue"], ["Private", current[0]]]},
+                               now=NOW)
+    response = _get(eng)
+    assert reads == ["fixture"]
+    assert current[0] not in str(response)
+    assert all(row["choices"] == [{"label": "Safe", "reply": "continue"}]
+               for row in response["needs_you"])
+
+    current[0] = "synthetic-private-rotated"
+    eng.store.alert_upsert("rotated", kind="question", title=current[0], body=current[0], now=NOW)
+    response = _get(eng)
+    assert reads == ["fixture", "fixture"]
+    assert current[0] not in str(response)
+
+    current[0] = None
+    code, response = api.handle("GET", "/api/oncall/home", eng=eng)
+    assert code == 400
+    assert "Cannot check outgoing content" in response["error"]
+
+
 def test_an_answer_reaches_the_session_and_closes_the_alert_once(eng):
     alert, _ = eng.store.alert_upsert("q1", kind="plain_question", title="Export fix", session_id="s1",
                                       body="Remove it, or keep it?", now=NOW)
