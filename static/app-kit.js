@@ -110,7 +110,48 @@
   // agent: 'unknown' until this browser's remembered agent or the server
   // says whether the app has one; then 'yes' or 'none'.
   var AGENT_KEY = 'ccc-app-agent:' + APP;
-  var ready = { content: null, cached: false, agentAt: null, agent: 'unknown', sent: false, hidden: document.hidden };
+  var ready = { content: null, cached: false, agentAt: null, agentStart: null, discoveryAt: null,
+    remembered: false, agent: 'unknown', sent: false, hidden: document.hidden };
+  var loadId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  // Keep timing attribution with the readiness sample. Never include URLs,
+  // session IDs or response bodies; the embedded pane has its own time origin.
+  function timingSnapshot(target, sessionId) {
+    try {
+      var perf = target.performance;
+      var nav = perf.getEntriesByType('navigation')[0];
+      var out = { navigation: null, resources: [] };
+      if (Number.isFinite(perf.timeOrigin) && Number.isFinite(window.performance.timeOrigin)) {
+        out.origin_offset_ms = Math.round(perf.timeOrigin - window.performance.timeOrigin);
+      }
+      function timing(entry) {
+        var result = {};
+        ['startTime', 'duration', 'requestStart', 'responseStart', 'responseEnd',
+          'domInteractive', 'domContentLoadedEventEnd', 'transferSize', 'encodedBodySize'].forEach(function (key) {
+          if (typeof entry[key] === 'number' && Number.isFinite(entry[key])) result[key] = Math.round(entry[key]);
+        });
+        (entry.serverTiming || []).forEach(function (item) {
+          if (['app', 'cpu', 'req_wait'].indexOf(item.name) !== -1 && Number.isFinite(item.duration)) {
+            if (!result.server) result.server = {};
+            result.server[item.name] = Math.round(item.duration);
+          }
+        });
+        return result;
+      }
+      if (nav) out.navigation = timing(nav);
+      perf.getEntriesByType('resource').forEach(function (entry) {
+        var url = new URL(entry.name, location.href);
+        if (url.origin !== location.origin) return;
+        var kind = url.pathname === '/static/app.js' ? 'dashboard_script'
+          : url.pathname === '/static/app-kit.js' ? 'app_kit'
+          : url.pathname === '/api/apps/routines' ? 'routines'
+          : sessionId && url.pathname === '/api/conversations/' + encodeURIComponent(sessionId) ? 'conversation' : '';
+        if (!kind) return;
+        out.resources.push(Object.assign({ kind: kind }, timing(entry)));
+      });
+      out.resources = out.resources.slice(0, 8);
+      return out;
+    } catch (_) { return null; }
+  }
   if (document.hidden) ready.hidden = true;
   document.addEventListener('visibilitychange', function () { if (document.hidden) ready.hidden = true; });
   // The dashboard loads the app someone used last in the background and
@@ -130,7 +171,12 @@
     if (ready.agent === 'yes' && ready.agentAt == null) return;
     ready.sent = true;
     var out = { app: APP, ms: Math.round(Math.max(ready.content, ready.agentAt || 0)), content_ms: Math.round(ready.content),
-      agent_ms: ready.agentAt == null ? null : Math.round(ready.agentAt), cached: ready.cached, framed: window.parent !== window };
+      agent_ms: ready.agentAt == null ? null : Math.round(ready.agentAt), cached: ready.cached, framed: window.parent !== window,
+      load_id: loadId, page_timing: timingSnapshot(window, ''),
+      agent_start_ms: ready.agentStart == null ? null : Math.round(ready.agentStart),
+      agent_discovery_ms: ready.discoveryAt == null ? null : Math.round(ready.discoveryAt),
+      agent_remembered: ready.remembered,
+      agent_timing: ready.agentAt == null ? null : timingSnapshot(frameFor[agentId] && frameFor[agentId].contentWindow, agentId) };
     window.cccAppReady = out;
     window.dispatchEvent(new CustomEvent('ccc:app-fully-ready', { detail: out }));
     if (window.parent !== window) {
@@ -227,6 +273,7 @@
     var f = frameFor[id];
     if (!f) {
       f = frameFor[id] = $('iframe');
+      if (id === agentId && ready.agentAt == null) ready.agentStart = performance.now();
       f.title = 'Agent session';
       // embed=app: the dashboard page boots lean there, with no chrome of its
       // own and no reads for panels this pane never shows.
@@ -378,6 +425,7 @@
   function refresh() {
     return api('/api/apps/routines?app=' + encodeURIComponent(APP)).then(function (r) {
       if (!r.ok) return;
+      if (ready.discoveryAt == null) ready.discoveryAt = performance.now();
       state = r; draw(); drawTips(); noteStamp(r.stamp);
       var id = (r.agent && r.agent.session_id) || '';
       if (shell && id !== agentId) {
@@ -488,7 +536,7 @@
       // server has answered; refresh() corrects it if the app's agent changed.
       var known = '';
       try { known = localStorage.getItem(AGENT_KEY) || ''; } catch (_) {}
-      if (/^[A-Za-z0-9_.:-]{1,200}$/.test(known)) { agentId = known; ready.agent = 'yes'; showSession(known, 'Agent'); }
+      if (/^[A-Za-z0-9_.:-]{1,200}$/.test(known)) { agentId = known; ready.remembered = true; ready.agent = 'yes'; showSession(known, 'Agent'); }
     } else { ready.agent = 'none'; }
     buildRoutines(content);
     refresh();
