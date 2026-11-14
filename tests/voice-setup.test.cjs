@@ -38,25 +38,25 @@ ${car}
 ${tts}
 ${wiring}
 window.__open=part=>window.cccVoiceSetup.open(part);
-window.cccVoiceSetup.mount({navigate:()=>{window.__closed=false;document.querySelector('#settingsSection-voice>details').open=true;},load:loadVoiceConfig,loadOperator:fetchCarModeStatus,refreshVoices:refreshTtsVoiceOptions});
+window.cccVoiceSetup.mount({navigate:()=>{window.__closed=false;const disclosure=document.querySelector('#settingsSection-voice>details');if(disclosure)disclosure.open=true;},load:loadVoiceConfig,loadOperator:fetchCarModeStatus,refreshVoices:refreshTtsVoiceOptions});
 window.__refreshTts=refreshTtsVoiceOptions;
 </script><script src="/static/local-speech.js"></script></body></html>`;
 let child,browser,url,original;const file=path.join(scratch,'voice','voice.json');
 test.before(async()=>{fs.writeFileSync(path.join(scratch,'fixture.html'),fixture);child=spawn('python3',['-u','tests/fixtures/voice_setup_server.py',scratch],{cwd:root,env:{...process.env,PYTHONPATH:root,CCC_EPHEMERAL:'1'}});let stderr='';child.stderr.on('data',d=>stderr+=d);const lines=readline.createInterface({input:child.stdout});url=(await Promise.race([once(lines,'line').then(([line])=>JSON.parse(line)),once(child,'exit').then(()=>{throw new Error(stderr);})])).url;original=fs.readFileSync(file,'utf8');browser=await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});});
 test.after(async()=>{await browser?.close();if(child){child.kill();await once(child,'exit');}console.log('Voice setup screenshots:',scratch);});
-async function open(t,width=1440,fragment=''){
+async function open(t,width=1440,fragment='',part='conversation'){
  fs.writeFileSync(file,original);for(const flag of ['fail-write','fail-read','fail-catalog'])fs.rmSync(path.join(scratch,flag),{force:true});
  const context=await browser.createBrowserContext(),page=await context.newPage(),errors=[],posts=[];page.setDefaultTimeout(7000);await page.setViewport({width,height:1000});page.on('pageerror',e=>errors.push(e.message));await page.setRequestInterception(true);page.on('request',r=>{if(r.method()==='POST')posts.push({url:r.url(),body:r.postData()?JSON.parse(r.postData()):null});return r.url().startsWith(url)?r.continue():r.abort();});
  t.after(async()=>{assert.deepEqual(await page.evaluate(()=>window.__forbidden),[]);await context.close();assert.deepEqual(errors,[]);assert(posts.every(p=>p.url===url+'/api/voice/config'));});
- await page.goto(url+'/'+fragment,{waitUntil:'load'});await page.evaluate(()=>window.__open('listening'));await page.waitForFunction(()=>document.querySelector('#voiceSetupCallStatus')?.textContent.includes('Saved call defaults loaded'));return{page,posts};
+ await page.goto(url+'/'+fragment,{waitUntil:'load'});await page.evaluate(()=>window.cccVoiceSetup.enter());await page.waitForFunction(()=>document.querySelector('#voiceSetupCallStatus')?.textContent.includes('Saved call defaults loaded'));if(part){await page.evaluate(part=>window.__open(part),part);await page.waitForFunction(part=>document.activeElement.id==='voiceSetup-'+part,{},part);}return{page,posts};
 }
 const read=()=>JSON.parse(fs.readFileSync(file,'utf8'));
 for(const width of [1440,390])test('one native workflow with truthful input/output scopes and no writes at '+width,async t=>{
- const{page,posts}=await open(t,width);assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(posts,[]);
+ const{page,posts}=await open(t,width,'',null);assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(posts,[]);
  for(const id of ['voiceSelect','settingsTtsVoiceDefault','settingsVoiceCallBtnToggle','localSpeechInstall','carModeAnthropicKey'])assert.equal(await page.$$eval('#'+id,n=>n.length),1);
  assert.equal(await page.$eval('#voiceModal',n=>n.hidden),true);assert.equal(await page.$eval('#carModeModal',n=>n.hidden),true);assert.equal(await page.$eval('#settingsSoundsToggle',n=>n.closest('.settings-section').id),'settingsSection-notifications');assert.equal(await page.$eval('#voiceSetupLegacy #settingsVoiceMobileToggle',n=>!!n),true);
- assert.match(await page.$eval('#voiceSetupListeningStatus',n=>n.textContent),/permission.*not been checked/);assert.match(await page.$eval('#voiceSetup-reading',n=>n.textContent),/does not open the microphone/);assert.match(await page.$eval('#voiceSetup-offline',n=>n.textContent),/does not establish offline dictation/);
- await page.$eval('#voiceSetup',n=>n.scrollIntoView({block:'start'}));await page.screenshot({path:path.join(scratch,'setup-'+width+'.png'),fullPage:true});const bounds=await page.$eval('#voiceSetup',n=>({scroll:n.scrollWidth,width:n.clientWidth}));assert(bounds.scroll<=bounds.width+1);
+ assert.match(await page.$eval('#voiceSetupListeningStatus',n=>n.textContent),/permission.*not been checked/);assert.match(await page.$eval('#voiceSetup-reading',n=>n.textContent),/speaker button/);assert.match(await page.$eval('#voiceSetup-offline',n=>n.textContent),/Does not enable offline dictation/);
+ assert.equal(await page.$$eval('#voiceSetup details:not([open])',n=>n.length),4);await page.$eval('#voiceSetup',n=>n.scrollIntoView({block:'start'}));await page.screenshot({path:path.join(scratch,'setup-'+width+'.png'),fullPage:true});const bounds=await page.$eval('#voiceSetup',n=>({scroll:n.scrollWidth,width:n.clientWidth}));assert(bounds.scroll<=bounds.width+1);
 });
 test('saved unavailable voice and profile remain selected; no-op Save never writes or changes visibility',async t=>{
  const{page,posts}=await open(t);assert.equal(await page.$eval('#voiceSelect',n=>n.value),'coral');assert.equal(await page.$eval('#voiceProfileSelect',n=>n.value),'Missing profile');assert.match(await page.$eval('#voiceProfileSelect',n=>n.selectedOptions[0].textContent),/key unavailable/);const before=await page.evaluate(()=>({...localStorage}));await page.click('#voiceModalSaveBtn');await page.waitForFunction(()=>document.querySelector('#voiceSetupCallStatus').textContent.includes('No call settings changed'));assert.deepEqual(posts,[]);assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(await page.evaluate(()=>({...localStorage})),before);
@@ -79,7 +79,7 @@ test('legacy setup buttons and hash links redirect into actual sections with key
  await page.focus('#voiceSettingsBtn');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-conversation');
 });
 test('offline refresh is read-only and never claims local output makes calls offline',async t=>{
- const{page,posts}=await open(t,390);fs.writeFileSync(path.join(scratch,'offline.json'),JSON.stringify({state:'ready',reason:'',progress:''}));await page.click('#voiceSetupOfflineRefresh');await page.waitForFunction(()=>document.querySelector('#localSpeechStatus').textContent.includes('Ready'));assert.equal(await page.$eval('#localSpeechInstall',n=>n.disabled),true);assert.match(await page.$eval('#voiceSetup-offline',n=>n.textContent),/does not establish offline dictation/);assert.deepEqual(posts,[]);fs.writeFileSync(path.join(scratch,'offline.json'),JSON.stringify({state:'not_installed',reason:'',progress:''}));
+ const{page,posts}=await open(t,390);fs.writeFileSync(path.join(scratch,'offline.json'),JSON.stringify({state:'ready',reason:'',progress:''}));await page.evaluate(()=>window.__open('offline'));await page.click('#voiceSetupOfflineRefresh');await page.waitForFunction(()=>document.querySelector('#localSpeechStatus').textContent.includes('Ready'));assert.equal(await page.$eval('#localSpeechInstall',n=>n.disabled),true);assert.match(await page.$eval('#voiceSetup-offline',n=>n.textContent),/Does not enable offline dictation/);assert.deepEqual(posts,[]);fs.writeFileSync(path.join(scratch,'offline.json'),JSON.stringify({state:'not_installed',reason:'',progress:''}));
 });
 test('load failure disables Save and retry restores actual saved values',async t=>{
  const{page}=await open(t);fs.writeFileSync(path.join(scratch,'fail-read'),'1');await page.click('#voiceSetupReload');await page.waitForFunction(()=>document.querySelector('#voiceSetupCallStatus').textContent.includes('unavailable'));assert.equal(await page.$eval('#voiceModalSaveBtn',n=>n.disabled),true);assert.equal(fs.readFileSync(file,'utf8'),original);fs.rmSync(path.join(scratch,'fail-read'));await page.click('#voiceSetupReload');await page.waitForFunction(()=>document.querySelector('#voiceSetupCallStatus').textContent.includes('Saved call defaults loaded'));assert.equal(await page.$eval('#voiceSelect',n=>n.value),'coral');
@@ -181,7 +181,7 @@ test('closing Settings skips a hidden desktop trigger and restores the visible p
   const settings=document.getElementById('settingsModal');settings.hidden=false;
   const desktop=document.createElement('button');desktop.style.display='none';document.body.append(desktop);
   const opener=document.createElement('button');opener.textContent='Voice setup';opener.style.cssText='position:fixed;top:20px;left:20px;z-index:99999';document.body.append(opener);
-  const run=new Function('$settingsModal','$settingsBtn','_settingsModalPrevFocus','finishEnginesFirstRun',close+';closeSettingsModal();');
+  const run=new Function('$settingsModal','$settingsBtn','_settingsModalPrevFocus','finishEnginesFirstRun','let choiceEligibilityReturn=null;'+close+';closeSettingsModal();');
   run(settings,desktop,opener,()=>{});
   return {hidden:settings.hidden,restored:document.activeElement===opener};
  },close);
@@ -196,7 +196,7 @@ test('closing Settings skips a covered gear and hidden mobile fallback',async t=
   const gear=document.createElement('button');gear.style.cssText='position:fixed;top:20px;left:20px;width:44px;height:44px;z-index:99998';document.body.append(gear);
   const hidden=document.createElement('button');hidden.dataset.mobileNavMenu='';hidden.hidden=true;document.body.append(hidden);
   const more=document.createElement('button');more.dataset.mobileNavMenu='';more.textContent='More';more.style.cssText='position:fixed;top:20px;left:20px;width:44px;height:44px;z-index:99999';document.body.append(more);
-  new Function('$settingsModal','$settingsBtn','_settingsModalPrevFocus','finishEnginesFirstRun',close+';closeSettingsModal();')(settings,gear,null,()=>{});
+  new Function('$settingsModal','$settingsBtn','_settingsModalPrevFocus','finishEnginesFirstRun','let choiceEligibilityReturn=null;'+close+';closeSettingsModal();')(settings,gear,null,()=>{});
   return {hidden:settings.hidden,restored:document.activeElement===more,hit:document.elementFromPoint(42,42)===more};
  },close);
  assert.deepEqual(result,{hidden:true,restored:true,hit:true});
