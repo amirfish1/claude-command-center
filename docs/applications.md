@@ -210,6 +210,64 @@ one into your apps folder and returns `{"ok": true, "id": "taxes"}`. Only
 `app_templates/`; add a folder there with an `app.json` and it shows up.
 `{{label}}`, `{{icon}}` and `{{app_id}}` in a template's HTML are filled in.
 
+## Sharing an app
+
+An app is a folder, so sharing one means handing over the folder: put it in a
+git repository (the folder itself, or one folder inside the repository) and
+the other person installs it with one command.
+
+```bash
+ccc app install owner/repo            # GitHub shorthand, a git URL, or a local folder
+ccc app install owner/repo --focus    # and make it the only thing on screen
+```
+
+The app is copied into `~/.claude/command-center/apps/<id>`; the id is the
+folder name, or the repository name without a leading `ccc-` (`--id` picks
+another). Another machine's state (`ccc-state.json`, `.venv`, `.git`,
+`.claude`) is never copied. An app that is already installed is never
+overwritten: once installed it belongs to its owner, who reshapes it with the
+agent.
+
+For someone who has neither CCC nor the app, the installer takes the app too
+and opens CCC locked to it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amirfish1/claude-command-center/main/scripts/install.sh | CCC_APP=owner/repo bash
+```
+
+The warning above still applies: a shared app runs with the installer's full
+CCC authority, and its setup routine runs a command on their machine. Share
+apps with people who trust you, and install only from people you trust.
+
+Three `app.json` fields make a shared app easy for someone who has never seen
+CCC:
+
+- **A setup routine.** Add `"setup": true` to a script routine and leave out
+  its schedule. CCC runs it once, the first time it sees the app, then only
+  from "Run now". Use it to install what the app needs into the app's own
+  folder. If it fails, the card shows the last line it printed.
+- **Suggestions.** `"suggestions": [{"label": "Record a booking", "prompt": "I
+  booked a place. Record it: "}]` shows "Try asking" chips above the agent.
+  Clicking one puts the prompt in the message box for the person to finish and
+  send. Up to eight; a plain string is both label and prompt.
+- **Instructions for the agent.** A `CLAUDE.md` (or `AGENTS.md`) in the app
+  folder tells a fresh agent what each file is and how to make the common
+  changes. The agent on the other machine has none of your session history.
+
+### Focus: one app on screen
+
+`ccc app focus <id>` locks the rail to one app: the rail shows that app and a
+"More" button, and opening CCC lands on the app instead of Sessions. "More"
+asks once, then shows everything; a "Just <app>" button in the rail goes back.
+`ccc app unlock` does the same from a terminal (`--forget` also removes the
+button).
+
+Focus hides nothing behind a permission. It decides what the rail shows and
+where a bare `/` lands; every page still answers at its own URL. It is stored
+as `focus_app` and `focus_home` in `custom-links.json`. `GET /api/apps` returns
+it as `focus`, and `POST /api/apps/focus` with `{"app": "<id>"}` sets it
+(`{"app": ""}` unlocks, adding `"forget": true` drops the button too).
+
 ## Embedding a dashboard that runs on another port
 
 A browser iframe pointed at another localhost port renders blank inside the

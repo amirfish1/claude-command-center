@@ -97,6 +97,20 @@
     "  place-items: center; padding: 0; margin-top: 2px;",
     "}",
     ".ccc-side-nav .add:hover { border-color: #5ac8fa; color: #5ac8fa; }",
+    /* Focus mode: the rail is locked to one app. The lock button sits at the
+       bottom of the rail, away from the app icon, so nobody leaves by accident. */
+    ".ccc-side-nav .focus-toggle {",
+    "  display: flex; flex-direction: column; align-items: center; gap: 3px;",
+    "  width: calc(var(--ccc-rail-w, " + RAIL_DEFAULT + "px) - 12px); flex-shrink: 0;",
+    "  padding: 7px 3px; border: 0; border-radius: 7px; background: none;",
+    "  color: #5f6772; cursor: pointer; font: inherit; font-size: 9px;",
+    "  text-transform: uppercase; letter-spacing: 0.2px; line-height: 1.2;",
+    "}",
+    ".ccc-side-nav .focus-toggle .icon { font-size: 15px; }",
+    ".ccc-side-nav .focus-toggle:hover { background: #1a1d23; color: #ccc; }",
+    ".ccc-side-nav.focused { padding-bottom: 12px; }",
+    ".ccc-side-nav.focused .focus-toggle { margin-top: auto; }",
+    "html.ccc-focus :is(.ccc-account-wrap, .ccc-account-pop, .ccc-report-flag) { display: none; }",
     /* Guided setup for the GitHub issue auto-fix flow (static/issue-flow.js). */
     ".ccc-side-nav .autofix {",
     "  display: flex; flex-direction: column; align-items: center; gap: 3px;",
@@ -273,6 +287,48 @@
       var v = JSON.parse(localStorage.getItem(APPS_CACHE_KEY) || "null");
       return (Array.isArray(v) && v.length) ? v : null;
     } catch (e) { return null; }
+  }
+
+  // Focus mode (docs/applications.md, "Sharing an app"): the rail shows one
+  // app and a way back to everything. Cached like the app list so a locked
+  // rail never flashes the full one while /api/apps is in flight.
+  var FOCUS_CACHE_KEY = "ccc-rail-focus-v1";
+  var lastFocus = null;
+  try { lastFocus = JSON.parse(localStorage.getItem(FOCUS_CACHE_KEY) || "null"); } catch (e) {}
+
+  function rememberFocus(focus) {
+    lastFocus = (focus && typeof focus === "object") ? focus : null;
+    try { localStorage.setItem(FOCUS_CACHE_KEY, JSON.stringify(lastFocus)); } catch (e) {}
+  }
+
+  function setFocus(appId) {
+    return fetch("/api/apps/focus", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app: appId })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(function (d) {
+        if (!d || !d.ok) return false;
+        rememberFocus(d.focus);
+        render(lastApps);
+        return true;
+      });
+  }
+
+  function focusToggle(icon, label, title, onClick) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "focus-toggle";
+    b.title = title;
+    var i = document.createElement("span");
+    i.className = "icon";
+    i.textContent = icon;
+    b.appendChild(i);
+    b.appendChild(document.createTextNode(label));
+    b.onclick = onClick;
+    return b;
   }
 
   // Fire-and-forget latency sample into the local perf sink (the same
@@ -784,6 +840,16 @@
 
   function render(apps) {
     lastApps = apps;
+    // Locked to one app: that app is the whole list, for this rail and for
+    // anything that mirrors it (the mobile nav). A focus id that is not in
+    // the list (stale cache, removed app) never strands the user.
+    var all = apps;
+    var focusId = lastFocus && lastFocus.app;
+    var only = focusId ? all.filter(function (a) { return a.id === focusId; }) : [];
+    var focused = only.length === 1;
+    if (focused) apps = only;
+    nav.classList.toggle("focused", focused);
+    document.documentElement.classList.toggle("ccc-focus", focused);
     window.cccRailApps = apps;
     window.dispatchEvent(new CustomEvent("ccc:apps", { detail: apps }));
     var activeId = activeIdFor(apps);
@@ -818,6 +884,13 @@
       // top, where a long app list cannot push it below the fold.
       if (app.id === "queues") { nav.appendChild(autofix); autofixPlaced = true; }
     }
+    if (focused) {
+      nav.appendChild(focusToggle("\uD83D\uDD13", "More", "Show the rest of Claude Command Center", function () {
+        if (confirm("Show the rest of Claude Command Center?\n\nYou can come back to just " +
+            only[0].label + " with the lock button in this bar.")) setFocus("");
+      }));
+      return;
+    }
     if (!autofixPlaced) nav.appendChild(autofix);
     // Adding an app is a rail action, so the affordance belongs in the rail
     // rather than buried in dashboard settings. It opens a popup instead of
@@ -830,6 +903,16 @@
     add.textContent = "+";
     add.onclick = openApps;
     nav.appendChild(add);
+    // After an unlock, one click goes back to the single-app view.
+    var homeId = lastFocus && lastFocus.home;
+    var home = homeId ? all.filter(function (a) { return a.id === homeId; })[0] : null;
+    if (home) {
+      nav.appendChild(focusToggle("\uD83D\uDD12", "Just " + home.label, "Show only " + home.label, function () {
+        setFocus(home.id).then(function (ok) {
+          if (ok && activeIdFor(all) !== home.id) location.href = home.nav || home.url;
+        });
+      }));
+    }
     // The report flag centres itself in whatever space is left between the
     // app list and the rail's bottom padding — around the middle on short
     // pages, in the scroll flow on long ones. The account avatar is not a
@@ -852,6 +935,7 @@
         var ok = !!(d && Array.isArray(d.apps) && d.apps.length);
         perfEvent("rail_apps", Date.now() - t0, { ok: ok, attempt: attempt, cached: hadCache });
         if (ok) {
+          rememberFocus(d.focus);
           render(d.apps);
           try { localStorage.setItem(APPS_CACHE_KEY, JSON.stringify(d.apps)); } catch (e) {}
         } else if (attempt < RETRY_MS.length) {

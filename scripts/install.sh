@@ -270,7 +270,10 @@ has_agent_history() {
 dashboard_open_url() {
   local base="${1:-$DASHBOARD_URL}"
   local state="$HOME/.claude/command-center/onboarding.json"
-  if [ -f "$state" ] && grep -Eq '"completed"[[:space:]]*:[[:space:]]*true' "$state" 2>/dev/null; then
+  if [ -n "${CCC_APP_READY:-}" ]; then
+    # Installed for one shared app: CCC is locked to it, so `/` lands there.
+    printf '%s' "$base"
+  elif [ -f "$state" ] && grep -Eq '"completed"[[:space:]]*:[[:space:]]*true' "$state" 2>/dev/null; then
     printf '%s' "$base"
   elif has_agent_history; then
     printf '%s' "$base"
@@ -706,6 +709,21 @@ link_ccc_cli() {
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
+# CCC_APP=<folder | git URL | owner/repo> installs one shared app and locks
+# CCC to it (docs/applications.md, "Sharing an app"). Re-running the install
+# line leaves an app that is already there alone: it belongs to its owner.
+install_shared_app() {
+  [ -n "${CCC_APP:-}" ] || return 0
+  step "Adding the app: $CCC_APP"
+  if python3 "$INSTALL_DIR/ccc" app install "$CCC_APP" --focus; then
+    CCC_APP_READY=1
+  elif grep -q '"focus_app"' "$HOME/.claude/command-center/custom-links.json" 2>/dev/null; then
+    CCC_APP_READY=1   # already installed and locked on an earlier run
+  else
+    note "The app was not added. CCC itself is installed and will start normally."
+  fi
+}
+
 main() {
   printf '\n'
   step "Claude Command Center"
@@ -732,6 +750,7 @@ main() {
   step "Step 3 of 4: installing helper tools"
   install_watchtower  # WT-26: bundle WT as CCC's queue engine
   link_ccc_cli        # put `ccc` on PATH
+  install_shared_app  # optional: CCC_APP=owner/repo
 
   step "Step 4 of 4: starting CCC"
   launch_server "$@"

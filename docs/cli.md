@@ -46,6 +46,13 @@ fires once and does not repeat. `ccc remind status` shows it; `ccc remind off`
 cancels it. CCC has to be running then, and the computer needs desktop
 notifications (`notify-send` on Linux).
 
+## Install or share an app
+
+`ccc app install <folder | git URL | owner/repo>` copies an app into your apps
+folder. Add `--focus` to make it the only thing on screen; `ccc app focus <id>`
+and `ccc app unlock` switch that later. See
+[Sharing an app](applications.md#sharing-an-app).
+
 ## Choose a session or model
 
 `ccc sessions` shows live sessions, including spawned children under their

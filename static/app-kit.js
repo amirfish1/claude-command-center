@@ -8,6 +8,8 @@
 // It adds two things to the page:
 //   1. The app's one builder agent in a resizable pane on the right
 //      (started on first use; the session stays loaded).
+//      If app.json lists "suggestions", they show above the agent as chips:
+//      things you can ask for. Clicking one puts it in the message box.
 //   2. A Routines section: one card per routine in app.json with its
 //      schedule, last result, an on/off switch and "Run now". Click a card
 //      for its last runs, to edit it or delete it. The last card asks the
@@ -52,6 +54,8 @@
     '.ccck-frames iframe{position:absolute;inset:0;width:100%;height:100%;border:0}.ccck-frames iframe[hidden]{display:none}',
     '.ccck-hero{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;color:var(--k-muted);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--k-panel)}',
     '.ccck-hero .big{font-size:46px}.ccck-hero[hidden]{display:none}',
+    '.ccck-tips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid var(--k-line);font:13px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--k-muted)}',
+    '.ccck-tip{font:inherit;color:var(--k-text);background:var(--k-tile);border:1px solid var(--k-line);border-radius:999px;padding:4px 11px;cursor:pointer}.ccck-tip:hover{border-color:var(--k-accent)}',
     '.ccck-modes{display:none}',
     '@media(max-width:900px){.ccck-shell{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.ccck-modes{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--k-line);background:var(--k-panel)}.ccck-grip{display:none}.ccck-content,.ccck-side{height:auto;min-height:0}.ccck-shell[data-mode="app"] .ccck-side,.ccck-shell[data-mode="agent"] .ccck-content{display:none}}',
     '.ccck-modes .ccck-btn[aria-pressed="true"]{border-color:var(--k-accent)}',
@@ -91,7 +95,40 @@
   document.head.appendChild($('style', null, css));
 
   var state = null, agentId = '', shell = null, frames = null, hero = null, barName = null, backBtn = null;
-  var frameFor = {};
+  var frameFor = {}, tips = null, tipsDrawn = '', lastFilled = '';
+
+  // "Try asking" chips: what this app's agent can do, from app.json.
+  function drawTips() {
+    if (!tips || !state) return;
+    var list = state.suggestions || [];
+    var html = list.length ? '<span>Try asking:</span>' + list.map(function (x, i) {
+      return '<button type="button" class="ccck-tip" data-tip="' + i + '" title="' + esc(x.prompt) + '">' + esc(x.label) + '</button>';
+    }).join('') : '';
+    if (html === tipsDrawn) return;
+    tipsDrawn = html; tips.innerHTML = html; tips.hidden = !html;
+  }
+  // Put a suggestion in the agent's message box for the user to finish and
+  // send. The session view is a same-origin frame that may still be loading.
+  function fillComposer(text) {
+    (agentId ? Promise.resolve(agentId) : startAgent(false)).then(function (sid) {
+      if (!sid) return;
+      showSession(sid, 'Agent'); setMode('agent');
+      var f = frameFor[sid], tries = 0;
+      (function put() {
+        var box = null;
+        try { box = f.contentDocument.getElementById('convInput'); } catch (_) {}
+        if (box && box.offsetParent !== null) {
+          var mine = !box.value.trim() || box.value === lastFilled;
+          box.value = lastFilled = mine ? text : box.value.replace(/\s+$/, '') + '\n' + text;
+          box.dispatchEvent(new f.contentWindow.Event('input', { bubbles: true }));
+          box.focus();
+          try { box.setSelectionRange(box.value.length, box.value.length); } catch (_) {}
+          return;
+        }
+        if (++tries < 60) setTimeout(put, 500);
+      })();
+    });
+  }
 
   // ---- agent pane -------------------------------------------------------
   function showSession(id, label) {
@@ -129,10 +166,16 @@
     content.parentNode.insertBefore(shell, content);
     var modes = $('nav', 'ccck-modes', '<button type="button" class="ccck-btn" data-mode="app" aria-pressed="true">App</button><button type="button" class="ccck-btn" data-mode="agent" aria-pressed="false">Agent</button>');
     var grip = $('div', 'ccck-grip'); grip.setAttribute('role', 'separator'); grip.setAttribute('aria-orientation', 'vertical'); grip.title = 'Drag to resize';
-    var side = $('aside', 'ccck-side', '<div class="ccck-bar"><span data-k="name">Agent</span><span class="sp"></span><button type="button" class="ccck-btn" data-k="back" hidden>Back to the app’s agent</button><button type="button" class="ccck-btn" data-k="fresh" title="Start a new agent for this app">New agent</button></div><div class="ccck-frames"><div class="ccck-hero"></div></div>');
+    var side = $('aside', 'ccck-side', '<div class="ccck-bar"><span data-k="name">Agent</span><span class="sp"></span><button type="button" class="ccck-btn" data-k="back" hidden>Back to the app’s agent</button><button type="button" class="ccck-btn" data-k="fresh" title="Start a new agent for this app">New agent</button></div><div class="ccck-tips" hidden></div><div class="ccck-frames"><div class="ccck-hero"></div></div>');
     content.classList.add('ccck-content');
     shell.appendChild(modes); shell.appendChild(content); shell.appendChild(grip); shell.appendChild(side);
     frames = side.querySelector('.ccck-frames'); hero = side.querySelector('.ccck-hero');
+    tips = side.querySelector('.ccck-tips');
+    tips.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-tip]');
+      var sug = b && state && (state.suggestions || [])[+b.dataset.tip];
+      if (sug) fillComposer(sug.prompt);
+    });
     barName = side.querySelector('[data-k="name"]'); backBtn = side.querySelector('[data-k="back"]');
     showHero('<div>Opening the agent…</div>');
     modes.addEventListener('click', function (e) { var b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
@@ -231,7 +274,7 @@
   function refresh() {
     return api('/api/apps/routines?app=' + encodeURIComponent(APP)).then(function (r) {
       if (!r.ok) return;
-      state = r; draw();
+      state = r; draw(); drawTips();
       var id = (r.agent && r.agent.session_id) || '';
       if (shell && id !== agentId) { agentId = id; if (id) showSession(id, 'Agent'); }
       else if (shell && !id && !hero.dataset.asked) { hero.dataset.asked = '1'; noAgent(); }

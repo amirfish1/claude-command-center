@@ -2468,6 +2468,70 @@ def cmd_jobs_add(args):
 # never travel over HTTP. Needs no running server.
 # ---------------------------------------------------------------------------
 
+def _app_share_module():
+    repo_dir = os.path.dirname(os.path.realpath(__file__))
+    if repo_dir not in sys.path:
+        sys.path.append(repo_dir)
+    from ccc_server import app_share
+    return app_share
+
+
+def _app_set_focus(args, app_id, forget=False):
+    """Lock the rail to one app (or unlock). Goes through the running server
+    when there is one; otherwise writes the config for the next start."""
+    base = _resolve_server(args.server)
+    if base:
+        try:
+            status, res = _post_json(base, "/api/apps/focus",
+                                     {"app": app_id, "forget": forget}, timeout=20)
+            if status == 200 and res.get("ok"):
+                return True, base
+            if status == 404 and res.get("error") == "unknown app":
+                return False, base
+        except OSError:
+            pass  # not running after all: fall through to the file
+    _app_share_module().write_focus_offline(app_id, forget=forget)
+    return True, base
+
+
+def cmd_app(args):
+    share = _app_share_module()
+    if args.app_command == "install":
+        result, status = share.install(args.source, app_id=args.id)
+        if not result.get("ok"):
+            print(f"ccc: {result.get('error')}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"Installed {result['label']} in {result['dir']}")
+            for run in result.get("setup") or []:
+                print("It sets itself up the first time CCC sees it by running: " + " ".join(run))
+        base = None
+        if args.focus:
+            _, base = _app_set_focus(args, result["id"])
+            if not args.json:
+                print(f"CCC now opens on {result['label']} only. "
+                      "The lock button in the left bar shows everything else.")
+        else:
+            base = _resolve_server(args.server)
+        if not args.json:
+            print("Open " + ((base or "http://localhost:8090") + result["url"]))
+        return 0
+    if args.app_command == "focus":
+        ok, _ = _app_set_focus(args, args.id)
+        if not ok:
+            print(f"ccc: no app called '{args.id}'.", file=sys.stderr)
+            return 1
+        print(f"CCC now opens on {args.id} only. Undo with: ccc app unlock")
+        return 0
+    if args.app_command == "unlock":
+        _app_set_focus(args, "", forget=args.forget)
+        print("CCC shows everything again.")
+        return 0
+    return 1
+
+
 def _vault_module():
     repo_dir = os.path.dirname(os.path.realpath(__file__))
     if repo_dir not in sys.path:
@@ -3233,6 +3297,31 @@ def main(argv=None):
                     help="with --wait: give up after this long (default 1800)")
     jp.add_argument("--json", action="store_true", help="raw result JSON")
     jp.set_defaults(func=cmd_jobs_add)
+
+    p = sub.add_parser(
+        "app",
+        help="install a shared app, or lock CCC to one app",
+        description="Apps are folders in ~/.claude/command-center/apps. Install one "
+                    "from a folder or a git repository, and optionally lock CCC's "
+                    "navigation to it so it is the only thing on screen. "
+                    "An installed app runs with your full CCC authority: only "
+                    "install apps from people you trust.",
+    )
+    asub = p.add_subparsers(dest="app_command", required=True)
+    ap = asub.add_parser("install", help="copy an app from a folder, a git URL or owner/repo")
+    ap.add_argument("source", help="folder, git URL, or GitHub owner/repo")
+    ap.add_argument("--id", help="install under this app id (default: the folder or repo name)")
+    ap.add_argument("--focus", action="store_true",
+                    help="open CCC on this app only; the rest stays one click away")
+    ap.add_argument("--json", action="store_true", help="raw result JSON")
+    ap.set_defaults(func=cmd_app)
+    ap = asub.add_parser("focus", help="show only this app; the rest stays one click away")
+    ap.add_argument("id", help="app id (the folder name)")
+    ap.set_defaults(func=cmd_app)
+    ap = asub.add_parser("unlock", help="show all of CCC again")
+    ap.add_argument("--forget", action="store_true",
+                    help="also remove the button that locks back to the app")
+    ap.set_defaults(func=cmd_app)
 
     p = sub.add_parser("secret", help="request a credential through the CCC dashboard")
     ssub = p.add_subparsers(dest="secret_command", required=True)

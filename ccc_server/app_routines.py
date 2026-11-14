@@ -184,8 +184,27 @@ def load_routines(folder):
             "kind": kind,
             "run": run if kind == "script" else None,
             "prompt": str(r.get("prompt") or "") if kind == "agent" else None,
+            # A setup routine installs what the app needs. It runs once on its
+            # own the first time CCC sees the app, then only from "Run now".
+            "setup": r.get("setup") is True and kind == "script",
         })
     return out, meta
+
+
+def load_suggestions(meta):
+    """Starter prompts from app.json: things the user can ask the agent."""
+    out = []
+    raw = meta.get("suggestions") if isinstance(meta, dict) else None
+    for s in raw if isinstance(raw, list) else []:
+        if isinstance(s, str):
+            s = {"label": s, "prompt": s}
+        if not isinstance(s, dict):
+            continue
+        label = str(s.get("label") or "").strip()[:40]
+        prompt = str(s.get("prompt") or label)[:600]
+        if label and prompt.strip():
+            out.append({"label": label, "prompt": prompt})
+    return out[:8]
 
 
 def load_state(folder):
@@ -222,8 +241,9 @@ def describe(app_id, apps_dir=None, now=None):
         enabled = st.get("enabled", True) is not False
         rows.append({
             "id": r["id"], "name": r["name"], "icon": r["icon"], "does": r["does"],
-            "kind": r["kind"], "schedule": r["schedule"],
-            "schedule_text": schedule_text(sched),
+            "kind": r["kind"], "schedule": r["schedule"], "setup": r["setup"],
+            "schedule_text": "Runs once, when the app is installed" if r["setup"] and not sched
+            else schedule_text(sched),
             "enabled": enabled,
             "running": st.get("status") == "running",
             "last_run": st.get("last_run"),
@@ -236,7 +256,7 @@ def describe(app_id, apps_dir=None, now=None):
         })
     agent = state.get("agent") if isinstance(state.get("agent"), dict) else None
     return {"ok": True, "app": app_id, "label": str(meta.get("label") or app_id),
-            "agent": agent, "routines": rows}
+            "agent": agent, "routines": rows, "suggestions": load_suggestions(meta)}
 
 
 def overview(apps_dir=None):
@@ -521,6 +541,8 @@ def ensure_agent(app_id, port, fresh=False, apps_dir=None, docs_path=""):
         return {"ok": True, "session_id": agent["session_id"], "existing": True}, 200
     label = str(load_routines(folder)[1].get("label") or app_id)
     docs = f" How apps and routines work is documented in {docs_path}." if docs_path else ""
+    if (folder / "CLAUDE.md").is_file() or (folder / "AGENTS.md").is_file():
+        docs += " This app came with its own instructions (CLAUDE.md or AGENTS.md in this folder); follow them."
     res = _post_json(port, "/api/sessions/spawn", {
         "cwd": str(folder), "name": f"{label} agent"[:60],
         "prompt": (
@@ -571,6 +593,8 @@ def tick(port, apps_dir=None, now=None):
                                           summary="The agent did not report a result")
                 continue
             due = next_run(parse_schedule(r["schedule"]), st.get("last_run"), now, meta.get("tz"))
+            if r["setup"] and not st.get("last_run"):
+                due = now  # first sight of the app: install what it needs
             if due is not None and due <= now:
                 run_now(d.name, r["id"], port, base)
                 started.append((d.name, r["id"]))

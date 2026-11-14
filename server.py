@@ -23565,6 +23565,21 @@ def _apps_config_mutate(fn):
         return result
 
 
+def _apps_focus_state(apps=None):
+    """Focus (rail locked to one app) for /api/apps and the `/` redirect.
+
+    Reads the config first and only resolves the app list when a focus key is
+    set, so an unfocused install pays one small file read."""
+    from ccc_server import app_share as _app_share
+    try:
+        cfg = json.loads(_apps_config_path().read_text())
+    except Exception:
+        cfg = {}
+    if not isinstance(cfg, dict) or not (cfg.get(_app_share.FOCUS_KEY) or cfg.get(_app_share.HOME_KEY)):
+        return {"app": "", "home": ""}
+    return _app_share.focus_state(cfg, apps if apps is not None else _resolve_apps())
+
+
 def _resolve_apps(include_disabled=False):
     """The ordered app list behind /api/apps and the rail.
 
@@ -30737,6 +30752,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return
 
         if path == "" or path == "/":
+            # Focus mode: a bare `/` lands on the one app the rail is locked
+            # to. Any query string (popouts, deep links) still gets Sessions.
+            focus = {} if parsed.query else _apps_focus_state()
+            if focus.get("app") and str(focus.get("url") or "/") != "/":
+                self.send_response(302)
+                self.send_header("Location", focus["url"])
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             # Re-read on every request so edits to static/index.html are live.
             self.send_html(_load_index_html())
         elif path == "/api/control-plane/status":
@@ -34062,7 +34087,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # the apps you have switched off so you can switch them back on.
             want_all = urllib.parse.parse_qs(
                 urllib.parse.urlparse(self.path).query).get("all", ["0"])[0] == "1"
-            self.send_json({"apps": _resolve_apps(include_disabled=want_all)})
+            apps = _resolve_apps(include_disabled=want_all)
+            self.send_json({"apps": apps, "focus": _apps_focus_state(
+                [a for a in apps if a.get("enabled", True)])})
         elif path.startswith("/proxy/"):
             self._proxy_local_view("GET")
         elif path == "/api/version":
@@ -37495,6 +37522,26 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 _apps_config_mutate(lambda cfg: cfg.__setitem__(
                     "app_order", [i for i in order if i != result["id"]] + [result["id"]]))
                 _log_activity("apps", "CREATE", f"app={result['id']} template={result['template']}")
+            self.send_json(result, status)
+            return
+        if path == "/api/apps/focus":
+            # Lock the rail to one app, or unlock it. {app: "<id>"} locks,
+            # {app: ""} unlocks and keeps the offer to lock again,
+            # {app: "", forget: true} drops the offer too.
+            from ccc_server import app_share as _app_share
+            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                payload = json.loads(self.rfile.read(length)) if length > 0 else {}
+            except json.JSONDecodeError:
+                payload = None
+            if not isinstance(payload, dict):
+                self.send_json({"ok": False, "error": "invalid JSON"}, 400)
+                return
+            apps = _resolve_apps()
+            result, status = _apps_config_mutate(lambda cfg: _app_share.set_focus(
+                cfg, payload.get("app"), apps, forget=payload.get("forget") is True))
+            if result.get("ok"):
+                _log_activity("apps", "FOCUS", f"app={payload.get('app') or ''}")
             self.send_json(result, status)
             return
         if path in ("/api/apps/add", "/api/apps/remove", "/api/apps/arrange"):
