@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 function load(rows) {
-  const start = source.indexOf('  function rowLocalTitle(');
+  const start = source.indexOf('  function isGenericHandoffTitle(');
   const end = source.indexOf('  // One row per continuation chain.', start);
   return vm.runInNewContext(source.slice(start, end) + '\nrowRawTitle;', {
     cleanIssuePrompt: s => s,
@@ -42,6 +42,8 @@ test('a regenerated automatic title replaces its stale cached display name', () 
   assert.equal(load([c])(c).rawTitle, 'Review inbox and booking fixes');
   c.name_overridden = true;
   c.display_name = 'My chosen topic';
+  assert.equal(load([c])(c).rawTitle, 'My chosen topic: Review inbox and booking fixes');
+  c.name_overridden = false; // /rename in the terminal has no CCC sidecar
   assert.equal(load([c])(c).rawTitle, 'My chosen topic: Review inbox and booking fixes');
 });
 test('persisted task title survives refreshes that only supply continuation boilerplate', () => {

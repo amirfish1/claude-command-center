@@ -5512,6 +5512,10 @@
   // Priority: user rename or CCC spawn name (display_name) > Claude Code's
   // ai_title > raw first user prompt > "(untitled)". The prefix glyphs the
   // caller adds say which slot won: ✏️ user-chosen, ✨ ai-title, none = raw.
+  function isGenericHandoffTitle(title) {
+    return /^(?:(?:pick(?:ing)?|up|and|continu(?:e|ing)|resum(?:e|ing)|tak(?:e|ing)|over|the|an?|this|that|from|previous|prior|earlier|existing|pending|unfinished|ongoing|work|tasks?|session|conversation)\s*)+$/.test(
+      String(title || '').toLowerCase().replace(/[^a-z ]/g, ' ').trim());
+  }
   function rowLocalTitle(c) {
     if (!c) return { rawTitle: '(untitled)', titleSource: '' };
     const cleanFirst = c.first_message ? cleanIssuePrompt(c.first_message) : '';
@@ -5520,10 +5524,10 @@
     if ((c.name_overridden || c.spawn_named) && c.display_name) {
       rawTitle = c.display_name;
       titleSource = c.name_overridden ? 'user' : 'spawn';
-    } else if (c.auto_titled && c.task_title) {
+    } else if (c.auto_titled && c.task_title && isGenericHandoffTitle(c.display_name)) {
       // The saved title overlay updates without rebuilding historical rows.
       // A cached display_name must not become a topic prefix for its own
-      // regenerated title. Explicit renames and launch names still win.
+      // regenerated title. Concrete terminal renames still win too.
       rawTitle = c.task_title;
       titleSource = 'ai';
     } else if (c.display_name && c.display_name !== c.ai_title) {
