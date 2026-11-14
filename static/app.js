@@ -19199,7 +19199,8 @@
     if (info.kind === 'plan' || build) {
       source.investigation = next;
       const check = _rowInvestigationChecks.get(sid);
-      if (!candidateOnly && (!check || check.key !== source.key || !check.idle || check.until <= Date.now())) return null;
+      if (!candidateOnly && (!check || check.key !== source.key || !check.idle
+          || (!check.pending && check.until <= Date.now()))) return null;
     }
     return source;
   }
@@ -19220,7 +19221,10 @@
     const old = _rowInvestigationChecks.get(source.sid);
     if (!force && old?.key === source.key && (old.pending || old.until > Date.now())) return old.pending;
     if (!force && _rowInvestigationChecksInFlight >= 4) return;
-    const check = { key: source.key, idle: false, until: 0 };
+    // Revalidating the same action is not evidence that it disappeared.
+    // Keep its confirmed presentation while the bounded request is pending;
+    // clicks still force a fresh transcript check before sending anything.
+    const check = { key: source.key, idle: old?.key === source.key && old.idle === true, until: 0 };
     if (_rowInvestigationChecks.size >= 64) {
       for (const [sid, prior] of _rowInvestigationChecks) {
         if (!prior.pending) _rowInvestigationChecks.delete(sid);
@@ -19233,8 +19237,8 @@
       try {
         const res = await fetch('/api/conversations/' + encodeURIComponent(source.sid) + '?tail=20',
           { cache: 'no-store', signal: AbortSignal.timeout(5000) });
-        if (res.ok) check.idle = rowInvestigationTranscriptIdle(source, (await res.json()).events);
-      } catch (_) { /* Unconfirmed or unavailable means no continuation chip. */ }
+        check.idle = res.ok && rowInvestigationTranscriptIdle(source, (await res.json()).events);
+      } catch (_) { check.idle = false; /* Failed confirmation removes the chip. */ }
       finally {
         check.until = Date.now() + 3000;
         check.pending = null;

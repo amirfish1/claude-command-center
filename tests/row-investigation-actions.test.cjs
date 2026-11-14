@@ -128,6 +128,48 @@ test('continuation chips render on desktop and phone, reject stale clicks and se
       assert.ok(chip.width > 0 && chip.height >= (width < 500 ? 32 : 26));
       assert.ok(chip.right <= chip.rowRight + 1);
     }
+    // Hold a periodic transcript refresh open: both layouts must retain the
+    // exact button nodes and text geometry until there is new evidence.
+    for (const [width, height, host] of [[1440, 900, '.conv-outcome'], [390, 844, '.wa-line2']]) {
+      await page.setViewport({ width, height });
+      const stable = await page.evaluate(async host => {
+        const savedFetch = window.fetch;
+        let release;
+        window.fetch = async (...args) => {
+          await new Promise(resolve => { release = resolve; });
+          return savedFetch(...args);
+        };
+        const button = document.querySelector(host + ' .conv-quick-action');
+        const before = button.getBoundingClientRect().toJSON();
+        _rowInvestigationChecks.get(row.session_id).until = 0;
+        syncActions();
+        await new Promise(requestAnimationFrame);
+        const retained = document.querySelector(host + ' .conv-quick-action') === button;
+        const during = button.getBoundingClientRect().toJSON();
+        release();
+        await _rowInvestigationChecks.get(row.session_id).pending;
+        window.fetch = savedFetch;
+        syncActions();
+        return { retained, before, during,
+          after: document.querySelector(host + ' .conv-quick-action') === button };
+      }, host);
+      assert.equal(stable.retained, true, 'refresh must not remove the confirmed button');
+      assert.deepEqual(stable.during, stable.before, 'refresh must not change layout');
+      assert.equal(stable.after, true, 'unchanged confirmation keeps the button node');
+    }
+    await page.evaluate(async () => {
+      const savedFetch = window.fetch;
+      window.fetch = async () => ({ok:false});
+      _rowInvestigationChecks.get(row.session_id).until = 0;
+      syncActions();
+      await _rowInvestigationChecks.get(row.session_id).pending;
+      syncActions();
+      window.fetch = savedFetch;
+    });
+    assert.equal(await page.$$('.conv-quick-action').then(els => els.length), 0,
+      'failed refresh must remove previously confirmed buttons');
+    await page.evaluate(() => { _rowInvestigationChecks.clear(); syncActions(); });
+    await page.waitForSelector('.wa-line2 .conv-quick-action');
     await page.evaluate(() => {
       row.session_state.completion.remaining_actions[0].text = 'Investigate a different delivery.';
       document.querySelector('.wa-line2 .conv-quick-action').click();
