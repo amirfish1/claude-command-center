@@ -28666,6 +28666,26 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
   }
 }
 
+/* Narrow or app-embedded pane (composer has .actions-in-menu, set by app.js
+   _initConvActionsMenu): the info bar (path, context meter, model chip) sits
+   BELOW the composer row instead of above it. Same breakpoint and body
+   selectors as the mobile status layout above, so it wins over its areas. */
+@media (max-width: 1200px) {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail:not(.has-new-session-context):has(> .conv-input-bar.actions-in-menu),
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail:not(.has-new-session-context):has(> .conv-input-bar.actions-in-menu) {
+    grid-template-areas:
+      "header"
+      "present-toolbar"
+      "conv"
+      "goal"
+      "model"
+      "queued"
+      "input"
+      "hint"
+      "context";
+  }
+}
+
 /* =========================================================================
    MOBILE REDESIGN (body.ccc-mobile-redesign)
    Gated by isMobileRedesign() in app.js — matchMedia(max-width:1200px),
