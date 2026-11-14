@@ -35121,8 +35121,8 @@ a.local-ci-job:hover { color: var(--accent); }
 
 /* Blocked tickets explain the next action; completed workers stay quiet. */
 .workers-ticket-context { margin: 0 0 8px; min-width: 0; }
-.workers-block-meta, .workers-block-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
-.workers-block-category { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; color: var(--text-secondary, var(--text)); font-size: 10px; line-height: 1.4; }
+.workers-block-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.workers-block-category { display: inline-block; margin-inline-end: 6px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; color: var(--text-secondary, var(--text)); font-size: 10px; line-height: 1.4; vertical-align: baseline; }
 .workers-ticket-context .workers-ticket-update { margin: 4px 0; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .workers-block-choice { max-width: 100%; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--accent); font: inherit; font-size: 11px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
 .workers-block-choice:hover { background: var(--surface-2); }

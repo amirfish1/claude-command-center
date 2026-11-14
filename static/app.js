@@ -56431,8 +56431,8 @@
     const choices = _workersTicketChoices(item, card);
     const buttons = choices.map((choice, index) => '<button type="button" class="workers-block-choice" data-workers-choice="' + index + '" data-workers-ref="' + escapeAttr(ref) + '" title="' + escapeAttr('Send answer: ' + choice.reply) + '">' + escapeHtml(choice.label) + '</button>').join('');
     const review = context.owner ? '<button type="button" class="workers-block-choice" data-workers-review="' + escapeAttr(ref) + '">Answer…</button>' : '';
-    return '<div class="workers-ticket-context"' + (_workersTicketSessions.has(ref) ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '') + '>' + (category ? '<div class="workers-block-meta">' + category + '</div>' : '')
-      + '<div class="workers-ticket-update" title="' + escapeAttr(context.full || context.text) + '">' + escapeHtml(context.text) + '</div>'
+    return '<div class="workers-ticket-context"' + (_workersTicketSessions.has(ref) ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '') + '>'
+      + '<div class="workers-ticket-update" title="' + escapeAttr(context.full || context.text) + '">' + category + escapeHtml(context.text) + '</div>'
       + (buttons || review ? '<div class="workers-block-choices">' + buttons + review + '</div>' : '') + '</div>';
   }
   const _workersAnswersPending = new Set();
