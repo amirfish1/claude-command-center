@@ -56854,11 +56854,42 @@
   let _workersFallbackTickets = [];
   // Ticket view: idea ticket ref -> newest activity (ms) of its sessions.
   let _workersIdeaTicketActivity = new Map();
+  function _workersLocalWorkIdentities() {
+    const ids = new Set(_workersKnownSessions().keys());
+    const health = (typeof _uxqHealthCache === 'undefined' ? null : _uxqHealthCache) || {};
+    const add = value => { if (value) ids.add(String(value)); };
+    for (const sid of health.worker_session_ids || []) add(sid);
+    for (const [worker, sid] of Object.entries(health.worker_session_map || {})) { add(worker); add(sid); }
+    for (const worker of [...(health.wt_workers || []), ...(health.past_workers || [])]) {
+      add(worker.worker_id); add(worker.session_id);
+    }
+    return ids;
+  }
+  function _workersTicketInvolvesLocalWork(item, ids) {
+    if (_workersAssignedTicketRefs.has(_uxqItemRef(item))) return true;
+    const matches = values => values.some(value => value && ids.has(String(value)));
+    if (matches([item.claimed_by, item.claimed_session_id, item.closed_by, item.closed_session_id])) return true;
+    const events = [
+      ...(Array.isArray(item.history) ? item.history : []),
+      ...(Array.isArray(item.timeline) ? item.timeline : []),
+      ...(Array.isArray(item.progress_notes) ? item.progress_notes : []).filter(Boolean)
+        .map(note => ({...note, event:'progress'})),
+    ];
+    return events.some(event => {
+      if (!event || !['claim', 'progress', 'block', 'close'].includes(event.event)) return false;
+      const by = typeof event.by === 'string' ? {worker:event.by} : event.by || {};
+      return matches([by.worker, by.session_id, event.worker, event.session_id]);
+    });
+  }
   function _workersActivityRows() {
     const items = [..._uxqItemsCache.items];
     const refs = new Set(items.map(_uxqItemRef));
     for (const item of _workersFallbackTickets) if (!refs.has(item.ref)) { items.push(item); refs.add(item.ref); }
-    const workerTickets = items.filter(item => !item._sessionOnly && !_workersIdeaTicket(item));
+    // Queue snapshots sync across machines; their recent work is not evidence
+    // that any worker on this host participated. Filter before the ten-row cap.
+    const localIds = _workersLocalWorkIdentities();
+    const workerTickets = items.filter(item => !item._sessionOnly && !_workersIdeaTicket(item)
+      && _workersTicketInvolvesLocalWork(item, localIds));
     return _uxqRecentWorkItems(workerTickets, Infinity)
       .concat(_workersIdeaTicketRows(items))
       .map(row => ({...row, workerState:_workersTicketState(row.item)}))

@@ -1,0 +1,1 @@
+The Workers tab now shows ticket activity only when a worker or session on the current machine actually participated, instead of mixing in unrelated work from synced queues. Local work remains visible across queues, reassignment, and worker cleanup.
