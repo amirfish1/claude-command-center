@@ -3718,7 +3718,7 @@
         } catch (_) { note('Filed ' + ref + '; queue refresh is unavailable.', 'success'); }
       })
       .catch(function (e) {
-        note((e.pending ? 'Ticket confirmation pending: ' : 'Could not file ticket: ') + e.message,
+        note(e.pending ? e.message : 'Could not file ticket: ' + e.message,
           e.pending ? 'pending' : 'error');
         // Hand the text back rather than losing it.
         openNewTicket();
