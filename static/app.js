@@ -40663,7 +40663,7 @@
     const payload = {
       session_id: sessionId,
       text,
-      idempotency_key: durableActionId('inject'),
+      idempotency_key: (opts && opts.idempotencyKey) || durableActionId('inject'),
     };
     if (mode) payload.mode = mode;
     // A human clicking a reply chip has the same authority as composer input.
@@ -52239,13 +52239,53 @@
     view.appendChild(banner);
   }
 
-  // "No response" affordance: a live session whose transcript has been silent
-  // for SILENT_INVESTIGATE_MS gets an Investigate button right in the view. It
-  // spawns a fresh session (server default engine/model) that is asked what is
-  // going on with this one, and opens it as a second pane to the right.
-  // 3 minutes: a model thinking hard or a slow first token routinely goes
-  // quiet for a minute or more; 30s flagged healthy sessions.
-  const SILENT_INVESTIGATE_MS = 180000;
+  // Try one status check before offering Investigate. Persist before sending:
+  // a reload or a lost reply must not turn a stalled session into a nudge loop.
+  const SILENT_INVESTIGATE_MS = 300000;
+  const silentNudgeAttempts = new Map();
+  function silentNudgeAttempt(sid, next) {
+    const key = 'ccc-silent-nudge:' + sid;
+    if (next) {
+      silentNudgeAttempts.set(sid, next);
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch (_) {}
+      return next;
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || 'null');
+      if (saved && Number.isFinite(saved.at)) return saved;
+    } catch (_) {}
+    return silentNudgeAttempts.get(sid) || null;
+  }
+
+  async function nudgeSilentSession(sid, view, activity, responseAt, status) {
+    const send = async () => {
+      // A Web Lock may have waited while the user changed panes or new output
+      // arrived. Recheck the original context before injecting anything.
+      if (!view.isConnected || !currentSession || String(currentSession.id) !== sid || liveStatus !== status) return;
+      if ([...view.querySelectorAll('[data-ts-epoch]')].some(node => Number(node.dataset.tsEpoch) > activity)) return;
+      const prior = silentNudgeAttempt(sid);
+      if (prior && prior.responseAt >= responseAt) return;
+      const attempt = silentNudgeAttempt(sid, {
+        at: Date.now(), activity, responseAt, state: 'pending',
+      });
+      try {
+        const data = await postInjectInput(sid, '?', 'steer', {
+          announcedFrom: 'CCC silence check',
+          idempotencyKey: 'silent-nudge:' + sid + ':' + (responseAt || activity),
+        });
+        attempt.state = data.ok ? (data.queued ? 'queued' : 'sent') : 'failed';
+      } catch (_) { attempt.state = 'failed'; }
+      // Do not overwrite a newer episode from another tab after a slow reply.
+      const latest = silentNudgeAttempt(sid);
+      if (latest && latest.at === attempt.at) silentNudgeAttempt(sid, attempt);
+      if (view.isConnected && currentSession && String(currentSession.id) === sid) updateSilentInvestigateBar(view);
+    };
+    try {
+      if (navigator.locks) await navigator.locks.request('ccc-silent-nudge:' + sid, send);
+      else await send();
+    } catch (_) { /* navigation cancelled the lock; the next status pass can try */ }
+  }
+
   function updateSilentInvestigateBar(view) {
     if (!view) return;
     const existing = view.querySelector(':scope > .conv-silent-bar');
@@ -52265,13 +52305,41 @@
     // Codex app-server turns stream reasoning as events, not transcript
     // writes; that activity counts as a response too.
     let freshest = Math.max(toMs(ls.sidecarTs), toMs(ls.transcriptMtime), toMs(ls.codexAppServerLastActivityAt));
+    let responseAt = 0;
+    let transcriptNudgeAt = 0;
     const stamped = view.querySelectorAll('[data-ts-epoch]');
     for (let i = 0; i < stamped.length; i++) {
       const ep = Number(stamped[i].dataset.tsEpoch);
       if (ep > freshest) freshest = ep;
+      // The automatic peer prompt is not a response. A real reply/tool event,
+      // or a later user message, permits one check in a new silence episode.
+      const node = stamped[i];
+      const userText = node.querySelector('.user-msg');
+      const text = userText && (userText.dataset.rawText || userText.textContent || '').trim();
+      const autoCheck = /^Announced from: CCC silence check\s+\?$/.test(text || '')
+        || (text === '?' && node.querySelector('.peer-sender-name')?.textContent === 'CCC silence check');
+      if (autoCheck && !node.matches('.pending')) transcriptNudgeAt = Math.max(transcriptNudgeAt, ep || 0);
+      if (node.matches('.event.assistant, .event.thinking, .event.tool_use, .event.tool_result')
+          || (node.matches('.event.user_text:not(.pending)') && text && text !== '?'
+            && !autoCheck)) {
+        responseAt = Math.max(responseAt, ep || 0);
+      }
     }
     const silentMs = freshest ? Date.now() - freshest : 0;
     if (!freshest || silentMs < SILENT_INVESTIGATE_MS) { clear(); return; }
+    let attempt = silentNudgeAttempt(sid);
+    // The transcript also carries the check across browser profiles/devices.
+    if (!attempt && transcriptNudgeAt > responseAt) {
+      attempt = silentNudgeAttempt(sid, { at: transcriptNudgeAt, responseAt, state: 'sent' });
+    }
+    // Some engine transcripts round timestamps to whole seconds.
+    const responded = attempt && responseAt > attempt.responseAt && responseAt >= attempt.at - 2000;
+    if (!attempt || responded) {
+      clear();
+      void nudgeSilentSession(sid, view, freshest, responseAt, ls);
+      return;
+    }
+    if (attempt.state !== 'failed' && Date.now() - attempt.at < SILENT_INVESTIGATE_MS) { clear(); return; }
     const label = 'No response for ' + _optimisticAgeLabel(silentMs);
     if (existing && existing.isConnected) {
       const txt = existing.querySelector('.cob-body strong');
@@ -52285,7 +52353,9 @@
     bar.innerHTML =
       '<span class="cob-icon" aria-hidden="true">&#9203;</span>'
       + '<span class="cob-body"><strong>' + escapeHtml(label) + '</strong>'
-      + '<span class="cob-detail">The session is still running but has written nothing recently.</span></span>'
+      + '<span class="cob-detail">' + (attempt.state === 'failed'
+        ? 'The automatic “?” check could not be confirmed. Investigate before retrying.'
+        : 'The session has not responded to the automatic “?” check.') + '</span></span>'
       + '<button type="button" class="cob-wake-btn" data-role="silent-investigate"'
       + ' title="Start a new session that investigates this one, side by side">Investigate</button>';
     bar.querySelector('[data-role="silent-investigate"]').addEventListener('click', (ev) => {
@@ -52303,7 +52373,7 @@
     const short = sid.slice(0, 8);
     const name = 'Investigate ' + short;
     const prompt = 'What\'s going on with session ' + sid + '? It is mid-turn but has produced no output '
-      + 'for over 3 minutes. Check its state (GET /api/session/' + sid + '/inject-receipt, the tail of its '
+      + 'for at least 5 minutes. CCC already attempted one automatic status check ("?"). Check its state (GET /api/session/' + sid + '/inject-receipt, the tail of its '
       + 'transcript, the CCC activity.log, and whether its process is alive or the host is starved of CPU) and '
       + 'report what is wrong. Do not kill it or change anything without saying so first.';
     const tempPid = 'tmp-inv-' + Date.now();
