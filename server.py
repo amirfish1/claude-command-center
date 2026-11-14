@@ -18413,6 +18413,8 @@ def _archive_overlay_codex_sessions(rows, now=None):
     archived, trashed = _load_conversation_lifecycle_sets()
     parents = _session_graph.parent_snapshot()
     names = _load_session_name_overrides()
+    task_titles = _auto_titled_session_ids()
+    spawns = _spawn_registry_entries_by_session(engine="codex")
     out = []
     for row in missing:
         sid = row["id"]
@@ -18420,11 +18422,19 @@ def _archive_overlay_codex_sessions(rows, now=None):
         if sid in archived or sid in trashed or not stamp or stamp < now - 86400:
             continue
         cwd = str(row.get("cwd") or "")
-        title = " ".join(str(names.get(sid) or row.get("title") or sid).split())[:200]
+        spawn = spawns.get(sid) or {}
+        prompt = _strip_ccc_session_state_instruction(
+            _strip_host_system_instruction(spawn.get("prompt") or spawn.get("command_summary") or "")
+        ).strip()
+        title = " ".join(str(
+            names.get(sid) or task_titles.get(sid) or row.get("title")
+            or _strip_image_markup(prompt) or spawn.get("name") or "New Codex session"
+        ).split())[:200]
         out.append({
             "id": sid, "session_id": sid, "engine": "codex", "source": "codex",
             "model": row.get("model") or "", "reasoning_effort": row.get("reasoning_effort") or "",
-            "display_name": title, "first_message": title,
+            "display_name": title, "first_message": prompt[:200],
+            "name_overridden": bool(names.get(sid)),
             "folder_label": Path(cwd).name if cwd else "Codex", "folder_path": cwd,
             "session_cwd": cwd, "slug": _encode_project_slug(cwd) if cwd else "",
             "mtime": stamp, "modified": stamp, "parent_session_id": parents.get(sid) or "",
@@ -19778,7 +19788,10 @@ def _rehydrate_archive_cached_rows(rows):
                         )
                         if row["ai_title"] is None:
                             try:
-                                _request_codex_auto_title(sid, fresh=fresh, mtime=row.get("mtime"))
+                                _request_codex_auto_title(
+                                    sid, fresh=fresh, mtime=row.get("mtime"),
+                                    first_message=row.get("first_message") or "",
+                                )
                             except Exception:
                                 pass
 

@@ -1,0 +1,1 @@
+Fixed unnamed Codex sessions showing a UUID while the sidebar refreshes, and restored automatic titles when Codex leaves its stored prompt empty. Screenshot attachment paths no longer appear in fallback names.

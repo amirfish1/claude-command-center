@@ -2651,14 +2651,15 @@ def request_auto_title(session_id):
 # no Stop hook to poke us, so this is driven from the sidebar hydrate path
 # instead (_apply_watchtower_worker_display_names' caller) — cheap idempotency
 # checks below make repeated polling calls a no-op after the first attempt.
-def _codex_auto_title_needed(session_id):
+def _codex_auto_title_needed(session_id, fresh=None):
     """True when a Codex session's own title is just a copy of its first prompt."""
     if _core._load_session_name_overrides().get(session_id):
         return False
-    try:
-        fresh = _core._codex_titles_snapshot().get(session_id)
-    except Exception:
-        fresh = None
+    if fresh is None:
+        try:
+            fresh = _core._codex_titles_snapshot().get(session_id)
+        except Exception:
+            fresh = None
     if not fresh:
         return None  # Codex hasn't written title/first_user_message yet
     first_message = (fresh.get("first_user_message") or "").strip()
@@ -2707,7 +2708,7 @@ def _codex_title_max_age_s():
         return 3 * 86400
 
 
-def _request_codex_auto_title(session_id, fresh=None, mtime=None):
+def _request_codex_auto_title(session_id, fresh=None, mtime=None, first_message=""):
     """Queue a background auto-title for a Codex session. Returns immediately.
 
     Codex has no Stop hook, so this runs from the list-build path over every
@@ -2725,14 +2726,18 @@ def _request_codex_auto_title(session_id, fresh=None, mtime=None):
         pass
     if _auto_title_marker_path(sid).exists():
         return
-    needed = _codex_auto_title_needed(sid)
-    if not needed:
-        return
     if fresh is None:
         try:
             fresh = _core._codex_titles_snapshot().get(sid)
         except Exception:
             fresh = None
+    # Newer Codex builds can leave both SQLite text fields empty. The list
+    # builder already recovered the opener from the rollout; use that text
+    # without reading transcripts again on the sidebar polling path.
+    if first_message and not (fresh or {}).get("first_user_message"):
+        fresh = dict(fresh or {}, first_user_message=first_message)
+    if not _codex_auto_title_needed(sid, fresh=fresh):
+        return
     first_message = ((fresh or {}).get("first_user_message") or "").strip()
     if not first_message or _is_wt_worker_session(sid, first_message):
         return
