@@ -56395,7 +56395,8 @@
     const QA = window.QueueAttention;
     const reason = QA && QA.blockReason(item);
     if (reason) return reason;
-    if (!card && _workersActiveClaim(item)) return {text:'Working on this ticket. Session details are loading.', category:''};
+    // The "Working" state already says it; a filler line would cost a row.
+    if (!card && _workersActiveClaim(item)) return null;
     const outcome = card && rowOutcomeView(card);
     // Terminal worker sign-offs describe its drained queue, not this ticket.
     return outcome && outcome.kind === 'working'
@@ -56570,8 +56571,9 @@
       return '<div class="workers-ticket-entry' + (sessions.lanes ? ' has-lanes' : '') + '" data-workers-ticket="' + escapeAttr(ref) + '">'
         + '<div class="workers-ticket-heading" data-workers-ticket-row="' + escapeAttr(ref) + '">' + ticketButton
         + '<button type="button" class="workers-ticket-toggle" data-workers-ticket-toggle="' + escapeAttr(ref) + '"'
-        + ' aria-expanded="' + expanded + '" aria-label="' + escapeAttr('Session and lane details for ' + ref) + '">'
-        + escapeHtml(label) + '</button></div>' + updateHtml
+        + ' aria-expanded="' + expanded + '" aria-label="' + escapeAttr(label + ' for ' + ref) + '" title="' + escapeAttr(label) + '">'
+        // A count, not a sentence: the full label would wrap onto its own line.
+        + escapeHtml(String(sessions.count)) + '</button></div>' + updateHtml
         + '<div class="workers-ticket-session-body"' + (expanded ? '' : ' hidden') + '>' + sessions.html + '</div></div>';
 
 

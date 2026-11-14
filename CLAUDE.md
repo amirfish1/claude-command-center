@@ -33,6 +33,7 @@ Everything ships to github.com/amirfish1/claude-command-center.
 - `hooks/` scripts run in Claude Code's hook pipeline: exit fast, never prompt.
 - Bounding headless `claude -p` to read-only tools needs `--disallowedTools` too; `--allowedTools` alone doesn't restrict.
 - Fix UI staleness at its source (auto-refresh); never add a manual refresh button.
+- Vertical space is budgeted. Workers rows get one identity line plus one context line (`tests/workers-row-budget.browser.cjs`, run by the pre-push gate). Fit new UI into existing lines; if it truly needs more height, ask the owner for budget instead of raising the numbers.
 - Never hold a foreground Bash polling loop for more than minutes; use `run_in_background`, Monitor, or end the turn (a live turn blocks queued input).
 
 ## Performance gates

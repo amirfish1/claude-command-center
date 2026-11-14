@@ -35280,3 +35280,48 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 @media (prefers-reduced-motion: reduce) {
   .conv-replay-incoming { animation: none; }
 }
+
+/* ── Workers vertical budget ───────────────────────────────────────────────
+   Each ticket gets one line for identity (ref, title, state, age, session
+   count) and at most one line for context (category, question, answers).
+   tests/workers-row-budget.browser.cjs enforces this; a feature that needs
+   more height asks the owner for budget instead of adding a line here. */
+#convList.workers-view > .conv-archived-section { margin-top: 0; padding-top: 0; border-top: 0; }
+#convList.workers-view .conv-workers-activity { margin: 0; }
+#convList.workers-view .conv-workers-activity .fq-recent-work { padding: 0 10px; }
+#convList.workers-view .conv-workers-activity .fq-recent-rows { margin-top: 0; }
+#convList.workers-view .workers-awaiting {
+  display: flex; align-items: center; gap: 8px; padding: 4px 0; min-width: 0;
+}
+#convList.workers-view .workers-awaiting[hidden] { display: none; }
+#convList.workers-view .workers-awaiting-label { flex: 0 0 auto; margin: 0; white-space: nowrap; }
+#convList.workers-view .workers-awaiting-chips { flex: 1 1 auto; min-width: 0; gap: 4px; padding: 1px; scrollbar-width: none; }
+#convList.workers-view .workers-awaiting-chip { min-height: 0; padding: 1px 6px; font-size: 10.5px; }
+#convList.workers-view .conv-workers-activity .workers-ticket-heading { flex-wrap: nowrap; }
+#convList.workers-view .conv-workers-activity .workers-ticket-heading .fq-recent-row.is-brief {
+  flex-basis: auto; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; padding: 5px 0 3px;
+}
+#convList.workers-view .conv-workers-activity .workers-ticket-entry.has-lanes .workers-ticket-toggle { margin: 0; }
+#convList.workers-view .workers-ticket-toggle {
+  min-width: 18px; padding: 0 4px; font-size: 10px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
+}
+#convList.workers-view .workers-ticket-context {
+  display: flex; align-items: center; gap: 6px; margin: 0 0 5px; min-width: 0;
+}
+#convList.workers-view .workers-ticket-context .workers-ticket-update {
+  display: block; flex: 1 1 auto; min-width: 0; margin: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset;
+}
+#convList.workers-view .workers-block-category { padding: 0 4px; font-size: 9.5px; line-height: 14px; margin-inline-end: 4px; }
+#convList.workers-view .workers-block-choices {
+  flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; gap: 4px; margin: 0; overflow: hidden;
+}
+#convList.workers-view .workers-ticket-context .workers-ticket-update { flex-basis: 30%; }
+#convList.workers-view .workers-block-choice {
+  flex: 0 1 auto; min-width: 4.5em; max-width: 120px; min-height: 0; padding: 0 6px; font-size: 10px; line-height: 16px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Touch keeps a tappable target, still inside the two-line budget. */
+@media (pointer: coarse) {
+  #convList.workers-view .workers-block-choice { min-height: 28px; }
+}

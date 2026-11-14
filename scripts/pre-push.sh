@@ -103,3 +103,20 @@ if ! "$PY" -m pytest tests/test_perf_budget.py -q --tb=short; then
   exit 1
 fi
 echo "pre-push: perf gate passed ✓"
+
+# Vertical budget: Workers rows must fit their line budget (ask the owner for
+# more height instead of raising it). Needs node + puppeteer; clones without
+# them skip with a notice rather than blocking an unrelated push.
+if command -v node >/dev/null 2>&1 && [ -d node_modules/puppeteer ]; then
+  echo "pre-push: running vertical-budget gate…"
+  if ! node --test tests/workers-row-budget.browser.cjs >/tmp/ccc-vertical-budget.log 2>&1; then
+    grep -E "budget is|error:" /tmp/ccc-vertical-budget.log | head -20
+    echo ""
+    echo "❌ vertical-budget gate FAILED — a Workers row grew past its line budget."
+    echo "   Fit the feature into the existing lines, or ask the owner for budget."
+    exit 1
+  fi
+  echo "pre-push: vertical budget passed ✓"
+else
+  echo "pre-push: vertical-budget gate skipped (node or puppeteer not installed)"
+fi

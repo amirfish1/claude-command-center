@@ -51,7 +51,7 @@ test('live claims remain visible while session details load, without inventing a
   const ctx = setup({_uxqHealthCache:{wt_workers:[worker]}});
   const item = {ref:'TEST-2',project:'TEST',status:'in_progress',claimed_by:'worker-1'};
   assert.equal(ctx._workersTicketState(item).label, 'Working');
-  assert.match(ctx._workersTicketContext(item, null).text, /Session details are loading/);
+  assert.equal(ctx._workersTicketContext(item, null), null, 'the Working state already says it');
   for (const patch of [{alive:false},{released_at:'2026-01-01'},{idle_seconds:61},{idle_seconds:null},{queue:'OTHER'},{worker_id:'another-worker'}]) {
     ctx._uxqHealthCache.wt_workers = [{...worker,...patch}];
     assert.equal(ctx._workersTicketState(item).label, 'Claimed', JSON.stringify(patch));

@@ -42,6 +42,8 @@ test('one session and at most one lane opens directly; larger groups still discl
       const _uxqItemRef = item => item.ref;
       const _workersActivityRows = () => items.map(item => ({item,at:new Date().toISOString(),workerState:{label:'Working'},worker:'Example worker'}));
       const _workersPendingWorkers = () => [];
+      const _workersAwaitingTickets = () => [];
+      const _uxqItemsCache = {items:[]};
       const _workersPendingHtml = () => '';
       const _scheduleSidebarRender = () => {};
       const _workersLatestTicketCard = s => s?.cards[0];
