@@ -6785,7 +6785,9 @@
       const body = document.createElement('div');
       body.style.cssText = 'flex:1 1 auto;min-width:0;word-break:break-word;';
       body.innerHTML = '<strong>CCC wants to interrupt this session. Approve?</strong><br>'
-        + '<span style="color:var(--text-muted)">' + escapeHtml(label) + ': ' + escapeHtml(ask.reason || '') + '</span>';
+        + '<span style="color:var(--text-muted)"><a class="session-ref-chip" href="?session=' + encodeURIComponent(ask.sid)
+        + '" data-session-ref="' + escapeAttr(ask.sid) + '" title="' + escapeAttr('Open session: ' + label)
+        + '">' + escapeHtml(label) + '</a>: ' + escapeHtml(ask.reason || '') + '</span>';
       card.appendChild(body);
       const resolve = async (decision) => {
         card.querySelectorAll('button').forEach(b => { b.disabled = true; });
