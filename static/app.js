@@ -80433,10 +80433,11 @@
     let role = String((origin && origin.role) || '').trim();
     if (!role || role === 'worker') role = _workerRoleFromPrompt(c) || 'worker';
     const isHelper = role !== 'worker';
-    // Ticket: the worker's own claim name wins (it is what the worker is on
-    // NOW); the origin ledger names a helper's ticket; the worked-ticket
-    // history is the fallback for rows that never renamed themselves.
-    let ticketRef = workerSelfTicketRef(c);
+    // A recorded active claim wins over a stale server-generated name.
+    // Helpers retain their origin ticket; history supplies older work when
+    // no current claim or explicit ticket identity is available.
+    const activeClaim = !isHelper && _uxFixesWorkerTicketsForRow(c).find(ticket => ticket.currentClaimed);
+    let ticketRef = (activeClaim && activeClaim.ref) || workerSelfTicketRef(c);
     if (!ticketRef && origin && origin.ref) ticketRef = String(origin.ref).trim();
     if (!ticketRef) ticketRef = workerTaskTicketRef(c);
     if (!ticketRef) {

@@ -83,6 +83,9 @@ test('current claim wins over a later progress event on old work and updates wit
     ticket(2, {status:'in_progress', claimed_at:new Date().toISOString(), closed_by:'',closed_at:''})]);
   assert.equal(ctx._uxFixesWorkerDisplayTitle(row, 'EXAMPLE#1 Drain the EXAMPLE WatchTower queue and keep it empty'), 'Task 2');
   assert.equal(ctx._withTicketPrefix(row, ctx._uxFixesWorkerDisplayTitle(row, row.display_name)), 'EXAMPLE#2 Task 2');
+  ctx.sessionIsActivelyWorking = () => true; ctx._applyLiveOverlayToRow = c => c;
+  assert.equal(ctx.workerRowFacts(row, 'Old task').ticketRef, 'EXAMPLE-2');
+  assert.equal(ctx.workerRowFacts(row, 'Old task').title, 'Task 2');
   ctx._setUxFixesQueueMeta([ticket(3, {title:'',note:'Make replies survive a restart',status:'in_progress',claimed_at:new Date().toISOString()})]);
   assert.equal(ctx._uxFixesWorkerDisplayTitle(row, row.display_name), 'Make replies survive a restart');
 });
