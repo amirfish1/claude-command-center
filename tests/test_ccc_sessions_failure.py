@@ -26,6 +26,8 @@ def api():
     class Handler(http.server.BaseHTTPRequestHandler):
         health = {'pid': 123, 'uptime_s': 400, 'sessions_readiness': {'state': 'warming', 'elapsed_s': 180}}
         census_delay = 0.15
+        census_payload = {'ok': True, 'sessions': []}
+        warm_census_path = None
         health_code = 200
         calls = []
         def log_message(self, *args):
@@ -34,7 +36,10 @@ def api():
             Handler.calls.append(self.path)
             if self.path.startswith('/api/sessions/census'):
                 time.sleep(Handler.census_delay)
-                data, code = {'ok': True, 'sessions': []}, 200
+                if Handler.warm_census_path and self.path != Handler.warm_census_path:
+                    data, code = {'ok': False, 'sessions': []}, 503
+                else:
+                    data, code = Handler.census_payload, 200
             else:
                 data, code = Handler.health, Handler.health_code
             body = json.dumps(data).encode()
@@ -108,3 +113,21 @@ def test_success_does_not_probe_health_or_change_json(cli, api, capsys):
     assert cli.cmd_sessions(SimpleNamespace(server=base, since=None, json=True)) == 0
     assert json.loads(capsys.readouterr().out) == {'ok': True, 'sessions': []}
     assert handler.calls == ['/api/sessions/census?since=86400']
+
+
+@pytest.mark.parametrize('since', [0, 7200, 18000, 86400, 172800])
+def test_time_window_uses_warm_census_and_preserves_filter(cli, api, capsys, since):
+    base, handler = api
+    handler.census_delay = 0
+    # Only the default census is kept warm by the server. Wider windows
+    # still need their own result so recently ended sessions are included.
+    handler.warm_census_path = f'/api/sessions/census?since={max(86400, since)}'
+    handler.census_payload = {'ok': True, 'sessions': [
+        {'session_id': 'boundary', 'last_event_age_s': since},
+        {'session_id': 'older', 'last_event_age_s': since + 1},
+        {'session_id': 'unknown', 'last_event_age_s': None},
+    ]}
+    assert cli.cmd_sessions(SimpleNamespace(server=base, since=since, json=True)) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['sessions'] == [handler.census_payload['sessions'][0]]
+    assert handler.calls == [handler.warm_census_path]

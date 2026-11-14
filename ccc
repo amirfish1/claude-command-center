@@ -332,9 +332,11 @@ def cmd_sessions(args):
     try:
         census_path = "/api/sessions/census"
         if effective_since is not None:
-            # Server widens the candidate pool with recently-ended sessions in
-            # the window; the client-side filter below then applies uniformly.
-            census_path += f"?since={effective_since}"
+            # The server keeps the default window warm, while occasional
+            # narrower queries otherwise hit cold per-window cache slots.
+            # Filter that superset below; wider windows still need their own
+            # candidate pool to include recently ended sessions.
+            census_path += f"?since={max(_DEFAULT_SESSIONS_SINCE_S, effective_since)}"
         payload = _get_json(base, census_path)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         _sessions_failure(base, e, time.monotonic() - request_started)
