@@ -34134,11 +34134,32 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 .sidebar:has(.session-workspace) .search-wrap { order: 10; flex: 1 1 120px; }
 .sidebar:has(.session-workspace) .conv-search-input { border-radius: 7px; min-height: 36px; font-size: 13px; }
 @media (max-width: 1200px) {
-  #convList#convList.session-workspace .conv-item .wa-body { min-height: 78px; }
+  #convList#convList.session-workspace .conv-item .wa-body { min-height: 0; padding-block: 4px; }
+  #convList#convList.session-workspace .conv-item:not(.is-current-child-row) { padding-block: 6px !important; }
+  #convList.session-workspace .session-lifecycle-section { margin-bottom: 12px; }
+  #convList.session-workspace .session-lifecycle-heading { margin: 8px 4px 4px; }
   #convList#convList.session-workspace .conv-item:not(.is-current-child-row) .wa-row > .conv-idea-avatar:not(.is-child-mini) { position: relative; top: auto; flex: 0 0 40px; }
   #convList.session-workspace .wa-title { font-size: 15px; }
   #convList.session-workspace .wa-preview { font-size: 13px; line-height: 19px; }
   .session-usage-drawer { padding: 6px 14px; }
+  #convList .wa-line2:has(.wa-decision-context) .wa-preview {
+    display: block; flex-basis: 100%; -webkit-line-clamp: unset; overflow: visible;
+  }
+  .wa-decision-context { flex: 1 0 100%; min-width: 0; }
+  .wa-decision-context-toggle {
+    min-height: 32px; padding: 4px 0; border: 0; background: transparent;
+    color: var(--accent); font: inherit; font-size: 12px; cursor: pointer;
+    text-align: start; text-decoration: underline; text-underline-offset: 3px;
+  }
+  .wa-decision-context-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .wa-decision-context .conv-session-summary-detail {
+    margin: 0 0 4px; padding: 0; border: 0; background: transparent;
+  }
+  .wa-decision-choice, .wa-decision-reply {
+    color: var(--text-muted); font-size: 12px; line-height: 1.5;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .wa-decision-choice { margin-bottom: 4px; }
 }
 @media (prefers-reduced-motion: reduce) {
   #convList.session-workspace * { animation: none !important; transition: none !important; }

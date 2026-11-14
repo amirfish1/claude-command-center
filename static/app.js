@@ -19028,6 +19028,50 @@
         || /[\x00-\x1f]/.test(value.reply)) return null;
     return { label: value.label, reply: value.reply.trim() };
   }
+  const _rowDecisionReplies = new Map();
+  function rowDecisionReplyText(text) {
+    text = String(text || '').replace(/(?:<!--\s*)?<session-state>[\s\S]*$/, '').trim();
+    try {
+      const value = JSON.parse(text.replace(/^```(?:json)?\s*\n?/, '').replace(/\s*```$/, ''));
+      if (Array.isArray(value.decisions) && value.decisions.length) {
+        return value.decisions.map(d => [d.tag, d.question,
+          d.impact && 'Impact: ' + d.impact, d.tradeoff && 'Tradeoff: ' + d.tradeoff,
+          d.recommendation && 'Recommendation: ' + d.recommendation].filter(Boolean).join('\n')).join('\n\n')
+          + '\n\nFull saved reply:\n' + text;
+      }
+    } catch (_) { /* Ordinary prose remains verbatim. */ }
+    return text;
+  }
+  function loadRowDecisionReply(row) {
+    if (typeof window !== 'undefined' && window.innerWidth > 1200) return;
+    const host = row.querySelector('.wa-decision-reply');
+    if (!host) return;
+    const sid = row.dataset.sessionId;
+    const base = _ultraFreshRow(sid);
+    const preview = JSON.stringify([base?.last_assistant_text || base?.last_assistant_preview || '',
+      base?.modified, base?.session_state]);
+    let entry = _rowDecisionReplies.get(sid);
+    if (!entry || entry.preview !== preview) {
+      if (_rowDecisionReplies.size >= 64) _rowDecisionReplies.delete(_rowDecisionReplies.keys().next().value);
+      entry = { preview, text: 'Loading full decision context…' };
+      _rowDecisionReplies.set(sid, entry);
+      fetch('/api/conversations/' + encodeURIComponent(sid) + '?tail=20',
+        { cache: 'no-store', cccPriority: 'user', signal: AbortSignal.timeout(10000) })
+        .then(async res => {
+          if (!res.ok) throw new Error('Reply unavailable');
+          const events = (await res.json()).events || [];
+          const last = events.filter(e => ['assistant', 'assistant_block'].includes(e.type)
+            && !e.parent_tool_use_id && e.blocks?.some(b => (b.kind || b.type) === 'text' && b.text)).at(-1);
+          const text = (last?.blocks || []).filter(b => (b.kind || b.type) === 'text').map(b => b.text || '').join('\n');
+          entry.text = rowDecisionReplyText(text) || 'Full reply unavailable. Open this session to read it.';
+        }).catch(() => { entry.text = 'Full reply unavailable. Open this session to read it.'; })
+        .finally(() => {
+          // A rerender may have replaced the row while the request ran.
+          if (_rowDecisionReplies.get(sid) === entry) syncRowQuickActions(sid);
+        });
+    }
+    host.textContent = entry.text;
+  }
   // "Answer [Q12:slug]: keep all questions or use the shorter form." is a
   // decision, and a decision always gets one chip per option (CCC-276).
   // Footers written before NEXT_ACTION accepted arrays only carry the prose,
@@ -19228,6 +19272,7 @@
     const rects = rows.map(row => row.getBoundingClientRect());
     rows.forEach((row, rowIndex) => {
       const rect = rects[rowIndex];
+      if (rect.width && rect.height && rect.bottom > 0 && rect.top < innerHeight) loadRowDecisionReply(row);
       if (rect.width && rect.height && rect.bottom > 0 && rect.top < innerHeight
           && !_rowQuickActionSending.has(row.dataset.sessionId) && _rowInvestigationChecksInFlight < 4) {
         const base = _ultraFreshRow(row.dataset.sessionId);
@@ -43192,6 +43237,21 @@
         : (_readyToCloseRow && !_childLaneRow) ? readyToCloseArchiveHtml()
         : _needsYouRow ? '<span class="wa-badge" title="Needs you">?</span>'
         : (_isWorkingRow ? '<span class="wa-dot" title="Working"></span>' : '');
+      // A phone has no hover summary. Keep the rationale beside the choice,
+      // using the same persisted disclosure as the desktop summary control.
+      const waDecisionContextHtml = _outView.label === 'Decide' && _hasSummaryDetails
+        ? '<div class="wa-decision-context">'
+          + '<button type="button" class="wa-decision-context-toggle" data-role="session-summary-toggle"'
+          + ' data-summary-sid="' + escapeAttr(_summarySid) + '"'
+          + ' aria-expanded="' + (_summaryExpanded ? 'true' : 'false') + '">'
+          + (_summaryExpanded ? 'Hide decision context' : 'Decision context') + '</button>'
+          + (_summaryExpanded ? summaryDetailHtml
+            + sessionQuickActions(_summaryState, _outView.next, _latestRaw).map(action =>
+              '<div class="wa-decision-choice"><strong>' + escapeHtml(action.label) + ':</strong> '
+                + escapeHtml(action.reply || action.href || '') + '</div>').join('')
+            + '<div class="wa-decision-reply">Loading full decision context…</div>' : '')
+          + '</div>'
+        : '';
       const waHtml = '<div class="wa-row">'
         // Ticket rows keep the AUTO switch under the avatar here too.
         + ((autoSwitchHtml || _wkTicketChip)
@@ -43203,7 +43263,7 @@
         // Claude is the norm; the engine mark only flags the exceptions.
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Ticket identity stays inside the avatar.
-        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview ? '<span class="wa-explanation-label" data-status="' + escapeAttr(_waExplanationLabel.toLowerCase()) + '">' + escapeHtml(_waExplanationLabel) + (_waExplanationLabel === '✓' ? '' : ':') + '</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + '</div>'
+        +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview ? '<span class="wa-explanation-label" data-status="' + escapeAttr(_waExplanationLabel.toLowerCase()) + '">' + escapeHtml(_waExplanationLabel) + (_waExplanationLabel === '✓' ? '' : ':') + '</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + waDecisionContextHtml + '</div>'
         + '<div class="wa-row-footer">' + sessionIdChipHtml + '</div>'
         + (window.CCCSessionRecaps ? window.CCCSessionRecaps.render(c, _outView) : '')
         + '</div>'
