@@ -52,6 +52,8 @@ test('merged turns fold tools and reasoning across lifecycle markers, preserving
       final: true, narrationFinal: false, approvalVisible: true });
     await page.click('.cc-run-chip');
     await page.click('.cc-run-tools');
+    assert.notEqual(await page.$eval('.kimi-tool-group-body', el => getComputedStyle(el).display), 'none',
+      'Show tools reveals grouped rows immediately');
     await page.click('#single .kimi-tool-head');
     assert.equal(await page.$eval('#single', el => el.classList.contains('open')), true);
     await page.click('.cc-run-chip');
@@ -83,6 +85,40 @@ test('merged turns fold tools and reasoning across lifecycle markers, preserving
   } finally {
     await browser.close();
   }
+});
+
+test('a standalone group of fifteen tools opens with one native disclosure', async () => {
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1000, height: 800 });
+    const rows = Array.from({length:15}, (_, i) => '<div class="kimi-tool" data-cc-orch="wt status">'
+      + '<div class="kimi-tool-head"><span class="kimi-tool-name">Bash</span>'
+      + '<span class="kimi-tool-status error">failed</span></div><div class="kimi-tool-body">Result ' + i + '</div></div>').join('');
+    await page.setContent(`<style>${css}</style><body class="conv-compact"><div class="conv-pane is-webui-session"><div class="conversations-view">
+      <div class="event user_text">Inspect the tools</div><div class="kimi-turn">${rows}</div>
+    </div></div></body>`);
+    const regroup = app.slice(app.indexOf('  function _kimiFlushRegroups('), app.indexOf('  // kimi-web parity (messagesToTurns flushGroup)'));
+    await page.evaluate(({compact,regroup}) => {
+      (0, eval)('const _KIMI_GLYPHS = new Proxy({}, {get:()=>""}); const escapeAttr = s => String(s);'
+        + regroup + '\n' + compact + '\nwindow.regroup=_kimiRegroupTools; window.markRuns=_ccMarkRuns;');
+      window.regroup(document.querySelector('.kimi-turn'));
+      window.markRuns(document.querySelector('.conversations-view'));
+    }, {compact,regroup});
+    assert.equal(await page.$$eval('.cc-run-fold, .cc-run-chip', els => els.length), 0);
+    assert.match(await page.$eval('.kimi-tg-title', el => el.textContent), /15 tool calls/);
+    assert.equal(await page.$eval('.kimi-tool-group', el => el.dataset.kimiGroupState), 'failed');
+    assert.equal(await page.$$eval('.kimi-tg-orch-chip', els => els.length), 1);
+    await page.click('.kimi-tool-group-head');
+    assert.equal(await page.$eval('.kimi-tool-group-head', el => el.getAttribute('aria-expanded')), 'true');
+    assert.equal(await page.$$eval('.kimi-tool-group-body > .kimi-tool', els => els.filter(el => el.checkVisibility()).length), 15);
+    await page.evaluate(() => { regroup(document.querySelector('.kimi-turn')); markRuns(document.querySelector('.conversations-view')); });
+    assert.notEqual(await page.$eval('.kimi-tool-group-body', el => getComputedStyle(el).display), 'none');
+    if (process.env.CCC_DISCLOSURE_SCREENSHOT_DIR) await page.screenshot({path:process.env.CCC_DISCLOSURE_SCREENSHOT_DIR+'/fifteen-tools.png'});
+    await page.focus('.kimi-tool-group-head');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.$eval('.kimi-tool-group', el => el.classList.contains('collapsed')), true);
+  } finally { await browser.close(); }
 });
 
 test('Codex wt / CCC API tool rows get purple orchestration chips (CCC-227)', async () => {

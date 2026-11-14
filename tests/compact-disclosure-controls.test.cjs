@@ -49,6 +49,10 @@ test('Claude disclosure arrows expand their own group without folding the run', 
         await page.screenshot({ path: process.env.CCC_DISCLOSURE_SCREENSHOT_DIR + '/thinking-' + narration + '.png' });
       }
       await page.click('.cc-run-tools');
+      assert.notEqual(await page.$eval('#first .tool-call-group-body', el => getComputedStyle(el).display), 'none',
+        'Show tools reveals rows without a second disclosure');
+      await page.click('#first .tcg-arrow');
+      assert.equal(await page.$eval('#first', el => el.classList.contains('collapsed')), true);
       await page.click('#first .tcg-arrow');
       assert.equal(await page.$eval('#first', el => el.classList.contains('cc-run-open')), true,
         'first disclosure must leave the surrounding run open');
@@ -56,6 +60,8 @@ test('Claude disclosure arrows expand their own group without folding the run', 
         'first disclosure must expand its command group');
       await page.click('#first summary');
       assert.equal(await page.$eval('#first details', el => el.open), true);
+      await page.click('#second .tcg-arrow');
+      assert.equal(await page.$eval('#second', el => el.classList.contains('collapsed')), true);
       await page.click('#second .tcg-arrow');
       assert.equal(await page.$eval('#second', el => el.classList.contains('collapsed')), false);
       await page.click('#first .tcg-arrow');

@@ -88729,7 +88729,8 @@
       // A chip costs no row, so with a preceding text even one step folds;
       // Legacy standalone rows fold at two steps; merged tools/thinking
       // also fold alone so output previews never dominate compact mode.
-      if (active.length >= 2 || (active.length && prevText) || active[0]?.el.matches('.kimi-tool, .kimi-tool-group, .kimi-thinking')) {
+      // A standalone tool group already has its own disclosure.
+      if (active.length >= 2 || (active.length && prevText) || active[0]?.el.matches('.kimi-tool, .kimi-thinking')) {
         const head = active[0].el;
         const calls = active.reduce((n, u) => n + (u.calls || 0), 0);
         const thoughts = active.filter(u => u.kind === 'think').length;
@@ -88964,6 +88965,11 @@
       .forEach(el => {
         el.classList.toggle('cc-run-open', open);
         el.classList.toggle('cc-run-thinking', thinking);
+        if (open && !thinking && el.matches('.tool-call-group, .kimi-tool-group')) {
+          // Revealing tools should reveal their rows in the same action.
+          el.classList.remove('collapsed');
+          el.querySelector(':scope > .kimi-tool-group-head')?.setAttribute('aria-expanded', 'true');
+        }
       });
     _ccMarkRuns(view);
   }, true);
