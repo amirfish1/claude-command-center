@@ -448,10 +448,11 @@ def forward_target(sid):
         return sid
     try:
         conn = _sg._get_connection()
-        _sg._sync_all(conn, force=False)
+        # Background indexing owns refreshes and schema migrations. Doing
+        # either here can wait behind its writer before a send is dispatched.
         target = _lineage.latest_successor(conn, manual_forward_target(sid))
     except Exception:
-        return sid
+        target = manual_forward_target(sid)
     if not target or target == sid:
         return sid
     try:
