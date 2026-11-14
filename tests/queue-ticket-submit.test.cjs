@@ -28,7 +28,7 @@ for (const lost of ['502', 'timeout', 'empty', 'pending']) {
     assert.equal(h.calls[0].opts.body, h.calls[1].opts.body);
     assert.equal(h.calls[0].opts.cccRetryHandled, true, 'dedicated helper owns write recovery');
     assert.match(JSON.parse(h.calls[0].opts.body).idempotency_key, /^[a-f0-9-]{36}$/);
-    assert.equal(h.retries.length, 1);
+    assert.equal(h.retries.length, 0, 'automatic retries must not notify the user');
   });
 }
 test('persistent outage remains pending and a retry after reload reuses the saved key', async () => {
@@ -58,7 +58,7 @@ test('browser timeout wording becomes a contextual, actionable confirmation warn
   });
   assert.equal(h.calls.length, 4);
   assert.equal(new Set(h.calls.map(c => c.opts.body)).size, 1);
-  assert.match(h.retries[0], /TEST.*Fix the button.*\d+s elapsed.*No confirmation within 10 seconds/);
+  assert.equal(h.retries.length, 0, 'timeouts retry silently');
 });
 test('an empty success reply explains the missing confirmation instead of calling HTTP 200 a failure', async () => {
   const h = fixture(async () => reply(200, {}));
@@ -69,14 +69,14 @@ test('an empty success reply explains the missing confirmation instead of callin
     return true;
   });
 });
-test('slow acknowledged saves keep checking and explain which ticket is pending', async () => {
+test('slow acknowledged saves keep checking silently until confirmed', async () => {
   const h = fixture(async n => n < 7
     ? reply(202, {ok:false, pending:true, error:'Ticket save is still running'})
     : reply(200, {ok:true, item:{ref:'TEST-2'}}));
   assert.equal((await h.submit({note:'Fix the button', project:'TEST'})).item.ref, 'TEST-2');
   assert.equal(h.calls.length, 7);
   assert.equal(new Set(h.calls.map(c => c.opts.body)).size, 1);
-  assert.match(h.retries[0], /TEST.*Fix the button.*Ticket save is still running/);
+  assert.equal(h.retries.length, 0, 'pending save checks must not produce warning toasts');
 });
 test('HTTP pages without randomUUID can still submit with corrupt saved state', async () => {
   const ctx = vm.createContext({AbortController, crypto: {},

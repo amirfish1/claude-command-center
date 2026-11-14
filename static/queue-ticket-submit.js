@@ -16,7 +16,7 @@
     else { delete entries[signature]; memory.delete(signature); }
     try { root.sessionStorage.setItem(storageKey, JSON.stringify(entries)); } catch (_) {}
   }
-  async function submit(payload, onRetry) {
+  async function submit(payload) {
     const signature = JSON.stringify(payload);
     const key = memory.get(signature) || read()[signature]
       || (root.crypto && typeof root.crypto.randomUUID === 'function' ? root.crypto.randomUUID()
@@ -33,8 +33,7 @@
     let failures = 0;
     for (let attempt = 0; attempt < 40 && failures < 4; attempt++) {
       if (attempt) {
-        if (onRetry) onRetry('Waiting for ticket confirmation in ' + context + ' (' + elapsed()
-          + ' elapsed). Last check: ' + reason + '. Retrying the same submission safely…');
+        // Retry quietly; transient save checks should not produce notifications.
         await new Promise(resolve => setTimeout(resolve, 1000 * Math.min(attempt, 3)));
       }
       const controller = new AbortController();
