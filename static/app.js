@@ -19180,14 +19180,20 @@
       if (reply.length > 400) return null;
       actions = [{ label, reply, derived: true }];
     } else if (info.kind === 'plan' && info.planOwner === '' && !actions.length) {
-      // Older footers leave investigations unowned with NEXT_ACTION: null.
-      // Offer a literal resume of the scoped investigation, rather than
-      // making the owner compose it. Explicit agent/external waits stay put.
+      // Older footers leave investigations and retries unowned with
+      // NEXT_ACTION: null. Copy the scoped task and keep any prerequisites;
+      // explicit agent/external waits still follow their own rules.
       const planned = c.session_state?.completion?.remaining_actions?.[0];
       next = info.text;
       if (!planned || planned.within_scope !== true || planned.reversible !== true
-          || !/^investigate\b/i.test(next) || next.length > 340 || /[\x00-\x1f]/.test(next)) return null;
-      actions = [{ label: 'Continue investigation', reply: 'Continue the investigation: ' + next, derived: true }];
+          || next.length > 340 || /[\x00-\x1f]/.test(next)) return null;
+      if (/^investigate\b/i.test(next)) {
+        actions = [{ label: 'Continue investigation', reply: 'Continue the investigation: ' + next, derived: true }];
+      } else if (/^(?:re[ -]?run|retry|resume)\b/i.test(next)) {
+        const reply = 'Retry the pending task: ' + next.replace(/[.!?]+$/, '') + '. Honor its stated trigger and prerequisites, then verify the result. Preserve existing approval and spending limits; do not bypass dependencies or fabricate evidence.';
+        if (reply.length > 400) return null;
+        actions = [{ label: 'Retry task', reply, derived: true }];
+      } else return null;
     } else if (!actions.length || !next || info.kind !== 'next' || (info.next || info.text) !== next) return null;
     const source = { sid, actions, action: actions[0], key: JSON.stringify([sid, next, actions]) };
     if (info.kind === 'plan' || build) {

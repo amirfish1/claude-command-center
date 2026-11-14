@@ -1,0 +1,1 @@
+Pending tasks that explicitly ask to rerun, retry, or resume now offer a **Retry task** chip when they are within scope and reversible. The reply retains prerequisites and approval limits, and requires a fresh transcript check before display and send.

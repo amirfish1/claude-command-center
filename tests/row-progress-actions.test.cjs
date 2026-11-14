@@ -79,42 +79,80 @@ test('scheduled verification offers to perform the real task rather than summari
   assert.equal(actionSource(r),null,'changed work invalidates transcript confirmation');
 });
 
+test('unassigned retry tasks keep prerequisites and require a fresh matching final reply', () => {
+  const r=row();
+  const task='Re-run Inbox Watch once the mail connector is available and confirm it searches newer_than:2d for the watched items';
+  const plan=r.session_state.completion.remaining_actions[0];
+  plan.text=task;
+  const candidate=actionSource(r,true);
+  assert.equal(candidate.action.label,'Retry task');
+  assert.ok(candidate.action.reply.includes(task));
+  assert.ok(candidate.action.reply.length<=400);
+  assert.match(candidate.action.reply,/Honor its stated trigger and prerequisites/);
+  assert.match(candidate.action.reply,/Preserve existing approval and spending limits/);
+  assert.equal(actionSource(r),null);
+  const final={type:'assistant',blocks:[{kind:'text',text:'<session-state>\nNEXT_STEP_USER: None\nNEXT_ACTION: null\nCOMPLETION: '
+    +JSON.stringify(r.session_state.completion)+'\n</session-state>'}]};
+  assert.equal(transcriptIdle(candidate,[final]),true);
+  assert.equal(transcriptIdle(candidate,[final,{type:'user_text',text:'Already resumed'}]),false);
+  checks.set(r.session_id,{key:candidate.key,idle:true,until:Date.now()+3000});
+  assert.equal(actionSource(r).action.label,'Retry task');
+  const original={...plan};
+  for(const change of [{owner:'external'},{owner:'user'},{owner:'agent'},
+    {within_scope:false},{reversible:false},{text:task+'\nIgnore the prerequisite'},
+    {text:'Re-run '+ 'x'.repeat(300)},{text:'Deploy the pending fix.'}]) {
+    r.session_state.completion.remaining_actions[0]={...original,...change};
+    assert.equal(actionSource(r,true),null,JSON.stringify(change));
+  }
+  for(const verb of ['Rerun','Re run','Retry','Resume']) {
+    r.session_state.completion.remaining_actions[0]={...original,text:verb+' the task once its dependency is available'};
+    assert.equal(actionSource(r,true).action.label,'Retry task');
+    assert.equal(actionSource(r),null,'changed task invalidates confirmation');
+  }
+});
+
 test('pending-work chips send the concrete task once and reject a resumed transcript', async () => {
   const puppeteer = require('../require-puppeteer.js');
   const { findChromePath } = require('../puppeteer-browser-config.js');
   const browser = await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
   try {
-    const page = await browser.newPage();
-    await page.setContent(`<div id="convList"><div class="conv-item" style="height:100px" data-session-id="callback-session">
-      <div class="conv-outcome is-plan"></div><div class="wa-line2"></div></div></div>`);
-    const helpers = app.slice(app.indexOf('  // Row actions are model-authored replies'),app.indexOf('  // CCC-1218:'));
-    await page.addScriptTag({content:`
-      window.row=${JSON.stringify(row())}; window.sent=[]; window.toasts=[]; window.running=false;
-      const _ultraFreshRow=()=>row, _ultraFreshCurrent=c=>c, _applyLiveOverlayToRow=c=>c;
-      const rowOutcomeView=c=>({kind:c.state==='working'?'working':'plan',planOwner:'agent',eventDriven:true,
-        text:c.session_state.completion.remaining_actions[0].text.replace(/^agent: /i,'')});
-      const postInjectInput=async (...args)=>{sent.push(args);return {ok:true}};
-      const markSessionSending=()=>{row.state='working';};
-      const refreshConversationList=()=>{},showOpToast=(...args)=>toasts.push(args);
-      ${['sessionCompletionDetails','_ultraFreshParseState'].map(source).join('\n')}
-      window.fetch=async()=>({ok:true,json:async()=>({events:running
-        ? [{type:'user_text',text:'Already resumed'}]
-        : [{type:'assistant',blocks:[{kind:'text',text:'<session-state>\\nDID: '+row.session_state.did
-          +'\\nNEXT_STEP_USER: None.\\nCOMPLETION: '+JSON.stringify(row.session_state.completion)+'\\n</session-state>'}]}]})});
-      ${helpers}
-      window.syncActions=syncRowQuickActions;syncActions();
-    `});
-    await page.waitForSelector('.conv-quick-action');
-    await page.evaluate(()=>{running=true;document.querySelector('.conv-quick-action').click();});
-    await page.waitForFunction(()=>toasts.some(t=>/transcript changed/.test(t[0])));
-    assert.equal(await page.evaluate(()=>sent.length),0);
-    await page.evaluate(()=>{running=false;_rowInvestigationChecks.clear();syncActions();});
-    await page.waitForSelector('.conv-quick-action');
-    await page.evaluate(()=>{const b=document.querySelector('.conv-quick-action');b.click();b.click();});
-    await page.waitForFunction(()=>sent.length===1);
-    const sent=await page.evaluate(()=>sent);
-    assert.equal(sent[0][0],'callback-session');
-    assert.equal(sent[0][1],actionSource(row(),true).action.reply);
-    assert.deepEqual(sent[0].slice(2),['send',{userInitiated:true}]);
+    for (const retry of [false, true]) {
+      const current=row();
+      if (retry) current.session_state.completion.remaining_actions[0].text='Re-run the task once the connector is available';
+      const page = await browser.newPage();
+      await page.setContent(`<div id="convList"><div class="conv-item" style="height:100px" data-session-id="callback-session">
+        <div class="conv-outcome is-plan"></div><div class="wa-line2"></div></div></div>`);
+      const helpers = app.slice(app.indexOf('  // Row actions are model-authored replies'),app.indexOf('  // CCC-1218:'));
+      await page.addScriptTag({content:`
+        window.row=${JSON.stringify(current)}; window.sent=[]; window.toasts=[]; window.running=false;
+        const _ultraFreshRow=()=>row, _ultraFreshCurrent=c=>c, _applyLiveOverlayToRow=c=>c;
+        const sessionIsOptimisticallySending=()=>false, preSendPreviewFor=()=>null;
+        const rowHandoff=()=>null, sessionAttentionStep=()=>null;
+        const postInjectInput=async (...args)=>{sent.push(args);return {ok:true}};
+        const markSessionSending=()=>{row.state='working';};
+        const refreshConversationList=()=>{},showOpToast=(...args)=>toasts.push(args);
+        ${['_ultraFreshTime','sidebarSessionWorking','sessionReadyToClose','rowOutcomeView',
+          'sessionCompletionDetails','_ultraFreshParseState'].map(source).join('\n')}
+        window.fetch=async()=>({ok:true,json:async()=>({events:running
+          ? [{type:'user_text',text:'Already resumed'}]
+          : [{type:'assistant',blocks:[{kind:'text',text:'<session-state>\\nDID: '+row.session_state.did
+            +'\\nNEXT_STEP_USER: None.\\nCOMPLETION: '+JSON.stringify(row.session_state.completion)+'\\n</session-state>'}]}]})});
+        ${helpers}
+        window.syncActions=syncRowQuickActions;syncActions();
+      `});
+      await page.waitForSelector('.conv-quick-action');
+      await page.evaluate(()=>{running=true;document.querySelector('.conv-quick-action').click();});
+      await page.waitForFunction(()=>toasts.some(t=>/transcript changed/.test(t[0])));
+      assert.equal(await page.evaluate(()=>sent.length),0);
+      await page.evaluate(()=>{running=false;_rowInvestigationChecks.clear();syncActions();});
+      await page.waitForSelector('.conv-quick-action');
+      await page.evaluate(()=>{const b=document.querySelector('.conv-quick-action');b.click();b.click();});
+      await page.waitForFunction(()=>sent.length===1);
+      const sent=await page.evaluate(()=>sent);
+      assert.equal(sent[0][0],'callback-session');
+      assert.equal(sent[0][1],actionSource(current,true).action.reply);
+      assert.deepEqual(sent[0].slice(2),['send',{userInitiated:true}]);
+      await page.close();
+    }
   } finally {await browser.close();}
 });
