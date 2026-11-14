@@ -22739,10 +22739,13 @@
     // Idea tickets: with the flag on the Coding button becomes Features
     // and a Bugs button opens Small bugs; the tab bar carries the rest.
     const _ideasNav = ideaTicketsOn();
+    // Ticket view folds All / Features / Small bugs into Workers.
+    const _ticketNav = ticketViewOn();
     nav.querySelectorAll('[data-ff-only="idea_tickets"]').forEach(btn => {
-      btn.style.display = _ideasNav ? '' : 'none';
+      btn.style.display = _ideasNav && !_ticketNav ? '' : 'none';
     });
     const _codingNavBtn = nav.querySelector('[data-mobile-nav="coding"]');
+    if (_codingNavBtn) _codingNavBtn.style.display = _ticketNav ? 'none' : '';
     if (_codingNavBtn) {
       const label = _ideasNav ? 'Features' : 'Coding';
       const lab = _codingNavBtn.querySelector('.mobile-nav-label');
@@ -41597,10 +41600,16 @@
       const pid = String(c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from || '').trim();
       return pid && continuationParentId(c) !== pid ? pid : '';
     };
+    // Ticket view: Workers also holds what All showed (Features, Small bugs
+    // and, on a small install, sessions with no ticket).
+    const ticketView = _ideaTicketsOn && ticketViewOn();
+    const ticketViewLane = lane => lane === 'ideas' || lane === 'smallbugs'
+      || (ticketlessInAll && lane === 'coding');
     const directMatch = (c, tab) => {
       if (!sessionAllowed(c) || !_archiveEngineAllowsRow(c)
           || !_archiveWindowAllowsRow(c, _archiveWindowCutoff())) return false;
       const lane = laneFor(c);
+      if (ticketView && tab === 'workers') return lane === 'workers' || ticketViewLane(lane);
       if (tab === 'alltickets') return lane === 'ideas' || lane === 'smallbugs'
         || (ticketlessInAll && lane === 'coding');
       if (tab === 'ideas' || tab === 'smallbugs' || tab === 'coding' || tab === 'workers') return lane === tab;
@@ -41639,7 +41648,10 @@
     };
     return { sessionId: _allTabSessionId, parentId: _allTabParentId,
       byId: _allTabById, laneFor, ticketFor: _ideaTicketFor, parentIds,
-      ideaTicketsOn: _ideaTicketsOn, ticketlessInAll, matches,
+      ideaTicketsOn: _ideaTicketsOn, ticketlessInAll, ticketView, ticketViewLane, matches,
+      // Ticket view: the owner's own tickets share the page with the worker
+      // fleet, so a busy queue cannot push a Features ticket off it.
+      priority: (c, tab) => ticketView && tab === 'workers' && ticketViewLane(laneFor(c)),
       otherCount: rows.filter(c => sessionAllowed(c) && !c.trashed
         && _archiveEngineAllowsRow(c) && otherLane(c)).length };
   }
@@ -41704,7 +41716,7 @@
   }
   function _boundSidebarRowsForRender(rows, limit, tab, membership) {
     const source = Array.isArray(rows) ? rows : [];
-    if (source.length <= limit) return { rows: source, omitted: 0,
+    if (source.length <= limit) return { rows: source, omitted: 0, omittedFirst: 0,
       matched: membership ? source.filter(membership.matches).length : source.length };
     // Spend the budget on rows the view can actually show: the open tab's
     // lane first, then in-window rows, newest first. Taking rows in server
@@ -41716,16 +41728,30 @@
       const id = String((row && (row.session_id || row.id)) || '').trim();
       if (id) byId.set(id, row);
     });
-    const rankedEntries = source
+    let rankedEntries = source
       .map(row => ({
         row,
         inLane: membership ? membership.matches(row) : (tab === 'coding' || tab === 'workers') ? (_sidebarBudgetLaneGuess(row, byId) === tab)
           : (tab === 'ideas' || tab === 'smallbugs' || tab === 'alltickets') ? _sidebarBudgetIdeaLane(row, tab, byId)
           : true,
         inWindow: !!membership || _archiveWindowAllowsRow(row, cutoff),
+        first: !!(membership && membership.priority && membership.priority(row)),
         ts: _archiveWindowRowTs(row),
       }))
       .sort((a, b) => (b.inLane - a.inLane) || (b.inWindow - a.inWindow) || (b.ts - a.ts));
+    // Two kinds of row share this page (Ticket view: the owner's tickets and
+    // the worker fleet). Take them in turn so neither side can push the other
+    // off the page; whatever one side does not use goes to the other.
+    if (rankedEntries.some(entry => entry.first)) {
+      const shown = rankedEntries.filter(entry => entry.inLane && entry.inWindow);
+      const sides = [shown.filter(entry => entry.first), shown.filter(entry => !entry.first)];
+      const turns = [];
+      for (let i = 0; i < Math.max(sides[0].length, sides[1].length); i++) {
+        if (i < sides[0].length) turns.push(sides[0][i]);
+        if (i < sides[1].length) turns.push(sides[1][i]);
+      }
+      rankedEntries = turns.concat(rankedEntries.filter(entry => !(entry.inLane && entry.inWindow)));
+    }
     const ranked = rankedEntries.map(entry => entry.row);
     // Column quotas keep each kanban column represented, but only among rows
     // this view shows; otherwise an empty column's quota went to hidden rows.
@@ -41775,7 +41801,8 @@
     const result = source.filter(row => familySelected.has(row));
     const matching = rankedEntries.filter(entry => entry.inLane && entry.inWindow);
     const matched = matching.filter(entry => familySelected.has(entry.row)).length;
-    return { rows: result, omitted: matching.length - matched, matched };
+    return { rows: result, omitted: matching.length - matched, matched,
+      omittedFirst: matching.filter(entry => entry.first && !familySelected.has(entry.row)).length };
   }
 
   // What an empty list says on a brand-new install: what to do first, in
@@ -41821,6 +41848,7 @@
     const _sidebarLanes = _sidebarLaneModel(_sidebarFullRows);
     const _sidebarMembership = {
       matches: row => _sidebarLanes.matches(row, _sidebarTab, _ipSearchActive),
+      priority: row => !_ipSearchActive && _sidebarLanes.priority(row, _sidebarTab),
       parentIds: _sidebarLanes.parentIds, search: _ipSearchActive,
     };
     const _sidebarBounded = _boundSidebarRowsForRender(convs, _sidebarRenderRowLimit,
@@ -42426,7 +42454,10 @@
       // the badge replaces it seconds later, so the glyph appears to vanish on
       // its own. `u` flag or the replace beheads the emoji and leaks a lone
       // surrogate (OPS-935).
-      if (workersLaneActive()) title = title.replace(/^🧵\s*/u, '');
+      // Ticket view lists Features / Small bugs sessions in Workers too; they
+      // keep their own titles and controls instead of reading as workers.
+      const _wkLaneRow = workersLaneActive() && !(_sidebarLanes.ticketView && _sidebarLanes.laneFor(c) !== 'workers');
+      if (_wkLaneRow) title = title.replace(/^🧵\s*/u, '');
       // Continuation rows (F2 "Continue in a new session" / auto-resume):
       // Show the topic directly; continuation history lives in Earlier.
       // Legacy spawn names may still contain continuation prefixes.
@@ -42460,7 +42491,7 @@
       // (workerTicketChipHtml) and generic spawn names ("CCC worker", the raw
       // drain prompt, "You are an INDEPENDENT verifier…") replaced by what the
       // worker is actually doing right now.
-      const _wkFacts = (workersLaneActive() && !isBacklogRow && !isGithubPrRow && c.source !== 'hermes')
+      const _wkFacts = (_wkLaneRow && !isBacklogRow && !isGithubPrRow && c.source !== 'hermes')
         ? workerRowFacts(c, title) : null;
       if (_wkFacts) title = _wkFacts.title;
       if (c.recently_unarchived) title = '[unarchived] ' + title;
@@ -45988,7 +46019,25 @@
     // under Other. Past this size the user has a ticket habit and All is the
     // curated list; below it, All has to mean all.
     const _ticketlessRowsInAll = _sidebarLanes.ticketlessInAll;
-    const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
+    // Ticket view: the Workers list also carries the Features / Small bugs
+    // sessions (and whatever else All showed), grouped under their tickets.
+    const _ticketView = _sidebarLanes.ticketView;
+    const _allTabWorkerConvs = _allTabConvs.filter(c => {
+      const lane = _allTabLaneFor(c);
+      return lane === 'workers' || (_ticketView && _sidebarLanes.ticketViewLane(lane));
+    });
+    // The ticket a Workers-tab session is listed under. In Ticket view a
+    // Features / Small bugs session belongs to its own (or its family's) idea
+    // ticket; a session with no ticket stays a plain session row.
+    const _wkTicketRefOf = (card) => {
+      if (_ticketView) {
+        const lane = _allTabLaneFor(card);
+        if (lane === 'ideas' || lane === 'smallbugs') return String((_ideaTicketFor(card) || {}).ref || '');
+        if (lane !== 'workers') return '';
+      }
+      return workerRowFacts(card).ticketRef;
+    };
+    const _wkIdeaLaneCard = card => _ticketView && _allTabLaneFor(card) !== 'workers';
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
     const _allTabOtherConvs = _allTabConvs.filter(c => {
       const lane = _allTabLaneFor(c);
@@ -46202,13 +46251,23 @@
     if (_allTabView === 'workers' && !_ipSearchActive) {
       _workersAssignedTicketRefs = new Set();
       _workersFallbackTickets = [];
+      _workersIdeaTicketActivity = new Map();
       const cachedRefs = new Set(_uxqItemsCache.items.map(_uxqItemRef));
       for (const cluster of _allTabClusters) {
-        const ticketRef = _workersClusterTicketRef(cluster, card => workerRowFacts(card).ticketRef);
+        const ticketRef = _workersClusterTicketRef(cluster, _wkTicketRefOf);
         if (!ticketRef) continue;
-        const card = cluster.rows.find(row => workerRowFacts(row.card).ticketRef === ticketRef).card;
+        const card = cluster.rows.find(row => _wkTicketRefOf(row.card) === ticketRef).card;
+        _workersAssignedTicketRefs.add(ticketRef);
+        if (_wkIdeaLaneCard(card)) {
+          // An idea ticket has no claim or close to date it by, so its
+          // sessions' own activity places it in the list.
+          const at = _allTabClusterMtime(cluster) * 1000;
+          _workersIdeaTicketActivity.set(ticketRef, Math.max(at || 0, _workersIdeaTicketActivity.get(ticketRef) || 0));
+          if (!cachedRefs.has(ticketRef)) _workersFallbackTickets.push({ ref: ticketRef,
+            title: rowRawTitle(card).rawTitle || 'Session', status: 'open' });
+          continue;
+        }
         const facts = { ...workerRowFacts(card), ticketRef };
-        _workersAssignedTicketRefs.add(facts.ticketRef);
         if (!cachedRefs.has(facts.ticketRef)) {
           const ticket = _uxFixesWorkerTicketsForRow(card).find(t => t.ref === facts.ticketRef);
           const ms = ticket?.workedAt || ticket?.closedAt || ticket?.claimedAt || _allTabClusterMtime(cluster) * 1000;
@@ -46219,7 +46278,7 @@
       }
       for (const cluster of _allTabClusters) {
         if (!cluster.rows.length) continue;
-        if (_workersClusterTicketRef(cluster, card => workerRowFacts(card).ticketRef)) continue;
+        if (_workersClusterTicketRef(cluster, _wkTicketRefOf)) continue;
         const card = cluster.rows[0].card;
         const sid = card.session_id || card.id;
         if (!sid) continue;
@@ -46233,14 +46292,17 @@
       }
       const recentRefs = new Set(_workersActivityRows().map(r => _uxqItemRef(r.item)));
       _workersTicketRecentSignature = [...recentRefs].join('|');
-      const partition = _workersPartitionTicketClusters(_allTabClusters, recentRefs,
-        card => workerRowFacts(card).ticketRef);
+      const partition = _workersPartitionTicketClusters(_allTabClusters, recentRefs, _wkTicketRefOf);
       for (const [ref, clusters] of partition.matched) {
         const cards = clusters.flatMap(c => c.rows.map(r => r.card));
         const lanes = clusters.reduce((n, c) => n + _subagentClusterPresentation(c).total, 0);
         _workersTicketSessions.set(ref, {
           cards, lanes, count: clusters.length,
-          html: _renderAllTabClusters(clusters, true, true),
+          roots: clusters.map(c => c.rows[0].card),
+          // Worker sessions belong to a queue and have no Trash; a Features or
+          // Small bugs session is the owner's and keeps its archive controls.
+          html: clusters.map(c => _renderAllTabClusters([c], true,
+            !_wkIdeaLaneCard(c.rows[0].card))).join(''),
         });
       }
       _allTabClusters = partition.remaining;
@@ -46868,7 +46930,13 @@
     // exclusively under their own top-level tabs. Hidden entirely when empty.
     const _otherTabCount = _allTabGroupChatCount + _sidebarLanes.otherCount;
     const _otherTabDef = ['archived', 'Other', _otherTabCount];
-    const _tabDefs = _ideaTicketsOn
+    const _tabDefs = _ticketView
+      ? [
+        ['workers', 'Workers', _allTabWorkerConvs.length],
+        ['jobs', 'Jobs', _jobsTabCount()],
+        ...(_otherTabCount > 0 ? [_otherTabDef] : []),
+      ]
+      : _ideaTicketsOn
       ? [
         ['alltickets', 'All', _allTabAllTicketConvs.length],
         ['ideas', 'Features', _allTabIdeaConvs.length],
@@ -46930,11 +46998,17 @@
       // still showing ready-to-merge rows when only In-progress is empty.
       : ((_readyToMergeHtml + _forceOpen(_inProgressHtml, 'conv-inprogress-section')) || _tabEmpty('in-progress sessions'));
     const _canShowMoreRows = _sidebarRowsOmitted && (_ipSearchActive
-      || ['alltickets', 'ideas', 'smallbugs', 'coding', 'archived', 'inprogress'].includes(_sidebarTab));
+      || ['alltickets', 'ideas', 'smallbugs', 'coding', 'archived', 'inprogress'].includes(_sidebarTab)
+      // Workers pages only when one of the owner's own tickets is waiting;
+      // the worker fleet itself stays bounded, as it always was.
+      || (_ticketView && _sidebarTab === 'workers' && _sidebarBounded.omittedFirst > 0));
+    // In Ticket view, Workers counts only what its button will bring in.
+    const _moreRowsCount = (_ticketView && _sidebarTab === 'workers' && !_ipSearchActive)
+      ? _sidebarBounded.omittedFirst : _sidebarRowsOmitted;
     const _showMoreRowsHtml = (_canShowMoreRows || _sidebarLoadNotice)
       ? '<div class="archive-empty-state sidebar-pagination">'
         + (_canShowMoreRows ? '<button type="button" class="conv-window-btn" data-role="sidebar-show-more">Load more sessions</button>'
-          + '<div>' + _sidebarRowsOmitted + ' more matching sessions.</div>' : '')
+          + '<div>' + _moreRowsCount + ' more matching sessions.</div>' : '')
         + '<div data-role="sidebar-load-status" role="status" aria-live="polite">'
         + escapeHtml(_sidebarLoadNotice || 'Sessions inside collapsed groups stay grouped.') + '</div></div>'
       : '';
@@ -56242,13 +56316,15 @@
   let _workersTabWasActive = false;
   let _workersAssignedTicketRefs = new Set();
   let _workersFallbackTickets = [];
+  // Ticket view: idea ticket ref -> newest activity (ms) of its sessions.
+  let _workersIdeaTicketActivity = new Map();
   function _workersActivityRows() {
     const items = [..._uxqItemsCache.items];
     const refs = new Set(items.map(_uxqItemRef));
     for (const item of _workersFallbackTickets) if (!refs.has(item.ref)) { items.push(item); refs.add(item.ref); }
-    const workerTickets = items.filter(item => !item._sessionOnly
-      && !/^(?:IDEAS|SMALL-BUGS)-\d+$/.test(_uxqItemRef(item)));
+    const workerTickets = items.filter(item => !item._sessionOnly && !_workersIdeaTicket(item));
     return _uxqRecentWorkItems(workerTickets, Infinity)
+      .concat(_workersIdeaTicketRows(items))
       .map(row => ({...row, workerState:_workersTicketState(row.item)}))
       .sort((a, b) => a.workerState.rank - b.workerState.rank || b.ms - a.ms)
       .filter((row, i) => i < 10 || _workersAssignedTicketRefs.has(_uxqItemRef(row.item)));
@@ -56305,6 +56381,49 @@
     // Cluster cards are root-first; a lone child lane opens its owner.
     const card = sessions.cards[0];
     return String(card.id || card.session_id || '');
+  }
+  // The session a ticket's name opens: its only session, else the topic that
+  // is working, waiting on the owner, or most recent. A ticket whose session
+  // is not in the list still opens the one that claimed it, when known.
+  function _workersTicketOpenSession(item, sessions) {
+    const single = _workersSingleTicketSession(sessions);
+    if (single) return single;
+    if (sessions && sessions.cards.length) {
+      const lead = _workersLatestTicketCard({cards: sessions.roots && sessions.roots.length ? sessions.roots : sessions.cards});
+      return String((lead && (lead.id || lead.session_id)) || '');
+    }
+    const known = _workersKnownSessions();
+    const events = [...(Array.isArray(item && item.timeline) ? item.timeline : []),
+      ...(Array.isArray(item && item.history) ? item.history : [])];
+    const ids = [item && item.claimed_session_id];
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i] || {};
+      ids.push((ev.by && ev.by.session_id) || ev.session_id);
+    }
+    for (const id of ids) {
+      const sid = id && (known.get(String(id)) || known.get('devincli-' + id));
+      if (sid) return sid;
+    }
+    return '';
+  }
+  // Session id (either form) -> the id selectConversation takes. Rebuilt only
+  // when the session list itself is replaced, never per ticket row.
+  let _workersKnownSessionsFor = null;
+  let _workersKnownSessionsMap = new Map();
+  function _workersKnownSessions() {
+    const rows = typeof conversationsData !== 'undefined' && Array.isArray(conversationsData) ? conversationsData : [];
+    if (rows === _workersKnownSessionsFor) return _workersKnownSessionsMap;
+    const map = new Map();
+    for (const c of rows) {
+      if (!c) continue;
+      const open = String(c.id || c.session_id || '');
+      if (!open) continue;
+      if (c.session_id) map.set(String(c.session_id), open);
+      map.set(open, open);
+    }
+    _workersKnownSessionsFor = rows;
+    _workersKnownSessionsMap = map;
+    return map;
   }
   function _workersActiveClaim(item) {
     if (item.status !== 'in_progress' || item.needs_input || item.closed_at) return null;
@@ -56387,7 +56506,39 @@
           + '</div>';
       }).join('') + '</section>';
   }
+  function _workersIdeaTicket(item) {
+    return /^(?:IDEAS|SMALL-BUGS)-\d+$/.test(_uxqItemRef(item));
+  }
+  // Ticket view: Features / Small bugs tickets that have a session in the
+  // list. They are worked by a session, not claimed by a worker, so that
+  // session's activity dates the row; a recorded claim or close still counts.
+  function _workersIdeaTicketRows(items) {
+    if (!_workersIdeaTicketActivity.size) return [];
+    return items.filter(item => !item._sessionOnly && _workersIdeaTicket(item)
+      && _workersIdeaTicketActivity.has(_uxqItemRef(item))).map(item => {
+      const worked = _uxqRecentWorkItems([item], 1)[0];
+      const ms = Math.max(_workersIdeaTicketActivity.get(_uxqItemRef(item)) || 0, (worked && worked.ms) || 0) || Date.now();
+      const resolved = item.status === 'closed' || !!item.closed_at;
+      return { item, ms, at: new Date(ms).toISOString(), resolved,
+        worker: (worked && worked.worker) || (/^IDEAS-/.test(_uxqItemRef(item)) ? 'Feature' : 'Small bug'),
+        summary: (worked && worked.summary) || '' };
+    });
+  }
+  // An idea ticket's state is its session's: the same four sections the
+  // Features and Small bugs tabs sort by.
+  function _workersIdeaTicketState(item) {
+    const sessions = _workersTicketSessions.get(_uxqItemRef(item));
+    const cards = sessions ? sessions.cards : [];
+    if (cards.some(c => rowOutcomeView(_ultraFreshCurrent(_applyLiveOverlayToRow(c))).kind === 'working')) return {label:'Working', rank:0, css:'is-working'};
+    const sections = cards.map(ticketSessionSection);
+    if (sections.includes('needs-you')) return {label:'Needs you', rank:1, css:'is-needs-you'};
+    if (sections.includes('active')) return {label:'Open', rank:2, css:'is-open'};
+    if (item.status === 'closed' || item.closed_at) return {label:'Resolved', rank:4, css:'is-resolved'};
+    if (sections.includes('finished')) return {label:'Finished', rank:4, css:'is-resolved'};
+    return cards.length ? {label:'Archived', rank:5, css:'is-resolved'} : {label:'Open', rank:2, css:'is-open'};
+  }
   function _workersTicketState(item) {
+    if (_workersIdeaTicket(item)) return _workersIdeaTicketState(item);
     if (item.status === 'closed' || item.closed_at) return {label:'Resolved', rank:4, css:'is-resolved'};
     const attention = _uxqTicketAttention(item);
     if (attention && attention.blocked) return {label:attention.owner ? 'Needs you' : attention.key === 'worker' ? 'Waiting for worker' : attention.label,
@@ -56404,11 +56555,16 @@
   }
   function _workersTicketContext(item, card, fallback) {
     const QA = window.QueueAttention;
-    const reason = QA && QA.blockReason(item);
+    const idea = _workersIdeaTicket(item);
+    // An idea ticket records the owner's own session, so "workers cannot
+    // claim this yet" says nothing; only a recorded question is a blocker.
+    const reason = QA && (!idea || QA.needsOwner(item)) && QA.blockReason(item);
     if (reason) return reason;
     // The "Working" state already says it; a filler line would cost a row.
     if (!card && _workersActiveClaim(item)) return null;
     const outcome = card && rowOutcomeView(card);
+    // An idea ticket's session speaks to its owner: show what it is asking.
+    if (outcome && outcome.kind === 'next' && idea) return {text:outcome.text, category:''};
     // Terminal worker sign-offs describe its drained queue, not this ticket.
     return outcome && outcome.kind === 'working'
       ? {text:_workersMeaningfulUpdate(outcome.text || fallback), category:''} : null;
@@ -56555,14 +56711,18 @@
       const briefTitle = brief && row.summary ? '\n\n' + row.summary : '';
       const expanded = _workersTicketExpanded.has(ref);
       const singleSession = _workersSingleTicketSession(sessions);
-      const toggleAttrs = singleSession ? ' data-workers-ticket-row="' + escapeAttr(ref) + '" aria-label="' + escapeAttr('Open session: ' + title) + '"'
-        : sessions ? ' data-workers-ticket-toggle="' + escapeAttr(ref) + '" aria-expanded="' + expanded + '"' : '';
+      // The name always opens the session; the count button discloses the rest.
+      const openSession = _workersTicketOpenSession(item, sessions);
+      const titleHtml = openSession
+        ? '<button type="button" class="workers-ticket-title" data-workers-ticket-open="' + escapeAttr(openSession)
+          + '" aria-label="' + escapeAttr('Open session: ' + title) + '">' + escapeHtml(title) + '</button>'
+        : escapeHtml(title);
       const ticketButton = '<div class="fq-recent-row' + (brief ? ' is-brief' : ' is-detailed') + '"'
         + (sessions ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '')
         + (brief ? ' title="' + escapeAttr(state + ' · ' + _uxqRelTime(row.at) + briefTitle) + '"' : '')
         + '>'
         + '<span class="fq-recent-title"><button type="button" class="fq-recent-ref workers-ticket-link" data-uxq-recent-ref="' + escapeAttr(ref) + '" aria-label="Open ' + escapeAttr(item._sessionOnly ? 'session' : ref + ' details') + '">' + escapeHtml(item._sessionOnly ? 'Session' : ref) + '</button> '
-        + (sessions ? '<button type="button" class="workers-ticket-title"' + toggleAttrs + '>' + escapeHtml(title) + '</button>' : escapeHtml(title)) + '</span>'
+        + titleHtml + '</span>'
         + '<span class="fq-recent-meta"><span class="fq-recent-state' + (ticketState.css ? ' ' + ticketState.css : '') + '">' + escapeHtml(state) + '</span>'
         + (timerHtml || '<time class="fq-recent-resolved" datetime="' + escapeAttr(row.at) + '" title="Last activity: ' + escapeAttr(absolute) + '">'
           + escapeHtml(_uxqRelTime(row.at)) + '</time>')
@@ -56623,6 +56783,12 @@
           return;
         }
         const ticketLink = ev.target.closest && ev.target.closest('[data-uxq-recent-ref]');
+        const openTitle = !ticketLink && ev.target.closest && ev.target.closest('[data-workers-ticket-open]');
+        if (openTitle) {
+          ev.preventDefault(); ev.stopPropagation();
+          selectConversation(openTitle.dataset.workersTicketOpen);
+          return;
+        }
         const toggle = !ticketLink && ev.target.closest && ev.target.closest('[data-workers-ticket-toggle], [data-workers-ticket-row]');
         if (toggle) {
           ev.preventDefault();
@@ -98102,8 +98268,56 @@
   function ideaTicketsOn() {
     return ff('idea_tickets');
   }
+  // Ticket view (sidebar ⋮ menu): the Workers tab lists every ticket, so the
+  // All / Features / Small bugs tabs go away and their IDEAS-N / SMALL-BUGS-N
+  // tickets join the WatchTower ones there. Needs idea tickets; default off.
+  function ticketViewOn() {
+    if (!ideaTicketsOn()) return false;
+    if (ticketViewOn.pref === undefined) {
+      try { ticketViewOn.pref = localStorage.getItem('ccc-ticket-view') === '1'; }
+      catch (_) { ticketViewOn.pref = false; }
+    }
+    return ticketViewOn.pref;
+  }
+  function _ticketViewRetiredTab(t) {
+    return t === 'alltickets' || t === 'ideas' || t === 'smallbugs';
+  }
+  function setTicketView(on) {
+    ticketViewOn.pref = !!on;
+    try { localStorage.setItem('ccc-ticket-view', on ? '1' : '0'); } catch (_) {}
+    _syncTicketViewToggle();
+    try { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); } catch (_) {}
+    try { if (typeof _syncMobileBottomNav === 'function') _syncMobileBottomNav(); } catch (_) {}
+  }
+  // The switch only exists while idea tickets are on: without them there are
+  // no ticket tabs to fold away.
+  function _syncTicketViewToggle() {
+    const knob = document.getElementById('ticketViewToggle');
+    if (!knob) return;
+    knob.hidden = !ideaTicketsOn();
+    knob.setAttribute('aria-checked', String(ticketViewOn()));
+  }
+  (function _wireTicketView() {
+    try {
+      window.CCCNavigation.mapTab = t => (ticketViewOn() && _ticketViewRetiredTab(t) ? 'workers' : t);
+    } catch (_) {}
+    const knob = document.getElementById('ticketViewToggle');
+    if (knob) knob.addEventListener('click', () => setTicketView(!ticketViewOn()));
+    _syncTicketViewToggle();
+    window.addEventListener('ccc:flags', _syncTicketViewToggle);
+    // Another window flipped the switch: follow it.
+    window.addEventListener('storage', ev => {
+      if (ev.key !== 'ccc-ticket-view') return;
+      ticketViewOn.pref = undefined;
+      _syncTicketViewToggle();
+      try { renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true }); } catch (_) {}
+    });
+  })();
   function normalizeSidebarTabKey(t) {
     if (t === 'decisions' || t === 'decisions2') return window.cccDecisionTabKey();
+    if (ticketViewOn()) {
+      return (t === 'issues' || t === 'queues' || t === 'archived' || t === 'jobs') ? t : 'workers';
+    }
     if (ideaTicketsOn()) {
       return (t === 'alltickets' || t === 'ideas' || t === 'smallbugs' || t === 'issues' || t === 'queues' || t === 'archived' || t === 'workers' || t === 'jobs') ? t : 'alltickets';
     }

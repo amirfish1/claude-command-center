@@ -33368,6 +33368,11 @@ body.ccc-hide-other-machines .fed-peer-section { display: none !important; }
 html.ccc-mobile-list-view .sh-more-filters .is-phone-menu-only { display: inline-flex !important; }
 html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .sh-more-check input { margin: 0; accent-color: var(--accent); }
+/* A menu row that is an on/off switch: label left, knob right. */
+.sh-more-item.sh-more-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; }
+.sh-more-item.sh-more-switch[hidden] { display: none; }
+.sh-more-switch[aria-checked="true"] .settings-toggle-track { background: var(--accent); }
+.sh-more-switch[aria-checked="true"] .settings-toggle-thumb { background: var(--accent-contrast); transform: translateX(14px); }
 @media (max-width: 1200px) {
   #sidebarMoreMenu .sh-more-desktop-only,
   #sidebarMoreMenu .sh-more-divider { display: none !important; }

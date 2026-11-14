@@ -7,7 +7,7 @@ const modelCode = app.slice(app.indexOf('  const _NON_WORKER_SPAWNED_VIAS'), app
 const foldCode = app.slice(app.indexOf('  function _continuationFoldMaps('), app.indexOf('  let _f2ContinuationEdgesCache'));
 const budgetCode = app.slice(app.indexOf('  function _sidebarBudgetIdeaLane('), app.indexOf('  // What an empty list says'));
 
-function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = []} = {}) {
+function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], ticketView = false} = {}) {
   const context = {
     Map, Set, currentConversation: '',
     workerSelfTicketRef: row => row.selfTicket || '',
@@ -15,6 +15,7 @@ function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = []} = {}) {
     f2EffectiveParentSessionId: (id, parent) => f2[id] || parent || '',
     continuationParentId: row => row.continued_from_session_id || '',
     ideaTicketsOn: () => true,
+    ticketViewOn: () => ticketView,
     _uxqHealthCache: {worker_session_ids: workerIds}, _wtWorkersCache: {}, _wtWorkerConvsCache: {},
     classifyKanbanColumn: row => row.archived ? 'archived' : row.source === 'backlog' ? 'backlog' : 'active',
     isApprovalAskRow: row => !!row.approval,

@@ -969,6 +969,13 @@
                  time window, engines, other machines), filled on open by
                  app.js; clicks forward to the originals. -->
             <div class="sh-more-filters" id="sidebarMoreFilters" hidden></div>
+            <!-- Ticket view: the Workers tab lists every ticket, so the All /
+                 Features / Small bugs tabs go away. Shown only while idea
+                 tickets are on (app.js). -->
+            <button type="button" class="sh-more-item sh-more-switch" id="ticketViewToggle" role="menuitemcheckbox" aria-checked="false" title="Show Features and Small bugs tickets in the Workers tab instead of their own tabs" hidden>
+              <span>Ticket view</span>
+              <span class="settings-toggle" aria-hidden="true"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></span>
+            </button>
             <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="historyBtn">Search history…</button>
             <div class="sh-more-divider sh-more-desktop-only" role="separator"></div>
             <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="sidebarNewGroupChatBtn">New group chat</button>

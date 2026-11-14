@@ -10,7 +10,7 @@ const slice = (from, to) => {
   return app.slice(start, end);
 };
 
-test('one session and at most one lane opens directly; larger groups still disclose', async () => {
+test('a ticket name always opens its session; the count button discloses larger groups', async () => {
   const browser = await puppeteer.launch({executablePath:findChromePath(), args:['--no-sandbox']});
   try {
     const page = await browser.newPage();
@@ -29,16 +29,18 @@ test('one session and at most one lane opens directly; larger groups still discl
         {ref:'EXAMPLE-1',title:'Repair pending request recovery'},
         {ref:'EXAMPLE-2',title:'Coordinate several worker lanes'},
         {ref:'EXAMPLE-3',title:'Unassigned report'},
+        {ref:'EXAMPLE-5',title:'Claimed by a session outside the list',claimed_session_id:'claimer'},
         {ref:'EXAMPLE-4',title:'Another standalone session'},
       ];
       const _workersTicketSessions = new Map([
         ['EXAMPLE-1',{count:1,lanes:1,cards:[{id:'owner'},{id:'child'}],html:'<div>Owner and child</div>'}],
-        ['EXAMPLE-2',{count:1,lanes:2,cards:[{id:'many'},{id:'lane-a'},{id:'lane-b'}],html:'<div>Several lanes</div>'}],
+        ['EXAMPLE-2',{count:1,lanes:2,cards:[{id:'many'},{id:'lane-a'},{id:'lane-b'}],roots:[{id:'many'}],html:'<div>Several lanes</div>'}],
         ['EXAMPLE-4',{count:1,lanes:0,cards:[{id:'solo'}],html:'<div>Solo</div>'}],
       ]);
       const _workersTicketExpanded = new Set(['EXAMPLE-1']);
       let _workersTicketRecentSignature = '';
       const _workersFallbackTickets = [];
+      const conversationsData = [{id:'devincli-claimer',session_id:'devincli-claimer'}];
       const _uxqItemRef = item => item.ref;
       const _workersActivityRows = () => items.map(item => ({item,at:new Date().toISOString(),workerState:{label:'Working'},worker:'Example worker'}));
       const _workersPendingWorkers = () => [];
@@ -75,10 +77,18 @@ test('one session and at most one lane opens directly; larger groups still discl
     assert.equal(await page.$eval(single+' .workers-ticket-title',el=>el.hasAttribute('aria-expanded')),false);
     const multi = '[data-workers-ticket="EXAMPLE-2"]';
     await page.click(multi+' .workers-ticket-title');
+    assert.equal(await page.evaluate(()=>picked.at(-1)),'many','the name opens the topic, not the disclosure');
+    assert.equal(await page.$eval(multi+' .workers-ticket-session-body',el=>el.hidden),true);
+    await page.click(multi+' .workers-ticket-toggle');
     assert.equal(await page.$eval(multi+' .workers-ticket-session-body',el=>el.hidden),false);
     await page.focus(multi+' .workers-ticket-toggle');
     await page.keyboard.press('Enter');
     assert.equal(await page.$eval(multi+' .workers-ticket-session-body',el=>el.hidden),true);
+    await page.click(multi+' .fq-recent-state');
+    assert.equal(await page.$eval(multi+' .workers-ticket-session-body',el=>el.hidden),false,'the rest of the row still discloses');
+    await page.click('[data-workers-ticket="EXAMPLE-5"] .workers-ticket-title');
+    assert.equal(await page.evaluate(()=>picked.at(-1)),'devincli-claimer','a ticket with no listed session opens its claimer');
+    assert.equal(await page.$$eval('[data-workers-ticket="EXAMPLE-3"] .workers-ticket-title',es=>es.length),0,'no known session, no dead button');
     await page.click('[data-workers-ticket="EXAMPLE-4"] .workers-ticket-title');
     assert.equal(await page.evaluate(()=>picked.at(-1)),'solo');
     await page.click('[data-workers-ticket="EXAMPLE-3"] .workers-ticket-link');
