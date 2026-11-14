@@ -5812,3 +5812,32 @@ def test_concurrent_identity_misses_join_archive_once(monkeypatch, tmp_path):
         maps = list(pool.map(lambda _: server._census_identity_map(), range(8)))
     assert len(calls) == 1, 'concurrent misses repeated the archive/Codex join'
     assert all('single' in value for value in maps)
+
+
+def test_census_missing_transcripts_do_not_repeat_filesystem_search(monkeypatch, tmp_path):
+    """Missing identities cost one directory pass, independent of row count."""
+    from unittest import mock
+    for n in range(12):
+        project = tmp_path / f"project-{n}"
+        project.mkdir()
+        (project / "unrelated.jsonl").write_text("{}\n")
+    known = tmp_path / "project-0" / "known.jsonl"
+    known.write_text(json.dumps({"type": "user", "message": {
+        "role": "user", "content": "Find the regression"}}) + "\n")
+    monkeypatch.setattr(server, '_SYS_PROJECTS_DIR', str(tmp_path))
+    monkeypatch.setattr(server, '_CENSUS_TRANSCRIPT_PATHS_CACHE',
+                        {"key": None, "ts": 0.0, "paths": {}})
+    monkeypatch.setattr(server, '_CENSUS_PROBE_CACHE', {})
+    activity = {f"missing-{n}": {"is_live": True} for n in range(100)}
+    activity['known'] = {"is_live": True}
+    monkeypatch.setattr(server, 'build_live_sessions_activity', lambda: activity)
+    monkeypatch.setattr(server, '_census_identity_map', lambda: {})
+    original_lookup = server._census_transcript_paths
+    original_is_file = Path.is_file
+    with mock.patch.object(server, '_census_transcript_paths', wraps=original_lookup) as lookup, \
+         mock.patch.object(Path, 'is_file', autospec=True, side_effect=original_is_file) as checks:
+        rows = server.build_session_census()['sessions']
+    assert len(rows) == len(activity)
+    assert next(r for r in rows if r['session_id'] == 'known')['name'] == 'Find the regression'
+    assert lookup.call_count == 1, 'negative bulk lookups must not be searched again per row'
+    assert checks.call_count <= len(activity), 'do not stat every missing sid in every project'

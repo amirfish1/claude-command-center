@@ -14605,10 +14605,18 @@ def _census_transcript_paths(session_ids):
     for project in projects:
         if not project.is_dir():
             continue
-        for sid in wanted - found.keys():
-            candidate = project / f"{sid}.jsonl"
-            if candidate.is_file():
-                found[sid] = candidate
+        # Enumerate names once instead of stat-ing every missing sid in every
+        # project. Missing identities often belong to a different engine.
+        try:
+            with os.scandir(project) as entries:
+                for entry in entries:
+                    if not entry.name.endswith(".jsonl"):
+                        continue
+                    sid = entry.name[:-6]
+                    if sid in wanted and sid not in found and entry.is_file():
+                        found[sid] = Path(entry.path)
+        except OSError:
+            continue
         if len(found) == len(wanted):
             break
     _CENSUS_TRANSCRIPT_PATHS_CACHE.update(key=key, ts=now, paths=dict(found))
@@ -14798,7 +14806,10 @@ def build_session_census(since_s=None):
         ident = identity.get(sid) or {}
         helper = False
         if not ident:
-            probe = _census_probe_transcript(sid, transcript_paths.get(sid))
+            transcript_path = transcript_paths.get(sid)
+            # A negative bulk lookup is final for this census build; otherwise
+            # each absent transcript repeats the entire project search.
+            probe = _census_probe_transcript(sid, transcript_path) if transcript_path else None
             if probe:
                 if probe.get("is_helper"):
                     helper = True
