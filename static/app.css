@@ -17277,8 +17277,8 @@
       transform: translateX(0);
     }
 
-    /* Advanced keeps the app rail even on phones. Simple mode sets the
-       rail width to zero while its bottom navigation is present. */
+    /* Mobile bottom navigation sets the rail width to zero. Windows that
+       explicitly keep desktop chrome still leave room for the rail. */
     body:not(.kanban-split) .main {
       left: var(--ccc-rail-w, 76px);
     }
@@ -19414,8 +19414,7 @@
     border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   }
 
-  /* Installed windows use the same app navigation as the browser.
-     Only Simple mode replaces the rail with bottom navigation. */
+  /* Installed windows use the same responsive navigation as the browser. */
   body.has-mobile-bottom-nav .ccc-side-nav { display: none !important; }
   body.has-mobile-bottom-nav { padding-left: 0 !important; }
   body.has-side-nav #termPanel { left: 0 !important; }
@@ -34726,6 +34725,24 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
   body.has-mobile-bottom-nav :is(.ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag, .ccc-account-wrap, .ccc-account-pop) { display: none !important; }
 }
 
+/* Reading on a phone gets the whole screen. Back restores the session list
+   and its mobile navigation. */
+@media (max-width: 700px) {
+  body.mobile-show-main:not(.kanban-split) { padding-left: 0 !important; }
+  body.mobile-show-main:not(.kanban-split) .main { left: 0; }
+  body.mobile-show-main:not(.kanban-split) :is(.ccc-side-nav, .ccc-rail-resizer, .ccc-account-wrap, .ccc-account-pop) { display: none !important; }
+
+  /* Keep the labelled 44px tap targets without covering a column of prose. */
+  :is(.conv-scroll-end-btn, .conv-scroll-last-btn, .conv-scroll-next-btn, .conv-scroll-segment-btn) {
+    width: 44px; height: 44px; padding: 0; gap: 0;
+  }
+  :is(.conv-scroll-end-btn, .conv-scroll-last-btn, .conv-scroll-next-btn, .conv-scroll-segment-btn) span {
+    position: absolute; width: 1px; height: 1px; padding: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  :is(.conv-scroll-end-btn, .conv-scroll-last-btn, .conv-scroll-next-btn, .conv-scroll-segment-btn) svg { width: 18px; height: 18px; }
+}
+
 /* Queues page: inline add form under the header. */
 .ao-q-add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; gap: 8px; align-items: center; margin: 0 0 12px; }
 .ao-q-add[hidden] { display: none; }
@@ -34865,6 +34882,12 @@ a.local-ci-job:hover { color: var(--accent); }
   }
   .local-ci-mobile .local-ci-label, .local-ci-mobile .local-ci-step { font-size: 12px; }
   .local-ci-mobile .local-ci-dismiss { flex-basis: 44px; width: 44px; height: 44px; }
+}
+@media (max-width: 700px) {
+  /* Successful checks remain in the list; the reader only needs running or
+     unsuccessful checks. Do not reserve an empty strip when all passed. */
+  #localCiMobileReader > .local-ci-group[data-outcome="success"] { display: none; }
+  body .main > #localCiMobileReader:not([hidden]):not(:has(> :not(.local-ci-group[data-outcome="success"]))) { display: none !important; }
 }
 .session-ref-chip {
   display: inline-block;

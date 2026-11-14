@@ -1,0 +1,1 @@
+Restore mobile Features, Bugs, Workers, and hamburger navigation, with apps inside the hamburger menu instead of a desktop rail. Phone conversations use the full screen width with compact jump controls; successful CI checks stay in the session list.

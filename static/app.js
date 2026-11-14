@@ -22530,9 +22530,13 @@
     if (!isMobileRedesign() || isSimpleMode()) _setMobileAskOpen(false);
   });
   function _mobileBottomNavShouldShow() {
-    // Advanced uses the app rail at every width. Only Simple mode owns
-    // the Home / Tasks / Helpers / More bottom navigation.
-    return isMobileChromeActive();
+    if (!isMobileRedesign()) return false;
+    if (isSimpleMode()) return true;
+    if (document.body.classList.contains('conversation-popout')) return false;
+    if (document.body.classList.contains('flow-popout')) return false;
+    if (typeof isFlowView === 'function' && isFlowView()) return false;
+    if (document.body.classList.contains('kanban-split')) return false;
+    return true;
   }
   // Sidebar Jobs tab badge: failed + stale jobs (blank when all healthy or unloaded).
   function _jobsTabCount() {
@@ -51030,6 +51034,18 @@
       segBtn.style.bottom = above + 'px';
       if (segBtn.classList.contains('visible')) above += step;
     }
+    // Phones use a single row above the composer rather than a tall stack
+    // obscuring the conversation. Measure actual controls to fit each slot.
+    if (matchMedia('(max-width: 700px)').matches) {
+      let rowRight = right;
+      for (const control of [btn, nextBtn, lastBtn, segBtn]) {
+        if (!control) continue;
+        control.style.right = rowRight + 'px';
+        control.style.bottom = endBottom + 'px';
+        if (control.classList.contains('visible')) rowRight += (control.offsetWidth || 44) + 6;
+      }
+      above = endBottom + step;
+    }
     // The floating speaker tops the same right-hand column, so every floating
     // control covers one narrow strip instead of a second one on the left.
     const speakBtn = view._convSpeakButton;
@@ -51751,7 +51767,7 @@
       btn.className = 'conv-scroll-end-btn';
       btn.title = 'Jump to end of conversation';
       btn.setAttribute('aria-label', 'Jump to end of conversation');
-      btn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"></path><path d="M6 13l6 6 6-6"></path></svg><span>End</span>';
+      btn.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v13"></path><path d="M6 10l6 6 6-6"></path><path d="M5 21h14"></path></svg><span>End</span>';
       host.appendChild(btn);
     }
     btn._convTargetView = view;
