@@ -36698,7 +36698,7 @@
 
     // Incoming (not typed) user-role messages: injected briefs, lane
     // reports, worker/peer messages. Never touch the composer; the bubble
-    // arrives whole with its own "incoming" animation and a short beat.
+    // arrives whole with its own "incoming" animation, then a 3s hold.
     if (isUserMsg && !isUserTurn) {
       item.el.classList.remove('conv-replay-hidden');
       item.el.classList.remove('conv-replay-incoming');
@@ -36709,7 +36709,9 @@
       _convReplayRevealAllWordsInstantly(_convReplayPrepareWordsForItem(item));
       _scrollConvReplayToBottom(item.paneId);
       if (_convReplayMsgIndex >= _convReplayEvents.length) { renderConvReplayControls(); return; }
-      _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, 900 / _convReplaySpeed);
+      // Hold ~3s (at 1x) so the incoming message registers before the
+      // agent's reply starts.
+      _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, 3000 / _convReplaySpeed);
       return;
     }
 
