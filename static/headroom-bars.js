@@ -261,7 +261,11 @@
     heading.textContent = 'Usage left';
     grid = document.createElement('div');
     grid.className = 'hb-grid';
+    // Savings may finish loading first; move its existing button so its
+    // click handler and displayed value survive either initialization order.
+    var savings = document.getElementById('cccSavingsTicker');
     strip.replaceChildren(heading, grid);
+    if (savings) grid.appendChild(savings);
     return strip;
   }
 

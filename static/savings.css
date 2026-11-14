@@ -2,7 +2,7 @@
  * milestone celebration. All selectors are ccc-sav-* namespaced so the file
  * can load alongside app.css without collisions. */
 
-/* ── Header ticker pill (lives inside #sidebarTopAlerts) ────────────────── */
+/* ── Ticker pill alongside the plan usage meters ──────────────────────── */
 .ccc-sav-ticker {
   display: inline-flex;
   align-items: center;
@@ -18,6 +18,7 @@
   max-width: none;
 }
 .ccc-sav-ticker:hover { background: rgba(210, 153, 34, 0.18); }
+.ccc-sav-ticker[hidden] { display: none !important; }
 .ccc-sav-ticker .ccc-sav-ticker-spark { font-size: 9px; }
 .ccc-sav-ticker.is-free {
   border-color: rgba(63, 185, 80, 0.55);

@@ -137,7 +137,7 @@ function cccSavRangePhrase(range) {
   const LS_CELEBRATED = 'ccc.savings.celebrated.v1';
   const LS_RANGE = 'ccc.savings.range.v1';
 
-  let _ticker = null;                 // the pill element in #sidebarTopAlerts
+  let _ticker = null;                 // the pill alongside the usage meters
   let _tickerSeen = false;            // has one successful render happened
   let _lastUsd = null;                // last rendered ticker value
   let _allRange = null;               // latest range=all payload (milestones)
@@ -215,7 +215,7 @@ function cccSavRangePhrase(range) {
   // ── Ticker pill ────────────────────────────────────────────────────────
   function mountTicker() {
     if (_ticker) return _ticker;
-    const host = document.getElementById('sidebarTopAlerts');
+    const host = document.querySelector('#headroomBars .hb-grid') || document.getElementById('sidebarTopAlerts');
     if (!host) return null;
     const b = document.createElement('button');
     b.type = 'button';

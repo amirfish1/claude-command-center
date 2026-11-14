@@ -20,6 +20,12 @@
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: 6px 14px;
 }
+.headroom-bars .hb-grid:has(> .ccc-sav-ticker:not([hidden])) { display: flex; gap: 10px; }
+.headroom-bars .hb-grid > .hb-chip { flex: 1 1 0; }
+.sidebar .headroom-bars .hb-grid > .ccc-sav-ticker:not([hidden]) { display: inline-flex !important; flex: none; align-self: center; }
+@media (max-width: 600px) {
+  .headroom-bars .hb-grid > .ccc-sav-ticker { min-height: 44px; }
+}
 .headroom-bars .hb-chip {
   --hb-color: var(--text-muted);
   min-width: 0;

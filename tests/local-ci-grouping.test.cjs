@@ -18,7 +18,7 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
   let data = {jobs:[{...base, id:'example/project:1:1'},
     {...base, id:'example/project:1:1', name:'another job', percent:90}], completed:[
     {...base, id:'example/project:2:1', name:'install-smoke', conclusion:'success'},
-    {...base, id:'example/project:3:1', head_sha:'b'.repeat(40), conclusion:'failure'}]};
+    {...base, id:'example/project:3:1', head_sha:'b'.repeat(40), execution:'self_hosted', conclusion:'failure'}]};
   const dismissed = [];
   const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/api/ci/')) {
@@ -45,6 +45,8 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
     await page.waitForSelector('#checks .local-ci-group');
     assert.equal(await page.$$eval('#checks .local-ci-group', es => es.length), 2);
     assert.equal(await page.$eval('#checks details', el => el.open), false);
+    assert.equal(await page.$eval('#checks .local-ci-runner', el => el.getAttribute('aria-label')), 'GitHub-hosted runner');
+    assert.equal(await page.$eval('#checks .local-ci-group:last-child .local-ci-runner', el => el.getAttribute('aria-label')), 'Machine-hosted runner');
     assert.match(await page.$eval('#checks summary', el => el.textContent), /TEST-42 \+2.*aaaaaaa.*71%/);
     assert.equal(await page.$eval('#checks .local-ci-summary-name', el => el.scrollWidth <= el.clientWidth), true);
     assert.match(await page.$eval('#checks summary .local-ci-elapsed', el => el.textContent), /^5:\d{2}$/);

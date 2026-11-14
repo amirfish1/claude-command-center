@@ -32805,7 +32805,8 @@ body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
 }
 
 /* ── Phone list header: no row of its own ─────────────────────────────────
-   Share, Discord and the savings ticker are gone on phones; the CCC icon
+   Share and Discord are gone on phones; savings sits with the usage meters.
+   The CCC icon
    moves onto the "Usage left" heading line (headroom bars flatten into the
    header grid via display:contents) so the usage chips keep the full width.
    Alerts (update pill etc.) still get their own full-width line. */
@@ -34807,6 +34808,8 @@ a.local-ci-job:hover { color: var(--accent); }
 .local-ci-summary::before { content: ''; flex: 0 0 5px; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); }
 .local-ci-commit[open] > .local-ci-summary::before { transform: rotate(45deg); }
 .local-ci-summary-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.local-ci-runner { display: inline-flex; align-items: center; gap: 2px; flex: none; color: var(--text-secondary, var(--text)); }
+.local-ci-runner svg { display: block; width: 14px; height: 14px; }
 .local-ci-summary-status { flex: none; color: var(--ci-color); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .local-ci-overall-progress { flex: 0 0 32px; width: 32px; height: 4px; margin: 0; appearance: none; border: 0; border-radius: 2px; overflow: hidden; background: var(--border); accent-color: var(--ci-color); }
 .local-ci-overall-progress::-webkit-progress-bar { background: var(--border); }

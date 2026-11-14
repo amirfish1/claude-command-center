@@ -100488,6 +100488,20 @@
           });
           const summary = document.createElement('summary');
           summary.className = 'local-ci-summary';
+          const locations = new Set(members.map(({job}) => job.execution === 'github_hosted' ? 'github'
+            : ['local','self_hosted'].includes(job.execution) ? 'machine' : 'unknown'));
+          const runner = document.createElement('span');
+          runner.className = 'local-ci-runner';
+          runner.setAttribute('role', 'img');
+          const githubIcon = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';
+          const machineIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>';
+          const unknownIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.2 2.4c-.7.3-.7 1.1-.7 1.6m0 3h.01"/></svg>';
+          runner.title = locations.has('unknown') ? 'Runner location unverified'
+            : locations.size > 1 ? 'GitHub-hosted and machine-hosted runners'
+            : locations.has('github') ? 'GitHub-hosted runner' : 'Machine-hosted runner';
+          runner.setAttribute('aria-label', runner.title);
+          runner.innerHTML = locations.has('unknown') ? unknownIcon
+            : (locations.has('github') ? githubIcon : '') + (locations.has('machine') ? machineIcon : '');
           const tickets = [...new Set(members.flatMap(({job}) => [...(job.origin?.tickets || []), ...(job.origin?.pusher?.tickets || [])]))];
           const pusher = members.map(({job}) => job.origin?.pusher).find(Boolean);
           const title = document.createElement('span');
@@ -100526,7 +100540,7 @@
           overallBar.max = 100;
           if (overall != null) overallBar.value = overall;
           overallBar.setAttribute('aria-label', overall == null ? 'Overall CI progress unavailable' : 'Overall CI progress: ' + overall + '%');
-          summary.append(title, overallBar, status);
+          summary.append(runner, title, overallBar, status);
           const starts = members.map(({job}) => Date.parse(job.workflow_started_at || job.started_at)).filter(Number.isFinite);
           const ends = members.map(({job}) => Date.parse(job.completed_at)).filter(Number.isFinite);
           if (starts.length && (live || ends.length)) {
