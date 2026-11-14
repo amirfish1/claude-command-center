@@ -5520,6 +5520,12 @@
     if ((c.name_overridden || c.spawn_named) && c.display_name) {
       rawTitle = c.display_name;
       titleSource = c.name_overridden ? 'user' : 'spawn';
+    } else if (c.auto_titled && c.task_title) {
+      // The saved title overlay updates without rebuilding historical rows.
+      // A cached display_name must not become a topic prefix for its own
+      // regenerated title. Explicit renames and launch names still win.
+      rawTitle = c.task_title;
+      titleSource = 'ai';
     } else if (c.display_name && c.display_name !== c.ai_title) {
       // Server-side display_name diverged from ai_title — typically a user
       // /rename in the terminal (Claude Code writes that as a custom-title
