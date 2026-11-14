@@ -641,6 +641,107 @@ def _local_tts_request(path, text, voice, prio="fg"):
         headers={"Content-Type": "application/json"}, method="POST")
 
 
+_TTS_QUEUE_LOCK = threading.Lock()
+_TTS_IN_FLIGHT = {"fg": 0, "bg": 0, "remote": 0}
+
+
+def _tts_in_flight_inc(slot):
+    with _TTS_QUEUE_LOCK:
+        _TTS_IN_FLIGHT[slot] = _TTS_IN_FLIGHT.get(slot, 0) + 1
+
+
+def _tts_in_flight_dec(slot):
+    with _TTS_QUEUE_LOCK:
+        _TTS_IN_FLIGHT[slot] = max(0, _TTS_IN_FLIGHT.get(slot, 0) - 1)
+
+
+class _tts_in_flight_scope:
+    def __init__(self, slot):
+        self._slot = slot
+
+    def __enter__(self):
+        _tts_in_flight_inc(self._slot)
+        return self
+
+    def __exit__(self, *exc):
+        _tts_in_flight_dec(self._slot)
+        return False
+
+
+class _TrackedClip:
+    """Forwards a live remote TTS stream and releases its queue count once closed."""
+
+    def __init__(self, resp, slot="remote"):
+        self._resp, self._slot, self._released = resp, slot, False
+        self.headers = getattr(resp, "headers", None)
+
+    def _release(self):
+        if not self._released:
+            self._released = True
+            _tts_in_flight_dec(self._slot)
+
+    def read(self, n=-1):
+        chunk = self._resp.read(n)
+        if not chunk:
+            self._release()
+        return chunk
+
+    def close(self):
+        try:
+            close_fn = getattr(self._resp, "close", None)
+            if callable(close_fn):
+                close_fn()
+        finally:
+            self._release()
+
+    def __enter__(self):
+        enter = getattr(self._resp, "__enter__", None)
+        if callable(enter):
+            enter()
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            exit_fn = getattr(self._resp, "__exit__", None)
+            return exit_fn(*exc) if callable(exit_fn) else False
+        finally:
+            self._release()
+
+    def __del__(self):
+        self._release()
+
+
+def tts_queue_stats():
+    """O(1) in-memory snapshot of live uncached TTS synthesis requests."""
+    with _TTS_QUEUE_LOCK:
+        fg = _TTS_IN_FLIGHT["fg"]
+        bg = _TTS_IN_FLIGHT["bg"]
+        remote = _TTS_IN_FLIGHT["remote"]
+    session_waiting = 0
+    with _TTS_SESSIONS_LOCK:
+        sessions = list(_TTS_SESSIONS.values())
+    for s in sessions:
+        if s.cancelled:
+            continue
+        with s.cond:
+            if not s.done and not s.cancelled:
+                started = getattr(s, "started", len(s.marks))
+                session_waiting += max(0, len(s.texts) - started)
+    local_in_flight = fg + bg
+    in_flight = local_in_flight + remote
+    active = (1 if local_in_flight > 0 else 0) + remote
+    waiting = max(0, local_in_flight - 1) + session_waiting
+    return {
+        "queued": in_flight + session_waiting,
+        "in_flight": in_flight,
+        "active": active,
+        "waiting": waiting,
+        "session_waiting": session_waiting,
+        "fg": fg,
+        "bg": bg,
+    }
+
+
 def local_tts_open(text, voice="", prio="fg"):
     """(open HTTP response, label) streaming Kokoro mp3, or (None, "") when unavailable.
 
@@ -669,11 +770,14 @@ def local_tts_open(text, voice="", prio="fg"):
     cached = _clip_cache_get(key)
     if cached is not None:
         return _CachedClip(cached), _KOKORO_LABEL + voice
+    slot = "bg" if prio == "bg" else "fg"
+    _tts_in_flight_inc(slot)
     try:
         resp = urllib.request.urlopen(_local_tts_request("/stream", text, voice, prio), timeout=60)
-        return _TeeClip(resp, key), _KOKORO_LABEL + voice
     except Exception:  # older venv without lameenc answers 404: caller uses local_tts()
+        _tts_in_flight_dec(slot)
         return None, ""
+    return _TeeClip(resp, key, slot=slot), _KOKORO_LABEL + voice
 
 
 # Kokoro runs near realtime on a busy CPU (a 400-char clip takes ~20s), so a
@@ -855,10 +959,16 @@ class _TeeClip:
     cached (CCC-173).
     """
 
-    def __init__(self, resp, key):
+    def __init__(self, resp, key, slot=None):
         self._resp, self._key, self._parts, self._done = resp, key, [], False
+        self._slot, self._released = slot, slot is None
         self._cacheable = getattr(resp, "chunked", True) is not False
         self.headers = getattr(resp, "headers", None)
+
+    def _release(self):
+        if not self._released:
+            self._released = True
+            _tts_in_flight_dec(self._slot)
 
     def read(self, n=-1):
         chunk = self._resp.read(n)
@@ -866,7 +976,16 @@ class _TeeClip:
             self._parts.append(chunk)
         else:
             self._done = True
+            self._release()
         return chunk
+
+    def close(self):
+        try:
+            close_fn = getattr(self._resp, "close", None)
+            if callable(close_fn):
+                close_fn()
+        finally:
+            self._release()
 
     def __enter__(self):
         self._resp.__enter__()
@@ -876,8 +995,12 @@ class _TeeClip:
         try:
             return self._resp.__exit__(*exc)
         finally:
+            self._release()
             if self._done and self._cacheable and exc[0] is None:
                 _clip_cache_put(self._key, b"".join(self._parts))
+
+    def __del__(self):
+        self._release()
 
 
 # Continuous read: one mp3 stream for a whole message, for browsers without
@@ -900,6 +1023,7 @@ class _TtsSession:
         self.texts, self.voice = texts, voice
         self.parts, self.size = [], 0
         self.marks = []      # seconds where each clip starts in the stream
+        self.started = 0     # clips already handed to local_tts_open
         self.done = False
         self.failed = None   # index of the clip that could not be made
         self.cancelled = False
@@ -913,6 +1037,8 @@ class _TtsSession:
             for i, text in enumerate(self.texts):
                 if self.cancelled:
                     break
+                with self.cond:
+                    self.started = i + 1
                 resp, label = local_tts_open(text, self.voice, "fg")
                 if resp is None:
                     with self.cond:
@@ -1111,8 +1237,9 @@ def local_tts(text, voice=""):
         return b"", ""
     req = _local_tts_request("/speak", text, voice)
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = resp.read()
+        with _tts_in_flight_scope("fg"):
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = resp.read()
         return (data, _KOKORO_LABEL + voice) if data else (b"", "")
     except Exception:
         return b"", ""
@@ -1174,10 +1301,13 @@ def deepgram_open(text, voice="", fmt="encoding=linear16&container=wav"):
         data=json.dumps({"text": text}).encode(),
         headers={"Authorization": "Token " + key, "Content-Type": "application/json"},
         method="POST")
+    _tts_in_flight_inc("remote")
     try:
-        return urllib.request.urlopen(req, timeout=30), _DEEPGRAM_LABEL + voice
+        resp = urllib.request.urlopen(req, timeout=30)
     except Exception:
+        _tts_in_flight_dec("remote")
         return None, ""
+    return _TrackedClip(resp, "remote"), _DEEPGRAM_LABEL + voice
 
 
 def tts_voice_options():
@@ -1259,8 +1389,9 @@ def tts(text, voice=""):
             headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
             method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                data = resp.read()
+            with _tts_in_flight_scope("remote"):
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    data = resp.read()
             if data:
                 return 200, data, _audio_type(data), "MeloTTS" if melo else voice
         except urllib.error.HTTPError as e:

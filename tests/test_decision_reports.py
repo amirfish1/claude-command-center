@@ -136,3 +136,11 @@ def test_invalid_reporter_notes_are_rejected_before_filing(report_env, note):
     assert status == 400 and not result["ok"]
     report_env.annotation.assert_not_called()
     report_env.queue.enqueue.assert_not_called()
+
+
+def test_submission_identity_survives_new_transcript_on_retry(report_env):
+    reports.create_report(report_env.payload, submission_id='fixed-browser-request')
+    first = report_env.queue.enqueue.call_args.kwargs['dedupe_key']
+    report_env.parser.return_value = {'events': [], 'last_line': 99}
+    reports.create_report(report_env.payload, submission_id='fixed-browser-request')
+    assert report_env.queue.enqueue.call_args.kwargs['dedupe_key'] == first

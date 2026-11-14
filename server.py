@@ -19056,6 +19056,7 @@ def _queue_health_stats(rows, *, now=None):
         "queued_items": queued_items,
         "stale_queued_items": stale_items,
         "stale_queued_wait_s": round(stale_wait_s, 1),
+        "tts": _free_runtime.tts_queue_stats(),
     }
 
 
@@ -30876,6 +30877,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
+        if path.startswith("/api/decisions-fix/report/"):
+            from ccc_server import decision_report_jobs
+            result, status = decision_report_jobs.status(path.rsplit("/", 1)[-1])
+            self.send_json(result, status)
+            return
+
         if path.startswith("/api/ticket-audio/"):
             from ccc_server import ticket_audio
             if ticket_audio.handle(self, self.command):
@@ -31934,6 +31941,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "ok": True,
                 "ready": all(v["ready"] for v in per_engine.values()),
                 "engines": per_engine,
+                "tts_queue": _free_runtime.tts_queue_stats(),
             })
         elif path == "/api/sessions/children":
             # Lightweight lineage lookup: children of a dispatcher session,
@@ -35919,6 +35927,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 _sent += len(_buf)
                     except Exception:
                         pass
+                    finally:
+                        try:
+                            if hasattr(_resp, "close"):
+                                _resp.close()
+                        except Exception:
+                            pass
                     # first = ms until the first audio bytes (the wait before
                     # sound); ms = until the whole clip was made.
                     _log_activity("tts", "SPEAK", "chars=%d status=200 spoke=%s ms=%d first=%d bytes=%d stream=1 prio=%s" % (
@@ -48612,6 +48626,10 @@ def main():
     # Recover in-progress group-chat coordinations and start background watcher.
     _start_coordination_watcher()
     _start_resume_queue_watcher()
+    # Recover durably acknowledged reports after a dashboard restart.
+    if not os.environ.get("CCC_EPHEMERAL"):
+        from ccc_server import decision_report_jobs
+        decision_report_jobs.kick_worker()
     # GH #71 (mechanism 5) — always-on reaper for stale Claude headless agents
     # whose session has been taken over by a live terminal. Runs regardless of
     # any open dashboard so the ~500MB stale process doesn't linger.

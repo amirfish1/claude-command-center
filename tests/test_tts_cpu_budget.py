@@ -80,3 +80,20 @@ def test_budget_only_applies_on_busy_hosts(monkeypatch):
         assert cls._background_budget() == 0.0
     with mock.patch.object(os, "getloadavg", side_effect=OSError):
         assert cls._background_budget() == 0.0
+
+
+def test_priority_lock_tracks_waiting_background_requests():
+    lock = lock_class()()
+    lock._busy = True
+    observed = []
+
+    def stop_waiting(_timeout=None):
+        observed.append((lock._fg_waiting, lock._bg_waiting))
+        raise RuntimeError("stop")
+
+    with mock.patch.object(lock, "_background_budget", return_value=0.0), \
+            mock.patch.object(lock._cond, "wait", side_effect=stop_waiting):
+        with pytest.raises(RuntimeError, match="stop"):
+            lock.acquire(False)
+    assert observed == [(0, 1)]
+    assert lock._bg_waiting == 0
