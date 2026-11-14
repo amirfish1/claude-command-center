@@ -14,13 +14,12 @@ const css = fs.readFileSync(path.join(root, 'static/app.css'), 'utf8');
 const html = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/app.css"><style>
 body {display:block;padding:0} .sidebar {width:100%;height:100dvh;max-width:none;overflow:hidden}
-#convListPanel {display:flex;flex:1;min-height:0;flex-direction:column}
 #convList {flex:1;min-height:0;overflow:auto} .test-row {padding:20px;border-bottom:1px solid var(--border)}
 </style><div class="sidebar"><div class="sidebar-header">
 <div class="sidebar-header-brand"><div class="sh-title-row"><a class="sh-title-link"><span class="sh-title-main">Claude Command Center</span></a></div></div>
 <div class="mobile-home-status"><div id="localCiMobileList"><button class="local-ci-mobile-toggle" aria-expanded="false">CI: checks passing</button></div></div></div>
 <div class="new-session-panel"><button class="new-session-btn" id="sidebarNewBtn">+ New session</button><button id="sidebarSearchBtn">Search sessions</button><input id="convSearch" aria-label="Search sessions" hidden></div>
-<div id="convListPanel"><div id="convList"><div class="conv-archived-tools"><button>Filters</button></div>${Array.from({length:45},(_,i)=>`<div class="test-row">Session ${i+1}</div>`).join('')}</div></div></div>
+<div id="convListPanel" class="conv-list-panel"><div id="convList"><div class="conv-archived-tools"><button>Filters</button></div>${Array.from({length:45},(_,i)=>`<div class="test-row">Session ${i+1}</div>`).join('')}</div></div></div>
 <script>document.querySelector('#sidebarNewBtn').onclick=()=>window.newClicks=(window.newClicks||0)+1;
 document.querySelector('#sidebarSearchBtn').onclick=()=>document.querySelector('#convSearch').hidden=false;</script>
 <script>${controller}</script>`;
@@ -56,7 +55,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
         const list = document.querySelector('#convList'), panel = document.querySelector('#convListPanel');
         list.scrollTop = 0;
         const start = performance.now(), samples = [];
-        const sample = () => samples.push({ms:performance.now()-start,y:panel.getBoundingClientRect().top});
+        const sample = () => {const rect=panel.getBoundingClientRect();samples.push({ms:performance.now()-start,y:rect.top,bottom:rect.bottom});};
         sample(); list.dispatchEvent(new Event('scroll')); sample();
         for (let i=0;i<25;i++) {await new Promise(requestAnimationFrame);sample();}
         return samples;
@@ -64,6 +63,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       assert.ok(Math.abs(trace[1].y-trace[0].y)<2, 'top-of-list must not jump synchronously');
       assert.ok(trace.at(-1).y-trace[0].y>40,'header returns');
       assert.ok(new Set(trace.map(s=>Math.round(s.y))).size>=4,'header has intermediate positions');
+      for (const sample of trace) assert.ok(sample.bottom>=843,'slide fills the viewport, including cleanup');
       for (let i=1;i<trace.length;i++) assert.ok(trace[i].y>=trace[i-1].y-1,'reveal is monotonic');
       traces.push({width,trace});
       // Reversing mid-fold preserves the current position.

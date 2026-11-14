@@ -35126,6 +35126,7 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
     min-height: var(--mobile-home-fold-height); flex-shrink: 0;
     position: relative; z-index: 1; background: var(--surface); will-change: transform;
   }
+  .sidebar:has(> .mobile-home-list-moving) > :not(.mobile-home-list-moving) { flex-shrink: 0; }
   .sidebar .mobile-home-status { flex-shrink: 0; }
   body.mobile-home-collapsed .sidebar .sidebar-header { padding-bottom: 4px; }
   body.mobile-home-collapsed .sidebar .sidebar-header-brand { width: 100%; }
