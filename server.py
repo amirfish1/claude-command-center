@@ -4689,6 +4689,7 @@ FILE_CATEGORIES = {
                       ".xlsx", ".xls", ".csv", ".ods", ".numbers"},
     "presentations": {".pptx", ".ppt", ".key", ".odp"},
     "markdown":      {".md", ".mdx"},
+    "text":          {".txt", ".log", ".json"},
     "html":          {".html", ".htm"},
 }
 FILE_EXT_TO_CATEGORY = {
@@ -35260,7 +35261,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 return
             file_path = Path(resolved["path"])
             media_category = _categorize_file_target(str(file_path))
-            if media_category not in ("videos", "html", "images", "pdfs", "markdown") or not file_path.is_file():
+            if media_category not in ("videos", "html", "images", "pdfs", "markdown", "text") or not file_path.is_file():
                 self.send_json({"ok": False, "error": "not a streamable media file"}, 404)
                 return
             try:
@@ -35302,6 +35303,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 # folder viewer fetches it and renders client-side.
                 ".md": "text/plain; charset=utf-8",
                 ".mdx": "text/plain; charset=utf-8",
+                ".txt": "text/plain; charset=utf-8",
+                ".log": "text/plain; charset=utf-8",
+                ".json": "text/plain; charset=utf-8",
+                ".csv": "text/plain; charset=utf-8",
             }
             content_type = ct_map.get(ext)
             if content_type is None:
@@ -35337,6 +35342,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "private, max-age=3600")
             if is_preview:
                 self.send_header("X-CCC-Preview", "1")
+            if media_category == "text":
+                self.send_header("X-Content-Type-Options", "nosniff")
             if media_category == "html" or ext == ".svg":
                 # An arbitrary local HTML file rendered same-origin as the
                 # dashboard would otherwise run script with the dashboard's

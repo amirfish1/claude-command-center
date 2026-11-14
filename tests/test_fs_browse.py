@@ -36,3 +36,43 @@ class FolderViewerListingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_text_reports_stream_as_inert_text_with_existing_file_boundary():
+    import threading
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    httpd = server.ThreadedHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    repo = str(Path(server.__file__).parent)
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            for ext in ('.txt', '.log', '.json', '.bin'):
+                report = Path(folder) / ('report' + ext)
+                content = '<script>window.reportExecuted=true</script>\nReport details\n'
+                report.write_text(content)
+                listing = server._browse_folder_for_viewer(str(report))
+                assert listing['selected'] == report.name
+                category = next(f['category'] for f in listing['files'] if f['name'] == report.name)
+                query = urllib.parse.urlencode({'path': str(report), 'repo_path': repo})
+                url = f'http://127.0.0.1:{httpd.server_port}/api/media?{query}'
+                if ext == '.bin':
+                    assert category is None
+                    try:
+                        urllib.request.urlopen(url, timeout=2)
+                        raise AssertionError('unsupported binary became streamable')
+                    except urllib.error.HTTPError as error:
+                        assert error.code == 404
+                    continue
+                assert category == 'text'
+                with urllib.request.urlopen(url, timeout=2) as response:
+                    assert response.headers['Content-Type'] == 'text/plain; charset=utf-8'
+                    assert response.headers['X-Content-Type-Options'] == 'nosniff'
+                    assert response.read().decode() == content
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(2)

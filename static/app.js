@@ -38179,7 +38179,7 @@
       let inner;
       if (f.category === 'images') inner = '<img src="' + escapeAttr(_mediaPreviewUrl(url) || url) + '" alt="' + escapeAttr(f.name) + '">';
       else if (f.category === 'videos') inner = '<video src="' + escapeAttr(url) + '" controls></video>';
-      else if (f.category === 'markdown') inner = '<div class="ffv-md tp-body">Loading\u2026</div>';
+      else if (f.category === 'markdown' || f.category === 'text') inner = '<div class="ffv-md tp-body">Loading\u2026</div>';
       else if (f.category === 'pdfs' || f.category === 'html') inner = '<iframe src="' + escapeAttr(url) + '"></iframe>';
       else inner = '<div class="ffv-nopreview">No inline preview for this file type.</div>';
       $view.innerHTML = '<div class="ffv-pv-head"><span>' + escapeHtml(f.name) + '</span>'
@@ -38189,19 +38189,24 @@
         $fs.addEventListener('click', (ev) => {
           ev.preventDefault();
           const cat = $fs.getAttribute('data-ffv-fullscreen');
-          const kind = cat === 'videos' ? 'video' : (cat === 'pdfs' || cat === 'html') ? 'frame' : 'image';
+          const kind = cat === 'videos' ? 'video' : (cat === 'pdfs' || cat === 'html' || cat === 'text' || cat === 'markdown') ? 'frame' : 'image';
           openMediaLightbox(url, { kind, title: f.name });
         });
       }
       $list.querySelectorAll('.ffv-row').forEach(r => r.classList.toggle('sel', r.getAttribute('data-path') === f.path));
-      if (f.category === 'markdown') {
-        fetch(url, { cache: 'no-store' }).then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status))).then(t => {
+      if (f.category === 'markdown' || f.category === 'text') {
+        fetch(url, { cache: 'no-store', cccPriority: 'user' }).then(r => r.ok ? r.text() : Promise.reject(new Error('HTTP ' + r.status))).then(t => {
           const el = $view.querySelector('.ffv-md');
           if (!el || $list.querySelector('.ffv-row.sel')?.getAttribute('data-path') !== f.path) return;
-          el.innerHTML = window.CCCTicketProse ? window.CCCTicketProse.render(t) : '<pre>' + escapeHtml(t) + '</pre>';
+          if (f.category === 'text') {
+            const pre = document.createElement('pre');
+            pre.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;margin:0';
+            pre.textContent = t;
+            el.replaceChildren(pre);
+          } else el.innerHTML = window.CCCTicketProse ? window.CCCTicketProse.render(t) : '<pre>' + escapeHtml(t) + '</pre>';
         }).catch(e => {
           const el = $view.querySelector('.ffv-md');
-          if (el) el.textContent = 'Could not load: ' + e.message;
+          if (el && $list.querySelector('.ffv-row.sel')?.getAttribute('data-path') === f.path) el.textContent = 'Could not load: ' + e.message;
         });
       }
     }
@@ -38246,7 +38251,7 @@
       $list.innerHTML = '<div class="ffv-msg">Loading\u2026</div>';
       let d;
       try {
-        const res = await fetch('/api/fs/browse?path=' + encodeURIComponent(path), { cache: 'no-store' });
+        const res = await fetch('/api/fs/browse?path=' + encodeURIComponent(path), { cache: 'no-store', cccPriority: 'user' });
         d = await res.json();
       } catch (e) { d = { ok: false, error: String(e) }; }
       if (!d.ok) { $list.innerHTML = '<div class="ffv-msg">' + escapeHtml(d.error || 'failed') + '</div>'; return; }
