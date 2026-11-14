@@ -1,2 +1,0 @@
-- Let the Workers ticket list fill the tab, hide independent sessions and manual idea/small-bug queues, and show ticket lifecycle statuses with Open in red.
-- Refresh ticket descriptions on the same live message stream as their attached sessions, including collapsed tickets, without replacing expanded lanes.

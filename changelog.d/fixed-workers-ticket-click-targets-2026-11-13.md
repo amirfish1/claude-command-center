@@ -1,2 +1,0 @@
-- In Workers, open ticket details only from the ticket number; click the title or row to expand and collapse its sessions.
-- Keep session-to-ticket grouping synchronized with ticket refreshes so a newly claimed ticket and its worker do not appear as separate topics.

@@ -1,1 +1,0 @@
-An open app page now records any stretch in which it could not respond, so a hang shows up in `ccc app speed` (freezes and the longest one) instead of going unseen. `CCC_PERF_APP_FREEZE_MS` sets how long counts as a freeze (default two seconds).

@@ -16,7 +16,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "5.45.0"
+__version__ = "5.46.0"
 
 import sender_envelope as _attribution
 import ast

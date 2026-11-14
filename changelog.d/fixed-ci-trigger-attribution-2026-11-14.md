@@ -1,1 +1,0 @@
-CI progress identifies GitHub Actions, runner location, trigger, commit, and available agent, worker, and related ticket evidence. Push hooks keep session attribution locally; missing attribution is explicit.

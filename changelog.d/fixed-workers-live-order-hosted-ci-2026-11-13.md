@@ -1,1 +1,0 @@
-- Put active worker tickets ahead of resolved history, distinguish parked claims from live work, and give ticket activity the full Workers list height. Show GitHub-hosted CI progress alongside local runner jobs. Prioritize the first CI reading so it appears during session loading.

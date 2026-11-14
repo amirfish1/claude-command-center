@@ -7,6 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.46.0] - 2026-11-14
+
+### Added
+- Support Primary (Google Cloud) and Secondary (personal Google OAuth) Antigravity accounts across session and worker defaults, the composer, launch policy and previews, CLI/API launches, replies and continuations. Keep credentials separate and preserve each conversation's account.
+- App pages can redraw themselves when their files change: `app-kit.js` fires a `ccc:app-changed` event after the agent or a routine edits a file in the app folder, so an app no longer needs a refresh button.
+- Routine alerts can also be delivered outside the dashboard through opt-in channels (WhatsApp to your own chat, dry run by default); set up in `app-channels.json`.
+- Concierge: describe a new app in one sentence at `POST /api/apps/concierge` and an agent sets it up, asking at most three questions and proposing routines.
+- Research apps get a findings feed: add `<script src="/static/app-feed.js" data-app="...">` and a `[data-ccc-feed]` element; routines append cards with `POST /api/apps/feed`.
+- An open app page now records any stretch in which it could not respond, so a hang shows up in `ccc app speed` (freezes and the longest one) instead of going unseen. `CCC_PERF_APP_FREEZE_MS` sets how long counts as a freeze (default two seconds).
+- Apps get an automatic preview image (preview.png) re-rendered when their files change, so the Apps home can show pictures without live previews.
+- Every app page now reports how long it took to become fully ready (content drawn and agent pane showing) against a one-second budget. `ccc app speed` shows the numbers per app, and `CCC_PERF_APP_READY_MS` changes the budget.
+- Apps can have an agent and routines: add `app-kit.js` to an app page for a resizable agent pane and routine cards, and declare scheduled script or agent routines in `app.json` (see `docs/applications.md`).
+- Default app templates (tracker, research, watch, blank) and one-call app creation: `GET /api/apps/templates` and `POST /api/apps/create`.
+- Apps home: a built-in page at the top of the rail with a card for every app (preview, one-line status), a resizable side panel to open an app beside the grid, and a + New app card.
+- Show elapsed time beside each CI job and deployment, with a fixed duration for completed runs.
+- Add “File as bug for CCC” to error toasts, resume failures, and Simple mode errors, opening an editable report with the error prefilled for private support or public GitHub submission.
+- Added Gemini 4 Carbon (High, Medium, Low) to the Antigravity model catalog and picker.
+- iMessage channel for app routine alerts: sends to the one configured owner handle via Messages on macOS, or through an ssh host from Linux.
+- Routine cards expand to their last 10 runs and can be edited (name, icon, schedule) or deleted; the New routine card sits in the same grid.
+- Share an app with someone else: `ccc app install owner/repo` copies an app from a git repository or folder, and `--focus` (or `ccc app focus <id>`) locks CCC to that one app, with a "More" button in the rail to show everything else. `CCC_APP=owner/repo` on the install line does both for a new user. Apps can declare a setup routine that runs once on install and "Try asking" suggestions shown above the agent.
+- New ticket popups prefill the IDs of sessions visible in conversation panes as editable context, with the cursor ready for the description above them.
+- Show the active repository’s Vercel production deployment alongside CI progress on desktop and phone, with build phases, final outcomes, deployment links and dismissible results.
+
+### Changed
+- Apps open much faster: the page draws from a saved copy, the agent pane loads a trimmed conversation view, the app you used last stays loaded in the background so opening or switching back to it is instant, and a page opened straight on an app loads the app before the dashboard behind it.
+- Group GitHub CI activity into one compact, expandable row per repository and commit, with shared attribution, overall workflow progress, wall-clock duration, visible failures, and dismissal of completed groups.
+- Composer buttons (Esc, Compact, Steer) now move into the + menu when the agent pane is narrow (under 600px) or embedded in an app, not only on touch devices.
+- In narrow or app-embedded panes, the info bar (folder path, context meter, model chip) now sits below the composer instead of above it.
+- Live session status (working/idle chips) is now built in its own helper process, so a busy or stalled dashboard no longer delays it. If the helper is down or slow, the dashboard builds it itself as before.
+- Mobile CI runs share one comma-separated status line. Expand it to inspect individual runs and dismiss completed checks; status updates preserve the expanded view.
+- Question history now has a labeled link in the Decisions header. Removed the floating question count button; current counts remain in Decisions and its phone menu entry.
+- Move queue worker defaults and the worker fallback/model profile editor from Agents to Queues in Settings.
+- Known session IDs in transcript messages now link to named session chips, with a Child label for child sessions.
+- Start with a collapsed session sidebar and three setup choices for local agents, automatic issue fixes, and phone access. Open All checks whether engine setup is needed; first-run guides remain available on request.
+- Pages open faster: every script and stylesheet is now cached by the browser until it changes, so reloads and the agent pane stop re-fetching 100+ files.
+- Move the savings chip beside the plan usage meters and distinguish GitHub-hosted, machine-hosted, mixed, and unverified CI runners with compact icons.
+- Workers now shows compact, theme-aware ticket history with a bounded expanded list, keeps time filters above activity, and avoids repeating status labels and section counts. Queue warnings remain visible, and ticket details retain the full work history. Cozy worker rows use tighter typography, and activity labels show the current status without the confusing “Worked” prefix.
+- Replace terminal worker sign-offs with the ticket's blocker reason and a compact reason category in Workers. Distinguish owner decisions from worker, dependency, and external waits; show recorded answer choices as drafts in the existing ticket dialog. The queue view shares the same reason categories.
+- Let the Workers ticket list fill the tab, hide independent sessions and manual idea/small-bug queues, and show ticket lifecycle statuses with Open in red.
+- Refresh ticket descriptions on the same live message stream as their attached sessions, including collapsed tickets, without replacing expanded lanes.
+- Workers now combines recent tickets, assigned tickets and worker session groups in compact expandable rows, with live Working/Needs you states and a small updating description. Session and lane clicks open their conversations. Workers without a linked ticket remain accessible as Session entries. Expansion survives reload, and placeholder descriptions are hidden. Time filters sit below the compact rows. Removed the activity heading and warning chips, increased the ticket area's height, and refresh worker data immediately on tab entry.
+
+### Fixed
+- Advanced mode uses the app rail at every window width instead of showing the old Coding / Workers / More bottom bar.
+- Removed the redundant “Allow screenshot” button and tab-sharing prompt from annotations; selected areas are captured automatically.
+- Bulk archive/trash bursts no longer start a new background archive rebuild on every poll (at most one per two minutes, unless a new transcript lands), which stalled the session list for tens of seconds.
+- Pages, apps and the agent pane no longer wait seconds for the dashboard while it is busy in the background: database and file reads were being held up to 900 times longer than they need whenever another part of the server was computing. `CCC_THREAD_SWITCH_MS` tunes the fix; `0` turns it off.
+- Restore recent CI progress immediately after a browser refresh while live status updates, and retain saved progress if an update fails.
+- CI progress identifies GitHub Actions, runner location, trigger, commit, and available agent, worker, and related ticket evidence. Push hooks keep session attribution locally; missing attribution is explicit.
+- Fixed unnamed Codex sessions showing a UUID while the sidebar refreshes, and restored automatic titles when Codex leaves its stored prompt empty. Screenshot attachment paths no longer appear in fallback names.
+- Codex sessions now include file links and image attachments from messages, custom tool calls, and structured tool results in the Files panel.
+- Compact conversation runs keep orchestration chips and a thinking preview visible, reveal thinking before tools, and provide explicit tool and collapse controls.
+- Remove the empty spacer between compact composer controls so the message field uses the available width. New-session model selectors stay together on their own row.
+- Decision choices use compact rounded rectangles so wrapped labels stay readable in narrow sidebars.
+- Show local image previews in the Files tab, alongside uploaded and remote images, while keeping the newest conversation mentions first.
+- Inline script previews summarize each script in a command chain instead of copying later scripts into the preview. Full source remains available under View script.
+- Completed JSON-only verdict sessions move to Finished without requiring a footer that would break their requested response format. New work and pending questions keep the session active.
+- Show “No timer” when mobile CI progress has no elapsed-time information.
+- Preserve the CCC logo and gradient title on mobile Home, combine CI hosting/progress/timers, engine usage and savings into one horizontal row, and collapse extra list controls while scrolling. Sessions keep the full screen for reading and composing, with keyboard-aware draft sizing, no mobile Steer button, and jump controls above the composer. Restore responsive swipe-to-archive across session lists, including Simple Home and History, with cancellation, restore and Undo support.
+- Start the mobile and narrow-screen composer with one line of input beside the attachment and send controls, while preserving draft growth and wrapping secondary actions.
+- On-call home reuses one Vault scan per response, avoiding repeated decryption for every alert and reply choice while refreshing redaction secrets on every request.
+- Explicitly opening On-call home gives its data request priority over background dashboard startup reads.
+- Peer reports now start collapsed with their status and first summary sentence; expand Details to read the full report and view its screenshots.
+- Make peer reports easier to scan in all conversation engines with upright text, spaced sections, and smaller bulleted file references.
+- Restore mobile Features, Bugs, Workers, and hamburger navigation, with apps inside the hamburger menu instead of a desktop rail. Phone conversations use the full screen width with compact jump controls; successful CI checks stay in the session list.
+- Preserve all quick reply choices when short decision labels contain commas or four words.
+- Background archive updates now share the sidebar's read-aloud refresh limit, reducing repeated redraws while session state changes remain immediate.
+- Allow config approvals and removal from trusted remote dashboards, including Tailscale, using the existing origin, proxy-secret, and optional PIN checks.
+- Routine `ccc restart` now waits (up to 8 minutes) while a read-aloud is playing, so a restart no longer cuts the voice mid-read. The Restart button, auto-update and `ccc restart --now` are unchanged.
+- Resume existing CLI sessions in plain working folders without requiring the folder to be registered as a repository first.
+- Open Sessions by default when On-call is enabled; opening the On-call home at startup now requires opting in through Settings.
+- Share card pages now display the current CCC description in their visible footer as well as their social preview metadata.
+- Simplify the sidebar footer with consistent, keyboard-accessible dashboard controls. Keep completion sounds in Settings and show Usage & diagnostics only in Debug mode.
+- Reduce sidebar refresh stalls during busy agent activity by batching bounded thread and continuation-topic index reads.
+- Restore plan usage to the sidebar header without debug mode or opening a diagnostics drawer, and prevent its initial request from timing out behind deferred startup reads.
+- Keep a visible subagent under its parent topic when time windows or section filters would otherwise hide the parent; group topic families together across lifecycle sections.
+- Ticket creation errors now identify the queue and ticket text, preserve server or connection details, and explain how to check an unconfirmed save instead of showing “Add failed: unknown.”
+- Keep finished and archived tickets in their queue's sidebar budget and offer Show more sessions in Features, Small bugs, and All so older tickets remain reachable.
+- Group ticket-prefixed helper and continuation sessions, historical workers, and their attached lanes under their ticket instead of separate generic Session rows.
+- Fixed broken session images and visible HTML when an image filename or alt text contains a ticket reference.
+- Fixed unreadable conversation toast messages in light mode by matching their background to the active theme.
+- Session Trash confirmation now appears beside the clicked button instead of in a browser dialog.
+- Worker rows show the ticket's issue description with Bug or FR labels, keeping ticket numbers in the avatar badge and status in the second line.
+- Use the worker ticket headline in conversation headers and popouts instead of the queue-draining launch prompt.
+- Put active worker tickets ahead of resolved history, distinguish parked claims from live work, and give ticket activity the full Workers list height. Show GitHub-hosted CI progress alongside local runner jobs. Prioritize the first CI reading so it appears during session loading.
+- In Workers, open ticket details only from the ticket number; click the title or row to expand and collapse its sessions.
+- Keep session-to-ticket grouping synchronized with ticket refreshes so a newly claimed ticket and its worker do not appear as separate topics.
+- Use the conversation theme's foreground color for the Working badge and elapsed timer so they remain readable on light backgrounds.
+
 ## [5.45.0] - 2026-11-11
 
 ### Added
@@ -5030,7 +5119,8 @@ Initial public release.
 - `/api/repo/switch` validates targets against the picker allow-list.
 - See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.45.0...HEAD
+[Unreleased]: https://github.com/amirfish1/claude-command-center/compare/v5.46.0...HEAD
+[5.46.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.46.0
 [5.45.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.45.0
 [5.44.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.44.0
 [5.43.0]: https://github.com/amirfish1/claude-command-center/releases/tag/v5.43.0

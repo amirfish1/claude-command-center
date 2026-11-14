@@ -1,1 +1,0 @@
-- Allow config approvals and removal from trusted remote dashboards, including Tailscale, using the existing origin, proxy-secret, and optional PIN checks.

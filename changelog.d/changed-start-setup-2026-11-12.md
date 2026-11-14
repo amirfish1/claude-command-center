@@ -1,1 +1,0 @@
-Start with a collapsed session sidebar and three setup choices for local agents, automatic issue fixes, and phone access. Open All checks whether engine setup is needed; first-run guides remain available on request.

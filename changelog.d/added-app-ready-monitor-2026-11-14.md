@@ -1,1 +1,0 @@
-Every app page now reports how long it took to become fully ready (content drawn and agent pane showing) against a one-second budget. `ccc app speed` shows the numbers per app, and `CCC_PERF_APP_READY_MS` changes the budget.

@@ -1,1 +1,0 @@
-- Keep finished and archived tickets in their queue's sidebar budget and offer Show more sessions in Features, Small bugs, and All so older tickets remain reachable.

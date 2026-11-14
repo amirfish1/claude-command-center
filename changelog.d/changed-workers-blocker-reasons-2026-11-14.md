@@ -1,1 +1,0 @@
-- Replace terminal worker sign-offs with the ticket's blocker reason and a compact reason category in Workers. Distinguish owner decisions from worker, dependency, and external waits; show recorded answer choices as drafts in the existing ticket dialog. The queue view shares the same reason categories.

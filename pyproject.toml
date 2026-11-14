@@ -1,6 +1,6 @@
 [project]
 name = "claude-command-center"
-version = "5.45.0"
+version = "5.46.0"
 description = "Puts coding agents on call for your product: bugs go to agents that fix them, and real decisions reach you by message."
 readme = "README.md"
 requires-python = ">=3.9"

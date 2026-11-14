@@ -1,1 +1,0 @@
-- Resume existing CLI sessions in plain working folders without requiring the folder to be registered as a repository first.

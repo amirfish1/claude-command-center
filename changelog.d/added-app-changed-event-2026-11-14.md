@@ -1,1 +1,0 @@
-- App pages can redraw themselves when their files change: `app-kit.js` fires a `ccc:app-changed` event after the agent or a routine edits a file in the app folder, so an app no longer needs a refresh button.

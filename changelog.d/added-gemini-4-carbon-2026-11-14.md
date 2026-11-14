@@ -1,1 +1,0 @@
-- Added Gemini 4 Carbon (High, Medium, Low) to the Antigravity model catalog and picker.

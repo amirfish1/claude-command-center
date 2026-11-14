@@ -1,1 +1,0 @@
-- Ticket creation errors now identify the queue and ticket text, preserve server or connection details, and explain how to check an unconfirmed save instead of showing “Add failed: unknown.”
