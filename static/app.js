@@ -3907,6 +3907,8 @@
     if (attn) return Object.assign(base, { label: attn.label, kind: attn.kind, text: attn.text, attn });
     // An open task's pending work is more useful than its completed milestone.
     if (plan) return Object.assign(base, plan);
+    if (c._statusLoading && !did && !text && !hasNext) return Object.assign(base, {
+      label: 'Loading', kind: 'update', text: 'Loading session status…' });
     // A decision with chips reads "Decide: <the choice>", never
     // "Next: Answer Q12 ..." (CCC-276). info.next keeps the raw step so the
     // quick-action source still matches it.
@@ -42345,7 +42347,9 @@
       c = _ultraFreshCurrent(c);
       // Flat results still represent spawned lanes, even without a cluster.
       const recordedParent = manualSubsessionParentId(c.session_id || c.id) || c.parent_session_id || c.hermes_parent_session_id;
-      if (!(opts.currentChildDepth > 0) && recordedParent && recordedParent !== (c.session_id || c.id) && !continuationParentId(c)) {
+      const standaloneChild = !(opts.currentChildDepth > 0) && recordedParent
+        && recordedParent !== (c.session_id || c.id) && !continuationParentId(c);
+      if (standaloneChild) {
         opts = { ...opts, currentChildDepth: 1 };
       }
       if (!opts.subagentClusterMeta && !(opts.currentChildDepth > 0) && !opts.familyNested
@@ -43251,7 +43255,7 @@
       // The session this one continued from folds into this row; its
       // meta-row ⤴ from: chip is the way back to it. A nested cluster child
       // skips the ↳ spawned-by chip — its parent is the row directly above.
-      const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c, Number(opts.currentChildDepth || 0) > 0);
+      const sessionProvenanceChipHtml = _sessionProvenanceChipHtml(c, Number(opts.currentChildDepth || 0) > 0 && !standaloneChild);
       const objectChipHtml = flowObjectChipHtml(c);
       // Current-goal chip — codex sessions only (the native `/goal` feature,
       // read server-side from ~/.codex/goals_1.sqlite into c.goal). Status
@@ -43443,7 +43447,7 @@
           .replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 280)
         : '';
       const _outWorking = _outView.kind === 'working';
-      if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking || _readyToCloseRow)) {
+      if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking || _readyToCloseRow || c._statusLoading)) {
         const _did = ((_ss && _ss.did) || '').trim();
         const _next = ((_ss && _ss.next_step_user) || '').trim();
         const _hasNext = !!_next && !/^(?:none|nothing|no action(?: is)? needed|n\/a|not applicable)[.!]?(?:\s+[—–-]\s+.*)?$/i.test(_next);
@@ -43557,6 +43561,10 @@
             + '<div class="wa-decision-reply">Loading full decision context…</div>' : '')
           + '</div>'
         : '';
+      const waParentHtml = standaloneChild
+        ? '<button type="button" class="conv-family-link" data-parent-sid="'
+          + escapeAttr(spawnParentVisibleId(recordedParent)) + '" title="Open the session that spawned this lane">Open parent</button>'
+        : '';
       const waHtml = '<div class="wa-row">'
         // Ticket rows keep the AUTO switch under the avatar here too.
         + ((autoSwitchHtml || _wkTicketChip)
@@ -43569,7 +43577,7 @@
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Ticket identity stays inside the avatar.
         +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview ? '<span class="wa-explanation-label" data-status="' + escapeAttr(_waExplanationLabel.toLowerCase()) + '">' + escapeHtml(_waExplanationLabel) + (_waExplanationLabel === '✓' ? '' : ':') + '</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + waDecisionContextHtml + '</div>'
-        + '<div class="wa-row-footer">' + sessionIdChipHtml + '</div>'
+        + '<div class="wa-row-footer">' + sessionIdChipHtml + waParentHtml + '</div>'
         + (window.CCCSessionRecaps ? window.CCCSessionRecaps.render(c, _outView) : '')
         + '</div>'
         + '</div>';
@@ -81179,7 +81187,8 @@
       if (cached.version !== 1 || cached.window !== windowName
         || !Number.isFinite(age) || age < 0 || age > ARCHIVE_SIDEBAR_CACHE_TTL_MS
         || !Array.isArray(cached.rows) || cached.rows.length > ARCHIVE_SIDEBAR_CACHE_MAX_ROWS) return null;
-      return cached.rows.map(_archiveSidebarCacheRow).filter(Boolean);
+      return cached.rows.map(_archiveSidebarCacheRow).filter(Boolean)
+        .map(row => Object.assign(row, { _statusLoading: true }));
     } catch (_) { return null; }
   }
   function _writeArchiveSidebarCache(rows, windowName) {
@@ -81192,14 +81201,28 @@
       // fleet must not crowd every Features/Small bugs session out of cache.
       const ordered = rows.filter(row => row && row.idea_ticket)
         .concat(rows.filter(row => !row || !row.idea_ticket));
+      const idOf = row => String(row && (row.session_id || row.id) || '');
+      const byId = new Map(rows.filter(Boolean).map(row => [idOf(row), row]));
+      const saved = new Set();
       for (const row of ordered) {
         if (entries.length >= ARCHIVE_SIDEBAR_CACHE_MAX_ROWS) break;
-        const projected = _archiveSidebarCacheRow(row);
-        if (!projected) continue;
-        const entry = JSON.stringify(projected);
-        if (chars + entry.length + 1 > ARCHIVE_SIDEBAR_CACHE_MAX_CHARS) continue;
-        entries.push(entry);
-        chars += entry.length + 1;
+        // Admit a child with its loaded ancestors as one bounded batch. A
+        // busy fleet must not evict the parent and leave an unexplained lane.
+        const batch = [], seen = new Set(saved);
+        let candidate = row;
+        while (candidate && !seen.has(idOf(candidate))) {
+          seen.add(idOf(candidate));
+          const projected = _archiveSidebarCacheRow(candidate);
+          if (!projected) break;
+          batch.push({ id: idOf(candidate), text: JSON.stringify(projected) });
+          candidate = byId.get(candidate.parent_session_id || candidate.hermes_parent_session_id
+            || candidate.continued_from_session_id);
+        }
+        const cost = batch.reduce((n, item) => n + item.text.length + 1, 0);
+        if (entries.length + batch.length > ARCHIVE_SIDEBAR_CACHE_MAX_ROWS
+            || chars + cost > ARCHIVE_SIDEBAR_CACHE_MAX_CHARS) continue;
+        for (const item of batch) { entries.push(item.text); saved.add(item.id); }
+        chars += cost;
       }
       const envelope = JSON.stringify({ version: 1, window: windowName, savedAt: Date.now() });
       localStorage.removeItem(ARCHIVE_SIDEBAR_CACHE_KEY);  // pre-per-window snapshot
@@ -82299,6 +82322,7 @@
         // render. Dropped here previously — which is why it only ever showed in
         // the transcript pane, never on the row.
         session_state: c.session_state || null,
+        _statusLoading: !!c._statusLoading,
         modified: c.mtime || c.modified || 0,
         last_interacted: c.mtime || c.modified || c.last_interacted || 0,
         size: c.size || 0,

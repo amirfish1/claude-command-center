@@ -1,0 +1,1 @@
+- Keep spawned sessions with their loaded parents in startup previews, distinguish loading status from incomplete work, and show a parent link for lanes outside their cluster.
