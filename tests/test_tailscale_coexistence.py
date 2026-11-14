@@ -130,7 +130,13 @@ def test_acceptance_17_18_disabled_then_localhost_enable():
     # fully functional. Acceptance 18: enabling from a localhost origin never
     # touches network trust (network.json, ALLOWED_ORIGINS, network-config).
     listener = CountingListener()
-    local = LocalCCCFixture(cloud_disabled=False)  # default config, no env kill
+    # The census warm-up may cache an empty archive before add_session below.
+    # Exercise the real refresh path on a test clock, independent of host load.
+    local = LocalCCCFixture(cloud_disabled=False, extra_env={
+        "CCC_ARCHIVE_SERVE_TTL_SEC": "1",
+        "CCC_ARCHIVE_REFRESH_MIN_GAP_S": "1",
+        "CCC_ARCHIVE_REFRESH_GATE_LOAD_PER_CPU": "1000000",
+    })  # default cloud config, no env kill
     try:
         _seed_network_json(local)
         # Paired but DISABLED config pointing at our counting listener: the

@@ -3211,18 +3211,20 @@ class TestServerImports(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("const folderChipHtml = (c.folder_label_chip && !opts.suppressFolderChip)", app_js)
+        self.assertNotIn("const folderChipHtml =", app_js)
+        self.assertIn("const groupedRowClass = opts.suppressFolderChip", app_js)
         # CCC-467 follow-up: the transcript-size badge ("3MB") was dropped from
         # the meta row — it wrapped onto a second line and is redundant with the
         # size in the pane titlebar. rowSizeHtml is now a constant empty string.
         self.assertIn("const rowSizeHtml = '';", app_js)
         self.assertNotIn("+ '<span>' + formatSize(c.size) + '</span>'", app_js)
         self.assertIn("const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;", app_js)
-        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief);", app_js)
+        self.assertIn("const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || sessionProvenanceChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief);", app_js)
         self.assertIn("const hoverMetaRowHtml = _hasMetaContent", app_js)
         self.assertIn("'<div class=\"conv-hover-meta-row\">'", app_js)
         self.assertIn("+ _briefChevronHtml", app_js)
-        self.assertIn("+ _hmObjectChip\n          + _hmFolderChip", app_js)
+        self.assertIn("+ _hmObjectChip\n          + sessionProvenanceChipHtml", app_js)
+        self.assertNotIn("+ _hmFolderChip", app_js)
         self.assertIn("+   hoverMetaRowHtml", app_js)
         row_start = app_js.index("+ '<div class=\"conv-main-row")
         row_end = app_js.index("// Right-edge slot", row_start)
@@ -3284,8 +3286,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("function flowObjectForConversation(c)", app_js)
         self.assertIn("function flowObjectChipHtml(c)", app_js)
         self.assertIn("const objectChipHtml = flowObjectChipHtml(c);", app_js)
-        self.assertIn("_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml", app_js)
-        self.assertIn("+ _hmObjectChip\n          + _hmFolderChip", app_js)
+        self.assertIn("_hmObjectChip || sessionProvenanceChipHtml", app_js)
+        self.assertIn("+ _hmObjectChip\n          + sessionProvenanceChipHtml", app_js)
+        self.assertNotIn("+ _hmFolderChip", app_js)
         self.assertIn("Object &middot; ", app_js)
         self.assertIn(".conv-item .conv-hover-meta-row .conv-object-chip", app_css)
         self.assertIn(".conv-current-sessions-scroll:not(.is-search-results) .conv-item .conv-hover-meta-row .conv-object-chip,", app_css)
@@ -5150,7 +5153,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _gcItems = _visibleGroupChats.map(chat => {", app_js)
         self.assertIn("const _gcCountForSection = _hideGroupChatsForSearch ? 0", app_js)
         self.assertIn("const _archivedGroupChatsForRender = _hideGroupChatsForSearch", app_js)
-        self.assertIn("const hasGc = !q && _gcActiveChats && _gcActiveChats.length > 0;", app_js)
+        self.assertIn("const hasIndependentContent = (!q && _gcActiveChats && _gcActiveChats.length > 0)", app_js)
 
     def test_group_chats_respect_inprogress_window_filter(self):
         """Group chats should disappear from Active rows under 1d/7d just like
@@ -7296,10 +7299,10 @@ class TestServerImports(unittest.TestCase):
         # Every non-delivery outcome hands the card back to the tray, and the
         # in-flight hold is released BEFORE the revert -- the reverted card is a
         # queued candidate again, so the in-flight filter would delete it.
-        self.assertIn("revertOptimisticSteerMove(moved, activePaneId())", queued_handler)
+        self.assertIn("revertOptimisticSteerMove(moved, steerPaneId)", queued_handler)
         self.assertLess(
             queued_handler.index("clearSteerInFlight(sid, [text])"),
-            queued_handler.index("revertOptimisticSteerMove(moved, activePaneId())"),
+            queued_handler.index("revertOptimisticSteerMove(moved, steerPaneId)"),
         )
         self.assertEqual(queued_handler.count("giveBack();"), 5)
         # A steer whose POST is still in flight must not be re-collected from a
