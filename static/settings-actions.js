@@ -25,7 +25,7 @@
     if (menu.hidden) button.click();
     const details = get('settingsActionsHelp');
     if (help && details) details.open = true;
-    (help ? details?.querySelector('summary') : get('settingsCmdkBtn'))?.focus();
+    (help ? details?.querySelector('summary') : get('termToggleBtn'))?.focus();
   }
   function openSystem(focusId) {
     hooks.closeSettings(); closeMenu();
@@ -90,7 +90,7 @@
     tools.setAttribute('role', 'group'); tools.setAttribute('aria-label', 'Workspace tools');
     menu.prepend(tools);
     for (const [id, label] of [
-      ['settingsCmdkBtn', 'Session search…'], ['termToggleBtn'], ['historyStatusPill'],
+      ['termToggleBtn'], ['historyStatusPill'],
       ['kptWorktreesBtn'], ['statsBtn', 'Stats & usage…'], ['todayToggleBtn'],
       ['annotationNotesBtn'], ['fleetViewBtn', 'Fleet overview…'], ['settingsFleetPulseBtn', 'Fleet Pulse…'],
     ]) {
@@ -167,6 +167,9 @@
     // listener as a hidden alias instead of the old consolidation deleting it.
     const aliases = node('div'); aliases.hidden = true; aliases.id = 'settingsActionsLegacy'; menu.append(aliases);
     if (get('takeTourBtn')) aliases.append(get('takeTourBtn'));
+    // Search already has its own field and keyboard shortcut. Preserve the
+    // legacy launcher without presenting another search action in More.
+    if (get('settingsCmdkBtn')) aliases.append(get('settingsCmdkBtn'));
 
     function relocateControls(rowId, ids) {
       const destination = get(rowId); if (!destination) return;

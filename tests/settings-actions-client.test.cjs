@@ -165,7 +165,11 @@ for(const width of [1440,390]){
     assert.equal(await page.$eval('#termToggleBtn',element=>!!element.offsetParent),true);
     await page.click('#termToggleBtn');await page.waitForSelector('#termPanel.open');
     assert.equal(await page.$eval('#sidebarMoreMenu',element=>element.hidden),true);
-    await page.click('#termCloseBtn');await menu(page);await page.focus('#settingsCmdkBtn');await page.keyboard.press('Enter');
+    await page.click('#termCloseBtn');await menu(page);
+    assert.equal(await page.$eval('#settingsCmdkBtn',element=>element.checkVisibility()),false);
+    assert.equal(await page.$eval('#sidebarMoreMenu',element=>element.innerText.includes('Session search')),false);
+    // The retained alias still uses the native search handler.
+    await page.evaluate(()=>document.getElementById('settingsCmdkBtn').click());
     await page.waitForSelector('#cmdkModal.open');await page.waitForFunction(()=>document.activeElement.id==='cmdkInput');
     await page.evaluate(()=>document.getElementById('cmdkModal').classList.remove('open'));
     await menu(page);await page.click('#settingsActionsWorkspace > summary');await page.click('#kptWorktreesBtn');await page.waitForSelector('#worktreesModal.open');
@@ -175,7 +179,7 @@ for(const width of [1440,390]){
     await menu(page);await page.click('#settingsFleetPulseBtn');assert.equal(await page.evaluate(()=>document.body.dataset.fixturePulse),'open');
     await menu(page);await page.click('#historyStatusPill');assert.equal(await page.evaluate(()=>document.body.dataset.fixtureHistory),'open');
     await menu(page);await page.click('#annotationNotesBtn');assert.equal(await page.evaluate(()=>document.body.dataset.fixtureNotes),'open');
-    await menu(page);await page.keyboard.press('ArrowDown');assert.equal(await page.evaluate(()=>document.activeElement.id),'termToggleBtn');
+    await menu(page);await page.keyboard.press('Home');assert.equal(await page.evaluate(()=>document.activeElement.id),'termToggleBtn');
     await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.id),'sidebarMoreBtn');
     assert.equal(await page.$eval('#sidebarMoreMenu',element=>element.hidden),true);
   });
@@ -225,6 +229,7 @@ for (const width of [1440,390]) test(`service controls move intact and legacy al
 
 test('retired section deep links and adapters redirect to existing destinations',async t=>{
   const page=await open(t,1440,'?ccc_settings=tools');assert.equal(await page.$eval('#sidebarMoreMenu',element=>element.hidden),false);
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'termToggleBtn');
   await page.evaluate(()=>document.getElementById('settingsRailTab-help').click());assert.equal(await page.$eval('#settingsActionsHelp',element=>element.open),true);
   await page.evaluate(()=>window.cccSettingsActions.redirect('model-usage'));await page.waitForSelector('#statsModal.open');
   assert.equal(await page.$eval('#settingsActionsUsage',element=>element.open),true);
