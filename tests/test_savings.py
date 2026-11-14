@@ -391,3 +391,32 @@ class TestPlan:
         plan_cost = 200.0 * day_fraction / calendar.monthrange(now.year, now.month)[1]
         assert payload["plan_cost_usd"] == round(plan_cost, 2)
         assert payload["roi_x"] == round(30.0 / plan_cost, 1)
+
+
+def _ledger_conn():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE files (path TEXT PRIMARY KEY, mtime REAL, size INTEGER)")
+    conn.executemany(
+        "INSERT INTO files VALUES (?,?,?)",
+        [("/a.jsonl", 1794636405.7928371, 10), ("/b.jsonl", 1794553028.6078525, 2048)],
+    )
+    return conn
+
+
+@pytest.mark.parametrize("exact", [None, True, False])
+def test_ledger_file_rows_match_the_ordinary_read_exactly(monkeypatch, exact):
+    """The file table is read in one step without rounding any mtime."""
+    conn = _ledger_conn()
+    plain = sorted(tuple(r) for r in conn.execute("SELECT path, mtime, size FROM files"))
+    monkeypatch.setattr(savings, "_JSON_REALS_EXACT", exact)
+    assert sorted(savings._ledger_file_rows(conn)) == plain
+
+
+def test_ledger_file_rows_skip_batching_when_sqlite_rounds_reals(monkeypatch):
+    """A SQLite that rounds JSON reals would make every file look changed."""
+    def boom(*_a, **_k):
+        raise AssertionError("batched read used on a rounding SQLite")
+    monkeypatch.setattr(savings, "_JSON_REALS_EXACT", False)
+    monkeypatch.setattr(savings, "_sqlite_fetch_rows", boom)
+    assert len(savings._ledger_file_rows(_ledger_conn())) == 2

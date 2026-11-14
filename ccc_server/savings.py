@@ -42,6 +42,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ccc_server import core as _core
+from ccc_server.sqlite_batch import fetch_rows as _sqlite_fetch_rows
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -363,6 +364,33 @@ _LEDGER_LOCK = threading.Lock()
 _REFRESH_RUNNING = False
 
 
+_JSON_REALS_EXACT = None
+_MTIME_PROBE = 1794636405.7928371
+
+
+def _ledger_file_rows(conn):
+    """Every ``files`` row as ``(path, mtime, size)`` in one database step.
+
+    Reading the ledger a row at a time gives the interpreter up once per row;
+    beside a computing thread that turned a 0.03 s read of ~12,000 rows into
+    10 s or more, held on every savings refresh. The batched read goes through
+    SQLite's JSON, which older builds round to 15 digits: a rounded mtime
+    would never match the file again and every transcript would be re-priced
+    on each pass, so those builds keep the ordinary read.
+    """
+    global _JSON_REALS_EXACT
+    sql = "SELECT path, mtime, size FROM files"
+    if _JSON_REALS_EXACT is None:
+        try:
+            packed = conn.execute("SELECT json_array(?)", (_MTIME_PROBE,)).fetchone()[0]
+            _JSON_REALS_EXACT = json.loads(packed)[0] == _MTIME_PROBE
+        except (sqlite3.Error, ValueError, TypeError, IndexError):
+            _JSON_REALS_EXACT = False
+    if _JSON_REALS_EXACT:
+        return _sqlite_fetch_rows(conn, sql, (), ("path", "mtime", "size"))
+    return [tuple(r) for r in conn.execute(sql)]
+
+
 def _scan_incremental(conn, root: Path, deadline=None):
     """Catch the ledger up to the transcripts on disk.
 
@@ -376,11 +404,10 @@ def _scan_incremental(conn, root: Path, deadline=None):
     on_disk = set()
     candidates = []
     # One read of the ledger's file table instead of a query per transcript.
-    known_map = {
-        r["path"]: (r["mtime"], r["size"])
-        for r in conn.execute("SELECT path, mtime, size FROM files")
+    known_map = {path: (mtime, size) for path, mtime, size in _ledger_file_rows(conn)}
+    queued_set = {
+        r[0] for r in _sqlite_fetch_rows(conn, "SELECT path FROM backlog", (), ("path",))
     }
-    queued_set = {r["path"] for r in conn.execute("SELECT path FROM backlog")}
     for path in _transcript_paths(root):
         on_disk.add(str(path))
         try:

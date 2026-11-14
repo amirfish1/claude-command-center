@@ -24,6 +24,7 @@ import time
 from ccc_server import core as _core
 from ccc_server.paths import _is_pid_alive
 from ccc_server import dbutil
+from ccc_server.sqlite_batch import fetch_rows as _sqlite_fetch_rows
 from ccc_server.history_search import extract_history_terms, _is_explicit_history_fts_query
 
 # ---------------------------------------------------------------------------
@@ -467,8 +468,8 @@ def _hermes_session_ids():
         try:
             cols = _hermes_columns(con, "sessions")
             if "id" in cols:
-                for row in con.execute("SELECT id FROM sessions"):
-                    sid = row["id"]
+                # One database step instead of one per row (see sqlite_batch).
+                for (sid,) in _sqlite_fetch_rows(con, "SELECT id FROM sessions", (), ("id",)):
                     if sid:
                         sid = str(sid)
                         ids.add(sid)
