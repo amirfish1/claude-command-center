@@ -57177,7 +57177,9 @@
     for (const [ref, sessions] of _workersTicketSessions) {
       if (!sessions.cards.some(card => String(card.session_id || card.id) === String(sid))) continue;
       const latest = _workersLatestTicketCard(sessions);
-      const item = _uxqItemForRef(ref);
+      // The list also renders tickets recovered from session metadata while
+      // the queue snapshot loads. Live text must use that same fallback.
+      const item = _uxqItemForRef(ref) || _workersFallbackTickets.find(ticket => _uxqItemRef(ticket) === ref);
       const contextHtml = item ? _workersTicketContextHtml(item, latest) : '';
       for (const entry of document.querySelectorAll('[data-workers-ticket]')) {
         if (entry.dataset.workersTicket !== ref) continue;
