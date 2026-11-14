@@ -83,7 +83,8 @@ def test_ccc_sends_routine_flag_only_when_not_forced(monkeypatch):
     monkeypatch.setattr(mod, "_post_json", lambda base, path, payload, timeout=60: sent.append(payload) or (200, {"ok": True}))
     mod._post_restart("http://x", "dashboard", routine=True)
     mod._post_restart("http://x", "dashboard")
-    assert sent == [{"routine": True}, {}]
+    assert [p.get("routine", False) for p in sent] == [True, False]
+    assert all(p["audit_caller"]["source"] == "ccc-cli" and p["audit_caller"]["pid"] > 0 for p in sent)
 
 
 def test_handler_holds_only_routine_restarts_before_the_drain_precheck():

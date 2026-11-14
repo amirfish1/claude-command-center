@@ -32,6 +32,7 @@ Environment=CCC_ENGINE_UPDATE_SKIP=hermes
 Environment=PORT=8091
 
 ExecStart=/bin/bash __CCC_HOME__/Apps/claude-command-center/run.sh
+ExecStopPost=-/usr/bin/env python3 __CCC_HOME__/Apps/claude-command-center/ccc_server/restart_audit.py --systemd-stop-post
 
 Restart=on-failure
 RestartSec=5s

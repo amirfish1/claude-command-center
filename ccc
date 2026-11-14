@@ -1754,7 +1754,10 @@ def _post_restart(base, target, routine=False):
     when the server could not be reached. `routine` lets the server hold the
     restart (409, retried by the runner) while a read-aloud is playing."""
     try:
-        return _post_json(base, _RESTART_PATHS[target], {"routine": True} if routine else {}, timeout=120)
+        payload = {"routine": True} if routine else {}
+        payload["audit_caller"] = {"source": "ccc-cli", "pid": os.getpid(), "ppid": os.getppid(),
+                                   "pid_chain": _caller_pid_chain()}
+        return _post_json(base, _RESTART_PATHS[target], payload, timeout=120)
     except OSError as e:
         return -1, {"ok": False, "error": str(e)}
 

@@ -501,6 +501,7 @@ StartLimitIntervalSec=0
 Type=simple
 WorkingDirectory=$HERE
 ExecStart=$HERE/run.sh
+ExecStopPost=-/usr/bin/env python3 "$HERE/ccc_server/restart_audit.py" --systemd-stop-post
 Restart=on-failure
 RestartSec=2
 LimitNOFILE=2048

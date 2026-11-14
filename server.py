@@ -21385,7 +21385,7 @@ def _auto_update_tick():
         _log_activity("update", "fail", f"{chk['tag']}: {result.get('error')}")
         return {"action": "error", "tag": chk["tag"], "error": result.get("error")}
     _log_activity("update", "restart", f"now at {chk['tag']} ({result.get('new_sha', '')[:12]})")
-    _schedule_restart()
+    _schedule_restart(caller="auto-updater", reason="release-update")
     return {"action": "applied", "tag": chk["tag"], "result": result}
 
 
@@ -23053,12 +23053,17 @@ def _serve_http(server):
     _HTTPD_SERVER = server
 
     def _on_sigterm(signum, frame):
+        from ccc_server import restart_audit
+        restart_audit.stop("SIGTERM (sender unavailable to Python signal handler)",
+                           caller="systemd-or-external-signal")
         raise SystemExit(0)
 
     signal.signal(signal.SIGTERM, _on_sigterm)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        from ccc_server import restart_audit
+        restart_audit.stop("SIGINT", caller="terminal-or-external-signal")
         print("\nStopped.")
     finally:
         # Do this before unregistering or shutting down dependencies that
@@ -23084,7 +23089,7 @@ def _serve_http(server):
         server.server_close()
 
 
-def _schedule_restart(delay=0.5):
+def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart"):
     """Arm a launchctl kickstart or os.execvp() that replaces this process with a fresh
     `python server.py` after `delay` seconds. Called AFTER the HTTP response
     is flushed so the client sees {ok:true} before the socket dies."""
@@ -23096,6 +23101,8 @@ def _schedule_restart(delay=0.5):
             pass
         if not _quiesce_http_for_restart():
             return
+        from ccc_server import restart_audit
+        restart_audit.record_restart(caller, reason)
         if sys.platform == "darwin":
             for service_label in (_CCC_DASHBOARD_LAUNCHD_LABEL, _CCC_LEGACY_DASHBOARD_LAUNCHD_LABEL):
                 plist_path = _launch_agent_plist_path(service_label)
@@ -37151,7 +37158,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.flush()
             except Exception:
                 pass
-            _schedule_restart()
+            from ccc_server import restart_audit
+            _schedule_restart(caller=restart_audit.request_caller(self, _rbody), reason=path)
             return
         if path == "/api/template-gallery/open":
             # Open the editable gallery source for the local CCC install.
@@ -37306,7 +37314,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.flush()
             except Exception:
                 pass
-            _schedule_restart()
+            from ccc_server import restart_audit
+            _schedule_restart(caller=restart_audit.request_caller(self), reason="network-bind-change")
             return
         if path == "/api/spawn-advisor":
             try:
@@ -37770,7 +37779,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     self.wfile.flush()
                 except Exception:
                     pass
-                _schedule_restart()
+                from ccc_server import restart_audit
+                _schedule_restart(caller=restart_audit.request_caller(self), reason="self-update")
             return
         if path == "/api/annotations":
             # Save a browser-page annotation note. Same-origin gated; storage
@@ -48771,7 +48781,14 @@ def _script_main():
             )
             raise SystemExit(2)
         raise SystemExit(_archive_refresh_worker_main(sys.argv[2], sys.argv[3]))
-    main()
+    from ccc_server import restart_audit
+    if not os.environ.get("CCC_EPHEMERAL") and not test_isolation_active():
+        restart_audit.start(COMMAND_CENTER_STATE_DIR)
+    try:
+        main()
+    except Exception as exc:
+        restart_audit.stop("uncaught-" + type(exc).__name__)
+        raise
 
 
 if __name__ == "__main__":
