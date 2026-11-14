@@ -108,7 +108,7 @@ test('assigned finished tickets stay in activity beyond the recent-ten window', 
   const start = app.indexOf('  function _uxqWithMachine(');
   const end = app.indexOf('  // Compact history rows', start);
   const items = Array.from({length: 14}, (_, i) => ({ref: `TEST-${i}`, status: 'closed', closed_at: new Date(1700000000000 + i * 1000).toISOString()}));
-  const ctx = {_uxqItemsCache: {items}, _uxqItemRef: item => item.ref};
+  const ctx = {_uxqTicketAttention: () => null, _uxqItemsCache: {items}, _uxqItemRef: item => item.ref};
   vm.createContext(ctx);
   vm.runInContext(app.slice(start, end), ctx);
   const refs = vm.runInContext("_workersAssignedTicketRefs = new Set(['TEST-0']); _workersActivityRows().map(r => r.item.ref)", ctx);
@@ -217,7 +217,7 @@ test('Workers hides independent sessions and manual ticket queues even when assi
   const items = ['TEST-1', 'IDEAS-2', 'SMALL-BUGS-3', 'session:orphan'].map(ref => ({
     ref, status: 'open', claimed_at: '2026-01-01T12:00:00Z', _sessionOnly: ref.startsWith('session:'),
   }));
-  const ctx = {_uxqItemsCache: {items}, _uxqItemRef: item => item.ref};
+  const ctx = {_uxqTicketAttention: () => null, _uxqItemsCache: {items}, _uxqItemRef: item => item.ref};
   vm.createContext(ctx);
   vm.runInContext(app.slice(start, end), ctx);
   const refs = vm.runInContext("_workersAssignedTicketRefs = new Set(['IDEAS-2','SMALL-BUGS-3','session:orphan']); _workersActivityRows().map(row => row.item.ref)", ctx);
@@ -230,9 +230,9 @@ test('active workers lead resolved activity and a parked claim is not Working', 
   const items = [
     {ref:'TEST-1', status:'closed', closed_at:'2026-01-01T12:00:00Z'},
     {ref:'TEST-2', status:'in_progress', claimed_at:'2026-01-01T10:00:00Z'},
-    {ref:'TEST-3', status:'in_progress', claimed_at:'2026-01-01T11:00:00Z'},
+    {ref:'TEST-3', status:'in_progress', needs_input:true, claimed_at:'2026-01-01T11:00:00Z'},
   ];
-  const ctx = {_uxqItemsCache:{items}, _uxqItemRef:item=>item.ref,
+  const ctx = {_uxqTicketAttention: () => null, _uxqItemsCache:{items}, _uxqItemRef:item=>item.ref,
     _ultraFreshCurrent:c=>c, _applyLiveOverlayToRow:c=>c,
     workerStateBucket:c=>c.bucket, rowOutcomeView:c=>c.outcome};
   vm.createContext(ctx);
@@ -243,6 +243,7 @@ test('active workers lead resolved activity and a parked claim is not Working', 
   assert.equal(ctx._workersTicketState(items[1]).label, 'Working');
   assert.equal(ctx._workersTicketState(items[2]).label, 'Needs you');
   assert.equal(ctx._workersTicketState(items[0]).label, 'Resolved');
+  items[2].needs_input = false;
   vm.runInContext(`_workersTicketSessions.get('TEST-3').cards[0].outcome = {kind:'update'};`, ctx);
   assert.equal(ctx._workersTicketState(items[2]).label, 'Idle');
   vm.runInContext(`_workersTicketSessions.clear()`, ctx);

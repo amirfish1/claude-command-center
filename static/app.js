@@ -56011,15 +56011,71 @@
   }
   function _workersTicketState(item) {
     if (item.status === 'closed' || item.closed_at) return {label:'Resolved', rank:4, css:'is-resolved'};
+    const attention = _uxqTicketAttention(item);
+    if (attention && attention.blocked) return {label:attention.owner ? 'Needs you' : attention.key === 'worker' ? 'Waiting for worker' : attention.label,
+      rank:attention.owner ? 1 : 3, css:attention.owner ? 'is-needs-you' : ''};
     const sessions = _workersTicketSessions.get(_uxqItemRef(item));
     const card = _workersLatestTicketCard(sessions);
     const outcome = card && rowOutcomeView(card);
     if (sessions && sessions.cards.some(c => rowOutcomeView(_ultraFreshCurrent(_applyLiveOverlayToRow(c))).kind === 'working')) return {label:'Working', rank:0, css:'is-working'};
     if (item.status === 'open') return {label:'Open', rank:2, css:'is-open'};
-    if (item.needs_input || item.status === 'needs_input' || (card && workerStateBucket(card) === 'needs-you')
-        || (outcome && outcome.kind === 'next')) return {label:'Needs you', rank:1, css:'is-waiting'};
+    if (item.needs_input || item.status === 'needs_input') return {label:'Needs you', rank:1, css:'is-needs-you'};
     if (item.status === 'in_progress') return {label:outcome && outcome.kind === 'plan' ? outcome.label : card ? 'Idle' : 'Claimed', rank:3, css:''};
     return {label:capitalizeSessionTitleStart(String(item.status || 'open').replace(/_/g, ' ')), rank:3, css:''};
+  }
+  function _workersTicketContext(item, card, fallback) {
+    const QA = window.QueueAttention;
+    const reason = QA && QA.blockReason(item);
+    if (reason) return reason;
+    const outcome = card && rowOutcomeView(card);
+    // Terminal worker sign-offs describe its drained queue, not this ticket.
+    return outcome && outcome.kind === 'working'
+      ? {text:_workersMeaningfulUpdate(outcome.text || fallback), category:''} : null;
+  }
+  function _workersTicketChoices(item, card) {
+    if (!item.needs_input || !window.QueueAttention?.needsOwner(item)) return [];
+    const question = String(item.block_question || '');
+    const tag = (question.match(/\[Q\d+(?::[a-z0-9-]+)?\]/i) || [])[0];
+    const authored = card && card.session_state;
+    const next = String(authored?.next_step_user || '');
+    const blockAt = Date.parse(item.blocked_at || '');
+    const cardAt = card && Math.max(_ultraFreshTime(card.modified), _ultraFreshTime(card.last_event_ts));
+    const current = !Number.isFinite(blockAt) || cardAt >= blockAt;
+    const actions = current && tag && next.includes(tag) ? sessionQuickActions(authored, next) : [];
+    const literal = question.split('\n').map(line => line.replace(/^\s*\[Q\d+(?::[a-z0-9-]+)?\]\s*/i, '')).find(line => /^(?:choose|pick|decide|answer)\b/i.test(line.trim()));
+    return (actions.length ? actions : literal ? decisionQuickActions(literal).map(choice => ({...choice, reply:(tag && !choice.reply.includes(tag) ? tag + ' ' : '') + choice.reply})) : [])
+      .filter(action => action.reply && (!tag || action.reply.includes(tag))).slice(0, 4);
+  }
+  function _workersTicketContextHtml(item, card, fallback) {
+    const context = _workersTicketContext(item, card, fallback);
+    if (!context || !context.text) return '';
+    const ref = _uxqItemRef(item);
+    const category = context.category ? '<span class="workers-block-category" title="' + escapeAttr(context.categorySource + ': ' + context.category) + '">' + escapeHtml(context.category) + '</span>' : '';
+    const choices = _workersTicketChoices(item, card);
+    const buttons = choices.map((choice, index) => '<button type="button" class="workers-block-choice" data-workers-choice="' + index + '" data-workers-ref="' + escapeAttr(ref) + '" title="' + escapeAttr('Review answer: ' + choice.reply) + '">' + escapeHtml(choice.label) + '</button>').join('');
+    const review = context.owner && !choices.length ? '<button type="button" class="workers-block-choice" data-workers-review="' + escapeAttr(ref) + '">Answer…</button>' : '';
+    return '<div class="workers-ticket-context"' + (_workersTicketSessions.has(ref) ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '') + '>' + (category ? '<div class="workers-block-meta">' + category + '</div>' : '')
+      + '<div class="workers-ticket-update" title="' + escapeAttr(context.full || context.text) + '">' + escapeHtml(context.text) + '</div>'
+      + (buttons || review ? '<div class="workers-block-choices">' + buttons + review + '</div>' : '') + '</div>';
+  }
+  async function _workersReviewChoice(ref, index) {
+    const item = _uxqItemForRef(ref);
+    const card = _workersLatestTicketCard(_workersTicketSessions.get(ref));
+    const choice = _workersTicketChoices(item || {}, card)[index];
+    if (!choice) return;
+    try {
+      const response = await fetch('/api/ux-fixes/item?ref=' + encodeURIComponent(ref), {cache:'no-store', cccPriority:'user'});
+      const data = await response.json();
+      if (!response.ok || !data.ok || !data.item) throw new Error('Could not check the current question.');
+      if (!window.QueueAttention?.needsOwner(data.item) || data.item.blocked_at !== item.blocked_at || data.item.block_question !== item.block_question) {
+        _uxqOpenItemModal(data.item);
+        showOpToast('This question changed. Review the current ticket before answering.', 'warn');
+        return;
+      }
+      _uxqOpenItemModal(data.item);
+      const input = document.querySelector('#uxqItemModal .uxq-answer-input');
+      if (input) { input.value = choice.reply; input.focus(); }
+    } catch (error) { showOpToast(error.message || 'Could not open the answer.', 'error'); }
   }
   // Patch only the ticket's text on the same animation frame as its session.
   // Rebuilding the list here would discard expanded lanes and keyboard focus.
@@ -56027,26 +56083,21 @@
     for (const [ref, sessions] of _workersTicketSessions) {
       if (!sessions.cards.some(card => String(card.session_id || card.id) === String(sid))) continue;
       const latest = _workersLatestTicketCard(sessions);
-      const update = _workersMeaningfulUpdate(latest && rowOutcomeView(latest).text);
+      const item = _uxqItemForRef(ref);
+      const contextHtml = item ? _workersTicketContextHtml(item, latest) : '';
       for (const entry of document.querySelectorAll('[data-workers-ticket]')) {
         if (entry.dataset.workersTicket !== ref) continue;
-        const item = _uxqItemsCache.items.find(item => _uxqItemRef(item) === ref);
         const stateNode = entry.querySelector('.fq-recent-state');
         if (item && stateNode) {
           const state = _workersTicketState(item);
           stateNode.textContent = state.label;
           stateNode.className = 'fq-recent-state' + (state.css ? ' ' + state.css : '');
         }
-        let node = entry.querySelector('.workers-ticket-update');
-        if (!update) { if (node) node.remove(); continue; }
-        if (!node) {
-          node = document.createElement('div');
-          node.className = 'workers-ticket-update';
-          node.dataset.workersTicketRow = ref;
-          entry.querySelector('.workers-ticket-heading').after(node);
-        }
-        if (node.textContent !== update) node.textContent = update;
-        node.title = update;
+        let node = entry.querySelector('.workers-ticket-context');
+        if (!contextHtml) { if (node) node.remove(); continue; }
+        const holder = document.createElement('div'); holder.innerHTML = contextHtml;
+        if (!node) entry.querySelector('.workers-ticket-heading').after(holder.firstElementChild);
+        else if (node.innerHTML !== holder.firstElementChild.innerHTML) node.replaceChildren(...holder.firstElementChild.childNodes);
       }
     }
   }
@@ -56076,10 +56127,7 @@
       const working = ticketState.label === 'Working';
       const state = ticketState.label;
       const latestCard = _workersLatestTicketCard(sessions);
-      const outcome = latestCard ? rowOutcomeView(latestCard) : null;
-      const update = _workersMeaningfulUpdate((outcome && outcome.text) || row.summary);
-      const updateHtml = update ? '<div class="workers-ticket-update"' + (sessions ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '') + ' title="' + escapeAttr(update) + '">'
-        + escapeHtml(update) + '</div>' : '';
+      const updateHtml = _workersTicketContextHtml(item, latestCard, row.summary);
       const timerHtml = working && latestCard ? wipAgeChipHtml(latestCard) : '';
       const absolute = new Date(row.at).toLocaleString();
       const dates = [item.claimed_at ? 'Claimed: ' + item.claimed_at : '', item.closed_at ? 'Closed: ' + item.closed_at : ''].filter(Boolean).join('\n');
@@ -56132,6 +56180,13 @@
       if ($el.dataset.recentWorkBound) return;
       $el.dataset.recentWorkBound = '1';
       $el.addEventListener('click', ev => {
+        const choice = ev.target.closest && ev.target.closest('[data-workers-choice], [data-workers-review]');
+        if (choice) {
+          ev.preventDefault(); ev.stopPropagation();
+          if (choice.dataset.workersReview) _uxqOpenItemDetail(choice.dataset.workersReview);
+          else _workersReviewChoice(choice.dataset.workersRef, Number(choice.dataset.workersChoice));
+          return;
+        }
         const ticketLink = ev.target.closest && ev.target.closest('[data-uxq-recent-ref]');
         const toggle = !ticketLink && ev.target.closest && ev.target.closest('[data-workers-ticket-toggle], [data-workers-ticket-row]');
         if (toggle) {
@@ -58466,6 +58521,8 @@
           c.push('<span class="fq-chip fq-att fq-att-' + escapeAttr(att.tone) + (att.owner ? ' fq-blocked' : '')
             + '" data-attention="' + escapeAttr(att.key) + '" title="' + escapeAttr(att.title) + '">' + escapeHtml(att.label) + '</span>');
         }
+        const reason = window.QueueAttention?.blockReason(it);
+        if (reason) c.push('<span class="fq-chip" title="' + escapeAttr(reason.categorySource + ': ' + reason.text) + '">' + escapeHtml(reason.category) + '</span>');
         if (it.status === 'in_review' && (!att || att.key !== 'review')) {
           const label = _uxqReviewLabel(it);
           c.push('<span class="fq-chip fq-review" title="' + escapeAttr('Closed by its worker, ' + label + ' (wt accept / wt reject)') + '">'

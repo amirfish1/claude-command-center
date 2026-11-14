@@ -5,9 +5,10 @@ const vm = require('node:vm');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync('static/app.js', 'utf8');
+const escaping = app.slice(app.indexOf('  function escapeHtml(s)'), app.indexOf('  function unescapeHtml(s)'));
 const ticketPaint = app.slice(app.indexOf('  function _workersMeaningfulUpdate('), app.indexOf('  // Compact history rows'));
 const block = app.slice(app.indexOf('  // Ultra-fresh:'), app.indexOf('  // The server derives readiness'))
-  + '\nconst _workersTicketSessions = new Map(); const _uxqItemsCache = {items:[]}; const _uxqItemRef = item => item.ref;\n' + ticketPaint;
+  + '\nconst _workersTicketSessions = new Map(); const _uxqItemsCache = {items:[{ref:"TASK-1",status:"in_progress"}]}; const _uxqTicketAttention = () => null; const _uxqItemForRef = ref => _uxqItemsCache.items.find(it => it.ref === ref); const _uxqItemRef = item => item.ref;\n' + escaping + ticketPaint;
 const rowActions = app.slice(app.indexOf('  // Row actions are model-authored replies'), app.indexOf('  // CCC-1218:'));
 
 test('a submitted turn survives delivery acknowledgment over an old finished snapshot', () => {
@@ -137,7 +138,7 @@ test('streamed attention changes reorder within Active despite a permanent hover
     assert.equal(await page.$eval('section',el=>el.firstElementChild.dataset.sessionId),'s0');
     assert.match(await page.$eval('.wa-preview',el=>el.textContent), /Decision needed: Choose the publication scope/);
     assert.deepEqual(await page.evaluate(()=>renders), [{force:true}]);
-    assert.match(await page.$eval('[data-workers-ticket] .workers-ticket-update', el=>el.textContent), /Choose the publication scope/);
+    assert.equal(await page.$('[data-workers-ticket] .workers-ticket-update'), null, 'inactive worker chatter is hidden without a recorded ticket blocker');
     assert.equal(await page.evaluate(()=>document.getElementById('stable-ticket-child') === stableTicketChild), true,
       'live ticket text must not replace expanded child DOM');
     assert.ok(elapsed < 1000, 'section must follow the stream without a list poll or hover release');
@@ -149,6 +150,7 @@ test('streamed attention changes reorder within Active despite a permanent hover
     await new Promise(resolve=>setTimeout(resolve,100));
     assert.equal(await page.evaluate(()=>renders.length),renderCount,'unchanged group must not cause a render loop');
     await page.evaluate(() => {
+      conversationsData[0].state = 'working'; conversationsData[0].is_live = true;
       document.querySelector('section').hidden = true;
       document.getElementById('convList').prepend(document.querySelector('[data-workers-ticket]'));
       document.querySelector('.workers-ticket-session-body').hidden = true;

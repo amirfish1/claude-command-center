@@ -157,3 +157,32 @@ test('future deferral is neutral, past deferral is nothing', () => {
   assert.match(a.title, /vendor/);
   assert.equal(QA.project({ status: 'open', deferred_until: '2026-10-19T00:00:00Z' }, { now }), null);
 });
+
+test('block reasons expose the actual owner question and classify only its cause', () => {
+  const item = blocked({block_question:'[Q42:policy-test] May a bounded trial change the current policy?',
+    block_proposal:{major_because:'owner-only-action', major_detail:'Only the owner can reverse this policy.'}});
+  const reason = QA.blockReason(item);
+  assert.equal(reason.category, 'Policy');
+  assert.equal(reason.text, 'Only the owner can reverse this policy.');
+  assert.equal(reason.owner, true);
+  const money = QA.blockReason(blocked({block_question:'[Q43:refund] Refund the duplicate $20 charge?'}));
+  assert.equal(money.category, 'Money');
+  assert.equal(money.text, 'Refund the duplicate $20 charge?');
+});
+
+test('worker measurement waits are not owner decisions; terminal rows have no blocker', () => {
+  const item = blocked({block_question:'Collect representative measurements before another optimization.',
+    wait:{on:'worker', block_at:BLOCK_AT}});
+  const reason = QA.blockReason(item);
+  assert.equal(reason.category, 'Measurement');
+  assert.equal(reason.owner, false);
+  assert.equal(reason.kind, 'worker');
+  assert.equal(QA.blockReason({...item,status:'closed'}), null);
+  assert.equal(QA.blockReason({...item,needs_input:false,status:'open',wait:null}), null);
+});
+
+test('missing block explanation is explicit and stale wait records never override current ownership', () => {
+  assert.equal(QA.blockReason({status:'blocked'}).text, 'Blocker reason not recorded.');
+  const reason = QA.blockReason(blocked({wait:{on:'worker',block_at:'old'}}));
+  assert.equal(reason.owner, true);
+});

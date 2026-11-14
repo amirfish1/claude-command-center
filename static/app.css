@@ -34956,3 +34956,13 @@ a.local-ci-job:hover { color: var(--accent); }
 }
 #convList.workers-view .conv-workers-activity .fq-recent-state.is-open { color: var(--red, #da3633); font-weight: 600; }
 #convList.workers-view .conv-workers-activity .fq-recent-rows:has(.workers-ticket-session-body:not([hidden])) { max-height: none; }
+
+/* Blocked tickets explain the next action; completed workers stay quiet. */
+.workers-ticket-context { margin: 0 0 8px; min-width: 0; }
+.workers-block-meta, .workers-block-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.workers-block-category { padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; color: var(--text-secondary, var(--text)); font-size: 10px; line-height: 1.4; }
+.workers-ticket-context .workers-ticket-update { margin: 4px 0; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.workers-block-choice { max-width: 100%; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--accent); font: inherit; font-size: 11px; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.workers-block-choice:hover { background: var(--surface-2); }
+.workers-block-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@container sidebar (max-width: 420px) { .workers-block-choice { min-height: 36px; } }
