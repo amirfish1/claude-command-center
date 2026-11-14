@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,7 +54,51 @@ def test_simple_home_reuses_archive_rows_instead_of_requesting_full_sessions():
     )
 
     assert "'/api/sessions?all=1'" not in source
-    assert "const sessionRows = convRows;" in source
+    # Reusing the archive may include filtering: archived and trashed rows
+    # belong in History. Exercise the actual refresh so the contract covers
+    # both the data source and the cards users see, not an old assignment.
+    subprocess.run(
+        ["node", "-e", """
+const assert = require('node:assert/strict');
+const tasks = {innerHTML: 'Previously loaded'};
+const document = {getElementById: id => ({simpleHome: {}, simpleTasks: tasks}[id])};
+const isSimpleMode = () => true;
+const isSidebarDragInProgress = () => false;
+const requests = [];
+const fetch = async url => { requests.push(url); return {json: async () => ({items: []})}; };
+const rows = [
+  {id: 'past', mtime: 1},
+  {id: 'working', mtime: 3, is_live: true},
+  {id: 'archived', mtime: 9, explicitly_archived: true},
+  {id: 'idea-archived', mtime: 9, idea_ticket: {explicitly_archived: true}},
+  {id: 'legacy-archived', mtime: 9, archived: true},
+  {id: 'trashed', mtime: 9, trashed: true},
+  {id: 'restored', mtime: 2, archived: true, explicitly_archived: false},
+  {id: 'optimistic', mtime: 9},
+];
+const loadArchiveAll = async options => {
+  assert.deepEqual(options, {staleOk: true, window: 'all'});
+  return rows;
+};
+const applyOptimisticOverrides = received => {
+  assert.equal(received, rows, 'reuse the cached archive rows');
+  received.find(row => row.id === 'optimistic').explicitly_archived = true;
+};
+const _simpleRefreshQueueAlerts = () => {};
+const _simpleIsWorkingRow = row => !!row.is_live;
+const _simpleWorkingStatusLine = () => 'Working';
+const _simpleTaskCardHtml = (row, status, working) => `${row.id}:${status}:${working}|`;
+""" + source + """
+_simpleHomeRefresh().then(() => {
+  assert.deepEqual(requests, ['/api/attention'], 'no separate full-sessions request');
+  assert.equal(tasks.innerHTML, 'working:Working:true|restored:Past task:false|past:Past task:false|');
+}).catch(error => { console.error(error); process.exitCode = 1; });
+"""],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
 
 
 def test_engine_availability_waits_for_first_sessions_and_idle_time():

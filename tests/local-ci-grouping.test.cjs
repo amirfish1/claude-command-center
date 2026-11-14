@@ -86,6 +86,14 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
     await page.waitForFunction(() => document.querySelectorAll('#localCiMobileList .local-ci-group').length === 1);
     assert.deepEqual(new Set(dismissed), new Set(['example/project:1:1', 'example/project:2:1']));
     assert.match(await page.$eval('#localCiMobileList summary', el => el.textContent), /1 failed/);
+    if (width <= 1200) {
+      data.completed = data.completed.map(row => ({...row, workflow_started_at:null, started_at:null}));
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await page.waitForFunction(() => document.querySelector('.local-ci-mobile-toggle').textContent.includes('No timer'));
+      assert.equal(await page.$eval('.local-ci-inline-run', el => el.textContent), 'Self 1 failed · 100% No timer');
+      assert.equal(await page.$eval('.local-ci-mobile-toggle', el => el.textContent.includes('\u2014')), false);
+      await page.screenshot({path:'/tmp/ccc-ci-mobile-no-timer.png'});
+    }
   } finally {
     await browser.close();
     server.closeAllConnections();

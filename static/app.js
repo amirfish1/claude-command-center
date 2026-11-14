@@ -100849,7 +100849,7 @@
           item.append((row.dataset.runnerLabel || 'Unverified') + ' ' + (status?.textContent || 'Running') + ' ');
           const timer = row.querySelector('[data-ci-started-at]');
           if (timer) item.append(timer.cloneNode(true));
-          else item.append('—');
+          else item.append('No timer');
           item.title = row.querySelector('summary, .local-ci-job')?.title || '';
           label.append(item);
         });
