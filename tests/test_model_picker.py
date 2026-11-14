@@ -62,6 +62,21 @@ class TestModelPickerContracts(unittest.TestCase):
         self.assertIn("{ id: 'opus-5-5'", app_js)
         self.assertIn("label: 'Opus 5.5'", app_js)
 
+    def test_gemini_4_carbon_is_available_across_antigravity_surfaces(self):
+        for level in ("High", "Medium", "Low"):
+            label = f"Gemini 4 Carbon ({level})"
+            slug = f"gemini-4-carbon-{level.lower()}"
+            self.assertIn(label, server._ENGINE_KNOWN_MODELS["antigravity"])
+            self.assertEqual(server._antigravity_model_settings_label(slug), label)
+        self.assertEqual(
+            server._antigravity_model_settings_label("gemini-4-carbon"),
+            "Gemini 4 Carbon (High)",
+        )
+        app_js = APP_JS.read_text(encoding="utf-8")
+        self.assertIn("{ id: 'Gemini 4 Carbon (High)', label: 'Gemini 4 Carbon (High)' }", app_js)
+        self.assertIn("{ id: 'Gemini 4 Carbon (Medium)', label: 'Gemini 4 Carbon (Medium)' }", app_js)
+        self.assertIn("{ id: 'Gemini 4 Carbon (Low)', label: 'Gemini 4 Carbon (Low)' }", app_js)
+
     def test_record_and_get_model_picker_picks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_history = pathlib.Path(tmpdir) / "model-picker-history.json"

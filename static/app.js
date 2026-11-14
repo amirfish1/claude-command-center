@@ -65942,6 +65942,9 @@
       { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash' },
     ],
     antigravity: [
+      { id: 'Gemini 4 Carbon (High)', label: 'Gemini 4 Carbon (High)' },
+      { id: 'Gemini 4 Carbon (Medium)', label: 'Gemini 4 Carbon (Medium)' },
+      { id: 'Gemini 4 Carbon (Low)', label: 'Gemini 4 Carbon (Low)' },
       { id: 'Gemini 4 Argon (High)', label: 'Gemini 4 Argon (High)' },
       { id: 'Gemini 4 Argon (Medium)', label: 'Gemini 4 Argon (Medium)' },
       { id: 'Gemini 4 Argon (Low)', label: 'Gemini 4 Argon (Low)' },

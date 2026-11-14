@@ -8601,6 +8601,12 @@ _ENGINE_CURATED_MODELS = {
         {"id": "composer-2.5", "label": "composer-2.5"},
     ),
     "antigravity": (
+        {"id": "Gemini 4 Carbon (High)", "label": "Gemini 4 Carbon (High)"},
+        {"id": "Gemini 4 Carbon (Medium)", "label": "Gemini 4 Carbon (Medium)"},
+        {"id": "Gemini 4 Carbon (Low)", "label": "Gemini 4 Carbon (Low)"},
+        {"id": "Gemini 4 Argon (High)", "label": "Gemini 4 Argon (High)"},
+        {"id": "Gemini 4 Argon (Medium)", "label": "Gemini 4 Argon (Medium)"},
+        {"id": "Gemini 4 Argon (Low)", "label": "Gemini 4 Argon (Low)"},
         {"id": "Gemini 3.8 Flash (High)", "label": "Gemini 3.8 Flash (High)"},
         {"id": "Gemini 3.8 Flash (Medium)", "label": "Gemini 3.8 Flash (Medium)"},
         {"id": "Gemini 3.8 Flash (Low)", "label": "Gemini 3.8 Flash (Low)"},
