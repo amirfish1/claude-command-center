@@ -10393,6 +10393,8 @@ def _factory_spawn_defaults():
         "worker_model": "",
         "worker_reasoning_effort": "",
         "worker_auto_compact_k": 250,
+        "antigravity_account_id": "",
+        "worker_antigravity_account_id": "",
         "worker_fallback": {"enabled": False, "models": []},
         "model_profiles": {},
         "disabled_engines": [],
@@ -10428,6 +10430,8 @@ _WORKER_DEFAULT_FIELDS = (
     "worker_engine", "worker_model", "worker_reasoning_effort", "worker_auto_compact_k",
 )
 
+_WORKER_ACCOUNT_FIELDS = ("worker_codex_account_id", "worker_antigravity_account_id")
+
 
 def _materialize_worker_defaults(payload):
     if payload.get("worker_inherit_session") is True:
@@ -10441,6 +10445,13 @@ def _materialize_worker_defaults(payload):
             worker_reasoning_effort=payload["reasoning_effort"],
             worker_auto_compact_k=payload.get("auto_compact_k", 250),
         )
+    if payload.get("worker_inherit_session") is True:
+        for key in _WORKER_ACCOUNT_FIELDS:
+            source = key.removeprefix("worker_")
+            if key in payload or source in payload:
+                payload[key] = payload.get(source, "")
+    _publish_codex_worker_homes(payload)
+    _publish_antigravity_worker_accounts(payload)
     return payload
 
 
@@ -10558,6 +10569,8 @@ def _load_spawn_defaults_unlocked(*, persist=True):
     # saves also publish the chosen home (worker_codex_home) and every known
     # account home (codex_account_homes) for its liveness lookups.
     result["worker_codex_account_id"] = str(raw.get("worker_codex_account_id") or "")[:200]
+    for key in ("antigravity_account_id", "worker_antigravity_account_id"):
+        result[key] = raw.get(key, "")
     if needs_migration and persist:
         # A new engine was added to _ORCHESTRATION_SPAWN_ENGINES after this
         # file was written. Backfill it once and persist so every future
@@ -10579,7 +10592,7 @@ def _load_spawn_defaults_unlocked(*, persist=True):
         if migrated.get("worker_inherit_session") is True:
             # The first GET must describe the tuple this migration just wrote,
             # rather than the stale worker fields parsed before materializing.
-            for key in (*_WORKER_DEFAULT_FIELDS, "reasoning_effort"):
+            for key in (*_WORKER_DEFAULT_FIELDS, *_WORKER_ACCOUNT_FIELDS, "reasoning_effort"):
                 result[key] = migrated[key]
     return result
 
@@ -10611,6 +10624,28 @@ def _publish_codex_worker_homes(payload):
             home = ""
     payload["worker_codex_home"] = "" if home == default else home
     return payload
+
+
+def _publish_antigravity_worker_accounts(payload):
+    """Publish only fixed account selectors; both accounts share runtime storage."""
+    account_id = payload.get("worker_antigravity_account_id", "")
+    if account_id not in ("", "primary", "secondary"):
+        raise ValueError("worker_antigravity_account_id must be primary or secondary")
+    return payload
+
+
+def _resolve_antigravity_spawn_account(payload):
+    """Resolve once before dedupe, retaining strict validation and parent binding."""
+    from ccc_server import antigravity_accounts
+    candidate = dict(payload)
+    if "antigravity_account_id" in candidate and candidate["antigravity_account_id"] not in ("", "primary", "secondary"):
+        raise ValueError("antigravity_account_id must be primary or secondary")
+    if not candidate.get("antigravity_account_id") and not candidate.get("parent_session_id"):
+        candidate["antigravity_account_id"] = _load_spawn_defaults().get("antigravity_account_id", "")
+        if candidate["antigravity_account_id"] not in ("", "primary", "secondary"):
+            raise ValueError("Saved antigravity_account_id must be primary or secondary")
+    candidate["antigravity_account_id"] = antigravity_accounts.spawn_account(candidate)
+    return candidate
 
 
 def _apply_default_codex_account(payload):
@@ -10681,12 +10716,15 @@ def _prepare_spawn_defaults_unlocked(config):
             from ccc_server import codex_accounts
             if not any(row.get("id") == account_id for row in codex_accounts.configured()):
                 return {"ok": False, "error": "That Codex account is not connected"}
+    for account_key in ("antigravity_account_id", "worker_antigravity_account_id"):
+        if account_key in config and (not isinstance(config[account_key], str) or config[account_key] not in ("", "primary", "secondary")):
+            return {"ok": False, "error": f"{account_key} must be primary or secondary"}
     inherited = stored_keys.get("worker_inherit_session") is True
     inherit_next = config.get("worker_inherit_session", inherited) is True
     if inherit_next:
         # Older callers may echo the effective fields. A distinct worker edit
         # must explicitly leave inheritance, never silently break the link.
-        if any(key in config and config[key] != current.get(key) for key in _WORKER_DEFAULT_FIELDS):
+        if any(key in config and config[key] != current.get(key) for key in (*_WORKER_DEFAULT_FIELDS, *_WORKER_ACCOUNT_FIELDS)):
             return {"ok": False, "error": "Disable worker inheritance before changing independent worker defaults"}
     restoring = inherited and not inherit_next
     if restoring:
@@ -10694,6 +10732,7 @@ def _prepare_spawn_defaults_unlocked(config):
         if not isinstance(saved, dict) or any(key not in saved for key in _WORKER_DEFAULT_FIELDS):
             return {"ok": False, "error": "Saved independent worker defaults are missing; inheritance was not changed"}
         current.update({key: saved[key] for key in _WORKER_DEFAULT_FIELDS})
+        current.update({key: saved.get(key, "") for key in _WORKER_ACCOUNT_FIELDS})
     if "engine" in config:
         engine = _normalize_orchestration_spawn_engine(config.get("engine"))
         if engine not in _ORCHESTRATION_SPAWN_ENGINES:
@@ -10825,10 +10864,12 @@ def _prepare_spawn_defaults_unlocked(config):
                 payload[routing_key] = stored_keys[routing_key]
             else:
                 payload.pop(routing_key, None)
-    for key in _WORKER_DEFAULT_FIELDS:
+    for key in (*_WORKER_DEFAULT_FIELDS, *_WORKER_ACCOUNT_FIELDS):
         if key not in config:
             if restoring:
-                payload[key] = stored_keys["worker_overrides"][key]
+                if key in _WORKER_ACCOUNT_FIELDS and key not in stored_keys and key not in stored_keys["worker_overrides"]:
+                    continue
+                payload[key] = stored_keys["worker_overrides"].get(key, "")
             elif key in stored_keys:
                 payload[key] = stored_keys[key]
     if "worker_inherit_session" in config:
@@ -10836,10 +10877,17 @@ def _prepare_spawn_defaults_unlocked(config):
     for account_key in ("codex_account_id", "worker_codex_account_id"):
         if account_key in config:
             payload[account_key] = "" if config[account_key] == "__current__" else config[account_key]
-    _publish_codex_worker_homes(payload)
+    for account_key in ("antigravity_account_id", "worker_antigravity_account_id"):
+        if account_key in config:
+            payload[account_key] = config[account_key]
     if inherit_next and not inherited:
         saved = dict(stored_keys.get("worker_overrides") or {}) if isinstance(stored_keys.get("worker_overrides"), dict) else {}
         saved.update({key: stored_keys.get(key, current.get(key)) for key in _WORKER_DEFAULT_FIELDS})
+        for key in _WORKER_ACCOUNT_FIELDS:
+            if stored_keys.get(key):
+                saved[key] = stored_keys[key]
+            else:
+                saved.pop(key, None)
         payload["worker_overrides"] = saved
     _materialize_worker_defaults(payload)
     payload["disabled_engines"] = _clean_disabled_engines(
@@ -22747,7 +22795,8 @@ def enqueue_annotation_ux_fixes_queue(
             }
 
         if engine == "antigravity":
-            spawned = spawn_session_antigravity(text, name=queue_name, repo_path=repo_path)
+            spawned = spawn_session_antigravity(text, name=queue_name, repo_path=repo_path,
+                                                antigravity_account_id=_resolve_antigravity_spawn_account({})["antigravity_account_id"])
         elif engine == "gemini":
             spawned = spawn_session_gemini(text, name=queue_name, repo_path=repo_path)
         elif engine == "kilo":
@@ -31603,6 +31652,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # _STATS_CACHE_LOCK).
             _save_stats_file_cache()
             self.send_json(result)
+        elif path == "/api/antigravity/accounts":
+            from ccc_server.antigravity_accounts import public_payload
+            qs = urllib.parse.parse_qs(parsed.query)
+            self.send_json(public_payload(qs.get("session_id", [""])[0]))
         elif path == "/api/codex/accounts":
             from ccc_server.codex_accounts import public_payload
             qs = urllib.parse.parse_qs(parsed.query)
@@ -39953,8 +40006,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             }
             engine_raw = payload.get("engine")
             engine, model = _spawn_request_engine_and_model(payload)
-            if engine == "codex" and not payload.get("codex_account_id") and not payload.get("parent_session_id"):
-                payload = _apply_default_codex_account(payload)
+            if engine == "antigravity":
+                try:
+                    if "antigravity_account_id" in payload and payload["antigravity_account_id"] not in ("", "primary", "secondary"):
+                        raise ValueError("antigravity_account_id must be primary or secondary")
+                except ValueError as exc:
+                    self.send_json({"ok": False, "code": "invalid_antigravity_account", "error": str(exc)}, 400)
+                    return
             # BYOK (W2-2): "key_profile" picks which stored profile's API
             # keys get injected into the spawned subprocess's env. See
             # ccc_server/byok.py. Only engines that read provider keys
@@ -40043,6 +40101,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         "spawn", "CALLER_PARENT",
                         f"resolved parent={resolved_parent} from caller pids",
                     )
+            if engine == "antigravity":
+                try:
+                    payload = _resolve_antigravity_spawn_account(dict(payload, parent_session_id=parent_session_id))
+                except ValueError as exc:
+                    self.send_json({"ok": False, "code": "invalid_antigravity_account", "error": str(exc)}, 400)
+                    return
+            elif engine == "codex" and not payload.get("codex_account_id") and not parent_session_id:
+                payload = _apply_default_codex_account(payload)
             cwd_raw = payload.get("cwd")
             cwd_input = cwd_raw.strip() if isinstance(cwd_raw, str) else ""
             cwd_resolved = None
@@ -40206,6 +40272,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     )
                     if engine == "codex" and payload.get("codex_account_id"):
                         dedupe_key += (str(payload["codex_account_id"]),)
+                    if engine == "antigravity":
+                        dedupe_key += ("antigravity", payload["antigravity_account_id"])
                     with _SPAWN_DEDUPE_LOCK:
                         dedupe_slot = _SPAWN_DEDUPE_INFLIGHT.get(dedupe_key)
                         if dedupe_slot is None:
@@ -40262,6 +40330,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             if not same_account:
                                 result = {"ok": False, "code": "codex_account_conflict",
                                           "error": "This deduplicated task belongs to another Codex account; use a new task key for a new session"}
+                        if engine == "antigravity":
+                            from ccc_server.antigravity_accounts import dedupe_matches
+                            if not dedupe_matches(
+                                dict(payload, parent_session_id=parent_session_id),
+                                result.get("session_id"),
+                                result.get("log") or matched.get("log") or "",
+                            ):
+                                result = {"ok": False, "code": "antigravity_account_conflict",
+                                          "error": "This deduplicated task belongs to another Antigravity account; use a new task key for a new session"}
                         _log_activity(
                             "spawn", "DEDUPED",
                             f"key={task_key or prompt_hash!r} "
@@ -40378,6 +40455,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     elif engine == "antigravity":
                         result = spawn_session_antigravity(
                             prompt,
+                            antigravity_account_id=payload["antigravity_account_id"],
                             name=name,
                             cwd=spawn_cwd,
                             repo_path=payload.get("repo_path"),
@@ -40934,8 +41012,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 try:
                     spawned_via = self._extract_spawned_via()
+                    payload = _resolve_antigravity_spawn_account(payload)
                     result = spawn_session_antigravity(
                         prompt,
+                        antigravity_account_id=payload["antigravity_account_id"],
+                        parent_session_id=payload.get("parent_session_id"),
                         name=name,
                         cwd=str(cwd_resolved) if cwd_resolved else None,
                         repo_path=payload.get("repo_path"),
@@ -40954,6 +41035,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                         self.send_json(result, 503)
                     else:
                         self.send_json(result)
+                except ValueError as e:
+                    self.send_json({"ok": False, "code": "invalid_antigravity_account", "error": str(e)}, 400)
                 except RepoContextError as e:
                     self.send_json(e.as_payload(), e.status)
                 except Exception as e:
@@ -43416,6 +43499,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = {}
             if not isinstance(payload, dict):
                 payload = {}
+            if any(key in payload for key in ("codex_account_id", "antigravity_account_id")):
+                self.send_json({"ok": False, "error": "A continuation preserves its bound account; choose an account for a new session"}, 400)
+                return
             continue_from = str(payload.get("continue_from") or "").strip()
             if not continue_from:
                 self.send_json({"ok": False, "error": "missing continue_from"}, 400)

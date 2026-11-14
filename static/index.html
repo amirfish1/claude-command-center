@@ -1473,6 +1473,14 @@
             <a href="/view/allowances" target="_blank" rel="noopener">Allowances</a>
           </span>
           <span id="codexSessionAccount" class="codex-session-account" hidden></span>
+          <span id="antigravityAccountRow" class="codex-account-row" hidden>
+            <label for="antigravityAccountSelect">Account</label>
+            <select id="antigravityAccountSelect" aria-label="Antigravity account for new session" title="This account stays attached to the new session and its replies">
+              <option value="primary">Antigravity (Primary) · Google Cloud</option>
+              <option value="secondary">Antigravity (Secondary) · Google OAuth</option>
+            </select>
+          </span>
+          <span id="antigravitySessionAccount" class="codex-session-account" hidden></span>
           <span id="newSessionObjectContext" class="new-session-object-context" aria-label="Object for new session"></span>
           <span id="spawnCwdQuickChips" class="spawn-cwd-quick-chips" aria-label="Recent folder shortcuts"></span>
           <!-- New-session-only cwd picker. Visibility controlled by
@@ -3193,6 +3201,16 @@
                     </div>
                   </div>
 
+                  <div class="settings-row" id="spawnDefaultsAntigravityAccountField" hidden data-keywords="antigravity account primary secondary cloud oauth session">
+                    <div class="settings-row-main">
+                      <label class="settings-row-label" for="spawnDefaultsAntigravityAccount">Antigravity account</label>
+                      <div class="settings-row-desc">Stays attached to the session and its replies.</div>
+                    </div>
+                    <div class="settings-row-control"><select id="spawnDefaultsAntigravityAccount" class="bug-input">
+                      <option value="primary">Primary · Google Cloud</option>
+                      <option value="secondary">Secondary · Google OAuth</option>
+                    </select></div>
+                  </div>
                   <div class="settings-row" data-keywords="spawn defaults model new session">
                     <div class="settings-row-main">
                       <div class="settings-row-label">Model</div>
@@ -3257,6 +3275,7 @@
                         <option value="">WatchTower default</option>
                         <option value="claude">Claude</option>
                         <option value="codex">Codex</option>
+                        <option value="antigravity">Antigravity</option>
                         <option value="kimi">Kimi</option>
                         <option value="devin">Devin</option>
                         <option value="grok">Grok</option>
@@ -3264,6 +3283,16 @@
                     </div>
                   </div>
 
+                  <div class="settings-row" id="spawnDefaultsWorkerAntigravityAccountField" hidden data-keywords="antigravity account primary secondary cloud oauth worker">
+                    <div class="settings-row-main">
+                      <label class="settings-row-label" for="spawnDefaultsWorkerAntigravityAccount">Antigravity account</label>
+                      <div class="settings-row-desc">Used for new Antigravity queue workers. Running workers keep their account.</div>
+                    </div>
+                    <div class="settings-row-control"><select id="spawnDefaultsWorkerAntigravityAccount" class="bug-input">
+                      <option value="primary">Primary · Google Cloud</option>
+                      <option value="secondary">Secondary · Google OAuth</option>
+                    </select></div>
+                  </div>
                   <div class="settings-row" id="spawnDefaultsWorkerModelField" data-keywords="worker model watchtower spawn defaults">
                     <div class="settings-row-main">
                       <div class="settings-row-label">Model</div>

@@ -28,6 +28,7 @@ document.addEventListener('click',ev=>{const go=ev.target.closest('[data-setting
 let _engHubData={};
 ${firstRunRender}
 const catalog={claude:['claude-sonnet-4-6','claude-opus-4-6'],codex:['gpt-5-codex']};const modelOptionsForSpawnEngine=(engine,current)=>[...new Set([...(catalog[engine]||[]),current].filter(Boolean))].map(id=>({id,label:id}));
+${between('  function spawnEngineLabelWithAccount(', '  function spawnSourceForEngine(')}
 ${efforts}
 ${controls}
 ${merge}

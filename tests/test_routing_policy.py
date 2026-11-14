@@ -216,3 +216,22 @@ def test_saved_policy_is_readable_by_distinct_native_consumers(api, monkeypatch)
     assert [row['engine'] for row in policy['models']] == ['claude', 'codex']
     assert policy['enabled'] is True
     assert wt.fallback_chain() == ['claude', 'codex']
+
+
+def test_staged_account_defaults_inherit_and_restore(api):
+    request, state, raw = api
+    raw.update(antigravity_account_id='secondary', worker_antigravity_account_id='primary')
+    state.write_text(json.dumps(raw))
+    assert apply(request, staged(request, {'worker_inherit_session': True}))[0] == 200
+    linked = json.loads(state.read_text())
+    assert linked['worker_antigravity_account_id'] == 'secondary'
+    assert linked['worker_overrides']['worker_antigravity_account_id'] == 'primary'
+    assert apply(request, staged(request, {'antigravity_account_id': 'primary'}))[0] == 200
+    assert json.loads(state.read_text())['worker_antigravity_account_id'] == 'primary'
+    assert apply(request, staged(request, {'worker_inherit_session': False}))[0] == 200
+    assert json.loads(state.read_text())['worker_antigravity_account_id'] == 'primary'
+    assert apply(request, staged(request, {'worker_antigravity_account_id': 'secondary'}))[0] == 200
+    assert json.loads(state.read_text())['worker_antigravity_account_id'] == 'secondary'
+    before = state.read_bytes()
+    assert request(staged(request, {'antigravity_account_id': 'invalid'}))[0] == 400
+    assert state.read_bytes() == before

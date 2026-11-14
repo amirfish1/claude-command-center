@@ -181,14 +181,14 @@ def send(sid, text):
     return {"ok": True, "pid": sp.proc.pid, "via": "antigravity-stream", "turn": sp.turns}
 
 
-def spawn(sid, cmd, cwd, log_path, key):
+def spawn(sid, cmd, cwd, log_path, key, env=None):
     """Start the stream process for ``sid``. ``cmd`` already ends with the
     stream-json flags; the first message is sent with ``send``."""
     log_fh = open(log_path, "a")
     try:
         proc = subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log_fh,
-            cwd=cwd, start_new_session=True,
+            cwd=cwd, start_new_session=True, env=env,
         )
     except (OSError, ValueError):
         log_fh.close()

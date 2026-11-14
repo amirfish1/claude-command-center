@@ -162,6 +162,8 @@ The session view is where you look when you want detail: every agent, what it is
 Nine engines in one session view, however you launched them: from CCC, a terminal, or an IDE.
 CCC attaches to sessions you already have instead of owning them. It reads each agent's own session files, so there is nothing to wrap or migrate.
 Close the CCC page and your agents keep running. [How attachment works](docs/session-attach.md).
+Antigravity supports separate Primary (Google Cloud) and Secondary (personal
+Google OAuth) accounts for sessions and workers. [Account setup](docs/antigravity-accounts.md).
 It runs on your machine and it is source-available: no account, free to use at work ([FSL-1.1-MIT](LICENSE)).
 
 ### When an agent stops to ask, you see it

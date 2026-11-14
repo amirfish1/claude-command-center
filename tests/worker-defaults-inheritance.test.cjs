@@ -43,6 +43,7 @@ const showOpToast=(text)=>{document.body.dataset.toast=text;},showSettingsSavedP
 const _modelUnavailableReason=()=>'';
 // Deterministic model catalog; persistence and inheritance use the server.
 const modelOptionsForSpawnEngine=(engine,current)=>[...new Set([engine==='claude'?'session-claude':'session-codex',current,'__other__'].filter(Boolean))].map(id=>({id,label:id==='__other__'?'Other…':id}));
+${between('  function spawnEngineLabelWithAccount(', '  function spawnSourceForEngine(')}
 ${efforts}
 ${controls}
 ${merge}

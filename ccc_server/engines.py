@@ -36,6 +36,7 @@ import time
 import urllib.request
 import uuid
 
+from ccc_server import antigravity_accounts as _antigravity_accounts
 from ccc_server import antigravity_ls
 from ccc_server import antigravity_stream as _antigravity_stream
 from ccc_server import core as _core
@@ -4054,7 +4055,7 @@ def spawn_session_cursor(prompt, name=None, cwd=None, repo_path=None, worktree=F
     return _finalize_spawn_response(resp, entry, ctx)
 
 
-def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None):
+def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, worktree=False, model=None, parent_session_id=None, antigravity_account_id=None):
     """Spawn a headless AGY print-mode run and return tracking info.
 
     If `worktree=True`, create a fresh git worktree off the launch cwd on a
@@ -4063,6 +4064,14 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     prompt = _core._strip_ccc_session_state_instruction(prompt or "")
     if not prompt:
         return {"ok": False, "error": "missing prompt"}
+    try:
+        account_args = {'parent_session_id': parent_session_id}
+        if antigravity_account_id is not None:
+            account_args['antigravity_account_id'] = antigravity_account_id
+        account_id = _antigravity_accounts.spawn_account(account_args)
+        child_env = _antigravity_accounts.launch_env(account_id)
+    except ValueError as exc:
+        return {'ok': False, 'code': 'antigravity_account_invalid', 'error': str(exc)}
     resolved = _core._resolve_antigravity_bin()
     if not resolved["available"]:
         return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
@@ -4071,7 +4080,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     repo_for_logs = ctx["repo_path"]
     session_name = _core._slugify(name or prompt) or "antigravity"
     timestamp = time.strftime("%Y%m%dT%H%M%S")
-    log_filename = f"spawn-antigravity-{session_name}-{timestamp}.log"
+    log_filename = f"spawn-antigravity-{session_name}-{timestamp}-{uuid.uuid4().hex[:8]}.log"
     log_dir = _core.repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / log_filename
@@ -4079,15 +4088,6 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
     model_to_use = _core._antigravity_model_settings_label(
         _core._spawn_model_for_engine("antigravity", model) or ""
     )
-    if model_to_use:
-        settings_result = _core._set_antigravity_cli_model(model_to_use)
-        if not settings_result.get("ok"):
-            return {
-                **settings_result,
-                "via": "antigravity-spawn",
-            }
-        model_to_use = settings_result.get("model") or model_to_use
-
     worktree_path = None
     worktree_branch = None
     if worktree:
@@ -4099,7 +4099,11 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         except RuntimeError as e:
             return {"ok": False, "error": f"worktree creation failed: {e}"}
 
-    cmd = _core._antigravity_command_words(resolved)
+    try:
+        cmd = _antigravity_accounts.configure_command(
+            _core._antigravity_command_words(resolved), account_id, model_to_use)
+    except ValueError as exc:
+        return {'ok': False, 'code': 'antigravity_settings_invalid', 'error': str(exc)}
     user_args = cmd[1:]
     
     if (
@@ -4121,11 +4125,12 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
 
     cmd.extend(["-p", prompt])
 
+    _antigravity_accounts.bind_pending(log_path, account_id)
     log_fh = open(log_path, "w")
     if worktree_path:
         _core._run_worktree_init_hook(worktree_path, ctx["repo_path"], session_name, log_fh)
     try:
-        proc = _antigravity_popen(cmd, spawn_cwd, log_fh, log_path)
+        proc = _antigravity_popen(cmd, spawn_cwd, log_fh, log_path, env=child_env)
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "antigravity-spawn"}
@@ -4165,6 +4170,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         "model": model_to_use,
         "parent_session_id": parent_session_id or "",
     }
+    entry['antigravity_account_id'] = account_id
     _core._spawned_sessions.append(entry)
     _core._record_spawn_to_registry(
         pid=proc.pid,
@@ -4185,6 +4191,7 @@ def spawn_session_antigravity(prompt, name=None, cwd=None, repo_path=None, workt
         "name": session_name,
         "log": str(log_path),
         "via": "antigravity-spawn",
+        "antigravity_account_id": account_id,
         "model": model_to_use,
     }
     if worktree_path:
@@ -4470,7 +4477,7 @@ def _antigravity_auth_prompt_seen(proc, log_path, wait_seconds=4.0):
 _ANTIGRAVITY_AUTH_CODE_WAIT_S = 60
 
 
-def _antigravity_popen(cmd, cwd, log_fh, log_path, session_id=""):
+def _antigravity_popen(cmd, cwd, log_fh, log_path, session_id="", env=None):
     """Start a headless agy run with a pseudo-terminal as stdin.
 
     A logged-out agy prints a sign-in URL, opens the browser, and reads the
@@ -4489,6 +4496,7 @@ def _antigravity_popen(cmd, cwd, log_fh, log_path, session_id=""):
             stdout=log_fh,
             stderr=subprocess.STDOUT,
             cwd=cwd,
+            env=env,
             start_new_session=True,
         )
     except BaseException:
@@ -4499,13 +4507,14 @@ def _antigravity_popen(cmd, cwd, log_fh, log_path, session_id=""):
     threading.Thread(
         target=_antigravity_auth_relay,
         args=(proc, master, log_path, session_id),
+        kwargs={"account_id": (env or {}).get("CCC_ANTIGRAVITY_ACCOUNT_ID", "primary")},
         daemon=True,
         name="agy-auth-relay",
     ).start()
     return proc
 
 
-def _antigravity_auth_relay(proc, master, log_path, session_id=""):
+def _antigravity_auth_relay(proc, master, log_path, session_id="", account_id="primary"):
     from ccc_server import credential_broker
 
     try:
@@ -4520,7 +4529,9 @@ def _antigravity_auth_relay(proc, master, log_path, session_id=""):
             "session_id": session_id,
             "timeout": _ANTIGRAVITY_AUTH_CODE_WAIT_S,
             "reason": (
-                "Antigravity CLI is not signed in. A Google sign-in page opened "
+                ("Secondary · personal Google OAuth: choose your personal Google AI subscription account. "
+                 if account_id == "secondary" else "Primary · Google Cloud. ")
+                + "Antigravity CLI is not signed in. A Google sign-in page opened "
                 "in your browser. Sign in, copy the authorization code it shows, "
                 "and paste it here."
             ),
@@ -4586,9 +4597,13 @@ def resume_session_antigravity(session_id, text, mode="send"):
     text = _core._strip_ccc_session_state_instruction(text)
     if not session_id or not text:
         return {"ok": False, "error": "missing session_id or text"}
+    account_id = _antigravity_accounts.session_account(session_id)
     cli_conversation = _core._antigravity_cli_conversation_path(session_id)
     has_cli_pb = bool(cli_conversation and cli_conversation.is_file())
     if not has_cli_pb and _core._antigravity_app_conversation_path(session_id):
+        if account_id == 'secondary':
+            return {'ok': False, 'code': 'antigravity_account_app_unsupported',
+                    'error': 'Secondary authentication requires an Antigravity CLI conversation'}
         return _core._resume_session_antigravity_app(session_id, text)
     resolved = _core._resolve_antigravity_bin()
     if not resolved["available"]:
@@ -4598,7 +4613,8 @@ def resume_session_antigravity(session_id, text, mode="send"):
     stream_state = _antigravity_stream.state(session_id)
     if stream_state is not None:
         want_dirs = set(_core._pasted_image_parent_dirs(text))
-        have_model, have_dirs = stream_state["key"]
+        have_model, have_dirs = stream_state["key"][:2]
+        have_account = stream_state["key"][2] if len(stream_state["key"]) > 2 else "primary"
         override = _core._get_session_override(session_id)
         want_model = _core._antigravity_model_settings_label(
             ((override or {}).get("model") if override else None)
@@ -4625,7 +4641,7 @@ def resume_session_antigravity(session_id, text, mode="send"):
                 "via": "antigravity-resume-queued",
                 "queued_reason": "waiting for the current Antigravity turn to finish (it can't take input mid-turn)",
             }
-        if want_dirs <= set(have_dirs) and (not want_model or want_model == have_model):
+        if have_account == account_id and want_dirs <= set(have_dirs) and (not want_model or want_model == have_model):
             sent = _antigravity_stream.send(session_id, text)
             if sent.get("ok"):
                 return sent
@@ -4742,7 +4758,7 @@ def resume_session_antigravity(session_id, text, mode="send"):
     if not Path(cwd).is_dir():
         cwd = str(Path.cwd())
     timestamp = time.strftime("%Y%m%dT%H%M%S")
-    log_filename = f"resume-antigravity-{session_id[:8]}-{timestamp}.log"
+    log_filename = f"resume-antigravity-{session_id[:8]}-{timestamp}-{uuid.uuid4().hex[:8]}.log"
     repo_for_logs = _core._git_toplevel_for_existing_dir(cwd) or cwd
     log_dir = _core.repo_log_dir(repo_for_logs)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -4754,16 +4770,12 @@ def resume_session_antigravity(session_id, text, mode="send"):
         or os.environ.get("CCC_ANTIGRAVITY_MODEL")
         or ""
     )
-    if model_to_use:
-        settings_result = _core._set_antigravity_cli_model(model_to_use)
-        if not settings_result.get("ok"):
-            return {
-                **settings_result,
-                "via": "antigravity-resume",
-            }
-        model_to_use = settings_result.get("model") or model_to_use
-
-    cmd = _core._antigravity_command_words(resolved)
+    try:
+        cmd = _antigravity_accounts.configure_command(
+            _core._antigravity_command_words(resolved), account_id, model_to_use)
+        child_env = _antigravity_accounts.launch_env(account_id)
+    except ValueError as exc:
+        return {'ok': False, 'code': 'antigravity_settings_invalid', 'error': str(exc)}
     user_args = cmd[1:]
     if (
         os.environ.get("CCC_ANTIGRAVITY_SKIP_PERMISSIONS", "1").strip().lower()
@@ -4793,7 +4805,8 @@ def resume_session_antigravity(session_id, text, mode="send"):
         try:
             _antigravity_stream.spawn(
                 session_id, stream_cmd, cwd, log_path,
-                (model_to_use or "", tuple(sorted(set(add_dirs)))),
+                (model_to_use or "", tuple(sorted(set(add_dirs))), account_id),
+                env=child_env,
             )
             sent = _antigravity_stream.send(session_id, text)
         except (OSError, ValueError):
@@ -4807,7 +4820,7 @@ def resume_session_antigravity(session_id, text, mode="send"):
     try:
         # A logged-out agy asks for a sign-in code (CCC-1274); the helper
         # relays it from the dashboard instead of leaving the turn hung.
-        proc = _antigravity_popen(cmd, cwd, log_fh, log_path, session_id)
+        proc = _antigravity_popen(cmd, cwd, log_fh, log_path, session_id, env=child_env)
     except (FileNotFoundError, OSError) as e:
         log_fh.close()
         return {"ok": False, "error": str(e), "via": "antigravity-resume"}
@@ -4852,7 +4865,7 @@ def resume_session_antigravity(session_id, text, mode="send"):
     }
 
 
-def launch_antigravity_terminal(prompt="", name=None, cwd=None, repo_path=None, terminal_app=None):
+def launch_antigravity_terminal(prompt="", name=None, cwd=None, repo_path=None, terminal_app=None, antigravity_account_id=None, parent_session_id=None):
     """Launch AGY in a real terminal for manual resume/switch.
 
     Existing Antigravity session resume is still handled inside the TUI via
@@ -4874,7 +4887,7 @@ def launch_antigravity_terminal(prompt="", name=None, cwd=None, repo_path=None, 
     timestamp = time.strftime("%Y%m%dT%H%M%S")
     log_dir = _core.repo_log_dir(ctx["repo_path"])
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"launch-antigravity-{session_name}-{timestamp}.log"
+    log_path = log_dir / f"launch-antigravity-{session_name}-{timestamp}-{uuid.uuid4().hex[:8]}.log"
     prompt_path = None
     if prompt:
         prompt_path = log_dir / f"prompt-antigravity-{session_name}-{timestamp}.txt"
@@ -4883,7 +4896,27 @@ def launch_antigravity_terminal(prompt="", name=None, cwd=None, repo_path=None, 
         except OSError:
             prompt_path = None
 
-    bin_and_args = _core._antigravity_shell_command(resolved)
+    try:
+        account_args = {'parent_session_id': parent_session_id}
+        if antigravity_account_id is not None:
+            account_args['antigravity_account_id'] = antigravity_account_id
+        account_id = _antigravity_accounts.spawn_account(account_args)
+        launch_cmd = _antigravity_accounts.configure_command(
+            _core._antigravity_command_words(resolved), account_id)
+    except ValueError as exc:
+        return {'ok': False, 'code': 'antigravity_account_invalid', 'error': str(exc)}
+    # Terminal opens a new login shell; scrub its environment immediately
+    # before exec as well as the osascript child. Never put secret values here.
+    prefix = []
+    if account_id == 'secondary':
+        prefix = ['env'] + [word for key in sorted(_antigravity_accounts._CLOUD_ENV | {'ANTIGRAVITY_GEMINI_DIR', 'GEMINI_DIR', 'XDG_CONFIG_HOME'}
+                                       | {key for key in os.environ if key.startswith('AGY_LLM_GATEWAY_')})
+                            for word in ('-u', key)]
+        secondary_env = _antigravity_accounts.launch_env(account_id, {})
+        prefix += [key + '=' + value for key, value in sorted(secondary_env.items())]
+    launch_cmd += ['--log-file', str(log_path) + '.agy.log']
+    _antigravity_accounts.bind_pending(log_path, account_id)
+    bin_and_args = shlex.join(prefix + launch_cmd)
     q_cwd = _core._shell_quote(spawn_cwd)
     notes = [
         "echo " + _core._shell_quote("CCC: starting Antigravity CLI in this workspace."),
@@ -4920,7 +4953,8 @@ def launch_antigravity_terminal(prompt="", name=None, cwd=None, repo_path=None, 
 
     try:
         lf = open(log_path, "w")
-        proc = subprocess.Popen(["osascript", "-e", script], stdout=lf, stderr=lf)
+        proc = subprocess.Popen(["osascript", "-e", script], stdout=lf, stderr=lf,
+                                env=_antigravity_accounts.launch_env(account_id))
     except (FileNotFoundError, OSError) as e:
         return {"ok": False, "error": str(e), "via": "antigravity-terminal"}
 
@@ -5049,6 +5083,8 @@ def _spawn_session_id_from_entry(entry):
     engine = entry.get("engine") or "claude"
     sid = entry.get("session_id") or entry.get("resumed_sid")
     if sid:
+        if engine == "antigravity":
+            _antigravity_accounts.finalize_pending(entry.get("log"), sid)
         if engine == "claude":
             if not _core._ensure_claude_desktop_session_visible(sid, spawn_entry=entry):
                 _core._schedule_claude_desktop_visibility_retry(sid, spawn_entry=entry)
@@ -5079,6 +5115,8 @@ def _spawn_session_id_from_entry(entry):
     else:
         sid = _core.extract_session_id(log)
     if sid:
+        if engine == "antigravity":
+            _antigravity_accounts.finalize_pending(entry.get("log"), sid)
         entry["session_id"] = sid
         _core._update_spawn_session_id_in_registry(entry.get("pid"), sid)
         if engine == "claude":

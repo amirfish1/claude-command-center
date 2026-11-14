@@ -4,8 +4,9 @@
   const $ = id => document.getElementById(id), copy = value => JSON.parse(JSON.stringify(value));
   const same = (a,b) => JSON.stringify(a) === JSON.stringify(b);
   const fields = {spawnDefaultsEngine:'engine',spawnDefaultsEffort:'reasoning_effort',spawnDefaultsAutoCompact:'auto_compact_k',
-    spawnDefaultsWorkerEngine:'worker_engine',spawnDefaultsWorkerEffort:'worker_reasoning_effort',spawnDefaultsWorkerAutoCompact:'worker_auto_compact_k',spawnDefaultsWorkerInherit:'worker_inherit_session'};
-  const workerKeys = ['worker_engine','worker_model','worker_reasoning_effort','worker_auto_compact_k'];
+    spawnDefaultsWorkerEngine:'worker_engine',spawnDefaultsWorkerEffort:'worker_reasoning_effort',spawnDefaultsWorkerAutoCompact:'worker_auto_compact_k',spawnDefaultsWorkerInherit:'worker_inherit_session',
+    spawnDefaultsAntigravityAccount:'antigravity_account_id',spawnDefaultsWorkerAntigravityAccount:'worker_antigravity_account_id'};
+  const workerKeys = ['worker_engine','worker_model','worker_reasoning_effort','worker_auto_compact_k','worker_codex_account_id','worker_antigravity_account_id'];
   let api, host, base, draft, chains, initialChains, preview, busy=false, dirty=false, extraDraft={}, context='defaults';
   const manual = new Set();
   function el(tag,text,cls) { const node=document.createElement(tag); if(text!=null)node.textContent=text;if(cls)node.className=cls;return node; }
@@ -37,13 +38,15 @@
   }
   function independentValues() { const source=base.policy_documents?.worker_overrides||base;return Object.fromEntries(workerKeys.map(key=>[key,source[key]])); }
   function inheritedValues() {
-    return {worker_engine:draft.engine,worker_model:draft.models?.[draft.engine]||'',worker_reasoning_effort:draft.reasoning_effort||'',worker_auto_compact_k:draft.auto_compact_k};
+    return {worker_engine:draft.engine,worker_model:draft.models?.[draft.engine]||'',worker_reasoning_effort:draft.reasoning_effort||'',worker_auto_compact_k:draft.auto_compact_k,
+      worker_codex_account_id:draft.codex_account_id||'',worker_antigravity_account_id:draft.antigravity_account_id||'primary'};
   }
   function renderDefaults() {
     const worker=draft.worker_inherit_session?inheritedValues():draft;
     for(const [id,key] of Object.entries(fields)) {
+      if (!$(id)) continue;
       if(key==='worker_inherit_session')$(id).checked=draft[key]===true;
-      else if(!key.endsWith('reasoning_effort'))setValue(id,(key.startsWith('worker_')?worker:draft)[key]);
+      else if(!key.endsWith('reasoning_effort'))setValue(id,(key.startsWith('worker_')?worker:draft)[key] ?? (key.endsWith('antigravity_account_id')?'primary':''));
     }
     effortSelect($('spawnDefaultsEffort'),draft.engine,draft.reasoning_effort);
     effortSelect($('spawnDefaultsWorkerEffort'),worker.worker_engine,worker.worker_reasoning_effort);
@@ -58,6 +61,8 @@
     }
     $('spawnDefaultsEffortField').style.display='';$('spawnDefaultsWorkerEffortField').style.display='';$('spawnDefaultsWorkerModelField').style.display='';
     $('spawnDefaultsWorkerOverrides').hidden=draft.worker_inherit_session===true;
+    if ($('spawnDefaultsAntigravityAccountField')) $('spawnDefaultsAntigravityAccountField').hidden=draft.engine!=='antigravity';
+    if ($('spawnDefaultsWorkerAntigravityAccountField')) $('spawnDefaultsWorkerAntigravityAccountField').hidden=worker.worker_engine!=='antigravity';
     $('spawnDefaultsWorkerInheritanceStatus').textContent=draft.worker_inherit_session
       ? (dirty?'Draft: workers follow ':'Saved: workers follow ')+api.label(worker.worker_engine)+' · '+(worker.worker_model||'Engine default model')+'. Saved independent overrides remain available for return.'
       : 'Independent worker defaults. Queue pins take precedence.';
@@ -157,7 +162,7 @@
     catch(err) { error(err.message);status('Saved policy unavailable. Reload to retry; nothing changed.'); }
     finally {busy=false;updateButtons();}
   }
-  const labels={engine:'Session engine',models:'Session/shared models',reasoning_effort:'Session effort',auto_compact_k:'Session autocompact',worker_engine:'Worker engine',worker_model:'Worker model',worker_reasoning_effort:'Worker effort',worker_auto_compact_k:'Worker autocompact',worker_inherit_session:'Workers follow sessions',worker_overrides:'Saved independent worker defaults',worker_fallback:'Worker/managed fallback',model_profiles:'Capability profiles',disabled_engines:'Disabled engines'};
+  const labels={antigravity_account_id:'Session Antigravity account',worker_antigravity_account_id:'Worker Antigravity account',engine:'Session engine',models:'Session/shared models',reasoning_effort:'Session effort',auto_compact_k:'Session autocompact',worker_engine:'Worker engine',worker_model:'Worker model',worker_reasoning_effort:'Worker effort',worker_auto_compact_k:'Worker autocompact',worker_inherit_session:'Workers follow sessions',worker_overrides:'Saved independent worker defaults',worker_fallback:'Worker/managed fallback',model_profiles:'Capability profiles',disabled_engines:'Disabled engines'};
   function describe(value) {
     if(value?.absent===true)return 'Not stored';if(typeof value==='boolean')return value?'On':'Off';if(value==null||value==='')return 'Engine default';
     if(typeof value!=='object')return String(value);if(Array.isArray(value))return value.join(', ')||'None';

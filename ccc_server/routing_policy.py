@@ -6,7 +6,8 @@ import json
 EDITABLE = frozenset(('engine', 'models', 'reasoning_effort', 'auto_compact_k',
                      'worker_engine', 'worker_model', 'worker_reasoning_effort',
                      'worker_auto_compact_k', 'worker_inherit_session',
-                     'worker_fallback', 'model_profiles', 'disabled_engines'))
+                     'worker_fallback', 'model_profiles', 'disabled_engines',
+                     'antigravity_account_id', 'worker_antigravity_account_id'))
 
 
 def revision(raw):
@@ -21,7 +22,10 @@ def validate_changes(changes):
     if not isinstance(changes, dict) or not changes or set(changes) - EDITABLE:
         raise ValueError('Choose at least one supported launch-policy change')
     for key, value in changes.items():
-        if key == 'disabled_engines':
+        if key in ('antigravity_account_id', 'worker_antigravity_account_id'):
+            if not isinstance(value, str) or value not in ('', 'primary', 'secondary'):
+                raise ValueError(key + ' must be primary or secondary')
+        elif key == 'disabled_engines':
             if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
                 raise ValueError('disabled_engines must be a list of engine identifiers')
         elif key.endswith('auto_compact_k'):
@@ -99,11 +103,18 @@ def staged_candidate(stored, changes, prepared):
     if prepared.get('worker_inherit_session') is True or 'worker_inherit_session' in changes:
         for key in ('worker_engine', 'worker_model', 'worker_reasoning_effort', 'worker_auto_compact_k'):
             candidate[key] = prepared[key]
+        for key in ('worker_codex_account_id', 'worker_antigravity_account_id'):
+            if key in prepared:
+                candidate[key] = prepared[key]
         if 'worker_overrides' in prepared:
             candidate['worker_overrides'] = copy.deepcopy(prepared['worker_overrides'])
         if prepared.get('worker_inherit_session') is True:
             candidate['engine'] = prepared['engine']
             candidate['reasoning_effort'] = prepared['reasoning_effort']
+    if any(key in changes for key in ('worker_codex_account_id', 'worker_inherit_session')) or prepared.get('worker_inherit_session') is True:
+        for key in ('worker_codex_home', 'codex_account_homes'):
+            if key in prepared:
+                candidate[key] = copy.deepcopy(prepared[key])
     if 'engine' in changes or 'worker_engine' in changes or 'worker_inherit_session' in changes:
         # Re-enable an explicitly chosen default without deleting future IDs.
         if isinstance(candidate.get('disabled_engines'), list):

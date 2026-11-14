@@ -30,7 +30,8 @@
     const details = el('details', null, 'settings-launch-details');
     details.append(el('summary', 'Sources & runtime details'));
     const fields = el('dl', null, 'settings-launch-fields');
-    for (const [key, label] of [['engine','Engine'],['model','Model'],['effort','Effort']]) {
+    for (const [key, label] of [['engine','Engine'],['account','Account'],['model','Model'],['effort','Effort']]) {
+      if (!plan.fields[key]) continue;
       const field = plan.fields[key], row = el('div'); row.dataset.launchField = key;
       row.append(el('dt', label));
       const value = field.value || (field.certainty === 'ambient' ? 'Engine decides at launch' : 'Unresolved');

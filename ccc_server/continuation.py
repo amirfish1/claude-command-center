@@ -41,7 +41,7 @@ from ccc_server.session_brief import _transcript_path, brief as _brief
 DEFAULT_LARGE_TOKENS = 150_000
 DEFAULT_STALE_SECONDS = 60 * 60
 
-_SUPPORTED_ENGINES = ("claude", "codex", "kimi")
+_SUPPORTED_ENGINES = ("claude", "codex", "kimi", "antigravity")
 
 MAX_MANUAL_FORWARD_HOPS = 25
 
@@ -225,6 +225,11 @@ def spawn_continuation(query, prompt="", model=None, effort=None, report_to=None
         return _spawn_continuation(query, **kwargs)
     scope = str(ctx["cwd"] or "")
     key = (task_key or f"prompt:{prompt_hash}", scope)
+    account_args = {"parent_session_id": ctx["latest"]}
+    account_module = None
+    if (engine or ctx["engine"]) == "antigravity":
+        from . import antigravity_accounts as account_module
+        key += ("antigravity", account_module.spawn_account(account_args))
     with _core._SPAWN_DEDUPE_LOCK:
         slot = _core._SPAWN_DEDUPE_INFLIGHT.get(key)
         owner = slot is None
@@ -251,6 +256,13 @@ def spawn_continuation(query, prompt="", model=None, effort=None, report_to=None
             result = _core._dedupe_existing_response(
                 live if live is not None else finished, finished=finished is not None,
             )
+            if account_module and not account_module.dedupe_matches(
+                account_args, result.get("session_id"),
+                result.get("log") or (live if live is not None else finished).get("log") or "",
+            ):
+                result = {"ok": False, "code": "antigravity_account_conflict",
+                          "error": "This task belongs to another Antigravity account; use a new task key"}
+                return result
             result.update(continue_from=ctx["session_id"], latest_session_id=ctx["latest"],
                           new_session_id=result.get("session_id"), dry_run=False)
             return result
@@ -311,6 +323,11 @@ def _spawn_continuation(query, prompt="", model=None, effort=None, report_to=Non
         "idle_seconds": ctx["idle_seconds"],
         "prompt": full_prompt,
     }
+    account_kwargs = {}
+    if engine == "antigravity":
+        from . import antigravity_accounts
+        account_kwargs["antigravity_account_id"] = antigravity_accounts.spawn_account({"parent_session_id": ctx["latest"]})
+        preview.update(account_kwargs)
     if dry_run:
         return preview
 
@@ -334,6 +351,8 @@ def _spawn_continuation(query, prompt="", model=None, effort=None, report_to=Non
         spawn_result = _core.spawn_session_codex(
             wrapped_prompt, reasoning_effort=final_effort or "", **kwargs,
         )
+    elif engine == "antigravity":
+        spawn_result = _core.spawn_session_antigravity(wrapped_prompt, **account_kwargs, **kwargs)
     elif engine == "kimi":
         spawn_result = _core.spawn_session_kimi(wrapped_prompt, effort=final_effort, **kwargs)
     else:
@@ -373,6 +392,7 @@ def _spawn_continuation(query, prompt="", model=None, effort=None, report_to=Non
         "report_route": report_route,
         "rebound": rebound,
         "spawn_result": spawn_result,
+        **account_kwargs,
     }
 
 

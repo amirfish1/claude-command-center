@@ -2085,6 +2085,9 @@ def cmd_spawn(args):
     prompt = " ".join(args.prompt).strip()
     if not prompt and not sys.stdin.isatty():
         prompt = sys.stdin.read().strip()
+    if args.continue_from and getattr(args, "antigravity_account", None):
+        print("ccc spawn: an existing session keeps its account; choose --antigravity-account for a new session", file=sys.stderr)
+        return 2
     if args.continue_from and getattr(args, "codex_account", None):
         print("ccc spawn: an existing session keeps its account; choose --codex-account for a new session", file=sys.stderr)
         return 2
@@ -2099,6 +2102,14 @@ def cmd_spawn(args):
               file=sys.stderr)
         return 2
     payload = {"prompt": prompt}
+    if getattr(args, "antigravity_account", None):
+        if args.antigravity_account not in ("primary", "secondary"):
+            print("ccc spawn: --antigravity-account must be primary or secondary", file=sys.stderr)
+            return 2
+        if args.engine not in ("antigravity", "agy", "gemini"):
+            print("ccc spawn: --antigravity-account requires --engine antigravity", file=sys.stderr)
+            return 2
+        payload["antigravity_account_id"] = args.antigravity_account
     if getattr(args, "codex_account", None):
         if args.engine != "codex":
             print("ccc spawn: --codex-account requires --engine codex", file=sys.stderr)
@@ -2968,6 +2979,8 @@ def main(argv=None):
     p.add_argument("--engine",
                    help="claude (default), codex, cursor, antigravity, kilo, "
                         "opencode, aider, hermes, kimi, devin, droid, grok, pi")
+    p.add_argument("--antigravity-account", choices=("primary", "secondary"),
+                   help="account for this new Antigravity session")
     p.add_argument("--codex-account", metavar="ACCOUNT_ID",
                    help="connected Allowances account for this new Codex session")
     p.add_argument("--model",

@@ -14524,8 +14524,8 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIn(str(self.repo), add_dirs)
         self.assertIn(str(paste_dir.resolve()), add_dirs)
 
-    def test_spawn_antigravity_writes_model_to_cli_settings(self):
-        """AGY print mode reads its model from settings.json, not argv."""
+    def test_spawn_antigravity_uses_session_model_settings(self):
+        """AGY model selection must not mutate shared settings.json."""
         server = self.server
         settings_path = server.ANTIGRAVITY_CLI_SETTINGS
         settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -14569,9 +14569,11 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertIsNone(result["session_id"])
         self.assertTrue(result["session_id_pending"])
         settings = json.loads(settings_path.read_text())
-        self.assertEqual(settings["model"], "Gemini 3.8 Flash (High)")
+        self.assertEqual(settings["model"], "Gemini 3.1 Pro (Low)")
         self.assertEqual(settings["colorScheme"], "dark")
         cmd = popen.call_args.args[0]
+        overlay = json.loads(cmd[cmd.index("--settings") + 1])
+        self.assertEqual(overlay["model"], "Gemini 3.8 Flash (High)")
         self.assertNotIn("--model", cmd)
         self.assertIn("-p", cmd)
 

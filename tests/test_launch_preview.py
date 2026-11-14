@@ -16,6 +16,19 @@ def defaults():
                 {'engine': 'codex', 'model': 'gpt-5-codex', 'effort': 'medium'}]}}
 
 
+def test_antigravity_preview_distinguishes_session_worker_and_linked_accounts():
+    state = defaults()
+    state.update(engine='antigravity', worker_engine='antigravity',
+                 antigravity_account_id='primary', worker_antigravity_account_id='secondary')
+    assert preview.session_plan(state)['fields']['account']['value'] == 'Primary · Google Cloud'
+    worker = preview.worker_plan(state)
+    assert worker['fields']['account']['value'] == 'Secondary · Google OAuth'
+    assert worker['fields']['account']['certainty'] == 'configured'
+    state['worker_inherit_session'] = True
+    assert preview.worker_plan(state)['fields']['account']['value'] == 'Primary · Google Cloud'
+    assert 'account' not in preview.worker_plan(state, {'engine': 'claude'})['fields']
+
+
 def test_pure_snapshot_never_guesses_runtime_engine_and_never_mutates_inputs():
     state = defaults()
     state['worker_engine'] = ''

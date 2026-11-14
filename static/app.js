@@ -12243,6 +12243,7 @@
 
   function updateInputBar() {
     syncCodexAccountUi();
+    syncAntigravityAccountUi();
     if (!$convInputBar) return;
     // In split-pane mode the active pane may not be p1; find its input bar so
     // we toggle 'visible' on the right element (p1's #convInputBar is always
@@ -82634,15 +82635,14 @@
     if (engine === 'pkood') return 'pkood';
     return 'Claude';
   }
-  // Codex has a Primary and Secondary account; any engine label that names
-  // Codex says which one (CCC-345). accountId: '' / '__current__' / 'local-codex' = Primary.
+  // Keep the account visible wherever a launch setup names its engine.
   function spawnEngineLabelWithAccount(engine, accountId) {
     const base = spawnEngineLabel(engine);
-    if (engine !== 'codex') return base;
+    if (engine !== 'codex' && engine !== 'antigravity') return base;
     const id = accountId === undefined
-      ? ((document.getElementById('codexAccountSelect') || {}).value || spawnDefaultsState.codex_account_id || '')
+      ? ((document.getElementById(engine + 'AccountSelect') || {}).value || spawnDefaultsState[engine + '_account_id'] || '')
       : accountId;
-    return base + ' ' + (!id || id === '__current__' || id === 'local-codex' ? '(Primary)' : '(Secondary)');
+    return base + ' ' + (!id || id === '__current__' || id === 'local-codex' || id === 'primary' ? '(Primary)' : '(Secondary)');
   }
   function spawnSourceForEngine(engine) {
     if (engine === 'codex') return 'codex';
@@ -82708,6 +82708,34 @@
   var _codexAccountsLoadedAt = 0;
   var _codexAccountsLoading = false;
   var _codexAccountSession = '';
+  var _antigravityAccountSession = '';
+  function syncAntigravityAccountUi() {
+    const row = document.getElementById('antigravityAccountRow');
+    const select = document.getElementById('antigravityAccountSelect');
+    const badge = document.getElementById('antigravitySessionAccount');
+    if (!row || !select || !badge) return;
+    const isNew = currentConversation === '__new__';
+    row.hidden = !(isNew && getSpawnEngine() === 'antigravity');
+    if (select.dataset.userPicked !== '1') select.value = spawnDefaultsState.antigravity_account_id || 'primary';
+    const sid = !isNew && currentSession && currentSession.source === 'antigravity' ? String(currentConversation || '') : '';
+    badge.hidden = !sid;
+    if (_antigravityAccountSession === sid) return;
+    _antigravityAccountSession = sid;
+    if (!sid) return;
+    badge.textContent = 'Antigravity account…';
+    fetch('/api/antigravity/accounts?session_id=' + encodeURIComponent(sid)).then(r => {
+      if (!r.ok) throw new Error('Account unavailable');
+      return r.json();
+    }).then(data => {
+      if (!data.ok) throw new Error('Account unavailable');
+      if (_antigravityAccountSession === sid) badge.textContent = 'Account: ' + data.session_account;
+    }).catch(() => {
+      if (_antigravityAccountSession === sid) {
+        badge.textContent = 'Account unavailable';
+        _antigravityAccountSession = '';
+      }
+    });
+  }
   function syncCodexAccountUi() {
     const row = document.getElementById('codexAccountRow');
     const select = document.getElementById('codexAccountSelect');
@@ -82754,6 +82782,10 @@
     const body = { prompt: o.prompt, engine };
     const accountSelect = document.getElementById("codexAccountSelect");
     if (engine === "codex" && accountSelect && accountSelect.value) body.codex_account_id = accountSelect.value;
+    if (engine === 'antigravity') {
+      const selected = document.getElementById('antigravityAccountSelect');
+      body.antigravity_account_id = selected?.value || spawnDefaultsState.antigravity_account_id || 'primary';
+    }
     if (o.name) body.name = o.name;
     if (o.cwd) body.cwd = o.cwd;
     if (o.repoPath) body.repo_path = o.repoPath;
@@ -82871,6 +82903,9 @@
 
   function mergeSpawnDefaults(data, opts) {
     if (!data || typeof data !== 'object') return;
+    for (const key of ['codex_account_id', 'worker_codex_account_id', 'antigravity_account_id', 'worker_antigravity_account_id']) {
+      if (typeof data[key] === 'string') spawnDefaultsState[key] = data[key];
+    }
     // Boot's loadSpawnDefaults() passes preserveUserEngineChoice so a pick
     // the user already made while this fetch was in flight wins over the
     // server's persisted default. The explicit settings-save path never
@@ -83034,6 +83069,7 @@
   let _emnBusy = '';               // engine whose install terminal we opened
   function syncSpawnEngineDependentUi() {
     syncCodexAccountUi();
+    syncAntigravityAccountUi();
     const engine = getSpawnEngine();
     if (typeof refreshEngineMissingNotice === 'function') {
       if (_emnInstalled) renderEngineMissingNotice(); else refreshEngineMissingNotice();
@@ -89573,7 +89609,7 @@
     }
     const status = document.getElementById('spawnDefaultsWorkerInheritanceStatus');
     if (status) status.textContent = workerInheritanceSaving ? 'Saving worker defaults…' : workerInheritanceError || (inherited
-      ? 'Following new sessions: ' + spawnEngineLabelWithAccount(spawnDefaultsState.worker_engine, spawnDefaultsState.worker_codex_account_id || '') + ' · ' + (spawnDefaultsState.worker_model || 'Engine default model') + ' · ' + (spawnDefaultsState.worker_reasoning_effort || 'Engine default effort') + ' · ' + spawnDefaultsState.worker_auto_compact_k + 'K. Independent worker settings are saved for return.'
+      ? 'Following new sessions: ' + spawnEngineLabelWithAccount(spawnDefaultsState.worker_engine, spawnDefaultsState['worker_' + spawnDefaultsState.worker_engine + '_account_id'] || '') + ' · ' + (spawnDefaultsState.worker_model || 'Engine default model') + ' · ' + (spawnDefaultsState.worker_reasoning_effort || 'Engine default effort') + ' · ' + spawnDefaultsState.worker_auto_compact_k + 'K. Independent worker settings are saved for return.'
       : 'Independent worker defaults. Existing settings stay unchanged until you opt in.');
   }
   function compatibleDefaultEffort(engine, value) {
@@ -96805,6 +96841,16 @@
       block('engines', 'agentsOverviewEngines', head('aoEngTitle', 'Engines', 'aoEngSub', 'Checking your engines…', '<div class="ao-stats" id="aoEngStats"></div>')
         + '<div class="ao-eng-list" id="aoEngGroups" role="list"></div>'),
     ];
+    for (const [section, barId] of [['defaults', 'aoDefaultsBar'], ['queues', 'aoWorkerDefaultsBar']]) {
+      const preview = document.querySelector('[data-launch-preview="' + section + '"]');
+      if (!preview) continue;
+      const disclosure = document.createElement('details');
+      disclosure.className = 'ao-launch-preview';
+      const summary = document.createElement('summary');
+      summary.textContent = 'Review next launch';
+      disclosure.append(summary, preview);
+      document.getElementById(barId)?.after(disclosure);
+    }
     const on = (type, handler) => boxes.forEach(box => box.addEventListener(type, handler));
     on('click', event => {
       const setup = event.target.closest('[data-ao-setup]');
@@ -96829,7 +96875,9 @@
       const pick = event.target.closest('[data-ao-pick]');
       if (pick) {
         const [engine, account] = pick.value.split('|');
-        if (account) aoSetCodexAccount(account, pick.dataset.aoPick); else aoSetDefault(engine, pick.dataset.aoPick);
+        if (account && engine === 'antigravity') aoSetAntigravityAccount(account, pick.dataset.aoPick);
+        else if (account) aoSetCodexAccount(account, pick.dataset.aoPick);
+        else aoSetDefault(engine, pick.dataset.aoPick);
         return;
       }
       const field = event.target.closest('[data-ao-field]');
@@ -96931,7 +96979,7 @@
   function aoSetCodexAccount(id, which) {
     const stored = id === 'local-codex' ? '' : id;
     if (which === 'worker') {
-      const body = {worker_codex_account_id: stored};
+      const body = {worker_codex_account_id: stored, worker_inherit_session: false};
       if (aoWorkerEngine() !== 'codex') Object.assign(body, {worker_engine: 'codex', worker_model: (spawnDefaultsState.models || {}).codex || '', worker_inherit_session: false});
       aoSaveDefaults(body, 'Queue workers now run on Codex (' + aoCodexAccountRole(id).toLowerCase() + ' account).');
       return;
@@ -96940,6 +96988,18 @@
     if (picker && picker.dataset.userPicked !== '1' && [...picker.options].some(o => o.value === id)) picker.value = id;
     aoSaveDefaults({engine: 'codex', codex_account_id: stored},
       'New sessions now start on Codex (' + aoCodexAccountRole(id).toLowerCase() + ' account).');
+  }
+  function aoSetAntigravityAccount(id, which) {
+    const role = id === 'secondary' ? 'Secondary' : 'Primary';
+    if (which === 'worker') {
+      const body = {worker_antigravity_account_id: id, worker_inherit_session: false};
+      if (aoWorkerEngine() !== 'antigravity') Object.assign(body, {worker_engine: 'antigravity', worker_model: (spawnDefaultsState.models || {}).antigravity || ''});
+      aoSaveDefaults(body, 'Queue workers now run on Antigravity (' + role + ').');
+      return;
+    }
+    const picker = document.getElementById('antigravityAccountSelect');
+    if (picker && picker.dataset.userPicked !== '1') picker.value = id;
+    aoSaveDefaults({engine: 'antigravity', antigravity_account_id: id}, 'New sessions now start on Antigravity (' + role + ').');
   }
   function aoSetDefault(engine, which) {
     const model = (spawnDefaultsState.models || {})[engine] || '';
@@ -97140,6 +97200,15 @@
         + '<span class="ao-account-role">' + role + '</span><span>' + escapeHtml(r.plan || '') + '</span><span class="ao-account-left">' + left + '</span></span>';
     }).join('') + '</span>';
   }
+  function aoAntigravityAccount(which) {
+    const key = which === 'worker' && spawnDefaultsState.worker_inherit_session !== true ? 'worker_antigravity_account_id' : 'antigravity_account_id';
+    return spawnDefaultsState[key] === 'secondary' ? 'secondary' : 'primary';
+  }
+  function aoAntigravityAccountsHtml() {
+    return '<span class="ao-accounts">' + [['Primary', 'Google Cloud'], ['Secondary', 'Google OAuth']].map(([role, label]) =>
+      '<span class="ao-account" title="' + label + ' · access and usage are checked at launch"><span class="ao-account-role">' + role + '</span><span>' + label + '</span></span>'
+    ).join('') + '</span>';
+  }
   // One row per supported engine: what it is, its state, and one action.
   // Which engine sessions and workers start on is chosen on the Agents page.
   function aoEngineTile(r) {
@@ -97153,10 +97222,11 @@
       + '<span class="ao-eng-name">' + escapeHtml(r.meta.label) + '</span>'
       + '<span class="ao-state' + tone + '"><span class="eng-pill-dot"></span>' + label + '</span>'
       + (kind === 'ready' && r.engine === 'codex' ? aoCodexAccountsHtml() : '')
+      + (r.installed && r.engine === 'antigravity' ? aoAntigravityAccountsHtml() : '')
       + '<button type="button" class="ao-q-btn ao-eng-action" data-ao-setup="' + r.engine + '" aria-label="' + escapeHtml(cta + ' ' + r.meta.label) + '">' + cta + '</button></div>';
   }
   // Engine picker for a launch default. Lists ready engines that can take the
-  // role; with two Codex accounts, each account is its own choice.
+  // role; accounts are separate choices for engines that support them.
   function aoEnginePick(which, current, account) {
     const allowed = which === 'worker' ? ENGINE_HUB_WORKER_ENGINES : SPAWN_DEFAULT_ENGINES;
     const ready = (_engHubData ? _engHubRows() : []).filter(r => r.state === 'ready' && allowed.includes(r.engine)).map(r => r.engine);
@@ -97166,6 +97236,7 @@
     const opts = [];
     for (const e of engines) {
       if (e === 'codex' && accounts.length > 1) accounts.forEach(id => opts.push(['codex|' + id, aoEngineLabel(e) + ' · ' + aoCodexAccountRole(id), current === 'codex' && account === id]));
+      else if (e === 'antigravity') ['primary', 'secondary'].forEach(id => opts.push(['antigravity|' + id, 'Antigravity · ' + (id === 'primary' ? 'Primary' : 'Secondary'), current === e && aoAntigravityAccount(which) === id]));
       else opts.push([e, aoEngineLabel(e), e === current]);
     }
     return '<select class="ao-select ao-def-engine" data-ao-pick="' + which + '" aria-label="' + (which === 'worker' ? 'Queue worker engine' : 'New session engine') + '">'
@@ -97190,7 +97261,8 @@
       + aoEnginePick('session', s.engine, aoCodexSessionAccount())
       + aoModelSelect('session-model', s.engine, (s.models || {})[s.engine] || '') + aoEffortSelect('session-effort', s.engine, s.reasoning_effort || '') + '</div>';
     const we = s.worker_engine || s.engine;
-    const wAcct = aoWorkerEngine() === 'codex' && aoCodexAccounts().size > 1 ? ' · ' + aoCodexAccountRole(aoCodexWorkerAccount()) + ' account' : '';
+    const wAcct = aoWorkerEngine() === 'antigravity' ? ' · ' + (aoAntigravityAccount('worker') === 'secondary' ? 'Secondary · Google OAuth' : 'Primary · Google Cloud')
+      : aoWorkerEngine() === 'codex' && aoCodexAccounts().size > 1 ? ' · ' + aoCodexAccountRole(aoCodexWorkerAccount()) + ' account' : '';
     const applyAll = '<button type="button" class="ao-q-btn" data-ao-apply-all>Apply to all queues</button>';
     const worker = '<div class="ao-def-row"><span class="ao-def-label">Queue workers</span>' + aoChipsHtml('worker') + '</div>'
       + '<div class="ao-def-row ao-def-fine"><span class="ao-def-label"></span>' + (inherit ? '' : aoMono(we) + aoEnginePick('worker', we, aoCodexWorkerAccount())
@@ -97247,7 +97319,7 @@
     const s = spawnDefaultsState;
     const sig = JSON.stringify([rows.map(r => [r.engine, r.state, r.installed, r.auth, r.limited, r.isDefault, r.isWorkerDefault]),
       getTopSpawnPicks().map(p => [p.engine, p.model, p.effort]),
-      s.engine, s.models, s.reasoning_effort, s.worker_engine, s.worker_model, s.worker_reasoning_effort, s.worker_inherit_session, s.auto_compact_k, s.codex_account_id, s.worker_codex_account_id, qd, _agentsOverviewCodex]);
+      s.engine, s.models, s.reasoning_effort, s.worker_engine, s.worker_model, s.worker_reasoning_effort, s.worker_inherit_session, s.auto_compact_k, s.codex_account_id, s.worker_codex_account_id, s.antigravity_account_id, s.worker_antigravity_account_id, qd, _agentsOverviewCodex]);
     if (sig === _agentsOverviewSig) return;
     if (document.activeElement && document.activeElement.closest?.('.agents-overview :is(select, input)')) return;   // don't yank an open picker
     _agentsOverviewSig = sig;
@@ -97310,6 +97382,7 @@
   }
   mountAgentsOverview();
   document.getElementById('codexAccountSelect')?.addEventListener('change', event => { event.target.dataset.userPicked = '1'; try { renderNsAdvisor(); } catch (_) {} });
+  document.getElementById('antigravityAccountSelect')?.addEventListener('change', event => { event.target.dataset.userPicked = '1'; try { renderNsAdvisor(); } catch (_) {} });
 
   function settingsModalFocusables() {
     if (!$settingsModal) return [];
@@ -97995,7 +98068,7 @@
     if (!wrap) return;
     wrap.hidden = !window.__cccEnginesFirstRun || !_engHubData;
     const summary = document.getElementById('engFirstRunDefaultSummary');
-    if (summary) summary.textContent = spawnEngineLabelWithAccount(spawnDefaultsState.engine, spawnDefaultsState.codex_account_id || '') + ' · '
+    if (summary) summary.textContent = spawnEngineLabelWithAccount(spawnDefaultsState.engine, spawnDefaultsState[spawnDefaultsState.engine + '_account_id'] || '') + ' · '
       + ((spawnDefaultsState.models || {})[spawnDefaultsState.engine] || 'Engine default model');
   }
   function refreshEnginesFirstRunFoot() {

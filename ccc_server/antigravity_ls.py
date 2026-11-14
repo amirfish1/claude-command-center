@@ -65,7 +65,7 @@ def register_from_env(env=None, registry_dir=None):
     token = (env.get("ANTIGRAVITY_CSRF_TOKEN") or "").strip()
     if not (_UUID_RE.match(cid) and _ADDR_RE.match(addr) and token):
         return None
-    path = _entry_path(cid, registry_dir)
+    path = _entry_path(cid, registry_dir or env.get("CCC_ANTIGRAVITY_LS_DIR"))
     entry = {"conversationId": cid, "address": addr, "token": token,
              "registeredAt": time.time()}
     try:

@@ -21,7 +21,8 @@ from .settings_changes import FIELDS, WORKER_FIELDS, model_ids, safe, HIDDEN, ki
 LIMIT = 50
 MISSING = {'present': False}
 PUBLICATION = threading.local()
-MACHINE = set(FIELDS) | {'models', 'worker_overrides', 'worker_fallback', 'model_profiles', 'disabled_engines'}
+ACCOUNT_FIELDS = {'antigravity_account_id', 'worker_antigravity_account_id'}
+MACHINE = ACCOUNT_FIELDS | set(FIELDS) | {'models', 'worker_overrides', 'worker_fallback', 'model_profiles', 'disabled_engines'}
 QUEUE = {'engine', 'model', 'effort', 'fallback_to_default_worker', 'headroom_dispatch'}
 
 
@@ -75,6 +76,10 @@ def atomic(path, value):
 
 def approved(core, key, value):
     """Exact shapes only: unknown metadata/custom identifiers are not retained."""
+    if key == "worker_codex_account_id":
+        return value == ""
+    if key in ACCOUNT_FIELDS:
+        return isinstance(value, str) and value in ("", "primary", "secondary")
     models = model_ids(core)
     if key in FIELDS or key in QUEUE:
         typ = 'boolean' if key in ('fallback_to_default_worker', 'headroom_dispatch') else kind(key)
@@ -84,7 +89,9 @@ def approved(core, key, value):
     if key == 'models':
         return isinstance(value, dict) and all(k in core._ORCHESTRATION_SPAWN_ENGINES and safe(v, 'model', core, models) != HIDDEN for k,v in value.items())
     if key == 'worker_overrides':
-        return isinstance(value, dict) and set(value) == set(WORKER_FIELDS) and all(approved(core,k,v) for k,v in value.items())
+        return (isinstance(value, dict) and set(WORKER_FIELDS) <= set(value)
+                and set(value) <= set(WORKER_FIELDS) | set(core._WORKER_ACCOUNT_FIELDS)
+                and all(approved(core,k,v) for k,v in value.items()))
     if key in ('worker_fallback', 'model_profiles'):
         if not isinstance(value, dict): return False
         if key == 'model_profiles':
@@ -317,6 +324,11 @@ def validate_restore(core,scope,candidate,changes):
     for prefix in ('','worker_'):
         engine=candidate.get(prefix+'engine') or 'claude'
         if engine not in core._ORCHESTRATION_SPAWN_ENGINES or core._validate_reasoning_effort(candidate.get(prefix+'reasoning_effort',''),engine,strict=True) is None: raise ValueError('Restored engine/effort is no longer compatible')
+    for key in ACCOUNT_FIELDS:
+        if key in candidate and not approved(core,key,candidate[key]):
+            raise ValueError('Restored Antigravity account is invalid')
+    if any(key in keys for key in ACCOUNT_FIELDS):
+        core._publish_antigravity_worker_accounts(candidate)
     disabled=candidate.get('disabled_engines')
     if isinstance(disabled,list) and any(e and e in disabled for e in (candidate.get('engine','claude'),candidate.get('worker_engine'))):
         raise ValueError('A restored default engine cannot also be disabled')
@@ -342,4 +354,4 @@ def validate_restore(core,scope,candidate,changes):
     if model and (core._model_policy_blocks(model) or engine and not core._model_catalog_allows_model(engine,model)): raise ValueError('Restored worker model is no longer allowed')
     if candidate.get('worker_inherit_session') is True:
         effective=core._materialize_worker_defaults(copy.deepcopy(candidate))
-        if any(effective.get(k)!=candidate.get(k) for k in WORKER_FIELDS): raise ValueError('Stored inheritance snapshot no longer matches its session sources')
+        if any(effective.get(k)!=candidate.get(k) for k in (*WORKER_FIELDS, *core._WORKER_ACCOUNT_FIELDS) if k in candidate): raise ValueError('Stored inheritance snapshot no longer matches its session sources')

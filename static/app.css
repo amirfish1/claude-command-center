@@ -34383,6 +34383,9 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
 [data-launch-preview] { min-width: 0; overflow-wrap: anywhere; }
 [data-launch-preview] h3 { margin: 0 0 8px; font-size: 15px; }
 [data-launch-preview] h4 { margin: 18px 0 6px; font-size: 13px; }
+.ao-launch-preview { margin: 12px 0; }
+.ao-launch-preview > summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
+.ao-launch-preview > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .settings-launch-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .settings-launch-toolbar select { flex: 1 1 180px; min-width: 0; max-width: 100%; }
 .settings-launch-output { font-size: 12px; line-height: 1.6; }
@@ -34697,7 +34700,7 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 #settingsPane .settings-scope-container, #settingsPane .settings-section-note { display: none !important; }
 .ao-sub:empty { display: none; }
 .agents-overview .ao-def-row select.ao-select { max-width: 190px !important; flex: 0 1 auto; }
-.agents-overview .ao-def-row select.ao-def-engine { font-weight: 650; margin-right: 0; }
+.agents-overview .ao-def-row select.ao-def-engine { font-weight: 650; margin-right: 0; max-width: min(100%, 230px) !important; }
 
 /* Narrow layout (bottom nav present): the hamburger menu already lists every
    app, so the left app rail is dropped and everything offset by it collapses. */

@@ -15,6 +15,16 @@ def _field(value, source, explanation, verified):
             'certainty': ('ambient' if not value or value in ('auto', 'adaptive') else 'resolved') if verified else ('configured' if value else 'unresolved')}
 
 
+def _account_fields(defaults, engine, worker=False):
+    if engine != 'antigravity':
+        return {}
+    key = 'worker_antigravity_account_id' if worker and not defaults.get('worker_inherit_session') else 'antigravity_account_id'
+    account = defaults.get(key) or 'primary'
+    label = {'primary': 'Primary · Google Cloud', 'secondary': 'Secondary · Google OAuth'}.get(account, 'Unavailable account')
+    return {'account': _field(label, 'worker_default' if key.startswith('worker_') else 'session_default',
+                              'The account stays attached to the conversation. Authentication is checked at launch; this preview does not test provider access.', False)}
+
+
 def _fallback(defaults, conf, facts):
     raw = defaults.get('worker_fallback')
     policy = facts.get('policy', raw)
@@ -48,6 +58,7 @@ def session_plan(defaults, facts=None):
     return {'id': 'session', 'label': 'New session · saved defaults',
             'basis': 'consumer' if verified else 'configuration_only',
             'fields': {
+                **_account_fields(defaults, engine),
                 'engine': _field(engine, 'session_default', 'Saved new-session engine.', verified),
                 'model': _field(model, facts.get('model_source') or ('model_policy' if verified and model != configured_model else 'session_default'),
                                 facts.get('model_explanation') or ('Model-policy substitution used by the session consumer.' if verified and model != configured_model else 'Saved model for this engine; blank lets the engine decide.'), verified),
@@ -95,6 +106,7 @@ def worker_plan(defaults, conf=None, facts=None, queue=None):
             'label': 'Workers · no queue pins' if queue is None else 'Queue · ' + queue,
             'basis': 'consumer' if verified else 'configuration_only',
             'fields': {
+                **_account_fields(defaults, engine, worker=True),
                 'engine': _field(engine, engine_source, 'Queue engine pin wins, then saved worker engine, then WatchTower availability fallback.', verified),
                 'model': _field(model, model_source, 'Usable queue model pin wins, then a worker model paired with this engine, then its shared model. Consumer policy and launch safeguards can substitute or omit it.', verified),
                 'effort': _field(effort, effort_source, 'Queue effort pin wins, then worker effort; the launch consumer omits catalog-incompatible effort.', verified)},

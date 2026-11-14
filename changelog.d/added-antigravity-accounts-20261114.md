@@ -1,0 +1,1 @@
+Support Primary (Google Cloud) and Secondary (personal Google OAuth) Antigravity accounts across session and worker defaults, the composer, launch policy and previews, CLI/API launches, replies and continuations. Keep credentials separate and preserve each conversation's account.
