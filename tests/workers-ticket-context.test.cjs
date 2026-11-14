@@ -159,3 +159,12 @@ test('failed send reports an error and releases the pending guard for retry', as
   assert.equal(sends,2);
   assert.deepEqual(errors,['Try again','Try again']);
 });
+
+test('pending Devin workers retire when their prefixed session card appears', () => {
+  const ctx = setup({_uxqHealthCache:{wt_workers:[{worker_id:'devin-1',session_id:'slug',alive:true}]}});
+  const item = {ref:'TEST-3',status:'in_progress'};
+  assert.equal(ctx._workersPendingWorkers([{item}]).length,1);
+  ctx._workersTicketSessions.set('TEST-3',{cards:[{session_id:'devincli-slug'}]});
+  assert.equal(ctx._workersPendingWorkers([{item}]).length,0);
+  assert.equal(ctx._workersPendingWorkers([{item:{...item,status:'closed'}}]).length,1);
+});

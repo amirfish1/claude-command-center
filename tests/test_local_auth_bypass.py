@@ -48,6 +48,17 @@ class TestProxySecretUnit(unittest.TestCase):
         census = patch.object(server, "build_session_census", return_value={"ok": True})
         census.start()
         self.addCleanup(census.stop)
+        # Authentication assertions need a ready endpoint, independent of a
+        # previous test's cache or the production census warm-up thread.
+        from ccc_server.census_readiness import CensusCache
+        cache = CensusCache()
+        cache_patch = patch.object(server, "_SESSION_CENSUS_CACHE", cache)
+        cache_patch.start()
+        self.addCleanup(cache_patch.stop)
+        deadline = time.monotonic() + 2
+        while cache.get(None, server.build_session_census)[1] != 200:
+            self.assertLess(time.monotonic(), deadline, "fixture census did not warm")
+            time.sleep(.001)
 
         # Save server globals
         self._orig_allowed_origins = list(server.ALLOWED_ORIGINS)

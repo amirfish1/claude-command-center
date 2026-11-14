@@ -47,7 +47,7 @@ class ConvViewToggleTest(unittest.TestCase):
         # User asks remain expandable; assistant commentary now stays fully
         # readable throughout the turn, including merged engine turns.
         self.assertNotIn(".event.assistant:has(~ .event.assistant .assistant-text) .assistant-text:not(.cc-open)", css)
-        rule = re.search(r"\.event\.user_text:not\(\.cc-open\):not\(:has\(img\)\) \.user-msg \{([^}]*)\}", css)
+        rule = re.search(r"\.event\.user_text:not\(\.peer-message\):not\(\.cc-open\):not\(:has\(img\)\) \.user-msg \{([^}]*)\}", css)
         self.assertIsNotNone(rule)
         self.assertIn("-webkit-line-clamp: 2;", rule.group(1))
 

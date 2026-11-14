@@ -4689,7 +4689,6 @@ FILE_CATEGORIES = {
                       ".xlsx", ".xls", ".csv", ".ods", ".numbers"},
     "presentations": {".pptx", ".ppt", ".key", ".odp"},
     "markdown":      {".md", ".mdx"},
-    "text":          {".txt", ".log", ".json"},
     "html":          {".html", ".htm"},
 }
 FILE_EXT_TO_CATEGORY = {
@@ -4697,11 +4696,16 @@ FILE_EXT_TO_CATEGORY = {
 }
 
 
-def _categorize_file_target(target):
+# Inert previews may read reports without widening the OS opener allow-list.
+PREVIEW_TEXT_EXTENSIONS = frozenset({".txt", ".log", ".json"})
+
+
+def _categorize_file_target(target, *, preview=False):
     """Return the category name for `target` (a path or URL), or None
     if its extension is not in the whitelist. Case-insensitive on the
     extension. URLs lose any query string / fragment before the lookup
-    so `foo.pdf?token=…` still classifies as `pdfs`."""
+    so `foo.pdf?token=…` still classifies as `pdfs`. Inert folder/media
+    previews opt into text reports with `preview=True`; OS openers do not."""
     if not target:
         return None
     s = target
@@ -4711,6 +4715,8 @@ def _categorize_file_target(target):
             s = s.split(sep, 1)[0]
     # os.path.splitext handles trailing-dot / no-dot cleanly.
     _, ext = os.path.splitext(s)
+    if preview and ext.lower() in PREVIEW_TEXT_EXTENSIONS:
+        return "text"
     return FILE_EXT_TO_CATEGORY.get(ext.lower())
 
 
@@ -7710,7 +7716,7 @@ def _browse_folder_for_viewer(raw_path):
                         "name": child.name,
                         "path": str(child),
                         "size": child.stat().st_size,
-                        "category": _categorize_file_target(child.name),
+                        "category": _categorize_file_target(child.name, preview=True),
                     })
             except OSError:
                 continue
@@ -35270,7 +35276,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": resolved.get("error", "not found")}, status)
                 return
             file_path = Path(resolved["path"])
-            media_category = _categorize_file_target(str(file_path))
+            media_category = _categorize_file_target(str(file_path), preview=True)
             if media_category not in ("videos", "html", "images", "pdfs", "markdown", "text") or not file_path.is_file():
                 self.send_json({"ok": False, "error": "not a streamable media file"}, 404)
                 return

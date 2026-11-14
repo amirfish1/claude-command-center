@@ -19100,7 +19100,7 @@
     } else {
       const planned = valid && assessment.remaining_actions[0];
       if (planned && (!hasUserAction || planned.owner !== 'user')) {
-        const label = planned.owner === 'agent' ? 'My next step' : planned.owner === 'user' ? 'Your next step'
+        const label = planned.owner === 'agent' ? 'The next step I am doing next without waiting for an ack' : planned.owner === 'user' ? 'Your next step'
           : planned.owner === 'external' ? 'Waiting on' : 'Next step';
         rows.push('<div class="ssb-row ssb-plan"><span class="ssb-key">' + label + '</span>' + escapeHtml(planned.text) + '</div>');
       } else if (!hasUserAction && (!valid || reasons.length)) {

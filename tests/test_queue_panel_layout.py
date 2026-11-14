@@ -244,10 +244,11 @@ class TestQueuePanelLayout(unittest.TestCase):
         devincli-<slug>, not just WT's raw session_id (CCC-1180)."""
         app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
         block = app_js[
-            app_js.index("_wtPending = ("):app_js.index("_wtWarmHealthForWorkersLane")]
+            app_js.index("function _workersPendingWorkers("):app_js.index("function _workersPendingState(")]
         self.assertIn("'devincli-'", block)
         self.assertIn("worker_session_map", block)
-        self.assertIn("_knownSids", block)
+        self.assertIn("represented", block)
+        self.assertIn("_workersPendingWorkers()", app_js)
 
     def test_main_sidebar_replaces_merge_with_shared_queues_tab(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
@@ -257,7 +258,7 @@ class TestQueuePanelLayout(unittest.TestCase):
             app_js.index("const _tabEmpty =", app_js.index("const _sidebarTab = (() => {"))
         ]
         # The saved tab key is validated by normalizeSidebarTabKey().
-        self.assertIn("normalizeSidebarTabKey(t)", tab_block)
+        self.assertIn("normalizeSidebarTabKey(window.CCCNavigation.getTab())", tab_block)
         normalize = app_js[
             app_js.index("function normalizeSidebarTabKey(t) {"):
             app_js.index("function ff(name)", app_js.index("function normalizeSidebarTabKey(t) {"))

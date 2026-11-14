@@ -19678,7 +19678,7 @@
     } else {
       const planned = valid && assessment.remaining_actions[0];
       if (planned && (!hasUserAction || planned.owner !== 'user')) {
-        const label = planned.owner === 'agent' ? 'My next step' : planned.owner === 'user' ? 'Your next step'
+        const label = planned.owner === 'agent' ? 'The next step I am doing next without waiting for an ack' : planned.owner === 'user' ? 'Your next step'
           : planned.owner === 'external' ? 'Waiting on' : 'Next step';
         rows.push('<div class="ssb-row ssb-plan"><span class="ssb-key">' + label + '</span>' + escapeHtml(planned.text) + '</div>');
       } else if (!hasUserAction && (!valid || reasons.length)) {
@@ -56421,8 +56421,8 @@
     const approval = question.replace(/^\s*\[Q\d+(?::[a-z0-9-]+)?\]\s*/i, '').trim();
     const binary = /^approve\s+[^?]+\?$/i.test(approval) && !/[\r\n]/.test(approval)
       && !/\bor\b/i.test(approval.replace(/\bno\s+[^,?]+/gi, '')) && approval.length <= 600
-      ? [{label:'Approve', reply:(tag ? tag + ' ' : '') + 'Yes — ' + approval.replace(/\?$/, '.')},
-         {label:'Decline', reply:(tag ? tag + ' ' : '') + 'No — do not proceed with this request: ' + approval}]
+      ? [{label:'Approve', reply:(tag ? tag + ' ' : '') + 'Yes: ' + approval.replace(/\?$/, '.')},
+         {label:'Decline', reply:(tag ? tag + ' ' : '') + 'No, do not proceed with this request: ' + approval}]
       : [];
     return (actions.length ? actions : literal ? decisionQuickActions(literal).map(choice => ({...choice, reply:(tag && !choice.reply.includes(tag) ? tag + ' ' : '') + choice.reply})) : binary)
       .filter(action => action.reply && (!tag || action.reply.includes(tag))).slice(0, 4);

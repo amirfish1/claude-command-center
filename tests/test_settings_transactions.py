@@ -37,7 +37,7 @@ def api(tmp_path, monkeypatch):
     monkeypatch.setattr(server.subprocess, 'Popen', forbidden)
     effects = []
     monkeypatch.setattr(server, '_log_activity', lambda *a, **kw: effects.append('confirmation'))
-    monkeypatch.setattr(server, '_schedule_restart', lambda: effects.append('restart'))
+    monkeypatch.setattr(server, '_schedule_restart', lambda **kwargs: effects.append('restart'))
     monkeypatch.setattr(server, '_reconcile_once_async', lambda: effects.append('reconcile'))
     monkeypatch.setattr(server, '_wt_log_queue_config_change', lambda *a, **kw: effects.append('log'))
     # Writing setters must never be called, even when WT is importable.
@@ -133,8 +133,15 @@ def test_replace_failure_preserves_original_and_skips_effects(api, monkeypatch, 
     assert not list(base.glob('*.tmp'))
 
 
-def test_network_revision_conflict_old_clients_security_and_restart_boundary(api):
+def test_network_revision_conflict_old_clients_security_and_restart_boundary(api, monkeypatch):
     request, base, effects=api; path=base/'network.json'
+    restarted = threading.Event()
+    def restart(**metadata):
+        assert metadata['reason'] == 'network-bind-change'
+        assert isinstance(metadata['caller'], dict)
+        effects.append('restart')
+        restarted.set()
+    monkeypatch.setattr(server, '_schedule_restart', restart)
     code, first=request('/api/network-config'); assert code == 200 and first['revision']
     assert not path.exists() and not (base/'preferences.lock').exists()
     code, saved=request('/api/network-config', {'bind_host':'127.0.0.1','trust_tailnet':True,'expected_revision':first['revision'],'unapproved':'ignored'})
@@ -148,6 +155,8 @@ def test_network_revision_conflict_old_clients_security_and_restart_boundary(api
     # Legacy callers omit a token and retain serialized last-writer behavior.
     code, saved=request('/api/network-config', {'bind_host':'0.0.0.0'})
     assert code == 200 and saved['restart'] is True
+    # The route flushes its response before scheduling the restart.
+    assert restarted.wait(2), 'bind change never scheduled a restart'
     assert effects == ['restart']
 
 

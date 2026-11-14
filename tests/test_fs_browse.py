@@ -76,3 +76,14 @@ def test_text_reports_stream_as_inert_text_with_existing_file_boundary():
         httpd.shutdown()
         httpd.server_close()
         thread.join(2)
+
+
+def test_text_preview_does_not_expand_os_opener_categories(tmp_path):
+    for ext in ('.txt', '.log', '.json'):
+        assert server._categorize_file_target('/tmp/report' + ext) is None
+        assert server._categorize_file_target('/tmp/report' + ext, preview=True) == 'text'
+        report = tmp_path / ('report' + ext)
+        report.write_text('Inert report')
+        assert not server._safe_local_file_open_path(report)
+    for ext in ('.sh', '.py', '.app', '.command', '.bin'):
+        assert server._categorize_file_target('/tmp/unsafe' + ext, preview=True) is None

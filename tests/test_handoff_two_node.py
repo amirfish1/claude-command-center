@@ -258,11 +258,16 @@ class TestHandoffTwoNode(unittest.TestCase):
             "session_id": sid2, "dest_node_id": self.node_b.node_id})
         self.assertTrue(result["ok"], result)
         self.node_a.stop()
-        time.sleep(0.3)
         # B lists and can read the conversation with history intact — no
-        # dependence on A being alive.
-        payload = self.node_b.get("/api/sessions?all=1")
-        ids = {r.get("session_id") for r in payload.get("sessions", [])}
+        # dependence on A being alive. Its archive refresh is asynchronous:
+        # wait for adoption rather than assuming a fixed 300ms is enough.
+        deadline = time.monotonic() + 10
+        while True:
+            payload = self.node_b.get("/api/sessions?all=1")
+            ids = {r.get("session_id") for r in payload.get("sessions", [])}
+            if sid2 in ids or time.monotonic() >= deadline:
+                break
+            time.sleep(.05)
         self.assertIn(sid2, ids)
         dest = (self.node_b.home / ".claude" / "projects" /
                 federation.encode_project_slug(str(self.fleet.repo_b)) /
