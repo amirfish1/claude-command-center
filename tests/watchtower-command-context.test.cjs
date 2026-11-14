@@ -124,3 +124,76 @@ test('real conversation renderers update existing chips when a filing result arr
     assert.deepEqual(outcomes, [false, true].map(() => ({ before: 'wt add · APP', after: 'wt add · APP-42', chips: ['wt add · APP-42'] })));
   } finally { await browser.close(); }
 });
+
+test('standalone Claude filing groups keep chips and bounded previews until expanded', async () => {
+  const marker = '\n})();\n\n/* === Hero: Fleet Pulse === */';
+  const exposed = app.replace(marker, '\nwindow.__wtContextTest={renderConversationEvents,activePaneId,getConvViewForPane};' + marker);
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      const url = new URL(request.url());
+      if (request.isNavigationRequest()) return request.respond({ status: 200, contentType: 'text/html',
+        body: fs.readFileSync(require.resolve('../static/index.html'), 'utf8') });
+      if (url.pathname === '/static/app.js') return request.respond({ status: 200, contentType: 'application/javascript', body: exposed });
+      return request.respond({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+    await page.goto('http://ccc-context.test/', { waitUntil: 'load' });
+    await page.waitForFunction(() => !!window.__wtContextTest);
+    await page.addStyleTag({ content: fs.readFileSync(require.resolve('../static/app.css'), 'utf8') });
+    // Keep the real renderer/view but remove unrelated dashboard layout.
+    await page.evaluate(() => {
+      const view = window.__wtContextTest.getConvViewForPane(window.__wtContextTest.activePaneId());
+      const host = view.closest('.conv-pane');
+      host.style.cssText = 'position:fixed;inset:0;display:block;overflow:auto;background:var(--bg);z-index:999999';
+      document.body.append(document.getElementById('convSplit'));
+      view.style.cssText = 'display:block;width:100%;height:100%;box-sizing:border-box';
+    });
+    for (const width of [1100, 390]) {
+      await page.setViewport({ width, height: 700 });
+      for (const mode of ['normal', 'compact']) {
+        const outcome = await page.evaluate(mode => {
+          const h = window.__wtContextTest, paneId = h.activePaneId(), view = h.getConvViewForPane(paneId);
+          document.body.classList.toggle('conv-compact', mode === 'compact');
+          view.replaceChildren();
+          const command = 'wt add -q APP --title "Repair the reply label" --text "' + 'Long acceptance details. '.repeat(100) + 'END OF COMMAND"';
+          const output = 'FILED: APP-42 Repair the reply label ' + 'Long result details. '.repeat(100) + 'END OF RESULT';
+          h.renderConversationEvents([{ type: 'user_text', line: 920000, text: 'Check this ticket' },
+            { type: 'assistant', line: 920001, blocks: [{ kind: 'tool_use', name: 'Bash', id: 'standalone-filing', detail: command, command }] }],
+          paneId, { initialLoad: true });
+          const pending = view.querySelector('.tcg-orch .kimi-tg-orch-chip')?.dataset.ccOrch;
+          h.renderConversationEvents([{ type: 'tool_result', line: 920002, tool_use_id: 'standalone-filing', text: output }], paneId, { initialLoad: true });
+          const group = view.querySelector('.tool-call-group'), header = group.querySelector('.tool-call-group-header');
+          const chip = header.querySelector('.tcg-orch .kimi-tg-orch-chip');
+          const fields = [...header.querySelectorAll('.tcg-label, .tcg-result')];
+          return { pending, chip: chip?.dataset.ccOrch, visible: chip?.checkVisibility(),
+            closed: group.classList.contains('collapsed'), height: header.getBoundingClientRect().height,
+            bounded: fields.every(el => {
+              const style = getComputedStyle(el);
+              const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.5;
+              return style.webkitLineClamp === '2' && el.getBoundingClientRect().height <= lineHeight * 2 + 1;
+            }),
+            overflow: header.scrollWidth > view.clientWidth,
+            fullCommand: group.querySelector('.tool-detail')?.textContent.includes('END OF COMMAND'),
+            fullResult: group.querySelector('.tool-result-output')?.textContent.includes('END OF RESULT') };
+        }, mode);
+        assert.equal(outcome.pending, 'wt add · APP');
+        assert.equal(outcome.chip, 'wt add · APP-42');
+        assert.equal(outcome.visible, true);
+        assert.equal(outcome.closed, true);
+        assert.equal(outcome.bounded, true, JSON.stringify(outcome));
+        assert.ok(outcome.height < 150, JSON.stringify(outcome));
+        assert.equal(outcome.overflow, false);
+        assert.equal(outcome.fullCommand, true);
+        assert.equal(outcome.fullResult, true);
+        await page.$eval('.tool-call-group', el => el.scrollIntoView({ block: 'start' }));
+        if (process.env.CCC_WT_SCREENSHOT_DIR) await (await page.$('.tool-call-group')).screenshot({ path: process.env.CCC_WT_SCREENSHOT_DIR + '/native-' + mode + '-' + width + '.png' });
+        await page.click('.tool-call-group-header');
+        assert.equal(await page.$eval('.tool-call-group-body', el => el.checkVisibility()), true);
+        assert.equal(await page.$eval('.tcg-label', el => getComputedStyle(el).webkitLineClamp), 'none');
+        assert.equal(await page.$eval('.tcg-result', el => getComputedStyle(el).webkitLineClamp), 'none');
+      }
+    }
+  } finally { await browser.close(); }
+});

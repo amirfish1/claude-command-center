@@ -4579,6 +4579,12 @@
     white-space: normal; overflow-wrap: anywhere; opacity: 0.6; font-size: 12px; font-style: italic;
   }
   .conversations-view .tool-call-group-header .tcg-result:empty { display: none; }
+  /* A closed disclosure previews the command and result; expanding it
+     retains the full text. Long ticket bodies must not fill the header. */
+  .conversations-view .tool-call-group.collapsed .tool-call-group-header :is(.tcg-label, .tcg-result):not(:empty) {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
   /* Real time + line number, right-aligned — a run of collapsed "▶ Completed
      X" rows previously carried neither (only a hidden debug-mode ::before),
      reading as anonymous noise with no way to tell when/where each happened. */

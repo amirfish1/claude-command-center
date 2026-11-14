@@ -68131,6 +68131,28 @@
     const codeReads = Number(group.dataset.codeReadCount || 0);
     const calls = Array.from(group.querySelectorAll('.tool-call'));
     const resultEl = group.querySelector('.tcg-result');
+    // Native Claude groups need the same command chips as merged tool
+    // groups, including a lone group with no preceding narration.
+    const header = label.parentElement;
+    const orch = _ccOrchLabels([{ el: group }]);
+    const chipLabels = orch.slice(0, 4).concat(orch.length > 4 ? ['+' + (orch.length - 4)] : []);
+    let chips = header.querySelector('.tcg-orch');
+    if (chipLabels.length) {
+      if (!chips) {
+        chips = document.createElement('span');
+        chips.className = 'tcg-orch kimi-tg-orch';
+        label.before(chips);
+      }
+      if (chips.dataset.labels !== chipLabels.join('|')) {
+        chips.replaceChildren(...chipLabels.map(text => {
+          const chip = document.createElement('span');
+          chip.className = 'kimi-tg-orch-chip';
+          chip.dataset.ccOrch = text;
+          return chip;
+        }));
+        chips.dataset.labels = chipLabels.join('|');
+      }
+    } else if (chips) chips.remove();
     // Kimi-web parity (KIMI-FIXES-16): webui panes get the ToolGroup.vue
     // header shape — "N tool calls · <aggregate status>" — instead of the
     // command-summary sentence. Aggregate from per-row terminal classes.
