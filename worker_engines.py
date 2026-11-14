@@ -587,7 +587,7 @@ class EngineHost:
                     {"replace_queued_id": str(args["replace_queued_id"])}
                     if args.get("replace_queued_id") else {}
                 )
-                return legacy.resume_session_codex(
+                result = legacy.resume_session_codex(
                     args.get("session_id"),
                     args.get("text") or "",
                     steer=bool(args.get("steer")),
@@ -603,6 +603,22 @@ class EngineHost:
                     ),
                     **by_id,
                 )
+                # A drain may outlive the turn being steered. Keep automatic
+                # inject's fallback here: its dashboard caller already returned
+                # a queued receipt and cannot handle this later refusal.
+                if (args.get("steer_fallback") and args.get("steer")
+                        and not args.get("preserve_queued_steer")
+                        and not args.get("from_queue")
+                        and not result.get("ok")
+                        and not result.get("uncertain")
+                        and not result.get("ambiguous")
+                        and result.get("code") in (
+                            "codex_no_active_turn", "codex_steer_unavailable",
+                        )):
+                    return legacy.resume_session_codex(
+                        args.get("session_id"), args.get("text") or "",
+                    )
+                return result
             if operation == "approval":
                 return legacy._codex_app_server_resolve_approval(
                     args.get("session_id"), args.get("decision"),
