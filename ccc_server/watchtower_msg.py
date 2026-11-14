@@ -2156,6 +2156,8 @@ def _inject_text_into_session_router(
             return _core._queue_terminal_input(session_id, text, {"status": "busy"})
     if is_codex and mode == "steer":
         steer_kwargs = {"steer": True}
+        if not preserve_queued_steer:
+            steer_kwargs["_steer_fallback"] = True
         if idempotency_key:
             steer_kwargs["idempotency_key"] = idempotency_key
         steer_kwargs["preserve_queued_steer"] = bool(preserve_queued_steer)

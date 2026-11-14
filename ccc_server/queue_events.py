@@ -2720,6 +2720,7 @@ def resume_session_codex(
     queued_steer_transaction_protocol=None,
     queued_delivery_transaction_protocol=0,
     replace_queued_id=None,
+    _steer_fallback=False,
 ):
     """Resume a dormant Codex thread with a new prompt through the app-server.
 
@@ -2759,6 +2760,7 @@ def resume_session_codex(
                 ),
                 **({"replace_queued_id": str(replace_queued_id)}
                    if replace_queued_id else {}),
+                **({"steer_fallback": True} if _steer_fallback else {}),
             },
             idempotency_key=idempotency_key,
         )

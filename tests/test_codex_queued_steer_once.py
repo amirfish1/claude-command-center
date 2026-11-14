@@ -16,6 +16,74 @@ import pytest
 import server
 
 
+def test_drained_inject_keeps_idle_steer_fallback_once(router_env, monkeypatch, tmp_path):
+    from ccc_worker import WorkerRuntime
+    from control_plane import WorkLedger
+    from worker_engines import EngineHost
+
+    runtime = WorkerRuntime(ledger=WorkLedger(tmp_path / "work.sqlite3"), token="a" * 64)
+    host = EngineHost(runtime)
+    host._module = server
+    runtime._engine_host = host
+    runtime.ledger.set_drain(True, "dashboard restart")
+    router_env.resume.return_value = {"ok": False, "code": "codex_no_active_turn"}
+    monkeypatch.setattr(server, "_codex_wt_app_worker_delivery", lambda *a: None)
+    monkeypatch.setattr(server, "_codex_headless_exec_refusal", lambda *a: None)
+    queued = mock.Mock(return_value={"ok": True, "queued": True, "via": "codex-resume-queue"})
+    monkeypatch.setattr(server, "_queue_codex_resume", queued)
+
+    def route(engine, operation, args, **kwargs):
+        if os.environ.get("CCC_WORKER_PROCESS") == "1":
+            return None
+        return host.execute({"engine": engine, "operation": operation,
+                             "args": args, "idempotency_key": kwargs["idempotency_key"]})
+
+    monkeypatch.setattr(server, "_control_plane_engine_call", route)
+    result = server._inject_text_into_session_router(
+        "drained-session", "substantive handoff", mode="steer", idempotency_key="one-send",
+    )
+    assert result["queued"]
+    router_env.resume.assert_not_called()
+    with mock.patch.dict(os.environ, {"CCC_WORKER_PROCESS": "1"}):
+        runtime.dispatch("drain.set", {"enabled": False})
+    work = runtime.ledger.get(result["work_id"])
+    assert work["state"] == "completed"
+    assert work["result"]["queued"]
+    queued.assert_called_once_with(
+        "drained-session", "substantive handoff",
+        reason="Waiting behind an earlier queued Codex message", only_if_pending=True,
+    )
+    duplicate = host.execute({"engine": "codex", "operation": "resume",
+                              "args": {}, "idempotency_key": "one-send"})
+    assert duplicate["deduplicated"]
+    assert queued.call_count == router_env.resume.call_count == 1
+
+
+@pytest.mark.parametrize("fallback,preserve,response,expected", [
+    (True, False, {"ok": False, "code": "codex_no_active_turn"}, 2),
+    (True, False, {"ok": False, "code": "codex_steer_unavailable"}, 2),
+    (False, False, {"ok": False, "code": "codex_no_active_turn"}, 1),
+    (True, True, {"ok": False, "code": "codex_no_active_turn"}, 1),
+    (True, False, {"ok": False, "code": "codex_no_active_turn", "uncertain": True}, 1),
+    (True, False, {"ok": False, "code": "codex_no_active_turn", "ambiguous": True}, 1),
+    (True, False, {"ok": False, "code": "codex_steer_unknown", "uncertain": True}, 1),
+    (True, False, {"ok": True, "via": "codex-steer"}, 1),
+])
+def test_worker_fallback_respects_explicit_and_uncertain_steers(fallback, preserve, response, expected):
+    from worker_engines import EngineHost
+
+    resume = mock.Mock(side_effect=[response, {"ok": True, "queued": True}])
+    host = object.__new__(EngineHost)
+    host._legacy = lambda: SimpleNamespace(resume_session_codex=resume)
+    host._call("codex", "resume", {
+        "session_id": "worker-session", "text": "handoff", "steer": True,
+        "steer_fallback": fallback, "preserve_queued_steer": preserve,
+    })
+    assert resume.call_count == expected
+    if expected == 2:
+        assert resume.call_args == mock.call("worker-session", "handoff")
+
+
 def _cross_process_claim_worker(
     pending_file, session_id, stale_loaded, claimed, release, released, results,
 ):
