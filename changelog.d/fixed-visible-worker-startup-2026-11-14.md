@@ -1,0 +1,2 @@
+- Show unlisted workers inside the scrollable Workers list with their identity, activity, and an Open session action, without waiting for conversation history. Only a new process without a registered session is Starting, for at most ten seconds; longer launches show Startup delayed.
+- Show clickable chips for tickets currently ready and awaiting a worker directly above the Workers ticket list; omit blocked, deferred, paused, and already claimed work.

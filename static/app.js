@@ -46566,7 +46566,7 @@
     }
     const _trashHtmlForAllTabView = _trashHtml;
 
-    if (_allTabUnfilteredCount > 0) {
+    if (_allTabUnfilteredCount > 0 || _allTabView === 'workers') {
       const _arcGroupingToggle = _arcHasFolderChips && !_isSpecificFolderFilter
         ? '<span class="conv-grouping-toggle" data-role="archived-grouping-toggle">'
             + '<span class="grouping-opt' + (_arcGrouping === 'project' ? ' is-active' : '') + '" data-grouping="project">by project</span>'
@@ -46641,81 +46641,10 @@
       // The strip that replaces the hoisted columns. It names what was folded
       // away so the information is still on screen, just once instead of N
       // times.
-      // A WatchTower worker is a PROCESS first and an engine session second.
-      // `wt` spawns it and the Queues tab's WORKING NOW strip sees it within a
-      // second, but this lane is built from transcripts -- so for the first
-      // 30-60s of a worker's life, the one tab that exists to show workers is
-      // the one place that cannot. Synthesise a row from the worker record for
-      // exactly that window. It is matched on session_id, so the real row
-      // takes over silently the moment its session lands; no row is ever shown
-      // twice and none is filtered.
-      let _wtPending = [];
-      if (_allTabView === 'workers') {
-        const _visibleWorkingClaims = new Set(_workersActivityRows()
-          .filter(row => row.workerState.label === 'Working')
-          .flatMap(row => [row.item.claimed_by, row.item.claimed_session_id]).filter(Boolean));
-        const _knownSids = new Set();
-        _allTabConvs.forEach(c => {
-          const sid = String((c && (c.id || c.session_id)) || '').trim();
-          if (sid) _knownSids.add(sid);
-        });
-        _wtPending = (((_uxqHealthCache && _uxqHealthCache.wt_workers) || [])).filter(w => {
-          if (!w || w.alive === false) return false;
-          const sid = String(w.session_id || '').trim();
-          const wid = String(w.worker_id || '').trim();
-          const mapSid = String((((_uxqHealthCache || {}).worker_session_map) || {})[wid] || '').trim();
-          if (_visibleWorkingClaims.has(wid) || _visibleWorkingClaims.has(sid)) return false;
-          const candidates = [sid, mapSid];
-          // WT stores a devin worker's session_id as the raw CLI slug while
-          // the conversation row id is devincli-<slug> (CCC-1176/CCC-1180) —
-          // without canonicalizing, the pending row never retires even though
-          // the session is already live in the lane.
-          if (String(w.engine || '').toLowerCase() === 'devin'
-              && sid && sid.indexOf('devin') !== 0) {
-            candidates.push('devincli-' + sid);
-          }
-          return !candidates.some(c => c && _knownSids.has(c));
-        });
-        // The health poll only runs for the Queues panel, so on a cold sidebar
-        // this lane would show nothing until the user opened Queues once.
-        _wtWarmHealthForWorkersLane();
-      }
-      let _wtPendingHtml = _wtPending.map(w => {
-        const queue = String(w.queue || '').trim();
-        const wid = String(w.worker_id || '').trim();
-        const idleS = Number(w.idle_seconds);
-        const icon = sessionEngineIconHtml({
-          engine: w.engine, source: w.engine, model: w.model,
-          state: (Number.isFinite(idleS) && idleS < 60) ? 'working' : 'idle',
-        });
-        const startedMs = Date.parse(w.started_at || '');
-        const age = Number.isFinite(startedMs) ? relativeTime(startedMs / 1000) : '';
-        // "starting" is only true for the first minutes; a worker that is
-        // alive but still has no session after that is not starting.
-        const _isFresh = Number.isFinite(startedMs) && (Date.now() - startedMs) < 5 * 60 * 1000;
-        const _pendSid = String(w.session_id || (((_uxqHealthCache || {}).worker_session_map) || {})[wid] || '').trim();
-        return '<div class="conv-item conv-wt-pending" data-role="wt-pending-worker"'
-          + ' data-wt-queue="' + escapeAttr(queue) + '"'
-          + (_pendSid ? ' data-wt-sid="' + escapeAttr(_pendSid) + '"' : '')
-          + ' title="' + escapeAttr((wid || 'This worker') + ' is registered on the '
-              + (queue || 'WatchTower') + ' queue but its session details are not loaded'
-              + (_isFresh ? ' (it may still be starting up).' : ' in this view.')
-              + (_pendSid ? ' Click to try opening its session.' : '')) + '">'
-          // Same nesting as a real row -- .conv-title-row outside .conv-main-row.
-          // The table flattens both with display:contents so the cells below
-          // become grid items of .conv-item and land in the shared columns; get
-          // the order wrong and the row silently opts out of the table.
-          + '<div class="conv-title-row"><div class="conv-main-row">'
-          +   icon
-          +   '<span class="conv-title">' + escapeHtml((queue || 'WatchTower') + ' worker')
-          +     ' <span class="conv-wt-pending-note">' + (_isFresh ? 'starting\u2026' : 'session details loading') + '</span></span>'
-          +   '<div class="conv-meta-col"><span class="conv-wt-pending-id">'
-          +     escapeHtml(wid || 'worker') + '</span></div>'
-          +   '<span class="conv-row-end"><span class="conv-rel" data-role="rel" title="Started">'
-          +     escapeHtml(age) + '</span></span>'
-          + '</div></div>'
-          + '</div>';
-      }).join('');
+      // Process records must remain visible even before session details load.
+      // Their rows live in the same scroll region as ticket activity below.
+      const _wtPending = _allTabView === 'workers' ? _workersPendingWorkers() : [];
+      if (_allTabView === 'workers') _wtWarmHealthForWorkersLane();
       let _workersUniformHtml = '';
       if (_allTabView === 'workers' && (_allTabMainConvs.length || _wtPending.length)) {
         // Fleet pulse: the same four states the list is sectioned by, counted
@@ -46735,7 +46664,7 @@
         const bits = [];
         if (counts['needs-you']) bits.push('<span class="conv-workers-needs"><b>' + counts['needs-you'] + '</b> need' + (counts['needs-you'] === 1 ? 's' : '') + ' you</span>');
         if (_wtPending.length) bits.push('<span class="conv-workers-starting"><b>' + _wtPending.length + '</b> '
-          + (_wtPending.every(w => Date.now() - Date.parse(w.started_at || '') < 5 * 60 * 1000) ? 'starting' : 'loading session details') + '</span>');
+          + 'without a listed ticket</span>');
         if (counts.idle) bits.push('<span class="conv-workers-idle"><b>' + counts.idle + '</b> standing by</span>');
         if (counts.done) bits.push('<span class="conv-workers-done"><b>' + counts.done + '</b> finished</span>');
         const parts = [];
@@ -46752,12 +46681,6 @@
           + ' title="' + escapeAttr('Working now counts sessions mid-turn, the same signal the Queues tab shows. Needs you = alive and waiting on an answer or approval. Standing by = alive with no turn running. Finished = process gone. Engine and cost are stated once here and dropped from rows that match; any row that differs keeps its own glyph.') + '">'
           + (_wkSectionCounts ? '' : live + bits.map(b => sep + b).join('')) + note
           + '</div>';
-        // Starting workers get their own section head so they read as a
-        // state, not as stray rows above the list.
-        if (_wtPendingHtml) {
-          const fresh = _wtPending.every(w => Date.now() - Date.parse(w.started_at || '') < 5 * 60 * 1000);
-          _wtPendingHtml = workerSectionHeaderHtml('starting', _wtPending.length, fresh ? '' : 'Session details loading') + _wtPendingHtml;
-        }
       }
       // CCC-1061: the Workers lane owns TIME. WORKING NOW (who is live right
       // now) and the recent-work list (which tickets moved, with their body
@@ -46778,6 +46701,7 @@
         _wtWarmActivityForWorkersLane();
         _workersActivityHtml = '<div class="conv-workers-activity" data-role="workers-activity">'
           + '<div class="fq-recent-work wa-recent" data-role="workers-recent-work" role="region" aria-label="Worker tickets and sessions">'
+          +   '<div class="workers-awaiting" data-role="workers-awaiting" hidden></div>'
           +   '<div class="fq-recent-rows"></div>'
           + '</div>'
           + '</div>';
@@ -46846,7 +46770,6 @@
         + _workersActivityHtml
         + _arcTools
         + _workersUniformHtml
-        + _wtPendingHtml
         + _allHermesTabBarHtml
         + '<div class="conv-archived-list">' + _arcRows + '</div>'
         + _ideaArchivedHtml
@@ -47889,15 +47812,6 @@
         setSessionDensity($sessionDensityToggle.getAttribute('data-density-lane'), opt.getAttribute('data-session-density'));
         applyRowDensityToggles();
         renderArchiveList(document.getElementById('convSearch')?.value || '', { force: true });
-      });
-    });
-    // A pending worker usually has no session to open; open it only when WT
-    // already knows its session id (the queue view no longer lives in the sidebar).
-    $convList.querySelectorAll('[data-role="wt-pending-worker"]').forEach(el => {
-      el.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const sid = el.getAttribute('data-wt-sid');
-        if (sid && typeof selectConversation === 'function') selectConversation(sid);
       });
     });
     const $currentSessionsModeToggle = $convList.querySelector('[data-role="current-sessions-mode-toggle"]');
@@ -56323,6 +56237,75 @@
         || (item.claimed_session_id && item.claimed_session_id === w.session_id));
     }) || null;
   }
+  function _workersAwaitingTickets(items) {
+    const seen = new Set();
+    return (items || []).filter(item => {
+      const ref = _uxqItemRef(item);
+      if (!ref || seen.has(ref) || item.status !== 'open' || item.closed_at || item._sessionOnly
+          || /^(?:IDEAS|SMALL-BUGS)-\d+$/.test(ref)) return false;
+      // Historical answer delivery does not determine current eligibility.
+      const attention = _uxqTicketAttention({...item, pending_answer:null, history:[]});
+      if (!attention || attention.key !== 'ready') return false;
+      seen.add(ref);
+      return true;
+    }).sort((a, b) => {
+      const rank = item => ({p0:0,p1:1,p2:2,p3:3})[String(item.priority || '').toLowerCase()] ?? (item.lane === 'express' ? 0 : 2);
+      return rank(a) - rank(b) || (Date.parse(a.created_at || '') || 0) - (Date.parse(b.created_at || '') || 0)
+        || _uxqItemRef(a).localeCompare(_uxqItemRef(b), undefined, {numeric:true});
+    });
+  }
+  function _workersPendingWorkers(rows = _workersActivityRows()) {
+    const health = (typeof _uxqHealthCache === 'undefined' ? null : _uxqHealthCache) || {};
+    const represented = new Set();
+    for (const row of rows) {
+      if (row.item.status !== 'in_progress' || row.item.closed_at) continue;
+      [row.item.claimed_by, row.item.claimed_session_id].filter(Boolean).forEach(id => represented.add(id));
+      const sessions = _workersTicketSessions.get(_uxqItemRef(row.item));
+      for (const card of (sessions && sessions.cards) || []) {
+        const sid = card.session_id || card.id;
+        if (sid) represented.add(sid);
+      }
+    }
+    return (health.wt_workers || []).filter(w => w && w.alive === true && !w.released_at)
+      .map(w => ({...w, session_id:w.session_id || (health.worker_session_map || {})[w.worker_id] || ''}))
+      .filter(w => !represented.has(w.worker_id) && !(w.session_id && represented.has(w.session_id))
+        && !represented.has('devincli-' + w.session_id));
+  }
+  function _workersPendingState(worker, now = Date.now()) {
+    const started = Date.parse(worker.started_at || '');
+    const remaining = started + 10000 - now;
+    if (!worker.session_id) {
+      if (remaining > 0 && remaining <= 10000) return {label:'Starting', css:'is-starting',
+        text:'Launching the worker session.', refreshIn:remaining};
+      return {label:Number.isFinite(started) ? 'Startup delayed' : 'Session not registered', css:'is-delayed',
+        text:'The worker process is running, but no session has been registered.'};
+    }
+    const idle = worker.idle_seconds == null ? NaN : Number(worker.idle_seconds);
+    if (Number.isFinite(idle) && idle >= 0) return idle < 60
+      ? {label:'Active', css:'is-active', text:'Recent worker activity. Its session is not attached to a ticket shown above.'}
+      : {label:'Standing by', css:'', text:'The worker process is running with no recent activity.'};
+    return {label:'Session not listed', css:'', text:'The worker session is registered; activity details are unavailable.'};
+  }
+  function _workersPendingHtml(workers) {
+    if (!workers.length) return '';
+    return '<section class="workers-pending-list" aria-label="Workers without listed tickets">'
+      + workerSectionHeaderHtml('unlisted', workers.length, 'Other workers')
+      + workers.map(w => {
+        const state = _workersPendingState(w);
+        const started = Date.parse(w.started_at || '');
+        const age = Number.isFinite(started) ? ' · started ' + _uxqRelTime(w.started_at) : '';
+        const activity = w.idle_seconds != null && Number.isFinite(Number(w.idle_seconds))
+          ? ' · last activity ' + Math.max(0, Math.floor(Number(w.idle_seconds))) + 's ago' : '';
+        return '<div class="workers-pending-entry" data-workers-pending-id="' + escapeAttr(w.worker_id || '') + '">'
+          + '<div class="workers-pending-heading"><strong>' + escapeHtml(w.queue || 'Worker') + '</strong>'
+          + '<span class="workers-pending-state ' + state.css + '">' + escapeHtml(state.label) + '</span></div>'
+          + '<div class="workers-pending-meta">' + escapeHtml((w.worker_id || 'Worker') + age + activity) + '</div>'
+          + '<p>' + escapeHtml(state.text) + '</p>'
+          + (w.session_id ? '<button type="button" class="workers-pending-session" data-workers-pending-session="'
+            + escapeAttr(w.session_id) + '" title="' + escapeAttr('Open session ' + w.session_id) + '">Open session</button>' : '')
+          + '</div>';
+      }).join('') + '</section>';
+  }
   function _workersTicketState(item) {
     if (item.status === 'closed' || item.closed_at) return {label:'Resolved', rank:4, css:'is-resolved'};
     const attention = _uxqTicketAttention(item);
@@ -56447,10 +56430,25 @@
   function _uxqRecentWorkHosts() {
     return document.querySelectorAll('[data-role="workers-recent-work"], #queueRecentWork');
   }
+  let _workersPendingRefreshTimer = null;
   function _uxqRenderRecentWork() {
+    clearTimeout(_workersPendingRefreshTimer);
+    _workersPendingRefreshTimer = null;
     const hosts = _uxqRecentWorkHosts();
     if (!hosts.length) return;
     const rows = _workersActivityRows();
+    const awaiting = _workersAwaitingTickets(_uxqItemsCache.items);
+    const awaitingHtml = awaiting.length ? '<div class="workers-awaiting-label">Awaiting worker <span>' + awaiting.length + '</span></div>'
+      + '<div class="workers-awaiting-chips" role="group" aria-label="Tickets ready for a worker">' + awaiting.map(item => {
+        const ref = _uxqItemRef(item);
+        const title = String(item.title || item.note || item.text || '').split('\n')[0];
+        return '<button type="button" class="workers-awaiting-chip" data-uxq-recent-ref="' + escapeAttr(ref)
+          + '" title="' + escapeAttr(title || ref) + '" aria-label="' + escapeAttr('Open ' + ref + (title ? ': ' + title : '')) + '">'
+          + escapeHtml(ref) + '</button>';
+      }).join('') + '</div>' : '';
+    const pending = _workersPendingWorkers(rows);
+    const deadlines = pending.map(w => _workersPendingState(w).refreshIn).filter(ms => ms > 0);
+    if (deadlines.length) _workersPendingRefreshTimer = setTimeout(_uxqRenderRecentWork, Math.min(...deadlines) + 1);
     const signature = rows.map(r => _uxqItemRef(r.item)).join('|');
     if (_workersTicketRecentSignature !== signature) _scheduleSidebarRender({ lifecycle: true });
     const html = rows.map((row, i) => {
@@ -56507,8 +56505,14 @@
         + '<div class="workers-ticket-session-body"' + (expanded ? '' : ' hidden') + '>' + sessions.html + '</div></div>';
 
 
-    }).join('') || '<div class="fq-recent-empty">No recorded work yet.</div>';
+    }).join('') + _workersPendingHtml(pending)
+      || '<div class="fq-recent-empty">No recorded work yet.</div>';
     hosts.forEach($el => {
+      const $awaiting = $el.querySelector('[data-role="workers-awaiting"]');
+      if ($awaiting) {
+        $awaiting.hidden = !awaiting.length;
+        if ($awaiting.innerHTML !== awaitingHtml) $awaiting.innerHTML = awaitingHtml;
+      }
       const $rows = $el.querySelector('.fq-recent-rows');
       // Skip the write when nothing moved: this runs on every health poll, and
       // a needless innerHTML swap drops :hover and restarts the enter fade.
@@ -56522,6 +56526,12 @@
       if ($el.dataset.recentWorkBound) return;
       $el.dataset.recentWorkBound = '1';
       $el.addEventListener('click', ev => {
+        const pendingSession = ev.target.closest && ev.target.closest('[data-workers-pending-session]');
+        if (pendingSession) {
+          ev.preventDefault(); ev.stopPropagation();
+          selectConversation(pendingSession.dataset.workersPendingSession);
+          return;
+        }
         const choice = ev.target.closest && ev.target.closest('[data-workers-choice], [data-workers-review]');
         if (choice) {
           ev.preventDefault(); ev.stopPropagation();
@@ -82037,12 +82047,14 @@
       }
     }
 
-    const hasGc = !q && _gcActiveChats && _gcActiveChats.length > 0;
-    if (!archiveLoaded && !archiveRows.length && !hasGc && !pendingSpawns.size) {
+    // Workers renders queue/process evidence independently of transcript history.
+    const hasIndependentContent = (!q && _gcActiveChats && _gcActiveChats.length > 0)
+      || window.CCCNavigation?.getTab() === 'workers';
+    if (!archiveLoaded && !archiveRows.length && !hasIndependentContent && !pendingSpawns.size) {
       _renderArchiveEmpty(_archiveLoadingPlaceholderHtml('Loading archive…'));
       return;
     }
-    if (!archiveRows.length && !hasGc && !pendingSpawns.size) {
+    if (!archiveRows.length && !hasIndependentContent && !pendingSpawns.size) {
       _renderArchiveEmpty(firstRunEmptyHtml());
       return;
     }
@@ -82053,7 +82065,7 @@
     // does not render). Surface a window-aware message with a "Show all"
     // affordance, mirroring the In Progress list's window footer.
     const _arcWindowEmptied = archiveRows.length > 0 && !byFolder.length && _arcWindow !== 'all';
-    if (_arcWindowEmptied && !hasGc && !pendingSpawns.size) {
+    if (_arcWindowEmptied && !hasIndependentContent && !pendingSpawns.size) {
       const _winLabel = _arcWindow === '7d' ? '7 days' : 'day';
       _renderArchiveEmpty(
         '<div class="archive-empty-state">No conversations in the last ' + _winLabel + '.<br>'
@@ -82063,11 +82075,11 @@
       _wireArchiveWindowShowAll();
       return;
     }
-    if (!byFolder.length && !hasGc && !pendingSpawns.size) {
+    if (!byFolder.length && !hasIndependentContent && !pendingSpawns.size) {
       _renderArchiveEmpty('<div class="archive-empty-state">No conversations in this folder.</div>');
       return;
     }
-    if (!rows.length && !hasGc && !pendingSpawns.size) {
+    if (!rows.length && !hasIndependentContent && !pendingSpawns.size) {
       _renderArchiveEmpty('<div class="archive-empty-state">No conversations match your filter.</div>');
       return;
     }

@@ -61,6 +61,52 @@ test('live claims remain visible while session details load, without inventing a
   assert.equal(ctx._workersTicketState({...item,status:'closed'}).label, 'Resolved');
 });
 
+test('Starting expires after ten seconds and registered sessions never look like a launch', () => {
+  const ctx = setup();
+  const started = Date.parse('2026-01-01T10:00:00Z');
+  const worker = {started_at:new Date(started).toISOString()};
+  assert.equal(ctx._workersPendingState(worker, started + 1000).label, 'Starting');
+  assert.equal(ctx._workersPendingState(worker, started + 1000).refreshIn, 9000);
+  assert.equal(ctx._workersPendingState(worker, started + 10000).label, 'Startup delayed');
+  assert.equal(ctx._workersPendingState(worker, started + 3600000).label, 'Startup delayed');
+  assert.equal(ctx._workersPendingState({...worker,session_id:'session-1',idle_seconds:2}, started + 1000).label, 'Active');
+  assert.equal(ctx._workersPendingState({...worker,session_id:'session-1',idle_seconds:80}, started + 1000).label, 'Standing by');
+  assert.equal(ctx._workersPendingState({...worker,session_id:'session-1'}, started + 1000).label, 'Session not listed');
+  assert.equal(ctx._workersPendingState({started_at:'invalid'}, started).label, 'Session not registered');
+});
+
+test('awaiting-worker chips include only currently runnable open tickets', () => {
+  const ctx = setup();
+  const ready = {ref:'TEST-1',status:'open',priority:'p2'};
+  const items = [ready,{...ready}, {...ready,ref:'TEST-2',priority:'p1'},
+    {...ready,ref:'TEST-3',status:'in_progress'}, {...ready,ref:'TEST-4',needs_input:true},
+    {...ready,ref:'TEST-5',waiting_on:['TEST-9']}, {...ready,ref:'TEST-6',claimable:false},
+    {...ready,ref:'TEST-7',deferred_until:'2099-01-01T00:00:00Z'},
+    {...ready,ref:'TEST-8',readiness:'needs-spec'}, {...ready,ref:'TEST-9',no_auto_drain:true},
+    {...ready,ref:'TEST-10',stages:{current:'verify'}},
+    {...ready,ref:'TEST-11',pending_answer:{state:'delivered'},waiting_on:['TEST-9']},
+    {...ready,ref:'IDEAS-1'}, {...ready,ref:'TEST-12',pending_answer:{state:'delivered'}}];
+  assert.deepEqual(Array.from(ctx._workersAwaitingTickets(items),it=>it.ref), ['TEST-2','TEST-1','TEST-12']);
+  ctx._uxqTicketAttention = item => QA.project(item,{explain:true,queue:{auto_drain:false}});
+  assert.equal(ctx._workersAwaitingTickets(items).length,0);
+});
+
+test('unlisted worker rows exclude dead, released, and already represented processes', () => {
+  const worker = {worker_id:'worker-1',session_id:'session-1',queue:'TEST',alive:true};
+  const ctx = setup({_uxqHealthCache:{wt_workers:[worker,{...worker,worker_id:'dead',alive:false},
+    {...worker,worker_id:'released',released_at:'2026-01-01'},
+    {...worker,worker_id:'unknown',alive:null}]}});
+  const item = {ref:'TEST-1',status:'in_progress',claimed_by:'worker-1'};
+  assert.equal(ctx._workersPendingWorkers([]).length,1);
+  assert.equal(ctx._workersPendingWorkers([{item}]).length,0);
+  assert.equal(ctx._workersPendingWorkers([{item:{...item,status:'closed'}}]).length,1);
+  ctx._uxqHealthCache.worker_session_map = {'worker-1':'canonical-session'};
+  ctx._uxqHealthCache.wt_workers = [{...worker,session_id:''}];
+  assert.equal(ctx._workersPendingWorkers([])[0].session_id,'canonical-session');
+  ctx._workersTicketSessions.set('TEST-2',{cards:[{session_id:'canonical-session'}]});
+  assert.equal(ctx._workersPendingWorkers([{item:{ref:'TEST-2',status:'in_progress'}}]).length,0);
+});
+
 
 test('approval questions get scoped binary answers; ambiguous and offline questions do not', () => {
   const ctx = setup();

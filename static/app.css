@@ -35075,8 +35075,7 @@ a.local-ci-job:hover { color: var(--accent); }
 /* Workers is a ticket list; independent sessions remain available elsewhere. */
 #convList.workers-view .conv-archived-list,
 #convList.workers-view .conv-archived-tools,
-#convList.workers-view .conv-workers-uniform,
-#convList.workers-view .conv-wt-pending { display: none; }
+#convList.workers-view .conv-workers-uniform { display: none; }
 #convList.workers-view .conv-workers-activity {
   display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden;
 }
@@ -35088,6 +35087,26 @@ a.local-ci-job:hover { color: var(--accent); }
 }
 #convList.workers-view .conv-workers-activity .fq-recent-state.is-open { color: var(--red, #da3633); font-weight: 600; }
 #convList.workers-view .conv-workers-activity .fq-recent-rows:has(.workers-ticket-session-body:not([hidden])) { max-height: none; }
+
+.workers-awaiting { flex: 0 0 auto; min-width: 0; padding: 8px 0 10px; border-bottom: 1px solid var(--border); }
+.workers-awaiting[hidden] { display: none; }
+.workers-awaiting-label { margin-bottom: 6px; font-size: 11px; color: var(--text-secondary, var(--text)); }
+.workers-awaiting-label span { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.workers-awaiting-chips { display: flex; gap: 6px; overflow-x: auto; padding: 2px; overscroll-behavior-x: contain; }
+.workers-awaiting-chip { flex: 0 0 auto; min-height: 32px; padding: 4px 8px; font: inherit; font-size: 11px; color: var(--accent); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.workers-awaiting-chip:hover { background: var(--surface-2); }
+.workers-awaiting-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.workers-pending-list { margin-top: 12px; }
+.workers-pending-entry { padding: 10px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.workers-pending-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.workers-pending-state, .workers-pending-meta, .workers-pending-entry p { font-size: 11px; line-height: 1.5; }
+.workers-pending-state, .workers-pending-meta { color: var(--text-secondary, var(--text)); }
+.workers-pending-entry p { margin: 4px 0; color: var(--text-secondary, var(--text)); }
+.workers-pending-state.is-active { color: var(--green); }
+.workers-pending-state.is-delayed { color: var(--orange); }
+.workers-pending-session { padding: 4px 8px; min-height: 32px; font: inherit; font-size: 11px; color: var(--accent); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; cursor: pointer; }
+.workers-pending-session:hover { background: var(--surface-2); }
+.workers-pending-session:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Blocked tickets explain the next action; completed workers stay quiet. */
 .workers-ticket-context { margin: 0 0 8px; min-width: 0; }
