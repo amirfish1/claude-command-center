@@ -19056,6 +19056,7 @@ def _queue_health_stats(rows, *, now=None):
         "queued_items": queued_items,
         "stale_queued_items": stale_items,
         "stale_queued_wait_s": round(stale_wait_s, 1),
+        "tts": _free_runtime.tts_queue_stats(),
     }
 
 
@@ -31940,6 +31941,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "ok": True,
                 "ready": all(v["ready"] for v in per_engine.values()),
                 "engines": per_engine,
+                "tts_queue": _free_runtime.tts_queue_stats(),
             })
         elif path == "/api/sessions/children":
             # Lightweight lineage lookup: children of a dispatcher session,
@@ -35925,6 +35927,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                                 _sent += len(_buf)
                     except Exception:
                         pass
+                    finally:
+                        try:
+                            if hasattr(_resp, "close"):
+                                _resp.close()
+                        except Exception:
+                            pass
                     # first = ms until the first audio bytes (the wait before
                     # sound); ms = until the whole clip was made.
                     _log_activity("tts", "SPEAK", "chars=%d status=200 spoke=%s ms=%d first=%d bytes=%d stream=1 prio=%s" % (

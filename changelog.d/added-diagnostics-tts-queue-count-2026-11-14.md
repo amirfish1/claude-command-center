@@ -1,0 +1,1 @@
+- Show the live count of queued and active text-to-speech synthesis requests in the bottom-left Diagnostics drawer (including an inline summary badge while requests are queued).
