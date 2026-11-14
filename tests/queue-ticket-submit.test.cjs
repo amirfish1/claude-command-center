@@ -4,12 +4,12 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const source = fs.readFileSync('static/queue-ticket-submit.js', 'utf8');
 const reply = (status, data) => ({ok: status >= 200 && status < 300, status, json: async () => data});
-function fixture(fetch, storage = new Map()) {
+function fixture(fetch, storage = new Map(), expireRequests = false) {
   const calls = [], retries = [];
   const ctx = vm.createContext({AbortController, crypto: require('node:crypto').webcrypto,
     sessionStorage: {getItem: k => storage.get(k), setItem: (k,v) => storage.set(k,v)},
     fetch: async (url, opts) => {calls.push({url, opts}); return fetch(calls.length, opts);},
-    setTimeout: (fn, ms) => {if (ms < 10000) queueMicrotask(fn); return 1;}, clearTimeout: () => {},
+    setTimeout: (fn, ms) => {if (ms < 10000 || expireRequests) queueMicrotask(fn); return 1;}, clearTimeout: () => {},
   });
   ctx.window = ctx;
   vm.runInContext(source, ctx);
@@ -45,6 +45,29 @@ test('explicit validation failure is rejected immediately', async () => {
   const h = fixture(async () => reply(400, {ok:false, error:'note required'}));
   await assert.rejects(h.submit({note:''}), e => e.rejected && !e.pending);
   assert.equal(h.calls.length, 1);
+});
+test('browser timeout wording becomes a contextual, actionable confirmation warning', async () => {
+  const h = fixture(async () => { throw new TypeError('signal is aborted without reason'); }, new Map(), true);
+  await assert.rejects(h.submit({note:'Fix the button', project:'TEST'}), error => {
+    assert.equal(error.pending, true);
+    assert.match(error.message, /Ticket confirmation pending in TEST.*Fix the button.*after \d+s/);
+    assert.match(error.message, /No confirmation within 10 seconds/);
+    assert.match(error.message, /Check the queue or retry this same ticket safely/);
+    assert.doesNotMatch(error.message, /aborted without reason/);
+    return true;
+  });
+  assert.equal(h.calls.length, 4);
+  assert.equal(new Set(h.calls.map(c => c.opts.body)).size, 1);
+  assert.match(h.retries[0], /TEST.*Fix the button.*\d+s elapsed.*No confirmation within 10 seconds/);
+});
+test('an empty success reply explains the missing confirmation instead of calling HTTP 200 a failure', async () => {
+  const h = fixture(async () => reply(200, {}));
+  await assert.rejects(h.submit({note:'x'.repeat(90), project:'TEST'}), error => {
+    assert.match(error.message, /x{80}…/);
+    assert.match(error.message, /Server reply did not include a ticket reference/);
+    assert.doesNotMatch(error.message, /HTTP 200/);
+    return true;
+  });
 });
 test('slow acknowledged saves keep checking and explain which ticket is pending', async () => {
   const h = fixture(async n => n < 7

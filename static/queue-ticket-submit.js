@@ -24,15 +24,17 @@
           + '-' + Math.random().toString(36).slice(2));
     remember(signature, key);
     const body = JSON.stringify(Object.assign({}, payload, {idempotency_key: key}));
-    const preview = String(payload.note || payload.text || '').replace(/\s+/g, ' ').trim().slice(0, 64);
+    const note = String(payload.note || payload.text || '').replace(/\s+/g, ' ').trim();
+    const preview = note.length > 80 ? note.slice(0, 80) + '…' : note;
     const context = (payload.project || 'default queue') + ' (“' + preview + '”)';
     const started = Date.now();
+    const elapsed = () => Math.round((Date.now() - started) / 1000) + 's';
     let reason = 'Connection lost';
     let failures = 0;
     for (let attempt = 0; attempt < 40 && failures < 4; attempt++) {
       if (attempt) {
-        if (onRetry) onRetry('Waiting for ' + context + ' — ' + reason
-          + ' (' + Math.round((Date.now() - started) / 1000) + 's). Checking the same submission…');
+        if (onRetry) onRetry('Waiting for ticket confirmation in ' + context + ' (' + elapsed()
+          + ' elapsed). Last check: ' + reason + '. Retrying the same submission safely…');
         await new Promise(resolve => setTimeout(resolve, 1000 * Math.min(attempt, 3)));
       }
       const controller = new AbortController();
@@ -47,7 +49,8 @@
           remember(signature, null);
           return data;
         }
-        reason = (data && data.error) || ('HTTP ' + response.status);
+        reason = (data && data.error) || (response.status === 202 ? 'Queue has not confirmed the save yet'
+          : response.ok ? 'Server reply did not include a ticket reference' : 'HTTP ' + response.status);
         if (response.status === 202 && data && data.pending) continue;
         failures++;
         if (response.status >= 400 && response.status < 500) {
@@ -57,11 +60,13 @@
       } catch (error) {
         if (error.rejected) throw error;
         failures++;
-        reason = error.name === 'AbortError' ? 'No confirmation within 10 seconds' : (error.message || reason);
+        reason = controller.signal.aborted || error.name === 'AbortError' || error.name === 'TimeoutError'
+          ? 'No confirmation within 10 seconds' : (error.message || reason);
       } finally { clearTimeout(timer); }
     }
-    throw Object.assign(new Error('Saving is not confirmed (' + reason
-      + '). Check the queue or retry this same ticket safely.'), {pending: true});
+    throw Object.assign(new Error('Ticket confirmation pending in ' + context + ' after ' + elapsed()
+      + '. Saving is not confirmed. Last check: ' + reason
+      + '. Check the queue or retry this same ticket safely.'), {pending: true});
   }
   root.cccSubmitQueueTicket = submit;
 })(window);

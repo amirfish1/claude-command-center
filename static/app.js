@@ -60460,7 +60460,7 @@
     const preview = String(note || '').replace(/\s+/g, ' ').trim();
     const label = preview.length > 80 ? preview.slice(0, 80) + '…' : preview;
     const reason = (err && err.message) || String(err);
-    showOpToast(escapeHtml((err && err.pending ? 'Ticket confirmation pending in ' : 'Could not add ticket to ')
+    showOpToast(escapeHtml(err && err.pending ? reason : 'Could not add ticket to '
       + (project || 'the default queue') + ' (“' + label + '”): ' + reason),
       err && err.pending ? 'warning' : 'error');
   }
