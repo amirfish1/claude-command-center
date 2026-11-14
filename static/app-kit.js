@@ -111,6 +111,7 @@
   // says whether the app has one; then 'yes' or 'none'.
   var AGENT_KEY = 'ccc-app-agent:' + APP;
   var ready = { content: null, cached: false, agentAt: null, agent: 'unknown', sent: false, hidden: document.hidden };
+  if (document.hidden) ready.hidden = true;
   document.addEventListener('visibilitychange', function () { if (document.hidden) ready.hidden = true; });
   // The dashboard loads the app someone used last in the background and
   // keeps an open one parked when they switch away. Nobody waited for a
@@ -137,7 +138,9 @@
     }
     // A tab that was in the background while loading had its timers
     // throttled: not a real sample of what someone waited for.
-    if (ready.hidden) return;
+    // Minutes, not seconds: a tab that slept or a page redrawn in place long
+    // after its navigation. Nobody watched that, so it is not a load time.
+    if (ready.hidden || out.ms > 120000) return;
     try {
       fetch('/api/perf-event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
         body: JSON.stringify({ kind: 'app_ready', ms: out.ms, detail: out }) }).catch(function () {});
