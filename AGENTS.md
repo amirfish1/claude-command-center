@@ -2,6 +2,18 @@
 
 This file tells AI coding agents (and external contributors running them) the house rules. Not user-facing docs — see `README.md` and `CONTRIBUTING.md` for that.
 
+## Verify facts and times
+
+Before answering whether an action happened, run a command against its
+authoritative source (queue, git, service/API, or audit log). A failed response
+does not prove the action failed. If verification is unavailable, report the
+outcome as unknown rather than guessing.
+
+For timestamps shown in US Pacific time, use `./pt "2026-11-14T16:26:00Z"`
+(or installed `pt`) and preserve its date, PST/PDT label, and UTC offset.
+Do not convert mentally. With no argument it shows now; timestamps without
+an offset are interpreted as UTC.
+
 ## This is public OSS
 
 Repo lives at `github.com/amirfish1/claude-command-center`. Every commit, comment, file name, and test fixture ships to the world. Assume strangers read it.

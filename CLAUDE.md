@@ -3,6 +3,10 @@
 House rules for Claude Code. Long-form rationale, tables, and incident notes:
 `docs/agent-rules.md`. User-facing docs: `README.md`, `CONTRIBUTING.md`.
 
+## Verify facts and times
+- Before answering whether an action happened, run a command against the authoritative source (queue, git, service/API, or audit log). A failed response does not prove the action failed. If verification is unavailable, say the outcome is unknown; do not guess.
+- For timestamps shown in US Pacific time, run `./pt "2026-11-14T16:26:00Z"` (or installed `pt`) and use its date, PST/PDT label, and UTC offset. Do not convert mentally; daylight-saving offsets change. `./pt` with no argument shows now; input without an offset is interpreted as UTC.
+
 ## Public OSS
 Everything ships to github.com/amirfish1/claude-command-center.
 - No internal paths, client names, private URLs, PII, or real-looking secrets (use `sk-ant-test-XXXX`).

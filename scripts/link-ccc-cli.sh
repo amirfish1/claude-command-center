@@ -44,6 +44,14 @@ fi
 chmod +x "$TARGET" 2>/dev/null || true
 mkdir -p "$BIN_DIR" 2>/dev/null || true
 
+# Keep a custom `pt` command; the repository helper remains available as ./pt.
+if [ -f "$SOURCE_DIR/pt" ] && ! command -v pt >/dev/null 2>&1 \
+   && [ ! -e "$BIN_DIR/pt" ] && [ ! -L "$BIN_DIR/pt" ]; then
+  chmod +x "$SOURCE_DIR/pt" 2>/dev/null || true
+  ln -s "$SOURCE_DIR/pt" "$BIN_DIR/pt" 2>/dev/null \
+    || printf '%scould not link pt — run it as %s/pt\n' "$LOG_PREFIX" "$SOURCE_DIR"
+fi
+
 if [ -L "$LINK" ] && [ "$(readlink "$LINK")" = "$TARGET" ]; then
   exit 0
 fi

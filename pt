@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Convert a UTC (or offset-aware) timestamp to US Pacific time."""
+import argparse
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+def pacific_time(value="now"):
+    value = value.strip()
+    if not value or value.lower() == "now":
+        instant = datetime.now(timezone.utc)
+    else:
+        if value.upper().endswith(" UTC"):
+            value = value[:-4].strip() + "+00:00"
+        if value.endswith(("Z", "z")):
+            value = value[:-1] + "+00:00"
+        instant = datetime.fromisoformat(value)
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+    local = instant.astimezone(ZoneInfo("America/Los_Angeles"))
+    offset = local.strftime("%z")
+    clock = f"{local.hour % 12 or 12}:{local.minute:02d}:{local.second:02d}"
+    period = "AM" if local.hour < 12 else "PM"
+    return (f"{local:%Y-%m-%d} {clock} {period} {local:%Z} "
+            f"(UTC{offset[:3]}:{offset[3:]})")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("timestamp", nargs="*", help="ISO timestamp or YYYY-MM-DD HH:MM UTC; defaults to now. Naive input means UTC.")
+    args = parser.parse_args()
+    try:
+        print(pacific_time(" ".join(args.timestamp) or "now"))
+    except (ValueError, ZoneInfoNotFoundError) as error:
+        parser.error(str(error))
+
+
+if __name__ == "__main__":
+    main()
