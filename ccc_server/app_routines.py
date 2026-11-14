@@ -35,6 +35,7 @@ Stdlib-only; no side effects at import.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -226,6 +227,36 @@ def _update_routine_state(folder, rid, **fields):
         return entry
 
 
+def files_stamp(folder):
+    """A cheap fingerprint of the app's own files, so its open page can
+    redraw when the agent or a routine changes one.
+
+    Top-level files only. CCC's state file and the page's own saves (in
+    data/) are left out: they change on every run or click and are not
+    something the page needs to reload for.
+    """
+    page, rest = "", []
+    try:
+        with os.scandir(folder) as it:
+            for e in it:
+                if e.name.startswith(".") or e.name == STATE_NAME:
+                    continue
+                try:
+                    if not e.is_file():
+                        continue
+                    st = e.stat()
+                except OSError:
+                    continue
+                mark = f"{st.st_mtime_ns}:{st.st_size}"
+                if e.name == "index.html":
+                    page = mark
+                else:
+                    rest.append(f"{e.name}:{mark}")
+    except OSError:
+        pass
+    return {"page": page, "files": hashlib.sha1("|".join(sorted(rest)).encode()).hexdigest()[:16]}
+
+
 def describe(app_id, apps_dir=None, now=None):
     """What the app page shows: the builder agent and one row per routine."""
     folder = app_dir(app_id, apps_dir)
@@ -256,7 +287,8 @@ def describe(app_id, apps_dir=None, now=None):
         })
     agent = state.get("agent") if isinstance(state.get("agent"), dict) else None
     return {"ok": True, "app": app_id, "label": str(meta.get("label") or app_id),
-            "agent": agent, "routines": rows, "suggestions": load_suggestions(meta)}
+            "agent": agent, "routines": rows, "suggestions": load_suggestions(meta),
+            "stamp": files_stamp(folder)}
 
 
 def overview(apps_dir=None):

@@ -153,6 +153,22 @@ summary), `POST /api/apps/routines/run` and `/toggle` with `{app, id}`,
 `POST /api/apps/routines/delete` with `{app, id}`, and
 `POST /api/apps/agent` with `{app}`.
 
+### Redrawing when a file changes
+
+The agent and the routines change the app's files while its page is open.
+`app-kit.js` fires `ccc:app-changed` on `window` within about ten seconds, so
+the page can redraw itself instead of offering a refresh button:
+
+```js
+window.addEventListener('ccc:app-changed', e => {
+  if (e.detail.page) location.reload();   // index.html itself changed
+  else loadData();                        // another top-level file changed
+});
+```
+
+Only files directly in the app folder count. CCC's `ccc-state.json` and the
+page's own saves under `data/` do not fire it.
+
 ### Alerts outside the dashboard
 
 Routine notifications can also go to your phone. Create

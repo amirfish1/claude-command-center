@@ -78,6 +78,25 @@ class RoutineTests(unittest.TestCase):
         self.assertIsNone(ar.app_dir("missing", self.base))
         self.assertIsNotNone(ar.app_dir("demo", self.base))
 
+    def test_stamp_follows_the_apps_own_files(self):
+        d = make_app(self.base, [SCRIPT])
+        (d / "index.html").write_text("<main></main>")
+        (d / "trips.json").write_text("[]")
+        first = ar.describe("demo", self.base)["stamp"]
+        # CCC's own state and the page's saved clicks are not a change.
+        (d / ar.STATE_NAME).write_text("{}")
+        (d / "data").mkdir()
+        (d / "data" / "ticks.json").write_text("[1]")
+        self.assertEqual(ar.describe("demo", self.base)["stamp"], first)
+        (d / "trips.json").write_text('[{"id": "jan"}]')
+        data = ar.describe("demo", self.base)["stamp"]
+        self.assertEqual(data["page"], first["page"])
+        self.assertNotEqual(data["files"], first["files"])
+        (d / "index.html").write_text("<main>new</main>")
+        page = ar.describe("demo", self.base)["stamp"]
+        self.assertNotEqual(page["page"], data["page"])
+        self.assertEqual(page["files"], data["files"])
+
     def test_script_run_records_result(self):
         d = make_app(self.base, [SCRIPT])
         (d / "hello.py").write_text('import json;print("noise");print(json.dumps({"summary":"All good","alert":True}))')

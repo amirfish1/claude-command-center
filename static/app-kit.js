@@ -271,10 +271,21 @@
     var t = $('div', null, html);
     while (t.firstChild) list.insertBefore(t.firstChild, addCard);
   }
+  // Tell the page when its own files changed (the agent edited data, a
+  // routine wrote a result), so it can redraw without a refresh button:
+  //   window.addEventListener('ccc:app-changed', e => e.detail.page ? ... : ...)
+  var lastStamp = null;
+  function noteStamp(s) {
+    if (!s || typeof s !== 'object') return;
+    var was = lastStamp; lastStamp = s;
+    if (!was) return;
+    var page = s.page !== was.page, files = s.files !== was.files;
+    if (page || files) window.dispatchEvent(new CustomEvent('ccc:app-changed', { detail: { page: page, files: files } }));
+  }
   function refresh() {
     return api('/api/apps/routines?app=' + encodeURIComponent(APP)).then(function (r) {
       if (!r.ok) return;
-      state = r; draw(); drawTips();
+      state = r; draw(); drawTips(); noteStamp(r.stamp);
       var id = (r.agent && r.agent.session_id) || '';
       if (shell && id !== agentId) { agentId = id; if (id) showSession(id, 'Agent'); }
       else if (shell && !id && !hero.dataset.asked) { hero.dataset.asked = '1'; noAgent(); }
