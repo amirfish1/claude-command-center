@@ -4731,9 +4731,8 @@
     flex: 0 1 auto;
     min-width: 0;
   }
-  /* The path is the longest item — let it shrink and ellipsis.
-     inline-block is required for text-overflow:ellipsis to apply; the
-     parent's white-space:nowrap and overflow:hidden are inherited. */
+  /* Clip the beginning of long paths so the repo name stays visible.
+     The inner LTR isolate preserves path punctuation and reading order. */
   .conv-input-context .wp-path {
     flex: 0 1 auto;
     min-width: 0;
@@ -4741,6 +4740,8 @@
     vertical-align: middle;
     overflow: hidden;
     text-overflow: ellipsis;
+    direction: rtl;
+    text-align: left;
     cursor: pointer;
   }
   .conv-input-context .wp-path:hover {

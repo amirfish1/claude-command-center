@@ -64635,7 +64635,7 @@
     const _branchSubsumes = pillBranch && _pathTail
       && pillBranch.toLowerCase().includes(_pathTail.toLowerCase());
     if (!_branchSubsumes) {
-      parts.push('<span class="wp-path" data-action="reveal-path" data-path="' + escapeAttr(pillPath) + '" role="button" tabindex="0" title="' + escapeHtml(pillPath) + ' - click to reveal in Finder">' + escapeHtml(tilde) + '</span>');
+      parts.push('<span class="wp-path" data-action="reveal-path" data-path="' + escapeAttr(pillPath) + '" role="button" tabindex="0" title="' + escapeHtml(pillPath) + ' - click to reveal in Finder"><bdi dir="ltr">' + escapeHtml(tilde) + '</bdi></span>');
     }
 
     // Sibling-worktrees pill removed — topbar Worktrees button is the
@@ -83086,7 +83086,7 @@
       fetch('/api/codex/accounts?session_id=' + encodeURIComponent(sid)).then(r => r.json()).then(data => {
         if (_codexAccountSession === sid) {
           const label = data.session_account === 'Codex · current account' ? 'Primary' : data.session_account;
-          badge.textContent = 'Account: ' + label;
+          badge.textContent = label;
         }
       }).catch(() => { if (_codexAccountSession === sid) badge.textContent = 'Account unavailable'; });
     }
