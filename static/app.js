@@ -91870,8 +91870,8 @@
     if ($voiceModalSaveBtn) $voiceModalSaveBtn.disabled = true;
     try {
       const [cfgRes, voicesRes] = await Promise.all([
-        fetch('/api/voice/config', {cache: 'no-store'}),
-        fetch('/api/voice/voices', {cache: 'no-store'}),
+        fetch('/api/voice/config', {cache: 'no-store', cccPriority: 'user'}),
+        fetch('/api/voice/voices', {cache: 'no-store', cccPriority: 'user'}),
       ]);
       const cfg = (await cfgRes.json().catch(() => ({}))) || {};
       const voices = (await voicesRes.json().catch(() => ({}))) || {};
@@ -96374,8 +96374,8 @@
       });
     }
   }
-  function refreshTtsVoiceOptions() {
-    return fetch('/api/free-runtime/tts-voices').then(r => { if (!r.ok) throw new Error('Output voice catalog unavailable'); return r.json(); }).then(d => {
+  function refreshTtsVoiceOptions({userInitiated = false} = {}) {
+    return fetch('/api/free-runtime/tts-voices', userInitiated ? {cccPriority: 'user'} : undefined).then(r => { if (!r.ok) throw new Error('Output voice catalog unavailable'); return r.json(); }).then(d => {
       _ttsVoiceOptions = (d && Array.isArray(d.voices)) ? d.voices : [];
       renderTtsVoiceDefaultSelect();
       document.querySelectorAll('.conv-pane').forEach(renderTtsVoiceStepper);
@@ -101172,7 +101172,7 @@
       setActiveSettingsRailSection('voice');
     },
     load: loadVoiceConfig, loadOperator: fetchCarModeStatus,
-    refreshVoices: refreshTtsVoiceOptions,
+    refreshVoices: () => refreshTtsVoiceOptions({userInitiated: true}),
   });
 
   window.cccEngineConnection?.mount({
