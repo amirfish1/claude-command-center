@@ -211,6 +211,18 @@ class DirectPortTest(unittest.TestCase):
         resp, _ = self._get("/api/conversations/abc", origin="https://evil.example")
         self.assertIsNone(resp.getheader("Access-Control-Allow-Origin"))
 
+    def test_encoded_subagent_id_is_decoded_before_open(self):
+        resp, body = self._get("/api/conversations/parent%3Aagent-a1?tail=80")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(body, b'{"id": "parent:agent-a1"}')
+        self.assertEqual(self.fake.calls, [("parent:agent-a1", "tail=80", "identity", True)])
+
+    def test_encoded_path_separators_are_rejected(self):
+        for encoded in ("%2F", "%5c", "%00"):
+            resp, _ = self._get("/api/conversations/parent" + encoded + "agent")
+            self.assertEqual(resp.status, 400)
+        self.assertEqual(self.fake.calls, [])
+
     def test_declined_and_failed_opens_ask_for_the_dashboard(self):
         for conv in ("declined", "boom"):
             resp, _ = self._get("/api/conversations/" + conv)

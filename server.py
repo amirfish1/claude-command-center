@@ -33409,7 +33409,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server.ultra_fresh import stream
             stream(self, urllib.parse.parse_qs(parsed.query))
         elif re.match(r"^/api/conversations/[^/]+/stream$", path):
-            conv_id = path.split("/")[-2]
+            try:
+                conv_id = _conv_reader.decode_conversation_id(path.split("/")[-2])
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, 400)
+                return
             qs = urllib.parse.parse_qs(parsed.query)
             after_line = int(qs.get("after", ["0"])[0])
             self._stream_conversation(conv_id, after_line)
@@ -33455,7 +33459,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"port": st.get("http_port") if st.get("ready") else None,
                             "ready": bool(st.get("ready"))})
         elif re.match(r"^/api/conversations/(?!all$|list$|order$)[^/]+$", path):
-            conv_id = path.split("/")[-1]
+            try:
+                conv_id = _conv_reader.decode_conversation_id(path.split("/")[-1])
+            except ValueError as exc:
+                self.send_json({"error": str(exc)}, 400)
+                return
             accept = self.headers.get("Accept-Encoding", "") or ""
             # Serve from the conversation-reader process when it is up: its
             # own GIL keeps an open from queueing behind this process's

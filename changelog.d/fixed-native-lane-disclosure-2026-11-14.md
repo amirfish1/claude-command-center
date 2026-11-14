@@ -1,1 +1,1 @@
-The session sidebar's lane count expands native subagent names and opens their read-only transcripts instead of displaying an inert badge.
+The session sidebar's lane count expands native subagent names and opens their read-only transcripts instead of displaying an inert badge. Conversation opens and streams decode URL-encoded subagent IDs so these transcripts load correctly.

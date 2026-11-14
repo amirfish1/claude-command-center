@@ -77,6 +77,14 @@ _state = {"sock": None, "proc": None, "ready": False, "errors": 0,
 _stats = {"served": 0, "declined": 0, "errors": 0}
 
 
+def decode_conversation_id(segment):
+    """Decode one URL segment, keeping conversation IDs inside that segment."""
+    conversation_id = urllib.parse.unquote(segment)
+    if any(char in conversation_id for char in ("/", "\\", "\x00")):
+        raise ValueError("invalid conversation id")
+    return conversation_id
+
+
 def enabled():
     return (os.environ.get("CCC_CONV_READER", "1").strip().lower()
             not in ("0", "false", "no", "off"))
@@ -376,7 +384,11 @@ def _http_handler(server_mod):
             if not _OPEN_PATH.match(path):
                 self._reply(404, b'{"error": "not found"}')
                 return
-            conv_id = path.split("/")[-1]
+            try:
+                conv_id = decode_conversation_id(path.split("/")[-1])
+            except ValueError:
+                self._reply(400, b'{"error": "invalid conversation id"}')
+                return
             accept = self.headers.get("Accept-Encoding", "") or ""
             try:
                 out = server_mod._conversation_open_response(
