@@ -34793,6 +34793,7 @@ a.local-ci-job:hover { color: var(--accent); }
 .local-ci-detail { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .local-ci-elapsed { flex: none; font-size: 11px; color: var(--text-secondary, var(--text)); font-variant-numeric: tabular-nums; }
 .local-ci-step { display: block; font-size: 11px; color: var(--text-secondary, var(--text)); }
+.local-ci-context { display: block; margin-top: 3px; font-size: 11px; line-height: 1.4; color: var(--text-secondary, var(--text)); overflow-wrap: anywhere; }
 
 #ciRunnerSetupStatus ul { padding-inline-start: 20px; line-height: 1.6; }
 

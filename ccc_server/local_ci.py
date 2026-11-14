@@ -5,7 +5,7 @@ configuration and a bounded diagnostic prefix supply identity only; job/step
 state comes from GitHub through the existing gh authentication.
 """
 import json
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import os
 import platform
 import shutil
@@ -87,7 +87,11 @@ def _save_records(records):
 def _recent_completed():
     with _db() as db:
         rows = db.execute("SELECT id,data,dismissed FROM ci_runs WHERE completed_at != '' ORDER BY completed_at DESC, rowid DESC LIMIT 2").fetchall()
-    return [dict(json.loads(data), id=key) for key, data, dismissed in rows if not dismissed]
+    result = [dict(json.loads(data), id=key) for key, data, dismissed in rows if not dismissed]
+    for record in result:
+        if record.get("head_sha"):
+            record["origin"] = _commit_origin(record["head_sha"])
+    return result
 
 
 def dismiss_local_ci(run_key):
@@ -109,6 +113,81 @@ def _api(route):
         return json.loads(response.stdout) if response.returncode == 0 else None
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return None
+
+
+def record_ci_push(sha):
+    """Keep push attribution locally; no agent identity enters public commits."""
+    if not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+        return
+    sid = os.environ.get("CODEX_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID")
+    if not sid:
+        return
+    origin = {"session_id": sid, "source": "push hook",
+              "engine": "codex" if os.environ.get("CODEX_SESSION_ID") else "claude",
+              "worker": os.environ.get("CCC_WORKER_PROCESS") == "1"}
+    try:
+        entries = json.loads((COMMAND_CENTER_STATE_DIR / "spawned-pids.json").read_text())
+        entry = next((e for e in entries if isinstance(e, dict) and e.get("session_id") == sid), {})
+        for field in ("engine", "model", "name", "spawned_via"):
+            if entry.get(field):
+                origin[field] = entry[field]
+    except (OSError, ValueError, TypeError):
+        pass
+    with _db() as db:
+        db.execute("CREATE TABLE IF NOT EXISTS ci_push_origins (sha TEXT PRIMARY KEY, data TEXT NOT NULL)")
+        db.execute("INSERT OR REPLACE INTO ci_push_origins VALUES (?,?)", (sha, json.dumps(origin)))
+
+
+def _commit_origin(sha):
+    """Only exact commit evidence counts; never infer ownership from timing."""
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+        return {"sessions": [], "tickets": []}
+    origin = {"sessions": [], "tickets": []}
+    with _db() as db:
+        try:
+            row = db.execute("SELECT data FROM ci_push_origins WHERE sha=?", (sha,)).fetchone()
+            if row:
+                origin["pusher"] = json.loads(row[0])
+        except sqlite3.OperationalError:
+            pass
+    # Read an existing index only: CI polling must never rebuild transcripts.
+    graph = Path(os.environ.get("CCC_SHIP_GRAPH_DB") or COMMAND_CENTER_STATE_DIR / "ship_graph.sqlite")
+    if not graph.is_file():
+        return origin
+    try:
+        with closing(sqlite3.connect(graph.resolve().as_uri() + "?mode=ro", uri=True, timeout=1)) as db:
+            rows = db.execute("SELECT DISTINCT m.sid, m.tickets FROM edges e JOIN session_meta m ON m.sid=e.src WHERE e.dst IN (?,?) AND e.kind='made' LIMIT 10",
+                              ("commit:" + sha, "commit:" + sha[:7])).fetchall()
+            for sid, tickets in rows:
+                origin["sessions"].append(sid)
+                origin["tickets"].extend(json.loads(tickets or "[]"))
+            origin["tickets"].extend(row[0] for row in db.execute("SELECT ref FROM tickets WHERE commit_sha=?", (sha,)))
+            if origin.get("pusher"):
+                row = db.execute("SELECT tickets FROM session_meta WHERE sid=?", (origin["pusher"]["session_id"],)).fetchone()
+                if row:
+                    origin["pusher"]["tickets"] = json.loads(row[0] or "[]")
+            origin["tickets"] = sorted(set(origin["tickets"]))
+    except (sqlite3.Error, ValueError, TypeError):
+        pass
+    return origin
+
+
+def _run_context(run):
+    commit = run.get("head_commit") or {}
+    sha = run.get("head_sha") or ""
+    actor = run.get("triggering_actor") or run.get("actor") or {}
+    return {"event": run.get("event") or "", "actor": actor.get("login") or "",
+            "head_sha": sha, "head_branch": run.get("head_branch") or "",
+            "commit_subject": (commit.get("message") or "").split("\n", 1)[0],
+            "origin": _commit_origin(sha)}
+
+
+def _execution(job, local_names=()):
+    if "self-hosted" in (job.get("labels") or []):
+        return "self_hosted"
+    if (job.get("runner_name") or "").startswith("GitHub Actions "):
+        return "github_hosted"
+    return "local" if job.get("runner_name") in local_names else "unknown"
 
 
 def _recent_identities():
@@ -183,7 +262,7 @@ def _collect():
             for identity in active if not identity.get("run_id")]
     started = time.monotonic()
     for key, record in sorted(records.items(), key=lambda item: not (item[0] in active_names or item[1].get("hosted"))):
-        if record.get("status") == "completed":
+        if record.get("status") == "completed" and record.get("context_read"):
             continue
         local_names = active_names.get(key, set())
         if not local_names and not record.get("hosted") and time.time() - record.get("polled_at", 0) < 30:
@@ -194,11 +273,18 @@ def _collect():
         repo, run_id, attempt = record["repo"], record["run_id"], record["attempt"]
         route = f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}"
         run = _api(route)
+        if run:
+            record.update(_run_context(run))
+            record["context_read"] = True
         record["polled_at"] = time.time()
         url = f"https://github.com/{repo}/actions/runs/{run_id}"
         if run and run.get("run_started_at"):
             record["started_at"] = run["run_started_at"]
         if run and run.get("status") == "completed":
+            if not record.get("execution"):
+                payload = _api(route + "/jobs?per_page=100") or {}
+                locations = {_execution(job) for job in payload.get("jobs", [])}
+                record["execution"] = next(iter(locations)) if len(locations) == 1 else "unknown"
             record.update(status="completed", name=run.get("name") or "CI",
                           conclusion=run.get("conclusion") or "unknown", percent=100,
                           completed_at=run.get("updated_at") or run.get("run_started_at") or "",
@@ -209,6 +295,8 @@ def _collect():
         payload = _api(route + "/jobs?per_page=100") or {}
         jobs = [job for job in payload.get("jobs", []) if (record.get("hosted") or job.get("runner_name") in local_names)
                 and job.get("status") in ("in_progress", "queued")]
+        locations = {_execution(job, local_names) for job in payload.get("jobs", [])}
+        record["execution"] = next(iter(locations)) if len(locations) == 1 else "unknown"
         if not jobs:
             rows.append(dict(record, id=key, name="CI", percent=None, completed_steps=0,
                              total_steps=0, current_step="Queued" if run and run.get("status") == "queued" else "Reading job progress", url=url))
@@ -218,6 +306,7 @@ def _collect():
             current = next((step.get("name") for step in steps
                             if step.get("status") == "in_progress"), "Starting job")
             rows.append(dict(record, id=key, name=job.get("name") or "CI",
+                             execution=_execution(job, local_names),
                              runner=job.get("runner_name") or record.get("runner", ""),
                              started_at=job.get("started_at"),
                              percent=min(99, int(done * 100 / len(steps))) if steps else None,
@@ -267,3 +356,9 @@ def local_ci_setup():
     except (OSError, subprocess.TimeoutExpired):
         result["runner_check_available"] = False
     return result
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) == 3 and sys.argv[1] == "--record-push":
+        record_ci_push(sys.argv[2])

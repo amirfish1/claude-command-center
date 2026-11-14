@@ -221,3 +221,46 @@ def test_hosted_discovery_uses_checkout_origin_and_includes_queued(remote, monke
     assert [identity['run_id'] for identity in identities] == ['123', '124']
     assert all(identity['repo'] == 'example/project' and identity['hosted'] for identity in identities)
     assert all(route.startswith('repos/example/project/actions/runs?') for route in routes)
+
+
+def test_push_origin_is_private_and_timing_does_not_assign_an_agent(tmp_path, monkeypatch):
+    import sqlite3
+    graph = tmp_path / 'graph.sqlite'
+    monkeypatch.setenv('CCC_SHIP_GRAPH_DB', str(graph))
+    monkeypatch.setenv('CODEX_SESSION_ID', 'test-session')
+    monkeypatch.setenv('CCC_WORKER_PROCESS', '1')
+    monkeypatch.setattr(local_ci, 'COMMAND_CENTER_STATE_DIR', tmp_path)
+    sha = 'a' * 40
+    local_ci.record_ci_push(sha)
+    origin = local_ci._commit_origin(sha)
+    assert origin['pusher']['session_id'] == 'test-session'
+    assert origin['pusher']['worker'] is True
+    assert origin['pusher']['engine'] == 'codex'
+    with sqlite3.connect(graph) as db:
+        db.executescript('CREATE TABLE edges(src,dst,kind); CREATE TABLE session_meta(sid,tickets); CREATE TABLE tickets(ref,commit_sha);')
+        db.execute('INSERT INTO session_meta VALUES (?,?)', ('unrelated', '["TEST-1"]'))
+        db.execute('INSERT INTO edges VALUES (?,?,?)', ('unrelated', 'commit:' + sha, 'window'))
+        db.execute('INSERT INTO session_meta VALUES (?,?)', ('author', '["TEST-2"]'))
+        db.execute('INSERT INTO edges VALUES (?,?,?)', ('author', 'commit:' + sha, 'made'))
+    origin = local_ci._commit_origin(sha)
+    assert origin['sessions'] == ['author']
+    assert origin['tickets'] == ['TEST-2']
+    assert local_ci._commit_origin('b' * 40) == {'sessions': [], 'tickets': []}
+
+
+def test_execution_requires_runner_evidence_not_discovery_source():
+    assert local_ci._execution({'runner_name':'GitHub Actions 123'}) == 'github_hosted'
+    assert local_ci._execution({'runner_name':'remote', 'labels':['self-hosted']}) == 'self_hosted'
+    assert local_ci._execution({'runner_name':'local'}, {'local'}) == 'local'
+    assert local_ci._execution({'runner_name':'unrecognized'}) == 'unknown'
+
+
+def test_run_context_preserves_trigger_commit_and_account(monkeypatch):
+    monkeypatch.setattr(local_ci, '_commit_origin', lambda sha: {'sessions':[], 'tickets':[]})
+    context = local_ci._run_context({'event':'push', 'actor':{'login':'original'},
+        'triggering_actor':{'login':'rerunner'}, 'head_sha':'a' * 40,
+        'head_branch':'main', 'head_commit':{'message':'Fix tests\n\nDetails'}})
+    assert context['event'] == 'push'
+    assert context['actor'] == 'rerunner'
+    assert context['commit_subject'] == 'Fix tests'
+    assert context['head_branch'] == 'main'

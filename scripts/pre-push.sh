@@ -72,6 +72,9 @@ while read -r _lref lsha _rref rsha || [ -n "${lsha:-}" ]; do
     echo "Check 'git config --show-origin user.email', fix it, then amend these commits."
     exit 1
   fi
+  # Private attribution for Actions triggered by this push. A later GitHub
+  # run proves it landed; recording an attempted push alone starts no CI.
+  python3 -m ccc_server.local_ci --record-push "$lsha" </dev/null || true
 done
 
 if [ ! -f tests/test_perf_budget.py ]; then

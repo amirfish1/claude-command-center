@@ -12,6 +12,9 @@ const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');
 const key = 'ccc-ci-progress-v1';
 const active = {id:'example/project:123:1', repo:'example/project', name:'Tests',
   percent:50, current_step:'Run tests', completed_steps:1, total_steps:2,
+  execution:'github_hosted', event:'push', actor:'example-user', head_sha:'abcdef1234567890',
+  commit_subject:'Fix test progress', origin:{sessions:[], tickets:['TEST-42'],
+    pusher:{session_id:'test-session', engine:'codex', worker:true}},
   url:'https://github.com/example/project/actions/runs/123'};
 
 for (const width of [1280, 390]) test('CI survives refresh before live status returns at ' + width, async () => {
@@ -55,6 +58,12 @@ for (const width of [1280, 390]) test('CI survives refresh before live status re
     const host = width === 390 ? '#localCiMobileList' : '#localCiProgress';
     await page.goto(`http://127.0.0.1:${server.address().port}`, {waitUntil:'domcontentloaded'});
     await page.waitForSelector(host + ' progress[value="50"]');
+    const context = await page.$eval(host + ' .local-ci-context', el => el.textContent);
+    assert.match(context, /GitHub-hosted runner/);
+    assert.match(context, /push · example-user · abcdef1/);
+    assert.match(context, /Pushed by codex · test-session · control-plane worker/);
+    assert.match(context, /TEST-42/);
+    assert.equal(await page.$eval(host, el => el.scrollWidth <= el.clientWidth), true);
     assert.equal(await page.evaluate(() => ciReadPriorities[0]), 'user', 'cold CI read bypasses startup background queue');
     hold = true;
     await page.reload({waitUntil:'domcontentloaded'});

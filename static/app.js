@@ -100429,7 +100429,7 @@
         label.className = 'local-ci-label';
         const name = document.createElement('span');
         name.className = 'local-ci-name';
-        name.textContent = (job.provider === 'vercel' ? 'Vercel · ' : 'CI · ') + String(job.repo || '').split('/').pop() + ' · ' + job.name;
+        name.textContent = (job.provider === 'vercel' ? 'Vercel · ' : 'GitHub Actions · ') + String(job.repo || '').split('/').pop() + ' · ' + job.name;
         const percent = document.createElement('span');
         percent.className = 'local-ci-percent';
         percent.textContent = job.provider === 'vercel' ? job.status : done ? (conclusions[job.conclusion] || 'Completed')
@@ -100459,6 +100459,22 @@
           detail.append(timer);
         }
         row.append(label, bar, detail);
+        if (job.provider !== 'vercel') {
+          const context = document.createElement('span');
+          context.className = 'local-ci-context';
+          const location = {github_hosted:'GitHub-hosted runner', self_hosted:'Self-hosted runner', local:'This machine'}[job.execution] || 'Runner location unverified';
+          const trigger = [job.event, job.actor, job.head_sha && job.head_sha.slice(0, 7)].filter(Boolean).join(' · ');
+          const origin = job.origin || {};
+          const pusher = origin.pusher;
+          const agents = pusher ? 'Pushed by ' + [pusher.engine, pusher.session_id].filter(Boolean).join(' · ')
+            + (pusher.worker ? ' · control-plane worker' : '') + (pusher.spawned_via ? ' · ' + pusher.spawned_via : '')
+            : (origin.sessions || []).length ? 'Commit agent: ' + origin.sessions.join(', ') : 'Agent / worker untracked';
+          const tickets = [...new Set([...(origin.tickets || []), ...(pusher?.tickets || [])])];
+          context.textContent = [location, trigger, job.commit_subject, agents,
+            tickets.length ? 'Related tickets: ' + tickets.join(', ') : 'Ticket untracked'].filter(Boolean).join(' · ');
+          context.title = context.textContent;
+          row.append(context);
+        }
         entry.append(row);
         if (done) {
           const button = document.createElement('button');
