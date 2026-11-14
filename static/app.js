@@ -71453,6 +71453,15 @@
     if (_kimiRegroupTools.batch) { _kimiRegroupTools.batch.add(turn); return; }
     const view = turn.closest('.conversations-view');
     const scrollTop = view && view.scrollTop;
+    const previousRail = turn.querySelector(':scope > .conversation-media-rail');
+    if (previousRail) {
+      for (const card of Array.from(previousRail.children)) {
+        const anchor = card._conversationMediaAnchor;
+        turn.insertBefore(card, anchor && anchor.parentNode === turn ? anchor : null);
+        if (anchor) anchor.remove();
+      }
+      previousRail.remove();
+    }
     Array.from(turn.querySelectorAll(':scope > .kimi-tool-group')).forEach(g => {
       const body = g.querySelector('.kimi-tool-group-body');
       while (body && body.firstElementChild) {
@@ -71528,6 +71537,25 @@
       flush();
     }
     flush();
+    // Keep media in a single float so text and tools can flow independently
+    // of thumbnail heights. Leave transcript markers and tools as direct
+    // children: live reconciliation and compact folding depend on them.
+    const mediaCards = Array.from(turn.querySelectorAll(':scope > .image-gen-card'));
+    let mediaRail = turn.querySelector(':scope > .conversation-media-rail');
+    if (mediaCards.length) {
+      if (!mediaRail) {
+        mediaRail = document.createElement('div');
+        mediaRail.className = 'conversation-media-rail';
+      }
+      for (const card of mediaCards) {
+        const anchor = document.createComment('conversation media');
+        card.before(anchor);
+        card._conversationMediaAnchor = anchor;
+        mediaRail.append(card);
+      }
+      turn.prepend(mediaRail);
+    }
+    if (mediaRail && !mediaRail.children.length) mediaRail.remove();
     // Moving a tall expanded result briefly shrinks its scroller. Restore
     // the reading position after the complete group is back in the DOM.
     if (view && view.scrollTop !== scrollTop) view.scrollTop = scrollTop;
