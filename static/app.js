@@ -19207,6 +19207,28 @@
       cancel.focus({ preventScroll: true });
     });
   }
+  async function followRowReportReceipt(result, btn) {
+    // The editor is already closed: slow queue locks no longer trap its controls.
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      try {
+        const response = await fetch(result.status_url, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+        const receipt = await response.json();
+        if (!response.ok) throw new Error('Receipt unavailable');
+        if (receipt.state === 'complete' && receipt.ref) {
+          showOpToast('Decisions Fix: reported as ' + receipt.ref, 'success');
+          btn.title = 'Reported as ' + receipt.ref + '; click to report another mismatch';
+          return;
+        }
+        if (receipt.state === 'failed') {
+          showOpToast('Report saved, but ticket filing failed. Click Report again to retry this saved report.', 'error');
+          return;
+        }
+      } catch (_) { /* The durable worker continues even if this tab disconnects. */ }
+    }
+    showOpToast('Report is saved. Ticket filing is still pending; it continues in the background.', 'warning');
+  }
+  const _rowDecisionReportPending = new Map();
   function openRowDecisionReportEditor(btn, submit) {
     const form = document.createElement('form');
     form.className = 'conv-report-editor';
@@ -19280,6 +19302,8 @@
     window.addEventListener('resize', position);
     window.visualViewport?.addEventListener('resize', position);
     window.visualViewport?.addEventListener('scroll', position);
+    const savedReport = _rowDecisionReportPending.get(sid);
+    if (savedReport) input.value = savedReport.reporter_note || '';
     input.focus({ preventScroll: true });
   }
   document.addEventListener('click', async ev => {
@@ -19293,23 +19317,44 @@
     const base = _ultraFreshRow(sid) || { session_id: sid, row_data_unavailable: true };
     // Stale list data is itself reportable; the DOM still anchors the report.
     // Capture the displayed DOM and its data before any async refresh or send.
-    const payload = rowDecisionReportSnapshot(row, base);
+    const pending = _rowDecisionReportPending.get(sid);
+    const payload = pending || rowDecisionReportSnapshot(row, base);
+    if (!payload.submission_id) payload.submission_id = Array.from(crypto.getRandomValues(new Uint8Array(16)), n => n.toString(16).padStart(2, '0')).join('');
+    payload.background = true;
     const screenshot = Promise.race([
       captureRowDecisionScreenshot(row, payload.rect).catch(() => null),
       new Promise(resolve => setTimeout(() => resolve(null), 1800)),
     ]);
+    let submittedNote = pending ? payload.reporter_note : null;
     openRowDecisionReportEditor(btn, async note => {
+      if (submittedNote !== null && note !== submittedNote) {
+        throw new Error('This saved report is awaiting filing. Retry its original note, or wait for its receipt before reporting another issue.');
+      }
+      submittedNote = note;
       payload.reporter_note = note;
       _rowDecisionReportSending.add(sid);
       btn.disabled = true; btn.setAttribute('aria-busy', 'true');
       try {
-        payload.screenshot_b64 = await screenshot;
+        if (!payload.screenshot_b64) payload.screenshot_b64 = await screenshot;
         if (!payload.screenshot_b64) payload.screenshot_warning = 'Browser row screenshot was unavailable; structured row and message evidence were captured.';
+        _rowDecisionReportPending.set(sid, payload);
         const response = await fetch('/api/decisions-fix/report', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(10000),
         });
         const result = await response.json();
-        if (!response.ok || !result.ok || !result.ref) throw new Error(result.error || 'Could not file the report');
+        if (!response.ok || !result.ok || (!result.ref && !result.saved)) throw new Error(result.error || 'Could not save the report');
+        if (result.saved && !result.ref) {
+          _rowDecisionReportPending.set(sid, payload);
+          showOpToast('Report saved. Filing the ticket in the background…', 'success');
+          btn.title = 'Report saved; ticket filing is pending';
+          void followRowReportReceipt(result, btn).then(() => {
+            // Keep failed/pending receipts available for an explicit same-ID retry.
+            if (btn.title.startsWith('Reported as ')) _rowDecisionReportPending.delete(sid);
+          });
+          return;
+        }
+        _rowDecisionReportPending.delete(sid);
         showOpToast('Decisions Fix: reported as ' + result.ref + (result.screenshot_warning ? ' (screenshot unavailable)' : ''), 'success');
         btn.title = 'Reported as ' + result.ref + '; click to report another mismatch';
       } finally {
