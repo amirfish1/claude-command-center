@@ -51711,9 +51711,19 @@
   // Peer (cross-session) messages are also excluded: the user didn't type
   // them, and they often arrive in bursts a few rows apart, which made
   // "Previous" hop a few rows instead of to the user's own prior message.
-  const CONV_USER_MESSAGE_SELECTOR = '.event.user_text:not(.task-notification-event):not(.peer-message):not(.skill-loaded-event):not([data-live-key])';
+  const CONV_USER_MESSAGE_SELECTOR = '.event.user_text:not(.task-notification-event):not(.peer-message):not(.skill-loaded-event):not(.compact-resume-event):not(.session-interrupted-event):not([data-live-key])';
   function _convReadingTop(view) {
     return view.getBoundingClientRect().top;
+  }
+  function _convUserMessageTop(el, view) {
+    if (el.getClientRects().length) return el.getBoundingClientRect().top;
+    // A pinned original ask has no box. Its next laid-out sibling marks
+    // its transcript position; rect.top=0 would move only one header-height.
+    if (!el.classList.contains('is-pinned-in-sticky')) return null;
+    let next = el.nextElementSibling;
+    while (next && !next.getClientRects().length) next = next.nextElementSibling;
+    return next ? next.getBoundingClientRect().top
+      : _convReadingTop(view) + view.scrollHeight - view.scrollTop;
   }
   function _prevUserMessageTarget(view) {
     if (!view) return null;
@@ -51726,7 +51736,8 @@
     // naturally becomes the message before it (CCC-451).
     const viewTop = _convReadingTop(view);
     for (let i = list.length - 1; i >= 0; i--) {
-      if (list[i].getBoundingClientRect().top < viewTop - 8) {
+      const top = _convUserMessageTop(list[i], view);
+      if (top !== null && top < viewTop - 8) {
         return { el: list[i], isLast: i === list.length - 1 };
       }
     }
@@ -51743,9 +51754,55 @@
     // currently at the top from being its own previous/next target.
     const viewTop = _convReadingTop(view);
     for (let i = 0; i < list.length; i++) {
-      if (list[i].getBoundingClientRect().top > viewTop + 20) return list[i];
+      const top = _convUserMessageTop(list[i], view);
+      if (top !== null && top > viewTop + 20) return list[i];
     }
     return null;
+  }
+
+  function _scrollToConversationUserMessage(view, el) {
+    view._pinnedToBottom = false;
+    view.querySelectorAll('.conv-user-jump-target').forEach(row => row.classList.remove('conv-user-jump-target'));
+    // The chosen message must be readable even if a sticky summary hides it.
+    el.classList.add('conv-user-jump-target');
+    const top = Math.max(0, view.scrollTop + el.getBoundingClientRect().top - _convReadingTop(view) - 12);
+    view.scrollTo({top, behavior: 'smooth'});
+    updateConversationEndAffordance(view);
+  }
+  async function _jumpToPreviousUserMessage(view) {
+    if (!view || view._convUserJumpPending) return;
+    const paneId = view.closest('.conv-pane')?.dataset.paneId;
+    const pane = paneByPaneId(paneId);
+    const conversationId = pane?.conversationId;
+    const button = view._convLastButton;
+    view._convUserJumpPending = true;
+    view._pinnedToBottom = false;
+    if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); }
+    try {
+      let target = _prevUserMessageTarget(view);
+      let banner = view.querySelector('.conv-load-earlier');
+      // A first-prompt copy is not the previous turn when unloaded history
+      // lies between it and the current tail. Page until a real turn appears.
+      while (banner && (!target || target.el.classList.contains('conv-first-prompt-pin'))) {
+        if (typeof banner._loadEarlier !== 'function') return;
+        const before = [pane?.firstLine, view.querySelector('[data-jsonl-line]')?.dataset.jsonlLine, view.childElementCount].join(':');
+        if (button) button.querySelector('span').textContent = 'Finding…';
+        if (!await banner._loadEarlier()) return;
+        // Let the prepend's scroll-position restoration finish before starting
+        // a smooth jump, or that restoration cancels the animation.
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        if (!view.isConnected || (pane && paneByPaneId(paneId)?.conversationId !== conversationId)) return;
+        target = _prevUserMessageTarget(view);
+        banner = view.querySelector('.conv-load-earlier');
+        const after = [pane?.firstLine, view.querySelector('[data-jsonl-line]')?.dataset.jsonlLine, view.childElementCount].join(':');
+        if (before === after) return;
+      }
+      if (target) _scrollToConversationUserMessage(view, target.el);
+    } finally {
+      view._convUserJumpPending = false;
+      if (button) { button.disabled = false; button.removeAttribute('aria-busy'); }
+      updateConversationEndAffordance(view);
+    }
   }
 
   function positionConversationEndAffordance(view) {
@@ -52011,7 +52068,8 @@
     const lastBtn = view._convLastButton;
     if (lastBtn) {
       const target = scrollable ? _prevUserMessageTarget(view) : null;
-      const showLast = !!target;
+      const earlier = view.querySelector('.conv-load-earlier');
+      const showLast = !!target || !!earlier;
       if (target) {
         const label = target.isLast ? 'Last' : 'Previous';
         const span = lastBtn.querySelector('span');
@@ -52023,6 +52081,10 @@
           lastBtn.title = title;
           lastBtn.setAttribute('aria-label', title);
         }
+      } else if (earlier) {
+        lastBtn.querySelector('span').textContent = 'Last';
+        lastBtn.title = 'Find your previous message in earlier history';
+        lastBtn.setAttribute('aria-label', lastBtn.title);
       }
       lastBtn.classList.toggle('visible', showLast);
       lastBtn.setAttribute('aria-hidden', showLast ? 'false' : 'true');
@@ -52621,15 +52683,7 @@
     }
     lastBtn._convTargetView = view;
     lastBtn.addEventListener('click', () => {
-      const v = lastBtn._convTargetView || view;
-      const target = _prevUserMessageTarget(v);
-      if (!target) return;
-      v._pinnedToBottom = false;
-      const elRect = target.el.getBoundingClientRect();
-      const top = Math.max(0, v.scrollTop + (elRect.top - _convReadingTop(v)) - 12);
-      if (typeof v.scrollTo === 'function') v.scrollTo({ top, behavior: 'smooth' });
-      else v.scrollTop = top;
-      updateConversationEndAffordance(v);
+      void _jumpToPreviousUserMessage(lastBtn._convTargetView || view);
     });
     view._convLastButton = lastBtn;
     // "Next" steps back down to the following user message after Previous has
@@ -52649,12 +52703,7 @@
       const v = nextBtn._convTargetView || view;
       const el = _nextUserMessageTarget(v);
       if (!el) return;
-      v._pinnedToBottom = false;
-      const elRect = el.getBoundingClientRect();
-      const top = Math.max(0, v.scrollTop + (elRect.top - _convReadingTop(v)) - 12);
-      if (typeof v.scrollTo === 'function') v.scrollTo({ top, behavior: 'smooth' });
-      else v.scrollTop = top;
-      updateConversationEndAffordance(v);
+      _scrollToConversationUserMessage(v, el);
     });
     view._convNextButton = nextBtn;
     // Floating speaker: reads the assistant turn underneath its position in the
@@ -63781,17 +63830,17 @@
     banner.className = 'conv-load-earlier';
     banner.textContent = '↑ Load earlier messages';
     let loading = false;
-    async function loadEarlier() {
-      if (loading) return;
+    async function loadEarlierPage() {
+      if (loading) return false;
       loading = true;
       const pane = paneByPaneId(paneId);
-      if (!pane || pane.conversationId !== id) { loading = false; return; }
+      if (!pane || pane.conversationId !== id) { loading = false; return false; }
       const beforeLine = Number(pane.firstLine || 0);
       if (!beforeLine || beforeLine <= 1) {
         // Current segment exhausted — if this session continued from an
         // earlier one, hop the fetch window up to that session's tail so
         // the merged conversation keeps scrolling seamlessly.
-        if (!_contNextParentForPane(pane, id)) { loading = false; return; }
+        if (!_contNextParentForPane(pane, id)) { loading = false; return false; }
         pane.loadAncestorHop = true;
       } else {
         pane.loadBeforeLine = beforeLine;
@@ -63823,6 +63872,7 @@
       } catch (err) {
         banner.textContent = '↑ Retry loading earlier messages';
         banner.title = err.message || 'History could not be loaded';
+        return false;
       } finally {
         overlay.remove();
         loading = false;
@@ -63831,8 +63881,15 @@
           banner.textContent = '↑ Load earlier messages';
         }
       }
-      return;
+      return true;
     }
+    function loadEarlier() {
+      if (!banner._loadingPromise) {
+        banner._loadingPromise = loadEarlierPage().finally(() => { banner._loadingPromise = null; });
+      }
+      return banner._loadingPromise;
+    }
+    banner._loadEarlier = loadEarlier;
     banner.addEventListener('click', loadEarlier);
     // Auto-load once the banner scrolls into view — but only as a response
     // to a deliberate scroll-UP with real overflow. Two traps to avoid:

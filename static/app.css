@@ -4543,6 +4543,11 @@
     visibility: hidden;
     pointer-events: none;
   }
+  .conversations-view .event.user_text.conv-user-jump-target {
+    display: block !important;
+    visibility: visible;
+    pointer-events: auto;
+  }
   /* Pictures belong in the transcript even when the ask is mirrored in a
      summary slot. Keep the full bubble visible so prose cannot clip an
      inline image or an attachment below it. */
