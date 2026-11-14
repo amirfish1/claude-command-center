@@ -186,6 +186,10 @@ reports it, so a slow app shows up without anyone timing it by hand.
   any stretch of a second or more in which the page could not respond and
   reports it. `ccc app speed` counts the ones of two seconds or more
   (`CCC_PERF_APP_FREEZE_MS`) as freezes and shows the longest.
+- **A busy server no longer stalls an open app.** The dashboard hands its
+  interpreter between threads every 0.5 ms instead of Python's 5 ms, so an
+  app's reads are not held for seconds behind a background rebuild.
+  `CCC_THREAD_SWITCH_MS` changes the interval; `0` keeps Python's default.
 - **Tell the kit when your content is drawn.** By default content counts as
   drawn at the first frame after `DOMContentLoaded`. A page that fetches its
   data first should say so itself, or its number is flattering:

@@ -1,0 +1,1 @@
+Pages, apps and the agent pane no longer wait seconds for the dashboard while it is busy in the background: database and file reads were being held up to 900 times longer than they need whenever another part of the server was computing. `CCC_THREAD_SWITCH_MS` tunes the fix; `0` turns it off.

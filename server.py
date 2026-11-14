@@ -48007,9 +48007,57 @@ def _exit_if_port_in_use(exc, port):
         sys.exit(1)
 
 
+_THREAD_SWITCH_MS_DEFAULT = 0.5
+
+
+def _tune_thread_switch_interval():
+    """Hand the interpreter between threads every 0.5 ms instead of 5 ms.
+
+    Each database row, file stat and socket write gives the interpreter up and
+    must win it back. While any other thread is computing (a list rebuild, a
+    transcript scan), that takes one whole switch interval, so a 12,000-row
+    read that needs 0.03 s alone took 25 s and every open page waited behind
+    it. ``CCC_THREAD_SWITCH_MS`` overrides; ``0`` keeps Python's default.
+    """
+    raw = os.environ.get("CCC_THREAD_SWITCH_MS", "").strip()
+    try:
+        ms = float(raw) if raw else _THREAD_SWITCH_MS_DEFAULT
+    except ValueError:
+        ms = _THREAD_SWITCH_MS_DEFAULT
+    if ms <= 0:
+        return sys.getswitchinterval()
+    sys.setswitchinterval(min(max(ms, 0.05), 50.0) / 1000.0)
+    return sys.getswitchinterval()
+
+
+_THREAD_SWITCH_MS_DEFAULT = 0.5
+
+
+def _tune_thread_switch_interval():
+    """Hand the interpreter between threads every 0.5 ms instead of 5 ms.
+
+    Each database row, file stat and socket write gives the interpreter up and
+    must win it back. While any other thread is computing (a list rebuild, a
+    transcript scan), that takes one whole switch interval, so a 12,000-row
+    read that needs 0.03 s alone took 25 s and every open page waited behind
+    it. ``CCC_THREAD_SWITCH_MS`` overrides; ``0`` keeps Python's default.
+    """
+    raw = os.environ.get("CCC_THREAD_SWITCH_MS", "").strip()
+    try:
+        ms = float(raw) if raw else _THREAD_SWITCH_MS_DEFAULT
+    except ValueError:
+        ms = _THREAD_SWITCH_MS_DEFAULT
+    if ms <= 0:
+        return sys.getswitchinterval()
+    sys.setswitchinterval(min(max(ms, 0.05), 50.0) / 1000.0)
+    return sys.getswitchinterval()
+
+
 def main():
     # State files, logs and transcripts hold secrets: create everything owner-only.
     os.umask(0o077)
+    _tune_thread_switch_interval()
+    _tune_thread_switch_interval()
     import socketserver
     class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         allow_reuse_address = True
