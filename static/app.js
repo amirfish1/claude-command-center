@@ -48639,7 +48639,10 @@
         ev.stopPropagation();
         ev.preventDefault();
         const sid = chip.getAttribute('data-parent-sid') || '';
-        if (sid) selectConversation(sid);
+        if (sid && chip.hasAttribute('data-family-task')) {
+          window.open('/?ccc_popout=conversation&conv=' + encodeURIComponent(sid), '_blank',
+            'width=900,height=800');
+        } else if (sid) selectConversation(sid);
       });
     }
     // "See log" button — opens the Watchtower activity log in a floating pane.
@@ -76060,21 +76063,64 @@
   // the rail is the row's existing 3px border-left. The list re-renders
   // often, so a MutationObserver re-applies the last family after each
   // rebuild instead of touching the render path.
-  let _orchFamily = { root: '', lanes: [], count: 0 };
+  let _orchFamily = { root: '', lanes: [], count: 0, details: [] };
   function orchPaintFamilyRows(ctx) {
     const list = document.getElementById('convList');
     if (!list) return;
-    let root = '', laneIds = [], count = 0;
+    let root = '', laneIds = [], count = 0, details = [];
     if (ctx && ctx.convId && !_orchSim) {
       const lanes = orchCollectLanes(ctx.rootSid || ctx.sid);
       if (lanes.length) {
         root = (ctx.rootRow && ctx.rootRow.id) || (ctx.rootSid === ctx.sid ? ctx.convId : '');
         laneIds = lanes.map(l => l.convId).filter(Boolean);
         count = lanes.length;
+        details = lanes;
       }
     }
-    _orchFamily = { root, lanes: laneIds, count };
+    _orchFamily = { root, lanes: laneIds, count, details };
     orchApplyFamilyRows();
+  }
+  // Native subagents have transcripts but no sidebar rows to expand. Give
+  // their family count a real disclosure, using the lane map's viewer IDs.
+  function orchSyncFamilyDisclosure(el, lanes) {
+    const sid = el.getAttribute('data-id') || '';
+    const signature = JSON.stringify(lanes.map(l => [l.id, l.convId, l.name, l.isTaskSubagent]));
+    const targets = [el.querySelector('.conv-main-row .conv-meta-col') || el.querySelector('.conv-main-row'),
+      el.querySelector('.wa-body')].filter(Boolean);
+    targets.forEach(target => {
+      let disclosure = target.querySelector('.conv-orch-family-details');
+      if (!disclosure) {
+        disclosure = document.createElement('details');
+        disclosure.className = 'conv-family-details conv-orch-family-details';
+        disclosure.setAttribute('data-family-key', sid + ':lanes');
+        disclosure.open = _subagentClustersExpandedSet().has(sid)
+          && !_subagentClustersCollapsedSet().has(sid);
+        disclosure.addEventListener('toggle', () => {
+          if (!disclosure.isConnected) return;
+          const expanded = disclosure.open;
+          const expSet = _subagentClustersExpandedSet();
+          const colSet = _subagentClustersCollapsedSet();
+          if (expanded) { expSet.add(sid); colSet.delete(sid); }
+          else { expSet.delete(sid); colSet.add(sid); }
+          _subagentClustersSaveExpandedSet(expSet);
+          _subagentClustersSaveCollapsedSet(colSet);
+          el.querySelectorAll('.conv-orch-family-details').forEach(other => {
+            if (other.open !== expanded) other.open = expanded;
+          });
+        });
+        target.appendChild(disclosure);
+      }
+      if (disclosure.dataset.lanes === signature) return;
+      disclosure.dataset.lanes = signature;
+      disclosure.innerHTML = '<summary class="conv-orch-lanes-chip">'
+        + escapeHtml('\u21b3 ' + lanes.length + (lanes.length === 1 ? ' lane' : ' lanes')) + '</summary>'
+        + '<div class="conv-family-list">' + lanes.map(lane => (
+          '<button type="button" class="conv-family-link"'
+          + (lane.convId ? ' data-parent-sid="' + escapeAttr(lane.convId) + '"' : ' disabled')
+          + (lane.isTaskSubagent ? ' data-family-task' : '') + '>'
+          + escapeHtml(lane.name || lane.id) + '</button>'
+        )).join('') + '</div>';
+    });
   }
   // CCC-228: a lane nested under its parent (is-family-nest) may also render
   // as its own row elsewhere in the list. Keep that row where it is and drop
@@ -76113,12 +76159,13 @@
   function orchApplyFamilyRows() {
     const list = document.getElementById('convList');
     if (!list) return;
-    const { root, lanes, count } = _orchFamily;
+    const { root, lanes, details } = _orchFamily;
     const laneSet = new Set(lanes);
     list.querySelectorAll('.conv-item.is-orch-root, .conv-item.is-orch-lane').forEach(el => {
       const id = el.getAttribute('data-id');
       if (id !== root && !laneSet.has(id)) {
         el.classList.remove('is-orch-root', 'is-orch-lane');
+        el.querySelectorAll('.conv-orch-family-details').forEach(d => d.remove());
         const chip = el.querySelector('.conv-orch-lanes-chip:not(.conv-subagent-cluster-toggle)');
         if (chip) chip.remove();
       }
@@ -76133,19 +76180,16 @@
       let chip = el.querySelector('.conv-orch-lanes-chip');
       if (isRoot && mainRow) {
         if (el.querySelector('.conv-subagent-cluster-toggle, .wa-lanes')) {
+          el.querySelectorAll('.conv-orch-family-details').forEach(d => d.remove());
           if (chip && !chip.classList.contains('conv-subagent-cluster-toggle')) chip.remove();
           return;
         }
-        const label = '\u21b3 ' + count + (count === 1 ? ' lane' : ' lanes');
-        if (!chip) {
-          chip = document.createElement('span');
-          chip.className = 'conv-orch-lanes-chip';
-          const rowEnd = mainRow.querySelector('.conv-row-end');
-          if (rowEnd) mainRow.insertBefore(chip, rowEnd);
-          else mainRow.appendChild(chip);
-        }
-        if (chip.textContent !== label) chip.textContent = label;
-      } else if (chip && !chip.classList.contains('conv-subagent-cluster-toggle')) chip.remove();
+        if (chip && !chip.closest('.conv-orch-family-details')) chip.remove();
+        orchSyncFamilyDisclosure(el, details || []);
+      } else {
+        el.querySelectorAll('.conv-orch-family-details').forEach(d => d.remove());
+        if (chip && !chip.classList.contains('conv-subagent-cluster-toggle')) chip.remove();
+      }
     });
   }
   let _orchFamilyRaf = 0;
