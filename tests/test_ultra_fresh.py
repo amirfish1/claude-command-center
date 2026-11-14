@@ -64,6 +64,33 @@ def test_new_user_is_a_barrier_for_old_messages():
         assert [u["text"] for u in updates if "text" in u] == ["Current reply"]
 
 
+def test_coordination_events_cannot_stall_incremental_explanations():
+    reader = FreshSession("test-session")
+    old = event("Checking the previous patch.", line=2)
+    coord = {"type": "system", "line": "coord-test-session-turn-ended",
+             "ts": "2026-10-23T10:00:03Z", "text": "Active turn went quiet"}
+    user = {"type": "user_text", "line": 4, "ts": "2026-10-23T10:00:04Z",
+            "text": "Review the revised patch."}
+    reply = event("I am checking the revised patch.", line=5, ts="2026-10-23T10:00:05Z")
+    tool = {"type": "assistant", "line": 6, "ts": "2026-10-23T10:00:06Z",
+            "blocks": [{"kind": "tool_use", "name": "Bash"}]}
+    with mock.patch.object(server, "_conv_parse_jsonl_mtime", side_effect=[(1, 1), (2, 2), (3, 3)]), \
+         mock.patch.object(server, "parse_conversation", side_effect=[
+             {"events": [coord, old], "last_line": 2},
+             {"events": [coord, old, user, reply], "last_line": 5},
+             {"events": [coord, old, user, reply, tool], "last_line": 6},
+         ]), \
+         mock.patch.object(server, "_resolve_spawn_log_for_session", return_value=(None, False)), \
+         mock.patch.object(server, "_detect_session_engine", return_value="codex"):
+        assert reader.read()[-1]["text"] == "Checking the previous patch."
+        update = reader.read()[-1]
+        assert update["text"] == "I am checking the revised patch."
+        assert update["line"] == 5
+        assert update["user_ts"] == user["ts"]
+        assert reader.read() == []
+        assert reader.last_text == reply["blocks"][0]["text"]
+
+
 def test_spawn_partial_message_uses_existing_normalizer_and_excludes_tools(tmp_path):
     log = tmp_path / "spawn.log"
     log.write_text("")
