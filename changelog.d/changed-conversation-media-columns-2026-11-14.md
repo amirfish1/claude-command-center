@@ -1,0 +1,1 @@
+Display tool and generated images in a compact right-hand column inside assistant turns, keeping text and tools flowing on the left without image-height gaps. Narrow conversation panes stack media below the text.

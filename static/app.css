@@ -2327,6 +2327,26 @@
   .tool-result-image.is-missing img { display: none; }
   .tool-result-image.is-missing .tool-result-image-missing { display: inline; }
 
+  /* Media belongs to the conversation, with an independent vertical flow. */
+  .conversations-view { container-type: inline-size; }
+  .kimi-turn:has(> .conversation-media-rail) { display: flow-root; }
+  .conversation-media-rail { display: flex; flex-direction: column; gap: 0; }
+  .conversation-media-rail > .image-gen-card { margin: 0; max-width: none; min-width: 0; }
+  .conversation-media-rail .tool-result-image { flex: 1 1 100%; max-width: 100%; }
+  .conversation-media-rail .tool-result-image img { width: 100%; object-fit: contain; }
+  @container (min-width: 720px) {
+    .kimi-turn > .conversation-media-rail {
+      float: right; width: 36%; margin: 0 0 0 16px;
+    }
+    .kimi-turn:has(> .conversation-media-rail) > :not(.conversation-media-rail) {
+      max-width: calc(64% - 16px);
+    }
+  }
+  @container (max-width: 719px) {
+    .kimi-turn:has(> .conversation-media-rail) { display: flex; flex-direction: column; }
+    .kimi-turn > .conversation-media-rail { order: 1; margin-top: 8px; }
+  }
+
   /* Inline `codex_request` card: approval/question/permission/elicitation,
      rendered in the transcript instead of only in the live strip. */
   .codex-request-card {

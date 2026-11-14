@@ -5520,6 +5520,12 @@
     if ((c.name_overridden || c.spawn_named) && c.display_name) {
       rawTitle = c.display_name;
       titleSource = c.name_overridden ? 'user' : 'spawn';
+    } else if (c.auto_titled && c.task_title) {
+      // The saved title overlay updates without rebuilding historical rows.
+      // A cached display_name must not become a topic prefix for its own
+      // regenerated title. Explicit renames and launch names still win.
+      rawTitle = c.task_title;
+      titleSource = 'ai';
     } else if (c.display_name && c.display_name !== c.ai_title) {
       // Server-side display_name diverged from ai_title — typically a user
       // /rename in the terminal (Claude Code writes that as a custom-title
@@ -6785,7 +6791,9 @@
       const body = document.createElement('div');
       body.style.cssText = 'flex:1 1 auto;min-width:0;word-break:break-word;';
       body.innerHTML = '<strong>CCC wants to interrupt this session. Approve?</strong><br>'
-        + '<span style="color:var(--text-muted)">' + escapeHtml(label) + ': ' + escapeHtml(ask.reason || '') + '</span>';
+        + '<span style="color:var(--text-muted)"><a class="session-ref-chip" href="?session=' + encodeURIComponent(ask.sid)
+        + '" data-session-ref="' + escapeAttr(ask.sid) + '" title="' + escapeAttr('Open session: ' + label)
+        + '">' + escapeHtml(label) + '</a>: ' + escapeHtml(ask.reason || '') + '</span>';
       card.appendChild(body);
       const resolve = async (decision) => {
         card.querySelectorAll('button').forEach(b => { b.disabled = true; });
@@ -71498,6 +71506,15 @@
     if (_kimiRegroupTools.batch) { _kimiRegroupTools.batch.add(turn); return; }
     const view = turn.closest('.conversations-view');
     const scrollTop = view && view.scrollTop;
+    const previousRail = turn.querySelector(':scope > .conversation-media-rail');
+    if (previousRail) {
+      for (const card of Array.from(previousRail.children)) {
+        const anchor = card._conversationMediaAnchor;
+        turn.insertBefore(card, anchor && anchor.parentNode === turn ? anchor : null);
+        if (anchor) anchor.remove();
+      }
+      previousRail.remove();
+    }
     Array.from(turn.querySelectorAll(':scope > .kimi-tool-group')).forEach(g => {
       const body = g.querySelector('.kimi-tool-group-body');
       while (body && body.firstElementChild) {
@@ -71573,6 +71590,25 @@
       flush();
     }
     flush();
+    // Keep media in a single float so text and tools can flow independently
+    // of thumbnail heights. Leave transcript markers and tools as direct
+    // children: live reconciliation and compact folding depend on them.
+    const mediaCards = Array.from(turn.querySelectorAll(':scope > .image-gen-card'));
+    let mediaRail = turn.querySelector(':scope > .conversation-media-rail');
+    if (mediaCards.length) {
+      if (!mediaRail) {
+        mediaRail = document.createElement('div');
+        mediaRail.className = 'conversation-media-rail';
+      }
+      for (const card of mediaCards) {
+        const anchor = document.createComment('conversation media');
+        card.before(anchor);
+        card._conversationMediaAnchor = anchor;
+        mediaRail.append(card);
+      }
+      turn.prepend(mediaRail);
+    }
+    if (mediaRail && !mediaRail.children.length) mediaRail.remove();
     // Moving a tall expanded result briefly shrinks its scroller. Restore
     // the reading position after the complete group is back in the DOM.
     if (view && view.scrollTop !== scrollTop) view.scrollTop = scrollTop;

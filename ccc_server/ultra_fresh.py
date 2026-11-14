@@ -101,7 +101,13 @@ class FreshSession:
             previous_line = 0 if initial or result.get("last_line", 0) < self.last_line else self.last_line
             self.last_line = result.get("last_line", self.last_line)
             for ev in result.get("events") or []:
-                if not initial and int(ev.get("line") or 0) <= previous_line:
+                # Synthetic coordination events use text IDs, not transcript
+                # cursors. They must not abort the rest of an incremental read.
+                try:
+                    line = int(ev.get("line") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if not initial and line <= previous_line:
                     continue
                 ts = str(ev.get("ts") or "")
                 if (ev.get("type") in ("user_text", "user") and not ev.get("pending")
@@ -114,7 +120,7 @@ class FreshSession:
                         updates.append({"session_id": self.sid, "user_ts": ts, "clear": True})
                 text = message_text(ev)
                 if text:
-                    update = self._message(text, ts, line=int(ev.get("line") or 0))
+                    update = self._message(text, ts, line=line)
                     if update:
                         # JSON-only verdicts cannot include a footer. Enrich
                         # only an exact, persisted response, never live chunks.

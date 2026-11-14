@@ -36,6 +36,14 @@ test('a manual name leads the AI title in the same session', () => {
   const row = { session_id: 'root', display_name: 'My project', name_overridden: true, ai_title: 'Fix sorting' };
   assert.equal(load([row])(row).rawTitle, 'My project: Fix sorting');
 });
+test('a regenerated automatic title replaces its stale cached display name', () => {
+  const c = { session_id: 'root', display_name: 'Pick up and continue pending work',
+    auto_titled: true, task_title: 'Review inbox and booking fixes' };
+  assert.equal(load([c])(c).rawTitle, 'Review inbox and booking fixes');
+  c.name_overridden = true;
+  c.display_name = 'My chosen topic';
+  assert.equal(load([c])(c).rawTitle, 'My chosen topic: Review inbox and booking fixes');
+});
 test('persisted task title survives refreshes that only supply continuation boilerplate', () => {
   const root = { session_id: 'root', display_name: 'Dashboard design', name_overridden: true };
   const leg = { session_id: 'leg', continued_from_session_id: 'root',

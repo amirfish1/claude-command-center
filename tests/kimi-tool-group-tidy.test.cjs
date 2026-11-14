@@ -139,3 +139,51 @@ test('a first render regroups each turn once, after its events are in place', as
     await browser.close();
   }
 });
+
+test('conversation media packs on the right without image-height gaps between text blocks', async () => {
+  const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1400, height: 900 });
+    await page.setContent('<body class="conv-compact"><div class="conv-pane is-webui-session">'
+      + '<div class="conversations-view"><div class="kimi-turn"></div></div></div></body>');
+    await page.addStyleTag({ content: fs.readFileSync(require.resolve('../static/app.css'), 'utf8') });
+    await page.evaluate(code => {
+      (0, eval)('const _KIMI_GLYPHS = new Proxy({}, { get: () => "" });'
+        + 'const escapeAttr = s => String(s).replace(/"/g, "&quot;");'
+        + code + '\nwindow.regroup = _kimiRegroupTools;');
+      const image = line => window.CCCToolResultImagesCardHtml({ images: [{ kind: 'base64', line,
+        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=' }] }, 'example');
+      const turn = document.querySelector('.kimi-turn');
+      turn.innerHTML = '<div class="assistant-text">Checking the settings screenshot.</div>' + image(10)
+        + '<div class="assistant-text">The session is running and visible.</div>' + image(20)
+        + '<div class="assistant-text">The navigation path is confirmed.</div>';
+      regroup(turn);
+      for (const img of turn.querySelectorAll('img')) img.style.height = '200px';
+    }, imageSlice + slice);
+    const measure = () => page.evaluate(() => {
+      const turn = document.querySelector('.kimi-turn');
+      const texts = [...turn.querySelectorAll('.assistant-text')].map(n => n.getBoundingClientRect());
+      const cards = [...turn.querySelectorAll('.image-gen-card')].map(n => n.getBoundingClientRect());
+      return { gap: texts[1].top - texts[0].bottom,
+        right: cards[0].left >= texts[0].right,
+        topAligned: Math.abs(cards[0].top - texts[0].top) < 2,
+        packed: Math.abs(cards[1].top - cards[0].bottom) < 2,
+        overflow: turn.scrollWidth > turn.clientWidth,
+        stacked: cards[0].top >= texts[2].bottom };
+    });
+    const desktop = await measure();
+    assert.ok(desktop.right && desktop.topAligned && desktop.packed, JSON.stringify(desktop));
+    assert.ok(desktop.gap <= 12 && !desktop.overflow, JSON.stringify(desktop));
+    // The breakpoint follows the conversation width, even on a wide screen.
+    await page.addStyleTag({ content: '.conv-pane { flex: none; width: 600px; }' });
+    const narrowPane = await measure();
+    assert.ok(narrowPane.stacked && !narrowPane.overflow, JSON.stringify(narrowPane));
+    await page.setViewport({ width: 390, height: 844 });
+    await page.addStyleTag({ content: '.conv-pane { flex: none; width: 100%; }' });
+    const mobile = await measure();
+    assert.ok(mobile.stacked && !mobile.overflow && mobile.packed, JSON.stringify(mobile));
+  } finally {
+    await browser.close();
+  }
+});
