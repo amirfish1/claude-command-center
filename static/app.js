@@ -59672,6 +59672,7 @@
         + '<div class="upd-dialog fq-ticket-dialog" role="dialog" aria-modal="true" aria-labelledby="fqTicketTitle">'
         +   '<div class="fq-ticket-header">'
         +     '<h2 class="upd-title" id="fqTicketTitle">New queue ticket</h2>'
+        +     '<button type="button" class="upd-btn fq-ticket-hide-keyboard" data-fq-ticket-hide-keyboard>Hide keyboard</button>'
         +     '<button type="button" class="fq-ticket-close" data-fq-ticket-cancel aria-label="Close">&times;</button>'
         +   '</div>'
         +   '<div class="fq-ticket-body">'
@@ -59729,6 +59730,14 @@
       modal.querySelectorAll('[data-fq-ticket-cancel]').forEach(el => el.addEventListener('click',
         () => (el.classList.contains('upd-backdrop') ? dismiss() : close(''))));
       if (submitBtn) submitBtn.addEventListener('click', submit);
+      const hideKeyboard = modal.querySelector('[data-fq-ticket-hide-keyboard]');
+      // Keep focus until click so a keyboard resize cannot move the target
+      // between pointerdown and click. Blurring leaves the draft intact.
+      hideKeyboard.addEventListener('pointerdown', ev => ev.preventDefault());
+      hideKeyboard.addEventListener('click', () => {
+        const field = document.activeElement;
+        if (modal.contains(field) && field.matches('textarea, input, select')) field.blur();
+      });
       // CCC-214: drag the header to move the dialog off the part of the page
       // it covers.
       const dialog = modal.querySelector('.fq-ticket-dialog');
@@ -59736,6 +59745,7 @@
       if (dialog && header) {
         let offX = 0, offY = 0, drag = null;
         header.addEventListener('pointerdown', (ev) => {
+          if (window.matchMedia('(max-width: 700px), (pointer: coarse)').matches) return;
           if (ev.button !== 0 || (ev.target.closest && ev.target.closest('button'))) return;
           drag = { id: ev.pointerId, x: ev.clientX - offX, y: ev.clientY - offY };
           try { header.setPointerCapture(ev.pointerId); } catch (_) {}

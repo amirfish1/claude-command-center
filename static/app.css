@@ -15761,6 +15761,24 @@
     color: var(--text-muted);
     font-size: 12px;
   }
+  .sidebar-pagination { line-height: 1.5; }
+  .sidebar-pagination .conv-window-btn {
+    min-height: 36px;
+    margin-bottom: 8px;
+    padding: 6px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .sidebar-pagination .conv-window-btn:hover { border-color: var(--accent); }
+  .sidebar-pagination .conv-window-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
   /* Explanatory archive placeholder (pre-checklist boot wait). */
   .archive-loading-placeholder .alp-title {
     font-weight: 600; color: var(--text); margin-bottom: 6px;
@@ -24718,6 +24736,44 @@ body.has-gc-reader .pwa-install-banner {
 }
 .fq-ticket-actions .fq-ticket-attach-btn:hover { background: var(--surface-2); color: var(--text); }
 .fq-ticket-actions .fq-ticket-attach-btn svg { display: block; }
+.fq-ticket-hide-keyboard { display: none; }
+@media (max-width: 700px), (pointer: coarse) {
+  /* iOS keeps the layout viewport full-height when the keyboard opens.
+     Share the chat shell's visual viewport bounds, including Safari panning. */
+  .fq-ticket-composer.upd-overlay {
+    top: var(--app-vv-top, 0px);
+    bottom: auto;
+    height: var(--app-vh, 100dvh);
+    padding: 12px;
+    box-sizing: border-box;
+    justify-content: center;
+  }
+  .fq-ticket-composer .fq-ticket-dialog {
+    box-sizing: border-box;
+    width: min(640px, 100%);
+    max-height: 100%;
+    padding: 12px;
+    gap: 10px;
+    overflow: hidden;
+    /* A desktop drag must not carry outside the viewport after rotation. */
+    transform: none !important;
+  }
+  .fq-ticket-composer .fq-ticket-header,
+  .fq-ticket-composer .fq-ticket-actions { flex-shrink: 0; }
+  .fq-ticket-composer .fq-ticket-header {
+    gap: 6px;
+    cursor: default;
+    touch-action: auto;
+  }
+  .fq-ticket-composer .fq-ticket-header .upd-title { flex: 1; min-width: 0; }
+  .fq-ticket-hide-keyboard { display: block; min-height: 44px; padding: 8px; font-size: 12px; }
+  .fq-ticket-composer .fq-ticket-close { width: 44px; height: 44px; flex-shrink: 0; }
+  .fq-ticket-composer .fq-ticket-body { min-height: 0; overflow-y: auto; padding: 3px; }
+  .fq-ticket-composer .fq-ticket-textarea { min-height: 90px; flex-shrink: 0; font-size: 16px; line-height: 1.4; }
+  .fq-ticket-composer .fq-ticket-queue-select { flex-shrink: 0; font-size: 16px; }
+  .fq-ticket-composer .fq-ticket-actions .upd-btn { min-height: 44px; }
+  .fq-ticket-composer .fq-ticket-attach-btn { width: 44px; height: 44px; }
+}
 .files-queue-configure { font-size: 14px; }
 
 /* Plan-to-fleet import dialog (W51). Flat preview list, never a Kanban. */
