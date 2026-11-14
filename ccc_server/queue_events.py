@@ -1804,14 +1804,82 @@ def _queue_codex_resume(session_id, text, pid=None, reason=None, *, only_if_pend
 # sees the wake broken down moment to moment (stages, live tokens, context %)
 # and, critically, learns when a turn produced nothing because the session hit
 # its context limit. Everything here is single-session and cheap: the stage
-# timeline comes from the in-memory `_CODEX_WAKE_EVENTS` window (NO file scan)
-# and the token/context readout comes from a ~16KB TAIL of one rollout file,
+# timeline merges the in-memory window with a bounded, cached ledger tail
+# because engine wakes run in a separate worker process. The token/context
+# readout comes from a ~16KB TAIL of one rollout file,
 # cached by (path, mtime, size) so repeated polls of an unchanged file re-read
 # nothing (perf gate).
 _CODEX_WAKE_TAIL_CACHE = collections.OrderedDict()
 _CODEX_WAKE_TAIL_LOCK = threading.Lock()
 _CODEX_WAKE_TAIL_BYTES = 16 * 1024
 _CODEX_WAKE_TAIL_MAX = 16
+_CODEX_WAKE_LEDGER_BYTES = 128 * 1024
+_CODEX_WAKE_LEDGER_CACHE = collections.OrderedDict()
+_CODEX_WAKE_LEDGER_LOCK = threading.Lock()
+
+
+def _codex_wake_events(session_id):
+    """Read worker wake transitions without scanning the full lifecycle log.
+
+    Cache each of the two rotating ledger tails by file identity/version;
+    unchanged polls only stat them. Memory covers a local append that has not
+    reached disk yet. Read the backup too so rotation cannot erase an active
+    wake. Keep only the newest attempt, including for local-only callers.
+    """
+    events = []
+    for ledger in (_core._RESUME_LEDGER_BACKUP, _core._RESUME_LEDGER_FILE):
+        try:
+            ledger = Path(ledger)
+            st = ledger.stat()
+            key = (str(ledger), st.st_ino, st.st_mtime_ns, st.st_size)
+            with _CODEX_WAKE_LEDGER_LOCK:
+                cached = _CODEX_WAKE_LEDGER_CACHE.get(str(ledger))
+                if not cached or cached[0] != key:
+                    by_sid = collections.OrderedDict()
+                    with ledger.open("rb") as fh:
+                        if st.st_size > _CODEX_WAKE_LEDGER_BYTES:
+                            fh.seek(-_CODEX_WAKE_LEDGER_BYTES, os.SEEK_END)
+                            fh.readline(_CODEX_WAKE_LEDGER_BYTES)
+                        chunk = fh.read(_CODEX_WAKE_LEDGER_BYTES)
+                    for raw in chunk.splitlines():
+                        try:
+                            row = json.loads(raw)
+                        except (ValueError, UnicodeError):
+                            continue
+                        if not isinstance(row, dict):
+                            continue
+                        sid = row.get("sid")
+                        if not isinstance(sid, str) or not str(row.get("event", "")).startswith("codex_wake"):
+                            continue
+                        if not isinstance(row.get("epoch"), (int, float)):
+                            continue
+                        if sid not in by_sid:
+                            by_sid[sid] = collections.deque(maxlen=_core._CODEX_WAKE_PER_SID)
+                        by_sid.move_to_end(sid)
+                        by_sid[sid].append(row)
+                        while len(by_sid) > _core._CODEX_WAKE_MAX_SIDS:
+                            by_sid.popitem(last=False)
+                    cached = (key, by_sid)
+                    _CODEX_WAKE_LEDGER_CACHE[str(ledger)] = cached
+                    _CODEX_WAKE_LEDGER_CACHE.move_to_end(str(ledger))
+                    while len(_CODEX_WAKE_LEDGER_CACHE) > 2:
+                        _CODEX_WAKE_LEDGER_CACHE.popitem(last=False)
+                events.extend(cached[1].get(session_id, ()))
+        except (OSError, ValueError, TypeError):
+            continue
+    with _core._RESUME_LEDGER_LOCK:
+        events.extend(_core._CODEX_WAKE_EVENTS.get(session_id, ()))
+    # Local entries also appear on disk; deduplicate before finding the last
+    # attempt so equal-millisecond transitions retain their append order.
+    unique = {}
+    for row in events:
+        unique.setdefault(json.dumps(row, sort_keys=True), row)
+    events = list(unique.values())
+    events.sort(key=lambda row: row.get("epoch", 0))
+    for i in range(len(events) - 1, -1, -1):
+        if events[i].get("event") == "codex_wake_attempt":
+            return events[i:]
+    return events
 
 
 def _codex_wake_rollout_snapshot(session_id):
@@ -1935,12 +2003,10 @@ def _codex_wake_stall_detail(quiet_s, app_transport):
 
 def build_codex_wake_status(session_id):
     """Assemble the live wake/turn breakdown for one Codex session. Reads the
-    in-memory per-sid wake-event window plus a single rollout tail — no
+    bounded worker-ledger tails plus a single rollout tail — no full log or
     all-sessions scan, no subprocess. Never raises (returns a safe shell)."""
     try:
-        with _core._RESUME_LEDGER_LOCK:
-            dq = _core._CODEX_WAKE_EVENTS.get(session_id)
-            events = list(dq) if dq else []
+        events = _codex_wake_events(session_id)
     except Exception:
         events = []
     now = time.time()
