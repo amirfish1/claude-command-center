@@ -36015,6 +36015,13 @@
   let _convReplayHumanTypeIndex = 0;
   let _convReplayHumanSendPending = false;
   let _convReplayHumanSent = false;
+  // paneId -> {lines:Set<jsonl line>, evidence:bool} from
+  // /api/conversations/<id>/typed-turns: which user turns the owner actually
+  // typed in the composer. Everything else (lane reports, injected briefs,
+  // worker/peer messages) arrives whole instead of being typed out.
+  let _convReplayTypedByPane = {};
+  let _convReplayRunId = 0;
+  let _convReplayTypedLoading = false;
 
   function _isConvReplayMeaningful(el) {
     if (!el || !el.classList) return false;
@@ -36297,7 +36304,13 @@
     };
     document.addEventListener('input', _onConvReplayInputRef, true);
 
-    playNextConvReplayStep();
+    const runId = ++_convReplayRunId;
+    _convReplayTypedLoading = true;
+    _convReplayLoadTypedTurns(paneIds).then(() => {
+      if (runId !== _convReplayRunId) return;
+      _convReplayTypedLoading = false;
+      if (_convReplayActive && !_convReplayPaused && !_convReplayTimeout) playNextConvReplayStep();
+    });
   }
 
   // Called at the tail of renderConversationEvents whenever new nodes just
@@ -36517,8 +36530,12 @@
     // Escape/Skip-to-end mid "human is typing" must not leave a fake draft
     // sitting in the real composer.
     _convReplayResetHumanTyping();
+    _convReplayEvents.forEach(item => item.el.classList.remove('conv-replay-incoming'));
     _convReplayEvents = [];
     _convReplaySeenEls = null;
+    _convReplayTypedByPane = {};
+    _convReplayRunId++;
+    _convReplayTypedLoading = false;
     if (typeof _orchReplayStep === 'function') _orchReplayStep(null);
     const controls = document.getElementById('convReplayControls');
     if (controls) controls.remove();
@@ -36578,12 +36595,45 @@
     if (t.length > 2500) return true;
     return /^(announced from:|\[ccc |\[request interrupted|<ccc-|<system|<hook|use ccc orchestration|when ready to execute|when execution lands|before landing,|\[?system\]?:|\[?hook)/i.test(t);
   }
+  // True only for a user turn the owner typed in the composer. Uses the
+  // server's proof (dashboard-send journal) when the session has any; rows
+  // the server can't place (no jsonl line yet) and sessions with no send
+  // record fall back to the shape check above.
+  function _convReplayIsTyped(item) {
+    const el = item && item.el;
+    if (!el || !el.classList.contains('user_text')) return false;
+    if (el.matches('.task-notification-event, .peer-message, .skill-loaded-event, .compact-resume-event')) return false;
+    const info = _convReplayTypedByPane[item.paneId];
+    const line = Number(el.dataset.jsonlLine);
+    if (info && info.evidence && el.dataset.jsonlLine && Number.isFinite(line)) return info.lines.has(line);
+    const textEl = _convReplayTextContainer(el);
+    return !_convReplayLooksInjected((textEl ? textEl.textContent : el.textContent || '').trim());
+  }
+
+  function _convReplayLoadTypedTurns(paneIds) {
+    _convReplayTypedByPane = {};
+    const loads = paneIds.map(pid => {
+      const cid = presentationConversationIdForPane(pid);
+      if (!cid) return Promise.resolve();
+      return fetch('/api/conversations/' + encodeURIComponent(cid) + '/typed-turns', { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data && data.ok && Array.isArray(data.typed_lines)) {
+            _convReplayTypedByPane[pid] = { lines: new Set(data.typed_lines.map(Number)), evidence: !!data.evidence };
+          }
+        })
+        .catch(() => {});
+    });
+    // Never hold the replay hostage to a slow server: fall back to the shape
+    // check after a short wait.
+    return Promise.race([Promise.all(loads), new Promise(res => setTimeout(res, 2500))]);
+  }
+
   function _convReplayHumanStep(item) {
     const textEl = _convReplayTextContainer(item.el);
     const plainText = (textEl ? textEl.textContent : item.el.textContent || '').trim();
     const inputEl = composerInputForPane(item.paneId);
     if (!inputEl || !plainText) return true;  // nothing to animate - just show the bubble
-    if (_convReplayLooksInjected(plainText)) return true;  // system-shaped: bubble only, no typing
 
     if (_convReplayHumanSent) {
       _convReplayHumanSent = false;
@@ -36636,14 +36686,32 @@
   }
 
   function playNextConvReplayStep() {
-    if (!_convReplayActive || _convReplayPaused) return;
+    if (!_convReplayActive || _convReplayPaused || _convReplayTypedLoading) return;
     if (_convReplayMsgIndex >= _convReplayEvents.length) {
       renderConvReplayControls();
       return;
     }
 
     const item = _convReplayEvents[_convReplayMsgIndex];
-    const isUserTurn = item.meaningful && item.el.classList.contains('user_text');
+    const isUserMsg = item.meaningful && item.el.classList.contains('user_text');
+    const isUserTurn = isUserMsg && _convReplayIsTyped(item);
+
+    // Incoming (not typed) user-role messages: injected briefs, lane
+    // reports, worker/peer messages. Never touch the composer; the bubble
+    // arrives whole with its own "incoming" animation and a short beat.
+    if (isUserMsg && !isUserTurn) {
+      item.el.classList.remove('conv-replay-hidden');
+      item.el.classList.remove('conv-replay-incoming');
+      void item.el.offsetWidth; // restart the animation after a step back
+      item.el.classList.add('conv-replay-incoming');
+      _convReplayMsgIndex++;
+      if (typeof _orchReplayStep === 'function') _orchReplayStep(item);
+      _convReplayRevealAllWordsInstantly(_convReplayPrepareWordsForItem(item));
+      _scrollConvReplayToBottom(item.paneId);
+      if (_convReplayMsgIndex >= _convReplayEvents.length) { renderConvReplayControls(); return; }
+      _convReplayTimeout = setTimeout(() => { _convReplayTimeout = null; playNextConvReplayStep(); }, 900 / _convReplaySpeed);
+      return;
+    }
 
     // User turns: simulate typing into the real composer, then "send" —
     // the bubble stays hidden and untouched until that finishes, instead

@@ -963,6 +963,28 @@ def export_conversation(conversation_id, *, parse, transcript_path, engine="",
     }, 200
 
 
+def typed_turns(conversation_id, *, parse, transcript_path, engine="") -> dict:
+    """Payload for GET /api/conversations/<id>/typed-turns.
+
+    Which user rows the owner typed (same proof Share uses), so the in-app
+    replay can type only those into the composer and show the rest (lane
+    reports, injected briefs, peer and worker messages) arriving whole.
+    `evidence` is False when the session has no dashboard-send record at all;
+    the client then falls back to its own shape check instead of calling
+    every row machine input.
+    """
+    events = (parse(conversation_id) or {}).get("events") or []
+    sends = attribution.human_sends(conversation_id, _months_of(events)) if events else []
+    proven = _proven_rows(events, sends)
+    terminal = _is_terminal_session(engine, transcript_path)
+    typed = sorted(
+        e["line"] for e in events
+        if e.get("type") == "user_text" and e.get("line") is not None
+        and _is_typed_prompt(e, proven, terminal)
+    )
+    return {"ok": True, "typed_lines": typed, "evidence": bool(sends or typed)}
+
+
 def _commits_in_days(productivity: dict, days: int, now: float):
     """Pushed commits over the last ``days`` days, or None when unknown."""
     rows = productivity.get("daily")

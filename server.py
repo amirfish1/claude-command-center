@@ -33379,6 +33379,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cwd=find_session_cwd(conv_id) or _kilo_session_cwd(conv_id) or "",
             )
             self.send_json(payload, status)
+        elif re.match(r"^/api/conversations/[^/]+/typed-turns$", path):
+            # In-app replay: which user turns were typed in the composer.
+            from ccc_server import share_run
+            conv_id = urllib.parse.unquote(path.split("/")[-2])
+            self.send_json(share_run.typed_turns(
+                conv_id,
+                parse=parse_conversation,
+                transcript_path=conversation_transcript_path(conv_id),
+                engine=_detect_session_engine(conv_id),
+            ))
         elif path == "/api/sessions/ultra-fresh":
             from ccc_server.ultra_fresh import stream
             stream(self, urllib.parse.parse_qs(parsed.query))

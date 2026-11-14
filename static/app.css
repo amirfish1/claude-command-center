@@ -35254,3 +35254,18 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 @media (prefers-reduced-motion: reduce) {
   #convList.session-workspace .conv-item.is-swipe-settling { transition: none !important; }
 }
+
+/* Replay: a user-role message the owner did not type (injected brief, lane
+   report, worker or peer message) arrives whole, sliding in from above,
+   instead of being typed into the composer. */
+.conv-replay-incoming {
+  animation: conv-replay-incoming-in 0.45s ease-out;
+}
+@keyframes conv-replay-incoming-in {
+  from { opacity: 0; transform: translateY(-10px); box-shadow: 0 0 0 2px var(--accent); }
+  60% { opacity: 1; }
+  to { opacity: 1; transform: none; box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conv-replay-incoming { animation: none; }
+}

@@ -1,0 +1,1 @@
+- Conversation replay only types messages you wrote in the composer. Injected briefs, lane reports, task notifications and worker messages now slide in whole instead of being typed out keystroke by keystroke.
