@@ -17788,6 +17788,20 @@
     const btn = document.getElementById('convActionsBtn');
     const menu = document.getElementById('convActionsMenu');
     if (!btn || !menu) return;
+    const bar = btn.closest('.conv-input-bar');
+    // Container-width trigger (not viewport): an app pane is a narrow box in a
+    // wide window. Embedded panes always use the menu.
+    if (bar) {
+      const NARROW_PX = 600;
+      const apply = () => {
+        const embedded = document.body.classList.contains('ccc-app-embed');
+        const w = bar.getBoundingClientRect().width;
+        bar.classList.toggle('actions-in-menu', embedded || (w > 0 && w < NARROW_PX));
+      };
+      apply();
+      if (typeof ResizeObserver === 'function') new ResizeObserver(apply).observe(bar);
+      else window.addEventListener('resize', apply);
+    }
     const hide = () => { menu.style.display = 'none'; btn.setAttribute('aria-expanded', 'false'); };
     btn.addEventListener('click', (ev) => {
       ev.preventDefault();
@@ -17798,6 +17812,15 @@
         // it whenever the Esc button itself would be live.
         const escItem = menu.querySelector('[data-act="esc"]');
         if (escItem) escItem.hidden = !($convEscBtn && $convEscBtn.style.display !== 'none' && !$convEscBtn.disabled);
+        // Compact and Steer only move into this menu when the composer is in
+        // actions-in-menu mode (narrow pane / app embed); show them while their
+        // own button would be live.
+        const inMenu = !!(bar && bar.classList.contains('actions-in-menu'));
+        const live = (b) => !!(b && b.classList.contains('visible') && !b.disabled);
+        const cItem = menu.querySelector('[data-act="compact"]');
+        if (cItem) cItem.hidden = !(inMenu && live($convCompactBtn) && !$convCompactBtn.classList.contains('in-header'));
+        const sItem = menu.querySelector('[data-act="steer"]');
+        if (sItem) sItem.hidden = !(inMenu && live($convSteerBtn));
       }
       menu.style.display = opening ? 'block' : 'none';
       btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
@@ -17807,6 +17830,8 @@
       if (!item) return;
       hide();
       if (item.dataset.act === 'esc') sendEscToTerminal();
+      else if (item.dataset.act === 'compact') compactCurrentSession();
+      else if (item.dataset.act === 'steer') sendToTerminal('p1', 'steer');
       else if (item.dataset.act === 'attach') { const i = document.getElementById('convAttachInput'); if (i) i.click(); }
       else if (item.dataset.act === 'continue') { const c = document.querySelector('#convSendMenu .continue-new-btn'); if (c) c.click(); }
     });

@@ -10035,6 +10035,19 @@
     .conv-input-bar:has(textarea:focus) textarea { max-height: calc(var(--app-vh, 100vh) * 0.12) !important; }
   }
 
+  /* Narrow or app-embedded composer: same + menu as touch. app.js
+     (_initConvActionsMenu) sets .actions-in-menu on the composer when it is
+     under ~600px wide or framed inside an app (body.ccc-app-embed), so Esc,
+     Compact and Steer move into the + menu and the input, mic and Send stay. */
+  .conv-input-bar.actions-in-menu .conv-actions-group { display: inline-flex; }
+  .conv-input-bar.actions-in-menu .attach-btn,
+  .conv-input-bar.actions-in-menu .conv-send-caret,
+  .conv-input-bar.actions-in-menu .compact-btn,
+  .conv-input-bar.actions-in-menu .steer-btn,
+  .conv-input-bar.actions-in-menu #convEscBtn { display: none !important; }
+  .conv-input-bar.actions-in-menu .conv-input-row-bottom { overflow: visible !important; }
+  .conv-input-bar.is-new-session-launch.actions-in-menu .conv-actions-item[data-act="continue"] { display: none; }
+
   /* ── Goal #5: tighten message + status row vertical rhythm ────────────────
      More message fits per screen once the inter-event margins shrink. */
   @media (max-width: 1200px) {
