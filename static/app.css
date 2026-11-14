@@ -17590,19 +17590,6 @@
     /* Controls that don't make sense on phones */
     .sh-btn-deploy { display: none !important; }
 
-    /* Headroom-style session-list header: collapses on scroll-down, returns
-       on scroll-up or at the top (app.js toggles .list-scroll-hidden). */
-    .sidebar-header { max-height: 200px;
-      transition: max-height 0.18s ease, opacity 0.15s ease, padding 0.18s ease; }
-    .sidebar-header.list-scroll-hidden {
-      /* overflow:hidden only while collapsed — the header's dropdown menus
-         (.sh-more-menu, .sh-refresh-menu) are absolutely positioned below it
-         and must not be clipped when the header is expanded. */
-      overflow: hidden;
-      max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; border-bottom-width: 0;
-      pointer-events: none;
-    }
-
     /* Floating speaker + rate dial: 56/84px is desktop-sized and eats phone
        width; shrink both proportionally. */
     .conv-scroll-speak-btn { width: 40px; height: 40px; right: 14px; font-size: 17px; }
@@ -17722,44 +17709,6 @@
       touch-action: pan-y;
       transition: transform 0.12s ease, background-color 0.08s ease;
       -webkit-tap-highlight-color: rgba(188, 140, 255, 0.15);
-    }
-    /* A rightward lifecycle swipe must be visible before its action removes
-       the row.  The offset follows the finger, then springs home if the
-       request leaves the row in place. */
-    .conv-item.is-swipe-committed {
-      transform: translateX(var(--conv-row-swipe-offset, 12px));
-      background-color: color-mix(in srgb, var(--red) 16%, var(--surface-2)) !important;
-      box-shadow: -80px 0 0 var(--red);
-    }
-    .conv-item.is-swipe-committed::before {
-      content: attr(data-swipe-action-label);
-      position: absolute;
-      z-index: 1;
-      top: 0;
-      right: calc(100% + 8px);
-      bottom: 0;
-      width: 72px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 4px;
-      border-radius: 6px;
-      background: var(--red);
-      color: #fff;
-      font-size: 10px;
-      font-weight: 700;
-      line-height: 1.1;
-      text-align: center;
-    }
-    /* Left swipe = "Background": the session keeps running, so grey, not red. */
-    .conv-item.is-swipe-committed.is-swipe-left {
-      background-color: color-mix(in srgb, var(--text-muted, #888) 14%, var(--surface-2)) !important;
-      box-shadow: 80px 0 0 var(--text-muted, #888);
-    }
-    .conv-item.is-swipe-committed.is-swipe-left::before {
-      right: auto;
-      left: calc(100% + 8px);
-      background: var(--text-muted, #888);
     }
     .compact-rows .conv-item {
       padding-top: 8px !important;
@@ -34895,7 +34844,8 @@ a.local-ci-job:hover { color: var(--accent); }
     transform: rotate(-45deg);
   }
   .local-ci-mobile-toggle[aria-expanded="true"]::before { transform: rotate(45deg); }
-  .local-ci-mobile-toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .local-ci-mobile-toggle > span { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .local-ci-inline-run, .local-ci-inline-run .local-ci-elapsed { font-size: 12px; }
   .local-ci-mobile-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .local-ci-mobile:not(.is-expanded) > :not(.local-ci-mobile-toggle) { display: none !important; }
   body :is(.sidebar > #localCiMobileList, .main > #localCiMobileReader):not([hidden]):not(.is-expanded) { padding-top: 0; padding-bottom: 0; }
@@ -35023,4 +34973,122 @@ body.ccc-app-embed.conversation-popout .main > #localCiMobileReader,
 body.ccc-app-embed.conversation-popout .main > #convToolbar,
 body.ccc-app-embed.conversation-popout .main > .toolbar {
   display: none !important;
+}
+
+/* Home keeps the existing identity; operational details share one scrollable
+   line instead of competing with the conversation for vertical space. */
+.mobile-home-status { display: contents; }
+@media (max-width: 1200px) {
+  .sidebar .sidebar-header { display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 8px 12px 0; }
+  .sidebar .sidebar-header > .sidebar-header-brand { display: flex; order: -2; min-height: 36px; margin: 0; }
+  .sidebar .sidebar-header-brand .sh-title-row { gap: 8px; }
+  .sidebar .sidebar-header-brand .sh-title-link { display: flex; }
+  .sidebar .sidebar-header-brand .sh-app-icon { display: block; width: 28px; height: 28px; }
+  .sidebar .sidebar-header-brand .sh-title-main {
+    font-size: 17px; font-weight: 750; color: transparent; -webkit-text-fill-color: transparent;
+    background-image: linear-gradient(90deg, #f0f6fc 0%, #58a6ff 42%, #bc8cff 74%, #3fb950 100%);
+    background-clip: text; -webkit-background-clip: text;
+  }
+  .sidebar .mobile-home-status {
+    display: flex; order: -1; align-items: center; gap: 12px;
+    width: 100%; min-width: 0; min-height: 44px; flex-wrap: nowrap;
+    overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin;
+    white-space: nowrap;
+  }
+  .sidebar .mobile-home-status > #localCiMobileList:not([hidden]) {
+    display: block !important; flex: 0 0 auto; width: max-content; max-width: none;
+    margin: 0; padding: 0; border: 0; max-height: none; overflow: visible;
+  }
+  .mobile-home-status .local-ci-mobile-toggle { width: auto; gap: 6px; }
+  .mobile-home-status .local-ci-mobile-toggle > span { overflow: visible; }
+  .sidebar .mobile-home-status > #headroomBars:not([hidden]) { display: block; flex: 0 0 auto; width: auto; margin: 0; }
+  .sidebar #headroomBars .hb-heading,
+  .sidebar #headroomBars .hb-bar,
+  .sidebar #headroomBars .hb-sub { display: none; }
+  .sidebar #headroomBars .hb-grid { display: flex; flex-wrap: nowrap; gap: 12px; }
+  .sidebar #headroomBars .hb-chip { display: flex; align-items: center; flex: 0 0 auto; min-height: 44px; padding: 0; }
+  .sidebar #headroomBars .hb-top { flex-wrap: nowrap; justify-content: flex-start; gap: 4px; }
+  .sidebar #headroomBars .hb-grid > .ccc-sav-ticker:not([hidden]) { display: inline-flex !important; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: none; font-size: 12px; }
+  .sidebar #headroomBars .ccc-sav-ticker-spark { display: none; }
+  html body .main > #localCiMobileReader:not([hidden]) { display: none !important; }
+  body.mobile-show-main .sidebar .sidebar-header { visibility: hidden; }
+  .conv-input-bar .steer-btn { display: none !important; }
+  html body .conv-split .conv-pane .conv-input-bar.visible { flex-shrink: 0; }
+}
+
+/* Swipes track directly, then settle; vertical scrolling retains ownership. */
+@media (max-width: 1200px), (pointer: coarse) {
+  :is(.conv-item, .simple-task-card[data-session-id]) { touch-action: pan-y; }
+  :is(.conv-item, .simple-task-card).is-swipe-committed {
+    position: relative; overflow: visible; z-index: 2;
+    transform: translateX(var(--conv-row-swipe-offset, 0px));
+    transition: none; box-shadow: none;
+  }
+  :is(.conv-item, .simple-task-card).is-swipe-committed::before {
+    content: attr(data-swipe-action-label);
+    position: absolute; inset-block: 0; right: 100%; width: 112px;
+    display: flex; align-items: center; justify-content: center;
+    padding: 10px; background: #164b48; color: #e2fffa;
+    font-size: 12px; font-weight: 650; text-align: center;
+  }
+  :is(.conv-item, .simple-task-card).is-swipe-committed.is-swipe-left::before { right: auto; left: 100%; }
+  :is(.conv-item, .simple-task-card).is-swipe-armed::before { background: #08786e; }
+  :is(.conv-item, .simple-task-card).is-swipe-settling { transition: transform 180ms cubic-bezier(.2,.8,.2,1); }
+  .simple-card-archive-btn { border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; flex-shrink: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.conv-item, .simple-task-card).is-swipe-settling { transition: none; }
+}
+
+@media (max-width: 1200px) {
+  .mobile-home-status .mobile-ci-details {
+    position: fixed; z-index: 1100; left: 12px; right: 12px;
+    max-height: min(50dvh, 360px); overflow-y: auto; white-space: normal;
+    padding: 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); box-shadow: 0 8px 24px #0005;
+  }
+  .local-ci-inline-run[data-outcome="failure"] { color: var(--red); }
+  .local-ci-inline-run[data-outcome="active"] { color: var(--blue, #79a9dc); }
+  .local-ci-inline-run[data-outcome="success"] { color: var(--green); }
+}
+.mobile-home-quick { display: none; }
+@media (max-width: 1200px) {
+  body.mobile-home-collapsed .sidebar .mobile-home-status,
+  body.mobile-home-collapsed .sidebar > .new-session-panel,
+  body.mobile-home-collapsed .sidebar #convList .conv-archived-tools {
+    display: none !important;
+  }
+  body.mobile-home-collapsed .sidebar .sidebar-header { padding-bottom: 4px; }
+  body.mobile-home-collapsed .sidebar .sidebar-header-brand { width: 100%; }
+  body.mobile-home-collapsed .sidebar .sh-title-link { margin-right: auto; }
+  body.mobile-home-collapsed .mobile-home-quick {
+    display: inline-flex; align-items: center; justify-content: center;
+    flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0;
+    border-radius: 50%; background: transparent; color: var(--text); font-size: 26px;
+  }
+  body.mobile-home-collapsed .mobile-home-search { font-size: 28px; }
+  .mobile-home-quick:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+}
+@media (max-width: 1200px) {
+  body.mobile-home-collapsed .sidebar .sidebar-header-brand .sh-title-main { font-size: 15px; }
+  body.mobile-home-collapsed .sidebar .sidebar-header-brand .sh-app-icon { width: 24px; height: 24px; }
+}
+
+.simple-card-archive-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.simple-card-archive-btn:disabled { opacity: .45; cursor: wait; }
+
+.simple-card-archive-btn { border: 0; background: transparent; color: var(--text-muted); padding: 6px; border-radius: 6px; }
+@media (max-width: 1200px) {
+  body.ccc-mobile-redesign.ccc-simple-mode .msh-wordmark {
+    font-size: 15px; font-weight: 750; color: transparent; -webkit-text-fill-color: transparent;
+    background-image: linear-gradient(90deg, #f0f6fc 0%, #58a6ff 42%, #bc8cff 74%, #3fb950 100%);
+    background-clip: text; -webkit-background-clip: text;
+  }
+  .sidebar #mobileSimpleHeader .mobile-home-status { width: calc(100% - 24px); margin-inline: 12px; }
+  body.mobile-show-main .sidebar #mobileSimpleHeader { visibility: hidden; }
+}
+.mobile-home-status:not(:has(> :not([hidden]))) { display: none !important; }
+#convList.session-workspace .conv-item.is-swipe-settling { transition: transform 180ms cubic-bezier(.2,.8,.2,1) !important; }
+@media (prefers-reduced-motion: reduce) {
+  #convList.session-workspace .conv-item.is-swipe-settling { transition: none !important; }
 }

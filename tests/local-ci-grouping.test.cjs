@@ -18,7 +18,7 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
   let data = {jobs:[{...base, id:'example/project:1:1'},
     {...base, id:'example/project:1:1', name:'another job', percent:90}], completed:[
     {...base, id:'example/project:2:1', name:'install-smoke', conclusion:'success'},
-    {...base, id:'example/project:3:1', head_sha:'b'.repeat(40), execution:'self_hosted', conclusion:'failure'}]};
+    {...base, id:'example/project:3:1', head_sha:'b'.repeat(40), execution:'self_hosted', conclusion:'failure', completed_at:new Date().toISOString()}]};
   const dismissed = [];
   const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/api/ci/')) {
@@ -55,7 +55,7 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
     assert.equal(await page.$eval('#localCiMobileList', el => el.scrollWidth <= el.clientWidth), true);
     assert.equal(await page.$eval('#localCiMobileList .local-ci-group:last-child', el => el.dataset.outcome), 'failure');
     if (width <= 1200) {
-      assert.equal(await page.$eval('#localCiMobileList .local-ci-mobile-toggle', el => el.textContent), 'CI: 1 running, 1 failed');
+      assert.match(await page.$eval('#localCiMobileList .local-ci-mobile-toggle', el => el.textContent), /^CI: GH 71% 5:\d{2}, Self 1 failed · 100% 5:\d{2}$/);
       assert.equal(await page.$eval('#localCiMobileList', el => el.getBoundingClientRect().height), 45, 'one 44px disclosure plus border');
       assert.equal(await page.$eval('#localCiMobileList .local-ci-group', el => getComputedStyle(el).display), 'none');
       await page.screenshot({path:'/tmp/ccc-ci-mobile-line.png'});

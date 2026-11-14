@@ -18079,6 +18079,7 @@
         : 240;  // ~10 rows at our current font/line-height
       el.style.height = Math.min(el.scrollHeight, max) + 'px';
       if (view && view.scrollTop !== viewTop) view.scrollTop = viewTop;
+      if (view) positionConversationEndAffordance(view);
       // A long paste can leave the caret below the capped box (iOS does not
       // re-scroll after the height changes). Typing/pasting at the end is the
       // common case: pin the scroll to the bottom so the caret stays visible.
@@ -22960,8 +22961,9 @@
     if (!row) { showOpToast('No open task', 'error'); return; }
     const convId = row.id;
     const sessionId = row.session_id || row.id;
-    const lists = [conversationsData, archiveData, currentRepoBacklogData];
+    const lists = [conversationsData, archiveData, currentRepoBacklogData, _simpleHistoryRows];
     const applyPatch = (group, patch) => {
+      Object.assign(row, patch);
       lists.forEach(rows => {
         if (!Array.isArray(rows)) return;
         for (const r of rows) {
@@ -22971,6 +22973,7 @@
       for (const member of group) setOptimisticOverride(member, patch);
       updateInputBar();
       renderSidebar(filterConversations($convSearch.value), { force: true });
+      if (isSimpleMode()) { _simpleHistoryApply(); _simpleHomeRefresh(); }
     };
     // Move the row now: the POST can queue for seconds behind in-flight polls,
     // and a menu click that changes nothing reads as "it didn't work".
@@ -23227,7 +23230,7 @@
     if (isImeKey(ev)) return;
     if (ev.key !== 'Enter' && ev.key !== ' ') return;
     const card = ev.target.closest && ev.target.closest('.simple-task-card[role="button"]');
-    if (!card || ev.target.closest('[data-simple-copy-ref]')) return;
+    if (!card || ev.target.closest('button')) return;
     ev.preventDefault();
     card.click();
   });
@@ -23752,8 +23755,27 @@
     try { localStorage.setItem(_SIMPLE_SEEN_KEY, JSON.stringify(map)); } catch (_) {}
   }
 
+  var _simpleTaskRowsById = new Map();
+  var _simpleLifecyclePending = new Set();
+  document.addEventListener('click', async ev => {
+    const button = ev.target.closest('[data-simple-archive]');
+    if (!button) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const row = _simpleTaskRowsById.get(button.dataset.simpleArchive);
+    if (!row || button.disabled || _simpleLifecyclePending.has(button.dataset.simpleArchive)) return;
+    _simpleLifecyclePending.add(button.dataset.simpleArchive);
+    button.disabled = true;
+    try { await _setOpenSessionLifecycle(button.dataset.archived === 'false' ? 'unarchive' : 'archive', row); }
+    finally {
+      _simpleLifecyclePending.delete(button.dataset.simpleArchive);
+      button.disabled = false;
+      _simpleHistoryApply(); _simpleHomeRefresh();
+    }
+  }, true);
   function _simpleTaskCardHtml(row, statusLine, isRunning) {
     const sid = String(row.id || row.session_id || '');
+    _simpleTaskRowsById.set(sid, row);
+    const archived = !!(row.explicitly_archived ?? row.idea_ticket?.explicitly_archived ?? row.archived);
     const mtime = String(row.mtime || row.modified || '');
     const name = String(row.display_name || row.first_message || row.status_rail_title || 'Untitled task').trim();
     // isRunning is caller-supplied where the caller already knows for sure
@@ -23796,7 +23818,12 @@
       + ' data-session-id="' + escapeAttr(sid) + '" data-mtime="' + escapeAttr(mtime) + '">'
       + '<span class="simple-card-title-row">' + sessionEngineIconHtml(row, { context: 'pane' })
       + '<span class="simple-card-name">' + escapeHtml(name.length > 90 ? name.slice(0, 90) + '…' : name) + '</span>'
-      + badge + copyRefBtn + '</span>'
+      + badge + copyRefBtn
+      + (sid && !row.trashed ? '<button type="button" class="conv-archive-btn simple-card-archive-btn" data-simple-archive="' + escapeAttr(sid)
+        + '"' + (_simpleLifecyclePending.has(sid) ? ' disabled' : '') + ' data-archived="' + (!archived) + '" aria-label="' + (archived ? 'Restore' : 'Archive')
+        + '" title="' + (archived ? 'Restore' : 'Archive') + '"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">'
+        + (archived ? '<path d="m8 4-4 4 4 4M4 8h10a6 6 0 0 1 0 12h-4"/>'
+          : '<rect x="3" y="3" width="18" height="4" rx="1"/><path d="M5 7v13h14V7m-10 4h6"/>') + '</svg></button>' : '') + '</span>'
       + '<span class="simple-status-line">' + escapeHtml(statusLine) + '</span>'
       + '<span class="simple-memory-line">' + escapeHtml(_simpleMemoryLine(row)) + '</span>'
       + '</div>';
@@ -23816,7 +23843,7 @@
   // ── data loading + section rendering ──
   async function _simpleHomeRefresh() {
     const home = document.getElementById('simpleHome');
-    if (!home || !isSimpleMode()) return;
+    if (!home || !isSimpleMode() || isSidebarDragInProgress()) return;
     // First load has nothing cached yet to show while these fetches are in
     // flight — show a spinner instead of leaving the section blank.
     const tasksEl0 = document.getElementById('simpleTasks');
@@ -23838,6 +23865,7 @@
       archive = Array.isArray(results[1]) ? { conversations: results[1] } : null;
     } catch (_) { return; }
 
+    if (isSidebarDragInProgress()) return;
     // Needs you: sessions waiting on the user. (R4's stuck-queue alerts are
     // fetched separately below, not awaited here — /api/queue/status was
     // briefly bundled into this same Promise.all, which meant a slow queue
@@ -23863,11 +23891,12 @@
     // it's running or finished-and-unseen.
     const tasksEl = document.getElementById('simpleTasks');
     const convRows = (archive && Array.isArray(archive.conversations)) ? archive.conversations : [];
-    const sessionRows = convRows;
+    applyOptimisticOverrides(convRows);
+    const sessionRows = convRows.filter(row => !row.trashed && !(row.explicitly_archived ?? row.idea_ticket?.explicitly_archived ?? row.archived));
     const workingRows = sessionRows.filter(_simpleIsWorkingRow);
     const workingIds = {};
     workingRows.forEach(r => { workingIds[String(r.id || r.session_id || '')] = true; });
-    const finishedRows = convRows.filter(r => r && !workingIds[String(r.id || r.session_id || '')]);
+    const finishedRows = sessionRows.filter(r => r && !workingIds[String(r.id || r.session_id || '')]);
     const merged = workingRows.concat(finishedRows)
       .sort((a, b) => (Number(b.mtime || b.modified) || 0) - (Number(a.mtime || a.modified) || 0))
       .slice(0, 10);
@@ -24315,7 +24344,7 @@
   var _simpleHistoryRows = null;
   function _simpleHistoryApply() {
     const list = document.getElementById('simpleHistoryList');
-    if (!list) return;
+    if (!list || isSidebarDragInProgress()) return;
     const query = String((document.getElementById('simpleHistorySearch') || {}).value || '')
       .trim().toLowerCase();
     let rows = (_simpleHistoryRows || []);
@@ -25060,135 +25089,101 @@
     setInterval(wireAllConvSwipe, 3000);
   }
 
-  // Mobile swipe-right on conversation-list rows: in the Coding tab it triggers
-  // the row's Trash action; in the Active tab it triggers the Archive action
-  // ("Done": the session stops, after its current turn if it is mid-turn).
-  // Swipe-left in the Active tab is "Background": the row leaves Active but
-  // the session keeps working, and comes back when it next needs the user.
-  // Wired once per #convList render because the list's innerHTML is replaced,
-  // but the container itself persists.
-  function _currentSidebarTabForSwipe() {
-    try {
-      const t = window.CCCNavigation.getTab();
-      return normalizeSidebarTabKey(t);
-    } catch (_) { return 'coding'; }
-  }
+  // Session swipes share the row's reversible archive action in every list.
+  // Restoring an archived row uses that same button; swipes never trash.
   function _swipeActionButtonForRow(row) {
-    const tab = _currentSidebarTabForSwipe();
-    if (tab === 'coding' || tab === 'workers') {
-      // An archived row's swipe restores it to Active (its only phone path
-      // back); swiping it would otherwise trash it.
-      const restore = row.querySelector('.conv-archive-btn.is-restore');
-      if (restore) return restore;
-      // Workers-tab rows intentionally have no trash affordance (worker sessions
-      // are queue-owned), so a swipe there only does something on rows that
-      // actually expose a trash button — e.g. the Trash subsection of Coding,
-      // where the button is "Untrash to Archived".
-      return row.querySelector('.conv-trash-btn');
-    }
-    if (tab === 'inprogress') {
-      return row.querySelector('.conv-archive-btn') || row.querySelector('.conv-trash-btn');
-    }
-    return null;
+    return row.querySelector('.conv-archive-btn:not(.is-close)');
   }
-  // Left swipe: only an Active-tab session row with a plain Archive button
-  // (not an issue row, not a restore) can be backgrounded.
-  function _swipeBackgroundButtonForRow(row) {
-    if (_currentSidebarTabForSwipe() !== 'inprogress') return null;
-    const btn = row.querySelector('.conv-archive-btn[data-archived="true"]');
-    if (!btn || btn.classList.contains('is-close') || btn.classList.contains('is-restore')) return null;
-    return btn;
-  }
-  function _swipeLabelForRow(row, dir) {
-    if (dir < 0) return 'Background';
-    const btn = _swipeActionButtonForRow(row);
-    if (btn && btn.matches('.conv-archive-btn[data-archived="true"]:not(.is-close)')) return 'Done';
-    return (btn && btn.getAttribute('aria-label')) || 'Move to Trash';
+  function _swipeLabelForRow(row) {
+    return _swipeActionButtonForRow(row)?.dataset.archived === 'false' ? 'Restore' : 'Archive';
   }
   function wireConvListRowSwipe($list) {
+    // Delegate from the stable shell, including Simple Home and History.
+    $list = document.body;
     if (!$list || $list.dataset.convSwipeWired === '1' || !isTouchPrimary()) return;
     $list.dataset.convSwipeWired = '1';
-    const THRESH = 80;
-    const RATIO = 1.5;
-    let sx = 0, sy = 0, active = false, committed = false, decided = false, currentRow = null, dir = 0;
-    const clearRowSwipe = (row) => {
-      row.classList.remove('is-swipe-committed', 'is-swipe-left');
+    const rowSelector = '.conv-item, .simple-task-card[data-session-id]';
+    let currentRow = null, sx = 0, sy = 0, dir = 0, tracking = false;
+    let threshold = 80, lastX = 0, lastAt = 0, velocity = 0;
+    const clearRowSwipe = row => {
+      row.classList.remove('is-swipe-committed', 'is-swipe-left', 'is-swipe-armed');
       row.style.removeProperty('--conv-row-swipe-offset');
-      delete row.dataset.swipeActionLabel;
+      row.classList.add('is-swipe-settling');
+      clearTimeout(row._swipeSettleTimer);
+      row._swipeSettleTimer = setTimeout(() => { row.classList.remove('is-swipe-settling'); delete row.dataset.swipeActionLabel; }, 200);
     };
-    $list.addEventListener('touchstart', (e) => {
-      active = false; committed = false; decided = false; currentRow = null; dir = 0;
-      if (e.touches.length !== 1) return;
-      const t = e.target;
-      // Let buttons, inputs, links, and scrollable children handle their own gestures.
-      if (t.closest('button, input, textarea, select, a, [contenteditable]')) return;
-      const row = t.closest('.conv-item');
-      if (!row) return;
-      const btn = _swipeActionButtonForRow(row);
-      const bgBtn = _swipeBackgroundButtonForRow(row);
-      if ((!btn || btn.disabled) && (!bgBtn || bgBtn.disabled)) return;
-      sx = e.touches[0].clientX; sy = e.touches[0].clientY;
-      active = true; currentRow = row;
-    }, { passive: true });
-    $list.addEventListener('touchmove', (e) => {
-      if (!active || e.touches.length !== 1) return;
-      const dx = e.touches[0].clientX - sx;
-      const dy = e.touches[0].clientY - sy;
-      if (!decided) {
-        if (Math.abs(dx) < 12 && Math.abs(dy) < 12) return;
-        decided = true;
-        dir = dx > 0 ? 1 : -1;
-        const dirBtn = dir > 0 ? _swipeActionButtonForRow(currentRow) : _swipeBackgroundButtonForRow(currentRow);
-        committed = !!dirBtn && !dirBtn.disabled && Math.abs(dx) > Math.abs(dy) * RATIO;
-        if (!committed) { active = false; currentRow = null; return; }
-        // The pointer-tap listener is intentionally separate so list scrolling
-        // stays cheap.  Cancel its pending tap here as soon as this gesture is
-        // known to be a swipe; otherwise Safari can deliver a pointerup after
-        // touchend and open the row we just acted on.
+    const cancel = () => {
+      if (currentRow) clearRowSwipe(currentRow);
+      if (tracking) {
+        endSidebarDrag();
+        if (isSimpleMode()) requestAnimationFrame(() => { _simpleHistoryApply(); _simpleHomeRefresh(); });
+      }
+      currentRow = null; tracking = false; dir = 0;
+    };
+    $list.addEventListener('click', e => {
+      const row = e.target.closest(rowSelector);
+      if (row && Date.now() < Number(row.dataset.swipeSuppressUntil || 0)
+          && !e.target.closest('.conv-archive-btn')) {
+        e.preventDefault(); e.stopImmediatePropagation();
+      }
+    }, true);
+    $list.addEventListener('touchstart', e => {
+      cancel();
+      if (e.touches.length !== 1 || e.target.closest('button, input, textarea, select, a, [contenteditable]')) return;
+      const row = e.target.closest(rowSelector);
+      const btn = row && _swipeActionButtonForRow(row);
+      if (!btn || btn.disabled) return;
+      sx = lastX = e.touches[0].clientX; sy = e.touches[0].clientY;
+      if (sx < 20) return; // Leave the browser's edge-back gesture alone.
+      currentRow = row;
+      threshold = Math.min(112, Math.max(72, row.getBoundingClientRect().width * 0.28));
+      lastAt = performance.now(); velocity = 0;
+    }, {passive:true});
+    $list.addEventListener('touchmove', e => {
+      if (!currentRow) return;
+      if (e.touches.length !== 1 || !currentRow.isConnected) { cancel(); return; }
+      const x = e.touches[0].clientX, dx = x - sx, dy = e.touches[0].clientY - sy;
+      if (!tracking) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 12) return;
+        if (Math.abs(dx) <= Math.abs(dy) * 1.5) { cancel(); return; }
+        dir = dx > 0 ? 1 : -1; tracking = true;
+        beginSidebarDrag();
         cancelMobileConversationRowTap();
         noteMobileConversationRowSwipe(currentRow);
-        currentRow.dataset.swipeActionLabel = _swipeLabelForRow(currentRow, dir);
+        currentRow.dataset.swipeSuppressUntil = String(Date.now() + 1000);
+        clearTimeout(currentRow._swipeSettleTimer);
+        currentRow.classList.remove('is-swipe-settling');
         currentRow.classList.add('is-swipe-committed');
         currentRow.classList.toggle('is-swipe-left', dir < 0);
       }
-      if (committed) {
-        const offset = dir > 0 ? Math.min(Math.max(dx, 0), THRESH) : Math.max(Math.min(dx, 0), -THRESH);
-        currentRow.style.setProperty('--conv-row-swipe-offset', offset + 'px');
+      const now = performance.now();
+      velocity = (x - lastX) / Math.max(1, now - lastAt);
+      lastX = x; lastAt = now;
+      const distance = Math.max(0, dx * dir);
+      const offset = Math.min(distance, threshold) + Math.max(0, distance - threshold) * 0.35;
+      currentRow.style.setProperty('--conv-row-swipe-offset', dir * offset + 'px');
+      currentRow.classList.toggle('is-swipe-armed', distance >= threshold);
+      currentRow.dataset.swipeActionLabel = (distance >= threshold ? 'Release to ' : '') + _swipeLabelForRow(currentRow).toLowerCase();
+      if (e.cancelable) e.preventDefault();
+    }, {passive:false});
+    $list.addEventListener('touchend', e => {
+      if (!currentRow || !tracking) { cancel(); return; }
+      const row = currentRow, touch = e.changedTouches?.[0];
+      const dx = touch ? touch.clientX - sx : 0, dy = touch ? touch.clientY - sy : 0;
+      const distance = dx * dir;
+      const flick = distance >= 44 && velocity * dir > 0.55 && performance.now() - lastAt < 80;
+      const commit = row.isConnected && Math.abs(dx) > Math.abs(dy) * 1.5 && (distance >= threshold || flick);
+      row.dataset.swipeSuppressUntil = String(Date.now() + 700);
+      const btn = _swipeActionButtonForRow(row);
+      cancel();
+      if (commit && btn && !btn.disabled && btn.isConnected) {
         if (e.cancelable) e.preventDefault();
+        btn.click();
       }
-    }, { passive: false });
-    const end = (e) => {
-      if (!active || !committed || !currentRow) return;
-      const t = (e.changedTouches && e.changedTouches[0]) || null;
-      if (!t) { clearRowSwipe(currentRow); active = false; committed = false; decided = false; currentRow = null; return; }
-      const dx = t.clientX - sx;
-      const dy = t.clientY - sy;
-      if (dx * dir >= THRESH && Math.abs(dx) > Math.abs(dy) * RATIO) {
-        if (e.cancelable) e.preventDefault();
-        const btn = dir > 0 ? _swipeActionButtonForRow(currentRow) : _swipeBackgroundButtonForRow(currentRow);
-        if (btn && !btn.disabled) {
-          btn.classList.add('is-swiped');
-          const swipedRow = currentRow;
-          setTimeout(() => {
-            if (btn) btn.classList.remove('is-swiped');
-            if (swipedRow) clearRowSwipe(swipedRow);
-          }, 300);
-          if (dir < 0) btn.dataset.keepRunning = '1';
-          btn.click();
-        } else {
-          clearRowSwipe(currentRow);
-        }
-      } else {
-        clearRowSwipe(currentRow);
-      }
-      active = false; committed = false; decided = false; currentRow = null;
-    };
-    $list.addEventListener('touchend', end, { passive: false });
-    $list.addEventListener('touchcancel', () => {
-      if (currentRow) clearRowSwipe(currentRow);
-      active = false; committed = false; decided = false; currentRow = null;
-    }, { passive: true });
+    }, {passive:false});
+    $list.addEventListener('touchcancel', cancel, {passive:true});
   }
+  wireConvListRowSwipe(document.body);
 
   // WhatsApp-style drag-to-dismiss the on-screen keyboard. Deliberately NOT
   // tied to the swipe-rotate gesture above: that one bails (swipeStartBlocked)
@@ -25233,24 +25228,6 @@
         if (ae) ae.blur();
       }
     }, { passive: true, capture: true });
-  }
-
-  // Headroom-style auto-collapse of the sidebar header on touch layouts:
-  // scrolling the session list down hides it for more room, scrolling up
-  // (or reaching the top) brings it back. No library — direction deltas.
-  if (isTouchPrimary()) {
-    const _list = document.getElementById('convList');
-    const _hdr = document.querySelector('.sidebar-header');
-    if (_list && _hdr) {
-      let _hrLastY = _list.scrollTop;
-      _list.addEventListener('scroll', () => {
-        const y = _list.scrollTop;
-        const dy = y - _hrLastY;
-        _hrLastY = y;
-        if (y <= 4 || dy < -6) _hdr.classList.remove('list-scroll-hidden');
-        else if (dy > 6 && y > 40) _hdr.classList.add('list-scroll-hidden');
-      }, { passive: true });
-    }
   }
 
   // Conversation-list collapse (CCC-132). « hides the list to widen the reader;
@@ -28496,7 +28473,7 @@
     let domHasDragging = false;
     if (_sidebarDragInProgress) {
       domHasDragging = !!document.querySelector(
-      '.flow-node.dragging,.kanban-card.dragging,.kanban-column-header.dragging-header,.conv-item.dragging,.conv-draft-row.dragging,.conv-folder-group-header.dragging,.conv-objects-splitter.is-dragging,.flow-board.is-panning,.flow-board.is-zooming'
+      '.flow-node.dragging,.kanban-card.dragging,.kanban-column-header.dragging-header,.conv-item.dragging,.conv-draft-row.dragging,.conv-folder-group-header.dragging,.is-swipe-committed,.conv-objects-splitter.is-dragging,.flow-board.is-panning,.flow-board.is-zooming'
       );
       if (!domHasDragging) _sidebarDragInProgress = false;
     }
@@ -42694,7 +42671,7 @@
           ? '<button class="conv-archive-btn" data-role="archive" data-archived="true" title="Archive session" aria-label="Archive session">Archive</button>'
           : c.archived
           ? '<button class="conv-archive-btn is-restore" data-role="archive" data-archived="false" title="Move to Active" aria-label="Move to Active"><span class="conv-archive-glyph">&#8617;</span><span class="conv-archive-label">Active</span></button>'
-          : '')
+          : '<button class="conv-archive-btn" data-role="archive" data-archived="true" title="Archive session" aria-label="Archive session">Archive</button>')
           + (opts.hideTrash ? '' : '<button class="conv-trash-btn" data-role="trash" title="Move to Trash" aria-label="Move to Trash">&#128465;</button>');
       } else {
         lifecycleButtons = '<button class="conv-archive-btn" data-role="archive" data-archived="true" title="Archive" aria-label="Archive">&#128229;</button>';
@@ -51004,6 +50981,10 @@
     const viewRect = view.getBoundingClientRect();
     if (!hostRect.width || !hostRect.height || !viewRect.width || !viewRect.height) return;
     let endBottom = Math.max(12, Math.round(hostRect.bottom - viewRect.bottom + 14));
+    const composer = host.querySelector(':scope > .conv-input-bar.visible');
+    if (composer && getComputedStyle(composer).display !== 'none') {
+      endBottom = Math.max(endBottom, Math.round(hostRect.bottom - composer.getBoundingClientRect().top + 8));
+    }
     // The finished-session Archive button sits above the composer's right
     // edge, in the same strip as this stack.
     const readyArchive = host.querySelector(':scope > .conv-input-bar.visible > .conv-ready-archive-footer:not([hidden])');
@@ -52788,7 +52769,10 @@
     const syncVisualViewport = () => {
       _vvRaf = 0;
       const h = vv.height;
-      if (!h || h < window.innerHeight * 0.5) return;
+      const editing = document.activeElement?.matches('textarea, input, [contenteditable="true"]');
+      // A real phone keyboard can leave less than half the layout viewport.
+      // Only reject that reading during an unfocused cold start.
+      if (!h || (h < window.innerHeight * 0.5 && !editing)) return;
       // iOS draws its prev/next/✓ form-accessory bar over the bottom of the
       // visual viewport while a field is focused; lift the shell above it so
       // the composer's send button can't be hit as ✓.
@@ -52796,6 +52780,7 @@
       const kbOpen = window.innerHeight - h > 150;
       document.documentElement.style.setProperty('--app-vh', (kbOpen && !_cccNativeShell ? h - 56 : h) + 'px');
       document.documentElement.style.setProperty('--app-vv-top', vv.offsetTop + 'px');
+      _autosizeConvInput();
     };
     const queueVisualViewportSync = () => {
       if (_vvRaf) return;
@@ -100512,6 +100497,77 @@
   }
 })();
 
+// Keep only the compact brand and quick actions while browsing a long list.
+(function initMobileHomeCollapse() {
+  const sidebar = document.querySelector('.sidebar');
+  const title = sidebar?.querySelector('.sh-title-row');
+  if (!sidebar || !title) return;
+  const query = matchMedia('(max-width: 1200px)');
+  const setCollapsed = collapsed => {
+    if (document.body.classList.contains('mobile-home-collapsed') === collapsed) return;
+    document.body.classList.toggle('mobile-home-collapsed', collapsed);
+    if (collapsed) {
+      document.getElementById('localCiMobileList')?.classList.remove('is-expanded');
+      document.querySelector('#localCiMobileList .local-ci-mobile-toggle')?.setAttribute('aria-expanded', 'false');
+    }
+  };
+  for (const [kind, label, glyph] of [['search','Search sessions','⌕'], ['new','New session','+']]) {
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'mobile-home-quick mobile-home-' + kind;
+    button.setAttribute('aria-label', label); button.textContent = glyph;
+    button.addEventListener('click', () => {
+      if (kind === 'new') document.getElementById('sidebarNewBtn')?.click();
+      else { setCollapsed(false); document.getElementById('sidebarSearchBtn')?.click(); document.getElementById('convSearch')?.focus(); }
+    });
+    title.append(button);
+  }
+  sidebar.addEventListener('scroll', event => {
+    if (!query.matches || document.body.classList.contains('mobile-show-main')) return;
+    const scroller = event.target;
+    if (!scroller.matches('#convList, #simpleHome, #simpleHistory, .conv-archived-list, [data-role="current-sessions-scroll"], .fq-recent-rows')) return;
+    if (document.activeElement?.matches('input,textarea,select')) return;
+    if (scroller.scrollTop <= 4) setCollapsed(false);
+    else if (scroller.scrollTop > 96 && scroller.scrollHeight > scroller.clientHeight + 180) setCollapsed(true);
+  }, {capture:true, passive:true});
+  query.addEventListener('change', () => setCollapsed(false));
+  new MutationObserver(() => {
+    if (document.body.classList.contains('mobile-show-main')) setCollapsed(false);
+  }).observe(document.body, {attributes:true, attributeFilter:['class']});
+})();
+
+// Preserve the desktop header's DOM order when switching across the breakpoint.
+(function initMobileHomeStatus() {
+  const header = document.querySelector('.sidebar-header');
+  const usage = document.getElementById('headroomBars');
+  const ci = document.getElementById('localCiMobileList');
+  if (!header || !usage || !ci) return;
+  const line = document.createElement('div');
+  line.className = 'mobile-home-status';
+  line.setAttribute('aria-label', 'CI, engine usage and savings');
+  line.tabIndex = 0;
+  const anchors = [ci, usage].map(node => {
+    const anchor = document.createComment('status position');
+    node.before(anchor); return anchor;
+  });
+  const query = matchMedia('(max-width: 1200px)');
+  const sync = () => {
+    if (query.matches) {
+      const simpleHeader = document.body.classList.contains('ccc-simple-mode') && document.getElementById('mobileSimpleHeader');
+      const destination = simpleHeader || header;
+      if (line.parentNode !== destination) destination.append(line);
+      if (ci.parentNode !== line) line.append(ci, usage);
+    }
+    else if (line.isConnected) { [ci, usage].forEach((node, i) => anchors[i].after(node)); line.remove(); }
+  };
+  query.addEventListener('change', sync); sync();
+  new MutationObserver(sync).observe(document.body, {attributes:true, attributeFilter:['class']});
+  const wordmark = document.querySelector('.msh-wordmark');
+  if (wordmark) wordmark.textContent = 'Claude Command Center';
+  const close = () => { ci.classList.remove('is-expanded'); ci.querySelector('.local-ci-mobile-toggle')?.setAttribute('aria-expanded', 'false'); };
+  document.addEventListener('click', event => { if (!ci.contains(event.target)) close(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && ci.classList.contains('is-expanded')) { close(); ci.querySelector('.local-ci-mobile-toggle')?.focus(); } });
+})();
+
 // Local activity plus the last two completed workflow runs, shared across devices.
 (function initLocalCiProgress() {
   let busy = false;
@@ -100635,6 +100691,7 @@
           summary.className = 'local-ci-summary';
           const locations = new Set(members.map(({job}) => job.execution === 'github_hosted' ? 'github'
             : ['local','self_hosted'].includes(job.execution) ? 'machine' : 'unknown'));
+          shell.dataset.runnerLabel = [...locations].map(location => ({github:'GH', machine:'Self', unknown:'Unverified'})[location]).join('/');
           const runner = document.createElement('span');
           runner.className = 'local-ci-runner';
           runner.setAttribute('role', 'img');
@@ -100706,6 +100763,7 @@
         for (const {job, done} of members) {
         const entry = document.createElement('div');
         entry.className = 'local-ci-entry' + (done ? ' is-completed' : '');
+        if (job.provider === 'vercel') entry.dataset.runnerLabel = 'Vercel';
         entry.dataset.runId = job.id || '';
         const row = document.createElement('a');
         row.className = 'local-ci-job';
@@ -100776,24 +100834,40 @@
       host.hidden = !host.childElementCount;
       host.title = showingSaved ? 'Saved CI progress; waiting for a live update' : '';
       if (!host.hidden && host.classList.contains('local-ci-mobile')) {
-        const counts = new Map();
-        for (const row of host.children) {
-          const outcome = row.dataset.outcome;
-          counts.set(outcome, (counts.get(outcome) || 0) + 1);
-        }
+        const rows = [...host.children];
         const toggle = document.createElement('button');
         toggle.type = 'button';
         toggle.className = 'local-ci-mobile-toggle';
         const label = document.createElement('span');
-        label.textContent = 'CI: ' + ['active', 'failure', 'success', 'neutral']
-          .filter(outcome => counts.has(outcome))
-          .map(outcome => counts.get(outcome) + ' ' + ({active:'running', failure:'failed', success:'passed', neutral:'completed'})[outcome]).join(', ');
+        label.textContent = 'CI: ';
+        rows.forEach((row, index) => {
+          if (index) label.append(', ');
+          const item = document.createElement('span');
+          item.className = 'local-ci-inline-run';
+          item.dataset.outcome = row.dataset.outcome || 'active';
+          const status = row.querySelector('.local-ci-summary-status, .local-ci-percent');
+          item.append((row.dataset.runnerLabel || 'Unverified') + ' ' + (status?.textContent || 'Running') + ' ');
+          const timer = row.querySelector('[data-ci-started-at]');
+          if (timer) item.append(timer.cloneNode(true));
+          else item.append('—');
+          item.title = row.querySelector('summary, .local-ci-job')?.title || '';
+          label.append(item);
+        });
         toggle.append(label);
         toggle.title = 'Show or hide CI runs and their details';
         toggle.setAttribute('aria-expanded', String(host.classList.contains('is-expanded')));
+        const onHomeLine = !!host.closest('.mobile-home-status');
+        let popup;
+        if (onHomeLine) {
+          popup = document.createElement('div');
+          popup.className = 'mobile-ci-details';
+          popup.append(...rows); host.append(popup);
+        }
         toggle.addEventListener('click', () => {
           toggle.setAttribute('aria-expanded', String(host.classList.toggle('is-expanded')));
+          if (popup) popup.style.top = toggle.getBoundingClientRect().bottom + 'px';
         });
+        if (popup && host.classList.contains('is-expanded')) popup.style.top = host.closest('.mobile-home-status').getBoundingClientRect().bottom + 'px';
         host.prepend(toggle);
         if (focusedToggle) toggle.focus({preventScroll:true});
       }
