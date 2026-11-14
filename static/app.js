@@ -5595,6 +5595,39 @@
     };
     return { hidden: new Set(successorOf.keys()), headOf };
   }
+  // Filters choose activity; a visible spawned lane still needs its topic as
+  // an anchor. Resolve against the loaded pool before a window or ticket
+  // section drops the older parent, and follow its continuation to the head.
+  function sidebarRowsWithParentAnchors(rows, pool) {
+    if (!rows || !rows.length) return [];
+    const result = (rows || []).slice();
+    const idOf = row => String(row && (row.session_id || row.id) || '').trim();
+    const byId = new Map((pool || []).map(row => [idOf(row), row]));
+    result.forEach(row => byId.set(idOf(row), row));
+    const fold = _continuationFoldMaps([...byId.values()], idOf);
+    const included = new Set(result.map(idOf));
+    for (let i = 0; i < result.length; i++) {
+      const row = result[i];
+      if (continuationParentId(row)) continue;
+      const pid = String(row.parent_session_id || row.hermes_parent_session_id || '').trim();
+      if (!pid) continue;
+      // Keep the recorded leg too: the tree needs the origin present to
+      // fold the child's edge forward to the current head.
+      for (const anchorId of new Set([pid, fold.headOf(pid)])) {
+        const parent = byId.get(anchorId);
+        const id = idOf(parent);
+        // Explicit removal remains authoritative; context must not restore a
+        // topic the user archived or trashed, or a separate ticket's parent.
+        if (!parent || included.has(id) || parent.trashed
+            || (parent.explicitly_archived ?? parent.idea_ticket?.explicitly_archived)
+            || (row.idea_ticket?.ref && parent.idea_ticket?.ref
+              && row.idea_ticket.ref !== parent.idea_ticket.ref)) continue;
+        included.add(id);
+        result.push(parent);
+      }
+    }
+    return result;
+  }
   let _f2ContinuationEdgesCache = { raw: null, edges: {} };
   function _f2ContinuationEdges() {
     let raw = '';
@@ -41397,6 +41430,7 @@
       _prioritizeSessionIdMatches(convs, document.getElementById('convSearch')?.value || ''),
       document.getElementById('convSearch')?.value || '');
     const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();
+    if (!_ipSearchActive) convs = sidebarRowsWithParentAnchors(convs, conversationsData);
     const _ipSearchValue = (document.getElementById('convSearch')?.value || '').trim();
     const _sidebarScope = _ipSearchValue.toLowerCase();
     if (_sidebarScope !== _sidebarRenderScope) {
@@ -45561,6 +45595,7 @@
       _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || continuationParentId(c) || c.continued_from_session_id)
     ) || _wkHelperParentId(c);
     const _allTabTreeRowsFor = (rows) => {
+      if (!_ipSearchActive) rows = sidebarRowsWithParentAnchors(rows, _allTabUnfilteredConvs);
       const byId = new Map();
       (rows || []).forEach(c => {
         const id = _allTabSessionId(c);
@@ -45574,6 +45609,9 @@
         if (!id || fold.hidden.has(id)) return;
         const pid = fold.headOf(_allTabParentId(c));
         if (!pid || id === pid || !byId.has(pid)) return;
+        const ticket = c.idea_ticket?.ref;
+        const parentTicket = byId.get(pid).idea_ticket?.ref;
+        if (ticket && parentTicket && ticket !== parentTicket) return;
         childIds.add(id);
         (childrenByParent.get(pid) || childrenByParent.set(pid, []).get(pid)).push(c);
       });
@@ -46276,7 +46314,12 @@
     };
     if (_ticketLifecycleView) {
       const lifecycleRows = _ideaTicketRows(_allTabView, 'archived');
-      const groups = stableTicketSessionGroups(_allTabMainConvs.concat(lifecycleRows), _allTabView, currentConversation);
+      // Classify whole topics, not their individual lanes: otherwise a
+      // finished child gets its own loose row in a different section and
+      // family dedup removes the copy beneath its parent.
+      const topicRows = _allTabTreeRowsFor(_allTabMainConvs.concat(lifecycleRows))
+        .filter(item => item.depth === 0).map(item => item.card);
+      const groups = stableTicketSessionGroups(topicRows, _allTabView, currentConversation);
       const renderSectionRows = (rows, opts = {}) => {
         let clusters = _allTabRowsToClusters(_allTabTreeRowsFor(rows));
         clusters.sort((a, b) => {
@@ -81674,10 +81717,11 @@
     // / always-visible by design (matches the server-side non-repo-scoping).
     // Without this, old Hermes chats silently vanish in the all-repos view and
     // the only window control lives in the Archived section header.
-    const _windowed = (_arcWindowCutoff && !q)
+    const _windowCandidates = (_arcWindowCutoff && !q)
       ? archiveRows.filter(c => _archiveWindowAllowsRow(c, _arcWindowCutoff)
         || isRecentOpenAskRow(c) || _rowHasApprovalAsk(c))
       : archiveRows;
+    const _windowed = q ? _windowCandidates : sidebarRowsWithParentAnchors(_windowCandidates, archiveRows);
     // Never filter by folder — the folder picker controls grouping and the
     // active-chip highlight only. Hiding sessions from other repos breaks
     // worktree sessions and "by time" cross-repo views.

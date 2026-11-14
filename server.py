@@ -17800,24 +17800,24 @@ def _archive_list_delta_payload(state, since, rows, *, window, cached=None, now=
     idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
     row_rev, track_since = state["row_rev"], state["track_since"]
     ids, changed = [], []
-    for r in state["base"]:
-        if not isinstance(r, dict) or not _archive_list_window_allows_row(r, cutoff, idea_tickets_by_sid):
-            continue
-        sid = _archive_row_sid(r)
-        if not sid:
-            return None
-        ids.append(sid)
-        if row_rev.get(sid, track_since) > since_ver or sid in ctx_sids:
-            changed.append(r)
-    seen = set(ids)
-    for r in state["extra"]:
-        if not isinstance(r, dict) or not _archive_list_window_allows_row(r, cutoff, idea_tickets_by_sid):
-            continue
+    extra_sids = {_archive_row_sid(r) for r in state["extra"] if isinstance(r, dict)}
+    # Use the same anchored window as the full response, so a later delta
+    # cannot remove an unchanged older parent from the client's ordered ids.
+    visible = _archive_list_window_rows(
+        list(state["base"]) + list(state["extra"]), cutoff,
+        idea_tickets_by_sid, _session_graph.parent_snapshot(),
+    )
+    seen = set()
+    for r in visible:
         sid = _archive_row_sid(r)
         if not sid or sid in seen:
             return None
+        seen.add(sid)
         ids.append(sid)
-        changed.append(r)
+        if (row_rev.get(sid, track_since) > since_ver or sid in ctx_sids
+                or sid in extra_sids
+                or not _archive_list_window_allows_row(r, cutoff, idea_tickets_by_sid)):
+            changed.append(r)
     projected = _archive_list_project_rows(changed, window="all", now=now)
     payload = {
         "ok": True,
@@ -18206,6 +18206,36 @@ def _archive_list_title_overlays():
     return titles
 
 
+def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents):
+    """Window activity together with its loaded parent-topic context."""
+    source_rows = [row for row in (rows or []) if isinstance(row, dict)]
+    window_rows = [row for row in source_rows
+                   if _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid)]
+    if cutoff is not None:
+        # A recent lane must not arrive without its older topic. Preserve
+        # loaded ancestor rows before projection; the client cannot restore
+        # parents that the API's time window has already discarded.
+        by_sid = {str(row.get("session_id") or row.get("id") or ""): row
+                  for row in source_rows}
+        included = {str(row.get("session_id") or row.get("id") or "")
+                    for row in window_rows}
+        index = 0
+        while index < len(window_rows):
+            row = window_rows[index]
+            index += 1
+            sid = str(row.get("session_id") or row.get("id") or "")
+            parent_sid = str(row.get("parent_session_id") or row.get("hermes_parent_session_id")
+                             or parents.get(sid) or "")
+            parent = by_sid.get(parent_sid)
+            ticket = idea_tickets_by_sid.get(parent_sid) or (parent or {}).get("idea_ticket") or {}
+            if (not parent or parent_sid in included or parent.get("trashed")
+                    or parent.get("explicitly_archived", ticket.get("explicitly_archived"))):
+                continue
+            included.add(parent_sid)
+            window_rows.append(parent)
+    return window_rows
+
+
 def _archive_list_project_rows(rows, *, window="all", now=None):
     cutoff = _archive_list_window_cutoff(window, now=now)
     resumes = _load_usage_limit_resumes()
@@ -18217,11 +18247,10 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
     except Exception:
         idea_tickets_by_sid = {}
 
+    window_rows = _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents)
     projected = [
         _archive_list_project_row(row, resumes=resumes, parents=parents)
-        for row in (rows or [])
-        if isinstance(row, dict)
-        and _archive_list_window_allows_row(row, cutoff, idea_tickets_by_sid)
+        for row in window_rows
     ]
     # Persisted row snapshots may predate the title or this projection field.
     # One cached snapshot for the batch; never scan history to refresh names.
