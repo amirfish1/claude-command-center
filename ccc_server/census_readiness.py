@@ -14,6 +14,26 @@ class CensusCache:
         self.started = time.monotonic()
         self.ready = False
         self.last_build_ms = None
+        self._warm_stop = None
+
+    def start_warmup(self, builder):
+        """Keep the default census current even between occasional CLI calls.
+
+        Refreshes still use get's single-flight and failure backoff. Returning
+        the stop event also lets short-lived servers stop this daemon cleanly.
+        """
+        with self.lock:
+            if self._warm_stop is not None:
+                return self._warm_stop
+            stop = self._warm_stop = threading.Event()
+
+        def refresh():
+            while not stop.is_set():
+                self.get(86400, builder)
+                stop.wait(max(.01, self.fresh_s))
+
+        threading.Thread(target=refresh, name='ccc-census-warmup', daemon=True).start()
+        return stop
 
     def _readiness_locked(self):
         now = time.monotonic()

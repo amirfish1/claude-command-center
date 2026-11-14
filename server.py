@@ -48639,9 +48639,9 @@ def main():
     except Exception as e:
         print(f"  [cloud-relay] not started: {e}")
     print()
-    # One canonical warmup, shared with CLI requests. Readiness stays warming
-    # until this actual default census finishes; uptime alone proves nothing.
-    _SESSION_CENSUS_CACHE.get(86400, build_session_census)
+    # Keep the canonical census warm between CLI calls, sharing one build
+    # with requests. Only actual completion establishes sessions readiness.
+    _SESSION_CENSUS_CACHE.start_warmup(build_session_census)
     _serve_http(server)
 
 

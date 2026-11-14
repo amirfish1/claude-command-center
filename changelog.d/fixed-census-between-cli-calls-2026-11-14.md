@@ -1,0 +1,1 @@
+- Keep the default sessions census warm between CLI calls, so an occasional caller can use completed results instead of restarting an expired refresh.

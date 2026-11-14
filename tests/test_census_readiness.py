@@ -65,6 +65,44 @@ def test_stale_census_has_a_bound_and_cannot_hide_busy_state():
         settled(cache)
 
 
+def test_warmup_refreshes_and_recovers_without_a_request():
+    cache = CensusCache(fresh_s=.01, max_stale_s=.05)
+    first = threading.Event()
+    failed = threading.Event()
+    recover = threading.Event()
+    recovered = threading.Event()
+    calls = []
+
+    def build(key):
+        calls.append(key)
+        if len(calls) == 1:
+            first.set()
+            return {'ok': True, 'sessions': [{'session_id': 'first'}]}
+        if not recover.is_set():
+            failed.set()
+            raise RuntimeError('temporary index failure')
+        recovered.set()
+        return {'ok': True, 'sessions': [{'session_id': 'recovered'}]}
+
+    stop = cache.start_warmup(build)
+    try:
+        assert cache.start_warmup(build) is stop, 'one warmup per server'
+        assert first.wait(1)
+        settled(cache)
+        with cache.lock:
+            cache.slots[86400]['at'] -= 1
+        assert failed.wait(1), 'refresh cannot depend on a client request'
+        assert cache.readiness()['state'] == 'busy', 'expired data cannot mask a failure'
+        recover.set()
+        assert recovered.wait(1), 'warmup must recover without another CLI call'
+        settled(cache)
+        assert cache.readiness()['state'] == 'ready'
+        body, status = cache.get(86400, build)
+        assert status == 200 and body['sessions'] == [{'session_id': 'recovered'}]
+    finally:
+        stop.set()
+
+
 def test_real_http_reports_warming_promptly_then_serves_the_census(monkeypatch):
     cache = CensusCache()
     release = threading.Event()
