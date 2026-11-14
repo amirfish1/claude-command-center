@@ -11464,13 +11464,17 @@
       || row.classList.contains('not-acknowledged')
       || row._pendingRef
     );
+    // A pending echo may have been acknowledged since this button rendered.
+    if (!isPending) {
+      btn.remove();
+      return;
+    }
     const original = btn.textContent;
     btn.disabled = true;
-    btn.textContent = isPending ? 'Steering…' : '...';
+    btn.textContent = 'Steering…';
     try {
-      const data = await postInjectInput(sid, text, 'steer', isPending
-        ? { replaceQueued: true, userInitiated: true, replaceQueuedIds: [queuedRowDeliveryId(row)] }
-        : { userInitiated: true, steerExisting: true, steerOriginMsgId: btn.dataset.steerOriginMsgId || '' });
+      const data = await postInjectInput(sid, text, 'steer',
+        { replaceQueued: true, userInitiated: true, replaceQueuedIds: [queuedRowDeliveryId(row)] });
       if (data && data.queue_pump_started) {
         showOpToast('Turn ended; sending the oldest queued message now.');
         setTimeout(refreshConversationList, 500);
@@ -21114,6 +21118,8 @@
   }
 
   function userMessageSteerHtml(text, notification, compactCardHtml, ev) {
+    // Transcript events are already delivered; only unsent echoes may steer.
+    if (ev) return '';
     const isCodex = currentSession && currentSession.source === 'codex';
     // Render the button for every devin-cli user message like codex does —
     // capability is a live signal (devinTurnSteerable/syncUserMessageSteerButtons
@@ -40806,6 +40812,13 @@
       ? 'Steer ' + engine + ' with this message'
       : 'No running ' + engine + ' turn can be steered from CCC; use Send to resume or follow up';
     (root || document).querySelectorAll('[data-steer-user-message]').forEach((btn) => {
+      const row = btn.closest('.event.user_text');
+      if (!row || !(row.classList.contains('pending') || row.classList.contains('send-queued')
+        || row.classList.contains('not-acknowledged') || row._pendingRef)) {
+        btn.remove();
+        if (row) row.classList.remove('has-user-steer');
+        return;
+      }
       btn.hidden = !steerable;
       btn.disabled = !steerable;
       btn.setAttribute('aria-hidden', steerable ? 'false' : 'true');
@@ -61281,12 +61294,14 @@
     } finally { clearProgress(); }
   }
   function _showQueueTicketAddError(project, note, err) {
+    // A missing receipt is not a failed save. Keep the retry key without
+    // interrupting the user for a confirmation check that timed out.
+    if (err && err.pending) return;
     const preview = String(note || '').replace(/\s+/g, ' ').trim();
     const label = preview.length > 80 ? preview.slice(0, 80) + '…' : preview;
     const reason = (err && err.message) || String(err);
-    showOpToast(escapeHtml(err && err.pending ? reason : 'Could not add ticket to '
-      + (project || 'the default queue') + ' (“' + label + '”): ' + reason),
-      err && err.pending ? 'warning' : 'error');
+    showOpToast(escapeHtml('Could not add ticket to '
+      + (project || 'the default queue') + ' (“' + label + '”): ' + reason), 'error');
   }
   // CCC-163: the panel "+" used to file silently into whatever queue the panel
   // was scoped to (e.g. ACME) with no queue shown; it now shows the Queue

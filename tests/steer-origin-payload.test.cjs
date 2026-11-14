@@ -1,5 +1,4 @@
-// Steering a delivered row re-sends words already in the transcript. The browser
-// must say so, and name the original message, or the server records them as typed.
+// Delivered transcript rows must not offer Steer; unsent echoes still can.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -22,20 +21,26 @@ const context = vm.createContext({
 vm.runInContext(html, context);
 const render = ev => vm.runInContext('userMessageSteerHtml', context)('words', null, null, ev);
 
-test('a delivered peer row names its original message', () => {
-  assert.match(render({peer: {msg_id: 'peer-1'}}), /data-steer-origin-msg-id="peer-1"/);
-  assert.match(render({attribution: {message_id: 'attr-1'}, peer: {msg_id: 'peer-1'}}), /data-steer-origin-msg-id="attr-1"/);
+test('delivered owner and peer transcript events never offer Steer', () => {
+  for (const source of ['codex', 'devin-cli']) {
+    context.currentSession = {source};
+    for (const ev of [{}, {peer: {msg_id: 'peer-1'}}, {attribution: {message_id: 'attr-1'}}]) {
+      assert.equal(render(ev), '');
+    }
+  }
 });
 
-test('a row with no record names nothing, and the pending echo still renders', () => {
-  assert.doesNotMatch(render({}), /data-steer-origin-msg-id/);
-  assert.doesNotMatch(render(undefined), /data-steer-origin-msg-id/);
+test('pending echoes retain Steer for supported engines', () => {
+  for (const source of ['codex', 'devin-cli']) {
+    context.currentSession = {source};
+    assert.match(render(undefined), /data-steer-user-message/);
+  }
 });
 
-test('the delivered-row Steer click marks the send as an existing message', () => {
+test('stale delivered-row clicks return before the injection request', () => {
   const click = between("const btn = ev.target.closest('[data-steer-user-message]');", 'if (data && data.queue_pump_started)');
-  assert.match(click, /userInitiated: true, steerExisting: true, steerOriginMsgId: btn\.dataset\.steerOriginMsgId/);
-  const post = between('    const payload = {\n      session_id: sessionId,', 'if (opts && opts.replaceQueued) payload.replace_queued = true;');
-  assert.match(post, /payload\.steer_existing = true/);
-  assert.match(post, /payload\.steer_origin_msg_id = opts\.steerOriginMsgId/);
+  assert.match(click, /if \(!isPending\) \{\s*btn\.remove\(\);\s*return;/);
+  assert.ok(click.indexOf('if (!isPending)') < click.indexOf('await postInjectInput'));
+  assert.doesNotMatch(click, /steerExisting/);
+  assert.match(click, /replaceQueued: true/);
 });
