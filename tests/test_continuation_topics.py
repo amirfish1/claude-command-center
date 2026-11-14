@@ -417,3 +417,20 @@ def test_connection_skips_ddl_and_cached_attach_topics_invalidates_on_mutations(
     chain_rows = [row('child-session'), row('grandchild-session')]
     topics.attach_topics(chain_rows, names={})
     assert [item['continuation_topic_title'] for item in chain_rows] == ['RENAMED TOPIC', 'RENAMED TOPIC']
+
+
+def test_topic_prefetch_has_one_python_result_per_table_chunk(store):
+    sids = [f'session-{i}' for i in range(1200)]
+    store.executemany('INSERT INTO session_meta VALUES (?,?)', [(sid, '') for sid in sids])
+    topics._connection(store)
+    callbacks = []
+
+    def factory(cursor, result):
+        callbacks.append(result)
+        return result
+
+    store.row_factory = factory
+    batch = topics._Batch(store, [row(sid, 'Standalone') for sid in sids], {})
+    assert len(batch.records) == 1200
+    assert len(batch.indexed_origins) == 1200
+    assert len(callbacks) == 6  # two indexed tables, three <=500-ID chunks

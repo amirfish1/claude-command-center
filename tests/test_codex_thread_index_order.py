@@ -89,7 +89,7 @@ def test_null_guard_and_top_n_share_a_read_snapshot(thread_db, monkeypatch):
 
     class ConcurrentInsert(sqlite3.Connection):
         def execute(self, sql, parameters=(), /):
-            if sql.startswith("SELECT id FROM threads ORDER BY"):
+            if "SELECT id FROM threads ORDER BY" in sql:
                 with real_connect(thread_db) as writer:
                     writer.execute("INSERT INTO threads VALUES ('new', 9, NULL, 0, 0, 0)")
             return super().execute(sql, parameters)

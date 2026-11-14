@@ -16,6 +16,7 @@ import threading
 
 from ccc_server import core as _core
 from ccc_server import ship_graph as _sg
+from ccc_server.sqlite_batch import fetch_rows as _sqlite_fetch_rows
 
 MAX_HOPS = 64
 _NATIVE_ID_RE = re.compile(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\Z')
@@ -197,14 +198,18 @@ class _Batch:
         for i in range(0, len(sids), chunk):
             part = sids[i:i + chunk]
             marks = ','.join('?' * len(part))
-            found = {r[0]: tuple(r[1:]) for r in self.conn.execute(
+            found = {r[0]: r[1:] for r in _sqlite_fetch_rows(
+                self.conn,
                 'SELECT sid, origin, root_sid, topic_title, user_named '
-                f'FROM continuation_topics WHERE sid IN ({marks})', part)}
+                f'FROM continuation_topics WHERE sid IN ({marks})', part,
+                ('sid', 'origin', 'root_sid', 'topic_title', 'user_named'))}
             for sid in part:
                 self.records.setdefault(sid, found.get(sid, ('', '', '', 0)))
             try:
-                origins = dict(self.conn.execute(
-                    f'SELECT sid, continuation_origin FROM session_meta WHERE sid IN ({marks})', part))
+                origins = dict(_sqlite_fetch_rows(
+                    self.conn,
+                    f'SELECT sid, continuation_origin FROM session_meta WHERE sid IN ({marks})', part,
+                    ('sid', 'continuation_origin')))
             except sqlite3.OperationalError as exc:
                 if str(exc) != 'no such table: session_meta':
                     raise

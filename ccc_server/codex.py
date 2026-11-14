@@ -32,6 +32,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server.sqlite_batch import fetch_rows as _sqlite_fetch_rows
 
 # ---------------------------------------------------------------------------
 # Codex CLI binary resolution
@@ -8963,14 +8964,21 @@ def _codex_fetch_threads_in_home(where="", params=(), limit=None, columns=None, 
                 sql += " LIMIT ?"
                 params = tuple(params) + (int(limit),)
             deleted = _core._codex_deleted_thread_ids()
+
+            def read_rows(query):
+                if limit and columns is not None:
+                    return [dict(zip(selected, row)) for row in _sqlite_fetch_rows(
+                        con, query, tuple(params), selected)]
+                return [dict(r) for r in con.execute(query, tuple(params)).fetchall()]
+
             try:
-                all_rows = [dict(r) for r in con.execute(sql, tuple(params)).fetchall()]
+                all_rows = read_rows(sql)
             except sqlite3.OperationalError as exc:
                 if order == fallback_order or "no such column: rowid" not in str(exc):
                     raise
                 # Unusual WITHOUT ROWID stores still support the legacy query.
                 sql = f"{base_sql} ORDER BY {fallback_order} LIMIT ?"
-                all_rows = [dict(r) for r in con.execute(sql, tuple(params)).fetchall()]
+                all_rows = read_rows(sql)
             if sig is not None and _codex_db_signature(db) == sig:
                 with _CODEX_THREADS_CACHE_LOCK:
                     if len(_CODEX_THREADS_CACHE) > 64:
