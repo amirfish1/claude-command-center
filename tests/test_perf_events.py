@@ -236,7 +236,18 @@ class TestSummarize(PerfEventsTestBase):
         self.assertEqual(summary["apps"]["notes"]["breaches"], 0)
         self.assertNotIn("worst", summary["apps"]["trips"])
 
+        # A freeze is counted per app once it is long enough to feel like a hang.
+        pe.record_event("app_freeze", pe.APP_FREEZE_MS - 500, detail={"app": "trips"})
+        pe.record_event("app_freeze", pe.APP_FREEZE_MS + 2500, detail={"app": "trips"})
+        summary = pe.summarize(hours=24)
+        self.assertEqual(summary["thresholds"]["app_freeze_ms"], pe.APP_FREEZE_MS)
+        self.assertEqual(summary["kinds"]["app_freeze"]["count"], 2)
+        self.assertEqual(summary["apps"]["trips"]["freezes"], 1)
+        self.assertEqual(summary["apps"]["trips"]["longest_freeze_ms"], pe.APP_FREEZE_MS + 2500)
+        self.assertEqual(summary["apps"]["notes"]["freezes"], 0)
+
         self.assertNotIn("app_ready", pe._NO_SELF_FILE_KINDS)
+        self.assertNotIn("app_freeze", pe._NO_SELF_FILE_KINDS)
         pattern = pe.evaluate_breach_pattern(pe.read_events(0))
         self.assertIsNotNone(pattern)
         self.assertEqual(pattern["kind"], "app_ready")

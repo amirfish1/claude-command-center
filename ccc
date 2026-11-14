@@ -2563,13 +2563,18 @@ def _app_speed(args):
         print(f"No loads of {what} recorded in the last {summary.get('hours')} hours.")
         return 0
     print(f"Time to fully ready, last {summary.get('hours')} hours (budget {budget} ms)")
-    print(f"{'app':<20} {'loads':>6} {'typical':>9} {'slow':>9} {'worst':>9} {'over budget':>12}")
+    print(f"{'app':<20} {'loads':>6} {'typical':>9} {'slow':>9} {'worst':>9} {'over budget':>12} "
+          f"{'freezes':>8} {'longest':>9}")
     over = False
     for app, st in apps.items():
-        over = over or bool(st.get("breaches"))
+        over = over or bool(st.get("breaches")) or bool(st.get("freezes"))
         print(f"{app:<20} {st.get('count', 0):>6} {str(st.get('p50', 0)) + ' ms':>9} "
               f"{str(st.get('p95', 0)) + ' ms':>9} {str(st.get('max', 0)) + ' ms':>9} "
-              f"{st.get('breaches', 0):>12}")
+              f"{st.get('breaches', 0):>12} {st.get('freezes', 0):>8} "
+              f"{str(st.get('longest_freeze_ms', 0)) + ' ms':>9}")
+    freeze = (summary.get("thresholds") or {}).get("app_freeze_ms")
+    if freeze:
+        print(f"A freeze is the page unable to respond for {freeze} ms or more while it was in front.")
     return 2 if over and args.check else 0
 
 
@@ -3367,7 +3372,7 @@ def main(argv=None):
     ap.add_argument("id", nargs="?", help="only this app (default: every app)")
     ap.add_argument("--hours", type=int, default=24, help="look back this many hours (default 24)")
     ap.add_argument("--check", action="store_true",
-                    help="exit 2 when any load went over the budget")
+                    help="exit 2 when any load went over the budget or the page froze")
     ap.add_argument("--json", action="store_true", help="raw numbers as JSON")
     ap.set_defaults(func=cmd_app)
 

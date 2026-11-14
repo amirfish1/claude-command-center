@@ -146,6 +146,27 @@
         body: JSON.stringify({ kind: 'app_ready', ms: out.ms, detail: out }) }).catch(function () {});
     } catch (_) {}
   }
+  // Freezes: a timer that should tick four times a second. A long gap while
+  // the page is in front means the browser thread was blocked, which is what
+  // someone calls "it hangs". Reported from one second up, at most 20 a load.
+  (function () {
+    if (thumb) return;
+    var TICK = 250, last = performance.now(), sawHidden = document.hidden, sent = 0;
+    document.addEventListener('visibilitychange', function () { sawHidden = true; });
+    setInterval(function () {
+      var now = performance.now(), blocked = now - last - TICK;
+      var skip = sawHidden || document.hidden || parked();
+      last = now; sawHidden = document.hidden;
+      // Over a minute is a sleeping laptop, not a blocked thread.
+      if (skip || blocked < 1000 || blocked > 60000 || sent >= 20) return;
+      sent++;
+      try {
+        fetch('/api/perf-event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+          body: JSON.stringify({ kind: 'app_freeze', ms: Math.round(blocked),
+            detail: { app: APP, at_s: Math.round(now / 1000), framed: window.parent !== window } }) }).catch(function () {});
+      } catch (_) {}
+    }, TICK);
+  })();
   if (window.cccAppContentReady) noteContent(window.cccAppContentReady);
   window.addEventListener('ccc:app-ready', function (e) { noteContent(e.detail); });
   if (me.dataset.ready !== 'event') {

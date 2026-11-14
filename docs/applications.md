@@ -182,6 +182,10 @@ reports it, so a slow app shows up without anyone timing it by hand.
   load went over). The same numbers are in `GET /api/perf/summary` under
   `apps` and `kinds.app_ready`.
 - **Change the budget.** `CCC_PERF_APP_READY_MS` (default `1000`).
+- **Freezes are recorded too.** While an app page is in front, the kit notices
+  any stretch of a second or more in which the page could not respond and
+  reports it. `ccc app speed` counts the ones of two seconds or more
+  (`CCC_PERF_APP_FREEZE_MS`) as freezes and shows the longest.
 - **Tell the kit when your content is drawn.** By default content counts as
   drawn at the first frame after `DOMContentLoaded`. A page that fetches its
   data first should say so itself, or its number is flattering:

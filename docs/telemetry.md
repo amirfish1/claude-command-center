@@ -328,8 +328,9 @@ a report. It is not part of the beacon above, and
 It contains a closed set of fields: `report_version`, CCC version,
 platform, latency histograms (fixed buckets in `latency_buckets_ms`, plus
 p50/p75/p95) for each perf-event kind including `view_switch` (rail click
-to painted view), `rail_apps` (the left rail's app-list fetch) and
-`app_ready` (an app page's navigation to fully ready), rail
+to painted view), `rail_apps` (the left rail's app-list fetch),
+`app_ready` (an app page's navigation to fully ready) and `app_freeze` (a
+stretch in which an open app page could not respond), rail
 fetch ok/failed/retry counts, and bucketed counts ("21-50"): active and
 live sessions in the window, open Decision cards, messages sent by source
 (`composer` for typed by a person, `api`, `wt`, `other`), and WatchTower
