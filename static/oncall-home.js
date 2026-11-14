@@ -1,6 +1,6 @@
 /* On-call home (preview flag `oncall`).
  *
- * With On-call on, a desktop window opens on one quiet screen: what needs
+ * With On-call on, a desktop window can open one quiet screen: what needs
  * you, what is being worked on, what got fixed this week. It is the phone's
  * three answers, bigger. The full dashboard is one click away and a rail
  * button brings this screen back.
@@ -9,15 +9,16 @@
  * comes from GET /api/oncall/home and is redrawn while the screen is open, so
  * there is nothing to refresh by hand. Text is set with textContent only.
  *
- * Opening rules: only a plain dashboard URL on a wide window opens it by
- * itself (phones and narrow windows keep their own layout, deep links keep
+ * Opening rules: Sessions is the default. With the startup setting opted in,
+ * a plain dashboard URL on a wide window opens this screen by itself
+ * (phones and narrow windows keep their own layout, deep links keep
  * their target). `?oncall-home=1` opens it anywhere. "Open the full
  * dashboard" closes it for this tab; the Settings switch closes it for good.
  */
 (() => {
   'use strict';
 
-  const PREF_KEY = 'ccc-oncall-home';          // 'off' = never open by itself
+  const PREF_KEY = 'ccc-oncall-home';          // 'on' = explicitly open by itself
   const CLOSED_KEY = 'ccc-oncall-home-closed'; // this tab chose the full dashboard
   const SEEN_KEY = 'ccc-oncall-home-seen';     // it opened here last time, so open at once
   const OPEN_MS = 10000, IDLE_MS = 60000, WIDE_PX = 1200;
@@ -320,7 +321,7 @@
   function wantsToOpen() {
     const params = new URLSearchParams(window.location.search || '');
     if (params.get('oncall-home') === '1') return true;
-    if (stored(localStorage, PREF_KEY) === 'off' || stored(sessionStorage, CLOSED_KEY) === '1') return false;
+    if (stored(localStorage, PREF_KEY) !== 'on' || stored(sessionStorage, CLOSED_KEY) === '1') return false;
     if (window.innerWidth <= WIDE_PX || window.location.pathname !== '/') return false;
     for (const key of params.keys()) if (key !== 'ff') return false;   // a deep link keeps its target
     try { if (window.self !== window.top) return false; } catch (_) { return false; }
@@ -465,9 +466,9 @@
 
   window.cccOncallHome = {
     open, close: () => close(true), refresh: load, available,
-    opensByItself: () => stored(localStorage, PREF_KEY) !== 'off',
+    opensByItself: () => stored(localStorage, PREF_KEY) === 'on',
     setOpensByItself: on => {
-      store(localStorage, PREF_KEY, on ? null : 'off');
+      store(localStorage, PREF_KEY, on ? 'on' : 'off');
       if (on) store(sessionStorage, CLOSED_KEY, null);
     },
   };

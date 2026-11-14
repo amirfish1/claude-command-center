@@ -1,0 +1,1 @@
+- Open Sessions by default when On-call is enabled; opening the On-call home at startup now requires opting in through Settings.

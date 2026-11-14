@@ -445,7 +445,7 @@
     if (!parts || !state) return;
     const p = parts, config = state.config || {};
     setToggle(p.masterToggle, state.enabled);
-    setToggle(p.homeToggle, !window.cccOncallHome || window.cccOncallHome.opensByItself());
+    setToggle(p.homeToggle, !!window.cccOncallHome && window.cccOncallHome.opensByItself());
     if (!state.wt || (state.enabled && state.paused)) {
       say(p.master.status, !state.wt ? 'WatchTower is not installed, so no agent will pick tickets up.'
         : 'Paused. Reply resume on any channel to continue.', !state.wt);
