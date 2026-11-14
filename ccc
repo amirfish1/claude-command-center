@@ -264,6 +264,55 @@ def _fmt_age(age_s):
 _DEFAULT_SESSIONS_SINCE_S = 86400  # 24h default window (mirrors Command Center's 1d view)
 
 
+def _sessions_failure(base, error, elapsed_s):
+    """Distinguish a slow census from an unavailable dashboard, cheaply."""
+    health = None
+    try:
+        health = _get_json(base, "/api/health", timeout=1)
+    except urllib.error.HTTPError as exc:
+        # A warming server may return a non-200 status with useful JSON.
+        try:
+            health = json.loads(exc.read(65536).decode("utf-8"))
+        except (OSError, ValueError):
+            pass
+        finally:
+            exc.close()
+    except (OSError, ValueError):
+        pass
+
+    def seconds(value):
+        import math
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
+            return f"{value:.1f}s"
+        return None
+
+    cause = getattr(error, "reason", error)
+    failure = "timed out" if isinstance(cause, TimeoutError) else f"failed ({error})"
+    detail = f"sessions request {failure} after {elapsed_s:.1f}s"
+    readiness = health.get("sessions_readiness") if isinstance(health, dict) else None
+    uptime = seconds(health.get("uptime_s")) if isinstance(health, dict) else None
+    if isinstance(health, dict) and (uptime is not None or isinstance(readiness, dict)):
+        state = readiness.get("state") if isinstance(readiness, dict) else None
+        age = seconds(readiness.get("elapsed_s")) if isinstance(readiness, dict) else None
+        if state in ("warming", "busy"):
+            status = "warming up" if state == "warming" else "busy serving sessions"
+            if age is not None:
+                status += f" for {age}"
+        elif isinstance(cause, TimeoutError):
+            status = "sessions are busy or slow"
+        else:
+            status = "the sessions request failed"
+        context = f"; server uptime {uptime}" if uptime is not None else ""
+        message = f"CCC is running at {base}: {status}{context}. {detail}. Retry `ccc sessions`."
+    elif isinstance(cause, ConnectionRefusedError):
+        message = f"CCC is not accepting connections at {base}; {detail}. Check `ccc doctor`."
+    else:
+        # A failed probe cannot establish that the process is down, warming,
+        # or busy. Keep the uncertainty instead of recommending a restart.
+        message = f"{detail} at {base}; server state unavailable (health probe failed). Check `ccc doctor`."
+    print("ccc: " + message, file=sys.stderr)
+
+
 def cmd_sessions(args):
     base = _resolve_server(args.server)
     if not base:
@@ -278,6 +327,8 @@ def cmd_sessions(args):
     effective_since = args.since
     if effective_since is None and not live_only:
         effective_since = _DEFAULT_SESSIONS_SINCE_S
+    import time
+    request_started = time.monotonic()
     try:
         census_path = "/api/sessions/census"
         if effective_since is not None:
@@ -286,7 +337,7 @@ def cmd_sessions(args):
             census_path += f"?since={effective_since}"
         payload = _get_json(base, census_path)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
-        print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+        _sessions_failure(base, e, time.monotonic() - request_started)
         return 1
     sessions = list(payload.get("sessions") or [])
     if live_only:
