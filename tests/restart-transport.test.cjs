@@ -134,3 +134,14 @@ test('unrelated success cannot erase an uncertain write warning; user can dismis
   h.node().child.click();
   assert.equal(h.node().hidden, true);
 });
+
+
+test('best-effort diagnostics cannot create a misleading unsaved-change warning', async () => {
+  let calls = 0;
+  const h = harness(async () => { calls++; return new Response('', {status: 502}); });
+  for (const url of ['/api/client-log', '/api/free-runtime/tts-log']) {
+    assert.equal((await h.fetch(url, {method: 'POST', body: '{}'})).status, 502);
+  }
+  assert.equal(calls, 2);
+  assert.equal(h.node(), undefined);
+});

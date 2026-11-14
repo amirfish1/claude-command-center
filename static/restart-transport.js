@@ -67,6 +67,10 @@
     }
     const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
     const read = method === 'GET' || method === 'HEAD';
+    // Best-effort diagnostic beacons do not represent an unsaved user action.
+    if (!read && ['/api/client-log', '/api/free-runtime/tts-log'].includes(url.pathname)) {
+      return nativeFetch(input, init);
+    }
     const signal = (init && init.signal) || (input && input.signal);
     // Keep a fresh request for each attempt, including Request-object bodies.
     // Never replay a write after an ambiguous network/proxy failure.
