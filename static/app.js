@@ -34325,6 +34325,7 @@
     '[data-role="handoff-answer"]',
     '[data-role="handoff-takeback"]',
     '[data-role="read-row-answer"]',
+    '[data-role="report-decision"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',
     '.conv-chain-badge[data-parent-sid]',

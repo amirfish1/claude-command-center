@@ -34369,6 +34369,9 @@ body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
   .conv-action-confirm [data-confirm-accept] { color: var(--red); }
   .conv-report-error { margin: 8px 0 0; color: var(--red); }
   .wa-line1 > .conv-decision-report-btn { flex-basis: 32px; width: 32px; height: 32px; margin-block: -4px; }
+  @media (max-width: 1200px), (pointer: coarse) {
+    .wa-line1 > .conv-decision-report-btn { flex-basis: 44px; width: 44px; height: 44px; }
+  }
 
   /* Keep the report inside the existing edge cell in flex and grid rows. */
   #convList#convList .conv-item .conv-main-row > .conv-row-end:has(> .conv-decision-report-btn) {
