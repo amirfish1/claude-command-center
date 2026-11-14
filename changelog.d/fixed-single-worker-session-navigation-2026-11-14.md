@@ -1,0 +1,1 @@
+- Open a ticket's sole worker session directly from its title or row, without a redundant session/lane disclosure chip.

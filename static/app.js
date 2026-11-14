@@ -56305,6 +56305,12 @@
     const recency = card => Math.max(Number(card.last_event_ts) || 0, Number(card.modified) || 0);
     return cards.sort((a, b) => rank(a) - rank(b) || recency(b) - recency(a))[0];
   }
+  function _workersSingleTicketSession(sessions) {
+    if (!sessions || sessions.count !== 1 || sessions.lanes > 1 || !sessions.cards.length) return '';
+    // Cluster cards are root-first; a lone child lane opens its owner.
+    const card = sessions.cards[0];
+    return String(card.id || card.session_id || '');
+  }
   function _workersActiveClaim(item) {
     if (item.status !== 'in_progress' || item.needs_input || item.closed_at) return null;
     const health = (typeof _uxqHealthCache === 'undefined' ? null : _uxqHealthCache) || {};
@@ -56468,7 +56474,9 @@
       const brief = i >= WORKERS_RECENT_DETAILED;
       const briefTitle = brief && row.summary ? '\n\n' + row.summary : '';
       const expanded = _workersTicketExpanded.has(ref);
-      const toggleAttrs = sessions ? ' data-workers-ticket-toggle="' + escapeAttr(ref) + '" aria-expanded="' + expanded + '"' : '';
+      const singleSession = _workersSingleTicketSession(sessions);
+      const toggleAttrs = singleSession ? ' data-workers-ticket-row="' + escapeAttr(ref) + '" aria-label="' + escapeAttr('Open session: ' + title) + '"'
+        : sessions ? ' data-workers-ticket-toggle="' + escapeAttr(ref) + '" aria-expanded="' + expanded + '"' : '';
       const ticketButton = '<div class="fq-recent-row' + (brief ? ' is-brief' : ' is-detailed') + '"'
         + (sessions ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '')
         + (brief ? ' title="' + escapeAttr(state + ' · ' + _uxqRelTime(row.at) + briefTitle) + '"' : '')
@@ -56487,7 +56495,7 @@
         + '<span class="fq-recent-abs"> · ' + escapeHtml(absolute) + '</span></time>'
         + (row.summary ? '<span class="fq-recent-summary">' + escapeHtml(row.summary) + '</span>' : '')
         + '</div>';
-      if (!sessions) return '<div class="workers-ticket-entry" data-workers-ticket="' + escapeAttr(ref) + '">'
+      if (!sessions || singleSession) return '<div class="workers-ticket-entry" data-workers-ticket="' + escapeAttr(ref) + '">'
         + '<div class="workers-ticket-heading">' + ticketButton + '</div>' + updateHtml + '</div>';
       const label = sessions.count + (sessions.count === 1 ? ' session' : ' sessions')
         + (sessions.lanes ? ' · ' + sessions.lanes + (sessions.lanes === 1 ? ' lane' : ' lanes') : '');
@@ -56527,6 +56535,8 @@
           ev.preventDefault();
           ev.stopPropagation();
           const ref = toggle.dataset.workersTicketToggle || toggle.dataset.workersTicketRow;
+          const singleSession = _workersSingleTicketSession(_workersTicketSessions.get(ref));
+          if (singleSession) { selectConversation(singleSession); return; }
           const entry = toggle.closest('.workers-ticket-entry');
           const body = entry.querySelector('.workers-ticket-session-body');
           const expanded = body.hidden;
