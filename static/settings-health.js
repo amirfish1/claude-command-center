@@ -97,7 +97,7 @@
       new MutationObserver(()=>{if(maintenance.classList.contains('is-active-section')&&!get('settingsModal').hidden&&(!snapshot||Date.now()>expires))refresh();}).observe(maintenance,{attributes:true,attributeFilter:['class']});
 b.addEventListener('click',()=>{api.closeSettings();api.openHealth();get('settingsHealthRefresh').focus();});}
     new MutationObserver(()=>{if(get('settingsModal').hidden){returnButton.hidden=true;}}).observe(get('settingsModal'),{attributes:true,attributeFilter:['hidden']});
-    get('sysTabBtnHealth').textContent='Health checks';get('sysTabBtnStatus').textContent='Services';
+    get('sysTabBtnHealth').textContent='Health checks';get('sysTabBtnStatus').textContent='Services & restart';
     // Clock expiry changes only presentation, never polls or probes.
     document.addEventListener('visibilitychange',()=>{if(!document.hidden&&snapshot&&Date.now()>expires)render();});
     const observe=new MutationObserver(()=>{if(get('sysModal').classList.contains('open')&&snapshot&&Date.now()>expires)render();});observe.observe(get('sysModal'),{attributes:true,attributeFilter:['class']});

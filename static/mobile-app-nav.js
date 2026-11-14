@@ -20,8 +20,8 @@
     #mobileBottomNav .mobile-nav-menu { max-height:calc(100dvh - 100px); overflow-y:auto; overscroll-behavior:contain; min-width:220px; max-width:calc(100vw - 16px); }
     #mobileBottomNav .ccc-mobile-app-list { display:flex; flex-direction:column; border-top:1px solid var(--border); margin-top:6px; padding-top:6px; }
     #mobileBottomNav .ccc-mobile-settings { border-top:1px solid var(--border); margin-top:6px; border-radius:0; position:sticky; bottom:-6px; z-index:1; background:var(--surface, #161b22); }
-    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-btn, #mobileBottomNav .ccc-mobile-settings, #mobileBottomNav .ccc-guided-decisions-shortcut { flex:none; flex-direction:row; justify-content:flex-start; gap:12px; min-height:44px; padding:8px 12px; }
-    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-label, #mobileBottomNav .ccc-mobile-settings .mobile-nav-label, #mobileBottomNav .ccc-guided-decisions-shortcut .mobile-nav-label { font-size:15px; }
+    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-btn, #mobileBottomNav .ccc-mobile-settings, #mobileBottomNav .ccc-mobile-system, #mobileBottomNav .ccc-guided-decisions-shortcut { flex:none; flex-direction:row; justify-content:flex-start; gap:12px; min-height:44px; padding:8px 12px; }
+    #mobileBottomNav .ccc-mobile-app-list .mobile-nav-label, #mobileBottomNav .ccc-mobile-settings .mobile-nav-label, #mobileBottomNav .ccc-mobile-system .mobile-nav-label, #mobileBottomNav .ccc-guided-decisions-shortcut .mobile-nav-label { font-size:15px; }
     #mobileBottomNav .ccc-mobile-app-heading { padding:8px 12px; color:var(--text-muted); font-size:12px; }
     #mobileBottomNav[data-ccc-apps-open] .mobile-nav-menu:not([hidden]) { display:flex; }
     body.ccc-mobile-app-open #mobileBottomNav > [data-mobile-nav] { color:var(--text-muted); }
@@ -177,6 +177,18 @@
       const settings = simpleMore.cloneNode(true); settings.removeAttribute('aria-haspopup'); settings.title = 'Settings'; settings.setAttribute('aria-label','Settings'); settings.setAttribute('role','menuitem'); settings.querySelector('.mobile-nav-label').textContent = 'Settings';
       nav.querySelector('.mobile-nav-menu').prepend(settings);
     }
+    // Keep diagnostics reachable from Simple Home as well as the session list.
+    // The canonical launcher owns the dialog and its restart safeguards.
+    const system = document.createElement('button'); system.type = 'button';
+    system.id = 'mobileSystemHealthBtn'; system.className = 'mobile-nav-btn ccc-mobile-system';
+    system.setAttribute('role', 'menuitem');
+    const systemLabel = document.createElement('span'); systemLabel.className = 'mobile-nav-label';
+    systemLabel.textContent = 'System Health & restart…'; system.append(systemLabel);
+    system.addEventListener('click', event => {
+      event.preventDefault(); event.stopPropagation(); setMenu(false);
+      document.getElementById('systemStatusBtn')?.click();
+    });
+    nav.querySelector('.mobile-nav-menu').prepend(system);
     const measure = () => document.documentElement.style.setProperty('--ccc-mobile-app-nav-height', nav.getBoundingClientRect().height + 'px');
     new ResizeObserver(measure).observe(nav);
     nav.addEventListener('click', e => {

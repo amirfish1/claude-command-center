@@ -80,6 +80,7 @@
       #statsTitle {font-size:15px;margin:0;padding:14px 20px 0}
       @media(max-width:600px) {
         #sysDialog .sys-tabs {display:flex;flex-wrap:wrap}
+        #sysDialog .sys-tab {min-height:44px}
         #sysDialog .sys-name {flex-wrap:wrap;gap:4px}
       }
     `; document.head.append(style);
@@ -104,7 +105,7 @@
     }
     // Preserve the status LED while replacing the old proxy with its live node.
     const oldStatus = menu.querySelector('[data-proxy="cccServerStatusChip"]') || get('settingsAboutStrip')?.querySelector('[data-proxy="cccServerStatusChip"]');
-    const system = item(get('systemStatusBtn'), 'System status…');
+    const system = item(get('systemStatusBtn'), 'System Health & restart…');
     if (system) {
       const led = get('sidebarMoreStatusLed'); if (led) system.prepend(led);
       if (oldStatus) oldStatus.replaceWith(system); else tools.append(system);
