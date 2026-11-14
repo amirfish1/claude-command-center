@@ -1,0 +1,1 @@
+- Keep Codex replies in transcript order when a later live answer arrives before earlier saved messages, while preserving reply actions and expanded tool groups.

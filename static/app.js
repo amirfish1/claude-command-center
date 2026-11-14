@@ -71044,12 +71044,16 @@
           if (prev === inc
               || prev.indexOf(inc) === 0
               || (inc.length >= 80 && prev.indexOf(inc) !== -1)) {
-            if (!el.dataset.liveKey) delete ex.dataset.liveKey;
+            if (!el.dataset.liveKey && ex.dataset.liveKey) {
+              delete ex.dataset.liveKey;
+              kept.push(ex);
+            }
             absorbed = true;  // existing block already covers the incoming one
             break;
           }
           if (inc.indexOf(prev) === 0 || (prev.length >= 80 && inc.indexOf(prev) !== -1)) {
             ex.replaceWith(el);  // incoming supersedes a shorter/partial copy
+            if (!el.dataset.liveKey) kept.push(el);
             absorbed = true;
             break;
           }
@@ -71061,7 +71065,10 @@
           const escTid = (window.CSS && CSS.escape) ? CSS.escape(tid) : tid;
           const existingTool = turn.querySelector('.kimi-tool[data-tool-use-id="' + escTid + '"]');
           if (existingTool) {
-            if (!el.dataset.liveKey) delete existingTool.dataset.liveKey;
+            if (!el.dataset.liveKey && existingTool.dataset.liveKey) {
+              delete existingTool.dataset.liveKey;
+              kept.push(existingTool);
+            }
             continue;
           }
         }
@@ -71094,6 +71101,7 @@
   // div itself stays as a hidden `.kimi-marker` so data-jsonl-line dedupe,
   // the msg_id stream hand-off, and other .event lookups keep working.
   function _kimiAppendAssistantEvent($view, marker, blockEls, existingMarker) {
+    const adoptedBlocks = [];
     // The merged renderer returns before the generic event reconciliation.
     // Match both arrival orders by native item identity when available, then
     // by answer payload for older transcripts (DOM text includes actions).
@@ -71124,7 +71132,10 @@
             if (block === candidate || !owned) continue;
             if (block.classList.contains('kimi-answer-meta')
                 || (sameItem && answer !== previousAnswer)) block.remove();
-            else delete block.dataset.liveKey;
+            else {
+              delete block.dataset.liveKey;
+              adoptedBlocks.push(block);
+            }
           }
           _kimiTidyToolGroups(oldTurn);
         }
@@ -71154,8 +71165,15 @@
       turn.className = 'kimi-turn';
       $view.appendChild(turn);
     }
+    // The live snapshot can show a later item before earlier rollout rows
+    // arrive. Saved rows belong before the remaining live tail, including
+    // the text/tools they adopt: replacing only the hidden marker leaves the
+    // visible answer stranded ahead of its earlier messages.
+    const saved = marker.dataset.jsonlLine != null;
+    if (saved && existingMarker) existingMarker.remove();
+    const anchor = saved ? turn.querySelector(':scope > .kimi-marker[data-live-key]') : null;
     if (existingMarker && existingMarker.parentNode === turn) existingMarker.replaceWith(marker);
-    else turn.appendChild(marker);
+    else turn.insertBefore(marker, anchor);
     if (marker.dataset.liveKey) {
       for (const el of blockEls) el.dataset.liveKey = marker.dataset.liveKey;
     }
@@ -71163,10 +71181,14 @@
       for (const el of blockEls) el.dataset.codexItemId = marker.dataset.codexItemId;
     }
     const newBlocks = _kimiTurnCoveredBlocks(turn, blockEls);
-    for (const el of newBlocks) turn.appendChild(el);
+    for (const el of [...adoptedBlocks.filter(el => el.parentNode), ...newBlocks]) {
+      const group = el.closest('.kimi-tool-group');
+      if (group) el.dataset.kimiCollapsed = group.classList.contains('collapsed') ? '1' : '0';
+      turn.insertBefore(el, anchor);
+    }
     // Replaying an unchanged live snapshot must not dismantle tool groups:
     // their compact fold state and expanded controls belong to the reader.
-    if (newBlocks.length) _kimiRegroupTools(turn);
+    if (newBlocks.length || adoptedBlocks.length) _kimiRegroupTools(turn);
     anchorCodexStateBadge($view);
     return turn;
   }

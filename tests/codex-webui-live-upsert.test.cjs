@@ -12,7 +12,9 @@ assert.ok(helpersStart >= 0 && helpersEnd > helpersStart,
   'web-UI merged-turn helpers exist before _kimiMoonHtml');
 const anchorCode = source.slice(source.indexOf('  function anchorCodexStateBadge('),
   source.indexOf('  function _reanchorToTailUnlessOnlyTransientBetween('));
-const helpersCode = anchorCode + source.slice(helpersStart, helpersEnd);
+const helpersCode = anchorCode
+  + source.slice(source.indexOf('  function _kimiFlushRegroups('), helpersStart)
+  + source.slice(helpersStart, helpersEnd);
 
 let browser;
 before(async () => { browser = await puppeteer.launch({ headless: true, executablePath: findChromePath(), args: ['--no-sandbox'] }); });
@@ -30,8 +32,8 @@ async function withPage(fn) {
 async function loadHelpers(page) {
   await page.evaluate((code) => {
     (0, eval)('window.__fns = (() => {\n'
-      + 'const _kimiRegroupTools = () => {};\n'
-      + 'const _kimiTidyToolGroups = () => {};\n'
+      + 'const _KIMI_GLYPHS = {};\n'
+      + 'const escapeAttr = s => String(s).replace(/"/g, "&quot;");\n'
       + code
       + '\nreturn { _kimiAppendAssistantEvent };\n})();');
   }, helpersCode);
@@ -269,5 +271,124 @@ test('working status stays after merged assistant updates without splitting the 
       };
     });
     assert.deepEqual(result, { turns: 1, messages: 4, statusLast: true });
+  });
+});
+
+test('saved history restores chronological order when a later reply appeared live first', async () => {
+  await withPage(async page => {
+    await page.setContent('<div class="conversations-view"></div>');
+    await loadHelpers(page);
+    const result = await page.evaluate(() => {
+      const view = document.querySelector('.conversations-view');
+      function append(id, value, line) {
+        const marker = document.createElement('div');
+        marker.className = 'event assistant kimi-marker';
+        marker.dataset.turnId = 'turn-1';
+        marker.dataset.codexItemId = id;
+        marker._agentAnswerText = value;
+        if (line == null) marker.dataset.liveKey = 'turn-1:' + id;
+        else marker.dataset.jsonlLine = String(line);
+        const text = document.createElement('div');
+        text.className = 'assistant-text';
+        text.textContent = value;
+        const meta = document.createElement('div');
+        meta.className = 'kimi-answer-meta';
+        meta._agentAnswerText = value;
+        meta.textContent = 'Copy ' + id;
+        window.__fns._kimiAppendAssistantEvent(view, marker, [text, meta], null);
+      }
+      append('final', 'Final answer.', null);
+      const liveText = view.querySelector('.assistant-text');
+      append('first', 'First update.', 14);
+      append('second', 'Second update.', 49);
+      append('final', 'Final answer.', 190);
+      append('final', 'Final answer.', null);
+      return {
+        texts: [...view.querySelectorAll('.assistant-text')].map(x => x.textContent),
+        actions: [...view.querySelectorAll('.kimi-answer-meta')].map(x => x._agentAnswerText),
+        lines: [...view.querySelectorAll('.kimi-marker')].map(x => x.dataset.jsonlLine),
+        preserved: view.querySelectorAll('.assistant-text')[2] === liveText,
+        provisional: view.querySelectorAll('[data-live-key]').length,
+      };
+    });
+    assert.deepEqual(result, {
+      texts: ['First update.', 'Second update.', 'Final answer.'],
+      actions: ['First update.', 'Second update.', 'Final answer.'],
+      lines: ['14', '49', '190'], preserved: true, provisional: 0,
+    });
+  });
+});
+
+test('saved tools and replies stay ahead of the live tail during incremental confirmation', async () => {
+  await withPage(async page => {
+    await page.setContent('<div class="conversations-view"></div>');
+    await loadHelpers(page);
+    const result = await page.evaluate(() => {
+      const view = document.querySelector('.conversations-view');
+      function append(id, line, tool = false) {
+        const marker = document.createElement('div');
+        marker.className = 'event assistant kimi-marker';
+        marker.dataset.turnId = 'turn-1';
+        if (line == null) marker.dataset.liveKey = 'turn-1:' + id;
+        else marker.dataset.jsonlLine = String(line);
+        const block = document.createElement('div');
+        block.className = tool ? 'kimi-tool' : 'assistant-text';
+        if (tool) block.dataset.toolUseId = id;
+        else marker._agentAnswerText = id;
+        block.textContent = id;
+        window.__fns._kimiAppendAssistantEvent(view, marker, [block],
+          line == null ? view.querySelector('.kimi-marker[data-live-key="turn-1:' + id + '"]') : null);
+      }
+      const order = () => [...view.querySelectorAll('.assistant-text, .kimi-tool')].map(x => x.textContent);
+      append('tool-a', null, true);
+      append('tool-b', null, true);
+      append('Later reply', null);
+      const tool = view.querySelector('[data-tool-use-id="tool-a"]');
+      view.querySelector('.kimi-tool-group').classList.remove('collapsed');
+      append('Earlier reply', 10);
+      const during = order();
+      append('tool-a', 20, true);
+      append('tool-b', 30, true);
+      append('Later reply', 40);
+      // Late overlay replays and final cleanup must not undo adoption.
+      append('tool-a', null, true);
+      view.querySelectorAll('[data-live-key]').forEach(x => x.remove());
+      return { during, after: order(), preservedTool: tool === view.querySelector('[data-tool-use-id="tool-a"]'),
+        expanded: !view.querySelector('.kimi-tool-group').classList.contains('collapsed'),
+        tools: view.querySelectorAll('.kimi-tool').length };
+    });
+    assert.deepEqual(result, {
+      during: ['Earlier reply', 'tool-a', 'tool-b', 'Later reply'],
+      after: ['Earlier reply', 'tool-a', 'tool-b', 'Later reply'],
+      preservedTool: true, expanded: true, tools: 2,
+    });
+  });
+});
+
+test('legacy partial replies adopt the complete saved text without restoring the old draft', async () => {
+  await withPage(async page => {
+    await page.setContent('<div class="conversations-view"></div>');
+    await loadHelpers(page);
+    const texts = await page.evaluate(() => {
+      const view = document.querySelector('.conversations-view');
+      function append(value, line) {
+        const marker = document.createElement('div');
+        marker.className = 'event assistant kimi-marker';
+        marker.dataset.turnId = 'turn-1';
+        marker._agentAnswerText = value;
+        if (line == null) marker.dataset.liveKey = 'turn-1:legacy-reply';
+        else marker.dataset.jsonlLine = String(line);
+        const block = document.createElement('div');
+        block.className = 'assistant-text';
+        block.textContent = value;
+        window.__fns._kimiAppendAssistantEvent(view, marker, [block], null);
+      }
+      append('This is the final answer with a streamed prefix', null);
+      append('An earlier progress update.', 10);
+      append('This is the final answer with a streamed prefix and the complete ending.', 20);
+      return [...view.querySelectorAll('.assistant-text')].map(x => x.textContent);
+    });
+    assert.deepEqual(texts, ['An earlier progress update.',
+      'This is the final answer with a streamed prefix and the complete ending.']);
   });
 });
