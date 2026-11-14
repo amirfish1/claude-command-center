@@ -316,6 +316,8 @@
   }
   .conv-pane.has-conv-bg.conv-bg-light {
     --orch-chip-text: #6639a6;
+    --conv-user-bubble-bg: #dceaff;
+    --conv-peer-bg: #e0f2e5;
   }
   .conv-pane.has-conv-bg .conversations-view {
     background: var(--conv-bg);
@@ -2384,7 +2386,7 @@
     --kw-bg: var(--conv-bg); --kw-surface: var(--conv-surface); --kw-raised: var(--conv-surface-2); --kw-sunken: var(--conv-surface);
     --kw-line: var(--conv-border); --kw-text: var(--conv-text); --kw-muted: var(--conv-text-muted); --kw-faint: var(--conv-text-muted);
     --kw-accent: var(--conv-accent); --kw-accent-hover: var(--conv-accent);
-    --kw-accent-soft: rgba(36,90,154,0.10); --kw-accent-bd: rgba(36,90,154,0.28);
+    --kw-accent-soft: var(--conv-user-bubble-bg, var(--conv-user-bg)); --kw-accent-bd: rgba(36,90,154,0.28);
     --kw-success: #1a7f37; --kw-success-soft: rgba(26,127,55,0.12);
     --kw-danger: #cf222e; --kw-danger-soft: rgba(207,34,46,0.10);
     --kw-warning: #9a6700;
@@ -4245,12 +4247,13 @@
   .conv-pane.has-conv-bg .conversations-view .event.user_text.peer-message {
     display: block;
     width: fit-content;
-    max-width: min(100%, 76ch);
-    margin-left: 0;
+    max-width: min(85%, 76ch);
+    margin-left: auto;
+    margin-right: 0;
     padding: 12px 16px;
     border: 1px solid color-mix(in srgb, var(--green) 28%, transparent);
     border-radius: 12px;
-    background: color-mix(in srgb, var(--green) 6%, transparent);
+    background: var(--conv-peer-bg, color-mix(in srgb, var(--green) 6%, transparent));
     box-shadow: none;
   }
   .conversations-view .event.user_text.peer-message .user-msg,
@@ -4313,6 +4316,7 @@
     padding: 8px 14px;
     max-width: 85%;
     margin-left: auto;
+    margin-right: 0;
     width: fit-content;
     position: relative;
   }
@@ -4322,6 +4326,7 @@
   .conversations-view .event.user_text .user-msg {
     margin-top: 0;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     font-size: 15.5px;
     line-height: 1.6;
     /* Regular weight + normal text color — the tinted bubble carries the
@@ -4395,7 +4400,12 @@
     cursor: default;
   }
   .conv-pane.has-conv-bg .conversations-view .event.user_text {
-    background: var(--conv-user-bg);
+    background: var(--conv-user-bubble-bg, var(--conv-user-bg));
+  }
+  /* WebUI engines paint the inner message; tinting its full-width wrapper
+     would make a right-aligned bubble appear to stretch across the reader. */
+  .conv-pane.has-conv-bg.is-webui-session .conversations-view .event.user_text:not(.peer-message) {
+    background: none;
   }
   .conv-pane.has-conv-bg .conversations-view .event.user_text .user-msg {
     color: var(--conv-user-text);
@@ -4525,7 +4535,7 @@
   }
   /* Mirroring an ask must preserve the engine's layout. Switching a flex
      image bubble to block changes its height and fights scroll anchoring. */
-  .conv-pane.is-webui-session .event.user_text.is-pinned-in-sticky:has(img) {
+  .conv-pane.is-webui-session .event.user_text.is-pinned-in-sticky:not(.peer-message):has(img) {
     display: flex !important;
   }
   .conversations-view .event.user_text:has(img) .user-msg {
@@ -31608,7 +31618,8 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   box-shadow: none !important;
 }
 .conv-pane.is-codex-session[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky):not(.peer-message) .user-msg {
-  max-width: min(88%, 70ch) !important;
+  max-width: 100% !important;
+  margin-left: auto;
   padding: 12px 16px !important;
   border: 1px solid var(--kw-accent-bd) !important;
   border-radius: 16px 16px 4px 16px !important;
@@ -32088,7 +32099,7 @@ body.conv-compact.conv-compact .conversations-view .event.assistant { padding: 1
 body.conv-compact.conv-compact .conversations-view .event.assistant .assistant-text {
   padding: 3px 10px !important; margin: 0 !important;
 }
-body.conv-compact.conv-compact .conversations-view .event.user_text { padding: 3px 10px !important; margin: 2px 0 !important; }
+body.conv-compact.conv-compact .conversations-view .event.user_text { padding: 3px 10px !important; margin: 2px 0 2px auto !important; }
 body.conv-compact.conv-compact .conversations-view .kimi-answer-meta,
 body.conv-compact.conv-compact .conversations-view .event-model-meta,
 body.conv-compact.conv-compact .conversations-view .event-token-chips,
