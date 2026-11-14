@@ -17,6 +17,7 @@ test('WatchTower commands retain distinct ticket targets and queue context', () 
   assert.deepEqual(labels('"/opt/bin/wt" duplicate APP-12 --of APP-13'), ['wt duplicate · APP-12, APP-13']);
   assert.deepEqual(labels('wt plan show "APP-12"'), ['wt plan · APP-12']);
   assert.deepEqual(labels('wt defer --reason APP-99 APP-12 --until +24h'), ['wt defer · APP-12']);
+  assert.deepEqual(labels('wt close APP-12 --summary=APP-99 --no-code'), ['wt close · APP-12']);
   assert.deepEqual(labels('wt status --queue=APP'), ['wt status · APP']);
   assert.deepEqual(labels('wt claim \\\n+    -q APP --worker test-worker --json'), ['wt claim · APP']);
   assert.deepEqual(labels('wt add -q APP --note "Mention APP-99; quoted text"; wt find OTHER-2'),
@@ -29,6 +30,8 @@ test('filing and claim results identify their ticket without guessing on empty o
   assert.deepEqual(resultLabels('wt add -q APP --title "Repair the panel"', 'FILED: APP-42\nDispatching worker'), ['wt add · APP-42']);
   assert.deepEqual(resultLabels('wt claim -q APP --json', '{"ref":"APP-42","note":"See OTHER-1"}'), ['wt claim · APP-42']);
   assert.deepEqual(resultLabels('wt take -q APP --json', '{\\"ref\\":\\"APP-42\\"}'), ['wt take · APP-42']);
+  assert.deepEqual(resultLabels('wt claim -q APP', 'CLAIMED: APP-42 -> test-worker'), ['wt claim · APP-42']);
+  assert.deepEqual(resultLabels('wt claim -q APP', 'HANDED BACK: APP-42 -> test-worker'), ['wt claim · APP-42']);
   for (const output of ['', '{"stop":true}', 'Something mentions APP-42', '{"ref":"OTHER-1"}',
     '[{"ref":"APP-42"},{"ref":"APP-43"}]']) {
     assert.deepEqual(resultLabels('wt claim -q APP --json', output), ['wt claim · APP']);

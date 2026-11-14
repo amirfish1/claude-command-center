@@ -88809,7 +88809,7 @@
     const proseFlag = /^--(?:note|summary|progress|reason|title|question|text|recommend|undo|caveat|follow-up|unresolved|accept|detail)$/;
     for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i];
-      if (proseFlag.test(token)) { i++; continue; }
+      if (proseFlag.test(token.split('=')[0])) { if (!token.includes('=')) i++; continue; }
       if (token === '-q' || token === '--queue') { queue = tokens[++i] || ''; continue; }
       if (/^--queue=/.test(token)) { queue = token.slice(8); continue; }
       const ref = /^(?:--[\w-]+=)?([A-Z][A-Z0-9_]*-\d+)$/.exec(token);
@@ -88825,7 +88825,7 @@
     if (allocating.length !== 1 || / · [A-Z][A-Z0-9_]*-\d+$/.test(allocating[0])) return labels;
     const refs = new Set();
     const text = String(output || '').replace(/\\"/g, '"');
-    const re = /(?:["']ref["']\s*:\s*["']|\bFILED:\s*)([A-Z][A-Z0-9_]*-\d+)\b/g;
+    const re = /(?:["']ref["']\s*:\s*["']|\b(?:FILED|CLAIMED|HANDED BACK):\s*)([A-Z][A-Z0-9_]*-\d+)\b/g;
     let m;
     while ((m = re.exec(text))) refs.add(m[1]);
     if (refs.size !== 1) return labels;
