@@ -339,7 +339,10 @@ def brief(query: str) -> dict:
     engine = _engine_of_path(path)
     sdoc = _sdoc_row(sid)
 
-    roots = _sg.discover_repo_roots()
+    # Discovery resolves every configured/local clone. The background sync
+    # already stores these roots; repeating its filesystem walk here can
+    # exhaust the CLI timeout even when this session is fully indexed.
+    roots = dict(conn.execute("SELECT name, path FROM repos"))
     repo_root = roots.get(meta.get("repo", ""), "")
     lineage = _lineage.chain_summary(conn, sid)
     children = _lineage.spawn_children_of(sid)

@@ -313,6 +313,28 @@ def test_brief_artifacts_outside_repos_names_the_scratch_file(mock_brief_env):
     assert str(mock_brief_env["repo_dir"] / "app.py") not in res["artifacts_outside_repos"]
 
 
+def test_brief_uses_indexed_repos_during_background_catchup(mock_brief_env, monkeypatch):
+    # A restart leaves the background index available, even while its refresh
+    # is pending. One session lookup must not rediscover every local clone.
+    conn = ship_graph._get_connection()
+    ship_graph._sync_all(conn, force=True)
+    session_fts._sync_index(session_fts._get_connection(), force=True)
+    monkeypatch.setattr(ship_graph, "_last_sync_ts", 0)
+    monkeypatch.setattr(ship_graph, "_BG_SYNC_THRESHOLD", 0)
+    monkeypatch.setattr(ship_graph, "_start_background_sync", lambda: None)
+
+    def no_discovery():
+        pytest.fail("brief scanned local repositories instead of reading its index")
+
+    monkeypatch.setattr(ship_graph, "discover_repo_roots", no_discovery)
+    res = session_brief.brief(mock_brief_env["sid"])
+    assert res["found"] is True
+    assert res["artifacts_outside_repos"] == [mock_brief_env["scratch_artifact"]]
+    commits = {c["sha"]: c["on_origin"] for c in res["commits"]}
+    assert commits[mock_brief_env["sha_pushed"][:7]] is True
+    assert commits[mock_brief_env["sha_local"][:7]] is False
+
+
 def test_brief_resume_command_for_claude_engine(mock_brief_env):
     res = session_brief.brief(mock_brief_env["sid"])
     assert res["resume_command"] == (
