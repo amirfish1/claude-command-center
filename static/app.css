@@ -34800,6 +34800,24 @@ a.local-ci-job:hover { color: var(--accent); }
 .local-ci-elapsed { flex: none; font-size: 11px; color: var(--text-secondary, var(--text)); font-variant-numeric: tabular-nums; }
 .local-ci-step { display: block; font-size: 11px; color: var(--text-secondary, var(--text)); }
 .local-ci-context { display: block; margin-top: 3px; font-size: 11px; line-height: 1.4; color: var(--text-secondary, var(--text)); overflow-wrap: anywhere; }
+.local-ci-group { display: flex; align-items: flex-start; gap: 4px; min-width: 0; --ci-color: var(--accent); }
+.local-ci-commit { flex: 1; min-width: 0; }
+.local-ci-summary { display: flex; align-items: center; gap: 6px; min-height: 32px; cursor: pointer; font-size: 11px; list-style: none; }
+.local-ci-summary::-webkit-details-marker { display: none; }
+.local-ci-summary::before { content: ''; flex: 0 0 5px; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); }
+.local-ci-commit[open] > .local-ci-summary::before { transform: rotate(45deg); }
+.local-ci-summary-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.local-ci-summary-status { flex: none; color: var(--ci-color); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.local-ci-overall-progress { flex: 0 0 32px; width: 32px; height: 4px; margin: 0; appearance: none; border: 0; border-radius: 2px; overflow: hidden; background: var(--border); accent-color: var(--ci-color); }
+.local-ci-overall-progress::-webkit-progress-bar { background: var(--border); }
+.local-ci-overall-progress::-webkit-progress-value { background: var(--ci-color); }
+.local-ci-overall-progress::-moz-progress-bar { background: var(--ci-color); }
+.local-ci-group[data-outcome="failure"] { --ci-color: var(--red); }
+.local-ci-group[data-outcome="success"] { --ci-color: var(--green); }
+.local-ci-group[data-outcome="neutral"] { --ci-color: var(--text-muted); }
+.local-ci-summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+.local-ci-checks { padding: 3px 0 6px 10px; }
+@media (max-width: 1200px) { .local-ci-summary { min-height: 44px; font-size: 12px; } }
 
 #ciRunnerSetupStatus ul { padding-inline-start: 20px; line-height: 1.6; }
 

@@ -187,7 +187,8 @@ def test_hosted_run_visible_without_local_runner(monkeypatch):
     monkeypatch.setattr(local_ci, '_hosted_identities', lambda: [identity])
     def api(route):
         if '/jobs?' in route:
-            return {'jobs':[{'runner_name':'GitHub Actions 123', 'status':'in_progress',
+            return {'jobs':[{'runner_name':'GitHub Actions 122', 'status':'completed', 'conclusion':'failure'},
+                {'runner_name':'GitHub Actions 123', 'status':'in_progress',
                 'name':'unittest', 'steps':[{'status':'completed','name':'Checkout'},
                                           {'status':'in_progress','name':'Tests'}]}]}
         return {'status':'in_progress', 'run_started_at':'2026-01-01T12:00:00Z'}
@@ -197,6 +198,8 @@ def test_hosted_run_visible_without_local_runner(monkeypatch):
     assert result['jobs'][0]['name'] == 'unittest'
     assert result['jobs'][0]['current_step'] == 'Tests'
     assert result['jobs'][0]['percent'] == 50
+    assert result['jobs'][0]['workflow_percent'] == 75
+    assert result['jobs'][0]['workflow_failed'] is True
     assert local_ci._collect()['jobs'], 'hosted jobs stay visible between polls'
     monkeypatch.setattr(local_ci, '_hosted_identities', lambda: [])
     records = local_ci._load_records()
@@ -253,6 +256,17 @@ def test_execution_requires_runner_evidence_not_discovery_source():
     assert local_ci._execution({'runner_name':'remote', 'labels':['self-hosted']}) == 'self_hosted'
     assert local_ci._execution({'runner_name':'local'}, {'local'}) == 'local'
     assert local_ci._execution({'runner_name':'unrecognized'}) == 'unknown'
+
+
+def test_workflow_progress_includes_completed_parallel_and_queued_jobs():
+    payload = {'total_count':3, 'jobs':[
+        {'status':'completed'},
+        {'status':'in_progress', 'steps':[{'status':'completed'}, {'status':'in_progress'}]},
+        {'status':'queued'}]}
+    assert local_ci._workflow_percent(payload) == 50
+    assert local_ci._workflow_percent({'jobs':[]}) is None
+    assert local_ci._workflow_percent(dict(payload, total_count=101)) is None
+    assert local_ci._workflow_percent({'jobs':[{'status':'completed'}]}) == 99
 
 
 def test_run_context_preserves_trigger_commit_and_account(monkeypatch):

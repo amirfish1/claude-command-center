@@ -190,6 +190,19 @@ def _execution(job, local_names=()):
     return "local" if job.get("runner_name") in local_names else "unknown"
 
 
+def _workflow_percent(payload):
+    """Average job progress, including finished and queued jobs in the run."""
+    jobs = payload.get("jobs") or []
+    if not jobs or (payload.get("total_count") or len(jobs)) > len(jobs):
+        return None
+    progress = []
+    for job in jobs:
+        steps = job.get("steps") or []
+        progress.append(100 if job.get("status") == "completed" else
+                        100 * sum(step.get("status") == "completed" for step in steps) / len(steps) if steps else 0)
+    return min(99, int(sum(progress) / len(progress)))
+
+
 def _recent_identities():
     # Recover recent local runs even if the page was closed when they finished.
     identities = []
@@ -280,19 +293,23 @@ def _collect():
         url = f"https://github.com/{repo}/actions/runs/{run_id}"
         if run and run.get("run_started_at"):
             record["started_at"] = run["run_started_at"]
+            record["workflow_started_at"] = run["run_started_at"]
         if run and run.get("status") == "completed":
             if not record.get("execution"):
                 payload = _api(route + "/jobs?per_page=100") or {}
                 locations = {_execution(job) for job in payload.get("jobs", [])}
                 record["execution"] = next(iter(locations)) if len(locations) == 1 else "unknown"
             record.update(status="completed", name=run.get("name") or "CI",
-                          conclusion=run.get("conclusion") or "unknown", percent=100,
+                          conclusion=run.get("conclusion") or "unknown", percent=100, workflow_percent=100,
                           completed_at=run.get("updated_at") or run.get("run_started_at") or "",
                           url=url, current_step=run.get("conclusion") or "Completed")
             continue
         if not local_names and not record.get("hosted"):
             continue
         payload = _api(route + "/jobs?per_page=100") or {}
+        record["workflow_percent"] = _workflow_percent(payload)
+        record["workflow_failed"] = any(job.get("conclusion") in ("failure", "timed_out", "startup_failure", "action_required")
+                                        for job in payload.get("jobs", []))
         jobs = [job for job in payload.get("jobs", []) if (record.get("hosted") or job.get("runner_name") in local_names)
                 and job.get("status") in ("in_progress", "queued")]
         locations = {_execution(job, local_names) for job in payload.get("jobs", [])}

@@ -100401,6 +100401,7 @@
     render(lastData);
   });
   const dismissed = new Set();
+  const expandedGroups = new Set();
   const conclusions = {success:'Passed', failure:'Failed', cancelled:'Cancelled',
     timed_out:'Timed out', skipped:'Skipped', neutral:'Neutral', action_required:'Action required',
     startup_failure:'Failed', stale:'Stopped', unknown:'Completed'};
@@ -100417,6 +100418,40 @@
       timer.title = timer.dataset.ciCompletedAt ? 'Total duration' : 'Time elapsed';
     }
   }
+  function dismissButton(jobs, label) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'local-ci-dismiss';
+    button.dataset.ciDismiss = jobs.map(job => job.id).join('|');
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    button.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      const failedIds = new Set();
+      for (const job of jobs) {
+        if (dismissed.has(job.id)) continue;
+        try {
+          if (job.provider !== 'vercel') {
+            const response = await fetch('/api/ci/dismiss', {method:'POST', cccPriority:'user',
+              headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:job.id})});
+            if (!response.ok) throw new Error('Dismiss failed');
+          }
+          dismissed.add(job.id);
+        } catch (_) { failedIds.add(job.id); }
+      }
+      saveSnapshot(lastData);
+      render(lastData);
+      if (failedIds.size) {
+        const retry = [...document.querySelectorAll('[data-ci-dismiss]')].find(el => el.dataset.ciDismiss.split('|').some(id => failedIds.has(id)));
+        if (retry) {
+          retry.title = 'Could not dismiss all checks. Try again.';
+          retry.setAttribute('aria-label', retry.title);
+        }
+      }
+    });
+    return button;
+  }
   function render(data) {
     lastData = data;
     const completed = (data.completed || []).filter(job => !dismissed.has(job.id));
@@ -100425,10 +100460,90 @@
     if (deploymentJob && !dismissed.has(deploymentJob.id)) {
       entries.unshift({job:deploymentJob, done:deploymentJob.done});
     }
+    const groups = new Map();
+    for (const item of entries) {
+      const job = item.job;
+      const key = job.provider === 'vercel' ? job.id : job.repo + ':' + (job.head_sha || job.id);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
     for (const host of document.querySelectorAll('[data-local-ci-host]')) {
       const focused = host.contains(document.activeElement) ? document.activeElement.dataset.ciDismiss : null;
+      const focusedGroup = host.contains(document.activeElement) && document.activeElement.matches('.local-ci-summary')
+        ? document.activeElement.parentElement.dataset.ciGroup : null;
       host.replaceChildren();
-      for (const {job, done} of entries) {
+      for (const [groupKey, members] of groups) {
+        let target = host;
+        const first = members[0].job;
+        if (first.provider !== 'vercel') {
+          const shell = document.createElement('div');
+          shell.className = 'local-ci-group';
+          const group = document.createElement('details');
+          group.className = 'local-ci-commit';
+          group.dataset.ciGroup = groupKey;
+          group.open = expandedGroups.has(groupKey);
+          group.addEventListener('toggle', () => {
+            if (group.open) expandedGroups.add(groupKey);
+            else expandedGroups.delete(groupKey);
+          });
+          const summary = document.createElement('summary');
+          summary.className = 'local-ci-summary';
+          const tickets = [...new Set(members.flatMap(({job}) => [...(job.origin?.tickets || []), ...(job.origin?.pusher?.tickets || [])]))];
+          const pusher = members.map(({job}) => job.origin?.pusher).find(Boolean);
+          const title = document.createElement('span');
+          title.className = 'local-ci-summary-name';
+          title.textContent = ['CI', ...tickets, first.head_sha?.slice(0, 7)].filter(Boolean).join(' · ');
+          const live = members.filter(item => !item.done).length;
+          const failures = new Set(members.filter(({job, done}) => job.workflow_failed || done && ['failure','timed_out','startup_failure','action_required'].includes(job.conclusion)).map(({job}) => job.id)).size;
+          const passed = members.filter(({job, done}) => done && job.conclusion === 'success').length;
+          const status = document.createElement('span');
+          status.className = 'local-ci-summary-status';
+          const counts = [failures && failures + ' failed', live && live + ' running', passed && passed + ' passed'].filter(Boolean).join(' · ') || 'Completed';
+          const workflows = new Map();
+          for (const member of members) {
+            const key = member.job.id;
+            if (!workflows.has(key)) workflows.set(key, []);
+            workflows.get(key).push(member);
+          }
+          const values = [...workflows.values()].map(items => {
+            if (items.every(item => item.done)) return 100;
+            const reported = items.find(item => Number.isFinite(item.job.workflow_percent));
+            if (reported) return reported.job.workflow_percent;
+            if (items.some(item => !item.done && !Number.isFinite(item.job.percent))) return null;
+            return items.reduce((sum, item) => sum + (item.done ? 100 : item.job.percent), 0) / items.length;
+          });
+          const overall = values.some(value => value == null) ? null
+            : Math.min(live ? 99 : 100, Math.round(values.reduce((sum, value) => sum + value, 0) / values.length));
+          status.textContent = [failures && failures + ' failed', overall == null ? (live ? 'Running' : 'Completed') : overall + '%'].filter(Boolean).join(' · ');
+          shell.dataset.outcome = failures ? 'failure' : live ? 'active' : passed === members.length ? 'success' : 'neutral';
+          summary.title = [first.repo, first.head_sha, first.commit_subject,
+            pusher && [pusher.engine, pusher.session_id, pusher.worker && 'control-plane worker'].filter(Boolean).join(' · '),
+            ...tickets, counts, 'Progress averages each workflow once, including finished jobs; queued jobs start at 0%. Step completion, not time remaining.',
+            'Expand for individual checks and attribution'].filter(Boolean).join('\n');
+          const overallBar = document.createElement('progress');
+          overallBar.className = 'local-ci-overall-progress';
+          overallBar.max = 100;
+          if (overall != null) overallBar.value = overall;
+          overallBar.setAttribute('aria-label', overall == null ? 'Overall CI progress unavailable' : 'Overall CI progress: ' + overall + '%');
+          summary.append(title, overallBar, status);
+          const starts = members.map(({job}) => Date.parse(job.workflow_started_at || job.started_at)).filter(Number.isFinite);
+          const ends = members.map(({job}) => Date.parse(job.completed_at)).filter(Number.isFinite);
+          if (starts.length && (live || ends.length)) {
+            const timer = document.createElement('span');
+            timer.className = 'local-ci-elapsed';
+            timer.dataset.ciStartedAt = new Date(Math.min(...starts)).toISOString();
+            if (!live) timer.dataset.ciCompletedAt = new Date(Math.max(...ends)).toISOString();
+            summary.append(timer);
+          }
+          group.append(summary);
+          target = document.createElement('div');
+          target.className = 'local-ci-checks';
+          group.append(target);
+          shell.append(group);
+          if (!live) shell.append(dismissButton([...new Map(members.map(({job}) => [job.id, job])).values()], 'Dismiss completed checks for this commit'));
+          host.append(shell);
+        }
+        for (const {job, done} of members) {
         const entry = document.createElement('div');
         entry.className = 'local-ci-entry' + (done ? ' is-completed' : '');
         entry.dataset.runId = job.id || '';
@@ -100474,13 +100589,14 @@
           detail.append(timer);
         }
         row.append(label, bar, detail);
-        if (job.provider !== 'vercel') {
+        if (job.provider !== 'vercel' && job === first) {
           const context = document.createElement('span');
           context.className = 'local-ci-context';
           const location = {github_hosted:'GitHub-hosted runner', self_hosted:'Self-hosted runner', local:'This machine'}[job.execution] || 'Runner location unverified';
           const trigger = [job.event, job.actor, job.head_sha && job.head_sha.slice(0, 7)].filter(Boolean).join(' · ');
-          const origin = job.origin || {};
-          const pusher = origin.pusher;
+          const origin = {sessions:[...new Set(members.flatMap(({job}) => job.origin?.sessions || []))],
+            tickets:[...new Set(members.flatMap(({job}) => [...(job.origin?.tickets || []), ...(job.origin?.pusher?.tickets || [])]))]};
+          const pusher = members.map(({job}) => job.origin?.pusher).find(Boolean);
           const agents = pusher ? 'Pushed by ' + [pusher.engine, pusher.session_id].filter(Boolean).join(' · ')
             + (pusher.worker ? ' · control-plane worker' : '') + (pusher.spawned_via ? ' · ' + pusher.spawned_via : '')
             : (origin.sessions || []).length ? 'Commit agent: ' + origin.sessions.join(', ') : 'Agent / worker untracked';
@@ -100492,40 +100608,15 @@
         }
         entry.append(row);
         if (done) {
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.className = 'local-ci-dismiss';
-          button.dataset.ciDismiss = job.id;
-          button.setAttribute('aria-label', 'Dismiss completed ' + (job.provider === 'vercel' ? 'deployment: ' : 'CI run: ') + job.name);
-          button.title = 'Dismiss completed run';
-          button.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';
-          button.addEventListener('click', async () => {
-            if (job.provider === 'vercel') {
-              dismissed.add(job.id);
-              render(lastData);
-              return;
-            }
-            button.disabled = true;
-            try {
-              const response = await fetch('/api/ci/dismiss', {method:'POST', cccPriority:'user',
-                headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:job.id})});
-              if (!response.ok) throw new Error('Dismiss failed');
-              dismissed.add(job.id);
-              saveSnapshot(lastData);
-              render(data);
-            } catch (_) {
-              button.disabled = false;
-              button.title = 'Could not dismiss. Try again.';
-              button.setAttribute('aria-label', 'Could not dismiss CI run. Try again.');
-            }
-          });
-          entry.append(button);
+          entry.append(dismissButton([job], 'Dismiss completed ' + (job.provider === 'vercel' ? 'deployment: ' : 'CI run: ') + job.name));
         }
-        host.append(entry);
+        target.append(entry);
+        }
       }
       host.hidden = !host.childElementCount;
       host.title = showingSaved ? 'Saved CI progress; waiting for a live update' : '';
       if (focused) [...host.querySelectorAll('[data-ci-dismiss]')].find(button => button.dataset.ciDismiss === focused)?.focus({preventScroll:true});
+      if (focusedGroup) [...host.querySelectorAll('[data-ci-group]')].find(group => group.dataset.ciGroup === focusedGroup)?.querySelector('summary').focus({preventScroll:true});
     }
     updateTimers();
   }

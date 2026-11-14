@@ -1,0 +1,1 @@
+Group GitHub CI activity into one compact, expandable row per repository and commit, with shared attribution, overall workflow progress, wall-clock duration, visible failures, and dismissal of completed groups.

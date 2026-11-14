@@ -86,7 +86,7 @@ for (const width of [1280, 390]) test('CI survives refresh before live status re
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await page.waitForFunction(selector => document.querySelector(selector).textContent.includes('Passed'), {}, host);
     assert.doesNotMatch(await page.$eval(host, el => el.textContent), /Saved/);
-    await page.click(host + ' .local-ci-dismiss');
+    await page.click(host + ' .local-ci-group > .local-ci-dismiss');
     await page.waitForFunction(selector => document.querySelector(selector).hidden, {}, host);
     hold = true;
     await page.reload({waitUntil:'domcontentloaded'});
