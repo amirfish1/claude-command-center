@@ -79300,7 +79300,6 @@
     retryMs: 1000,
     retryTimer: null,
   };
-  let _dashboardArchiveRenderQueued = false;
 
   function _persistDashboardEventCursor() {
     try {
@@ -79311,13 +79310,11 @@
     } catch (_) {}
   }
 
-  function _queueDashboardArchiveRender() {
-    if (_dashboardArchiveRenderQueued) return;
-    _dashboardArchiveRenderQueued = true;
-    requestAnimationFrame(() => {
-      _dashboardArchiveRenderQueued = false;
-      try { renderArchiveList(_archiveQuery()); } catch (_) {}
-    });
+  function _queueDashboardArchiveRender(opts = {}) {
+    // Passive event/refresh redraws share the pollers' read-aloud throttle.
+    // Promise continuations can pass archive rows here, so only an explicit
+    // lifecycle flag may bypass the pause for an authoritative state change.
+    _scheduleSidebarRender({ lifecycle: opts?.lifecycle === true });
   }
 
   function _applyDashboardConversationPatch(event) {
@@ -79343,7 +79340,7 @@
     if (currentSession && String(currentSession.id || '') === id) {
       currentSession = Object.assign({}, currentSession, event.patch);
     }
-    if (changed) _queueDashboardArchiveRender();
+    if (changed) _queueDashboardArchiveRender({ lifecycle: true });
   }
 
   function _applyPendingDashboardConversationPatches(rows) {
@@ -79393,7 +79390,7 @@
     conversationsData = patchRows(conversationsData);
     if (known) {
       _archiveUnknownPatchIds.delete(id);
-      _queueDashboardArchiveRender();
+      _queueDashboardArchiveRender({ lifecycle: true });
       return;
     }
     if (normalizedPatch.is_live === false) return;
