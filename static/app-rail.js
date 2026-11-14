@@ -246,6 +246,13 @@
     ".ccc-account-pop .acc-btn.danger { color: #f0a29b; }",
     ".ccc-account-pop .acc-btn.danger:hover { border-color: #8c3f39; }",
     ".ccc-account-pop .acc-btn:disabled { opacity: .55; cursor: default; }",
+    ".ccc-account-pop .acc-dashboard-tools { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }",
+    ".ccc-account-pop .acc-dashboard-tools[hidden] { display: none; }",
+    ".ccc-account-pop .sidebar-footer-tool {",
+    "  justify-content: flex-start; width: 100%; box-sizing: border-box; min-height: 34px; padding: 7px 10px;",
+    "  border: 1px solid #333a44; border-radius: 7px; background: #1c2027; color: #cfd4db; font-size: 12px;",
+    "}",
+    ".ccc-account-pop .sidebar-footer-tool:hover { background: #23272e; color: #e6e9ee; }",
     "@media (min-width: 1201px) {",
     "  html:not(.ccc-focus) body.ccc-rail-settings #settingsBtn { display: none; }",
     "}",
@@ -537,6 +544,41 @@
   pop.appendChild(popMachine);
   pop.appendChild(popErr);
   pop.appendChild(popActions);
+
+  // Move the existing nodes so their handlers and usage badge stay intact.
+  // Smaller layouts keep their footer because the account menu can be hidden.
+  var dashboardTools = null;
+  var dashboardNodes = [];
+  var dashboardMenu = document.createElement('nav');
+  dashboardMenu.className = 'acc-dashboard-tools';
+  dashboardMenu.setAttribute('aria-label', 'Workspace dashboards');
+  dashboardMenu.hidden = true;
+  popActions.insertBefore(dashboardMenu, popPrimary);
+  dashboardMenu.addEventListener('click', function (e) {
+    if (e.target.closest('a,button')) closePop(false);
+  }, true);
+  function placeDashboardTools(event) {
+    var tools = (event && event.detail) || dashboardTools || document.querySelector('.sidebar-footer-tools');
+    if (!tools) return;
+    if (tools !== dashboardTools) {
+      dashboardTools = tools;
+      dashboardNodes = ['cccProductivityPill', 'cccSystemPill', 'cccThroughputPill'].map(function (id) {
+        var node = document.getElementById(id);
+        if (!node || !tools.contains(node)) return null;
+        var anchor = document.createComment('dashboard shortcut');
+        tools.insertBefore(anchor, node);
+        return {node: node, anchor: anchor};
+      }).filter(Boolean);
+    }
+    dashboardMenu.hidden = !desktopSettings.matches;
+    dashboardNodes.forEach(function (entry) {
+      if (desktopSettings.matches) dashboardMenu.appendChild(entry.node);
+      else tools.insertBefore(entry.node, entry.anchor.nextSibling);
+    });
+  }
+  window.addEventListener('ccc:dashboard-tools-ready', placeDashboardTools);
+  desktopSettings.addEventListener('change', placeDashboardTools);
+  placeDashboardTools();
 
   var lastStatus = cachedStatus();
   var statusFresh = false;

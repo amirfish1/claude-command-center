@@ -1033,7 +1033,9 @@
   }
   function _openSystemHealth() {
     _ensureSysHealthModal();
-    sysOpenModal(document.getElementById('cccSystemPill'), 'health');
+    const shortcut = document.getElementById('cccSystemPill');
+    const opener = shortcut?.closest('.ccc-account-pop') ? document.querySelector('.ccc-account') : shortcut;
+    sysOpenModal(opener, 'health');
     // Opened from the system pill / CPU chip: the user wants live CPU and
     // memory, not setup boilerplate. Show the resource snapshot first, loaded.
     const rd = document.getElementById('sysResourceDetails');
@@ -1791,6 +1793,7 @@
     // fills the footer's empty middle and the gear stays pinned right.
     const spacer = footer.querySelector('.sidebar-footer-spacer');
     if (spacer) footer.insertBefore(wrap, spacer); else footer.appendChild(wrap);
+    window.dispatchEvent(new CustomEvent('ccc:dashboard-tools-ready', { detail: tools }));
     _startHealthPoll(health);
     _startAnomalyPoll();
     _startStuckSessionsPoll(health);
@@ -100821,7 +100824,9 @@
       pill.addEventListener('click', function (evt) { evt.preventDefault(); evt.stopPropagation(); openHero(); });
       pill.addEventListener('mouseenter', function () { pill.style.opacity = '1'; });
       pill.addEventListener('mouseleave', function () { pill.style.opacity = '.8'; });
-      if (tput && tput.parentNode) tput.parentNode.insertBefore(pill, tput.nextSibling);
+      var footerTools = document.querySelector('.sidebar-footer-tools');
+      if (tput && tput.closest('.ccc-account-pop') && footerTools) footerTools.appendChild(pill);
+      else if (tput && tput.parentNode) tput.parentNode.insertBefore(pill, tput.nextSibling);
     }
     attach();
   }
