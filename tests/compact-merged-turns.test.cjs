@@ -150,7 +150,7 @@ test('Codex wt / CCC API tool rows get purple orchestration chips (CCC-227)', as
       return [...view.querySelectorAll('.cc-orch-chip')].map(c => ({ label: c.dataset.ccOrch, shown: getComputedStyle(c).display !== 'none' }));
     }, compact + rowFn('_kimiToolRowHtml'));
     assert.deepEqual(result, [
-      { label: 'wt claim', shown: true },
+      { label: 'wt claim · CCC', shown: true },
       { label: 'CCC API /api/sessions', shown: true },
     ]);
   } finally {

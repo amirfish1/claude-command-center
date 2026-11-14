@@ -70980,7 +70980,7 @@
         : '<span class="kimi-tool-status running" role="status" aria-label="running"><span class="kimi-pulse-dot"></span></span>';
     // CCC-227: wt / ccc CLI and CCC API calls get the same purple compact
     // orchestration chips Claude's .tool-call rows carry (_ccOrchLabels).
-    const ccOrch = Array.from(_ccOrchScan(inputText, _ccOrchScan(summary))).join('|');
+    const ccOrch = _ccOrchResultLabels(Array.from(_ccOrchScan(inputText || summary)), outputText).join('|');
     return '<div class="kimi-tool' + (status === 'error' ? ' err' : '') + (open ? ' open' : '')
       + (b.approval_required ? ' acp-needs-approval' : '') + '"'
       + (toolUseId ? ' data-tool-use-id="' + escapeAttr(toolUseId) + '"' : '')
@@ -73087,7 +73087,7 @@
             // A permission prompt must never collapse into the "Ran N commands"
             // group — the option buttons are the only way to answer it.
             if (b.approval_required) hasNonTool = true;
-            blockParts.push('<div class="tool-call' + toolClass + detail.className + commandClass + acpPermClass + toolStatusClass + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-cc-orch="' + escapeAttr(Array.from(_ccOrchScan(b.command || '', _ccOrchScan(detail.full))).join('|')) + '" data-tool-source="' + escapeAttr(source) + '" data-tool-use-id="' + escapeAttr(toolUseId) + '">'
+            blockParts.push('<div class="tool-call' + toolClass + detail.className + commandClass + acpPermClass + toolStatusClass + '" data-tool-detail="' + escapeAttr(detail.full) + '" data-cc-orch="' + escapeAttr(Array.from(_ccOrchScan(b.command || detail.full)).join('|')) + '" data-tool-source="' + escapeAttr(source) + '" data-tool-use-id="' + escapeAttr(toolUseId) + '">'
               + '<span class="arrow">-></span> '
               + sourceHtml
               + '<span class="tool-name" data-tool-name="' + escapeAttr(b.name || '') + '">' + escapeHtml(displayName) + '</span>'
@@ -73341,6 +73341,15 @@
         const _answerConfirm = /^User answered the question/.test(text);
         const _isErr = !!ev.is_error && !_answerConfirm;
         const shouldRenderResult = !!text || _isErr;
+        if (text && ev.tool_use_id) {
+          const escId = (window.CSS && CSS.escape) ? CSS.escape(String(ev.tool_use_id)) : String(ev.tool_use_id);
+          const row = $view.querySelector('.tool-call[data-tool-use-id="' + escId + '"], .kimi-tool[data-tool-use-id="' + escId + '"]');
+          if (row) {
+            row.dataset.ccOrch = _ccOrchResultLabels((row.dataset.ccOrch || '').split('|').filter(Boolean), text).join('|');
+            const group = row.closest('.kimi-tool-group');
+            if (group) _kimiUpdateToolGroupHead(group);
+          }
+        }
         if (_kimiPane) {
           // Webui panes: fold the result into the matching `.kimi-tool` row
           // (codex emits tool_result as a separate event keyed by call_id;
@@ -73437,6 +73446,7 @@
         // empty .event.tool_result rows are hidden by CSS anyway.
         if (shouldRenderResult && _currentToolGroup) {
           const last = toolCallForResult(_currentToolGroup, ev.tool_use_id || '');
+          if (last) last.dataset.ccOrch = _ccOrchResultLabels((last.dataset.ccOrch || '').split('|').filter(Boolean), text).join('|');
           if (last && !last.querySelector('.tool-result-output, .tool-result-code-preview')) {
             // Stamp this output with the tool_result event's own ts (when
             // the result actually landed in the JSONL), not render time.
@@ -88772,11 +88782,58 @@
   const _CC_ORCH_RES = [
     [/(?:^|[\s;&|(`"'])((?:[^\s"'`]*tokeneconomizer[^\s"'`]*\/)?te)["']?\s+(?:(?:--host|--cwd)\s+(?:"[^"]*"|'[^']*'|[^\s;|)]+)\s+)*(status|microskills|facts|toolprune|untool|config|fold|judge|doctor|repos|repomap|probe)\b/gi,
       (m) => 'TokenEconomizer ' + m[2].toLowerCase()],
-    [/(?:^|[\s;&|(`])wt\s+([a-z][\w-]*)/g, (m) => 'wt ' + m[1]],
+    [/(?:^|[\s;&|(`"'])((?:[^\s"'`]*\/)?wt)["']?\s+([a-z][\w-]*)/g, (m) => _ccWtCommandLabel(m)],
     [/(?:^|[\s;&|(`])ccc\s+([a-z][\w-]*)/g, (m) => 'ccc ' + m[1]],
     [/(?:localhost|127\.0\.0\.1|\$\{?CCC[A-Z_]*\}?)(?::809[01])?(\/api\/[\w\-./]*)/g,
       (m) => 'CCC API ' + m[1].replace(/\/[0-9a-f]{8}-[0-9a-f-]{27}/gi, '/<id>').replace(/\/$/, '')],
   ];
+  function _ccWtCommandLabel(match) {
+    // Read shell words only to this command's boundary. Quoted prose may
+    // mention other tickets; only whole arguments can identify the target.
+    const args = match.input.slice(match.index + match[0].length);
+    const word = /(?:[^\s;&|()`"'\\]+|\\[\s\S]|"(?:\\[\s\S]|[^"\\])*"|'[^']*')+/y;
+    const tokens = [];
+    let offset = 0;
+    while (offset < args.length) {
+      const space = /^[ \t]+/.exec(args.slice(offset));
+      if (space) offset += space[0].length;
+      if (args.slice(offset, offset + 2) === '\\\n') { offset += 2; continue; }
+      word.lastIndex = offset;
+      const token = word.exec(args);
+      if (!token) break;
+      tokens.push(token[0].replace(/^(["'])([\s\S]*)\1$/, '$2'));
+      offset = word.lastIndex;
+    }
+    const refs = [];
+    let queue = '';
+    const proseFlag = /^--(?:note|summary|progress|reason|title|question|text|recommend|undo|caveat|follow-up|unresolved|accept|detail)$/;
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      if (proseFlag.test(token)) { i++; continue; }
+      if (token === '-q' || token === '--queue') { queue = tokens[++i] || ''; continue; }
+      if (/^--queue=/.test(token)) { queue = token.slice(8); continue; }
+      const ref = /^(?:--[\w-]+=)?([A-Z][A-Z0-9_]*-\d+)$/.exec(token);
+      if (ref && !refs.includes(ref[1])) refs.push(ref[1]);
+    }
+    const context = refs.length ? refs.join(', ') : (/^[\w.-]+$/.test(queue) ? queue : '');
+    return 'wt ' + match[2] + (context ? ' · ' + context : '');
+  }
+  function _ccOrchResultLabels(labels, output) {
+    // add/claim/take learn their ticket only when the result arrives. Do
+    // not infer one from arbitrary prose, list output, or ambiguous batches.
+    const allocating = labels.filter(l => /^wt (?:add|claim|take)(?: · [\w.-]+)?$/.test(l));
+    if (allocating.length !== 1 || / · [A-Z][A-Z0-9_]*-\d+$/.test(allocating[0])) return labels;
+    const refs = new Set();
+    const text = String(output || '').replace(/\\"/g, '"');
+    const re = /(?:["']ref["']\s*:\s*["']|\bFILED:\s*)([A-Z][A-Z0-9_]*-\d+)\b/g;
+    let m;
+    while ((m = re.exec(text))) refs.add(m[1]);
+    if (refs.size !== 1) return labels;
+    const ref = Array.from(refs)[0];
+    const queue = allocating[0].split(' · ')[1];
+    if (queue && ref.slice(0, ref.lastIndexOf('-')) !== queue) return labels;
+    return labels.map(l => l === allocating[0] ? l.split(' · ')[0] + ' · ' + ref : l);
+  }
   // Scan command text for orchestration use; returns distinct labels.
   function _ccOrchScan(text, seen) {
     seen = seen || new Set();
