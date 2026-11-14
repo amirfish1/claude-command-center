@@ -58154,6 +58154,116 @@
     });
   }
 
+  const _uxqAnswerPending = new Map();
+  const _uxqAnswerDrafts = new Map();
+  const UXQ_ANSWER_DRAFT_PREFIX = 'ccc-ticket-answer:';
+  function _uxqAnswerDraft(ref, text) {
+    if (text !== undefined) {
+      if (text === null) _uxqAnswerDrafts.delete(ref);
+      else _uxqAnswerDrafts.set(ref, text);
+      try {
+        if (text === null) sessionStorage.removeItem(UXQ_ANSWER_DRAFT_PREFIX + ref);
+        else sessionStorage.setItem(UXQ_ANSWER_DRAFT_PREFIX + ref, text);
+      } catch (_) { /* the in-memory draft still survives closing the dialog */ }
+    }
+    try { return sessionStorage.getItem(UXQ_ANSWER_DRAFT_PREFIX + ref) || _uxqAnswerDrafts.get(ref) || ''; }
+    catch (_) { return _uxqAnswerDrafts.get(ref) || ''; }
+  }
+  function _uxqAnswerNotice(ref, message) {
+    const toast = showOpToast(escapeHtml(ref + ': ' + message), 'warning', {
+      label: 'Review ticket', ttlMs: 86400000,
+      onClick: () => window.cccOpenTicket(ref),
+    });
+    toast?.querySelectorAll('button').forEach(button => { button.style.minHeight = '44px'; });
+    return toast;
+  }
+  function _uxqWireTicketAnswer(modal, item, close) {
+    const ref = _uxqItemRef(item);
+    const input = modal.querySelector('.uxq-answer-input');
+    const send = modal.querySelector('.uxq-answer-send');
+    const hint = modal.querySelector('.uxq-td-answer-hint');
+    if (!input || !send) return;
+    input.value = _uxqAnswerDraft(ref);
+    if (input.value && hint) hint.textContent = 'Previous answer was not confirmed. Check Activity before retrying.';
+    if (_uxqAnswerPending.has(ref)) {
+      input.value = _uxqAnswerPending.get(ref);
+      input.disabled = send.disabled = true;
+      send.textContent = 'Sending…';
+      if (hint) hint.textContent = 'Sending in the background. You can close this ticket.';
+    }
+    const submit = () => {
+      if (_uxqAnswerPending.has(ref) || _workersAnswersPending.has(ref) || send.disabled) return;
+      const text = input.value.trim();
+      if (!text) { input.focus(); return; }
+      _uxqAnswerDraft(ref, text);
+      _uxqAnswerPending.set(ref, text);
+      _workersAnswersPending.add(ref);
+      // Release the dialog before waiting for queue writes or worker delivery.
+      close();
+      const notice = _uxqAnswerNotice(ref, 'Sending answer in the background…');
+      void (async () => {
+        let confirmed = false;
+        try {
+          const body = JSON.stringify({ref, text});
+          const res = await fetch('/api/ux-fixes/answer', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body,
+            keepalive: new TextEncoder().encode(body).length < 60000,
+            cccRetryHandled: true,
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+          confirmed = true;
+          _uxqAnswerDraft(ref, null);
+          _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
+          try {
+            if (data.item) _uxqReplaceCachedItem(data.item);
+            _renderQueuePanel();
+          } catch (_) { /* a refresh failure cannot undo a recorded answer */ }
+          if (data.delivery && data.delivery.ok === false) {
+            _uxqAnswerNotice(ref, 'Answer recorded; worker notification could not be confirmed. Check Activity before sending again.');
+          } else {
+            showOpToast(escapeHtml(ref + (data.images_stripped
+              ? ': Answer recorded; images were omitted for this GitHub ticket.'
+              : ': Answer recorded.')), 'success');
+          }
+        } catch (error) {
+          _uxqAnswerNotice(ref, 'Answer not confirmed: ' + (error.message || error)
+            + '. Your text is saved. Check Activity before retrying.');
+        } finally {
+          notice?.remove();
+          _uxqAnswerPending.delete(ref);
+          _workersAnswersPending.delete(ref);
+          const current = document.getElementById('uxqItemModal');
+          if (current?.dataset.answerRef === ref) {
+            const button = current.querySelector('.uxq-answer-send');
+            const field = current.querySelector('.uxq-answer-input');
+            const status = current.querySelector('.uxq-td-answer-hint');
+            if (button) { button.disabled = confirmed; button.textContent = confirmed ? 'Answered' : 'Send'; }
+            if (field) field.disabled = confirmed;
+            if (status) status.textContent = confirmed ? 'Answer recorded.' : 'Answer not confirmed. Your text is saved; check Activity before retrying.';
+          }
+        }
+      })();
+    };
+    modal.dataset.answerRef = ref;
+    send.addEventListener('click', submit);
+    input.addEventListener('keydown', e => {
+      if (!isImeKey(e) && e.key === 'Enter') { e.preventDefault(); submit(); }
+    });
+  }
+  // A page reload can interrupt the response after the answer was recorded.
+  // Restore review links and drafts, never replay an uncertain decision.
+  setTimeout(() => {
+    try {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key?.startsWith(UXQ_ANSWER_DRAFT_PREFIX)) {
+          _uxqAnswerNotice(key.slice(UXQ_ANSWER_DRAFT_PREFIX.length), 'An earlier answer is unconfirmed. Your text is saved; check Activity before retrying.');
+        }
+      }
+    } catch (_) {}
+  }, 0);
+
   function _uxqOpenItemModal(item) {
     const existing = document.getElementById('uxqItemModal');
     if (existing) existing.remove();
@@ -59075,39 +59185,7 @@
       });
     }
 
-    // Inline answer (WT-29)
-    const answerInput = modal.querySelector('.uxq-answer-input');
-    const answerSend  = modal.querySelector('.uxq-answer-send');
-    if (answerInput && answerSend) {
-      const submitAnswer = async () => {
-        const text = (answerInput.value || '').trim();
-        if (!text) { answerInput.focus(); return; }
-        answerSend.disabled = true;
-        try {
-          const res = await fetch('/api/ux-fixes/answer', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ref, text }),
-          });
-          const d = await res.json().catch(() => ({}));
-          if (res.ok && d.ok) {
-            showOpToast(d.images_stripped
-              ? 'Answered - block cleared (images not supported for GitHub-backed tickets, text sent without them)'
-              : 'Answered - block cleared', 'success');
-            _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
-            _renderQueuePanel(); close();
-          } else {
-            showOpToast('Answer failed: ' + (d.error || res.status), 'error');
-            answerSend.disabled = false;
-          }
-        } catch (e) {
-          showOpToast('Answer failed: ' + e, 'error');
-          answerSend.disabled = false;
-        }
-      };
-      answerSend.addEventListener('click', submitAnswer);
-      answerInput.addEventListener('keydown', (e) => { if (isImeKey(e)) return; if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); } });
-    }
+    _uxqWireTicketAnswer(modal, item, close);
 
     // Gate actions (product gate)
     const gateAckBtn = modal.querySelector('.uxq-gate-ack');
