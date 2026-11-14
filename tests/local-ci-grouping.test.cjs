@@ -33,7 +33,7 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
       res.end(JSON.stringify(data));
     } else {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.end(`<style>${css}</style><div style="width:100%;max-width:330px"><div class="sidebar"><div data-local-ci-host id="checks"></div></div></div><script>${progress}</script>`);
+      res.end(`<style>${css}</style><div style="width:100%;max-width:330px"><div class="sidebar"><div data-local-ci-host id="localCiMobileList" class="${width <= 1200 ? 'local-ci-mobile' : ''}"></div></div></div><script>${progress}</script>`);
     }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -42,40 +42,50 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
     const page = await browser.newPage();
     await page.setViewport({width, height:650});
     await page.goto('http://127.0.0.1:' + server.address().port, {waitUntil:'domcontentloaded'});
-    await page.waitForSelector('#checks .local-ci-group');
-    assert.equal(await page.$$eval('#checks .local-ci-group', es => es.length), 2);
-    assert.equal(await page.$eval('#checks details', el => el.open), false);
-    assert.equal(await page.$eval('#checks .local-ci-runner', el => el.getAttribute('aria-label')), 'GitHub-hosted runner');
-    assert.equal(await page.$eval('#checks .local-ci-group:last-child .local-ci-runner', el => el.getAttribute('aria-label')), 'Machine-hosted runner');
-    assert.match(await page.$eval('#checks summary', el => el.textContent), /TEST-42 \+2.*aaaaaaa.*71%/);
-    assert.equal(await page.$eval('#checks .local-ci-summary-name', el => el.scrollWidth <= el.clientWidth), true);
-    assert.match(await page.$eval('#checks summary .local-ci-elapsed', el => el.textContent), /^5:\d{2}$/);
-    assert.match(await page.$eval('#checks summary', el => el.title), /2 running · 1 passed/);
-    assert.equal(await page.$eval('#checks summary', el => el.getBoundingClientRect().height <= 44), true);
-    assert.equal(await page.$eval('#checks', el => el.scrollWidth <= el.clientWidth), true);
-    assert.equal(await page.$eval('#checks .local-ci-group:last-child', el => el.dataset.outcome), 'failure');
+    await page.waitForSelector('#localCiMobileList .local-ci-group');
+    assert.equal(await page.$$eval('#localCiMobileList .local-ci-group', es => es.length), 2);
+    assert.equal(await page.$eval('#localCiMobileList details', el => el.open), false);
+    assert.equal(await page.$eval('#localCiMobileList .local-ci-runner', el => el.getAttribute('aria-label')), 'GitHub-hosted runner');
+    assert.equal(await page.$eval('#localCiMobileList .local-ci-group:last-child .local-ci-runner', el => el.getAttribute('aria-label')), 'Machine-hosted runner');
+    assert.match(await page.$eval('#localCiMobileList summary', el => el.textContent), /TEST-42 \+2.*aaaaaaa.*71%/);
+
+    assert.match(await page.$eval('#localCiMobileList summary .local-ci-elapsed', el => el.textContent), /^5:\d{2}$/);
+    assert.match(await page.$eval('#localCiMobileList summary', el => el.title), /2 running · 1 passed/);
+    assert.equal(await page.$eval('#localCiMobileList summary', el => el.getBoundingClientRect().height <= 44), true);
+    assert.equal(await page.$eval('#localCiMobileList', el => el.scrollWidth <= el.clientWidth), true);
+    assert.equal(await page.$eval('#localCiMobileList .local-ci-group:last-child', el => el.dataset.outcome), 'failure');
+    if (width <= 1200) {
+      assert.equal(await page.$eval('#localCiMobileList .local-ci-mobile-toggle', el => el.textContent), 'CI: 1 running, 1 failed');
+      assert.equal(await page.$eval('#localCiMobileList', el => el.getBoundingClientRect().height), 45, 'one 44px disclosure plus border');
+      assert.equal(await page.$eval('#localCiMobileList .local-ci-group', el => getComputedStyle(el).display), 'none');
+      await page.screenshot({path:'/tmp/ccc-ci-mobile-line.png'});
+      await page.focus('.local-ci-mobile-toggle');
+      await page.keyboard.press('Enter');
+      assert.equal(await page.$eval('.local-ci-mobile-toggle', el => el.getAttribute('aria-expanded')), 'true');
+    }
+    assert.equal(await page.$eval('#localCiMobileList .local-ci-summary-name', el => el.scrollWidth <= el.clientWidth), true);
     await page.screenshot({path:'/tmp/ccc-ci-grouped-' + width + '.png'});
-    await page.focus('#checks summary');
+    await page.focus('#localCiMobileList summary');
     await page.keyboard.press('Enter');
-    await page.waitForSelector('#checks details[open] .local-ci-context', {visible:true});
-    assert.match(await page.$eval('#checks .local-ci-context', el => el.textContent), /test-session/);
-    assert.equal(await page.$$eval('#checks img', es => es.length), 0);
+    await page.waitForSelector('#localCiMobileList details[open] .local-ci-context', {visible:true});
+    assert.match(await page.$eval('#localCiMobileList .local-ci-context', el => el.textContent), /test-session/);
+    assert.equal(await page.$$eval('#localCiMobileList img', es => es.length), 0);
     assert.equal(await page.evaluate(() => window.__xss), undefined);
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await page.waitForNetworkIdle({idleTime:100});
-    assert.equal(await page.$eval('#checks details', el => el.open), true);
-    assert.equal(await page.evaluate(() => document.activeElement.matches('#checks summary')), true);
+    assert.equal(await page.$eval('#localCiMobileList details', el => el.open), true);
+    assert.equal(await page.evaluate(() => document.activeElement.matches('#localCiMobileList summary')), true);
     await page.keyboard.press('Space');
-    await page.waitForFunction(() => !document.querySelector('#checks details').open);
+    await page.waitForFunction(() => !document.querySelector('#localCiMobileList details').open);
     await page.keyboard.press('Enter');
-    await page.waitForFunction(() => document.querySelector('#checks details').open);
+    await page.waitForFunction(() => document.querySelector('#localCiMobileList details').open);
     data = {jobs:[], completed:[...data.completed, {...base, id:'example/project:1:1', conclusion:'success'}]};
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
-    await page.waitForFunction(() => document.querySelector('#checks summary').textContent.includes('100%'));
-    await page.click('#checks .local-ci-group > .local-ci-dismiss');
-    await page.waitForFunction(() => document.querySelectorAll('#checks .local-ci-group').length === 1);
+    await page.waitForFunction(() => document.querySelector('#localCiMobileList summary').textContent.includes('100%'));
+    await page.click('#localCiMobileList .local-ci-group > .local-ci-dismiss');
+    await page.waitForFunction(() => document.querySelectorAll('#localCiMobileList .local-ci-group').length === 1);
     assert.deepEqual(new Set(dismissed), new Set(['example/project:1:1', 'example/project:2:1']));
-    assert.match(await page.$eval('#checks summary', el => el.textContent), /1 failed/);
+    assert.match(await page.$eval('#localCiMobileList summary', el => el.textContent), /1 failed/);
   } finally {
     await browser.close();
     server.closeAllConnections();

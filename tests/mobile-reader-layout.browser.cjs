@@ -20,6 +20,7 @@ const fixture = `
     document.getElementById('mobileConvTitle').hidden = false;
     const ci = document.getElementById('localCiMobileReader');
     ci.hidden = false;
+    ci.classList.add('is-expanded');
     ci.innerHTML = '<div class="local-ci-group" data-outcome="success"><details><summary class="local-ci-summary">CI · All checks passed · 100%</summary></details></div>';
     view.scrollTop = 180;
     view._pinnedToBottom = false;

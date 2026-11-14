@@ -34872,6 +34872,7 @@ a.local-ci-job:hover { color: var(--accent); }
 .local-ci-dismiss:hover { background: var(--surface-2); color: var(--text); }
 .local-ci-dismiss:disabled { opacity: .5; cursor: wait; }
 .local-ci-mobile { display: none; }
+.local-ci-mobile-toggle { display: none; }
 @media (max-width: 1200px) {
   #localCiProgress { display: none !important; }
   body .sidebar > #localCiMobileList:not([hidden]),
@@ -34882,12 +34883,28 @@ a.local-ci-job:hover { color: var(--accent); }
   }
   .local-ci-mobile .local-ci-label, .local-ci-mobile .local-ci-step { font-size: 12px; }
   .local-ci-mobile .local-ci-dismiss { flex-basis: 44px; width: 44px; height: 44px; }
+  .local-ci-mobile-toggle {
+    display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px;
+    padding: 0; border: 0; background: transparent; color: var(--text);
+    font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+    white-space: nowrap;
+  }
+  .local-ci-mobile-toggle::before {
+    content: ''; flex: 0 0 5px; width: 5px; height: 5px;
+    border-right: 1px solid currentColor; border-bottom: 1px solid currentColor;
+    transform: rotate(-45deg);
+  }
+  .local-ci-mobile-toggle[aria-expanded="true"]::before { transform: rotate(45deg); }
+  .local-ci-mobile-toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .local-ci-mobile-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .local-ci-mobile:not(.is-expanded) > :not(.local-ci-mobile-toggle) { display: none !important; }
+  body :is(.sidebar > #localCiMobileList, .main > #localCiMobileReader):not([hidden]):not(.is-expanded) { padding-top: 0; padding-bottom: 0; }
 }
 @media (max-width: 700px) {
   /* Successful checks remain in the list; the reader only needs running or
      unsuccessful checks. Do not reserve an empty strip when all passed. */
   #localCiMobileReader > .local-ci-group[data-outcome="success"] { display: none; }
-  body .main > #localCiMobileReader:not([hidden]):not(:has(> :not(.local-ci-group[data-outcome="success"]))) { display: none !important; }
+  body .main > #localCiMobileReader:not([hidden]):not(:has(> :is(.local-ci-group, .local-ci-entry):not([data-outcome="success"]))) { display: none !important; }
 }
 .session-ref-chip {
   display: inline-block;

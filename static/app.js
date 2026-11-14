@@ -100612,6 +100612,7 @@
       groups.get(key).push(item);
     }
     for (const host of document.querySelectorAll('[data-local-ci-host]')) {
+      const focusedToggle = host.contains(document.activeElement) && document.activeElement.matches('.local-ci-mobile-toggle');
       const focused = host.contains(document.activeElement) ? document.activeElement.dataset.ciDismiss : null;
       const focusedGroup = host.contains(document.activeElement) && document.activeElement.matches('.local-ci-summary')
         ? document.activeElement.parentElement.dataset.ciGroup : null;
@@ -100774,6 +100775,28 @@
       }
       host.hidden = !host.childElementCount;
       host.title = showingSaved ? 'Saved CI progress; waiting for a live update' : '';
+      if (!host.hidden && host.classList.contains('local-ci-mobile')) {
+        const counts = new Map();
+        for (const row of host.children) {
+          const outcome = row.dataset.outcome;
+          counts.set(outcome, (counts.get(outcome) || 0) + 1);
+        }
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'local-ci-mobile-toggle';
+        const label = document.createElement('span');
+        label.textContent = 'CI: ' + ['active', 'failure', 'success', 'neutral']
+          .filter(outcome => counts.has(outcome))
+          .map(outcome => counts.get(outcome) + ' ' + ({active:'running', failure:'failed', success:'passed', neutral:'completed'})[outcome]).join(', ');
+        toggle.append(label);
+        toggle.title = 'Show or hide CI runs and their details';
+        toggle.setAttribute('aria-expanded', String(host.classList.contains('is-expanded')));
+        toggle.addEventListener('click', () => {
+          toggle.setAttribute('aria-expanded', String(host.classList.toggle('is-expanded')));
+        });
+        host.prepend(toggle);
+        if (focusedToggle) toggle.focus({preventScroll:true});
+      }
       if (focused) [...host.querySelectorAll('[data-ci-dismiss]')].find(button => button.dataset.ciDismiss === focused)?.focus({preventScroll:true});
       if (focusedGroup) [...host.querySelectorAll('[data-ci-group]')].find(group => group.dataset.ciGroup === focusedGroup)?.querySelector('summary').focus({preventScroll:true});
     }
