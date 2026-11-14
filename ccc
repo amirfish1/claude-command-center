@@ -562,10 +562,10 @@ def _resolve_target(base, target):
     ended sessions so `ccc send` / `ccc ask` can wake them up). Returns
     (session_id, error_message) — exactly one is set. An unmatched target
     passes through untouched so server-side aliases (bridge ULIDs, spawn
-    prefixes) still work. A complete UUID is already canonical, so it skips
+    prefixes) still work. Complete UUIDs and server-owned reply routes skip
     the seven-day census (which can take longer than the send itself)."""
     target = (target or "").strip()
-    if _FULL_SESSION_ID_RE.match(target):
+    if _FULL_SESSION_ID_RE.match(target) or target.startswith("rr_"):
         return target, None
     try:
         payload = _get_json(base, "/api/sessions/census?since=604800")
@@ -644,7 +644,13 @@ def cmd_send(args):
         print(err, file=sys.stderr)
         return 1
     import sender_envelope as attribution
-    attr = attribution.capture_cli(sid, claimed=getattr(args, "sender", None) or "")
+    sender = getattr(args, "sender", None) or ""
+    if sender:
+        sender, err = _resolve_target(base, sender)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+    attr = attribution.capture_cli(sid, claimed=sender)
     if not args.dry_run:
         attribution.journal(attr, app="ccc", event="cli")
     if args.new_if_large_and_stale or args.dry_run:
@@ -677,7 +683,7 @@ def cmd_send(args):
                 print(f"[dry-run] would send normally to {sid}")
             return 0
     payload = {"session_id": sid, "text": text, **({"attr": attr, "idempotency_key": attr["message_id"]} if attribution.enabled("ccc") else {})}
-    sender_sid = getattr(args, "sender", None) or attr["author"].get("id") or None
+    sender_sid = sender or attr["author"].get("id") or None
     if sender_sid:
         resolved_sender, _ = _resolve_target(base, sender_sid)
         payload["peer_sender_sid"] = resolved_sender or sender_sid

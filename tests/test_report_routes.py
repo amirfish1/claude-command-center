@@ -127,6 +127,74 @@ def test_peer_report_envelope_resolves_route_at_send_time(monkeypatch):
     assert delivered == ["dispatcher-new-sid"]
 
 
+@pytest.mark.parametrize("entrypoint", ["http-ask", "http-send", "worker-ask", "worker-send"])
+@pytest.mark.parametrize("address", ["rebound", "unknown", "label"])
+def test_delivery_resolves_reply_routes_before_dispatch(monkeypatch, entrypoint, address):
+    """Return addresses are never engine session ids, even at worker entrypoints."""
+    from ccc_server import watchtower_msg
+
+    rid = rr.create("dispatcher-old-sid")
+    rr.rebind("dispatcher-new-sid", route_id=rid)
+    if address == "unknown":
+        rid = "rr_000000000000000000000000"
+    elif address == "label":
+        rid = rr.create("Browser verifier")
+    dispatched = []
+
+    def delivered(sid, *args, **kwargs):
+        dispatched.append(sid)
+        return {"ok": True, "text": "reply", "via": "test"}
+
+    monkeypatch.setattr(server, "_control_plane_engine_call", lambda engine, op, args, **kw: delivered(args["session_id"]))
+    monkeypatch.setattr(server, "_inject_text_into_session_router", delivered)
+    monkeypatch.setattr(server, "_resolve_local_spawn_session_prefix", lambda sid: sid)
+    monkeypatch.setattr(server, "_detect_session_engine", lambda sid: "claude")
+    monkeypatch.setattr(server, "_handoff_lease_guard", lambda sid: None)
+    monkeypatch.setattr(server, "_record_interaction", lambda sid: None)
+    monkeypatch.setattr(server, "_log_activity", lambda *args, **kw: None)
+    monkeypatch.setattr(watchtower_msg.attribution, "journal", lambda *args, **kw: None)
+    if entrypoint.startswith("http-"):
+        httpd, thread = _serve()
+        try:
+            endpoint = "/api/ask" if entrypoint == "http-ask" else "/api/inject-input"
+            _, result = _request(httpd, endpoint, {"session_id": rid, "text": "report"})
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
+    elif entrypoint == "worker-ask":
+        result = server.ask_session_and_wait(rid, "report")
+    else:
+        result = server._inject_text_into_session(rid, "report")
+    if address == "rebound":
+        assert result["ok"] and dispatched == ["dispatcher-new-sid"]
+    else:
+        assert not result["ok"] and result["code"] == "unknown_report_route"
+        assert dispatched == []
+
+
+@pytest.mark.parametrize("sender", [None, "sender-session-id"])
+def test_display_attribution_only_mints_reply_route_with_session_address(monkeypatch, sender):
+    from ccc_server import watchtower_msg
+
+    monkeypatch.setenv("CCC_ATTRIBUTION_EMIT", "1")
+    payload = {"announced_from": "Browser verifier"}
+    if sender:
+        payload["sender_session_id"] = sender
+    attr = watchtower_msg.attribution.request_attr(payload, "recipient-session-id")
+    captured = []
+    monkeypatch.setattr(server, "_inject_text_into_session_router", lambda sid, text, **kw: captured.append(kw["attr"]) or {"ok": True})
+    monkeypatch.setattr(server, "_log_activity", lambda *args, **kw: None)
+    monkeypatch.setattr(watchtower_msg.attribution, "journal", lambda *args, **kw: None)
+    result = server._inject_text_into_session("recipient-session-id", "report", attr=attr)
+    assert result["ok"]
+    if sender:
+        assert rr.resolve(captured[0]["reply_to"]["addr"]) == sender
+    else:
+        assert captured[0]["author"]["name_at_send"] == "Browser verifier"
+        assert not captured[0].get("reply_to")
+
+
 def _serve():
     import threading
     httpd = server.http.server.ThreadingHTTPServer(

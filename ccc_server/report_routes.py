@@ -133,16 +133,20 @@ def set_child(route_id, child_session_id, path=None):
     return _mutate(path, fn)
 
 
-def resolve(address, path=None):
+def resolve(address, path=None, *, strict=False):
     """Return the current report_to for a route id; other values pass through.
 
-    An unknown/expired route id also passes through unchanged, so the caller
-    reports "unknown session" instead of silently delivering somewhere else.
+    Strict delivery callers reject missing routes and legacy display-label
+    destinations before either can enter a session resume path.
     """
-    if not is_route_id(address):
+    if not str(address or "").startswith(ROUTE_PREFIX):
         return address
     entry = _load(path or _default_path()).get(str(address).strip())
-    return (entry or {}).get("report_to") or address
+    target = (entry or {}).get("report_to")
+    if strict and (not isinstance(target, str) or not target
+                   or target.startswith(ROUTE_PREFIX) or any(ch.isspace() for ch in target)):
+        raise ValueError(f"Unknown or undeliverable reply route {address}; use the sender's session id")
+    return target or address
 
 
 def get(route_id, path=None):

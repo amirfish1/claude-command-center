@@ -5797,6 +5797,7 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None, engine="claud
     )
     envelope = json.dumps({
         "session_id": addr, "mode": "steer",
+        "sender_session_id": "<your actual session id>",
         "announced_from": "<your session name or id>", "text": "<your report>",
     })
     sendmessage_hint_available = (
@@ -5825,8 +5826,10 @@ def _wrap_prompt_with_return_address(prompt, report_to, port=None, engine="claud
         "```bash\n"
         f"curl -s --max-time 30 -X POST \"http://127.0.0.1:{p}/api/inject-input\" \\\n"
         "  -H \"Content-Type: application/json\" \\\n"
-        f"  -d '{{\"session_id\": \"{addr}\", \"mode\": \"steer\", \"announced_from\": \"<your session name or id>\", \"text\": \"<your report>\"}}'\n"
+        f"  -d '{{\"session_id\": \"{addr}\", \"mode\": \"steer\", \"sender_session_id\": \"<your actual session id>\", \"announced_from\": \"<your session name or id>\", \"text\": \"<your report>\"}}'\n"
         "```\n\n"
+        "For replies, fill `sender_session_id` with your actual engine session id; "
+        "omit that field if unavailable. `announced_from` is display text only.\n\n"
         "Use `\"mode\": \"steer\"` exactly as shown — without it the report "
         "queues behind whatever the dispatching session is doing and can sit "
         "unseen for a long time; steer delivers it right away.\n\n"

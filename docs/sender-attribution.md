@@ -56,6 +56,11 @@ are independent of authorship: a live socket or registered CCC route is usable;
 otherwise the UI says no reply path. Native and historical messages without a
 matching record remain unattributed or sender-provided claims.
 
+An HTTP report's `announced_from` is a display label, not a session address.
+Include `sender_session_id` (or `peer_sender_sid`) with the actual engine session
+ID when replies should be routable. Unknown reply routes fail before delivery
+or resume; both synchronous asks and sends resolve routes at delivery time.
+
 For mixed versions, CCC passes the envelope to `wt send` through the one-shot
 `WT_MESSAGE_ENVELOPE` environment variable. Old WT ignores it and still accepts
 the same CLI arguments; CCC reports a missing `attribution_v=1` acknowledgement.

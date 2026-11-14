@@ -43741,11 +43741,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             sid = payload.get("session_id", "")
             # CCC-1202: a spawned child's report addresses its route id;
             # deliver to whoever owns that return address right now.
-            if _report_routes.is_route_id(sid):
-                route_sid = _report_routes.resolve(sid)
-                if route_sid != sid:
-                    _log_activity("inject", "REPORT_ROUTE", f"route={sid} -> {route_sid}")
-                sid = route_sid
+            try:
+                route_sid = _report_routes.resolve(sid, strict=True)
+            except ValueError as exc:
+                self.send_json({"ok": False, "code": "unknown_report_route", "error": str(exc), "queued": False}, 404)
+                return
+            if route_sid != sid:
+                _log_activity("inject", "REPORT_ROUTE", f"route={sid} -> {route_sid}")
+            sid = route_sid
             # Accept the Claude bridge id (bare ULID, session_<ULID>, or a
             # claude.ai/code/session_<ULID> URL) as an alias for the local
             # session UUID — that's the id users see in the TUI and commit
@@ -44163,6 +44166,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 payload = {}
             sid = payload.get("session_id", "")
+            try:
+                sid = _report_routes.resolve(sid, strict=True)
+            except ValueError as exc:
+                self.send_json({"ok": False, "code": "unknown_report_route", "error": str(exc), "queued": False}, 404)
+                return
             text = payload.get("text", "")
             cwd = payload.get("cwd", "")
             peer_sender_sid = str(payload.get("from_session_id") or "").strip() or None

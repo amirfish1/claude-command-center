@@ -560,9 +560,12 @@ def request_attr(payload, recipient, *, browser_composer=False, typed_text=None)
         return attr
     if browser_composer:
         return dashboard_human(recipient, typed_text)
-    sender = next((payload.get(k) for k in ('peer_sender_sid', 'sender_session_id', 'from_session_id', 'sender_id', 'announced_from') if payload.get(k)), '')
+    sender = next((payload.get(k) for k in ('peer_sender_sid', 'sender_session_id', 'from_session_id', 'sender_id') if payload.get(k)), '')
     if sender:
         return make(recipient, who=author('session', sender, sender), basis='claimed', evidence={'source': 'request'})
+    if payload.get('announced_from'):
+        # A display label identifies the author for people, not for replies.
+        return make(recipient, who=author('session', '', payload['announced_from']), basis='claimed', evidence={'source': 'request'})
     return make(recipient)
 
 

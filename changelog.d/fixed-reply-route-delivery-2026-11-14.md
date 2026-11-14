@@ -1,0 +1,1 @@
+- Resolve reply routes before synchronous asks and worker delivery; reject unknown return addresses without resuming a session. Sender display labels no longer create unusable reply addresses.

@@ -120,6 +120,11 @@ def test_composer_and_api_claims():
     a = envelope.request_attr({'peer_sender_sid':'sender'}, 'recipient')
     assert a['basis'] == 'claimed'
     assert a['author']['id'] == 'sender'
+    a = envelope.request_attr({'announced_from': 'Browser verifier'}, 'recipient')
+    assert a['author']['id'] == ''
+    assert a['author']['name_at_send'] == 'Browser verifier'
+    a = envelope.request_attr({'announced_from': 'Browser verifier', 'sender_session_id': 'sender'}, 'recipient')
+    assert a['author']['id'] == 'sender'
 
 
 def test_cli_no_env_and_registry_match(monkeypatch):

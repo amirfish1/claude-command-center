@@ -432,12 +432,12 @@ class ContinuationCliTests(unittest.TestCase):
 
     def test_resolve_target_full_uuid_skips_census(self):
         ccc = self.ccc
-        sid_in = "49F8AAF3-594d-42f2-a5e4-cb28a39c6f5b"
-        with mock.patch.object(ccc, "_get_json") as get_json:
-            sid, err = ccc._resolve_target("http://127.0.0.1:8090", f"  {sid_in} ")
-        get_json.assert_not_called()
-        self.assertEqual(sid, sid_in)
-        self.assertIsNone(err)
+        for sid_in in ("49F8AAF3-594d-42f2-a5e4-cb28a39c6f5b", "rr_abcdef0123456789abcdef01"):
+            with self.subTest(address=sid_in), mock.patch.object(ccc, "_get_json") as get_json:
+                sid, err = ccc._resolve_target("http://127.0.0.1:8090", f"  {sid_in} ")
+                get_json.assert_not_called()
+                self.assertEqual(sid, sid_in)
+                self.assertIsNone(err)
 
     def test_resolve_target_prefix_still_uses_census_and_flags_ambiguity(self):
         ccc = self.ccc

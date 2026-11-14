@@ -576,7 +576,11 @@ def _ccc_peer_route_report(envelope, from_addr):
     if not sid or not text:
         return
     # CCC-1202: a route id resolves to the child's current dispatcher.
-    sid = _core._report_routes.resolve(sid)
+    try:
+        sid = _core._report_routes.resolve(sid, strict=True)
+    except ValueError as exc:
+        _core._log_activity("peer", "CCC-PEER-ERR", str(exc))
+        return
     mode = str(envelope.get("mode") or "steer")
     announced_from = str(envelope.get("announced_from") or "").strip()
     from_sid = _ccc_sid_for_socket_addr(from_addr)
@@ -666,9 +670,8 @@ def _ccc_peer_handle_connection(conn):
             reply_attr = attribution.lookup(message_id=orig_msg_id) if orig_msg_id else None
             route = (reply_attr or {}).get('reply_to') or {}
             if route.get('route_token') and _core._report_routes.get(route['route_token']):
-                reply_to = _core._report_routes.resolve(route['route_token'])
-                _core._inject_text_into_session(reply_to, remainder, source='peer-reply',
-                    attr=attribution.request_attr({'peer_sender_sid': from_sid}, reply_to))
+                _core._inject_text_into_session(route['route_token'], remainder, source='peer-reply',
+                    attr=attribution.request_attr({'peer_sender_sid': from_sid}, route['route_token']))
                 continue
             envelope = ccc_peer_inbound.parse_report_envelope(body)
             if envelope is not None:
@@ -1724,6 +1727,11 @@ def _inject_text_into_session(session_id, text, **kwargs):
     Every keyword of the router below is keyword-only, so forwarding **kwargs
     preserves the existing signature exactly.
     """
+    if not (kwargs.get("same_session") or kwargs.get("no_queue")):
+        try:
+            session_id = _core._report_routes.resolve(session_id, strict=True)
+        except ValueError as exc:
+            return {"ok": False, "code": "unknown_report_route", "error": str(exc), "queued": False}
     if attribution.enabled("ccc"):
         incoming = kwargs.pop("attr", None) or getattr(text, "attr", None) or attribution.lookup(text=text)
         if incoming is None and kwargs.get("peer_sender_sid"):
@@ -1737,7 +1745,7 @@ def _inject_text_into_session(session_id, text, **kwargs):
         if attr['author']['kind'] == 'session' and not (attr.get('reply_to') or {}).get('route_token'):
             sender = attr['author'].get('id')
             node = attr['author'].get('node')
-            if sender:
+            if sender and not any(ch.isspace() for ch in sender):
                 address = (node + ':' + sender) if node and node != attribution.local_node() else sender
                 route = _core._report_routes.create(address)
                 attr['reply_to'] = {'addr': route, 'route_token': route, 'node': attribution.local_node(),
@@ -4029,6 +4037,10 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
       {"ok": False, "error": "timeout", "partial": <best-effort text>, "source": <str>}
       {"ok": False, "error": <message>, "source": <str>}
     """
+    try:
+        session_id = _core._report_routes.resolve(session_id, strict=True)
+    except ValueError as exc:
+        return {"ok": False, "code": "unknown_report_route", "error": str(exc), "queued": False}
     attr = attr or attribution.from_text(text) or attribution.request_attr({"peer_sender_sid": peer_sender_sid}, session_id)
     attr = attribution.relay(attr, "ccc-ask", delivered=session_id)
     attribution.journal(attr, app="ccc", event="ask")
