@@ -34131,9 +34131,9 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 }
 
 /* Session workspace: categories remain navigation; lifecycle guides attention. */
-.session-lifecycle-section { margin: 0 0 22px; }
+.session-lifecycle-section { margin: 0 0 12px; }
 .session-lifecycle-heading {
-  display: flex; align-items: center; gap: 8px; margin: 20px 8px 10px;
+  display: flex; align-items: center; gap: 8px; margin: 8px 4px 2px;
   color: var(--text-muted); font-size: 11px; line-height: 18px;
   font-weight: 650; letter-spacing: .08em; text-transform: uppercase;
 }
@@ -34153,11 +34153,11 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 .session-lifecycle-count { padding: 0 6px; border-radius: 5px; background: var(--surface-2); letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .session-lifecycle-empty { padding: 8px 8px 12px; color: var(--text-muted); font-size: 12px; }
 #convList.session-workspace { padding-inline: 12px; }
-#convList.session-workspace .conv-tab-bar { gap: 2px; margin-bottom: 4px; }
-#convList.session-workspace .conv-tab { padding: 10px 7px; font-size: 12px; }
+#convList.session-workspace .conv-tab-bar { gap: 2px; padding-top: 2px; margin-bottom: 2px; }
+#convList.session-workspace .conv-tab { padding: 6px 7px; font-size: 12px; }
 #convList.session-workspace .conv-tab-count { font-size: 10px; }
 #convList.session-workspace .conv-archived-section { border-top: 0; margin-top: 0; padding-top: 0; }
-#convList.session-workspace .conv-archived-tools { border: 0; padding: 8px 4px; margin: 0; }
+#convList.session-workspace .conv-archived-tools { border: 0; padding: 4px; margin: 0; }
 #convList#convList.session-workspace .conv-item:not(.is-current-child-row) {
   --conv-content-left: calc(var(--conv-icon-left) + 52px);
   padding-top: 13px !important; padding-bottom: 13px !important;
@@ -34221,8 +34221,6 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 @media (max-width: 1200px) {
   #convList#convList.session-workspace .conv-item .wa-body { min-height: 0; padding-block: 4px; }
   #convList#convList.session-workspace .conv-item:not(.is-current-child-row) { padding-block: 6px !important; }
-  #convList.session-workspace .session-lifecycle-section { margin-bottom: 12px; }
-  #convList.session-workspace .session-lifecycle-heading { margin: 8px 4px 4px; }
   #convList#convList.session-workspace .conv-item:not(.is-current-child-row) .wa-row > .conv-idea-avatar:not(.is-child-mini) { position: relative; top: auto; flex: 0 0 40px; }
   #convList.session-workspace .wa-title { font-size: 15px; }
   #convList.session-workspace .wa-preview { font-size: 13px; line-height: 19px; }
