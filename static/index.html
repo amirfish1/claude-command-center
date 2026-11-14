@@ -1469,21 +1469,7 @@
         <div class="simple-usage-line" id="simpleUsageLine" role="status" aria-live="polite"></div>
         <div class="conv-input-context" id="convInputContext" data-role="input-context">
           <span class="wp-row" data-workspace></span>
-          <span id="codexAccountRow" class="codex-account-row" hidden>
-            <label for="codexAccountSelect">Account</label>
-            <select id="codexAccountSelect" aria-label="Codex account for new session" title="This account stays attached to the new session and its replies">
-              <option value="__current__">Codex (Primary)</option>
-            </select>
-            <a href="/view/allowances" target="_blank" rel="noopener">Allowances</a>
-          </span>
           <span id="codexSessionAccount" class="codex-session-account" hidden></span>
-          <span id="antigravityAccountRow" class="codex-account-row" hidden>
-            <label for="antigravityAccountSelect">Account</label>
-            <select id="antigravityAccountSelect" aria-label="Antigravity account for new session" title="This account stays attached to the new session and its replies">
-              <option value="primary">Antigravity (Primary) · Google Cloud</option>
-              <option value="secondary">Antigravity (Secondary) · Google OAuth</option>
-            </select>
-          </span>
           <span id="antigravitySessionAccount" class="codex-session-account" hidden></span>
           <span id="newSessionObjectContext" class="new-session-object-context" aria-label="Object for new session"></span>
           <span id="spawnCwdQuickChips" class="spawn-cwd-quick-chips" aria-label="Recent folder shortcuts"></span>
@@ -1824,11 +1810,27 @@
           <section class="ns-advisor" id="nsComposerAdvisor" aria-label="Session thinking" hidden></section>
           <details class="ns-model-overrides" id="nsModelOverrides">
             <summary><span id="nsSelectedModel" aria-live="polite"></span><span class="ns-model-change">Change</span></summary>
-            <!-- CCC-255: while open, the composer's engine/model/effort selects move here, above the ranked chips. -->
-            <div class="ns-model-override-selects" id="nsModelOverrideSelects"></div>
             <div class="conv-model-picker-inner">
               <span class="conv-model-picker-label">Model</span>
               <div class="conv-model-picker-chips" id="nsModelPickerPills"></div>
+            </div>
+            <!-- Detailed engine/model/effort choices follow the ranked shortcuts. -->
+            <div class="ns-model-override-selects" id="nsModelOverrideSelects"></div>
+            <div class="ns-model-account-options">
+                <span id="codexAccountRow" class="codex-account-row" hidden>
+                  <label for="codexAccountSelect">Codex account</label>
+                  <select id="codexAccountSelect" aria-label="Codex account for new session" title="This account stays attached to the new session and its replies">
+                    <option value="__current__">Codex (Primary)</option>
+                  </select>
+                  <a href="/view/allowances" target="_blank" rel="noopener">Allowances</a>
+                </span>
+                <span id="antigravityAccountRow" class="codex-account-row" hidden>
+                  <label for="antigravityAccountSelect">Antigravity account</label>
+                  <select id="antigravityAccountSelect" aria-label="Antigravity account for new session" title="This account stays attached to the new session and its replies">
+                    <option value="primary">Antigravity (Primary) · Google Cloud</option>
+                    <option value="secondary">Antigravity (Secondary) · Google OAuth</option>
+                  </select>
+                </span>
             </div>
           </details>
         </div>

@@ -82996,7 +82996,7 @@
     }
     if (row.hidden || _codexAccountsLoading || Date.now() - _codexAccountsLoadedAt < 30000) return;
     _codexAccountsLoading = true;
-    fetch('/api/codex/accounts').then(r => r.json()).then(data => {
+    fetch('/api/codex/accounts', { cccPriority: 'user' }).then(r => r.json()).then(data => {
       if (!data.ok) throw new Error('Accounts unavailable');
       // Until the user picks one, start on the saved default account.
       const selected = select.dataset.userPicked === '1' ? select.value : (spawnDefaultsState.codex_account_id || '__current__');
@@ -94124,7 +94124,7 @@
     const choices = nsAdvisorChoices();
     const best = choices.find(c => !c.unavailable);
     if (config?.enabled && !nsAdvisor.manual && best) applyNsAdvisorChoice(best);
-    const label = c => spawnEngineLabelWithAccount(c.engine) + ' · ' + getModelPillLabel(c.engine, c.model, c.effort);
+    const label = c => spawnEngineLabel(c.engine) + ' · ' + getModelPillLabel(c.engine, c.model, c.effort);
     const automatic = config?.enabled && !nsAdvisor.manual && !!best;
     const strip = document.getElementById('convModelPickerStrip');
     const overrides = document.getElementById('nsModelOverrides');
@@ -94137,7 +94137,7 @@
     const selected = document.getElementById('nsSelectedModel');
     const held = currentSpawnChoice();
     const selectedLabel = window.CCCFreeRuntime?.runtimeForSpawn?.(held.engine) === 'free'
-      ? 'Free · ' + spawnEngineLabelWithAccount(held.engine) : label(held);
+      ? 'Free · ' + spawnEngineLabel(held.engine) : label(held);
     if (selected) selected.innerHTML = '<span class="ns-selection-mode">' + (automatic ? 'Auto' : nsAdvisor.manual ? 'Custom' : 'Model')
       + '</span><span class="ns-selection-name">' + escapeHtml(selectedLabel) + '</span>';
     host.innerHTML = '<div class="ns-advisor-top"><div class="ns-advisor-depth" role="group" aria-label="Task depth">'
@@ -94250,7 +94250,7 @@
   }
 
   // CCC-255: an open model override ("Change") shows the engine / model /
-  // effort selects right above the ranked chips instead of down in the
+  // effort selects below the ranked chips instead of down in the
   // composer row, and its toggle reads "Collapse". Closing (or legacy mode,
   // where the details is forced open with no summary) puts them back.
   function syncNsModelOverrideSelects() {
