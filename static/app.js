@@ -100758,13 +100758,72 @@
   const title = sidebar?.querySelector('.sh-title-row');
   if (!sidebar || !title) return;
   const query = matchMedia('(max-width: 1200px)');
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+  let folds = [];
+  const finishFolds = () => {
+    for (const {el, animation, cleanup} of folds) {
+      animation.cancel();
+      cleanup();
+    }
+    folds = [];
+  };
   const setCollapsed = collapsed => {
     if (document.body.classList.contains('mobile-home-collapsed') === collapsed) return;
+    const bands = [sidebar.querySelector('.mobile-home-status'), sidebar.querySelector(':scope > .new-session-panel')].filter(Boolean);
+    const lists = [...sidebar.querySelectorAll(':scope > #convListPanel, :scope > #simpleHome, :scope > #simpleHistory')];
+    // Read visual positions BEFORE cancelling so a reversed gesture starts at
+    // the interrupted position, not at the previous animation's destination.
+    const before = lists.map(el => el.getBoundingClientRect());
+    const bandBefore = bands.map(el => ({rect:el.getBoundingClientRect(), opacity:getComputedStyle(el).opacity}));
+    const sidebarRect = sidebar.getBoundingClientRect();
+    finishFolds();
     document.body.classList.toggle('mobile-home-collapsed', collapsed);
     if (collapsed) {
       document.getElementById('localCiMobileList')?.classList.remove('is-expanded');
       document.querySelector('#localCiMobileList .local-ci-mobile-toggle')?.setAttribute('aria-expanded', 'false');
     }
+    for (const el of bands) el.inert = collapsed;
+    if (!query.matches || reducedMotion.matches || document.body.classList.contains('mobile-show-main')) return;
+    const after = lists.map(el => el.getBoundingClientRect());
+    const run = (el, frames, cleanup) => {
+      const animation = el.animate(frames, {duration:220, easing:'cubic-bezier(0.16, 1, 0.3, 1)'});
+      const fold = {el, animation, cleanup};
+      folds.push(fold);
+      animation.onfinish = () => {
+        cleanup();
+        folds = folds.filter(item => item !== fold);
+      };
+    };
+    lists.forEach((el, i) => {
+      const delta = before[i].top - after[i].top;
+      if (!before[i].height || !after[i].height || Math.abs(delta) < 0.5) return;
+      // The taller viewport fills the bottom throughout the slide. Sidebar
+      // clipping hides the excess; cleanup restores the natural scrollport.
+      el.style.setProperty('--mobile-home-fold-height', Math.max(before[i].height, after[i].height) + 'px');
+      el.classList.add('mobile-home-list-moving');
+      run(el, [{transform:`translateY(${delta}px)`}, {transform:'translateY(0)'}], () => {
+        el.classList.remove('mobile-home-list-moving');
+        el.style.removeProperty('--mobile-home-fold-height');
+      });
+    });
+    bands.forEach((el, i) => {
+      const {rect, opacity} = bandBefore[i];
+      if (collapsed && !rect.height) return;
+      if (collapsed) {
+        // Keep outgoing controls at their old position without taking up
+        // layout space. The moving list covers them as they fade away.
+        // The sidebar's size container is the containing block for fixed bands.
+        for (const [key, value] of Object.entries({top:rect.top - sidebarRect.top, left:rect.left - sidebarRect.left, width:rect.width, height:rect.height})) {
+          el.style.setProperty('--mobile-home-fold-' + key, value + 'px');
+        }
+        el.classList.add('mobile-home-folding');
+      }
+      if (!el.getBoundingClientRect().height) return;
+      run(el, [{opacity:collapsed ? opacity : rect.height ? opacity : 0}, {opacity:collapsed ? 0 : 1}], () => {
+        el.classList.remove('mobile-home-folding');
+        for (const key of ['top', 'left', 'width', 'height']) el.style.removeProperty('--mobile-home-fold-' + key);
+      });
+    });
   };
   for (const [kind, label, glyph] of [['search','Search sessions','⌕'], ['new','New session','+']]) {
     const button = document.createElement('button');
@@ -100784,7 +100843,8 @@
     if (scroller.scrollTop <= 4) setCollapsed(false);
     else if (scroller.scrollTop > 96 && scroller.scrollHeight > scroller.clientHeight + 180) setCollapsed(true);
   }, {capture:true, passive:true});
-  query.addEventListener('change', () => setCollapsed(false));
+  query.addEventListener('change', () => { finishFolds(); setCollapsed(false); });
+  reducedMotion.addEventListener('change', finishFolds);
   new MutationObserver(() => {
     if (document.body.classList.contains('mobile-show-main')) setCollapsed(false);
   }).observe(document.body, {attributes:true, attributeFilter:['class']});

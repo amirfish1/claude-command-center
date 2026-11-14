@@ -1,0 +1,1 @@
+- Smooth the phone session list's compact header transition, including interrupted scroll gestures, while preserving native scrolling and reduced-motion preferences.
