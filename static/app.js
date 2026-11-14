@@ -11307,12 +11307,13 @@
     const original = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Steering…';
+    const steerPaneId = row.closest('.conv-pane')?.dataset.paneId || activePaneId();
+    const $view = trayConversationView(row.closest('.queued-steer-tray'));
     if (row?.dataset.busySend === 'true') {
       const ready = await readyQueuedSteerRows([row]);
       if (!ready.length) return;
       row = ready[0];
     }
-    const $view = trayConversationView(row.closest('.queued-steer-tray'));
     markSteerInFlight(sid, [text]);
     clearQueuedSteerError(sid, text);
     const moved = beginOptimisticSteerMove([row], $view);
@@ -11320,7 +11321,7 @@
     // queued candidate again, and the in-flight filter would delete it.
     const giveBack = () => {
       clearSteerInFlight(sid, [text]);
-      revertOptimisticSteerMove(moved, activePaneId());
+      revertOptimisticSteerMove(moved, steerPaneId);
     };
     try {
       const data = await postInjectInput(sid, text, 'steer', { replaceQueued: true, userInitiated: true, replaceQueuedIds: [queuedRowDeliveryId(row)] });
@@ -11470,6 +11471,8 @@
     const tray = btn.closest('.queued-steer-tray');
     const sid = btn.dataset.sessionId || '';
     const original = btn.textContent;
+    const steerPaneId = tray.closest('.conv-pane')?.dataset.paneId || activePaneId();
+    const $view = trayConversationView(tray);
     let rows = tray ? Array.from(tray.querySelectorAll('.event.user_text')) : [];
     if (rows.some(row => row.dataset.busySend === 'true')) {
       btn.disabled = true;
@@ -11492,13 +11495,12 @@
     }
     btn.disabled = true;
     btn.textContent = 'Steering…';
-    const $view = trayConversationView(tray);
     markSteerInFlight(sid, texts);
     clearQueuedSteerError(sid, texts);
     const moved = beginOptimisticSteerMove(rows, $view);
     const giveBack = () => {
       clearSteerInFlight(sid, texts);
-      revertOptimisticSteerMove(moved, activePaneId());
+      revertOptimisticSteerMove(moved, steerPaneId);
     };
     try {
       const data = await postInjectInput(sid, texts.join('\n\n'), 'steer', {
@@ -13009,22 +13011,43 @@
     }
   }
 
-  // Accept the click immediately, but replace only a server-confirmed queue
-  // entry. The original send may still deliver directly or fail instead.
+  // Move the accepted action into the conversation before waiting for Send.
+  // Its delivery ID must still come from that original request: steering early
+  // by text could duplicate a direct delivery or replace the wrong queue entry.
   async function readyQueuedSteerRows(rows) {
     if (rows.some(row => row._pendingRef?.steerWaiting)) return [];
     const claimed = [];
-    const ready = await Promise.all(rows.map(async row => {
+    rows.forEach(row => {
       const pending = row._pendingRef;
       if (pending) { pending.steerWaiting = true; claimed.push(pending); }
-      if (row.dataset.busySend !== 'true') return row;
-      if (!pending?.queueReady) return null;
-      const queued = await pending.queueReady;
-      return queued && pending.entry?.queued && !pending.entry.delivered
-        && pending.element?.isConnected ? pending.element : null;
-    }));
-    claimed.forEach(pending => { pending.steerWaiting = false; });
-    return ready.filter(row => row?.isConnected && !row._pendingRef?.entry?.delivered);
+      const text = row.querySelector('.user-msg');
+      markSteerInFlight(pending?.sid || row.querySelector('[data-session-id]')?.dataset.sessionId,
+        [text?.getAttribute('data-raw-text') || text?.textContent || '']);
+    });
+    const view = trayConversationView(rows[0]?.closest('.queued-steer-tray'));
+    beginOptimisticSteerMove(rows, view);
+    try {
+      const ready = await Promise.all(rows.map(async row => {
+        const pending = row._pendingRef;
+        if (row.dataset.busySend !== 'true') return row;
+        if (!pending?.queueReady) return null;
+        const queued = await pending.queueReady;
+        return queued && pending.entry?.queued && !pending.entry.delivered
+          && pending.element?.isConnected ? pending.element : null;
+      }));
+      rows.forEach((row, i) => {
+        if (ready[i]?.isConnected && !ready[i]._pendingRef?.entry?.delivered) return;
+        const pending = row._pendingRef;
+        clearSteerInFlight(pending?.sid, [pending?.text]);
+        row.classList.remove('steering-optimistic');
+        row.querySelector('.steer-background-note')?.remove();
+        // Direct delivery, refusal and durable receipt each finish the
+        // original Send themselves; none should create a second injection.
+      });
+      return ready.filter(row => row?.isConnected && !row._pendingRef?.entry?.delivered);
+    } finally {
+      claimed.forEach(pending => { pending.steerWaiting = false; });
+    }
   }
 
   function appendPendingSendEcho(text, sid, paneId, restoredEntry) {
@@ -13133,7 +13156,8 @@
       }, _PENDING_SEND_ECHO_MAX_MS);
       const convId = currentConversation;
       if (convId && pane) syncPendingSendsMapForConv(pane, convId);
-      if (busySend) syncQueuedSteerTray($view, paneId || activePaneId(), false);
+      if (pending.steerWaiting) beginOptimisticSteerMove([pendingDiv], $view);
+      else if (busySend) syncQueuedSteerTray($view, paneId || activePaneId(), false);
     }
     if (sid) markSessionSending(sid);
     return pending;
@@ -13268,6 +13292,7 @@
     }
     pending.entry.queued = false;
     pending.entry.queuedLabel = '';
+    div.querySelector('.steer-background-note')?.remove();
     div.classList.remove('pending', 'send-queued', 'server-queued', 'steering-optimistic');
     delete div.dataset.queuedSteerServer;
     div.classList.add('send-delivered');
@@ -68206,6 +68231,7 @@
     (rows || []).forEach(row => {
       if (!row) return;
       const tray = row.closest('.queued-steer-tray');
+      row.querySelector('.steer-background-note')?.remove();
       row.classList.remove('send-queued');
       row.classList.add('steering-optimistic');
       // The note carries the Steer/Cancel buttons; an in-flight card offers
@@ -68214,6 +68240,11 @@
       if (note) note.hidden = true;
       const actions = row.querySelector('.queued-steer-actions');
       if (actions) actions.hidden = true;
+      const status = document.createElement('div');
+      status.className = 'send-queued-note steer-background-note';
+      status.setAttribute('role', 'status');
+      status.textContent = 'Steering in background…';
+      row.appendChild(status);
       if ($view) $view.appendChild(row);
       moved.push(row);
       if (tray) syncQueuedSteerAllControl(tray);
@@ -68229,6 +68260,7 @@
   // engine's own copy of the text renders.
   function settleSteeredServerCard(row) {
     if (!row) return;
+    row.querySelector('.steer-background-note')?.remove();
     row.dataset.steerSettled = '1';
     delete row.dataset.queuedSteerServer;
     row.classList.remove('pending', 'server-queued', 'send-queued');
@@ -68241,6 +68273,7 @@
   function revertOptimisticSteerMove(moved, paneId) {
     (moved || []).forEach(row => {
       if (!row) return;
+      row.querySelector('.steer-background-note')?.remove();
       row.classList.remove('steering-optimistic');
       row.classList.add('send-queued');
       const note = row.querySelector('.send-queued-note');

@@ -1536,6 +1536,10 @@
     background: rgba(210, 153, 34, 0.06);
     border-left-color: color-mix(in srgb, var(--orange, #d29922) 70%, transparent);
   }
+  .event.user_text.steering-optimistic > .pending-send-cancel,
+  .event.user_text.steering-optimistic > .user-message-copy {
+    display: none;
+  }
   .event.user_text.steering-optimistic .label::after {
     content: ' · steering…';
     font-style: normal; font-weight: 400;

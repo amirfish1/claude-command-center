@@ -41,8 +41,9 @@ let browser;
 before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
 
-async function fixture(run, input, realTray = false) {
+async function fixture(run, input, realTray = false, viewport) {
   const page = await browser.newPage();
+  if (viewport) await page.setViewport(viewport);
   try {
     await page.setRequestInterception(true);
     page.on('request', request => request.abort());
@@ -138,7 +139,15 @@ async function fixture(run, input, realTray = false) {
       window.isPendingSendEchoElement = el => el.matches('.pending, .send-queued, .send-delivered');
       (0, eval)(helpers);
     }, between('  function queuedSteerCardCount(', '  // ── Conversation presentation modes'));
-    return await page.evaluate(run, input);
+    const result = await page.evaluate(run, input);
+    if (process.env.STEER_SCREENSHOT && viewport) {
+      await page.addStyleTag({ content: fs.readFileSync('static/app.css', 'utf8')
+        + 'body{display:block;margin:0}.conv-pane{height:95vh;width:100%}.conversations-view{display:block!important}.conv-input-bar{display:flex!important;min-height:100px}' });
+      assert.equal(await page.evaluate(() => [...document.querySelectorAll('.steering-optimistic > button')]
+        .every(button => getComputedStyle(button).display === 'none')), true);
+      await page.screenshot({ path: process.env.STEER_SCREENSHOT + '-' + viewport.width + '.png' });
+    }
+    return result;
   } finally {
     await page.close();
   }
@@ -766,3 +775,113 @@ test('Devin reply chunks preserve the generating row until live status settles t
   });
   assert.deepEqual(result, [true, true, true]);
 });
+
+
+for (const width of [390, 1280]) {
+  test(`Steer moves immediately while both Send and steer delivery wait (${width}px)`, async () => {
+    const result = await fixture(async () => {
+      const pending = appendPendingSendEcho('Please use the new instructions.', 'session', 'main');
+      getConvInputBarForPane().innerHTML = '<textarea aria-label="Message">Unsent draft stays editable</textarea>';
+      let requests = 0;
+      window.postInjectInput = () => { requests++; return new Promise(() => {}); };
+      const before = performance.now();
+      pending.element.querySelector('[data-steer-queued-message]').click();
+      const immediate = {
+        inConversation: pending.element.parentElement === getConvView(),
+        tray: !!document.querySelector('.queued-steer-tray'),
+        background: pending.element.querySelector('[role="status"]').textContent,
+        delivered: !!pending.entry.delivered,
+        requests,
+        draftEnabled: !getConvInputBarForPane().querySelector('textarea').disabled,
+      };
+      const elapsed = performance.now() - before;
+      // Polls while the original Send waits must not pull it back into the tray.
+      syncQueuedSteerTray(getConvView(), 'main', true);
+      restorePendingSendEchoes('conversation', 'main');
+      const afterPoll = pending.element.parentElement === getConvView()
+        && !document.querySelector('.queued-steer-tray');
+      // Rebuilding the pane keeps the accepted action visible, too.
+      getConvView().replaceChildren();
+      restorePendingSendEchoes('conversation', 'main');
+      const afterRebuild = pending.element.parentElement === getConvView()
+        && !!pending.element.querySelector('[role="status"]');
+      bindPendingSendDeliveryId(pending, 'confirmed-delivery');
+      markPendingSendQueued(pending, 'Queued');
+      await new Promise(resolve => setTimeout(resolve, 0));
+      return { immediate, elapsed, afterPoll, afterRebuild, requests,
+        inConversation: pending.element.parentElement === getConvView(),
+        status: pending.element.querySelector('[role="status"]').textContent };
+    }, undefined, true, { width, height: 800 });
+    assert.deepEqual(result.immediate, { inConversation: true, tray: false,
+      background: 'Steering in background…', delivered: false, requests: 0, draftEnabled: true });
+    assert.ok(result.elapsed < 300, `click took ${result.elapsed}ms`);
+    assert.equal(result.afterPoll, true);
+    assert.equal(result.afterRebuild, true);
+    assert.equal(result.requests, 1);
+    assert.equal(result.inConversation, true);
+    assert.equal(result.status, 'Steering in background…');
+  });
+}
+
+test('Steer all immediately clears the tray while Send acknowledgements wait', async () => {
+  const result = await fixture(async () => {
+    const first = appendPendingSendEcho('First instruction', 'session', 'main');
+    const second = appendPendingSendEcho('Second instruction', 'session', 'main');
+    let requests = 0;
+    window.postInjectInput = () => { requests++; return new Promise(() => {}); };
+    document.querySelector('[data-steer-all-queued]').click();
+    const immediate = { tray: !!document.querySelector('.queued-steer-tray'),
+      rows: getConvView().querySelectorAll('.steering-optimistic').length, requests };
+    bindPendingSendDeliveryId(first, 'first');
+    markPendingSendQueued(first, 'Queued');
+    await Promise.resolve();
+    const beforeSecond = requests;
+    bindPendingSendDeliveryId(second, 'second');
+    markPendingSendQueued(second, 'Queued');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    return { immediate, beforeSecond, requests };
+  }, undefined, true);
+  assert.deepEqual(result, { immediate: { tray: false, rows: 2, requests: 0 }, beforeSecond: 0, requests: 1 });
+});
+
+test('an early accepted steer failure restores a visible error and working retry/cancel', async () => {
+  const result = await fixture(async () => {
+    const pending = appendPendingSendEcho('Recover this instruction', 'session', 'main');
+    window.postInjectInput = async () => ({ ok: false, error: 'Engine unavailable', queued_preserved: true });
+    pending.element.querySelector('[data-steer-queued-message]').click();
+    bindPendingSendDeliveryId(pending, 'recover-id');
+    markPendingSendQueued(pending, 'Queued');
+    // Change focus while delivery waits; recovery still belongs to the original pane.
+    window.activePaneId = () => 'other-pane';
+    const originalGetView = getConvViewForPane;
+    window.getConvViewForPane = pid => pid === 'main' ? originalGetView() : null;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const row = pending.element;
+    return { tray: !!row.closest('.queued-steer-tray'),
+      error: row.querySelector('[role="alert"]')?.textContent,
+      background: !!row.querySelector('.steer-background-note'),
+      retry: !row.querySelector('[data-steer-queued-message]').disabled,
+      cancel: !row.querySelector('[data-cancel-queued-message]').disabled };
+  }, undefined, true);
+  assert.deepEqual(result, { tray: true, error: 'Not delivered: Engine unavailable',
+    background: false, retry: true, cancel: true });
+});
+
+for (const outcome of ['delivered', 'rejected', 'receipt']) {
+  test(`an early Steer finishes cleanly when original Send is ${outcome}`, async () => {
+    const result = await fixture(async outcome => {
+      const pending = appendPendingSendEcho('No duplicate please', 'session', 'main');
+      let requests = 0;
+      window.postInjectInput = async () => { requests++; return { ok: true }; };
+      pending.element.querySelector('[data-steer-queued-message]').click();
+      if (outcome === 'delivered') markPendingSendDelivered(pending, { via: 'codex-app-turn' });
+      else if (outcome === 'rejected') removePendingSendEcho(pending);
+      else reconcileUserEvent({ text: pending.text, ts: new Date().toISOString() }, 'main', getConvView());
+      await new Promise(resolve => setTimeout(resolve, 0));
+      return { requests, held: steerIsInFlight('session', pending.text),
+        statuses: document.querySelectorAll('.steer-background-note').length,
+        tray: !!document.querySelector('.queued-steer-tray') };
+    }, outcome, true);
+    assert.deepEqual(result, { requests: 0, held: false, statuses: 0, tray: false });
+  });
+}
