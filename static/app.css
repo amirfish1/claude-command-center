@@ -4243,6 +4243,12 @@
   }
   /* Structured reports share one reading layout across conversation engines. */
   .event.user_text.peer-message .peer-structured { white-space: normal; line-height: 1.65; max-width: 72ch; font-style: normal; font-weight: 400; }
+  .peer-report-preview { cursor: pointer; min-height: 44px; overflow-wrap: anywhere; }
+  .peer-report-preview:focus-visible { outline: 2px solid var(--accent, #4c8bf5); outline-offset: 3px; border-radius: 4px; }
+  .peer-report-summary { margin-left: 0.6em; }
+  .peer-report-expand { display: block; font-size: 0.86em; text-decoration: underline; text-underline-offset: 3px; }
+  .peer-report[open] > .peer-report-preview { margin-bottom: 12px; }
+  .peer-report-body { overflow-wrap: anywhere; }
   .peer-structured .peer-para { margin: 0 0 8px; }
   .peer-structured .peer-section { margin: 0 0 14px; }
   .peer-structured .peer-section:last-child,

@@ -18364,6 +18364,21 @@
   function formatPeerMessageHtml(text) {
     const lines = String(text || '').split('\n');
     if (!lines.some(l => PEER_LABEL_RE.test(l.trim()))) return '';
+    // Keep a report's outcome visible without making the whole transcript
+    // compete with its evidence. Sections may put their value on the next line.
+    const sections = [];
+    for (const raw of lines) {
+      const line = raw.trim();
+      const label = line.match(PEER_LABEL_RE);
+      if (label) sections.push({ label: label[1], body: label[2] });
+      else if (line && sections.length) sections[sections.length - 1].body += ' ' + line;
+    }
+    const statusSection = sections.find(s => /^(?:STATUS|VERDICT)$/.test(s.label));
+    const status = statusSection?.body.replace(/[*`]/g, '').trim().split(/\s+/)[0] || 'Report';
+    const summarySection = sections.find(s => s.label === 'SUMMARY' && s.body.trim())
+      || sections.find(s => !/^(?:STATUS|VERDICT|FILES?|IMAGES?|SCREENSHOTS?)$/.test(s.label) && s.body.trim());
+    const firstSentence = splitFirstSentence((summarySection?.body || '').replace(/^\s*(?:\(\d+\)|[-*])\s*/, ''))[0];
+    const preview = firstSentence.length > 280 ? firstSentence.slice(0, 277).trimEnd() + '…' : firstSentence;
     const fmt = s => String(s).split(/((?:~?\/|[\w.-]+\/)[^\s<>"'`,;()]+\.[a-zA-Z0-9]{1,12}(?::\d+)?)/g)
       .map((part, i) => i % 2
         ? (/\/\.claude\/(?:command-center\/)?(?:pasted-images|annotation-screenshots)\//.test(part)
@@ -18391,7 +18406,11 @@
           : (body ? ' ' + (/^\(\d+\)\s/.test(body) || body.length > 160 ? paras(body) : fmt(body)) : ''))
         + '</div>';
     }
-    return '<div class="peer-structured">' + html + '</div>';
+    return '<details class="peer-structured peer-report"><summary class="peer-report-preview" title="Expand or collapse the full report">'
+      + '<strong class="peer-report-status">' + escapeHtml(status) + '</strong>'
+      + (preview ? ' <span class="peer-report-summary">' + escapeHtml(preview) + '</span>' : '')
+      + '<span class="peer-report-expand">Details</span></summary>'
+      + '<div class="peer-report-body">' + html + peerReportImagesHtml(text) + '</div></details>';
   }
 
   // Reports often name a directory once, followed by screenshot basenames.
@@ -72302,7 +72321,6 @@
           + tsSpan(ev.ts)
           + ambientContextHtml(ev.ambient_context)
           + textHtml
-          + (ev.peer ? peerReportImagesHtml(cleanedText) : '')
           + eventModelMetaHtml(ev, 'user')
           + (_isPinned ? '' : imagesHtml)
           + userSteerHtml;
