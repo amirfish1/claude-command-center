@@ -14,12 +14,70 @@ from ccc_server.kilo import (
     find_kilo_conversations,
 )
 import sqlite3
+import os
+import subprocess
+from pathlib import Path
 
 from ccc_server import core as _core
 
 # ---------------------------------------------------------------------------
 # Antigravity integration
 # ---------------------------------------------------------------------------
+
+def _cli_process_logs(pid):
+    """Only logs held open by this process establish terminal ownership."""
+    fd_dir = Path('/proc') / str(pid) / 'fd'
+    if Path('/proc').is_dir():
+        paths = []
+        try:
+            for fd in fd_dir.iterdir():
+                try:
+                    paths.append(os.readlink(fd))
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    else:
+        try:
+            result = subprocess.run(
+                ['lsof', '-a', '-p', str(pid), '-Fn'],
+                capture_output=True, text=True, timeout=2,
+            )
+            paths = [line[1:] for line in result.stdout.splitlines()
+                     if line.startswith('n')]
+        except (OSError, subprocess.TimeoutExpired):
+            return set()
+    return {Path(p) for p in paths
+            if Path(p).parent.name == 'log'
+            and Path(p).name.startswith('cli-') and p.endswith('.log')}
+
+
+def live_cli_session_ids():
+    """Discover resumed and plain `agy` sessions without cwd guessing.
+
+    Interactive launches have no conversation argument. Their own open CLI
+    log supplies the current native ID, including after switching chats.
+    Called inside the bulk engine scan's TTL, never once per archive row.
+    """
+    sids = set()
+    for pid, _tty, comm, command in _core._scan_engine_processes():
+        words = _core._command_tokens(command)
+        executable = words[0].rsplit('/', 1)[-1] if words else ''
+        if not ({comm.rsplit('/', 1)[-1], executable} & {'agy', 'antigravity'}):
+            continue
+        owned = set()
+        for log in _cli_process_logs(pid):
+            sid = _core._antigravity_cli_log_meta(log).get('session_id')
+            if sid and _core._SESSION_UUID_RE.fullmatch(sid):
+                owned.add(sid)
+        if owned:
+            sids.update(owned)
+            continue
+        for word in words:
+            if (_core._SESSION_UUID_RE.fullmatch(word)
+                    and _core._command_targets_engine_session(command, word, 'antigravity')):
+                sids.add(word)
+    return sids
 
 def _antigravity_transcript_path(session_id):
     if not session_id:

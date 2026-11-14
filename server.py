@@ -11500,9 +11500,8 @@ def _live_engine_session_ids():
     """Set of session ids for non-Claude engine CLIs currently running.
 
     One ps-backed scan per engine, cached for _ENGINE_LIVE_TTL. We only count
-    sessions whose id appears in a live process's resume args (the exact-match
-    signal), which is cheap and unambiguous — no cwd heuristics here, since the
-    bulk list can't afford per-row disambiguation."""
+    sessions identified by resume args or an Antigravity process's own open
+    CLI log. Both are exact signals; the bulk list never guesses from cwd."""
     now = time.time()
     cached = _engine_live_sids_cache
     if now - cached["ts"] < _ENGINE_LIVE_TTL:
@@ -11517,6 +11516,8 @@ def _live_engine_session_ids():
                 for tok in cmd.split():
                     if len(tok) >= 16 and _command_targets_engine_session(cmd, tok, engine):
                         sids.add(tok)
+        from ccc_server.antigravity import live_cli_session_ids
+        sids.update(live_cli_session_ids())
         sids.update(_spawned_engine_session_ids())
     except Exception:
         # Never let liveness detection break the list; fall back to last cache.
