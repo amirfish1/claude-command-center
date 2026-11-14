@@ -1,0 +1,1 @@
+- Keep slow ticket saves running once across confirmation retries, and show the queue, ticket preview, elapsed time, and waiting reason while checking their result.

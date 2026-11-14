@@ -24,11 +24,16 @@
           + '-' + Math.random().toString(36).slice(2));
     remember(signature, key);
     const body = JSON.stringify(Object.assign({}, payload, {idempotency_key: key}));
+    const preview = String(payload.note || payload.text || '').replace(/\s+/g, ' ').trim().slice(0, 64);
+    const context = (payload.project || 'default queue') + ' (“' + preview + '”)';
+    const started = Date.now();
     let reason = 'Connection lost';
-    for (let attempt = 0; attempt < 4; attempt++) {
+    let failures = 0;
+    for (let attempt = 0; attempt < 40 && failures < 4; attempt++) {
       if (attempt) {
-        if (onRetry) onRetry('Confirming ticket; retrying safely…');
-        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        if (onRetry) onRetry('Waiting for ' + context + ' — ' + reason
+          + ' (' + Math.round((Date.now() - started) / 1000) + 's). Checking the same submission…');
+        await new Promise(resolve => setTimeout(resolve, 1000 * Math.min(attempt, 3)));
       }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 10000);
@@ -43,13 +48,16 @@
           return data;
         }
         reason = (data && data.error) || ('HTTP ' + response.status);
+        if (response.status === 202 && data && data.pending) continue;
+        failures++;
         if (response.status >= 400 && response.status < 500) {
           remember(signature, null);
           throw Object.assign(new Error(reason), {rejected: true});
         }
       } catch (error) {
         if (error.rejected) throw error;
-        reason = error.message || reason;
+        failures++;
+        reason = error.name === 'AbortError' ? 'No confirmation within 10 seconds' : (error.message || reason);
       } finally { clearTimeout(timer); }
     }
     throw Object.assign(new Error('Saving is not confirmed (' + reason

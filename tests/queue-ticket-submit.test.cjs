@@ -46,6 +46,15 @@ test('explicit validation failure is rejected immediately', async () => {
   await assert.rejects(h.submit({note:''}), e => e.rejected && !e.pending);
   assert.equal(h.calls.length, 1);
 });
+test('slow acknowledged saves keep checking and explain which ticket is pending', async () => {
+  const h = fixture(async n => n < 7
+    ? reply(202, {ok:false, pending:true, error:'Ticket save is still running'})
+    : reply(200, {ok:true, item:{ref:'TEST-2'}}));
+  assert.equal((await h.submit({note:'Fix the button', project:'TEST'})).item.ref, 'TEST-2');
+  assert.equal(h.calls.length, 7);
+  assert.equal(new Set(h.calls.map(c => c.opts.body)).size, 1);
+  assert.match(h.retries[0], /TEST.*Fix the button.*Ticket save is still running/);
+});
 test('HTTP pages without randomUUID can still submit with corrupt saved state', async () => {
   const ctx = vm.createContext({AbortController, crypto: {},
     sessionStorage: {getItem: () => 'null', setItem: () => {}},

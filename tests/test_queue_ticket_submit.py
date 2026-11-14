@@ -60,6 +60,37 @@ def test_concurrent_retries_create_one_ticket(isolated):
     assert len(queue.list_items(project="DEMO")) == 1
 
 
+def test_slow_save_returns_pending_and_retries_share_the_write(isolated, monkeypatch):
+    queue, receipts = isolated
+    payload = dict(note="One slow ticket", project="DEMO", idempotency_key="test-slow-submission")
+    began, release, finished = threading.Event(), threading.Event(), threading.Event()
+    real_enqueue = queue.enqueue
+    calls = []
+
+    def slow_enqueue(**kwargs):
+        calls.append(kwargs)
+        began.set()
+        assert release.wait(5)
+        return real_enqueue(**kwargs)
+
+    monkeypatch.setattr(queue, "enqueue", slow_enqueue)
+    monkeypatch.setattr(queue_submit, "_confirmation_wait", 0.02)
+    try:
+        for _ in range(3):
+            with pytest.raises(queue_submit.PendingSubmission, match="still running"):
+                queue_submit.enqueue(queue, payload, receipts)
+        assert began.is_set() and len(calls) == 1
+        with pytest.raises(ValueError, match="different ticket"):
+            queue_submit.enqueue(queue, dict(payload, note="Changed"), receipts)
+        with queue_submit._inflight_lock:
+            finished = next(iter(queue_submit._inflight.values()))["done"]
+    finally:
+        release.set()
+        assert finished.wait(5)
+    assert queue_submit.enqueue(queue, payload, receipts)["ref"] == "DEMO-1"
+    assert len(calls) == 1
+
+
 def test_existing_unkeyed_clients_and_invalid_keys(isolated):
     queue, receipts = isolated
     for invalid in ("", "short", 12, "bad key with spaces"):
