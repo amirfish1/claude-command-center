@@ -15553,7 +15553,7 @@ def _claude_task_agent_row(
         "subagent_in_flight_count": tail_meta.get("subagent_in_flight_count", 0),
         "subagent_recent": tail_meta.get("subagent_recent", []),
         "workflows": [],
-        "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
+        "session_state": _session_state_from_tail_meta(tail_meta),
         "claude_auth_failed": claude_auth_failed_from_meta(tail_meta),
         "goal": "",
         "goal_status": "",
@@ -16185,7 +16185,7 @@ def find_all_conversations(
                     )
                     if session_id in _ARCHIVE_WORKFLOW_SESSION_DIRS else []
                 ),
-                "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
+                "session_state": _session_state_from_tail_meta(tail_meta),
                 "claude_auth_failed": claude_auth_failed_from_meta(tail_meta),
                 "goal": tail_meta.get("goal") or "",
                 "goal_status": tail_meta.get("goal_status") or "",
@@ -25647,7 +25647,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             # Resolved PR state — filled in below via a parallel prime
             # pass. See find_all_conversations for the broader rationale.
             "pr_state": None,
-            "session_state": _parse_session_state(tail_meta.get("last_assistant_text")),
+            "session_state": _session_state_from_tail_meta(tail_meta),
             "claude_auth_failed": claude_auth_failed_from_meta(tail_meta),
             "goal": tail_meta.get("goal") or "",
             "goal_status": tail_meta.get("goal_status") or "",

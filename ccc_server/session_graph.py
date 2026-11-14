@@ -1459,6 +1459,37 @@ def _completion_assessment(value):
     return result
 
 
+def _session_state_from_tail_meta(meta):
+    """Honor footers; recognize a delivered, tool-free JSON verdict otherwise.
+
+    A JSON-only assessment cannot also carry our XML footer. This narrow
+    fallback describes delivery of that response, never completion of code
+    work or the task being assessed. It does not close or archive a ticket.
+    """
+    text = meta.get("last_assistant_text") or ""
+    state = _parse_session_state(text)
+    if state or "<session-state>" in text:
+        return state
+    prompt = meta.get("last_prompt") or ""
+    if (meta.get("last_event_type") != "assistant"
+            or meta.get("last_assistant_stop_reason") != "end_turn"
+            or meta.get("turn_has_tools") is not False
+            or meta.get("last_api_error")
+            or (meta.get("goal") and meta.get("goal_status") not in ("completed", "done"))
+            or not re.search(r"\b(?:return|output|respond)\s+only\s+(?:an?\s+|the\s+)?JSON\b", prompt, re.I)
+            or not re.search(r"\b(?:verdict|classification|assessment)\b", prompt, re.I)
+            or len(text) > 40000):
+        return None
+    try:
+        value = json.loads(text)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(value, dict) or not value or any(k in value for k in ("error", "errors")):
+        return None
+    return {"did": "Returned the requested JSON verdict.", "insight": None,
+            "next_step_user": None, "response_complete": True}
+
+
 def _parse_session_state(text):
     """Parse the last footer, preserving legacy fields and optional assessment."""
     if not text:

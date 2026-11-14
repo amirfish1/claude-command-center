@@ -3790,7 +3790,7 @@
     return Object.assign({}, c, waiting, { last_assistant_text: entry.text, last_assistant_preview: entry.text,
       _ownerInputAt: ownerInputAt,
       archived: reopened && !(c.explicitly_archived ?? c.idea_ticket?.explicitly_archived) ? false : c.archived,
-      session_state: entry.sessionState, last_event_type: 'assistant',
+      session_state: entry.sessionState || (entry.text === c.last_assistant_text ? c.session_state : null), last_event_type: 'assistant',
       modified: Math.max(Number(c.modified) || 0, entry.at / 1000) });
   }
   function sidebarSessionWorking(c, live = c) {
@@ -4225,6 +4225,7 @@
     const completion = c.session_state && c.session_state.completion;
     if (completion) return completion.version === 1 && completion.valid === true
       && completion.ready_to_close === true;
+    if (c.session_state?.response_complete === true) return true;
     const reviewedAt = Number(c.idea_ticket && c.idea_ticket.ready_to_close_reviewed_at) || 0;
     const activityAt = Math.max(Number(c.mtime) || 0, Number(c.modified) || 0,
       Number(live && live.mtime) || 0, Number(live && live.modified) || 0);
@@ -4276,7 +4277,8 @@
   }
 
   // Lifecycle is independent of process/turn liveness. Only explicit closure
-  // belongs in Finished; an idle turn and a recommendation to close stay Active.
+  // belongs in Finished, along with delivered JSON-only verdicts. An idle
+  // turn and a recommendation to close ordinary work stay Active.
   function ticketSessionSection(c) {
     if (c.trashed) return 'archived';
     c = _ultraFreshCurrent(c);
@@ -4293,6 +4295,7 @@
     if (c.archived) return 'finished';
     if (outcome.kind === 'next') return 'needs-you';
     if (outcome.kind === 'working') return 'active';
+    if (c.session_state?.response_complete === true && outcome.ready) return 'finished';
     return c.idea_ticket?.closed ? 'finished' : 'active';
   }
 

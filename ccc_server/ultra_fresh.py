@@ -116,6 +116,14 @@ class FreshSession:
                 if text:
                     update = self._message(text, ts, line=int(ev.get("line") or 0))
                     if update:
+                        # JSON-only verdicts cannot include a footer. Enrich
+                        # only an exact, persisted response, never live chunks.
+                        if not update["session_state"] and text.lstrip().startswith("{"):
+                            transcript = core.conversation_transcript_path(self.sid)
+                            if transcript and Path(transcript).suffix == ".jsonl":
+                                meta = core._extract_tail_meta(Path(transcript))
+                                if meta.get("last_assistant_text") == text:
+                                    update["session_state"] = core._session_state_from_tail_meta(meta)
                         updates.append(update)
 
         # Reuse the pane's stream-json normalizer. Seek to EOF on discovery:

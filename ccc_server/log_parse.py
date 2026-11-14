@@ -1196,6 +1196,8 @@ def _extract_tail_meta(path):
     # Revisit only old user tails once; keep the rest of the persisted cache
     # hot rather than forcing every transcript to be rescanned on upgrade.
     if (cached and cached.get("cache_key") == cache_key
+            and ("turn_has_tools" in cached
+                 or not str(cached.get("last_assistant_text") or "").lstrip().startswith("{"))
             and (cached.get("last_event_type") != "user"
                  or cached.get("bookkeeping_filtered") == 1)):
         # Emit interrupts from cached meta (Change 1: emit-on-cache-hit).
@@ -1228,6 +1230,8 @@ def _extract_tail_meta(path):
         "pending_tool": None,     # tool awaiting approval (last assistant had tool_use, no result yet)
         "pending_file": None,     # file path from pending tool
         "last_assistant_text": None,  # last text block from an assistant message (the "outcome")
+        "last_assistant_stop_reason": None,
+        "turn_has_tools": False,
         # Claude Code's synthetic API-error turn (isApiErrorMessage) carries a
         # machine-readable `error`, e.g. "authentication_failed". Cleared by the
         # next real assistant turn. Drives the Re-authenticate row action.
@@ -1344,6 +1348,8 @@ def _extract_tail_meta(path):
                         prompt_text = _core._extract_user_prompt_text(ev)
                         if prompt_text:
                             meta["last_prompt"] = prompt_text
+                            meta["turn_has_tools"] = False
+                            meta["last_assistant_stop_reason"] = None
                         # Detect [Request interrupted by user] — Claude writes
                         # this when SIGTERM'd mid-turn. Usually CCC's kill, not
                         # the user. Standardized to startswith (not substring
@@ -1393,6 +1399,8 @@ def _extract_tail_meta(path):
                     queued = _core._extract_queued_command_prompt(ev)
                     if queued:
                         meta["last_event_type"] = "user"
+                        meta["turn_has_tools"] = False
+                        meta["last_assistant_stop_reason"] = None
                         meta["last_prompt"] = queued.get("text") or meta["last_prompt"]
                         ts = ev.get("timestamp", "")
                         if ts:
@@ -1428,6 +1436,7 @@ def _extract_tail_meta(path):
                 # Session signals from tool calls
                 elif t == "assistant":
                     msg = _core._safe_parse_message(ev.get("message", {}))
+                    meta["last_assistant_stop_reason"] = msg.get("stop_reason")
                     if msg.get("model"):
                         meta["model"] = msg.get("model")
                     # Effort rides on the assistant record itself, not inside
@@ -1482,6 +1491,7 @@ def _extract_tail_meta(path):
                     for block in content:
                         if block.get("type") != "tool_use":
                             continue
+                        meta["turn_has_tools"] = True
                         name = block.get("name", "")
                         inp = block.get("input", {})
                         last_tool_name = name
