@@ -19330,12 +19330,9 @@ def _archive_refresh_worker_main(encoded_options, output_path):
         # detached refresh has been doing a full cold re-parse of the whole
         # corpus, every time, which is the actual reason these were slow
         # enough to hit the subprocess timeout in the first place.
+        from ccc_server.cpu_priority import set_background_priority
+        set_background_priority("archive")
         _load_conv_meta_cache()
-        if hasattr(os, "nice"):
-            try:
-                os.nice(10)
-            except OSError:
-                pass
         raw_options = base64.urlsafe_b64decode(encoded_options.encode("ascii"))
         cache_options = json.loads(raw_options.decode("utf-8"))
         if not isinstance(cache_options, dict):

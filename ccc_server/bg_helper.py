@@ -382,6 +382,8 @@ def _watch_parent(parent_pid, path, inode=None):
 
 
 def serve(path, parent_pid, role="main"):
+    from ccc_server.cpu_priority import set_background_priority
+    set_background_priority(role)
     os.umask(0o077)
     path = Path(path)
     sys.path.insert(0, str(PROJECT_ROOT))

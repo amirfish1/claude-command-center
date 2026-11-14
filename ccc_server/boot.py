@@ -34,6 +34,9 @@ def main():
     # Replace this script's directory, whose modules aren't top-level names.
     sys.path[0] = root
     sys.argv = sys.argv[1:]
+    if "--archive-refresh-worker" in sys.argv:
+        from ccc_server.cpu_priority import set_background_priority
+        set_background_priority("archive")
     _compile_stale(root, target)
     import server
     server._script_main()
