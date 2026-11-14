@@ -5757,3 +5757,58 @@ def test_oncall_formal_questions_probe_only_new_or_missing_candidates(tmp_path):
         api.observe_sessions(rows, rows, describe, eng=eng)
     assert len(calls) == 2, 'Unreadable questions must not trigger repeated scans'
     eng.store.close()
+
+
+def test_cold_census_pollers_share_one_build_and_never_wait_for_it():
+    """A cold/blocked index must not turn concurrent CLI polls into minute waits."""
+    from ccc_server.census_readiness import CensusCache
+    cache = CensusCache()
+    release = threading.Event()
+    started = threading.Event()
+    calls = []
+    def slow_build(key):
+        calls.append(key)
+        started.set()
+        release.wait(3)
+        return {'ok': True, 'sessions': [{'session_id': str(i)} for i in range(5000)]}
+    try:
+        t0 = time.monotonic()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+            responses = list(pool.map(lambda _: cache.get(86400, slow_build), range(32)))
+        assert time.monotonic() - t0 < 1.0
+        assert started.wait(1)
+        assert calls == [86400]
+        assert all(code == 503 and body['sessions_readiness']['state'] == 'warming'
+                   for body, code in responses)
+    finally:
+        release.set()
+        deadline = time.monotonic() + 3
+        while cache.readiness()['state'] != 'ready' and time.monotonic() < deadline:
+            time.sleep(.005)
+    body, code = cache.get(86400, slow_build)
+    assert code == 200 and len(body['sessions']) == 5000
+    assert calls == [86400]
+
+
+def test_concurrent_identity_misses_join_archive_once(monkeypatch, tmp_path):
+    """The expensive cold archive/Codex identity join is single-flight too."""
+    monkeypatch.setattr(server, '_CENSUS_IDENTITY_CACHE', {'token': None, 'map': {}})
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE', {})
+    monkeypatch.setattr(server, '_load_archive_response_cache', lambda: None)
+    monkeypatch.setattr(server, 'SPAWNED_PIDS_FILE', tmp_path / 'missing')
+    monkeypatch.setattr(server, '_load_spawn_markers', lambda: {})
+    monkeypatch.setattr(server, '_load_spawn_registry', lambda: [])
+    monkeypatch.setattr(server, '_archive_refresh_response_cache_async', lambda *a: False)
+    monkeypatch.setattr(server, '_overlay_wt_worker_display_names_on_census', lambda out: None)
+    monkeypatch.setattr(server._session_graph, 'parent_revision', lambda: 0)
+    monkeypatch.setattr(server._session_graph, 'parent_snapshot', lambda: {})
+    calls = []
+    def fetch(**kwargs):
+        calls.append(1)
+        time.sleep(.05)
+        return [{'id': 'single', 'title': 'Session'}]
+    monkeypatch.setattr(server, '_codex_fetch_threads', fetch)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        maps = list(pool.map(lambda _: server._census_identity_map(), range(8)))
+    assert len(calls) == 1, 'concurrent misses repeated the archive/Codex join'
+    assert all('single' in value for value in maps)

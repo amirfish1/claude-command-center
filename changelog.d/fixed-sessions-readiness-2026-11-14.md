@@ -1,0 +1,1 @@
+Report census warmup explicitly in health, share one background census build across startup callers, and return prompt retry guidance while sessions are unavailable instead of holding requests through repeated cold index joins.

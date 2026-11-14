@@ -12451,6 +12451,7 @@ def build_ccc_health():
         "recent_errors": _recent_error_count(),
         "error_window_min": _RECENT_ERROR_WINDOW_S // 60,
         "uptime_s": round(time.time() - _SERVER_START_TS),
+        "sessions_readiness": _SESSION_CENSUS_CACHE.readiness(),
         "pid": os.getpid(),
         "resume": _resume_ledger_stats(),
         "stray_processes_reaped": _stray_reaper_recent_entries(),
@@ -14161,6 +14162,11 @@ def _sessions_state_snapshot():
     return out
 
 
+from ccc_server.census_readiness import CensusCache
+_SESSION_CENSUS_CACHE = CensusCache()
+_CENSUS_IDENTITY_BUILD_LOCK = threading.Lock()
+
+
 _CENSUS_IDENTITY_CACHE_LOCK = threading.Lock()
 _CENSUS_IDENTITY_CACHE = {"token": None, "map": {}}
 _CONTINUATION_BOILERPLATE_PREFIX = "you are continuing a task from an earlier "
@@ -14283,6 +14289,13 @@ def _overlay_wt_worker_display_names_on_census(out):
 
 
 def _census_identity_map():
+    # A token miss joins the entire archive. Serialize misses and recheck the
+    # token inside, so simultaneous startup pollers cannot duplicate the join.
+    with _CENSUS_IDENTITY_BUILD_LOCK:
+        return _census_identity_map_serial()
+
+
+def _census_identity_map_serial():
     """sid → lightweight identity (name/engine/model/effort/repo/parent).
 
     Sources, lowest priority first so later ones override: the on-disk spawn
@@ -31941,7 +31954,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 since_s = float(since_raw) if since_raw else None
             except ValueError:
                 since_s = None
-            self.send_json(build_session_census(since_s=since_s))
+            payload, status = _SESSION_CENSUS_CACHE.get(since_s, build_session_census)
+            self.send_json(payload, status)
         elif path == "/api/free-failover/status":
             # ccc_server/free_failover.py — per-session limit/failover state
             # plus free-model readiness for the approval card. Reads only the
@@ -48610,6 +48624,9 @@ def main():
     except Exception as e:
         print(f"  [cloud-relay] not started: {e}")
     print()
+    # One canonical warmup, shared with CLI requests. Readiness stays warming
+    # until this actual default census finishes; uptime alone proves nothing.
+    _SESSION_CENSUS_CACHE.get(86400, build_session_census)
     _serve_http(server)
 
 
