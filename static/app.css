@@ -15761,24 +15761,6 @@
     color: var(--text-muted);
     font-size: 12px;
   }
-  .sidebar-pagination { line-height: 1.5; }
-  .sidebar-pagination .conv-window-btn {
-    min-height: 36px;
-    margin-bottom: 8px;
-    padding: 6px 16px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface-2);
-    color: var(--text);
-    font: inherit;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  .sidebar-pagination .conv-window-btn:hover { border-color: var(--accent); }
-  .sidebar-pagination .conv-window-btn:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
   /* Explanatory archive placeholder (pre-checklist boot wait). */
   .archive-loading-placeholder .alp-title {
     font-weight: 600; color: var(--text); margin-bottom: 6px;
