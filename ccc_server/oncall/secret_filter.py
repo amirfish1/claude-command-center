@@ -18,15 +18,20 @@ _PATTERNS = tuple(re.compile(p) for p in (
 
 def mask(*values):
     """Return masked strings and a hit flag. Fail closed if the Vault cannot be read."""
-    return masker()(*values)
+    from ccc_server import vault
+    return _with_secrets(vault.vault_get_value(entry['name'])
+                         for entry in vault.vault_list_entries())(*values)
 
 
 def masker():
     """Read secrets once for one operation; never retain them across requests."""
     from ccc_server import vault
+    return _with_secrets(vault.vault_get_values().values())
+
+
+def _with_secrets(values):
     secrets = []
-    for entry in vault.vault_list_entries():
-        value = vault.vault_get_value(entry['name'])
+    for value in values:
         if value is None:
             raise ValueError('Cannot check outgoing content against the Vault; sending is paused.')
         if value:

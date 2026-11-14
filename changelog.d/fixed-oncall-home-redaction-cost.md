@@ -1,1 +1,2 @@
 - On-call home reuses one Vault scan per response, avoiding repeated decryption for every alert and reply choice while refreshing redaction secrets on every request.
+- Explicitly opening On-call home gives its data request priority over background dashboard startup reads.

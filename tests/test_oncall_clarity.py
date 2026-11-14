@@ -131,6 +131,7 @@ def test_home_and_owner_choices_do_not_leak_secret(rig, monkeypatch):
     from ccc_server import vault
     monkeypatch.setattr(vault, 'vault_list_entries', lambda: [{'name': 'fixture'}])
     monkeypatch.setattr(vault, 'vault_get_value', lambda name: 'SYNTHETIC-CHOICE-SECRET')
+    monkeypatch.setattr(vault, 'vault_get_values', lambda: {'fixture': 'SYNTHETIC-CHOICE-SECRET'})
     alert, _ = rig.eng.store.alert_upsert('pick', kind='question', title='Checkout fix',
         session_id='s', body='Which redirect?', meta={'choices': [['Keep', 'SYNTHETIC-CHOICE-SECRET']]})
     card = home.summary(rig.eng)['needs_you'][0]

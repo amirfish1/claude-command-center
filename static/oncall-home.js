@@ -52,6 +52,9 @@
     const response = await fetch('/api/oncall/' + name, {
       method, headers: {'Content-Type': 'application/json'},
       body: method === 'POST' ? JSON.stringify(body || {}) : undefined,
+      // The visible startup screen must not queue behind dashboard status
+      // reads or the archive warmup it replaces.
+      cccPriority: name === 'home' && (isOpen() || wantsToOpen()) ? 'user' : undefined,
     });
     let result = {};
     try { result = await response.json(); } catch (_) { /* a non-JSON error page */ }

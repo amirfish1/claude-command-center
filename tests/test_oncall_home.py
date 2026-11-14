@@ -125,13 +125,11 @@ def test_home_reads_each_secret_once_and_refreshes_it_for_the_next_response(eng,
 
     reads = []
     current = ["synthetic-private-first"]
-    monkeypatch.setattr(vault, "vault_list_entries", lambda: [{"name": "fixture"}])
+    def read():
+        reads.append("fixture")
+        return {"fixture": current[0]}
 
-    def read(name):
-        reads.append(name)
-        return current[0]
-
-    monkeypatch.setattr(vault, "vault_get_value", read)
+    monkeypatch.setattr(vault, "vault_get_values", read)
     for i in range(3):
         eng.store.alert_upsert(str(i), kind="plain_question", title=current[0],
                                body=current[0], session_id="s1",

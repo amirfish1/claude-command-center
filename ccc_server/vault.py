@@ -312,6 +312,22 @@ def vault_get_value(name):
     return _vault_secret_get(name)
 
 
+def vault_get_values():
+    """Local-process snapshot, including None for unreadable indexed secrets.
+
+    File-backed callers decrypt once even when checking every Vault entry.
+    Like vault_get_value, this must never be exposed by an HTTP endpoint.
+    """
+    with _VAULT_LOCK:
+        names = _vault_load_index()["entries"]
+        if not names:
+            return {}
+        if _vault_keychain_available():
+            return {name: _vault_secret_get(name) for name in names}
+        data = _vault_secret_store.load_encrypted_json(_vault_file_store_path(), _vault_file_key())
+        return {name: data[name] if isinstance(data.get(name), str) else None for name in names}
+
+
 # ---------------------------------------------------------------------------
 # BYOK bridge: list existing BYOK keys, copy one into the Vault
 # ---------------------------------------------------------------------------

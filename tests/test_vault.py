@@ -189,6 +189,17 @@ class TestVaultStorageKeychain(VaultTestBase):
 class TestVaultStorageEncryptedFile(VaultTestBase):
     use_keychain = False
 
+    def test_snapshot_decrypts_once_refreshes_and_marks_unreadable_entries(self):
+        vault.vault_create_entry("a", FAKE_SECRET)
+        vault.vault_create_entry("b", FAKE_SECRET + "b")
+        with mock.patch.object(secret_store, "derive_key", wraps=secret_store.derive_key) as derive:
+            self.assertEqual(vault.vault_get_values(), {"a": FAKE_SECRET, "b": FAKE_SECRET + "b"})
+            self.assertEqual(derive.call_count, 1)
+        vault.vault_update_entry("a", value=FAKE_SECRET + "rotated")
+        self.assertEqual(vault.vault_get_values()["a"], FAKE_SECRET + "rotated")
+        (self.vault_dir / "secrets.enc.json").write_text("corrupt")
+        self.assertEqual(vault.vault_get_values(), {"a": None, "b": None})
+
     def test_round_trip_without_plaintext_on_disk(self):
         vault.vault_create_entry("e", FAKE_SECRET, kind="token", service="S")
         self.assertEqual(vault.vault_get_value("e"), FAKE_SECRET)
