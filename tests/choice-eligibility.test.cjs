@@ -101,12 +101,12 @@ test('phone keyboard cached setup handoff returns to staged policy without probe
  const backHit=await page.$eval('#choiceEligibilityReturn',n=>{const r=n.getBoundingClientRect();return r.height>=44&&n.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));});assert(backHit);await page.screenshot({path:path.join(scratch,'setup-phone.png'),fullPage:true});await page.keyboard.press('Escape');assert.equal(await page.$eval('#spawnDefaultsModel',n=>n.value),'custom-stored');assert.equal(await page.evaluate(()=>document.activeElement.textContent),'Engine setup · keep draft');
  await page.screenshot({path:path.join(scratch,'policy-phone.png'),fullPage:true});
 });
-test('queue canonical controls preserve unsupported custom identifier and staged overrides across cached setup',async t=>{
- const page=await open(t,390);await page.click('#queue');await page.waitForSelector('.queue-policy-composer');await page.waitForFunction(()=>document.querySelector('.queue-policy-status')?.textContent.includes('Saved queue policy loaded'));
+test('queue editor preserves an unsupported custom identifier and hides setup disclosures',async t=>{
+ const page=await open(t,390);await page.click('#queue');await page.waitForSelector('.queue-policy-composer');await page.waitForFunction(()=>(()=>{const n=document.querySelector('.queue-policy-now');return !!n&&!/Reading/.test(n.textContent)&&!document.querySelector('#fqConfigEngine').disabled;})());
  assert.equal(await page.$eval('#fqConfigCustomModel',n=>n.value),'custom-queue');assert.equal(await page.$eval('#fqConfigCustomModel',n=>n.hidden),false);
- await page.click('[aria-label="Override Model"]');await page.$eval('#fqConfigModel + details',n=>n.open=true);await page.focus('#fqConfigModel + details button');await page.keyboard.press('Enter');await page.waitForSelector('#choiceEligibilityReturn');await page.keyboard.press('Escape');
- assert.equal(await page.$eval('#fqConfigCustomModel',n=>n.value),'custom-queue');assert.equal(await page.$eval('#fqConfigModel',n=>n.disabled),false);
- assert.equal(await page.evaluate(()=>document.activeElement.textContent),'Engine setup · keep draft');
+ assert.equal(await page.$eval('#fqConfigModel',n=>n.disabled),false);
+ // The quick queue editor hides eligibility/setup disclosures; Settings keeps them.
+ assert.equal(await page.$$eval('.queue-policy-composer details.choice-eligibility',ns=>ns.some(n=>n.getClientRects().length)),false);
  await page.screenshot({path:path.join(scratch,'queue-phone.png'),fullPage:true});await page.keyboard.press('Escape');assert.equal(await page.$('.queue-policy-composer'),null);
 });
 test('current incompatible catalog value stays selected and disabled; no automatic substitution',async t=>{
@@ -131,9 +131,9 @@ test('native installation cache retains booleans and excludes null instead of in
  vm.runInNewContext('let _emnInstalled=null,_emnObservedAt=null;function renderEngineMissingNotice(){}function renderNsAdvisor(){}'+between('  async function refreshEngineMissingNotice(', '  function renderEngineMissingNotice()')+';window.run=async()=>{await refreshEngineMissingNotice();return _emnInstalled;};',cache);
  assert.deepEqual(JSON.parse(JSON.stringify(await cache.window.run())),{codex:true,kimi:false});
 });
-test('queue-local Override shares catalog and policy exclusions without saving or replacing the effective route',async t=>{
- const page=await open(t);await page.click('#queue');await page.waitForFunction(()=>document.querySelector('.queue-policy-status')?.textContent.includes('Saved queue policy loaded'));await page.click('[aria-label="Override Engine"]');await page.click('#fqEngineSeg [data-engine="claude"]');await page.click('[aria-label="Override Model"]');
- const rows=await page.$eval('#fqConfigModel',n=>Object.fromEntries([...n.options].map(o=>[o.value,{disabled:o.disabled,text:o.textContent}])));assert.equal(rows.blocked.disabled,true);assert.match(rows.blocked.text,/Blocked by model policy/);assert.equal(rows.retired.disabled,true);assert.match(rows.retired.text,/Removed from catalog/);assert.equal(rows.sonnet.disabled,false);assert.equal(await page.$eval('#fqConfigModel',n=>n.value),'');assert.match(await page.$eval('.queue-policy-status',n=>n.textContent),/nothing is saved|Unsaved queue exceptions/);await page.screenshot({path:path.join(scratch,'queue-desktop.png'),fullPage:true});
+test('queue-local engine pick shares catalog and policy exclusions without saving or replacing the effective route',async t=>{
+ const page=await open(t);await page.click('#queue');await page.waitForFunction(()=>(()=>{const n=document.querySelector('.queue-policy-now');return !!n&&!/Reading/.test(n.textContent)&&!document.querySelector('#fqConfigEngine').disabled;})());await page.click('#fqEngineSeg [data-engine="claude"]');
+ const rows=await page.$eval('#fqConfigModel',n=>Object.fromEntries([...n.options].map(o=>[o.value,{disabled:o.disabled,text:o.textContent}])));assert.equal(rows.blocked.disabled,true);assert.match(rows.blocked.text,/Blocked by model policy/);assert.equal(rows.retired.disabled,true);assert.match(rows.retired.text,/Removed from catalog/);assert.equal(rows.sonnet.disabled,false);assert.equal(await page.$eval('#fqConfigModel',n=>n.value),'');assert.match(await page.$eval('.queue-policy-status',n=>n.textContent),/^$|Unsaved changes/);await page.screenshot({path:path.join(scratch,'queue-desktop.png'),fullPage:true});
 });
 
 test('cached unknown-engine identity and warnings survive unrelated native renders',async t=>{

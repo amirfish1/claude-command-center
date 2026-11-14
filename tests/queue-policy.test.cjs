@@ -36,71 +36,72 @@ test.before(async()=>{
  original=fs.readFileSync(file,'utf8');defaults=fs.readFileSync(state,'utf8');browser=await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
 });
 test.after(async()=>{await browser?.close();if(child){child.kill();await once(child,'exit');}console.log('Queue-policy screenshots:',scratch);});
+const loaded=()=>{const n=document.querySelector('.queue-policy-now');return !!n&&!/Reading/.test(n.textContent)&&!document.querySelector('#fqConfigEngine').disabled;};
 async function open(t,width=1440,trigger='#queueChip'){
  fs.writeFileSync(file,original);fs.writeFileSync(state,defaults);fs.rmSync(failFlag,{force:true});
  const ctx=await browser.createBrowserContext(),page=await ctx.newPage(),errors=[],posts=[];page.setDefaultTimeout(8000);await page.setViewport({width,height:1000});page.on('pageerror',e=>errors.push(e.message));await page.setRequestInterception(true);
  page.on('request',req=>{if(req.method()==='POST')posts.push({url:req.url(),body:req.postData()?JSON.parse(req.postData()):null});return req.url().startsWith(url)?req.continue():req.abort();});
  t.after(async()=>{await ctx.close();assert.deepEqual(errors,[]);assert(posts.every(p=>p.url===url+'/api/queue/config-options'||(p.url===url+'/api/queue/config'&&['read','preview','apply'].includes(p.body.policy_action))));assert.equal(fs.readFileSync(state,'utf8'),defaults);});
- await page.goto(url,{waitUntil:'load'});await page.focus(trigger);await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('.queue-policy-status')?.textContent.includes('Saved queue policy loaded'));return{page,posts};
+ await page.goto(url,{waitUntil:'load'});await page.focus(trigger);await page.keyboard.press('Enter');await page.waitForFunction(loaded);return{page,posts};
 }
 const text=page=>page.$eval('.queue-policy-status',n=>n.textContent);
 const read=()=>JSON.parse(fs.readFileSync(file,'utf8'));
-async function preview(page){await page.click('.queue-policy-composer .upd-actions button:nth-last-child(2)');await page.waitForFunction(()=>/Preview ready|No changes to save|Preview failed/.test(document.querySelector('.queue-policy-status').textContent));}
-async function apply(page){await page.click('[data-fq-config-save]');await page.waitForFunction(()=>/Saved queue exceptions|Not applied/.test(document.querySelector('.queue-policy-status').textContent));}
-test('queue chip opens canonical staged controls, saved consumer sources and explicit Off without writes',async t=>{
- const{page,posts}=await open(t);assert.equal(fs.readFileSync(file,'utf8'),original);assert.equal(await page.$eval('#fqConfigTitle',n=>n.textContent),'DEMO · worker policy');
- assert(await page.$eval('#fqConfigEngine',n=>n.disabled));assert(await page.$eval('[data-fq-config-save]',n=>n.disabled));
- const saved=await page.$eval('.queue-policy-saved',n=>n.textContent);assert.match(saved,consumerAvailable?/Resolved by launch consumers/:/Configured only/);assert.match(saved,/claude/);assert.match(saved,/Off · Queue override/);
+async function save(page){await page.click('[data-fq-config-save]');await page.waitForFunction(()=>/Saved:|Not saved|Nothing changed|could not be confirmed/.test(document.querySelector('.queue-policy-status').textContent));}
+test('queue chip opens a short editor: current route, pickers, one Save, no writes until Save',async t=>{
+ const{page,posts}=await open(t);assert.equal(fs.readFileSync(file,'utf8'),original);assert.equal(await page.$eval('#fqConfigTitle',n=>n.textContent),'DEMO · worker settings');
+ assert(await page.$eval('[data-fq-config-save]',n=>n.disabled));
+ const now=await page.$eval('.queue-policy-saved',n=>n.textContent);assert.match(now,/claude · claude-sonnet-4-6 · high/);assert.match(now,/Set on this queue: engine, model, effort/);
  assert.equal(await page.$eval('#fqConfigPath',n=>!!n.getClientRects().length),false);assert.equal(await page.$eval('.fq-config-roles',n=>!!n.getClientRects().length),false);
+ // The noisy layers stay out of this dialog.
+ for(const sel of ['details.choice-eligibility','.settings-scope-container','.settings-launch-details'])assert.equal(await page.$$eval('.queue-policy-composer '+sel,ns=>ns.some(n=>n.getClientRects().length)),false,sel);
+ assert.equal(await page.$$eval('.queue-policy-composer .upd-actions button',ns=>ns.map(n=>n.textContent).join('|')),'Other queue settings|Cancel|Save');
  await page.screenshot({path:path.join(scratch,'desktop-saved.png'),fullPage:true});
- await page.click('[aria-label="Override Model"]');assert.equal(fs.readFileSync(file,'utf8'),original);assert.equal(await page.$eval('#fqConfigModel',n=>n.disabled),false);assert(posts.every(p=>p.body?.policy_action!=='apply'));
+ await page.select('#fqConfigEffort','low');assert.equal(fs.readFileSync(file,'utf8'),original);assert.equal(await page.$eval('[data-fq-config-save]',n=>n.disabled),false);assert(posts.every(p=>p.body?.policy_action!=='apply'));
 });
-test('Follow default stages only the chosen exception, previews then applies atomically',async t=>{
- const{page}=await open(t,1440,'#queueConfig');await page.click('[aria-label="Follow default for Failure fallback"]');assert.equal(fs.readFileSync(file,'utf8'),original);await preview(page);
- assert.match(await page.$eval('.queue-policy-preview',n=>n.textContent),/Off · explicit override → Follow default \(unset\)/);assert.match(await text(page),/Preview ready/);await apply(page);
- const expected=JSON.parse(original);delete expected.DEMO.fallback_to_default_worker;assert.deepEqual(read(),expected);assert.deepEqual(await page.evaluate(()=>window.__events),[{queue:'DEMO'}]);assert.match(await page.$eval('.queue-policy-saved',n=>n.textContent),/On · Worker policy/);
+test('Default in More options clears only that exception and saves in one click',async t=>{
+ const{page}=await open(t,1440,'#queueConfig');assert(await page.$eval('.queue-policy-more',n=>n.open));await page.select('#fqConfigFallback','');assert.equal(fs.readFileSync(file,'utf8'),original);await save(page);
+ assert.match(await text(page),/Saved: Fallback off → default/);
+ const expected=JSON.parse(original);delete expected.DEMO.fallback_to_default_worker;assert.deepEqual(read(),expected);assert.deepEqual(await page.evaluate(()=>window.__events),[{queue:'DEMO'}]);
 });
-test('phone native keyboard override, invalidation, preview and engine/model/effort save',async t=>{
- const{page}=await open(t,390);await page.focus('[aria-label="Override Engine"]');await page.keyboard.press('Enter');await page.focus('#fqEngineSeg [data-engine="codex"]');await page.keyboard.press('Enter');
- await page.focus('[aria-label="Override Model"]');await page.keyboard.press('Enter');await page.select('#fqConfigModel','gpt-5-codex');await page.focus('[aria-label="Override Effort"]');await page.keyboard.press('Enter');await page.select('#fqConfigEffort','low');await preview(page);
- assert.match(await page.$eval('.queue-policy-preview',n=>n.textContent),/DEMO only/);assert.equal(await page.$eval('[data-fq-config-save]',n=>n.disabled),false);
- await page.select('#fqConfigEffort','medium');assert.equal(await page.$eval('[data-fq-config-save]',n=>n.disabled),true);await preview(page);
- await page.screenshot({path:path.join(scratch,'phone-preview.png'),fullPage:true});
+test('phone keyboard engine/model/effort change saves together and fits the screen',async t=>{
+ const{page}=await open(t,390);await page.focus('#fqEngineSeg [data-engine="codex"]');await page.keyboard.press('Enter');
+ await page.select('#fqConfigModel','gpt-5-codex');await page.select('#fqConfigEffort','medium');
+ await page.screenshot({path:path.join(scratch,'phone-edit.png'),fullPage:true});
  const bounds=await page.$eval('.fq-config-dialog',n=>{const r=n.getBoundingClientRect();return{left:r.left,right:r.right,width:innerWidth,scroll:n.scrollWidth,client:n.clientWidth};});assert(bounds.left>=0&&bounds.right<=bounds.width);assert(bounds.scroll<=bounds.client+1);
- await page.focus('[data-fq-config-save]');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('.queue-policy-status').textContent.includes('Saved queue exceptions'));
+ await page.focus('[data-fq-config-save]');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('.queue-policy-status').textContent.includes('Saved:'));
  const expected=JSON.parse(original);Object.assign(expected.DEMO,{engine:'codex',model:'gpt-5-codex',effort:'medium'});assert.deepEqual(read(),expected);
+ assert.match(await page.$eval('.queue-policy-now',n=>n.textContent),/codex · gpt-5-codex · medium/);
  await page.keyboard.press('Escape');await page.waitForSelector('.fq-config-composer',{hidden:true});assert.equal(await page.evaluate(()=>document.activeElement.id),'queueChip');
 });
-test('stale queue edit rejects apply with visible phone error and no partial saves',async t=>{
- const{page}=await open(t,390);await page.click('[aria-label="Follow default for Model"]');await preview(page);const cfg=read();cfg.MANUAL.future=true;fs.writeFileSync(file,JSON.stringify(cfg));const before=fs.readFileSync(file,'utf8');await apply(page);
- assert.match(await text(page),/changed.*Refresh/);assert.equal(fs.readFileSync(file,'utf8'),before);assert.deepEqual(await page.evaluate(()=>window.__events),[]);assert(await page.$eval('[data-fq-config-save]',n=>n.disabled));
- await page.$eval('.queue-policy-status',n=>n.scrollIntoView({block:'center'}));await page.screenshot({path:path.join(scratch,'phone-stale.png'),fullPage:true});
+test('a queue edited elsewhere is not overwritten; the editor reloads the latest',async t=>{
+ const{page}=await open(t,390);await page.select('#fqConfigEffort','low');const cfg=read();cfg.DEMO.effort='max';fs.writeFileSync(file,JSON.stringify(cfg));const before=fs.readFileSync(file,'utf8');
+ // Revision check happens at preview; force staleness between preview and apply too.
+ await save(page);assert.match(await text(page),/changed elsewhere|Not saved/);assert.equal(fs.readFileSync(file,'utf8'),before);assert.deepEqual(await page.evaluate(()=>window.__events),[]);assert(await page.$eval('[data-fq-config-save]',n=>n.disabled));
 });
-test('publication failure remains visible and retry requires new preview',async t=>{
- const{page}=await open(t);await page.click('[aria-label="Follow default for Headroom dispatch"]');await preview(page);fs.writeFileSync(failFlag,'1');await apply(page);
- assert.match(await text(page),/simulated queue save failure/);assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(await page.evaluate(()=>window.__events),[]);assert(await page.$eval('[data-fq-config-save]',n=>n.disabled));fs.rmSync(failFlag);await preview(page);await apply(page);assert(!Object.hasOwn(read().DEMO,'headroom_dispatch'));
+test('publication failure stays visible and a retry saves',async t=>{
+ const{page}=await open(t);await page.select('#fqConfigHeadroom','');fs.writeFileSync(failFlag,'1');await save(page);
+ assert.match(await text(page),/simulated queue save failure/);assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(await page.evaluate(()=>window.__events),[]);fs.rmSync(failFlag);await save(page);assert.match(await text(page),/Saved:/);assert(!Object.hasOwn(read().DEMO,'headroom_dispatch'));
 });
-test('manual queue inherits saved defaults, supports explicit Off and skips no-op dispatch',async t=>{
- const{page}=await open(t,390,'#manualChip');assert.match(await page.$eval('.queue-policy-saved',n=>n.textContent),/codex/);assert.match(await page.$eval('.queue-policy-saved',n=>n.textContent),/manual launch only/);
- await page.click('[aria-label="Follow default for Model"]');await preview(page);assert.match(await text(page),/No changes to save/);assert(await page.$eval('[data-fq-config-save]',n=>n.disabled));assert.deepEqual(await page.evaluate(()=>window.__events),[]);
- await page.click('[aria-label="Override Headroom dispatch"]');await page.select('#fqConfigHeadroom','off');await preview(page);await apply(page);assert.equal(read().MANUAL.headroom_dispatch,false);assert.deepEqual(read().DEMO,JSON.parse(original).DEMO);
+test('manual queue shows inherited defaults and saves an explicit Off; no-op stays unsaved',async t=>{
+ const{page}=await open(t,390,'#manualChip');assert.match(await page.$eval('.queue-policy-saved',n=>n.textContent),/codex/);assert.match(await page.$eval('.queue-policy-saved',n=>n.textContent),/Using the worker defaults/);
+ await page.select('#fqConfigModel','');assert(await page.$eval('[data-fq-config-save]',n=>n.disabled));
+ await page.select('#fqConfigHeadroom','off');await save(page);assert.equal(read().MANUAL.headroom_dispatch,false);assert.deepEqual(read().DEMO,JSON.parse(original).DEMO);
 });
-test('read failure can retry, Escape restores opener and Tab stays in dialog',async t=>{
- const{page}=await open(t);await page.focus('[data-fq-config-save]'); // disabled; use final enabled action instead
- await page.$eval('.upd-actions',n=>Array.from(n.querySelectorAll('button')).filter(b=>!b.disabled).at(-1).focus());await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'Close');await page.keyboard.down('Shift');await page.keyboard.press('Tab');await page.keyboard.up('Shift');assert.equal(await page.evaluate(()=>document.activeElement.textContent),'Preview changes');
- const cfg=read();delete cfg.DEMO;fs.writeFileSync(file,JSON.stringify(cfg));await page.click('.upd-actions button:nth-last-child(3)');await page.waitForFunction(()=>document.querySelector('.queue-policy-status').textContent.includes('Could not read'));assert(await page.$eval('[data-fq-config-save]',n=>n.disabled));assert.match(await page.$eval('.queue-policy-saved',n=>n.textContent),/unavailable/);
- fs.writeFileSync(file,original);await page.click('.upd-actions button:nth-last-child(3)');await page.waitForFunction(()=>document.querySelector('.queue-policy-status').textContent.includes('Saved queue policy loaded'));await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.id),'queueChip');
+test('Escape restores opener and Tab stays in dialog',async t=>{
+ const{page}=await open(t);
+ await page.$eval('.upd-actions',n=>Array.from(n.querySelectorAll('button')).filter(b=>!b.disabled).at(-1).focus());await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'Close');await page.keyboard.down('Shift');await page.keyboard.press('Tab');await page.keyboard.up('Shift');assert.equal(await page.evaluate(()=>document.activeElement.textContent),'Cancel');
+ await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.id),'queueChip');
 });
 test('cross-queue report retains bulk scope and shows manual/fallback/headroom exceptions',async t=>{
  const{page}=await open(t);await page.keyboard.press('Escape');await page.evaluate(()=>window.__report());const reportText=await page.$eval('#settingsQueueTable',n=>n.textContent);assert.match(reportText,/2 active queues/);assert.match(reportText,/MANUAL · manual/);assert.match(reportText,/Fallback: Off · override/);assert.match(reportText,/Headroom: Off · override/);assert.equal(await page.$$eval('[data-queue-policy]',n=>n.length),2);
- await page.focus('[data-queue-policy=MANUAL]');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('.queue-policy-status')?.textContent.includes('Saved queue policy loaded'));assert.match(await page.$eval('#fqConfigTitle',n=>n.textContent),/MANUAL/);
+ await page.focus('[data-queue-policy=MANUAL]');await page.keyboard.press('Enter');await page.waitForFunction(loaded);assert.match(await page.$eval('#fqConfigTitle',n=>n.textContent),/MANUAL/);
  await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.matches('[data-queue-policy=MANUAL]')),true);assert.equal(await page.evaluate(()=>window.__underlyingEscapes),0);
  await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>window.__underlyingEscapes),1);
  assert.match(app,/Clear engine, model and effort pins for:/);assert.match(app,/fallback rules and running workers stay as they are/);
 });
 
-test('other queue configuration keeps the same canonical editor and can return without writes',async t=>{
- const{page}=await open(t);await page.evaluate(()=>Array.from(document.querySelectorAll('.upd-actions button')).find(b=>b.textContent==='Other queue configuration').click());await page.waitForFunction(()=>document.querySelector('#fqConfigTitle')?.textContent==='Queue configuration');
+test('other queue settings opens the full editor without writes',async t=>{
+ const{page}=await open(t);await page.evaluate(()=>Array.from(document.querySelectorAll('.upd-actions button')).find(b=>b.textContent==='Other queue settings').click());await page.waitForFunction(()=>document.querySelector('#fqConfigTitle')?.textContent==='Queue configuration');
  assert.equal(await page.$$eval('#fqConfigEngine',n=>n.length),1);assert.equal(await page.$eval('#fqConfigPath',n=>!!n.getClientRects().length),true);assert.equal(await page.$eval('[data-fq-config-save]',n=>n.textContent),'Save queue');assert.equal(fs.readFileSync(file,'utf8'),original);await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.id),'queueChip');
 });
 
@@ -112,7 +113,7 @@ test('queue trigger replacement during loading or editing restores the matching 
   const replace=()=>page.$eval(trigger,n=>{const replacement=n.cloneNode(true);replacement.removeAttribute('id');replacement.dataset.replacement='true';n.replaceWith(replacement);});
   if(duringLoad)await replace();
   await page.evaluate(()=>{window.__releaseOptions();window.__optionsWaiting=false;});
-  await page.waitForFunction(()=>document.querySelector('.queue-policy-status')?.textContent.includes('Saved queue policy loaded'));
+  await page.waitForFunction(loaded);
   if(!duringLoad)await replace();
   await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.dataset.replacement),'true');
   await page.evaluate(id=>{document.activeElement.id=id;},trigger.slice(1));
@@ -121,15 +122,17 @@ test('queue trigger replacement during loading or editing restores the matching 
  }
 });
 
-test('blocked custom model rejects preview before all writes with a visible error',async t=>{
- const{page}=await open(t,390);await page.click('[aria-label="Override Model"]');await page.select('#fqConfigModel','__custom__');await page.type('#fqConfigCustomModel','blocked');await preview(page);assert.match(await text(page),/Preview failed: Model blocked by policy/);assert.equal(fs.readFileSync(file,'utf8'),original);assert(await page.$eval('[data-fq-config-save]',n=>n.disabled));assert.deepEqual(await page.evaluate(()=>window.__events),[]);
+test('blocked custom model is rejected before any write with a visible error',async t=>{
+ const{page}=await open(t,390);await page.select('#fqConfigModel','__custom__');await page.type('#fqConfigCustomModel','blocked');await save(page);assert.match(await text(page),/Not saved: Model blocked by policy/);assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(await page.evaluate(()=>window.__events),[]);
 });
 
-test('lost apply response never claims success or certain non-application',async t=>{
- const{page}=await open(t);await page.click('[aria-label="Follow default for Model"]');await preview(page);await page.setOfflineMode(true);await page.click('[data-fq-config-save]');await page.waitForFunction(()=>document.querySelector('.queue-policy-status').textContent.includes('Save could not be confirmed'));
- assert.deepEqual(await page.evaluate(()=>window.__events),[]);assert(await page.$eval('[data-fq-config-save]',n=>n.disabled));await page.setOfflineMode(false);await page.click('.upd-actions button:nth-last-child(3)');await page.waitForFunction(()=>document.querySelector('.queue-policy-status').textContent.includes('Saved queue policy loaded'));assert.equal(fs.readFileSync(file,'utf8'),original);
+test('lost apply response never claims success',async t=>{
+ const{page}=await open(t);await page.select('#fqConfigModel','');
+ await page.evaluate(()=>{const native=window.fetch;window.fetch=async(url,init)=>{if(init?.body&&JSON.parse(init.body).policy_action==='apply')throw new TypeError('Failed to fetch');return native(url,init);};});
+ await save(page);assert.match(await text(page),/could not be confirmed/);assert.deepEqual(await page.evaluate(()=>window.__events),[]);assert.equal(fs.readFileSync(file,'utf8'),original);
 });
 
-test('Follow default for engine removes only that pin and retains model/effort exceptions',async t=>{
- const{page}=await open(t);await page.click('[aria-label="Follow default for Engine"]');await preview(page);const reviewed=await page.$eval('.queue-policy-preview ul',n=>n.textContent);assert.match(reviewed,/Engine: claude → Follow default/);assert.doesNotMatch(reviewed,/Model:|Effort:/);await apply(page);const expected=JSON.parse(original);delete expected.DEMO.engine;assert.deepEqual(read(),expected);
+test('Default engine removes the engine pin and the model/effort pins tied to it',async t=>{
+ const{page}=await open(t);await page.click('#fqEngineSeg [data-engine=""]');await save(page);assert.match(await text(page),/Saved: .*Engine claude → default/);
+ const expected=JSON.parse(original);delete expected.DEMO.engine;delete expected.DEMO.model;delete expected.DEMO.effort;assert.deepEqual(read(),expected);
 });

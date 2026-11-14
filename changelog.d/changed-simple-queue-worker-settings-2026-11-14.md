@@ -1,0 +1,1 @@
+- Queue worker settings are now one short screen: current route on top, engine/model/effort pickers, fallback options under "More options", and a single Save (no more Override / Follow default / Preview steps).
