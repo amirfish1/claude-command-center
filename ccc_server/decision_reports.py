@@ -33,7 +33,7 @@ def _snapshot(value, limit=200_000):
     return value
 
 
-def create_report(payload):
+def validate_report(payload):
     if not isinstance(payload, dict):
         return {"ok": False, "error": "Expected a report object"}, 400
     sid = str(payload.get("session_id") or "")
@@ -44,10 +44,25 @@ def create_report(payload):
         return {"ok": False, "error": "Report note must be text of at most 2000 characters"}, 400
     reporter_note = reporter_note.strip()
     try:
-        visible = _snapshot(payload.get("visible_row"))
-        client = _snapshot(payload.get("client_state"))
+        _snapshot(payload.get("visible_row"))
+        _snapshot(payload.get("client_state"))
     except ValueError as error:
         return {"ok": False, "error": str(error)}, 400
+    try:
+        _snapshot(payload.get("viewport"), 4000)
+    except ValueError as error:
+        return {"ok": False, "error": str(error)}, 400
+    return None
+
+
+def create_report(payload, *, submission_id=None):
+    invalid = validate_report(payload)
+    if invalid:
+        return invalid
+    sid = str(payload["session_id"])
+    reporter_note = payload.get("reporter_note", "").strip()
+    visible = _snapshot(payload.get("visible_row"))
+    client = _snapshot(payload.get("client_state"))
     # Never trust a client-supplied transcript filename or repository path.
     path = core.conversation_transcript_path(sid)
     transcript_warning = ""
@@ -141,7 +156,7 @@ def create_report(payload):
             text=text, project=QUEUE, source="ccc-decisions-fix", item_type="bug",
             repo_path=str(core.CCC_ROOT), url=bundle["url"], selector=selector,
             annotation_id=saved.get("id") or report_id,
-            screenshot_path=bundle["screenshot_path"], dedupe_key="decision-report:" + fingerprint,
+            screenshot_path=bundle["screenshot_path"], dedupe_key="decision-report:" + (submission_id or fingerprint),
         )
     except Exception as error:
         return {"ok": False, "error": "Report evidence saved, but ticket filing failed: " + str(error)[:300],
@@ -171,7 +186,11 @@ def handle_post(handler):
         handler.send_json({"ok": False, "error": "Invalid report JSON"}, 400)
         return
     try:
-        result, status = create_report(payload)
+        if isinstance(payload, dict) and payload.get("background") is True:
+            from ccc_server import decision_report_jobs
+            result, status = decision_report_jobs.submit(payload)
+        else:
+            result, status = create_report(payload)
     except Exception:
         handler.send_json({"ok": False, "error": "Could not collect report evidence; please try again"}, 500)
         return

@@ -30876,6 +30876,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
+        if path.startswith("/api/decisions-fix/report/"):
+            from ccc_server import decision_report_jobs
+            result, status = decision_report_jobs.status(path.rsplit("/", 1)[-1])
+            self.send_json(result, status)
+            return
+
         if path.startswith("/api/ticket-audio/"):
             from ccc_server import ticket_audio
             if ticket_audio.handle(self, self.command):
@@ -48612,6 +48618,10 @@ def main():
     # Recover in-progress group-chat coordinations and start background watcher.
     _start_coordination_watcher()
     _start_resume_queue_watcher()
+    # Recover durably acknowledged reports after a dashboard restart.
+    if not os.environ.get("CCC_EPHEMERAL"):
+        from ccc_server import decision_report_jobs
+        decision_report_jobs.kick_worker()
     # GH #71 (mechanism 5) — always-on reaper for stale Claude headless agents
     # whose session has been taken over by a live terminal. Runs regardless of
     # any open dashboard so the ~500MB stale process doesn't linger.

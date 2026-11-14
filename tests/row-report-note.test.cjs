@@ -5,7 +5,7 @@ const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');
-const editor = app.slice(app.indexOf('  function openRowDecisionReportEditor('), app.indexOf('  function sessionQuickAction('));
+const editor = app.slice(app.indexOf('  async function followRowReportReceipt('), app.indexOf('  function sessionQuickAction('));
 
 test('row report note supports cancel, retry, original evidence and desktop/phone input', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
