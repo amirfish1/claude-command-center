@@ -68,7 +68,7 @@
     destination.append(host);
     const legacy=create('div');legacy.hidden=true;legacy.id='voiceSetupLegacy';host.append(legacy);
     function moveRow(id,target){const element=get(id);if(!element)return;const row=element.closest('.settings-row');if(row)target.append(row);}
-    moveRow('settingsTtsVoiceDefault',get('voiceSetup-reading'));moveRow('localSpeechInstall',get('voiceSetup-offline'));moveRow('settingsVoiceCallBtnToggle',get('voiceSetup-access'));
+    moveRow('settingsTtsVoiceDefault',get('voiceSetup-reading'));moveRow('settingsTtsEnabledToggle',get('voiceSetup-offline'));moveRow('localSpeechInstall',get('voiceSetup-offline'));moveRow('settingsVoiceCallBtnToggle',get('voiceSetup-access'));
     const callToggle=get('settingsVoiceCallBtnToggle');callToggle.setAttribute('aria-label','Show floating call shortcut');
     callToggle.closest('.settings-row').querySelector('.settings-row-label').textContent='Show floating call shortcut';
     callToggle.closest('.settings-row').querySelector('.settings-row-desc').textContent='This browser · Saved immediately. Does not start a call.';

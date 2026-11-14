@@ -2075,8 +2075,28 @@
     const ttsQueueEl = document.createElement('div');
     ttsQueueEl.id = 'cccPerfTtsQueue';
     ttsQueueEl.style.cssText = 'padding:4px 10px;border-bottom:1px solid var(--border-color,#30363d);' +
-      'opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-    ttsQueueEl.textContent = 'tts queue: 0 queued';
+      'display:flex;align-items:center;justify-content:space-between;gap:6px;opacity:.85;';
+    const ttsQueueText = document.createElement('span');
+    ttsQueueText.id = 'cccPerfTtsQueueText';
+    ttsQueueText.style.cssText = 'min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    ttsQueueText.textContent = 'tts queue: 0 queued';
+    const ttsToggleBtn = document.createElement('button');
+    ttsToggleBtn.type = 'button';
+    ttsToggleBtn.id = 'cccPerfTtsToggleBtn';
+    ttsToggleBtn.style.cssText = 'flex:0 0 auto;padding:1px 6px;border-radius:4px;' +
+      'border:1px solid var(--border-color,#30363d);background:transparent;color:inherit;' +
+      'font:600 11px/1.3 ui-monospace,Menlo,monospace;cursor:pointer;';
+    ttsToggleBtn.textContent = 'Turn off';
+    ttsToggleBtn.title = 'Turn off TTS completely (stops active speech, prepare-ahead, and the local voice process)';
+    ttsToggleBtn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      if (typeof window.__cccSetTtsEnabled === 'function') {
+        const cur = typeof window.__cccIsTtsEnabled === 'function' ? window.__cccIsTtsEnabled() : true;
+        window.__cccSetTtsEnabled(!cur, { persistServer: true });
+      }
+    });
+    ttsQueueEl.appendChild(ttsQueueText);
+    ttsQueueEl.appendChild(ttsToggleBtn);
     ttsQueueEl.title = 'Live TTS requests queued right now across browser prepare-ahead and server synthesis';
     const head = document.createElement('div');
     head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 10px;cursor:pointer;user-select:none;';
@@ -15688,63 +15708,148 @@
     });
     document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
   }
+  let _ttsEnabled = true;
+  try { _ttsEnabled = localStorage.getItem('ccc-tts-enabled') !== '0'; } catch (_) {}
+  let _ttsTogglePending = false;
+  const _ttsInFlightAborts = new Set();
   const _ttsServerQueueSnap = { at: 0, extraInFlight: 0, sessionWaiting: 0, active: 0, fg: 0, bg: 0 };
+  function _ttsSyncEnabledControls() {
+    const enabled = typeof _ttsEnabled === 'undefined' ? true : !!_ttsEnabled;
+    if (typeof document !== 'undefined' && document.documentElement && document.documentElement.classList) {
+      document.documentElement.classList.toggle('ccc-tts-disabled', !enabled);
+    }
+    const diagBtn = typeof document !== 'undefined' && document.getElementById ? document.getElementById('cccPerfTtsToggleBtn') : null;
+    if (diagBtn) {
+      diagBtn.textContent = enabled ? 'Turn off' : 'Turn on';
+      diagBtn.title = enabled
+        ? 'Turn off TTS completely (stops active speech, prepare-ahead, and the local voice process)'
+        : 'Re-enable TTS synthesis';
+    }
+    const settingsBtn = typeof document !== 'undefined' && document.getElementById ? document.getElementById('settingsTtsEnabledToggle') : null;
+    if (settingsBtn) {
+      settingsBtn.setAttribute('aria-checked', String(enabled));
+      if (settingsBtn.classList) settingsBtn.classList.toggle('is-on', enabled);
+    }
+  }
+  function _ttsSetEnabled(enabled, opts) {
+    const next = !!enabled;
+    const persistServer = !opts || opts.persistServer !== false;
+    const changed = _ttsEnabled !== next;
+    _ttsEnabled = next;
+    try { localStorage.setItem('ccc-tts-enabled', next ? '1' : '0'); } catch (_) {}
+    if (!next) {
+      for (const ctrl of Array.from(_ttsInFlightAborts)) {
+        try { ctrl.abort(); } catch (_) {}
+      }
+      _ttsInFlightAborts.clear();
+      try { if (typeof _ttsCancelOffscreenPrefetch === 'function') _ttsCancelOffscreenPrefetch(); } catch (_) {}
+      for (let i = 0; i < _ttsDebugJobs.length; i++) {
+        const st = _ttsDebugJobs[i] && _ttsDebugJobs[i].status;
+        if (st === 'queued' || st === 'processing') _ttsDebugJobs[i].status = 'cancelled';
+      }
+      _ttsServerQueueSnap.at = 0;
+      _ttsServerQueueSnap.extraInFlight = 0;
+      _ttsServerQueueSnap.sessionWaiting = 0;
+      _ttsServerQueueSnap.active = 0;
+      try { if (typeof stopTextToSpeech === 'function') stopTextToSpeech(); } catch (_) {}
+    }
+    _ttsSyncEnabledControls();
+    _ttsUpdateDiagnosticsQueue();
+    if (persistServer && typeof fetch === 'function') {
+      _ttsTogglePending = true;
+      fetch('/api/free-runtime/tts-enabled', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      })
+        .then(r => (r && r.ok ? r.json() : null))
+        .then(d => {
+          _ttsTogglePending = false;
+          if (d && d.tts) _ttsUpdateDiagnosticsQueue(d.tts);
+          if (next) {
+            try { if (typeof scheduleTtsPrefetch === 'function') scheduleTtsPrefetch(); } catch (_) {}
+          }
+        })
+        .catch(() => { _ttsTogglePending = false; });
+    } else if (next && changed) {
+      try { if (typeof scheduleTtsPrefetch === 'function') scheduleTtsPrefetch(); } catch (_) {}
+    }
+    return next;
+  }
+  window.__cccSetTtsEnabled = _ttsSetEnabled;
+  window.__cccIsTtsEnabled = () => _ttsEnabled;
   function _ttsUpdateDiagnosticsQueue(serverTts) {
+    if (serverTts && typeof serverTts === 'object' && typeof serverTts.enabled === 'boolean' && !_ttsTogglePending) {
+      if (serverTts.enabled !== _ttsEnabled) {
+        _ttsSetEnabled(serverTts.enabled, { persistServer: false });
+      }
+    }
+    const enabled = typeof _ttsEnabled === 'undefined' ? true : !!_ttsEnabled;
     let browserWaiting = 0, browserSent = 0;
-    for (let i = 0; i < _ttsDebugJobs.length; i++) {
-      const st = _ttsDebugJobs[i] && _ttsDebugJobs[i].status;
-      if (st === 'queued') browserWaiting++;
-      else if (st === 'processing') browserSent++;
+    if (enabled) {
+      for (let i = 0; i < _ttsDebugJobs.length; i++) {
+        const st = _ttsDebugJobs[i] && _ttsDebugJobs[i].status;
+        if (st === 'queued') browserWaiting++;
+        else if (st === 'processing') browserSent++;
+      }
     }
     const now = Date.now();
     if (serverTts && typeof serverTts === 'object') {
-      const srvInFlight = Math.max(0, Number(serverTts.in_flight) || 0);
+      const srvInFlight = enabled ? Math.max(0, Number(serverTts.in_flight) || 0) : 0;
       _ttsServerQueueSnap.at = now;
-      _ttsServerQueueSnap.extraInFlight = Math.max(0, srvInFlight - browserSent);
-      _ttsServerQueueSnap.sessionWaiting = Math.max(0, Number(serverTts.session_waiting) || 0);
-      _ttsServerQueueSnap.active = Math.max(0, Number(serverTts.active) || 0);
-      _ttsServerQueueSnap.fg = Math.max(0, Number(serverTts.fg) || 0);
-      _ttsServerQueueSnap.bg = Math.max(0, Number(serverTts.bg) || 0);
+      _ttsServerQueueSnap.extraInFlight = enabled ? Math.max(0, srvInFlight - browserSent) : 0;
+      _ttsServerQueueSnap.sessionWaiting = enabled ? Math.max(0, Number(serverTts.session_waiting) || 0) : 0;
+      _ttsServerQueueSnap.active = enabled ? Math.max(0, Number(serverTts.active) || 0) : 0;
+      _ttsServerQueueSnap.fg = enabled ? Math.max(0, Number(serverTts.fg) || 0) : 0;
+      _ttsServerQueueSnap.bg = enabled ? Math.max(0, Number(serverTts.bg) || 0) : 0;
     }
-    const fresh = _ttsServerQueueSnap.at > 0 && (now - _ttsServerQueueSnap.at) < 60000;
+    const fresh = enabled && _ttsServerQueueSnap.at > 0 && (now - _ttsServerQueueSnap.at) < 60000;
     const extraInFlight = fresh ? _ttsServerQueueSnap.extraInFlight : 0;
     const sessionWaiting = fresh ? _ttsServerQueueSnap.sessionWaiting : 0;
-    const inFlight = browserSent + extraInFlight;
+    const inFlight = enabled ? browserSent + extraInFlight : 0;
     const synthesizing = inFlight > 0
       ? Math.min(inFlight, Math.max(1, fresh && _ttsServerQueueSnap.active > 1 ? _ttsServerQueueSnap.active : 1))
       : 0;
     const serverWaiting = Math.max(0, inFlight - synthesizing) + sessionWaiting;
-    const waiting = browserWaiting + serverWaiting;
-    const queued = synthesizing + waiting;
+    const waiting = enabled ? browserWaiting + serverWaiting : 0;
+    const queued = enabled ? synthesizing + waiting : 0;
+    _ttsSyncEnabledControls();
     const el = document.getElementById('cccPerfTtsQueue');
     if (el) {
-      const nextText = queued > 0
-        ? 'tts queue: ' + queued + ' queued (' + synthesizing + ' active · ' + waiting + ' waiting)'
-        : 'tts queue: 0 queued';
-      if (el.textContent !== nextText) el.textContent = nextText;
-      el.style.color = queued > 0 ? 'var(--accent, #58a6ff)' : '';
-      el.style.opacity = queued > 0 ? '1' : '.85';
-      const nextTitle = 'Live TTS synthesis queue · ' + browserSent + ' sent + ' + browserWaiting + ' waiting in this tab'
-        + (extraInFlight || sessionWaiting ? ' · +' + (extraInFlight + sessionWaiting) + ' on server from other tabs/sessions' : '');
+      const textEl = document.getElementById('cccPerfTtsQueueText') || el;
+      const nextText = !enabled
+        ? 'tts: off'
+        : queued > 0
+          ? 'tts queue: ' + queued + ' queued (' + synthesizing + ' active · ' + waiting + ' waiting)'
+          : 'tts queue: 0 queued';
+      if (textEl.textContent !== nextText) textEl.textContent = nextText;
+      el.style.color = !enabled ? 'var(--text-muted, #8b949e)' : queued > 0 ? 'var(--accent, #58a6ff)' : '';
+      el.style.opacity = queued > 0 || !enabled ? '1' : '.85';
+      const nextTitle = !enabled
+        ? 'Text-to-speech is completely disabled on this host (local voice server stopped)'
+        : 'Live TTS synthesis queue · ' + browserSent + ' sent + ' + browserWaiting + ' waiting in this tab'
+          + (extraInFlight || sessionWaiting ? ' · +' + (extraInFlight + sessionWaiting) + ' on server from other tabs/sessions' : '');
       if (el.title !== nextTitle) el.title = nextTitle;
     }
     const summary = document.querySelector('.session-usage-drawer > summary');
     if (summary) {
       let badge = document.getElementById('cccDiagTtsSummary');
-      if (queued > 0) {
+      if (!enabled || queued > 0) {
         if (!badge) {
           badge = document.createElement('span');
           badge.id = 'cccDiagTtsSummary';
-          badge.style.cssText = 'color:var(--accent,#58a6ff);font-weight:600;';
           summary.appendChild(badge);
         }
-        const badgeText = ' · TTS: ' + queued + ' queued';
+        badge.style.cssText = !enabled
+          ? 'color:var(--text-muted,#8b949e);font-weight:600;'
+          : 'color:var(--accent,#58a6ff);font-weight:600;';
+        const badgeText = !enabled ? ' · TTS off' : ' · TTS: ' + queued + ' queued';
         if (badge.textContent !== badgeText) badge.textContent = badgeText;
       } else if (badge && badge.textContent !== '') {
         badge.textContent = '';
       }
     }
-    return { queued, synthesizing, waiting, browserSent, browserWaiting, serverWaiting };
+    return { enabled, queued, synthesizing, waiting, browserSent, browserWaiting, serverWaiting };
   }
   window.__cccUpdateTtsDiagnostics = _ttsUpdateDiagnosticsQueue;
   function _ttsScheduleCacheDebug() {
@@ -15782,7 +15887,9 @@
   window.addEventListener('resize', () => { if (_ttsCacheDebug) _ttsScheduleCacheDebug(); });
   window.visualViewport?.addEventListener('resize', () => { if (_ttsCacheDebug) _ttsScheduleCacheDebug(); });
   document.getElementById('settingsTtsCacheDebugToggle')?.addEventListener('click', () => _ttsSetCacheDebug(!_ttsCacheDebug));
+  document.getElementById('settingsTtsEnabledToggle')?.addEventListener('click', () => _ttsSetEnabled(!_ttsEnabled, { persistServer: true }));
   _ttsSetCacheDebug(_ttsCacheDebug);
+  _ttsSyncEnabledControls();
   _ttsUpdateDiagnosticsQueue();
 
   function _ttsHeadChunk(text, baseOffset) {
@@ -15992,6 +16099,7 @@
   let _ttsHoverBtn = null;
   // Hover and viewport preparation leave the composer's latest-reply bar alone.
   function _ttsPrefetchHead(rawText, paneId, quiet, sourceBtn) {
+    if (typeof _ttsEnabled !== 'undefined' && !_ttsEnabled) return;
     const mk = quiet === 'viewport' ? '__viewport:' + paneId : quiet ? '__quiet' : paneId;
     if (Date.now() < _ttsNeuralCooldownUntil) { _ttsLog('SKIP', 'prefetch: cooldown, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')'); return; }
     if (document.hidden) { _ttsLog('SKIP', 'prefetch: tab hidden'); return; }
@@ -16119,6 +16227,7 @@
       : paneId === '__quiet' ? (_ttsHoverBtn?.closest?.('.conv-pane')?.dataset?.paneId || activePaneId())
       : paneId;
     const onScreen = () => {
+      if (typeof _ttsEnabled !== 'undefined' && !_ttsEnabled) return false;
       if (document.hidden) return false;
       if (paneId === '__quiet' && _ttsHoverBtn) {
         return typeof _ttsIsViewOnScreen !== 'function'
@@ -16203,6 +16312,7 @@
     window.addEventListener('resize', _queueTtsScreenSync);
   }
   function scheduleTtsViewportPrefetch(view, btn) {
+    if (typeof _ttsEnabled !== 'undefined' && !_ttsEnabled) return;
     const pane = view && view.closest('.conv-pane');
     const viewOnScreen = typeof _ttsIsViewOnScreen === 'function' ? _ttsIsViewOnScreen(view) : !document.hidden;
     const eligible = pane && pane.dataset.paneId === activePaneId()
@@ -16241,6 +16351,11 @@
   }
   // Called after a transcript render; waits for the text to stop changing.
   function scheduleTtsPrefetch() {
+    if (typeof _ttsEnabled !== 'undefined' && !_ttsEnabled) {
+      clearTimeout(_ttsPrefetchTimer);
+      _ttsPrefetchTimer = null;
+      return;
+    }
     const paneId = activePaneId();
     const view = (typeof getConvViewForPane === 'function' && paneId ? getConvViewForPane(paneId) : null)
       || Array.from(document.querySelectorAll('.conv-pane')).find(p => p.dataset.paneId === paneId)?.querySelector('.conversations-view');
@@ -16384,9 +16499,25 @@
   // Resolves a replayable clip (or a complete blob on non-streaming browsers).
   // prio 'bg' = prepare-ahead: the local voice makes 'fg' (a read being heard) first.
   function _ttsFetchNeural(text, voice, prio, debugJob, signal) {
+    if (typeof _ttsEnabled !== 'undefined' && !_ttsEnabled) {
+      if (debugJob) { debugJob.status = 'cancelled'; _ttsScheduleCacheDebug(); }
+      return Promise.reject(503);
+    }
     const job = debugJob || _ttsDebugJob(text, 'processing', null);
     job.status = 'processing';
     _ttsScheduleCacheDebug();
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    if (ctrl && typeof _ttsInFlightAborts !== 'undefined') {
+      _ttsInFlightAborts.add(ctrl);
+      if (signal && typeof signal.addEventListener === 'function') {
+        if (signal.aborted) ctrl.abort();
+        else signal.addEventListener('abort', () => ctrl.abort(), { once: true });
+      }
+    }
+    const effSignal = ctrl ? ctrl.signal : signal;
+    const releaseAbort = () => {
+      if (ctrl && typeof _ttsInFlightAborts !== 'undefined') _ttsInFlightAborts.delete(ctrl);
+    };
     voice = voice || ttsVoiceForPane(activePaneId());
     let onDone, onError;
     const done = new Promise((resolve, reject) => { onDone = resolve; onError = reject; });
@@ -16420,14 +16551,26 @@
       // Always the streamed mp3: a browser without MediaSource reads it as one
       // blob, and the server keeps the finished clip for a continuous read.
       body: JSON.stringify({ text, voice: voice || '', stream: true, prio: prio === 'bg' ? 'bg' : 'fg' }),
-      signal,
+      signal: effSignal,
     }).then(async (res) => {
-      if (!res.ok) throw res.status;
+      if (!res.ok) {
+        if (res.status === 503) {
+          try {
+            const errJson = await res.clone().json();
+            if (errJson && errJson.disabled && typeof _ttsSetEnabled === 'function') {
+              _ttsSetEnabled(false, { persistServer: false });
+            }
+          } catch (_) {}
+        }
+        throw res.status;
+      }
       const v = res.headers.get('X-CCC-Voice') || '';
       const model = res.headers.get('X-CCC-Model') || '';
       perfRow(res);
-      done.then(() => { job.status = 'ready'; _ttsScheduleCacheDebug(); }).catch(() => {
-        job.status = 'failed'; _ttsScheduleCacheDebug();
+      done.then(() => { releaseAbort(); job.status = 'ready'; _ttsScheduleCacheDebug(); }).catch(() => {
+        releaseAbort();
+        if (job.status !== 'cancelled') job.status = 'failed';
+        _ttsScheduleCacheDebug();
       });
       if (_ttsCanStream() && res.headers.get('X-CCC-Stream') === '1') {
         return Object.assign(_ttsStreamClip(res, done, onDone, onError), { voice: v, model });
@@ -16437,8 +16580,9 @@
       onDone();
       return { url, blob, voice: v, model, done: Promise.resolve() };
     }, () => { throw 0; }).catch(error => {
+      releaseAbort();
       onError(error);
-      job.status = 'failed';
+      if (job.status !== 'cancelled') job.status = 'failed';
       _ttsScheduleCacheDebug();
       throw error;
     });
@@ -17725,6 +17869,7 @@
   // When `domElements` (rendered message nodes) are given, the read maps
   // spoken offsets back onto their text nodes so the current word highlights.
   function speakTextDirect(text, convId, paneId, sourceBtn, domElements) {
+    if (typeof _ttsEnabled !== 'undefined' && !_ttsEnabled) return false;
     if (sourceBtn && window.cccLocalSpeech) window.cccLocalSpeech.offer();
     if (!window.speechSynthesis) return false;
     _ttsSelectionReadText = '';
@@ -17781,6 +17926,12 @@
   }
 
   async function readLastMessageAloud(paneId) {
+    if (typeof _ttsEnabled !== 'undefined' && !_ttsEnabled) {
+      if (typeof showOpToast === 'function') {
+        showOpToast('Text-to-speech is turned off (re-enable in Diagnostics or Settings).', 'info');
+      }
+      return;
+    }
     if (window.cccLocalSpeech) window.cccLocalSpeech.offer();
     if (!window.speechSynthesis) {
       showOpToast('Your browser does not support text-to-speech.', 'error');

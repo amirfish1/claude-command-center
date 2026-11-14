@@ -744,21 +744,31 @@ const _ttsFetchNeural = (text) => {
 
     def test_diagnostics_section_displays_live_tts_queue_counts(self):
         diag_block = self.source[
-            self.source.index("  const _ttsServerQueueSnap ="):
+            self.source.index("  let _ttsEnabled = true;"):
             self.source.index("  function _ttsWatchCacheEntry(")
         ]
         result = self.run_node(
             """
 const _ttsDebugJobs = [];
 let _ttsCacheDebugFrame = null;
+let stoppedCalls = 0, abortedCalls = 0;
+const posted = [];
 const els = new Map();
 const mkEl = (id) => {
+  const classes = new Set();
+  const attrs = new Map();
   const el = {
     id: id || '',
     textContent: '',
     title: '',
     style: {},
     children: [],
+    classList: {
+      toggle(name, on) { if (on) classes.add(name); else classes.delete(name); },
+      contains(name) { return classes.has(name); },
+    },
+    setAttribute(k, v) { attrs.set(k, String(v)); },
+    getAttribute(k) { return attrs.get(k); },
     appendChild(child) {
       this.children.push(child);
       if (child.id) els.set(child.id, child);
@@ -769,12 +779,27 @@ const mkEl = (id) => {
   return el;
 };
 const perfTtsEl = mkEl('cccPerfTtsQueue');
+const toggleBtn = mkEl('cccPerfTtsToggleBtn');
+const settingsToggle = mkEl('settingsTtsEnabledToggle');
 const summaryEl = mkEl('');
+const docEl = mkEl('');
 const window = {};
+const localStorage = {
+  _m: new Map(),
+  getItem(k) { return this._m.has(k) ? this._m.get(k) : null; },
+  setItem(k, v) { this._m.set(k, String(v)); },
+};
 const document = {
+  documentElement: docEl,
   getElementById: (id) => els.get(id) || null,
   querySelector: (sel) => (sel === '.session-usage-drawer > summary' ? summaryEl : null),
   createElement: () => mkEl(''),
+};
+const stopTextToSpeech = () => { stoppedCalls++; };
+const fetch = (url, opts) => {
+  const body = JSON.parse(opts.body);
+  posted.push({ url, enabled: body.enabled });
+  return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true, tts: { enabled: body.enabled, in_flight: 0, active: 0, waiting: 0, session_waiting: 0 } }) });
 };
 const requestAnimationFrame = (fn) => { _ttsCacheDebugFrame = 1; return 1; };
 const _ttsRefreshCacheCoverage = () => {};
@@ -782,45 +807,65 @@ const _ttsRefreshCacheDebug = () => {};
 """
             + diag_block
             + """
-const idle = {
-  stats: _ttsUpdateDiagnosticsQueue(),
-  row: perfTtsEl.textContent,
-  summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
-};
-_ttsDebugJobs.push(
-  { text: 'head', status: 'processing' },
-  { text: 'c1', status: 'queued' },
-  { text: 'c2', status: 'queued' },
-  { text: 'c3', status: 'queued' },
-);
-_ttsScheduleCacheDebug();
-const localBusy = {
-  row: perfTtsEl.textContent,
-  summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
-};
-// Another tab also has 1 request in flight + 2 session clips waiting on server.
-window.__cccUpdateTtsDiagnostics({ in_flight: 2, active: 1, waiting: 3, session_waiting: 2, fg: 1, bg: 1 });
-const multiTabBusy = {
-  row: perfTtsEl.textContent,
-  summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
-};
-// Local requests finish; only the other tab's work remains until next server snapshot clears it.
-for (const j of _ttsDebugJobs) j.status = 'ready';
-_ttsScheduleCacheDebug();
-const afterLocalDone = {
-  row: perfTtsEl.textContent,
-  summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
-};
-window.__cccUpdateTtsDiagnostics({ in_flight: 0, active: 0, waiting: 0, session_waiting: 0, fg: 0, bg: 0 });
-const backToIdle = {
-  row: perfTtsEl.textContent,
-  summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
-};
-console.log(JSON.stringify({ idle, localBusy, multiTabBusy, afterLocalDone, backToIdle }));
+(async () => {
+  const idle = {
+    stats: _ttsUpdateDiagnosticsQueue(),
+    row: perfTtsEl.textContent,
+    summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+    btn: toggleBtn.textContent,
+  };
+  _ttsDebugJobs.push(
+    { text: 'head', status: 'processing' },
+    { text: 'c1', status: 'queued' },
+    { text: 'c2', status: 'queued' },
+    { text: 'c3', status: 'queued' },
+  );
+  _ttsScheduleCacheDebug();
+  const localBusy = {
+    row: perfTtsEl.textContent,
+    summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+  };
+  // Another tab also has 1 request in flight + 2 session clips waiting on server.
+  window.__cccUpdateTtsDiagnostics({ enabled: true, in_flight: 2, active: 1, waiting: 3, session_waiting: 2, fg: 1, bg: 1 });
+  const multiTabBusy = {
+    row: perfTtsEl.textContent,
+    summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+  };
+  // Local requests finish; only the other tab's work remains until next server snapshot clears it.
+  for (const j of _ttsDebugJobs) j.status = 'ready';
+  _ttsScheduleCacheDebug();
+  const afterLocalDone = {
+    row: perfTtsEl.textContent,
+    summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+  };
+  window.__cccUpdateTtsDiagnostics({ enabled: true, in_flight: 0, active: 0, waiting: 0, session_waiting: 0, fg: 0, bg: 0 });
+  const backToIdle = {
+    row: perfTtsEl.textContent,
+    summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+  };
+  // Turn off TTS completely while jobs are active/queued.
+  _ttsInFlightAborts.add({ abort() { abortedCalls++; } });
+  _ttsDebugJobs.push({ text: 'live', status: 'processing' }, { text: 'next', status: 'queued' });
+  window.__cccSetTtsEnabled(false, { persistServer: true });
+  await Promise.resolve();
+  await Promise.resolve();
+  const disabledState = {
+    row: perfTtsEl.textContent,
+    summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+    btn: toggleBtn.textContent,
+    ariaChecked: settingsToggle.getAttribute('aria-checked'),
+    abortedCalls,
+    stoppedCalls,
+    posted,
+    tailStatuses: _ttsDebugJobs.slice(-2).map(j => j.status),
+  };
+  console.log(JSON.stringify({ idle, localBusy, multiTabBusy, afterLocalDone, backToIdle, disabledState }));
+})();
 """
         )
         self.assertEqual(result["idle"]["row"], "tts queue: 0 queued")
         self.assertEqual(result["idle"]["summary"], "")
+        self.assertEqual(result["idle"]["btn"], "Turn off")
         self.assertEqual(result["localBusy"], {
             "row": "tts queue: 4 queued (1 active · 3 waiting)",
             "summary": " · TTS: 4 queued",
@@ -836,6 +881,16 @@ console.log(JSON.stringify({ idle, localBusy, multiTabBusy, afterLocalDone, back
         self.assertEqual(result["backToIdle"], {
             "row": "tts queue: 0 queued",
             "summary": "",
+        })
+        self.assertEqual(result["disabledState"], {
+            "row": "tts: off",
+            "summary": " · TTS off",
+            "btn": "Turn on",
+            "ariaChecked": "false",
+            "abortedCalls": 1,
+            "stoppedCalls": 1,
+            "posted": [{"url": "/api/free-runtime/tts-enabled", "enabled": False}],
+            "tailStatuses": ["cancelled", "cancelled"],
         })
 
     def test_server_tts_queue_stats_track_uncached_streams_and_sessions(self):
@@ -886,6 +941,38 @@ console.log(JSON.stringify({ idle, localBusy, multiTabBusy, afterLocalDone, back
         finally:
             with fr._TTS_QUEUE_LOCK:
                 fr._TTS_IN_FLIGHT.update(saved)
+
+    def test_server_set_tts_enabled_stops_local_voice_and_blocks_requests(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from ccc_server import free_runtime as fr
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with fr._TTS_QUEUE_LOCK:
+                saved_enabled = fr._TTS_ENABLED
+                fr._TTS_ENABLED = None
+            try:
+                with mock.patch.object(fr, "_LOCAL_TTS_DIR", Path(tmp)), \
+                        mock.patch.object(fr, "_local_tts_stop") as stop_voice, \
+                        mock.patch.object(fr, "local_tts_installed", return_value=False):
+                    self.assertTrue(fr.tts_enabled())
+                    self.assertFalse(fr.set_tts_enabled(False))
+                    stop_voice.assert_called_once()
+                    self.assertTrue((Path(tmp) / "tts.disabled").exists())
+                    self.assertFalse(fr.tts_queue_stats()["enabled"])
+                    self.assertEqual(fr.local_tts_open("Hello", "Kokoro: af_heart", "fg"), (None, ""))
+                    self.assertEqual(fr.tts("Hello", "")[0], 503)
+                    # Re-read from disk after cache reset stays disabled.
+                    with fr._TTS_QUEUE_LOCK:
+                        fr._TTS_ENABLED = None
+                    self.assertFalse(fr.tts_enabled())
+                    self.assertTrue(fr.set_tts_enabled(True))
+                    self.assertFalse((Path(tmp) / "tts.disabled").exists())
+                    self.assertTrue(fr.tts_queue_stats()["enabled"])
+            finally:
+                with fr._TTS_QUEUE_LOCK:
+                    fr._TTS_ENABLED = saved_enabled
 
 
 if __name__ == "__main__":

@@ -1,0 +1,1 @@
+- Add a host-wide Text-to-speech off/on toggle in the bottom-left Diagnostics drawer and Voice settings that stops active speech, cancels background prepare-ahead, and shuts down the local Kokoro voice process while off.

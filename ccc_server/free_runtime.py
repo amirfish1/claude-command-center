@@ -536,7 +536,11 @@ def _local_tts_start():
     import subprocess
     import time
     global _LOCAL_TTS_PROCESS, _LOCAL_TTS_PORT
+    if not tts_enabled():
+        return False
     with _LOCAL_TTS_START_LOCK:
+        if not tts_enabled():
+            return False
         if _LOCAL_TTS_PROCESS is None:
             _LOCAL_TTS_PORT = _local_tts_saved_port()
         if _local_tts_up():
@@ -643,6 +647,68 @@ def _local_tts_request(path, text, voice, prio="fg"):
 
 _TTS_QUEUE_LOCK = threading.Lock()
 _TTS_IN_FLIGHT = {"fg": 0, "bg": 0, "remote": 0}
+_TTS_ENABLED = None
+
+
+def _tts_disabled_flag_path():
+    return _LOCAL_TTS_DIR / "tts.disabled"
+
+
+def tts_enabled():
+    """True unless TTS has been explicitly turned off on this host."""
+    global _TTS_ENABLED
+    with _TTS_QUEUE_LOCK:
+        if _TTS_ENABLED is None:
+            _TTS_ENABLED = not _tts_disabled_flag_path().exists()
+        return _TTS_ENABLED
+
+
+def _local_tts_stop():
+    """Stop any owned or loopback Kokoro voice server process immediately."""
+    global _LOCAL_TTS_PROCESS
+    with _LOCAL_TTS_START_LOCK:
+        if _LOCAL_TTS_PROCESS is not None:
+            try:
+                if _LOCAL_TTS_PROCESS.poll() is None:
+                    _LOCAL_TTS_PROCESS.terminate()
+                    _LOCAL_TTS_PROCESS.wait(timeout=5)
+            except Exception:
+                try:
+                    _LOCAL_TTS_PROCESS.kill()
+                except Exception:
+                    pass
+            _LOCAL_TTS_PROCESS = None
+        health = _local_tts_health()
+        if health.get("ok"):
+            _local_tts_retire(health)
+
+
+def set_tts_enabled(enabled):
+    """Enable or completely disable TTS synthesis across this CCC host."""
+    global _TTS_ENABLED
+    enabled = bool(enabled)
+    flag = _tts_disabled_flag_path()
+    try:
+        if enabled:
+            flag.unlink(missing_ok=True)
+        else:
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.write_text("disabled\n")
+    except OSError:
+        pass
+    with _TTS_QUEUE_LOCK:
+        _TTS_ENABLED = enabled
+    if not enabled:
+        with _TTS_SESSIONS_LOCK:
+            sessions = list(_TTS_SESSIONS.values())
+        for s in sessions:
+            s.cancelled = True
+            with s.cond:
+                s.cond.notify_all()
+        _local_tts_stop()
+    elif local_tts_installed():
+        threading.Thread(target=_local_tts_start, name="tts-warm", daemon=True).start()
+    return enabled
 
 
 def _tts_in_flight_inc(slot):
@@ -713,6 +779,7 @@ class _TrackedClip:
 
 def tts_queue_stats():
     """O(1) in-memory snapshot of live uncached TTS synthesis requests."""
+    enabled = tts_enabled()
     with _TTS_QUEUE_LOCK:
         fg = _TTS_IN_FLIGHT["fg"]
         bg = _TTS_IN_FLIGHT["bg"]
@@ -732,6 +799,7 @@ def tts_queue_stats():
     active = (1 if local_in_flight > 0 else 0) + remote
     waiting = max(0, local_in_flight - 1) + session_waiting
     return {
+        "enabled": enabled,
         "queued": in_flight + session_waiting,
         "in_flight": in_flight,
         "active": active,
@@ -751,6 +819,8 @@ def local_tts_open(text, voice="", prio="fg"):
     being heard) at every sentence.
     """
     import urllib.request
+    if not tts_enabled():
+        return None, ""
     text = str(text or "").strip()[:TTS_MAX_CHARS]
     if not text or not _local_tts_start():
         return None, ""
@@ -1110,7 +1180,7 @@ def tts_session_create(texts, voice=""):
     import time
     texts = [str(t or "").strip()[:TTS_MAX_CHARS] for t in (texts or [])]
     texts = [t for t in texts if t][:64]
-    if not texts or not local_tts_installed() or not _local_tts_start():
+    if not tts_enabled() or not texts or not local_tts_installed() or not _local_tts_start():
         return ""
     session = _TtsSession(texts, str(voice or ""))
     sid = secrets.token_urlsafe(18)
@@ -1201,7 +1271,7 @@ def local_tts_keepalive(interval=60.0):
     import time
     while True:
         try:
-            if local_tts_installed():
+            if tts_enabled() and local_tts_installed():
                 _local_tts_renice_check()
                 _local_tts_start()
         except Exception:
@@ -1232,6 +1302,8 @@ def local_tts(text, voice=""):
     round-trips through the browser so one read keeps one voice.
     """
     import urllib.request
+    if not tts_enabled():
+        return b"", ""
     voice = _kokoro_voice(voice)
     if not _local_tts_start():
         return b"", ""
@@ -1287,6 +1359,8 @@ def deepgram_open(text, voice="", fmt="encoding=linear16&container=wav"):
     """
     import random
     import urllib.request
+    if not tts_enabled():
+        return None, ""
     voice = str(voice or "")
     key = _deepgram_key(explicit=voice.startswith(_DEEPGRAM_LABEL))
     text = str(text or "").strip()[:TTS_MAX_CHARS]
@@ -1356,6 +1430,8 @@ def tts(text, voice=""):
     """
     import random
     import urllib.request
+    if not tts_enabled():
+        return 503, b"", "", ""
     text = str(text or "").strip()[:TTS_MAX_CHARS]
     if not text:
         return 400, b"", "", ""

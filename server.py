@@ -35849,6 +35849,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                               str(payload.get("detail") or "")[:300])
             self.send_json({"ok": True})
             return
+        if path == "/api/free-runtime/tts-enabled":
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                payload = json.loads(self.rfile.read(length)) if 0 < length <= 4096 else None
+            except (ValueError, OSError):
+                payload = None
+            if not isinstance(payload, dict) or "enabled" not in payload:
+                self.send_json({"ok": False, "error": "bad request"}, 400)
+                return
+            enabled = _free_runtime.set_tts_enabled(bool(payload.get("enabled")))
+            _log_activity("tts", "TOGGLE", "enabled=%d" % int(enabled))
+            self.send_json({"ok": True, "enabled": enabled, "tts": _free_runtime.tts_queue_stats()})
+            return
         if path == "/api/free-runtime/tts-session":
             # Continuous read for browsers without MediaSource (CCC-144):
             # {texts: [clip, ...], voice} -> {id}; GET .../<id> plays it.
@@ -35860,6 +35873,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             texts = payload.get("texts") if isinstance(payload, dict) else None
             if not isinstance(texts, list):
                 self.send_json({"ok": False, "error": "bad request"}, 400)
+                return
+            if not _free_runtime.tts_enabled():
+                self.send_json({"ok": False, "disabled": True, "error": "tts disabled"}, 503)
                 return
             sid = _free_runtime.tts_session_create(texts, str(payload.get("voice") or ""))
             if not sid:
@@ -35883,6 +35899,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 payload = None
             if not isinstance(payload, dict):
                 self.send_json({"ok": False, "error": "bad request"}, 400)
+                return
+            if not _free_runtime.tts_enabled():
+                self.send_json({"ok": False, "disabled": True, "error": "tts disabled"}, 503)
                 return
             _t0 = time.time()
             if payload.get("stream"):
