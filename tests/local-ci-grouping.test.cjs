@@ -13,7 +13,7 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
   const base = {repo:'example/project', head_sha:'a'.repeat(40), execution:'github_hosted',
     name:'unittest', percent:42, workflow_percent:42, current_step:'Run tests', completed_steps:3, total_steps:7,
     workflow_started_at:new Date(Date.now() - 312000).toISOString(),
-    origin:{pusher:{engine:'codex', session_id:'test-session', worker:true}, tickets:['TEST-42']},
+    origin:{pusher:{engine:'codex', session_id:'test-session', worker:true}, tickets:['TEST-42','TEST-43','TEST-44']},
     commit_subject:'<img src=x onerror="window.__xss=1">', event:'push', actor:'example-user'};
   let data = {jobs:[{...base, id:'example/project:1:1'},
     {...base, id:'example/project:1:1', name:'another job', percent:90}], completed:[
@@ -45,7 +45,8 @@ for (const width of [1280, 390]) test('one expandable CI row per commit at ' + w
     await page.waitForSelector('#checks .local-ci-group');
     assert.equal(await page.$$eval('#checks .local-ci-group', es => es.length), 2);
     assert.equal(await page.$eval('#checks details', el => el.open), false);
-    assert.match(await page.$eval('#checks summary', el => el.textContent), /TEST-42.*aaaaaaa.*71%/);
+    assert.match(await page.$eval('#checks summary', el => el.textContent), /TEST-42 \+2.*aaaaaaa.*71%/);
+    assert.equal(await page.$eval('#checks .local-ci-summary-name', el => el.scrollWidth <= el.clientWidth), true);
     assert.match(await page.$eval('#checks summary .local-ci-elapsed', el => el.textContent), /^5:\d{2}$/);
     assert.match(await page.$eval('#checks summary', el => el.title), /2 running · 1 passed/);
     assert.equal(await page.$eval('#checks summary', el => el.getBoundingClientRect().height <= 44), true);

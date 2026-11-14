@@ -100492,7 +100492,8 @@
           const pusher = members.map(({job}) => job.origin?.pusher).find(Boolean);
           const title = document.createElement('span');
           title.className = 'local-ci-summary-name';
-          title.textContent = ['CI', ...tickets, first.head_sha?.slice(0, 7)].filter(Boolean).join(' · ');
+          const ticketLabel = tickets.length ? tickets[0] + (tickets.length > 1 ? ' +' + (tickets.length - 1) : '') : '';
+          title.textContent = ['CI', ticketLabel, first.head_sha?.slice(0, 7)].filter(Boolean).join(' · ');
           const live = members.filter(item => !item.done).length;
           const failures = new Set(members.filter(({job, done}) => job.workflow_failed || done && ['failure','timed_out','startup_failure','action_required'].includes(job.conclusion)).map(({job}) => job.id)).size;
           const passed = members.filter(({job, done}) => done && job.conclusion === 'success').length;
