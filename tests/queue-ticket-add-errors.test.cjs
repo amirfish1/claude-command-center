@@ -49,15 +49,19 @@ for (const handler of ['_addQueueTicket', '_newGlobalTicket']) {
     const {ctx, toasts, pending, removed} = fixture(response);
     await vm.runInContext(handler + '()', ctx);
     const last = toasts.at(-1);
-    assert.equal(last[1], name === 'backend rejection' ? 'error' : 'warning');
-    assert.match(last[0], name === 'backend rejection' ? /Could not add ticket to TEST/ : /Ticket confirmation pending in TEST/);
-    assert.match(toasts.at(-1)[0], /Fix &lt;preview&gt; please/);
-    assert.doesNotMatch(toasts.at(-1)[0], /unknown|<TEST>|<preview>/);
-    if (name === 'backend rejection') assert.match(toasts.at(-1)[0], /Queue &lt;TEST&gt; is unavailable/);
-    else assert.match(toasts.at(-1)[0], /Check the queue or retry/);
-    if (name.includes('gateway')) assert.match(toasts.at(-1)[0], /HTTP 502/);
+    if (name === 'backend rejection') {
+      assert.equal(last[1], 'error');
+      assert.match(last[0], /Could not add ticket to TEST/);
+      assert.match(last[0], /Fix &lt;preview&gt; please/);
+      assert.match(last[0], /Queue &lt;TEST&gt; is unavailable/);
+      assert.doesNotMatch(last[0], /unknown|<TEST>|<preview>/);
+    } else {
+      assert.equal(toasts.length, 0, 'unconfirmed saves must not raise alerts or claim success');
+      const saved = JSON.parse(ctx.sessionStorage.getItem('ccc-ticket-submissions'));
+      assert.equal(Object.keys(saved).length, 1, 'retain the draft and retry key');
+    }
     assert.equal(pending.size, 0);
-    if (name !== 'backend rejection') assert.equal(new Set(removed).size, 3, 'progress notices removed on settlement');
+    assert.equal(removed.length, 0, 'quiet retries create no progress notifications');
   });
   test(handler + ': confirmed creation stays a success', async () => {
     let body;

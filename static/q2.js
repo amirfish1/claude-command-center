@@ -3704,7 +3704,7 @@
     closeModal();
     note('Filing ticket in ' + queue + '…', 'pending');
 
-    window.cccSubmitQueueTicket({ note: noteText, project: queue, source: 'ccc' },
+    return window.cccSubmitQueueTicket({ note: noteText, project: queue, source: 'ccc' },
       function (message) { note(message, 'pending'); })
       .then(async function (data) {
         var ref = data.item && data.item.ref;
@@ -3718,8 +3718,10 @@
         } catch (_) { note('Filed ' + ref + '; queue refresh is unavailable.', 'success'); }
       })
       .catch(function (e) {
-        note(e.pending ? e.message : 'Could not file ticket: ' + e.message,
-          e.pending ? 'pending' : 'error');
+        // Confirmation can outlast the request. The helper retains the
+        // submission for safe retries; only a real failure needs an alert.
+        if (e.pending) return;
+        note('Could not file ticket: ' + e.message, 'error');
         // Hand the text back rather than losing it.
         openNewTicket();
         var box = document.getElementById('q2TicketNote');

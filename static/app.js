@@ -61263,12 +61263,14 @@
     } finally { clearProgress(); }
   }
   function _showQueueTicketAddError(project, note, err) {
+    // A missing receipt is not a failed save. Keep the retry key without
+    // interrupting the user for a confirmation check that timed out.
+    if (err && err.pending) return;
     const preview = String(note || '').replace(/\s+/g, ' ').trim();
     const label = preview.length > 80 ? preview.slice(0, 80) + '…' : preview;
     const reason = (err && err.message) || String(err);
-    showOpToast(escapeHtml(err && err.pending ? reason : 'Could not add ticket to '
-      + (project || 'the default queue') + ' (“' + label + '”): ' + reason),
-      err && err.pending ? 'warning' : 'error');
+    showOpToast(escapeHtml('Could not add ticket to '
+      + (project || 'the default queue') + ' (“' + label + '”): ' + reason), 'error');
   }
   // CCC-163: the panel "+" used to file silently into whatever queue the panel
   // was scoped to (e.g. ACME) with no queue shown; it now shows the Queue
