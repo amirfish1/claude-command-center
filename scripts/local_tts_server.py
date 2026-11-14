@@ -32,7 +32,7 @@ MAX_CHARS = 2000
 
 # Bumped when the process's runtime contract changes (priority, threads), so
 # CCC replaces an older process left running from before an upgrade.
-SERVER_REV = 5
+SERVER_REV = 6
 # Normal priority: at nice 10 a loaded machine starved the voice for tens of
 # seconds. Background work is kept polite by the fg-first lock instead.
 

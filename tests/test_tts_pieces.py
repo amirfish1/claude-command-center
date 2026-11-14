@@ -96,9 +96,13 @@ class VoicePriorityTests(unittest.TestCase):
 
     def test_threads_scale_with_cores(self):
         with mock.patch("os.cpu_count", return_value=16):
-            self.assertEqual(free_runtime._local_tts_threads(), 8)
+            self.assertEqual(free_runtime._local_tts_threads(), 4)
         with mock.patch("os.cpu_count", return_value=4):
             self.assertEqual(free_runtime._local_tts_threads(), 2)
+
+    def test_single_core_does_not_oversubscribe_inference(self):
+        with mock.patch("os.cpu_count", return_value=1):
+            self.assertEqual(free_runtime._local_tts_threads(), 1)
 
     def test_niced_voice_is_retired(self):
         health = {"ok": True, "nice": 10, "pid": 4242}

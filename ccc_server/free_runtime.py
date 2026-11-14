@@ -464,7 +464,7 @@ def _local_tts_health():
 # SERVER_REV). An older process (nice 10, no fg/bg priority; rev 2's 300-char
 # pieces ran at half real time; rev 3's close-delimited stream hid mid-clip
 # failures; rev 4 let bg pieces interleave with a fg stream's) is replaced.
-_LOCAL_TTS_REV = 5
+_LOCAL_TTS_REV = 6
 
 
 def _local_tts_current(health):
@@ -599,9 +599,12 @@ def _local_tts_log():
 
 
 def _local_tts_threads():
-    """Kokoro threads: half the cores, 2..8. A read must be made faster than it
-    plays (1.25x); on 16 cores 8 threads gave 1.9x real time, 4 gave 1.2x."""
-    return max(2, min(8, (os.cpu_count() or 4) // 2))
+    """Bound inference parallelism on shared hosts; explicit env overrides win.
+
+    Eight threads can spend more CPU and wall time than four under load.
+    Keep the default pool small instead of scaling it up with a large host.
+    """
+    return max(1, min(4, (os.cpu_count() or 4) // 2))
 
 
 def _local_tts_weight_prefix():

@@ -3786,7 +3786,9 @@ def _wt_list_items_display_cached(max_age=_WT_ITEMS_SNAPSHOT_TTL_S):
         _WT_ITEMS_SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = _WT_ITEMS_SNAPSHOT_FILE.with_suffix(".json.tmp")
         with tmp.open("w") as f:
-            json.dump({"items": items}, f)
+            # Serialize once with the C encoder; streaming dump walks large
+            # ticket histories in Python on every snapshot refresh.
+            f.write(json.dumps({"items": items}))
         tmp.replace(_WT_ITEMS_SNAPSHOT_FILE)
     except (OSError, TypeError, ValueError):
         pass
