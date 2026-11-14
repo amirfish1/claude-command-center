@@ -234,6 +234,13 @@
     if (value && Number.isFinite(value.x) && Number.isFinite(value.y)) savedPosition = value;
   } catch (_) {}
   restorePosition();
+  // Navigation measures itself after this script loads. Reapply the saved
+  // ratios when that measurement arrives, not just on viewport resize.
+  let measuredNav = document.documentElement.style.getPropertyValue('--ccc-mobile-app-nav-height');
+  new MutationObserver(() => {
+    const next = document.documentElement.style.getPropertyValue('--ccc-mobile-app-nav-height');
+    if (next !== measuredNav) { measuredNav = next; restorePosition(); }
+  }).observe(document.documentElement, {attributes:true, attributeFilter:['style']});
   window.addEventListener('resize', restorePosition);
   window.visualViewport?.addEventListener('resize', restorePosition);
   window.visualViewport?.addEventListener('scroll', restorePosition);

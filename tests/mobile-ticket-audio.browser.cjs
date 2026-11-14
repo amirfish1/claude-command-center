@@ -75,6 +75,13 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
     assert.equal(await page.$('#fqTicketNote'),null);
     const position = await page.$eval('#mobileTicketRecord',e=>({x:e.getBoundingClientRect().x,y:e.getBoundingClientRect().y}));
     await setup();
+    // Simulate navigation's late measurement after script startup.
+    await page.evaluate(()=>document.documentElement.style.setProperty('--ccc-mobile-app-nav-height','55px'));
+    await page.waitForFunction(()=>Math.abs(document.getElementById('mobileTicketRecord').getBoundingClientRect().y
+      - JSON.parse(localStorage.getItem('ccc-mobile-ticket-record-position')).y * (innerHeight-55-80)) < 1);
+    await page.evaluate(()=>document.documentElement.style.setProperty('--ccc-mobile-app-nav-height','70px'));
+    await page.waitForFunction(()=>Math.abs(document.getElementById('mobileTicketRecord').getBoundingClientRect().y
+      - JSON.parse(localStorage.getItem('ccc-mobile-ticket-record-position')).y * (innerHeight-70-80)) < 1);
     const restored = await page.$eval('#mobileTicketRecord',e=>({x:e.getBoundingClientRect().x,y:e.getBoundingClientRect().y}));
     assert.deepEqual(restored,position,'position persists after reload');
     await page.setViewport({width:320,height:480,isMobile:true,hasTouch:true});

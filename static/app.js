@@ -60226,13 +60226,22 @@
       row.scrollIntoView({ block: 'center' });
     }
   }
-  // Queue names for the composer's Queue picker (cached health, else one fetch).
+  // Opening a draft needs queue names, not expensive worker health checks.
   async function _ticketQueueNames() {
-    let health = _uxqHealthCache;
-    if (!(health.queues || []).length) {
-      try { health = await _fetchUxqHealth(false); } catch (_) {}
+    let queues = _uxqHealthCache.queues || [];
+    if (!queues.length) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch('/api/queue/config-options', {
+          method:'POST', cccPriority:'user', signal:controller.signal,
+        });
+        const data = await response.json();
+        if (response.ok && data.ok) queues = data.queues || [];
+      } catch (_) {}
+      finally { clearTimeout(timeout); }
     }
-    return Array.from(new Set(((health && health.queues) || [])
+    return Array.from(new Set(queues
       .map(q => String((q && q.queue) || '').trim()).filter(Boolean)));
   }
   // Shared by every ticket-add entry point: a proxy error or an empty body

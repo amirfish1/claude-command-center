@@ -1,0 +1,1 @@
+- Restore the microphone position after mobile navigation finishes measuring, and open ticket drafts without waiting for worker health checks.
