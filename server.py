@@ -30774,6 +30774,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
+        if path.startswith("/api/ticket-audio/"):
+            from ccc_server import ticket_audio
+            if ticket_audio.handle(self, self.command):
+                return
+
         if path.startswith("/api/secrets/"):
             from ccc_server import credential_broker
             credential_broker.handle(self, self.command)
@@ -35651,6 +35656,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
         if self._phone_pin_blocked(path):
             return
+        if path.startswith("/api/ticket-audio/"):
+            from ccc_server import ticket_audio
+            if ticket_audio.handle(self, self.command):
+                return
+
         if path.startswith("/api/secrets/"):
             from ccc_server import credential_broker
             credential_broker.handle(self, self.command)
