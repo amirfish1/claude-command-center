@@ -44,6 +44,7 @@ import shlex
 import shutil
 import signal
 import socket
+import socketserver
 import sqlite3
 import stat
 import subprocess
@@ -22902,7 +22903,7 @@ def _launchd_restart_targets_pid(label, expected_pid, timeout=3):
 # in-flight requests finish (bounded), and (3) hands the listening socket to
 # the new process, which accepts that backlog once it is ready.
 _LISTEN_FD_ENV = "CCC_INHERITED_LISTEN_FD"
-_RESTART_DRAIN_TIMEOUT_S = 10.0
+_RESTART_DRAIN_TIMEOUT_S = 60.0
 _HTTPD_SERVER = None
 _ACCEPT_PAUSED = threading.Event()
 _INFLIGHT_LOCK = threading.Lock()
@@ -22911,7 +22912,10 @@ _INFLIGHT_REQUESTS = {}  # id(handler) -> path; long-lived streams excluded
 
 def _inflight_begin(handler):
     with _INFLIGHT_LOCK:
+        if _ACCEPT_PAUSED.is_set():
+            return False
         _INFLIGHT_REQUESTS[id(handler)] = str(getattr(handler, "path", "") or "")
+        return True
 
 
 def _inflight_end(handler):
@@ -23004,18 +23008,80 @@ def _take_inherited_listen_socket(bind_host, port):
     return None
 
 
-def _quiesce_http_for_restart(timeout=_RESTART_DRAIN_TIMEOUT_S):
-    """Stop accepting, let in-flight requests finish, hand off the listener."""
-    server = _HTTPD_SERVER
-    if server is None:
-        return
-    _ACCEPT_PAUSED.set()
+def _quiesce_http_for_stop(timeout=_RESTART_DRAIN_TIMEOUT_S):
+    """Fence new work, then finish accepted requests before any cleanup."""
+    with _INFLIGHT_LOCK:
+        _ACCEPT_PAUSED.set()
     left = _drain_inflight_requests(timeout)
     if left:
         print(f"[restart] drain timed out after {timeout:.0f}s; "
-              f"cutting {len(left)} request(s): {', '.join(sorted(set(left))[:8])}",
+              f"{len(left)} request(s) still running: {', '.join(sorted(set(left))[:8])}",
               flush=True)
+    return left
+
+
+def _quiesce_http_for_restart(timeout=_RESTART_DRAIN_TIMEOUT_S):
+    """Drain before exec or a service-manager restart; cancel if still busy."""
+    server = _HTTPD_SERVER
+    if server is None:
+        return True
+    if _quiesce_http_for_stop(timeout):
+        _ACCEPT_PAUSED.clear()
+        print("[restart] cancelled: requests are still running", flush=True)
+        return False
     _prepare_listen_socket_handoff(getattr(server, "socket", None))
+    return True
+
+
+class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+    request_queue_size = 128
+
+    def _handle_request_noblock(self):
+        # Exec preserves this backlog for the successor. Service-manager
+        # stops cannot pass the listener; the browser retries safe reads.
+        if _ACCEPT_PAUSED.is_set():
+            time.sleep(0.05)
+            return
+        return super()._handle_request_noblock()
+
+
+def _serve_http(server):
+    """All normal exits (SIGTERM, Ctrl+C and errors) drain before cleanup."""
+    global _HTTPD_SERVER
+    _HTTPD_SERVER = server
+
+    def _on_sigterm(signum, frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    finally:
+        # Do this before unregistering or shutting down dependencies that
+        # an in-flight handler may still need. Streams reconnect separately.
+        _quiesce_http_for_stop()
+        try:
+            _unregister_self()
+        except Exception:
+            pass
+        try:
+            from ccc_server import restart_recovery
+            restart_recovery.record_clean_stop()
+        except Exception:
+            pass
+        try:
+            voice_shutdown()
+        except Exception:
+            pass
+        try:
+            _ccc_peer_server_stop()
+        except Exception:
+            pass
+        server.server_close()
 
 
 def _schedule_restart(delay=0.5):
@@ -23028,6 +23094,8 @@ def _schedule_restart(delay=0.5):
             sys.stderr.flush()
         except Exception:
             pass
+        if not _quiesce_http_for_restart():
+            return
         if sys.platform == "darwin":
             for service_label in (_CCC_DASHBOARD_LAUNCHD_LABEL, _CCC_LEGACY_DASHBOARD_LAUNCHD_LABEL):
                 plist_path = _launch_agent_plist_path(service_label)
@@ -23044,10 +23112,6 @@ def _schedule_restart(delay=0.5):
                 except Exception:
                     pass
                 break
-        try:
-            _quiesce_http_for_restart()
-        except Exception:
-            pass
         os.execvp(sys.executable, _server_launch_argv())
     t = threading.Timer(delay, _go)
     t.daemon = True
@@ -45721,8 +45785,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         # restart can let it finish (CCC-282). Idle keep-alive waits never
         # reach this point and are not counted.
         ok = super().parse_request()
-        if ok:
-            _inflight_begin(self)
+        if ok and not _inflight_begin(self):
+            # A connection accepted before the fence can finish parsing
+            # afterwards. Refuse before dispatch: even a POST is safe to
+            # retry ONLY with this explicit non-execution acknowledgement.
+            body = b'{"ok":false,"restarting":true,"error":"Server restarting"}'
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.send_header("Retry-After", "1")
+            self.send_header("X-CCC-Restarting", "1")
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            self.close_connection = True
+            return False
         return ok
 
     def send_header(self, keyword, value):
@@ -48068,20 +48146,6 @@ def main():
     os.umask(0o077)
     _tune_thread_switch_interval()
     _tune_thread_switch_interval()
-    import socketserver
-    class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
-        allow_reuse_address = True
-        daemon_threads = True
-        request_queue_size = 128
-
-        def _handle_request_noblock(self):
-            # While a restart drains (CCC-282), leave new connections in the
-            # kernel backlog; the exec'd successor inherits the socket and
-            # accepts them instead of the proxy seeing a refusal (502).
-            if _ACCEPT_PAUSED.is_set():
-                time.sleep(0.05)
-                return
-            return super()._handle_request_noblock()
     # Parse CLI overrides for this server instance. Env var PORT and the
     # module-level default still apply when the flags are absent.
     port = PORT
@@ -48326,29 +48390,6 @@ def main():
     # transport -- a no-op on every install that hasn't flipped that flag.
     if os.environ.get("CCC_WORKER_PROCESS") != "1":
         _ccc_peer_server_start()
-    # SIGTERM (systemd / `kill <pid>`) needs explicit cleanup; SIGINT (Ctrl+C)
-    # raises KeyboardInterrupt below and is handled there. Both paths remove
-    # this server's registry entry so peers don't see a stale ghost.
-    def _on_sigterm(signum, frame):
-        try:
-            _unregister_self()
-        except Exception:
-            pass
-        try:  # restart recovery: this stop was on purpose, not a crash
-            from ccc_server import restart_recovery as _rr_stop
-            _rr_stop.record_clean_stop()
-        except Exception:
-            pass
-        try:
-            voice_shutdown()
-        except Exception:
-            pass
-        try:
-            _ccc_peer_server_stop()
-        except Exception:
-            pass
-        sys.exit(0)
-    signal.signal(signal.SIGTERM, _on_sigterm)
     display_host = "localhost" if bind_host in ("127.0.0.1", "::1") else bind_host
     print(f"Command Center running at http://{display_host}:{port}")
     print(f"  State dir:     {COMMAND_CENTER_STATE_DIR}")
@@ -48558,25 +48599,7 @@ def main():
     except Exception as e:
         print(f"  [cloud-relay] not started: {e}")
     print()
-    global _HTTPD_SERVER
-    _HTTPD_SERVER = server
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nStopped.")
-        try:
-            _unregister_self()
-        except Exception:
-            pass
-        try:
-            voice_shutdown()
-        except Exception:
-            pass
-        try:
-            _ccc_peer_server_stop()
-        except Exception:
-            pass
-        server.server_close()
+    _serve_http(server)
 
 
 # ── iMessage relay poller ─────────────────────────────────────────────────────
