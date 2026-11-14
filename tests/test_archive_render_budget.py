@@ -59,7 +59,7 @@ def test_render_budget_is_spent_on_the_open_tabs_lane_and_window():
     assert "_archiveWindowAllowsRow(row, cutoff)" in source
     assert "(b.inLane - a.inLane) || (b.inWindow - a.inWindow) || (b.ts - a.ts)" in source
     assert "entry.inLane && entry.inWindow" in source
-    assert "_WT_LAUNCH_PROMPT_RE.test(" in SOURCE[SOURCE.index("function _sidebarBudgetNaturalLane"):start]
+    assert "_WT_LAUNCH_PROMPT_RE.test(" in SOURCE[SOURCE.index("function _sidebarLaneModel"):start]
 
 
 def _fn_body(name):

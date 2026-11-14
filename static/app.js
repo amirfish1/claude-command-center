@@ -41309,6 +41309,7 @@
   const SIDEBAR_RENDER_MORE_ROWS = 240;
   let _sidebarRenderRowLimit = SIDEBAR_RENDER_INITIAL_ROWS;
   let _sidebarRenderScope = '';
+  let _sidebarLoadNotice = '';
 
   const _NON_WORKER_SPAWNED_VIAS = new Set([
     'ui',
@@ -41329,9 +41330,246 @@
   ]);
 
   const _WT_LAUNCH_PROMPT_RE = /^(?:drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b|fix ticket \S+ on the \S+ watchtower queue\b|you are the planner for watchtower ticket |you are an independent (?:plan reviewer|verifier) for watchtower ticket |you are the independent post-fix assessor for the bug ticket |you are the bounded senior reviewer for )/;
-  // Coarse lane guess for the render budget only (the authoritative split is
-  // _allTabLaneFor inside renderConversationList, which also consults
-  // WatchTower ledgers). Used to rank rows, never to hide them.
+  // Pagination and rendering must classify the complete session set identically.
+  // Keep this model cheap: it builds membership, never row HTML.
+  function _sidebarLaneModel(rows) {
+    const _allTabLaneOverride = (c) => {
+      const lane = String((c && c.all_lane_override) || '').trim();
+      return (lane === 'coding' || lane === 'workers' || lane === 'messages' || lane === 'other') ? lane : '';
+    };
+    const _allTabSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
+    // Stage helpers (verifier, planner, plan reviewer, assessor) are spawned
+    // for ONE ticket by the worker draining it, but WatchTower's origin ledger
+    // often records no parent session for them. Without one they sat in the
+    // Workers tab as peers of the workers. Map each self-declared "QUEUE#N"
+    // worker row to its ticket so a parentless helper can nest under it.
+    const _wkTicketOwnerSid = new Map();
+    const _wkTicketOwnerTs = new Map();
+    rows.forEach(c => {
+      const ref = workerSelfTicketRef(c);
+      if (!ref) return;
+      const ts = Number(c.modified || c.last_interacted || c.mtime || 0) || 0;
+      if (!_wkTicketOwnerSid.has(ref) || ts > (_wkTicketOwnerTs.get(ref) || 0)) {
+        _wkTicketOwnerSid.set(ref, _allTabSessionId(c));
+        _wkTicketOwnerTs.set(ref, ts);
+      }
+    });
+    const _wkHelperParentId = (c) => {
+      const facts = workerRowFacts(c);
+      if (!facts.isHelper || !facts.ticketRef) return '';
+      const owner = _wkTicketOwnerSid.get(facts.ticketRef) || '';
+      return owner && owner !== _allTabSessionId(c) ? owner : '';
+    };
+    const _allTabParentId = (c) => f2EffectiveParentSessionId(
+      _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || continuationParentId(c) || c.continued_from_session_id)
+    ) || _wkHelperParentId(c);
+    const _allTabById = new Map();
+    rows.forEach(c => {
+      const id = _allTabSessionId(c);
+      if (id) _allTabById.set(id, c);
+    });
+    const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
+    // A Hermes row is a worker when it ran under a worker profile
+    // (~/.hermes/profiles/*). Tool-call count alone is not a worker signal: a
+    // chat that happened to call tools ("Friendly greeting #7") was landing in
+    // Workers beside real queue drainers.
+    const _isHermesWorkerRow = (c) => _isHermesAllRow(c)
+      && !!String(c.hermes_profile || '').trim();
+    const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);
+    const _wtWorkerSessionIds = new Set();
+    const _wtWorkerQueues = new Set();
+    try {
+      ((_uxqHealthCache && _uxqHealthCache.worker_session_ids) || [])
+        .forEach(sid => { if (sid) _wtWorkerSessionIds.add(String(sid)); });
+      ((_wtWorkersCache && _wtWorkersCache.workers) || []).forEach(w => {
+        if (!w) return;
+        if (w.session_id) _wtWorkerSessionIds.add(String(w.session_id));
+        if (w.queue) _wtWorkerQueues.add(String(w.queue).trim().toUpperCase());
+      });
+      ((_uxqHealthCache && _uxqHealthCache.queues) || []).forEach(q => {
+        if (q && q.queue) _wtWorkerQueues.add(String(q.queue).trim().toUpperCase());
+      });
+      Object.keys(_wtWorkerConvsCache || {}).forEach(sid => { if (sid) _wtWorkerSessionIds.add(String(sid)); });
+    } catch (_) {}
+    const _looksLikeWtWorkerTitle = (c) => {
+      const raw = String((c && (c.display_name || c.ai_title || c.title || c.name)) || '').trim();
+      if (!raw) return false;
+      // `u` flag: without it this strips only 🧵's high UTF-16 half, leaving a
+      // lone low surrogate that breaks the worker-title match below and leaks
+      // an unencodable char into spawn names (OPS-935).
+      const plain = raw.replace(/^🧵\s*/u, '').trim();
+      const low = plain.toLowerCase();
+      if (/^drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b/.test(low)) return true;
+      if (_wtWorkerQueues.size) {
+        // Queue list is warm: a "QUEUE#N" / "QUEUE worker:" title only marks a
+        // worker when QUEUE is a real WatchTower queue. A bare pattern match on
+        // any uppercased prefix misclassified user-renamed sessions like
+        // "CLI#1: done" as workers.
+        for (const q of _wtWorkerQueues) {
+          const qlow = q.toLowerCase();
+          if (low === qlow + ' queue worker' || low === qlow + ' worker' || low.startsWith(qlow + ' worker:')) return true;
+          if (low.startsWith(qlow + '#')) return true;
+        }
+        return false;
+      }
+      // Cold-start fallback: the queue list hasn't loaded yet, so match the
+      // generic WT title shapes. Self-corrects once _uxqHealthCache warms.
+      if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*\s+worker(?::|\s*$)/.test(plain)) return true;
+      if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*#\d+\b/.test(plain)) return true;
+      return false;
+    };
+    // CCC-1239: last-resort fallback. WatchTower's stage roles (planner, plan
+    // reviewer, verifier, post-fix assessor) spawn via `spawn_adhoc`; since
+    // CCC-1241 it pins and ledgers their session_id, so the ledger check
+    // catches them. This prompt match only covers sessions spawned before
+    // that, or whose ledger entry predates a WT reset.
+    const _looksLikeWtLaunchPrompt = (c) => {
+      const first = String((c && c.first_message) || '').trim().toLowerCase();
+      return !!first && _WT_LAUNCH_PROMPT_RE.test(first);
+    };
+    const _isWatchTowerWorkerRow = (c) => {
+      if (!c) return false;
+      // F2 continuation sessions (continued_from_session_id / continuationParentId)
+      // are interactive user sessions continuing prior work; they must never be
+      // classified as WatchTower background workers.
+      if (continuationParentId(c) || (c && c.continued_from_session_id)) return false;
+      const sid = String(c.session_id || c.id || '').trim();
+      return !!(c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c)
+        || _looksLikeWtLaunchPrompt(c));
+    };
+    // A typed spawn marker is trusted launch-time metadata. It lets internal
+    // and external tools choose Workers or Other without fragile title/prompt
+    // matching. The older spawned_via-only contract remains a Worker marker.
+    const _spawnMarkerLane = (c) => {
+      const lane = String((c && c.spawned_lane) || '').trim();
+      return lane === 'workers' || lane === 'other' ? lane : '';
+    };
+    const _isExternalSpawnRow = (c) => {
+      if (!c) return false;
+      const via = String(c.spawned_via || '').trim().toLowerCase();
+      if (!via) return false;
+      return !_NON_WORKER_SPAWNED_VIAS.has(via);
+    };
+    const _allTabNaturalLane = (c) => {
+      const spawnedLane = _spawnMarkerLane(c);
+      if (spawnedLane) return spawnedLane;
+      if (c && (c.spawned_via === 'ccc-ask' || c.spawned_kind === 'assistant')) return 'other';
+      if (c && c.codex_cloud === true) return 'other';
+      if (_isHermesWorkerRow(c) || _isWatchTowerWorkerRow(c) || _isExternalSpawnRow(c)) return 'workers';
+      if (_isHermesMessageRow(c)) return 'messages';
+      return 'coding';
+    };
+    // Experimental idea tickets: a ticketed row's lane is its ticket's queue
+    // (continuations and children inherit the ticket server-side). Ticketless
+    // Coding rows go to Other while the flag is on.
+    const _ideaTicketsOn = ideaTicketsOn();
+    const _ideaTicketFor = (c) => {
+      const seen = new Set();
+      while (c) {
+        const id = _allTabSessionId(c);
+        if (seen.has(id)) break;
+        seen.add(id);
+        const ticket = c.idea_ticket;
+        if (ticket && (ticket.ref || ticket.pending)) return ticket;
+        c = _allTabById.get(_allTabParentId(c));
+      }
+      return null;
+    };
+    const _ideaTicketLane = (c) => {
+      const t = _ideaTicketsOn && c && c.idea_ticket;
+      // A UI spawn still waiting for its first reply sits in Ideas until
+      // its ticket is filed, instead of disappearing into Other.
+      if (t && t.pending) return 'ideas';
+      if (!t || !t.ref) return '';
+      return t.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas';
+    };
+    const _allTabLaneFor = (c, seen = new Set()) => {
+      const ticketLane = _ideaTicketLane(c);
+      if (ticketLane) return ticketLane;
+      const override = _allTabLaneOverride(c);
+      if (override) return override;
+      const id = _allTabSessionId(c);
+      if (id && seen.has(id)) return _allTabNaturalLane(c);
+      if (id) seen.add(id);
+      const parent = _allTabById.get(_allTabParentId(c));
+      if (parent) return _allTabLaneFor(parent, seen);
+      return _allTabNaturalLane(c);
+    };
+    const laneCache = new Map();
+    const laneFor = c => {
+      if (!laneCache.has(c)) laneCache.set(c, _allTabLaneFor(c));
+      return laneCache.get(c);
+    };
+    const baseAllowed = c => c.spawned_via !== 'ccc-ask'
+      && c.spawned_kind !== 'assistant'
+      && !String(c.folder_path || '').includes('/command-center/scratch')
+      && !String(c.slug || '').includes('-claude-command-center-scratch')
+      && c.folder_label !== 'scratch';
+    const sessionAllowed = c => baseAllowed(c) && c.source !== 'github_pr'
+      && (classifyKanbanColumn(c) !== 'backlog' || isApprovalAskRow(c));
+    const codingCount = rows.filter(c => sessionAllowed(c) && !c.trashed
+      && _archiveEngineAllowsRow(c) && laneFor(c) === 'coding').length;
+    // This threshold is a property of the full list, not the current page.
+    const ticketlessInAll = _ideaTicketsOn && codingCount <= 50;
+    const otherLane = c => {
+      const lane = laneFor(c);
+      return lane === 'messages' || lane === 'other'
+        || (_ideaTicketsOn && !ticketlessInAll && lane === 'coding');
+    };
+    const fold = _continuationFoldMaps(rows, _allTabSessionId);
+    const rawSpawnParent = c => {
+      const pid = String(c.parent_session_id || c.hermes_parent_session_id || c.hermes_continued_from || '').trim();
+      return pid && continuationParentId(c) !== pid ? pid : '';
+    };
+    const directMatch = (c, tab) => {
+      if (!sessionAllowed(c) || !_archiveEngineAllowsRow(c)
+          || !_archiveWindowAllowsRow(c, _archiveWindowCutoff())) return false;
+      const lane = laneFor(c);
+      if (tab === 'alltickets') return lane === 'ideas' || lane === 'smallbugs'
+        || (ticketlessInAll && lane === 'coding');
+      if (tab === 'ideas' || tab === 'smallbugs' || tab === 'coding' || tab === 'workers') return lane === tab;
+      if (tab === 'archived') return c.trashed || otherLane(c);
+      if (tab === 'inprogress') return classifyKanbanColumn(c) !== 'archived';
+      return true;
+    };
+    const viewCaches = new Map();
+    const matches = (c, tab, search, seen) => {
+      if (!baseAllowed(c)) return false;
+      if (search) return true; // Search spans tabs, engines and time windows.
+      if (!viewCaches.has(tab)) {
+        // A ticketed lane can pull its worker parent into the view as an
+        // anchor. That parent renders its other lanes too; those siblings
+        // must remain pageable even though their own lane is Workers.
+        const anchors = sidebarRowsWithParentAnchors(rows.filter(row => directMatch(row, tab)), rows);
+        viewCaches.set(tab, new Map(anchors.map(row => [row, true])));
+      }
+      const cache = viewCaches.get(tab);
+      if (cache.has(c)) return cache.get(c);
+      if (directMatch(c, tab)) { cache.set(c, true); return true; }
+      if (c.trashed || !sessionAllowed(c)) return false;
+      // The rendered family also includes lanes attached to an earlier leg
+      // of the topic, even when that lane has a different engine or override.
+      const parent = _allTabById.get(fold.headOf(rawSpawnParent(c)));
+      if (!parent || parent === c || (seen && seen.has(c))) return false;
+      if (!seen) seen = new Set();
+      seen.add(c);
+      const included = matches(parent, tab, false, seen);
+      cache.set(c, included);
+      return included;
+    };
+    const parentIds = c => {
+      const raw = rawSpawnParent(c);
+      return [_allTabParentId(c), raw, fold.headOf(raw), continuationParentId(c)].filter(Boolean);
+    };
+    return { sessionId: _allTabSessionId, parentId: _allTabParentId,
+      byId: _allTabById, laneFor, ticketFor: _ideaTicketFor, parentIds,
+      ideaTicketsOn: _ideaTicketsOn, ticketlessInAll, matches,
+      otherCount: rows.filter(c => sessionAllowed(c) && !c.trashed
+        && _archiveEngineAllowsRow(c) && otherLane(c)).length };
+  }
+
+  // Legacy fallback for callers without a full membership model. The live
+  // renderer supplies _sidebarLaneModel so pagination never guesses its lane.
   function _sidebarBudgetNaturalLane(row) {
     const marker = String(row.spawned_lane || '').trim();
     if (marker === 'workers' || marker === 'other') return marker;
@@ -41388,9 +41626,10 @@
     if (id) seen.add(id);
     return _sidebarBudgetIdeaLane(parent, tab, byId, seen);
   }
-  function _boundSidebarRowsForRender(rows, limit, tab) {
+  function _boundSidebarRowsForRender(rows, limit, tab, membership) {
     const source = Array.isArray(rows) ? rows : [];
-    if (source.length <= limit) return { rows: source, omitted: 0 };
+    if (source.length <= limit) return { rows: source, omitted: 0,
+      matched: membership ? source.filter(membership.matches).length : source.length };
     // Spend the budget on rows the view can actually show: the open tab's
     // lane first, then in-window rows, newest first. Taking rows in server
     // order filled the budget with worker/out-of-window rows the tab then
@@ -41404,10 +41643,10 @@
     const rankedEntries = source
       .map(row => ({
         row,
-        inLane: (tab === 'coding' || tab === 'workers') ? (_sidebarBudgetLaneGuess(row, byId) === tab)
+        inLane: membership ? membership.matches(row) : (tab === 'coding' || tab === 'workers') ? (_sidebarBudgetLaneGuess(row, byId) === tab)
           : (tab === 'ideas' || tab === 'smallbugs' || tab === 'alltickets') ? _sidebarBudgetIdeaLane(row, tab, byId)
           : true,
-        inWindow: _archiveWindowAllowsRow(row, cutoff),
+        inWindow: !!membership || _archiveWindowAllowsRow(row, cutoff),
         ts: _archiveWindowRowTs(row),
       }))
       .sort((a, b) => (b.inLane - a.inLane) || (b.inWindow - a.inWindow) || (b.ts - a.ts));
@@ -41438,13 +41677,16 @@
     const includeWithAncestors = (row) => {
       const chain = [];
       const seen = new Set();
-      let current = row;
-      while (current && !familySelected.has(current) && !seen.has(current)) {
+      const pending = [row];
+      while (pending.length) {
+        const current = pending.pop();
+        if (!current || familySelected.has(current) || seen.has(current)) continue;
         seen.add(current);
         chain.push(current);
-        const pid = String(current.parent_session_id || current.hermes_parent_session_id
-          || continuationParentId(current) || current.continued_from_session_id || '').trim();
-        current = pid ? byId.get(pid) : null;
+        const parentIds = membership ? membership.parentIds(current)
+          : [String(current.parent_session_id || current.hermes_parent_session_id
+            || continuationParentId(current) || current.continued_from_session_id || '').trim()];
+        parentIds.forEach(pid => { if (pid) pending.push(byId.get(pid)); });
       }
       if (familySelected.size + chain.length > limit) return;
       chain.forEach(member => familySelected.add(member));
@@ -41455,7 +41697,9 @@
       if (selected.has(row)) includeWithAncestors(row);
     }
     const result = source.filter(row => familySelected.has(row));
-    return { rows: result, omitted: Math.max(0, source.length - result.length) };
+    const matching = rankedEntries.filter(entry => entry.inLane && entry.inWindow);
+    const matched = matching.filter(entry => familySelected.has(entry.row)).length;
+    return { rows: result, omitted: matching.length - matched, matched };
   }
 
   // What an empty list says on a brand-new install: what to do first, in
@@ -41485,27 +41729,29 @@
     const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();
     if (!_ipSearchActive) convs = sidebarRowsWithParentAnchors(convs, conversationsData);
     const _ipSearchValue = (document.getElementById('convSearch')?.value || '').trim();
-    const _sidebarScope = _ipSearchValue.toLowerCase();
+    const _sidebarTab = (() => {
+      try { return normalizeSidebarTabKey(window.CCCNavigation.getTab()); }
+      catch (_) { return 'coding'; }
+    })();
+    const _sidebarScope = JSON.stringify([_sidebarTab, _ipSearchValue.toLowerCase(),
+      _archiveWindow(), _archiveEngineFilter()]);
     if (_sidebarScope !== _sidebarRenderScope) {
       _sidebarRenderScope = _sidebarScope;
       _sidebarRenderRowLimit = SIDEBAR_RENDER_INITIAL_ROWS;
+      _sidebarLoadNotice = '';
     }
     const _sidebarFullRows = convs;
-    const _sidebarBounded = _boundSidebarRowsForRender(convs, _sidebarRenderRowLimit, (() => {
-      try { return window.CCCNavigation.getTab() || 'coding'; } catch (_) { return 'coding'; }
-    })());
+    try { _ensureEvergreenQueuesFresh(); } catch (_) {}
+    const _sidebarLanes = _sidebarLaneModel(_sidebarFullRows);
+    const _sidebarMembership = {
+      matches: row => _sidebarLanes.matches(row, _sidebarTab, _ipSearchActive),
+      parentIds: _sidebarLanes.parentIds, search: _ipSearchActive,
+    };
+    const _sidebarBounded = _boundSidebarRowsForRender(convs, _sidebarRenderRowLimit,
+      _sidebarTab, _sidebarMembership);
     convs = _sidebarBounded.rows;
     const _sidebarRowsOmitted = _sidebarBounded.omitted;
     _applyOptimisticTouches(convs);
-    // Read the active tab before the row renderer is invoked below. Rows use
-    // this to choose Archive vs Move to Trash, while the tab markup itself is
-    // assembled later in this function.
-    const _sidebarTab = (() => {
-      try {
-        const t = window.CCCNavigation.getTab();
-        return normalizeSidebarTabKey(t);
-      } catch (_) { return 'coding'; }
-    })();
     try { if (typeof syncMobileListViewForTab === 'function') syncMobileListViewForTab(_sidebarTab); } catch (_) {}
     const _activeDraftInputBefore = document.activeElement;
     const _focusDraftIdBefore = (_activeDraftInputBefore && _activeDraftInputBefore.classList.contains('conv-draft-input'))
@@ -45600,10 +45846,6 @@
     // All keeps Active and Archived sessions in its main list. Only the
     // explicit Trashed state moves a row into the separate bottom bucket;
     // pinning and lane overrides never redefine lifecycle state.
-    const _allTabLaneOverride = (c) => {
-      const lane = String((c && c.all_lane_override) || '').trim();
-      return (lane === 'coding' || lane === 'workers' || lane === 'messages' || lane === 'other') ? lane : '';
-    };
     const _arcEngineFilter = _archiveEngineFilter();
     const _arcEngineFilterLabel = {
       codex: 'Codex', kimi: 'Kimi', devin: 'Devin',
@@ -45636,32 +45878,8 @@
       + _trashConvs.length
       + ((_gcItems || []).length || 0)
       + ((Array.isArray(_archivedGroupChats) ? _archivedGroupChats : []).length || 0);
-    const _allTabSessionId = (c) => String((c && (c.session_id || c.id)) || '').trim();
-    // Stage helpers (verifier, planner, plan reviewer, assessor) are spawned
-    // for ONE ticket by the worker draining it, but WatchTower's origin ledger
-    // often records no parent session for them. Without one they sat in the
-    // Workers tab as peers of the workers. Map each self-declared "QUEUE#N"
-    // worker row to its ticket so a parentless helper can nest under it.
-    const _wkTicketOwnerSid = new Map();
-    const _wkTicketOwnerTs = new Map();
-    _allTabUnfilteredConvs.forEach(c => {
-      const ref = workerSelfTicketRef(c);
-      if (!ref) return;
-      const ts = Number(c.modified || c.last_interacted || c.mtime || 0) || 0;
-      if (!_wkTicketOwnerSid.has(ref) || ts > (_wkTicketOwnerTs.get(ref) || 0)) {
-        _wkTicketOwnerSid.set(ref, _allTabSessionId(c));
-        _wkTicketOwnerTs.set(ref, ts);
-      }
-    });
-    const _wkHelperParentId = (c) => {
-      const facts = workerRowFacts(c);
-      if (!facts.isHelper || !facts.ticketRef) return '';
-      const owner = _wkTicketOwnerSid.get(facts.ticketRef) || '';
-      return owner && owner !== _allTabSessionId(c) ? owner : '';
-    };
-    const _allTabParentId = (c) => f2EffectiveParentSessionId(
-      _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || continuationParentId(c) || c.continued_from_session_id)
-    ) || _wkHelperParentId(c);
+    const _allTabSessionId = (c) => _sidebarLanes.sessionId(c);
+    const _allTabParentId = (c) => _sidebarLanes.parentId(c);
     const _allTabTreeRowsFor = (rows) => {
       if (!_ipSearchActive) rows = sidebarRowsWithParentAnchors(rows, _allTabUnfilteredConvs);
       const byId = new Map();
@@ -45700,145 +45918,16 @@
       (rows || []).forEach(c => emit(c, 0)); // cycle/orphan guard
       return out;
     };
-    const _allTabById = new Map();
-    _allTabUnfilteredConvs.forEach(c => {
-      const id = _allTabSessionId(c);
-      if (id) _allTabById.set(id, c);
-    });
-    try { _ensureEvergreenQueuesFresh(); } catch (_) {}
-    const _isHermesAllRow = (c) => !!(c && (c.source === 'hermes' || c.engine === 'hermes'));
-    // A Hermes row is a worker when it ran under a worker profile
-    // (~/.hermes/profiles/*). Tool-call count alone is not a worker signal: a
-    // chat that happened to call tools ("Friendly greeting #7") was landing in
-    // Workers beside real queue drainers.
-    const _isHermesWorkerRow = (c) => _isHermesAllRow(c)
-      && !!String(c.hermes_profile || '').trim();
-    const _isHermesMessageRow = (c) => _isHermesAllRow(c) && !_isHermesWorkerRow(c);
-    const _wtWorkerSessionIds = new Set();
-    const _wtWorkerQueues = new Set();
-    try {
-      ((_uxqHealthCache && _uxqHealthCache.worker_session_ids) || [])
-        .forEach(sid => { if (sid) _wtWorkerSessionIds.add(String(sid)); });
-      ((_wtWorkersCache && _wtWorkersCache.workers) || []).forEach(w => {
-        if (!w) return;
-        if (w.session_id) _wtWorkerSessionIds.add(String(w.session_id));
-        if (w.queue) _wtWorkerQueues.add(String(w.queue).trim().toUpperCase());
-      });
-      ((_uxqHealthCache && _uxqHealthCache.queues) || []).forEach(q => {
-        if (q && q.queue) _wtWorkerQueues.add(String(q.queue).trim().toUpperCase());
-      });
-      Object.keys(_wtWorkerConvsCache || {}).forEach(sid => { if (sid) _wtWorkerSessionIds.add(String(sid)); });
-    } catch (_) {}
-    const _looksLikeWtWorkerTitle = (c) => {
-      const raw = String((c && (c.display_name || c.ai_title || c.title || c.name)) || '').trim();
-      if (!raw) return false;
-      // `u` flag: without it this strips only 🧵's high UTF-16 half, leaving a
-      // lone low surrogate that breaks the worker-title match below and leaks
-      // an unencodable char into spawn names (OPS-935).
-      const plain = raw.replace(/^🧵\s*/u, '').trim();
-      const low = plain.toLowerCase();
-      if (/^drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b/.test(low)) return true;
-      if (_wtWorkerQueues.size) {
-        // Queue list is warm: a "QUEUE#N" / "QUEUE worker:" title only marks a
-        // worker when QUEUE is a real WatchTower queue. A bare pattern match on
-        // any uppercased prefix misclassified user-renamed sessions like
-        // "CLI#1: done" as workers.
-        for (const q of _wtWorkerQueues) {
-          const qlow = q.toLowerCase();
-          if (low === qlow + ' queue worker' || low === qlow + ' worker' || low.startsWith(qlow + ' worker:')) return true;
-          if (low.startsWith(qlow + '#')) return true;
-        }
-        return false;
-      }
-      // Cold-start fallback: the queue list hasn't loaded yet, so match the
-      // generic WT title shapes. Self-corrects once _uxqHealthCache warms.
-      if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*\s+worker(?::|\s*$)/.test(plain)) return true;
-      if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*#\d+\b/.test(plain)) return true;
-      return false;
-    };
-    // CCC-1239: last-resort fallback. WatchTower's stage roles (planner, plan
-    // reviewer, verifier, post-fix assessor) spawn via `spawn_adhoc`; since
-    // CCC-1241 it pins and ledgers their session_id, so the ledger check
-    // catches them. This prompt match only covers sessions spawned before
-    // that, or whose ledger entry predates a WT reset.
-    const _looksLikeWtLaunchPrompt = (c) => {
-      const first = String((c && c.first_message) || '').trim().toLowerCase();
-      return !!first && _WT_LAUNCH_PROMPT_RE.test(first);
-    };
-    const _isWatchTowerWorkerRow = (c) => {
-      if (!c) return false;
-      // F2 continuation sessions (continued_from_session_id / continuationParentId)
-      // are interactive user sessions continuing prior work; they must never be
-      // classified as WatchTower background workers.
-      if (continuationParentId(c) || (c && c.continued_from_session_id)) return false;
-      const sid = String(c.session_id || c.id || '').trim();
-      return !!(c._worker_id || (sid && _wtWorkerSessionIds.has(sid)) || _looksLikeWtWorkerTitle(c)
-        || _looksLikeWtLaunchPrompt(c));
-    };
-    // A typed spawn marker is trusted launch-time metadata. It lets internal
-    // and external tools choose Workers or Other without fragile title/prompt
-    // matching. The older spawned_via-only contract remains a Worker marker.
-    const _spawnMarkerLane = (c) => {
-      const lane = String((c && c.spawned_lane) || '').trim();
-      return lane === 'workers' || lane === 'other' ? lane : '';
-    };
-    const _isExternalSpawnRow = (c) => {
-      if (!c) return false;
-      const via = String(c.spawned_via || '').trim().toLowerCase();
-      if (!via) return false;
-      return !_NON_WORKER_SPAWNED_VIAS.has(via);
-    };
-    const _allTabNaturalLane = (c) => {
-      const spawnedLane = _spawnMarkerLane(c);
-      if (spawnedLane) return spawnedLane;
-      if (c && (c.spawned_via === 'ccc-ask' || c.spawned_kind === 'assistant')) return 'other';
-      if (c && c.codex_cloud === true) return 'other';
-      if (_isHermesWorkerRow(c) || _isWatchTowerWorkerRow(c) || _isExternalSpawnRow(c)) return 'workers';
-      if (_isHermesMessageRow(c)) return 'messages';
-      return 'coding';
-    };
-    // Experimental idea tickets: a ticketed row's lane is its ticket's queue
-    // (continuations and children inherit the ticket server-side). Ticketless
-    // Coding rows go to Other while the flag is on.
-    const _ideaTicketsOn = ideaTicketsOn();
-    const _ideaTicketFor = (c) => {
-      const seen = new Set();
-      while (c) {
-        const id = _allTabSessionId(c);
-        if (seen.has(id)) break;
-        seen.add(id);
-        const ticket = c.idea_ticket;
-        if (ticket && (ticket.ref || ticket.pending)) return ticket;
-        c = _allTabById.get(_allTabParentId(c));
-      }
-      return null;
-    };
-    const _ideaTicketLane = (c) => {
-      const t = _ideaTicketsOn && c && c.idea_ticket;
-      // A UI spawn still waiting for its first reply sits in Ideas until
-      // its ticket is filed, instead of disappearing into Other.
-      if (t && t.pending) return 'ideas';
-      if (!t || !t.ref) return '';
-      return t.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas';
-    };
-    const _allTabLaneFor = (c, seen = new Set()) => {
-      const ticketLane = _ideaTicketLane(c);
-      if (ticketLane) return ticketLane;
-      const override = _allTabLaneOverride(c);
-      if (override) return override;
-      const id = _allTabSessionId(c);
-      if (id && seen.has(id)) return _allTabNaturalLane(c);
-      if (id) seen.add(id);
-      const parent = _allTabById.get(_allTabParentId(c));
-      if (parent) return _allTabLaneFor(parent, seen);
-      return _allTabNaturalLane(c);
-    };
+    const _allTabById = _sidebarLanes.byId;
+    const _ideaTicketsOn = _sidebarLanes.ideaTicketsOn;
+    const _ideaTicketFor = _sidebarLanes.ticketFor;
+    const _allTabLaneFor = _sidebarLanes.laneFor;
     const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');
     // Sessions only get tickets when started from the UI, so someone who runs
     // `claude` in a terminal would otherwise see "All 0" and find their work
     // under Other. Past this size the user has a ticket habit and All is the
     // curated list; below it, All has to mean all.
-    const _ticketlessRowsInAll = _ideaTicketsOn && _allTabCodingConvs.length <= 50;
+    const _ticketlessRowsInAll = _sidebarLanes.ticketlessInAll;
     const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');
     const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');
     const _allTabOtherConvs = _allTabConvs.filter(c => {
@@ -46786,7 +46875,7 @@
     // CCC-851: "Other" (née All) holds only the leftover lanes -- Hermes
     // messages + group chats -- since Coding/Workers sessions now live
     // exclusively under their own top-level tabs. Hidden entirely when empty.
-    const _otherTabCount = _allTabGroupChatCount + _allTabOtherConvs.length;
+    const _otherTabCount = _allTabGroupChatCount + _sidebarLanes.otherCount;
     const _otherTabDef = ['archived', 'Other', _otherTabCount];
     const _tabDefs = _ideaTicketsOn
       ? [
@@ -46849,10 +46938,14 @@
       // `||` fallback keeps the empty-state text when BOTH are empty while
       // still showing ready-to-merge rows when only In-progress is empty.
       : ((_readyToMergeHtml + _forceOpen(_inProgressHtml, 'conv-inprogress-section')) || _tabEmpty('in-progress sessions'));
-    const _showMoreRowsHtml = (_sidebarRowsOmitted && (_sidebarTab !== 'workers' || _ipSearchActive) && (_ipSearchActive || (_sidebarTab !== 'decisions' && _sidebarTab !== 'decisions2' && _sidebarTab !== 'jobs')))
-      ? '<div class="archive-empty-state"><button type="button" class="conv-window-btn" data-role="sidebar-show-more">Show '
-        + Math.min(SIDEBAR_RENDER_MORE_ROWS, _sidebarRowsOmitted)
-        + ' more sessions</button><div>' + _sidebarRowsOmitted + ' older rows are not rendered yet.</div></div>'
+    const _canShowMoreRows = _sidebarRowsOmitted && (_ipSearchActive
+      || ['alltickets', 'ideas', 'smallbugs', 'coding', 'archived', 'inprogress'].includes(_sidebarTab));
+    const _showMoreRowsHtml = (_canShowMoreRows || _sidebarLoadNotice)
+      ? '<div class="archive-empty-state sidebar-pagination">'
+        + (_canShowMoreRows ? '<button type="button" class="conv-window-btn" data-role="sidebar-show-more">Load more sessions</button>'
+          + '<div>' + _sidebarRowsOmitted + ' more matching sessions.</div>' : '')
+        + '<div data-role="sidebar-load-status" role="status" aria-live="polite">'
+        + escapeHtml(_sidebarLoadNotice || 'Sessions inside collapsed groups stay grouped.') + '</div></div>'
       : '';
     const _convListHtml = _tabBarHtml + _idSearchRowsHtml + _repoSearchRowsHtml
       + (_ipSearchActive ? _textSearchRowsHtml : _tabBody) + _showMoreRowsHtml;
@@ -47001,9 +47094,20 @@
     const _showMoreRowsButton = $convList.querySelector('[data-role="sidebar-show-more"]');
     if (_showMoreRowsButton) {
       _showMoreRowsButton.addEventListener('click', () => {
+        const before = new Set(Array.from($convList.querySelectorAll('.conv-item[data-id]'), row => row.dataset.id));
         _sidebarRenderRowLimit += SIDEBAR_RENDER_MORE_ROWS;
+        const next = _boundSidebarRowsForRender(_sidebarFullRows, _sidebarRenderRowLimit,
+          _sidebarTab, _sidebarMembership);
+        const loaded = Math.max(0, next.matched - _sidebarBounded.matched);
+        _sidebarLoadNotice = loaded + ' more matching sessions loaded. Expand groups or Archived to see nested sessions.';
         _convListRenderSig = null;
         renderConversationList(_sidebarFullRows);
+        // Point at the result, rather than leaving the viewport on a footer
+        // whose replacement can look as though the click did nothing.
+        const firstNewVisible = Array.from($convList.querySelectorAll('.conv-item[data-id]'))
+          .find(row => !before.has(row.dataset.id) && row.checkVisibility());
+        if (firstNewVisible) firstNewVisible.scrollIntoView({ block: 'nearest' });
+        showOpToast(_sidebarLoadNotice, 'info');
       });
     }
     if (_objectsSplitActive) _updateSidebarFillSection($convList);
