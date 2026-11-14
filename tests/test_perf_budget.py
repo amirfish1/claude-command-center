@@ -972,6 +972,7 @@ def test_live_engine_scan_skips_claude_spawn_polling(monkeypatch):
     # _live_engine_session_ids scans ps via _raw_engine_process_commands, not
     # the find_live_* helpers above; stub it or real local engine processes leak in.
     monkeypatch.setattr(server, "_raw_engine_process_commands", lambda engine: [])
+    monkeypatch.setattr(server, "_scan_engine_processes", lambda: [])
     monkeypatch.setattr(server, "_engine_live_sids_cache", {"ts": 0.0, "sids": frozenset()})
     polled = []
 
