@@ -30821,13 +30821,12 @@
     if (c.has_push) return { key: 'pushed', label: 'pushed' };
     if (c.has_commit) return { key: 'committed', label: 'committed' };
     if (hasReadOnlyWork(c)) return { key: 'read-only', label: 'read-only' };
-    if (hasNoEdits(c)) return { key: 'no-edits', label: 'no edits' };
     return { key: '', label: '' };
   }
 
   // Compact chip strip for a session in the flow board — mirrors (a
   // subset of) the lifecycle chips in the regular conv list:
-  //   pushed | committed | no-edits | PR # | uncommitted
+  //   pushed | committed | PR # | uncommitted
   // Plus a live activity chip (tool name or WIP) when the agent is
   // actively running, and a numeric counter chip when a commit count is
   // available. Returns an HTML string ready to drop into the node body.
@@ -30876,10 +30875,6 @@
       chips.push('<span class="flow-chip pushed" title="Pushed to remote">pushed</span>');
     } else if (c.has_commit) {
       chips.push('<span class="flow-chip committed" title="Has commits, not pushed">committed</span>');
-    } else if (c.has_edit === false && Number(c.subagent_count || 0) === 0) {
-      // Don't show "no edits" when subagents ran — they likely edited
-      // things even though the parent JSONL has no Edit tool_use.
-      chips.push('<span class="flow-chip no-edits" title="No file edits in this session">no edits</span>');
     }
     // Numeric counter chip when server exposes one. commit_count is
     // intentionally optional — falls back to a qualitative chip above
@@ -38687,9 +38682,7 @@
     if (hasLabel('claude-in-progress')) return 'working';
 
     // Fallback: dead session with no commits/edits/labels. Used to land in a
-    // separate 'inactive' column; now lives in Working. The "no edits" chip
-    // (see hasNoEdits) flags any card — live or dead — that has yet to touch
-    // a file, so the user can spot resumable shells without a separate column.
+    // separate 'inactive' column; now lives in Working.
     return 'working';
   }
 
@@ -38720,32 +38713,9 @@
     );
   }
 
-  // True when this session has never edited a file and has no completed
-  // read-only output to show. Drives the "no edits" chip in both the list
-  // view and the kanban card. Excludes verified / archived (terminal state,
-  // chip is noise) and backlog (different render path).
-  function hasNoEdits(c) {
-    if (!c) return false;
-    if (c.verified || c.archived) return false;
-    if (c.source === 'backlog') return false;
-    // Live or just-spawned sessions might be mid-work — don't claim
-    // "no edits" while they're still running. WIP/sending chips take
-    // their spot at higher precedence anyway.
-    if (c.is_live || c.pending_spawn) return false;
-    if (hasReadOnlyWork(c)) return false;
-    // Sessions that spawn subagents (Task tool) delegate edits to the
-    // subagent JSONLs — the parent JSONL has no Edit/Write/NotebookEdit
-    // tool_use, so c.has_edit stays false even when many edits actually
-    // happened. Don't claim "no edits" when subagents ran; their work
-    // counts. Same applies if the row carries direct edit indicators
-    // (commit / push / PR), which already short-circuit above.
-    if (Number(c.subagent_count || 0) > 0) return false;
-    return !c.has_edit;
-  }
-
   // ── Mobile redesign: single dominant status per card ──
   // Reduces the ~7 same-weight badges (issue chip, needs-approval, question,
-  // stale-tool, stage chip, no-edits/read-only) desktop shows directly on
+  // stale-tool, stage chip, read-only) desktop shows directly on
   // the card face into one Working/Idle/Stuck/Offline line. Reads the exact
   // same fields desktop already computes (is_live, sidecar_status,
   // stale_tool_call, needs_approval, question_waiting) — no new data source.
@@ -39126,10 +39096,9 @@
         const pendingSpawn = c.pending_spawn ? ' pending-spawn' : '';
         const spawnFailed = c.spawn_failed ? ' spawn-failed' : '';
         const recentlyBorn = isRecentlyBorn(c.session_id) ? ' recently-born' : '';
-        const noEditsAttr = hasNoEdits(c) ? ' no-edits' : '';
         const readOnlyAttr = hasReadOnlyWork(c) ? ' read-only' : '';
         const isGithubColIssue = c.backlog_type === 'github' || c.issue_number || c.linked_issue;
-        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + spawnFailed + recentlyBorn + noEditsAttr + readOnlyAttr + (isGithubColIssue ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
+        html += '<div class="kanban-card' + active + trulyActive + pendingSpawn + spawnFailed + recentlyBorn + readOnlyAttr + (isGithubColIssue ? ' is-github-issue' : '') + '" draggable="' + rowDraggableAttr() + '" data-id="' + c.id + '" data-session-id="' + escapeHtml(c.session_id || c.id) + '" data-col="' + colKey + '">';
         // Create-issue button only when no issue is linked. The "view issue" link
         // was removed — tapping the #NNN badge in the title opens the issue.
         const linkedIssue = c.linked_issue || c.issue_number || '';
@@ -39208,7 +39177,7 @@
         // first thing the eye lands on when scanning the Waiting column.
         // Mobile redesign: replaced by one dominant status line below —
         // this whole badge-soup block (needs-approval/question/issue chip/
-        // stage/no-edits/read-only) folds into a collapsed Details panel
+        // stage/read-only) folds into a collapsed Details panel
         // instead, so desktop keeps every statement below unchanged.
         if (isMobileChromeActive()) {
           html += mobileCardStatusLineHtml(deriveMobileCardStatus(c, trulyActive));
@@ -39246,9 +39215,7 @@
         }
         if (!isMobileChromeActive()) {
         html += '<div class="kanban-card-stage ' + stageCls + '">' + escapeHtml(stageLabel) + '</div>';
-        if (noEditsAttr) {
-          html += '<span class="kanban-card-stage no-edits" title="Agent has not edited any files in this session">no edits</span>';
-        } else if (readOnlyAttr) {
+        if (readOnlyAttr) {
           html += '<span class="kanban-card-stage read-only" title="No file edits detected in this session. You can still reply or request changes.">read-only</span>';
         }
         }
@@ -39318,8 +39285,7 @@
           const detailBits = [pres.engineLabel + (pres.tierLabel ? ' \u00b7 ' + pres.tierLabel + ' cost' : '')];
           if (linkedIssue) detailBits.push('GH #' + linkedIssue);
           detailBits.push(stageLabel);
-          if (noEditsAttr) detailBits.push('no edits');
-          else if (readOnlyAttr) detailBits.push('read-only');
+          if (readOnlyAttr) detailBits.push('read-only');
           if (c.stale_tool_call) {
             detailBits.push('stuck on ' + liveActivityToolLabel(c.pending_tool || c.sidecar_tool || 'tool'));
           } else if (c.is_live && c.sidecar_status === 'active' && c.sidecar_tool && c.sidecar_tool !== 'AskUserQuestion') {
@@ -42640,7 +42606,6 @@
       //   5. pushed.
       //   6. committed (local commits not yet pushed).
       //   7. read-only (agent produced output without touching files).
-      //   8. no edits (agent has touched nothing this session).
       let signals = '';
       // GH-issue link chip — additive, lives at the front of the signal
       // chain. Sessions linked to a GH issue show "#N" so they're scannable
@@ -42822,7 +42787,7 @@
       // Without this, an injected session (e.g. UX-fixes-queue receive)
       // showed "Sending…" briefly in the live-tool slot but the
       // lifecycle chip stayed on whatever was there before (read-only /
-      // no-edits / pushed) and the user saw NO indication that work was
+      // pushed) and the user saw NO indication that work was
       // currently happening. The optimistic flag is set by
       // markSessionSending on send/inject and auto-clears after
       // _SENDING_TIMEOUT_MS — long enough to bridge most agent turns.
@@ -42944,8 +42909,6 @@
       // status, not as a separate badge.
       } else if (_showGitStateSignals && hasReadOnlyWork(c)) {
         signals += '<span class="conv-signal read-only" title="No file edits detected in this session. You can still reply or request changes.">read-only</span>';
-      } else if (_showGitStateSignals && hasNoEdits(c)) {
-        signals += '<span class="conv-signal no-edits" title="Agent has not edited any files in this session">no edits</span>';
       }
 
       // Merge button: shown when this row plausibly has an open PR.
@@ -43072,14 +43035,6 @@
       // the meta row — it wrapped onto a second line and is redundant with the
       // size shown in the status rail (#statusRailSize, see CCC-280/CCC-475).
       const rowSizeHtml = '';
-      // Suppressed when the row sits under a folder
-      // group header that already labels the folder — chip would be noise.
-      const folderChipHtml = (c.folder_label_chip && !opts.suppressFolderChip)
-        ? '<span class="conv-folder-chip' + (c.folder_chip_orphan ? ' is-orphan' : '')
-            + '" style="--chip-hue:' + (c.folder_chip_hue | 0) + ';"'
-            + ' title="' + escapeHtml(c.folder_path || c.session_cwd || '') + '">'
-            + repoAvatarHtml(c.folder_path || c.session_cwd, c.folder_label_chip) + escapeHtml(c.folder_label_chip) + '</span>'
-        : '';
       // Worktree badge — shown when the session came from a sibling worktree
       // dir (e.g. "claude-command-center-wt-gemini" → badge shows "wt-gemini").
       const worktreeBadgeHtml = c.worktree_label
@@ -43261,18 +43216,8 @@
           + '<span class="conv-status-slot">' + liveToolHtml + signals + '</span>'
           + '</span>'
         : '';
-      // Hover meta row — chip order: object → folder → provenance → session-id
-      // → goal → others.
-      // Suppress object chip when rows are already grouped under an object header
-      // (elevateToObject = by-objects sidebar mode — the chip would be noise).
-      // Dedupe: if the object title matches the folder label exactly (case-insensitive),
-      // drop the folder chip — they're showing the same thing.
-      const _hmObj = flowObjectForConversation(c);
-      const _hmObjTitle = _hmObj ? String(_hmObj.title || '').trim() : '';
+      // Object grouping already supplies the object context when enabled.
       const _hmObjectChip = opts.elevateToObject ? '' : objectChipHtml;
-      const _hmFolderChip = (ideaAvatarHtml || (folderChipHtml && _hmObjTitle && c.folder_label_chip
-        && _hmObjTitle.toLowerCase() === String(c.folder_label_chip).toLowerCase()))
-        ? '' : folderChipHtml;
       // Brief disclosure chevron — only for rows that have a did brief.
       // _briefExpandedRows is loaded once per render from localStorage.
       const _briefSid = c.session_id || c.id || '';
@@ -43292,12 +43237,11 @@
         ? '<span class="meta-runtime-free" title="This session runs on CCC’s free router - it costs $0.">$0</span>'
         : '';
       // Meta row: shown when there are chips or a brief chevron.
-      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || _hmFolderChip || sessionProvenanceChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief);
+      const _hasMetaContent = !opts.evergreenAgent && (_hmObjectChip || sessionProvenanceChipHtml || goalMetaHtml || pinnedHtml || rowSizeHtml || branchSlotHtml || _runtimeFreeChipHtml || _hasBrief);
       const hoverMetaRowHtml = _hasMetaContent
         ? '<div class="conv-hover-meta-row">'
           + _briefChevronHtml
           + _hmObjectChip
-          + _hmFolderChip
           + sessionProvenanceChipHtml
           + _runtimeFreeChipHtml
           + goalMetaHtml
@@ -82227,7 +82171,7 @@
         // Round 2: live flag + state pills, all derived server-side
         // from sidecar / git status / JSONL events with mtime-based
         // caching. Powers the blue live dot + uncommitted/committed/
-        // pushed/no-edits chips + PR #N + Ready-to-merge bucket.
+        // pushed chips + PR #N + Ready-to-merge bucket.
         is_live: !!c.is_live,
         state: c.state || '',
         ended_blocked: !!c.ended_blocked,

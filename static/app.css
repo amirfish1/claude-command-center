@@ -8162,7 +8162,7 @@
   .compact-rows .conv-item .conv-row-meta .conv-branch-slot { display: none; }
   .compact-rows .conv-item.active .conv-hover-meta-row { display: flex; }
   /* Compact also drops the terminal git-state badges (pushed / committed /
-     read-only / no edits) — they're status-at-rest, not live activity. The
+     read-only) — they're status-at-rest, not live activity. The
      blinking WIP / waiting / live-tool signals stay. */
   .compact-rows .conv-item .conv-signal.pushed,
   .compact-rows .conv-item .conv-signal.uncommitted,
@@ -8170,8 +8170,7 @@
   .compact-rows .conv-item .conv-signal.pr-merged,
   .compact-rows .conv-item .conv-signal.pr-closed,
   .compact-rows .conv-item .conv-signal.committed,
-  .compact-rows .conv-item .conv-signal.read-only,
-  .compact-rows .conv-item .conv-signal.no-edits { display: none; }
+  .compact-rows .conv-item .conv-signal.read-only { display: none; }
   .conv-folder-group .conv-item.is-grouped-row {
     /* Parity with "by time" rows — same vertical padding (6px) and same
        border-radius (6px). The original tightening (4px / 4px) made the
@@ -9269,7 +9268,6 @@
   .conv-signal.spawn-failed { background: rgba(248,81,73,0.15); color: var(--red); }
   .conv-signal.pkood-running { background: rgba(63,185,80,0.15); color: var(--green); }
   .conv-signal.pkood-idle { background: rgba(88,166,255,0.1); color: var(--accent); }
-  .conv-signal.no-edits { background: rgba(88,166,255,0.1); color: var(--accent); }
   .conv-signal.read-only { background: rgba(139,148,158,0.12); color: var(--text-muted); }
   .conv-signal.pkood-blocked { background: rgba(248,81,73,0.15); color: var(--red); animation: pulse 2s infinite; }
   .conv-signal.pkood-stuck { background: rgba(248,81,73,0.25); color: var(--red); font-weight: 700; }
@@ -11625,7 +11623,6 @@
   .flow-node-session.is-uncommitted { border-left-color: var(--orange); }
   .flow-node-session.is-failed { border-left-color: var(--red); }
   .flow-node-session.is-read-only,
-  .flow-node-session.is-no-edits,
   .flow-node-session.is-idle { border-left-color: var(--accent); }
   .flow-node-chips {
     display: flex; flex-wrap: wrap; gap: 4px;
@@ -11652,7 +11649,6 @@
   .flow-chip.uncommitted { color: var(--orange); border-color: rgba(255, 165, 0, 0.45); }
   .flow-chip.pushed      { color: var(--cyan);   border-color: rgba(80, 200, 220, 0.4); }
   .flow-chip.committed   { color: var(--cyan);   border-color: rgba(80, 200, 220, 0.4); }
-  .flow-chip.no-edits    { color: var(--text-2); }
   .flow-chip.pr-open     { color: var(--cyan);   border-color: rgba(80, 200, 220, 0.4); }
   .flow-chip.pr-merged   { color: var(--purple); border-color: rgba(168, 102, 232, 0.45); }
   .flow-chip.pr-closed   { color: var(--text-2); }
@@ -12039,10 +12035,6 @@
     will-change: opacity;
     pointer-events: none;
   }
-  /* "no edits" attribute: shown on cards whose Claude has never edited a file
-     (live or dead — liveness doesn't matter). Renders as a small lowercase
-     blue chip next to the stage chip. No card-level dimming so cards stay
-     scannable. */
   /* Pending (optimistic placeholder while /api/sessions/spawn is in flight)
      and recently-born (the real session that replaced it, or any session
      that first appeared during a live poll) share one shimmer style so the
@@ -12195,7 +12187,6 @@
   .kanban-card .kanban-card-stage.stage { background: rgba(188,140,255,0.15); color: var(--purple); }
   .kanban-card .kanban-card-stage.committed { background: rgba(63,185,80,0.15); color: var(--green); }
   .kanban-card .kanban-card-stage.testing { background: rgba(251,202,4,0.15); color: #FBCA04; }
-  .kanban-card .kanban-card-stage.no-edits { background: rgba(88,166,255,0.1); color: var(--accent); margin-left: 4px; }
   .kanban-card .kanban-card-stage.read-only { background: rgba(139,148,158,0.12); color: var(--text-muted); margin-left: 4px; }
   .kanban-issue-badge {
     display: inline-block; font-size: 11px; padding: 1px 6px;
