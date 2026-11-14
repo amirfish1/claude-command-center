@@ -109,6 +109,7 @@ class _PriorityLock:
         self._cond = threading.Condition()
         self._busy = False
         self._fg_waiting = 0
+        self._bg_waiting = 0
         self._fg_released = 0.0
         self._holder_fg = False
         self._bg_ready_at = 0.0
@@ -125,14 +126,18 @@ class _PriorityLock:
                 finally:
                     self._fg_waiting -= 1
             else:
-                while True:
-                    now = time.monotonic()
-                    budget = self._background_budget()
-                    pause = max(self.FG_GRACE_S - (now - self._fg_released),
-                                self._bg_ready_at - now if budget else 0.0)
-                    if not self._busy and not self._fg_waiting and pause <= 0:
-                        break
-                    self._cond.wait(None if self._busy or self._fg_waiting else min(1.0, max(0.001, pause)))
+                self._bg_waiting += 1
+                try:
+                    while True:
+                        now = time.monotonic()
+                        budget = self._background_budget()
+                        pause = max(self.FG_GRACE_S - (now - self._fg_released),
+                                    self._bg_ready_at - now if budget else 0.0)
+                        if not self._busy and not self._fg_waiting and pause <= 0:
+                            break
+                        self._cond.wait(None if self._busy or self._fg_waiting else min(1.0, max(0.001, pause)))
+                finally:
+                    self._bg_waiting -= 1
             self._busy = True
             self._holder_fg = fg
             self._budget = 0.0 if fg else self._background_budget()
@@ -256,6 +261,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "model": os.path.basename(model_path()), "stream": lameenc is not None,
                              "rev": SERVER_REV, "pid": os.getpid(), "nice": os.nice(0),
                              "threads": int(os.environ.get("CCC_KOKORO_THREADS", "").strip() or "4"),
+                             "busy": _SYNTH_LOCK._busy,
+                             "fg_waiting": _SYNTH_LOCK._fg_waiting,
+                             "bg_waiting": _SYNTH_LOCK._bg_waiting,
                              "background_cpu_budget": _SYNTH_LOCK._background_budget(),
                              "background_wait_s": round(max(0.0, _SYNTH_LOCK._bg_ready_at - time.monotonic()), 2)})
         else:

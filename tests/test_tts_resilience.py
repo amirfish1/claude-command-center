@@ -742,6 +742,151 @@ const _ttsFetchNeural = (text) => {
         self.assertEqual(result["statuses"], ["ready", "cancelled", "cancelled", "cancelled"])
         self.assertEqual(result["retryTimers"], [])
 
+    def test_diagnostics_section_displays_live_tts_queue_counts(self):
+        diag_block = self.source[
+            self.source.index("  const _ttsServerQueueSnap ="):
+            self.source.index("  function _ttsWatchCacheEntry(")
+        ]
+        result = self.run_node(
+            """
+const _ttsDebugJobs = [];
+let _ttsCacheDebugFrame = null;
+const els = new Map();
+const mkEl = (id) => {
+  const el = {
+    id: id || '',
+    textContent: '',
+    title: '',
+    style: {},
+    children: [],
+    appendChild(child) {
+      this.children.push(child);
+      if (child.id) els.set(child.id, child);
+      return child;
+    },
+  };
+  if (id) els.set(id, el);
+  return el;
+};
+const perfTtsEl = mkEl('cccPerfTtsQueue');
+const summaryEl = mkEl('');
+const window = {};
+const document = {
+  getElementById: (id) => els.get(id) || null,
+  querySelector: (sel) => (sel === '.session-usage-drawer > summary' ? summaryEl : null),
+  createElement: () => mkEl(''),
+};
+const requestAnimationFrame = (fn) => { _ttsCacheDebugFrame = 1; return 1; };
+const _ttsRefreshCacheCoverage = () => {};
+const _ttsRefreshCacheDebug = () => {};
+"""
+            + diag_block
+            + """
+const idle = {
+  stats: _ttsUpdateDiagnosticsQueue(),
+  row: perfTtsEl.textContent,
+  summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+};
+_ttsDebugJobs.push(
+  { text: 'head', status: 'processing' },
+  { text: 'c1', status: 'queued' },
+  { text: 'c2', status: 'queued' },
+  { text: 'c3', status: 'queued' },
+);
+_ttsScheduleCacheDebug();
+const localBusy = {
+  row: perfTtsEl.textContent,
+  summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+};
+// Another tab also has 1 request in flight + 2 session clips waiting on server.
+window.__cccUpdateTtsDiagnostics({ in_flight: 2, active: 1, waiting: 3, session_waiting: 2, fg: 1, bg: 1 });
+const multiTabBusy = {
+  row: perfTtsEl.textContent,
+  summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+};
+// Local requests finish; only the other tab's work remains until next server snapshot clears it.
+for (const j of _ttsDebugJobs) j.status = 'ready';
+_ttsScheduleCacheDebug();
+const afterLocalDone = {
+  row: perfTtsEl.textContent,
+  summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+};
+window.__cccUpdateTtsDiagnostics({ in_flight: 0, active: 0, waiting: 0, session_waiting: 0, fg: 0, bg: 0 });
+const backToIdle = {
+  row: perfTtsEl.textContent,
+  summary: (els.get('cccDiagTtsSummary') || {}).textContent || '',
+};
+console.log(JSON.stringify({ idle, localBusy, multiTabBusy, afterLocalDone, backToIdle }));
+"""
+        )
+        self.assertEqual(result["idle"]["row"], "tts queue: 0 queued")
+        self.assertEqual(result["idle"]["summary"], "")
+        self.assertEqual(result["localBusy"], {
+            "row": "tts queue: 4 queued (1 active · 3 waiting)",
+            "summary": " · TTS: 4 queued",
+        })
+        self.assertEqual(result["multiTabBusy"], {
+            "row": "tts queue: 7 queued (1 active · 6 waiting)",
+            "summary": " · TTS: 7 queued",
+        })
+        self.assertEqual(result["afterLocalDone"], {
+            "row": "tts queue: 3 queued (1 active · 2 waiting)",
+            "summary": " · TTS: 3 queued",
+        })
+        self.assertEqual(result["backToIdle"], {
+            "row": "tts queue: 0 queued",
+            "summary": "",
+        })
+
+    def test_server_tts_queue_stats_track_uncached_streams_and_sessions(self):
+        import io
+        from unittest import mock
+        from ccc_server import free_runtime as fr
+
+        class FakeResp(io.BytesIO):
+            chunked = True
+            headers = {}
+
+        with fr._TTS_QUEUE_LOCK:
+            saved = dict(fr._TTS_IN_FLIGHT)
+            fr._TTS_IN_FLIGHT.update({"fg": 0, "bg": 0, "remote": 0})
+        try:
+            self.assertEqual(fr.tts_queue_stats()["queued"], 0)
+            with mock.patch.object(fr, "_local_tts_start", return_value=True), \
+                    mock.patch.object(fr, "_clip_cache_get", return_value=None), \
+                    mock.patch.object(fr, "_clip_cache_put"), \
+                    mock.patch("urllib.request.urlopen", side_effect=[FakeResp(b"mp3-a"), FakeResp(b"mp3-b")]):
+                clip1, _ = fr.local_tts_open("First uncached sentence.", "Kokoro: af_heart", "fg")
+                clip2, _ = fr.local_tts_open("Second uncached sentence.", "Kokoro: af_heart", "bg")
+                mid = fr.tts_queue_stats()
+                self.assertEqual(mid["queued"], 2)
+                self.assertEqual(mid["in_flight"], 2)
+                self.assertEqual(mid["active"], 1)
+                self.assertEqual(mid["waiting"], 1)
+                self.assertEqual(mid["fg"], 1)
+                self.assertEqual(mid["bg"], 1)
+                with clip1:
+                    while clip1.read(4):
+                        pass
+                after_one = fr.tts_queue_stats()
+                self.assertEqual(after_one["queued"], 1)
+                self.assertEqual(after_one["waiting"], 0)
+                # Early close and repeated close must release once without underflow.
+                clip2.close()
+                clip2.close()
+                self.assertEqual(fr.tts_queue_stats()["queued"], 0)
+
+            # Cached clips do not enter the synthesis queue.
+            with mock.patch.object(fr, "_local_tts_start", return_value=True), \
+                    mock.patch.object(fr, "_clip_cache_get", return_value=b"cached-mp3"):
+                cached_clip, _ = fr.local_tts_open("Already cached.", "Kokoro: af_heart", "fg")
+                self.assertEqual(fr.tts_queue_stats()["queued"], 0)
+                with cached_clip:
+                    cached_clip.read()
+        finally:
+            with fr._TTS_QUEUE_LOCK:
+                fr._TTS_IN_FLIGHT.update(saved)
+
 
 if __name__ == "__main__":
     unittest.main()

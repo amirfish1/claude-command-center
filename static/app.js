@@ -2072,6 +2072,12 @@
     sec.id = 'cccPerfSection';
     sec.style.cssText = 'flex:0 0 auto;border-top:1px solid var(--border-color,#30363d);' +
       'font:600 12px/1.5 ui-monospace,Menlo,monospace;color:var(--text-secondary,#9aa);';
+    const ttsQueueEl = document.createElement('div');
+    ttsQueueEl.id = 'cccPerfTtsQueue';
+    ttsQueueEl.style.cssText = 'padding:4px 10px;border-bottom:1px solid var(--border-color,#30363d);' +
+      'opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    ttsQueueEl.textContent = 'tts queue: 0 queued';
+    ttsQueueEl.title = 'Live TTS requests queued right now across browser prepare-ahead and server synthesis';
     const head = document.createElement('div');
     head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 10px;cursor:pointer;user-select:none;';
     head.innerHTML = '<span>perf</span>' +
@@ -2112,11 +2118,15 @@
     body.appendChild(speakerCol);
     wrap.appendChild(queueStats);
     wrap.appendChild(body);
+    sec.appendChild(ttsQueueEl);
     sec.appendChild(head);
     sec.appendChild(wrap);
     window.__cccPerfQueueHealth = function (qh) {
       try {
         if (!qh || typeof qh !== 'object') return;
+        if (qh.tts && typeof window.__cccUpdateTtsDiagnostics === 'function') {
+          window.__cccUpdateTtsDiagnostics(qh.tts);
+        }
         const el = document.getElementById('cccPerfQueueStats');
         if (!el) return;
         const fmtWait = function (s) {
@@ -2140,6 +2150,7 @@
     const usageDrawer = document.querySelector('.session-usage-drawer');
     if (usageDrawer) usageDrawer.appendChild(sec);
     else footer.parentNode.insertBefore(sec, footer);
+    if (typeof window.__cccUpdateTtsDiagnostics === 'function') window.__cccUpdateTtsDiagnostics();
     // Replay anything logged before the pane mounted.
     _perfPaneLog.list.forEach(function (e) { _perfPaneRow('list', e, true); });
     _perfPaneLog.open.forEach(function (e) { _perfPaneRow('open', e, true); });
@@ -15673,7 +15684,67 @@
     });
     document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
   }
+  const _ttsServerQueueSnap = { at: 0, extraInFlight: 0, sessionWaiting: 0, active: 0, fg: 0, bg: 0 };
+  function _ttsUpdateDiagnosticsQueue(serverTts) {
+    let browserWaiting = 0, browserSent = 0;
+    for (let i = 0; i < _ttsDebugJobs.length; i++) {
+      const st = _ttsDebugJobs[i] && _ttsDebugJobs[i].status;
+      if (st === 'queued') browserWaiting++;
+      else if (st === 'processing') browserSent++;
+    }
+    const now = Date.now();
+    if (serverTts && typeof serverTts === 'object') {
+      const srvInFlight = Math.max(0, Number(serverTts.in_flight) || 0);
+      _ttsServerQueueSnap.at = now;
+      _ttsServerQueueSnap.extraInFlight = Math.max(0, srvInFlight - browserSent);
+      _ttsServerQueueSnap.sessionWaiting = Math.max(0, Number(serverTts.session_waiting) || 0);
+      _ttsServerQueueSnap.active = Math.max(0, Number(serverTts.active) || 0);
+      _ttsServerQueueSnap.fg = Math.max(0, Number(serverTts.fg) || 0);
+      _ttsServerQueueSnap.bg = Math.max(0, Number(serverTts.bg) || 0);
+    }
+    const fresh = _ttsServerQueueSnap.at > 0 && (now - _ttsServerQueueSnap.at) < 60000;
+    const extraInFlight = fresh ? _ttsServerQueueSnap.extraInFlight : 0;
+    const sessionWaiting = fresh ? _ttsServerQueueSnap.sessionWaiting : 0;
+    const inFlight = browserSent + extraInFlight;
+    const synthesizing = inFlight > 0
+      ? Math.min(inFlight, Math.max(1, fresh && _ttsServerQueueSnap.active > 1 ? _ttsServerQueueSnap.active : 1))
+      : 0;
+    const serverWaiting = Math.max(0, inFlight - synthesizing) + sessionWaiting;
+    const waiting = browserWaiting + serverWaiting;
+    const queued = synthesizing + waiting;
+    const el = document.getElementById('cccPerfTtsQueue');
+    if (el) {
+      const nextText = queued > 0
+        ? 'tts queue: ' + queued + ' queued (' + synthesizing + ' active · ' + waiting + ' waiting)'
+        : 'tts queue: 0 queued';
+      if (el.textContent !== nextText) el.textContent = nextText;
+      el.style.color = queued > 0 ? 'var(--accent, #58a6ff)' : '';
+      el.style.opacity = queued > 0 ? '1' : '.85';
+      const nextTitle = 'Live TTS synthesis queue · ' + browserSent + ' sent + ' + browserWaiting + ' waiting in this tab'
+        + (extraInFlight || sessionWaiting ? ' · +' + (extraInFlight + sessionWaiting) + ' on server from other tabs/sessions' : '');
+      if (el.title !== nextTitle) el.title = nextTitle;
+    }
+    const summary = document.querySelector('.session-usage-drawer > summary');
+    if (summary) {
+      let badge = document.getElementById('cccDiagTtsSummary');
+      if (queued > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.id = 'cccDiagTtsSummary';
+          badge.style.cssText = 'color:var(--accent,#58a6ff);font-weight:600;';
+          summary.appendChild(badge);
+        }
+        const badgeText = ' · TTS: ' + queued + ' queued';
+        if (badge.textContent !== badgeText) badge.textContent = badgeText;
+      } else if (badge && badge.textContent !== '') {
+        badge.textContent = '';
+      }
+    }
+    return { queued, synthesizing, waiting, browserSent, browserWaiting, serverWaiting };
+  }
+  window.__cccUpdateTtsDiagnostics = _ttsUpdateDiagnosticsQueue;
   function _ttsScheduleCacheDebug() {
+    _ttsUpdateDiagnosticsQueue();
     if (_ttsCacheDebugFrame == null) _ttsCacheDebugFrame = requestAnimationFrame(() => {
       _ttsRefreshCacheCoverage();
       _ttsRefreshCacheDebug();
@@ -15708,6 +15779,7 @@
   window.visualViewport?.addEventListener('resize', () => { if (_ttsCacheDebug) _ttsScheduleCacheDebug(); });
   document.getElementById('settingsTtsCacheDebugToggle')?.addEventListener('click', () => _ttsSetCacheDebug(!_ttsCacheDebug));
   _ttsSetCacheDebug(_ttsCacheDebug);
+  _ttsUpdateDiagnosticsQueue();
 
   function _ttsHeadChunk(text, baseOffset) {
     return _chunkTtsText(text, _TTS_HEAD_CHARS, baseOffset)[0] || null;
