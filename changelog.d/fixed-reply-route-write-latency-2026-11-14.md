@@ -1,0 +1,1 @@
+- Reduce peer-message acknowledgment delays under load by serializing reply routes in a single write while preserving atomic updates and rebindable return addresses.

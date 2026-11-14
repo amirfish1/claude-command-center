@@ -267,3 +267,37 @@ def test_rebind_endpoint_records_manual_forward_for_forward_target_endpoint():
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=5)
+
+
+def test_route_store_write_count_is_bounded_as_routes_grow(store, monkeypatch):
+    """Message acknowledgments must not yield to I/O once per JSON token."""
+    import contextlib
+    import json
+    from unittest.mock import Mock
+
+    state = {
+        f"rr_{i:024x}": {
+            "report_to": f"dispatcher-{i}",
+            "updated_at": 1000.0,
+        }
+        for i in range(200)
+    }
+    with open(store, "w", encoding="utf-8") as stream:
+        json.dump(state, stream)
+    fdopen = rr.os.fdopen
+    writers = []
+
+    @contextlib.contextmanager
+    def counted_fdopen(*args, **kwargs):
+        with fdopen(*args, **kwargs) as stream:
+            writer = Mock(wraps=stream)
+            writers.append(writer)
+            yield writer
+
+    monkeypatch.setattr(rr.os, "fdopen", counted_fdopen)
+    route = rr.create("new-dispatcher", path=store, now=1001.0)
+    assert sum(writer.write.call_count for writer in writers) <= 2
+    with open(store, encoding="utf-8") as stream:
+        persisted = json.load(stream)
+    assert {key: persisted[key] for key in state} == state
+    assert persisted[route]["report_to"] == "new-dispatcher"

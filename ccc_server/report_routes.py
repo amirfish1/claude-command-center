@@ -92,7 +92,8 @@ def _mutate(path, fn):
         result = fn(state)
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(state, f)
+            # Per-token writes amplify GIL contention on the message ack path.
+            f.write(json.dumps(state))
         os.replace(tmp, path)
         return result
     finally:
