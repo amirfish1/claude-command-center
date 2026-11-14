@@ -1,0 +1,1 @@
+- Queue tickets parked for agent follow-up or verification now say "worker follow-up" instead of "awaiting worker", distinguishing them from tickets ready for automatic pickup.

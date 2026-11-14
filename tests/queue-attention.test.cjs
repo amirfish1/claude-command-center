@@ -60,11 +60,18 @@ test('dependency wait is neutral and names the ref', () => {
   assert.equal(a.label, 'waiting on OPS-1');
 });
 
-test('worker wait means the decision is made', () => {
+test('parked worker follow-up is distinct from work ready for automatic pickup', () => {
   const a = QA.project(blocked({ wait: { on: 'worker', note: 'Q1 approved', block_at: BLOCK_AT } }));
   assert.equal(a.key, 'worker');
   assert.equal(a.tone, 'answer');
+  assert.equal(a.label, 'worker follow-up');
+  assert.equal(a.blocked, true);
+  assert.equal(a.owner, false);
+  assert.match(a.title, /blocker must be cleared before automatic pickup/);
   assert.match(a.title, /Q1 approved/);
+  const ready = QA.project({status:'open'}, {explain:true});
+  assert.equal(ready.label, 'awaiting worker');
+  assert.equal(ready.blocked, false);
 });
 
 test('explicit owner wait stays red', () => {

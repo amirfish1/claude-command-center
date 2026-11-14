@@ -111,8 +111,8 @@
           { blocked: true, actor: dep, depRef: str(w && w.ref) });
       }
       if (on === 'worker') {
-        return make('worker', 'answer', 'awaiting worker',
-          'Decision already made; waiting for a worker to pick it up.' + why + (question ? '\n\n' + question : '') + noteComments,
+        return make('worker', 'answer', 'worker follow-up',
+          'Waiting for agent follow-up or verification evidence. The recorded blocker must be cleared before automatic pickup.' + why + (question ? '\n\n' + question : '') + noteComments,
           { blocked: true });
       }
       return make('owner', 'owner', 'needs you',
