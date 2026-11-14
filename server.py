@@ -38673,6 +38673,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, 400)
             return
         if path == "/api/ux-fixes/enqueue":
+            from ccc_server import queue_submit
             # Add a ticket to the queue straight from the UI (CCC-145 — the
             # queue panel's "+ Add" affordance). Same-origin is already enforced
             # at the top of do_POST. `project` is honored explicitly so the new
@@ -38692,25 +38693,25 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "note required"}, 400)
                 return
             try:
-                item = _q.enqueue(
-                    note=note,
-                    source=str(payload.get("source") or "ccc"),
-                    project=str(payload.get("project") or "").strip(),
-                    repo_path=str(payload.get("repo_path") or "").strip(),
-                    lane=str(payload.get("lane") or "normal"),
-                )
-                # Dispatch NOW (nudge a live worker, else spawn) + log the decision,
-                # so a dashboard-filed ticket is handled immediately instead of
-                # waiting for the next reconciler tick. Best-effort.
+                item = queue_submit.enqueue(
+                    _q, payload, COMMAND_CENTER_STATE_DIR / "ticket-submissions.sqlite3")
+                # Confirm the durable save without waiting for reconciliation.
                 if _WT_WORKERS_AVAILABLE and _wt_workers is not None and item:
-                    try:
-                        _wt_workers.dispatch_after_enqueue(
-                            str(item.get("project") or ""), str(item.get("ref") or ""))
-                    except Exception:
-                        pass
+                    def _dispatch_ticket():
+                        try:
+                            _wt_workers.dispatch_after_enqueue(
+                                str(item.get("project") or ""), str(item.get("ref") or ""))
+                        except Exception:
+                            pass
+                    threading.Thread(target=_dispatch_ticket,
+                                     name="ccc-ticket-dispatch", daemon=True).start()
                 self.send_json({"ok": True, "item": item})
-            except Exception as e:
+            except queue_submit.PendingSubmission as e:
+                self.send_json({"ok": False, "pending": True, "error": str(e)}, 202)
+            except ValueError as e:
                 self.send_json({"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, 503)
             return
         if path == "/api/queue/import-doc":
             # Plan-to-fleet (W51): turn a plan/spec/mission-brief document into

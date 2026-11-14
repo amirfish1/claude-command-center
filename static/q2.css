@@ -1146,6 +1146,12 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.q2-note[data-tone="pending"] { color: var(--orange); }
+.q2-note[data-tone="success"] { color: var(--green); }
+.q2-note[data-tone="pending"] {
+  max-width: 64ch;
+  white-space: normal;
+}
 
 /* GitHub-backed marker, beside the queue name. The mark is a solid glyph, so
    the colour goes on the fill (via currentColor) — it cannot be layered over a

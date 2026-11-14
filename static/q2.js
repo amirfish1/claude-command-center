@@ -15,6 +15,20 @@
   var POLL_MS = 5000;
   var CLOSED_CAP = 50;
   var NEW_TICKET_GLOW_MS = 4500;
+  var filedTickets = {};
+  function rememberFiledTicket(item) {
+    if (item && item.ref) filedTickets[item.ref] = {item: item, until: Date.now() + 60000};
+  }
+  function mergeFiledTickets(items) {
+    var merged = items.slice();
+    Object.keys(filedTickets).forEach(function (ref) {
+      var saved = filedTickets[ref];
+      if (saved.until < Date.now() || items.some(function (it) { return it.ref === ref; })) {
+        delete filedTickets[ref];
+      } else merged.push(saved.item);
+    });
+    return merged;
+  }
   // A poll-driven rebuild lands every 5s regardless of what the user is doing.
   // renderTickets() replaces the row list wholesale (host.innerHTML = html),
   // so a poll landing between touchstart and click destroys the row under the
@@ -785,7 +799,7 @@
         .filter(function (w) { return w && w.alive !== false; }));
       state.pastWorkers = (results[0] && results[0].past_workers) || [];
       state.workerSessionMap = (results[0] && results[0].worker_session_map) || {};
-      state.items = (results[1] && results[1].items) || [];
+      state.items = mergeFiledTickets((results[1] && results[1].items) || []);
       state.offline = false;
       state.loaded = true;
     } catch (e) {
@@ -1074,10 +1088,11 @@
   // A write that fails silently is worse than one that fails loudly: the user
   // would be left believing a toggle took effect. Surfaced in the topbar.
   var noteTimer = null;
-  function note(msg) {
+  function note(msg, tone) {
     var el = $('q2Note');
     if (!el) return;
     el.textContent = msg;
+    el.dataset.tone = tone || 'error';
     el.hidden = false;
     if (noteTimer) clearTimeout(noteTimer);
     noteTimer = setTimeout(function () { el.hidden = true; }, 6000);
@@ -3676,10 +3691,8 @@
   }
 
   // The modal closes as soon as the request is SENT, not when it returns.
-  // /api/ux-fixes/enqueue writes the ticket and then calls
-  // dispatch_after_enqueue, which can spawn a worker process before it
-  // responds (server.py:52986). Awaiting that left the dialog sitting open for
-  // seconds after the ticket already existed, which reads as a stuck dialog.
+  // The server dispatches workers after saving; confirmation retries retain
+  // the same submission key if a restart interrupts the response.
   // The draft is held so a genuine failure can hand it back instead of
   // discarding what the user typed.
   function fileTicket(btn) {
@@ -3689,18 +3702,24 @@
     var queue = state.queue;
     btn.disabled = true;
     closeModal();
-    note('Filing ticket in ' + queue + '…');
+    note('Filing ticket in ' + queue + '…', 'pending');
 
-    postJson('/api/ux-fixes/enqueue', { note: noteText, project: queue, source: 'ccc' })
+    window.cccSubmitQueueTicket({ note: noteText, project: queue, source: 'ccc' },
+      function (message) { note(message, 'pending'); })
       .then(async function (data) {
         var ref = data.item && data.item.ref;
-        note(ref ? 'Filed ' + ref : 'Ticket filed');
+        rememberFiledTicket(data.item);
+        state.items = mergeFiledTickets(state.items || []);
+        note(ref ? 'Filed ' + ref : 'Ticket filed', 'success');
         markNewTicket(ref);
-        await refresh();
-        if (ref) selectTicket(ref);
+        try {
+          await refresh();
+          if (ref) selectTicket(ref);
+        } catch (_) { note('Filed ' + ref + '; queue refresh is unavailable.', 'success'); }
       })
       .catch(function (e) {
-        note('Could not file ticket: ' + e.message);
+        note((e.pending ? 'Ticket confirmation pending: ' : 'Could not file ticket: ') + e.message,
+          e.pending ? 'pending' : 'error');
         // Hand the text back rather than losing it.
         openNewTicket();
         var box = document.getElementById('q2TicketNote');

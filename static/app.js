@@ -38362,6 +38362,7 @@
     // Errors and warnings linger 15s, info 10s (time to read + copy); success stays 3s.
     // Hover pauses the timer, and the \u00d7 dismisses instantly.
     arm((action && action.ttlMs) || (kind === 'error' || kind === 'warning' ? 15000 : (kind === 'info' ? 10000 : 3000)));
+    return toast;
   }
 
   // Prepare a report locally; the existing dialog owns review and submission
@@ -60324,31 +60325,22 @@
   // Shared by every ticket-add entry point: a proxy error or an empty body
   // must not turn into an unexplained "unknown" toast.
   async function _enqueueQueueTicket(note, project) {
-    let res;
+    let progress;
+    const clearProgress = () => { if (progress && typeof progress.remove === 'function') progress.remove(); };
     try {
-      res = await fetch('/api/ux-fixes/enqueue', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(project ? { note, project } : { note }),
+      return await window.cccSubmitQueueTicket(project ? { note, project } : { note }, message => {
+        clearProgress();
+        progress = showOpToast(escapeHtml(message), 'warning');
       });
-    } catch (err) {
-      throw new Error('Could not reach the dashboard (' + ((err && err.message) || 'connection lost')
-        + '). Saving could not be confirmed. Check the queue before retrying.');
-    }
-    const data = await res.json().catch(() => null);
-    if (res.ok && data && data.ok && data.item && data.item.ref) return data;
-    const detail = data && typeof data.error === 'string' && data.error.trim();
-    if (detail) throw new Error(detail);
-    const status = 'HTTP ' + res.status + (res.statusText ? ' ' + res.statusText : '');
-    throw new Error('The dashboard returned ' + status + ' without a ticket confirmation. '
-      + 'Check the queue before retrying.');
+    } finally { clearProgress(); }
   }
   function _showQueueTicketAddError(project, note, err) {
     const preview = String(note || '').replace(/\s+/g, ' ').trim();
     const label = preview.length > 80 ? preview.slice(0, 80) + '…' : preview;
     const reason = (err && err.message) || String(err);
-    showOpToast(escapeHtml('Could not add ticket to ' + (project || 'the default queue')
-      + ' (“' + label + '”): ' + reason), 'error');
+    showOpToast(escapeHtml((err && err.pending ? 'Ticket confirmation pending in ' : 'Could not add ticket to ')
+      + (project || 'the default queue') + ' (“' + label + '”): ' + reason),
+      err && err.pending ? 'warning' : 'error');
   }
   // CCC-163: the panel "+" used to file silently into whatever queue the panel
   // was scoped to (e.g. ACME) with no queue shown; it now shows the Queue
@@ -60365,10 +60357,12 @@
     const pendingId = 'pending-' + Date.now() + '-' + Math.random().toString(36).slice(2);
     _uxqPendingQueueAdds.set(pendingId, { note, project: targetProj });
     _renderQueuePanel({ allowStale: true });
+    let confirmedRef = '';
     try {
       const data = await _enqueueQueueTicket(note, targetProj);
       if (data && data.ok) {
         const ref = (data.item && data.item.ref) || 'ticket';
+        confirmedRef = ref;
         _ticketQueueUsageRecord(targetProj);
         showOpToast('Added ' + ref + ' to queue');
         _uxqItemsCache.ts = 0;  // bust cache so the new row shows
@@ -60381,8 +60375,9 @@
       }
     } catch (e) {
       _uxqPendingQueueAdds.delete(pendingId);
-      _renderQueuePanel({ allowStale: true });
-      _showQueueTicketAddError(targetProj, note, e);
+      if (confirmedRef) showOpToast('Added ' + confirmedRef + '; queue refresh is unavailable.');
+      else _showQueueTicketAddError(targetProj, note, e);
+      try { await _renderQueuePanel({ allowStale: true }); } catch (_) {}
     }
   }
 
