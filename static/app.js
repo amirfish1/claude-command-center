@@ -15346,6 +15346,7 @@
   // Sent requests run to completion; only unsent continuation work is dropped.
   const _ttsDebugJobs = [];
   const _ttsPrefetchTargets = new Map();
+  const _ttsChainTokens = {};   // pane id -> latest chain token
   function _ttsDebugJob(text, status, owner) {
     const job = { text, status, owner };
     _ttsDebugJobs.push(job);
@@ -15783,12 +15784,140 @@
     }
     _ttsRefreshCacheCoverage();
   }
+  const _TTS_OFFSCREEN_BODY_CLASSES = [
+    'ccc-core-app-open',
+    'ccc-mobile-app-open',
+    'ccc-simple-home-open',
+    'ccc-simple-screen-open',
+    'mobile-ask-open',
+  ];
+  function _ttsIsViewOnScreen(view) {
+    if (document.hidden) return false;
+    const cl = document.body && document.body.classList;
+    if (cl) {
+      for (const c of _TTS_OFFSCREEN_BODY_CLASSES) if (cl.contains(c)) return false;
+      if (typeof isMobile === 'function' && isMobile()
+          && !cl.contains('conversation-popout') && !cl.contains('groupchat-popout')) {
+        if (cl.contains('kanban-split')) { if (!cl.contains('mobile-conv-open')) return false; }
+        else if (!cl.contains('mobile-show-main')) return false;
+      }
+    }
+    if (!view || view.isConnected === false || view.hidden) return false;
+    if (typeof view.getBoundingClientRect !== 'function') return true;
+    if (typeof getComputedStyle === 'function') {
+      const cs = getComputedStyle(view);
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0)) return false;
+    }
+    const vr = view.getBoundingClientRect();
+    if (!vr || vr.width < 16 || vr.height < 16) return false;
+    const vw = typeof innerWidth === 'number' && innerWidth > 0 ? innerWidth : (document.documentElement?.clientWidth || 0);
+    const vh = typeof innerHeight === 'number' && innerHeight > 0 ? innerHeight : (document.documentElement?.clientHeight || 0);
+    if (vw > 0 && vh > 0) {
+      const left = Math.max(0, vr.left), right = Math.min(vw, vr.right);
+      const top = Math.max(0, vr.top), bottom = Math.min(vh, vr.bottom);
+      if (right - left < 16 || bottom - top < 16) return false;
+      if (typeof document.elementFromPoint === 'function' && typeof view.contains === 'function') {
+        const host = (view.closest && (view.closest('.conv-pane') || view.closest('.conv-panel') || view.closest('.gc-reader'))) || view;
+        const cx = (left + right) / 2;
+        let checked = 0, unoccluded = 0;
+        for (const f of [0.25, 0.5, 0.75]) {
+          const hit = document.elementFromPoint(cx, top + (bottom - top) * f);
+          if (!hit) continue;
+          checked++;
+          if (host === hit || host.contains(hit) || (hit.contains && hit.contains(host))) unoccluded++;
+        }
+        if (checked > 0 && unoccluded === 0) return false;
+      }
+    }
+    return true;
+  }
+  function _ttsIsPaneOnScreen(paneId, view) {
+    if (document.hidden) return false;
+    const cl = document.body && document.body.classList;
+    if (cl) {
+      for (const c of _TTS_OFFSCREEN_BODY_CLASSES) if (cl.contains(c)) return false;
+    }
+    const pid = paneId || (typeof activePaneId === 'function' ? activePaneId() : '');
+    if (!pid) return false;
+    if (typeof paneByPaneId === 'function'
+        && !(cl && (cl.contains('conversation-popout') || cl.contains('groupchat-popout')))) {
+      const pane = paneByPaneId(pid);
+      if (pane && !pane.conversationId) return false;
+    }
+    const v = view
+      || (typeof getConvViewForPane === 'function' ? getConvViewForPane(pid) : null)
+      || (typeof document.querySelectorAll === 'function'
+        ? Array.from(document.querySelectorAll('.conv-pane')).find(p => p.dataset && p.dataset.paneId === pid)?.querySelector?.('.conversations-view')
+        : null);
+    return _ttsIsViewOnScreen(v);
+  }
+  function _ttsIsDataInView(data, view) {
+    if (!view || typeof view.getBoundingClientRect !== 'function' || !data || !Array.isArray(data.mapping) || !data.mapping.length) return true;
+    const vr = view.getBoundingClientRect();
+    if (!vr || vr.height <= 0) return false;
+    let measured = false;
+    for (const m of data.mapping) {
+      const el = m && m.node && (m.node.nodeType === 1 ? m.node : m.node.parentElement);
+      const boxEl = (el && el.closest && el.closest('.stream-bubble, .event, .assistant-text')) || el;
+      if (!boxEl || typeof boxEl.getBoundingClientRect !== 'function') continue;
+      const r = boxEl.getBoundingClientRect();
+      if (!r || (!r.height && !r.width)) continue;
+      measured = true;
+      if (r.bottom > vr.top && r.top < vr.bottom) return true;
+    }
+    return !measured;
+  }
+  function _ttsCancelOffscreenPrefetch() {
+    clearTimeout(_ttsPrefetchTimer);
+    _ttsPrefetchTimer = null;
+    _ttsPrefetchTarget = null;
+    if (typeof document.querySelectorAll === 'function') {
+      document.querySelectorAll('.conversations-view').forEach(v => {
+        if (v._ttsViewportPrefetch && v._ttsViewportPrefetch.timer) clearTimeout(v._ttsViewportPrefetch.timer);
+        v._ttsViewportPrefetch = null;
+      });
+    }
+    for (const key of Object.keys(_ttsChainTokens)) _ttsChainTokens[key] = (_ttsChainTokens[key] || 0) + 1;
+    let changed = false;
+    for (const job of _ttsDebugJobs) {
+      if (job.status === 'queued') { job.status = 'cancelled'; changed = true; }
+    }
+    if (changed) _ttsScheduleCacheDebug();
+  }
+  let _ttsLastScreenVisible = null;
+  let _ttsScreenSyncTimer = null;
+  function _ttsSyncScreenVisibility(settleMs) {
+    const onScreen = _ttsIsPaneOnScreen(activePaneId());
+    if (!onScreen) {
+      if (_ttsLastScreenVisible !== false || _ttsPrefetchTimer != null) _ttsCancelOffscreenPrefetch();
+      _ttsLastScreenVisible = false;
+      if (settleMs) {
+        clearTimeout(_ttsScreenSyncTimer);
+        _ttsScreenSyncTimer = setTimeout(() => { _ttsScreenSyncTimer = null; _ttsSyncScreenVisibility(0); }, settleMs);
+      }
+      return;
+    }
+    const becameVisible = _ttsLastScreenVisible === false;
+    _ttsLastScreenVisible = true;
+    clearTimeout(_ttsScreenSyncTimer);
+    _ttsScreenSyncTimer = null;
+    if (becameVisible) {
+      try { scheduleTtsPrefetch(); } catch (_) {}
+    }
+  }
   let _ttsHoverBtn = null;
   // Hover and viewport preparation leave the composer's latest-reply bar alone.
   function _ttsPrefetchHead(rawText, paneId, quiet, sourceBtn) {
     const mk = quiet === 'viewport' ? '__viewport:' + paneId : quiet ? '__quiet' : paneId;
     if (Date.now() < _ttsNeuralCooldownUntil) { _ttsLog('SKIP', 'prefetch: cooldown, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')'); return; }
     if (document.hidden) { _ttsLog('SKIP', 'prefetch: tab hidden'); return; }
+    const hoverSurface = quiet === true && sourceBtn
+      ? ((sourceBtn.closest && sourceBtn.closest('.conversations-view, .gc-reader')) || sourceBtn)
+      : null;
+    const onScreen = hoverSurface
+      ? (typeof _ttsIsViewOnScreen !== 'function' || _ttsIsViewOnScreen(hoverSurface))
+      : (typeof _ttsIsPaneOnScreen !== 'function' || _ttsIsPaneOnScreen(paneId, sourceBtn?.closest?.('.conversations-view')));
+    if (!onScreen) { _ttsLog('SKIP', 'prefetch: session off screen'); return; }
     const clean = _sanitizeTtsText(rawText, true);
     if (_ttsIsHebrew(clean)) { _ttsLog('SKIP', 'prefetch: Hebrew text uses the Mac voice'); return; }
     const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
@@ -15843,8 +15972,8 @@
   }
   // Generation is local and free, so once the first clip is ready the rest of
   // the message is made one clip at a time (same split as Speak uses) and kept
-  // for the click. Stops when a read starts or a newer message takes over.
-  const _ttsChainTokens = {};   // pane id -> latest chain token
+  // for the click. Stops when a read starts, the session leaves the screen, or
+  // a newer message takes over.
   let _ttsChainQueue = Promise.resolve();
   // The focused pane's latest message is made ahead whole (up to ~1,700 chars),
   // so a click plays from cache instead of racing generation. A hovered older
@@ -15901,7 +16030,20 @@
     const end = head.start + head.text.length;
     const rest = _ttsRestChunks(clean.slice(end), end).slice(0, _ttsPrefetchClipCount(paneId));
     const duringRead = !!paneId && paneId !== '__quiet' && !paneId.startsWith('__viewport:');
-    const live = () => token === _ttsChainTokens[paneId || ''] && Date.now() >= _ttsNeuralCooldownUntil
+    const realPaneId = !paneId ? ''
+      : paneId.startsWith('__viewport:') ? paneId.slice(11)
+      : paneId === '__quiet' ? (_ttsHoverBtn?.closest?.('.conv-pane')?.dataset?.paneId || activePaneId())
+      : paneId;
+    const onScreen = () => {
+      if (document.hidden) return false;
+      if (paneId === '__quiet' && _ttsHoverBtn) {
+        return typeof _ttsIsViewOnScreen !== 'function'
+          || _ttsIsViewOnScreen((_ttsHoverBtn.closest && _ttsHoverBtn.closest('.conversations-view, .gc-reader')) || _ttsHoverBtn);
+      }
+      return typeof _ttsIsPaneOnScreen !== 'function'
+        || (!!realPaneId && realPaneId === activePaneId() && _ttsIsPaneOnScreen(realPaneId));
+    };
+    const live = () => token === _ttsChainTokens[paneId || ''] && onScreen() && Date.now() >= _ttsNeuralCooldownUntil
       && (!(_ttsActive || _ttsPaused) || (duringRead && _ttsReadingOther(head.text)));
     const entries = [];
     const settle = async (i) => {   // clip i fully made; the bar moves past it
@@ -15915,11 +16057,13 @@
       for (let i = 0; i < rest.length; i++) {
         if (i >= _TTS_PREFETCH_WIDTH) await settle(i - _TTS_PREFETCH_WIDTH);
         if (!live()) {
-          for (const job of jobs) if (job.status === 'queued') job.status = token === _ttsChainTokens[paneId || ''] ? 'deferred' : 'cancelled';
+          const superseded = token !== _ttsChainTokens[paneId || ''];
+          const hidden = !onScreen();
+          for (const job of jobs) if (job.status === 'queued') job.status = (superseded || hidden) ? 'cancelled' : 'deferred';
           _ttsScheduleCacheDebug();
-          // Paused by a read or the cooldown, not superseded: nothing else
-          // would restart this message, leaving its speaker amber for good.
-          if (token === _ttsChainTokens[paneId || '']) setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, 20000);
+          // Paused by a read or the cooldown while still on screen, not
+          // superseded or off screen: nothing else would restart this message.
+          if (!superseded && !hidden) setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, 20000);
           return;
         }
         const c = rest[i];
@@ -15951,14 +16095,34 @@
     if (token === _ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'ready', 1);
     _ttsLog('READY', 'all ' + (rest.length + 1) + ' clips');
   }
-  // A prefetch skipped while the tab was hidden has no other trigger.
+  // A prefetch skipped while the tab or session pane was off screen resumes
+  // when the session becomes visible again, and cancels pending work on hide.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) { try { scheduleTtsPrefetch(); } catch (_) {} }
+    try { _ttsSyncScreenVisibility(document.hidden ? 0 : 240); } catch (_) {}
   });
+  if (typeof MutationObserver !== 'undefined' && document.body) {
+    let _ttsBodySyncQueued = false;
+    const _queueTtsScreenSync = () => {
+      if (_ttsBodySyncQueued) return;
+      _ttsBodySyncQueued = true;
+      queueMicrotask(() => {
+        _ttsBodySyncQueued = false;
+        try { _ttsSyncScreenVisibility(240); } catch (_) {}
+      });
+    };
+    const _ttsScreenObserver = new MutationObserver(_queueTtsScreenSync);
+    _ttsScreenObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    const _ttsSettingsModalEl = document.getElementById('settingsModal');
+    if (_ttsSettingsModalEl) {
+      _ttsScreenObserver.observe(_ttsSettingsModalEl, { attributes: true, attributeFilter: ['class', 'hidden'] });
+    }
+    window.addEventListener('resize', _queueTtsScreenSync);
+  }
   function scheduleTtsViewportPrefetch(view, btn) {
     const pane = view && view.closest('.conv-pane');
+    const viewOnScreen = typeof _ttsIsViewOnScreen === 'function' ? _ttsIsViewOnScreen(view) : !document.hidden;
     const eligible = pane && pane.dataset.paneId === activePaneId()
-      && !isConversationAtBottom(view) && btn;
+      && viewOnScreen && !isConversationAtBottom(view) && btn;
     const data = eligible && _ttsSpeakButtonData(btn);
     const text = data && data.text || '';
     const previous = view._ttsViewportPrefetch;
@@ -15970,8 +16134,9 @@
     _ttsPrefetchTimer = null;
     pending.timer = setTimeout(() => {
       pending.timer = null;
+      const stillOnScreen = typeof _ttsIsViewOnScreen === 'function' ? _ttsIsViewOnScreen(view) : !document.hidden;
       if (!btn.isConnected || view._convSpeakButton?._speakTarget !== btn
-          || pane.dataset.paneId !== activePaneId() || document.hidden) {
+          || pane.dataset.paneId !== activePaneId() || !stillOnScreen) {
         view._ttsViewportPrefetch = null;
         return;
       }
@@ -15993,15 +16158,29 @@
   // Called after a transcript render; waits for the text to stop changing.
   function scheduleTtsPrefetch() {
     const paneId = activePaneId();
-    const view = Array.from(document.querySelectorAll('.conv-pane')).find(p => p.dataset.paneId === paneId)?.querySelector('.conversations-view');
-    if (view && !isConversationAtBottom(view) && view._convSpeakButton?._speakTarget) {
+    const view = (typeof getConvViewForPane === 'function' && paneId ? getConvViewForPane(paneId) : null)
+      || Array.from(document.querySelectorAll('.conv-pane')).find(p => p.dataset.paneId === paneId)?.querySelector('.conversations-view');
+    if (typeof _ttsIsPaneOnScreen === 'function' && !_ttsIsPaneOnScreen(paneId, view)) {
       clearTimeout(_ttsPrefetchTimer);
       _ttsPrefetchTimer = null;
-      if (view._ttsViewportPrefetch?.timer == null) view._ttsViewportPrefetch = null;
-      scheduleTtsViewportPrefetch(view, view._convSpeakButton._speakTarget);
+      return;
+    }
+    if (view && typeof isConversationAtBottom === 'function' && !isConversationAtBottom(view)) {
+      clearTimeout(_ttsPrefetchTimer);
+      _ttsPrefetchTimer = null;
+      const target = view._convSpeakButton?._speakTarget;
+      if (target) {
+        if (view._ttsViewportPrefetch?.timer == null) view._ttsViewportPrefetch = null;
+        scheduleTtsViewportPrefetch(view, target);
+      }
       return;
     }
     const data = paneId && lastMessageTtsData(paneId);
+    if (typeof _ttsIsDataInView === 'function' && !_ttsIsDataInView(data, view)) {
+      clearTimeout(_ttsPrefetchTimer);
+      _ttsPrefetchTimer = null;
+      return;
+    }
     const text = data && data.text || '';
     // Live snapshots repeat every ~900ms. Only changed text resets the quiet
     // period; identical snapshots must not postpone preparation indefinitely.
@@ -16013,11 +16192,15 @@
       _ttsPrefetchTimer = null;
       try {
         if (document.hidden) return;
-        // Prefetch only the focused pane; background split panes prefetch on
-        // focus or hover so multi-pane layouts don't multiply synthesis work.
+        // Prefetch only the focused on-screen pane; off-screen sessions wait
+        // until shown so background activity never burns synthesis CPU.
         const paneId = activePaneId();
         if (!paneId) return;
+        const currentView = (typeof getConvViewForPane === 'function' ? getConvViewForPane(paneId) : null)
+          || Array.from(document.querySelectorAll('.conv-pane')).find(p => p.dataset.paneId === paneId)?.querySelector('.conversations-view');
+        if (typeof _ttsIsPaneOnScreen === 'function' && !_ttsIsPaneOnScreen(paneId, currentView)) return;
         const data = lastMessageTtsData(paneId);
+        if (typeof _ttsIsDataInView === 'function' && !_ttsIsDataInView(data, currentView)) return;
         if (data && data.text && data.text.trim()) _ttsPrefetchHead(data.text, paneId);
         else { _ttsMarkCache(paneId, null, null); _ttsLog('SKIP', 'prefetch: no last message text in pane ' + paneId); }
       } catch (_) {}

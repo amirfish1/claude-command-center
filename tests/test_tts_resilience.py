@@ -506,6 +506,242 @@ console.log(JSON.stringify({
         self.assertEqual(result["notices"][0]["kind"], "info")
         self.assertIn("continuing", result["notices"][0]["message"].lower())
 
+    def test_offscreen_sessions_skip_prefetch_and_resume_when_visible_again(self):
+        screen_helpers = self.source[
+            self.source.index("  const _TTS_OFFSCREEN_BODY_CLASSES"):
+            self.source.index("  let _ttsHoverBtn")
+        ]
+        viewport_scheduler = function_block(
+            self.source, "scheduleTtsViewportPrefetch", "scheduleTtsPrefetch"
+        )
+        scheduler = function_block(
+            self.source, "scheduleTtsPrefetch", "_ttsShowVoice"
+        )
+        result = self.run_node(
+            """
+let now = 0, nextTimer = 0;
+let mobile = false, convId = 'conv-1', atBottom = true;
+let viewRect = { left: 80, right: 1180, top: 40, bottom: 860, width: 1100, height: 820 };
+let msgRect = { left: 100, right: 900, top: 500, bottom: 760, width: 800, height: 260 };
+let displayStyle = 'block';
+let hitExternalOverlay = false;
+const innerWidth = 1200, innerHeight = 900;
+const bodyClasses = new Set();
+const timers = new Map(), requests = [];
+let _ttsPrefetchTimer = null, _ttsPrefetchTarget = null;
+const _ttsChainTokens = { p1: 1 };
+const _ttsDebugJobs = [{ owner: 'p1', status: 'queued', text: 'queued clip' }];
+const _ttsActive = false, _ttsPaused = false;
+const isMobile = () => mobile;
+const activePaneId = () => 'p1';
+const paneByPaneId = () => ({ conversationId: convId });
+const isConversationAtBottom = () => atBottom;
+const getComputedStyle = () => ({ display: displayStyle, visibility: 'visible', opacity: '1' });
+const _ttsMarkCache = () => {}, _ttsLog = () => {}, _ttsScheduleCacheDebug = () => {};
+const _ttsSpeakButtonData = b => ({ text: b.text });
+const _ttsPrefetchHead = (text, paneId, kind) => requests.push({ at: now, text, paneId, kind: kind || 'tail' });
+const setTimeout = (fn, delay) => { const id = ++nextTimer; timers.set(id, { fn, at: now + delay }); return id; };
+const clearTimeout = id => timers.delete(id);
+function tick(delta) {
+  const target = now + delta;
+  for (;;) {
+    const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
+    if (!next || next[1].at > target) break;
+    now = next[1].at;
+    timers.delete(next[0]);
+    next[1].fn();
+  }
+  now = target;
+}
+const msgEl = {
+  nodeType: 1,
+  closest: () => msgEl,
+  getBoundingClientRect: () => msgRect,
+};
+const pane = {
+  dataset: { paneId: 'p1' },
+  contains: el => el === pane || el === view || el === msgEl,
+};
+const overlayModal = { contains: () => false };
+const view = {
+  isConnected: true,
+  hidden: false,
+  _convSpeakButton: { _speakTarget: null },
+  closest: sel => sel === '.conv-pane' ? pane : null,
+  contains: el => el === view || el === msgEl,
+  getBoundingClientRect: () => viewRect,
+};
+pane.querySelector = sel => sel === '.conversations-view' ? view : null;
+const getConvViewForPane = id => id === 'p1' ? view : null;
+const lastMessageTtsData = () => ({
+  text: 'Latest visible session reply.',
+  mapping: [{ node: msgEl, start: 0, end: 29, nodeOffsetStart: 0 }],
+});
+const document = {
+  hidden: false,
+  body: {
+    classList: {
+      contains: c => bodyClasses.has(c),
+    },
+  },
+  querySelectorAll: sel => sel === '.conv-pane' ? [pane] : sel === '.conversations-view' ? [view] : [],
+  elementFromPoint: () => hitExternalOverlay ? overlayModal : msgEl,
+};
+"""
+            + screen_helpers
+            + viewport_scheduler
+            + scheduler
+            + """
+const suppressed = {};
+for (const cls of ['ccc-core-app-open', 'ccc-mobile-app-open', 'ccc-simple-home-open', 'ccc-simple-screen-open', 'mobile-ask-open']) {
+  bodyClasses.add(cls);
+  scheduleTtsPrefetch();
+  tick(3000);
+  suppressed[cls] = requests.length;
+  bodyClasses.delete(cls);
+}
+// Mobile sidebar open (.main off-canvas without mobile-show-main)
+mobile = true;
+scheduleTtsPrefetch();
+tick(3000);
+suppressed.mobileSidebar = requests.length;
+mobile = false;
+
+// Translated off-canvas geometry
+const savedViewRect = viewRect;
+viewRect = { left: 1200, right: 2300, top: 40, bottom: 860, width: 1100, height: 820 };
+scheduleTtsPrefetch();
+tick(3000);
+suppressed.offCanvasRect = requests.length;
+viewRect = savedViewRect;
+
+// Zero-sized / display:none pane
+displayStyle = 'none';
+scheduleTtsPrefetch();
+tick(3000);
+suppressed.displayNone = requests.length;
+displayStyle = 'block';
+
+// Empty pane with no selected conversation
+convId = '';
+scheduleTtsPrefetch();
+tick(3000);
+suppressed.emptyPane = requests.length;
+convId = 'conv-1';
+
+// Full-screen modal covering the session pane
+hitExternalOverlay = true;
+scheduleTtsPrefetch();
+tick(3000);
+suppressed.modalOccluded = requests.length;
+hitExternalOverlay = false;
+
+// Scrolled up into tool-only output with no visible speak button: must NOT fall through to bottom message
+atBottom = false;
+view._convSpeakButton._speakTarget = null;
+scheduleTtsPrefetch();
+tick(3000);
+suppressed.scrolledUpNoTarget = requests.length;
+atBottom = true;
+
+// Bottom-pinned, but the last speakable message scrolled completely above view.top
+const savedMsgRect = msgRect;
+msgRect = { left: 100, right: 900, top: -400, bottom: -20, width: 800, height: 380 };
+scheduleTtsPrefetch();
+tick(3000);
+suppressed.messageScrolledAboveViewport = requests.length;
+msgRect = savedMsgRect;
+
+// Overlay transition: on-screen -> Queues overlay cancels pending timer & queued job -> returning to Sessions resumes prefetch
+_ttsSyncScreenVisibility(0);
+scheduleTtsPrefetch();
+tick(1000);
+bodyClasses.add('ccc-core-app-open');
+_ttsSyncScreenVisibility(0);
+const jobAfterHide = _ttsDebugJobs[0].status;
+const tokenAfterHide = _ttsChainTokens.p1;
+tick(3000);
+suppressed.cancelledDuringOverlay = requests.length;
+
+const resumedAt = now;
+bodyClasses.delete('ccc-core-app-open');
+_ttsSyncScreenVisibility(0);
+tick(2500);
+
+console.log(JSON.stringify({ suppressed, jobAfterHide, tokenAfterHide, resumedAt, requests }));
+"""
+        )
+        for reason, count in result["suppressed"].items():
+            self.assertEqual(count, 0, f"expected zero prefetches for {reason}")
+        self.assertEqual(result["jobAfterHide"], "cancelled")
+        self.assertEqual(result["tokenAfterHide"], 2)
+        self.assertEqual(
+            result["requests"],
+            [{"at": result["resumedAt"] + 2500, "text": "Latest visible session reply.", "paneId": "p1", "kind": "tail"}],
+        )
+
+    def test_prefetch_continuation_stops_when_session_leaves_screen(self):
+        chunker = function_block(self.source, "_chunkTtsText", "_ttsBindChunkCompletion")
+        rest_chunker = "const _TTS_SECOND_CHARS = 160;\n" + function_block(
+            self.source, "_ttsRestChunks", "_ttsSetPlay"
+        )
+        chain_block = self.source[
+            self.source.index("  function _ttsReadingOther("):
+            self.source.index("  // A prefetch skipped while the tab or session pane was off screen")
+        ]
+        result = self.run_node(
+            chunker
+            + rest_chunker
+            + """
+const _TTS_PREFETCH_CLIPS = 4, _TTS_PREFETCH_CLIPS_QUIET = 1;
+let onScreenState = true, _ttsActive = false, _ttsPaused = false;
+let _ttsChunkState = null, _ttsBoundUtteranceText = '', _ttsHoverBtn = null;
+const _ttsNeuralCooldownUntil = 0;
+const _ttsChainTokens = {};
+let _ttsChainQueue = Promise.resolve();
+const _ttsHeadCache = new Map();
+const _ttsDebugJobs = [];
+const _ttsPrefetchTargets = new Map();
+const retryTimers = [];
+const fetched = [];
+const document = { hidden: false };
+const activePaneId = () => 'p1';
+const _ttsIsPaneOnScreen = () => onScreenState;
+const _ttsDebugJob = (text, status, owner) => {
+  const j = { text, status, owner };
+  _ttsDebugJobs.push(j);
+  return j;
+};
+const _ttsScheduleCacheDebug = () => {}, _ttsWatchCacheEntry = () => {}, _ttsEvictCache = () => {};
+const _ttsMarkCache = () => {}, _ttsLog = () => {}, scheduleTtsPrefetch = () => {};
+const setTimeout = (fn, delay) => { retryTimers.push(delay); return retryTimers.length; };
+const _ttsFetchNeural = (text) => {
+  fetched.push(text);
+  // Session goes off screen while the first continuation clip is in flight.
+  onScreenState = false;
+  return Promise.resolve({ voice: 'Kokoro:af_heart', done: Promise.resolve() });
+};
+"""
+            + chain_block
+            + """
+(async () => {
+  const words = Array.from({ length: 260 }, (_, i) => 'word' + i).join(' ');
+  const head = { text: words.slice(0, 60), start: 0 };
+  _ttsPrefetchTargets.set('p1', head.text);
+  _ttsStartChain(words, head, { voice: 'Kokoro:af_heart', done: Promise.resolve() }, 'p1');
+  await _ttsChainQueue;
+  console.log(JSON.stringify({
+    fetchedCount: fetched.length,
+    statuses: _ttsDebugJobs.map(j => j.status),
+    retryTimers,
+  }));
+})();
+"""
+        )
+        self.assertEqual(result["fetchedCount"], 1)
+        self.assertEqual(result["statuses"], ["ready", "cancelled", "cancelled", "cancelled"])
+        self.assertEqual(result["retryTimers"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
