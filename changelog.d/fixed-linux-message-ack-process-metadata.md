@@ -1,0 +1,1 @@
+- Speed up session message acknowledgments on Linux by reading process working directories and parent chains from procfs instead of launching a command for each lookup.

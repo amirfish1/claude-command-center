@@ -2840,7 +2840,7 @@ def _ttl_memo_keyed(ttl_seconds):
 def _proc_ancestor_terminal(pid):
     """Walk a PID's parent chain and return (term_app_friendly_name, term_pid) or (None, None).
 
-    Uses `ps -o ppid,comm -p <pid>` to avoid parsing platform-specific /proc.
+    Reads Linux procfs directly; other hosts use `ps -o pid,ppid,comm`.
     Stops at init (ppid==1) or when a known terminal app is found.
 
     Memoised per pid (_ttl_memo_keyed): this is the worst offender — up to 20
@@ -2849,19 +2849,26 @@ def _proc_ancestor_terminal(pid):
     current = pid
     for _ in range(20):  # hard cap to avoid runaway loops
         try:
-            out = subprocess.run(
-                ["ps", "-o", "pid,ppid,comm", "-p", str(current)],
-                capture_output=True, text=True, timeout=1,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            if sys.platform.startswith("linux"):
+                record = Path("/proc", str(current), "stat").read_text()
+                # comm can contain spaces and parentheses; fields follow its last ')'.
+                start, end = record.index("("), record.rindex(")")
+                _pid, comm = record[:start].strip(), record[start + 1:end]
+                ppid = record[end + 1:].split()[1]
+            else:
+                out = subprocess.run(
+                    ["ps", "-o", "pid,ppid,comm", "-p", str(current)],
+                    capture_output=True, text=True, timeout=1,
+                )
+                lines = [l.strip() for l in out.stdout.splitlines() if l.strip()]
+                if len(lines) < 2:
+                    return None, None
+                parts = lines[1].split(None, 2)
+                if len(parts) < 3:
+                    return None, None
+                _pid, ppid, comm = parts
+        except (subprocess.TimeoutExpired, OSError, ValueError, IndexError):
             return None, None
-        lines = [l.strip() for l in out.stdout.splitlines() if l.strip()]
-        if len(lines) < 2:
-            return None, None
-        parts = lines[1].split(None, 2)
-        if len(parts) < 3:
-            return None, None
-        _pid, ppid, comm = parts
         comm_base = comm.rsplit("/", 1)[-1].lower()
         # Strip .app/Contents/MacOS/... suffix by taking only basename
         comm_base = comm_base.replace(".app", "")
@@ -2876,7 +2883,12 @@ def _proc_ancestor_terminal(pid):
 
 @_ttl_memo_keyed(3.0)
 def _proc_cwd(pid):
-    """Return a process's cwd via lsof, or None. Memoised per pid (forks lsof)."""
+    """Return cwd via Linux procfs or lsof on other hosts; None if unavailable."""
+    if sys.platform.startswith("linux"):
+        try:
+            return os.readlink(Path("/proc", str(pid), "cwd"))
+        except OSError:
+            return None
     try:
         out = subprocess.run(
             ["lsof", "-a", "-d", "cwd", "-p", str(pid), "-Fn"],

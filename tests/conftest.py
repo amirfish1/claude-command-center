@@ -19,6 +19,17 @@ _real_sleep = time.sleep
 
 import pytest
 
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "linux_only: requires native Linux process metadata")
+
+
+def pytest_collection_modifyitems(items):
+    if not sys.platform.startswith("linux"):
+        for item in items:
+            if item.get_closest_marker("linux_only"):
+                item.add_marker(pytest.mark.skip(reason="requires Linux"))
+
 # Keep every test process away from the user's real conv-meta cache: server.py
 # loads it at import and any _save_conv_meta_cache() from a test would write
 # fixture entries (or a cleared cache) back over it. Set before any test
