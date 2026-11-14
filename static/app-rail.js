@@ -247,6 +247,9 @@
     ".ccc-account-pop .acc-btn.danger { color: #f0a29b; }",
     ".ccc-account-pop .acc-btn.danger:hover { border-color: #8c3f39; }",
     ".ccc-account-pop .acc-btn:disabled { opacity: .55; cursor: default; }",
+    "@media (min-width: 1201px) {",
+    "  html:not(.ccc-focus) body.ccc-rail-settings #settingsBtn { display: none; }",
+    "}",
     /* Morning's own wrappers hug the old nav; keep them off the rail. */
     ".mv-wrap, .mk-wrap { padding-left: 20px !important; }",
     /* The dashboard owns mobile bottom navigation in both UI modes. */
@@ -442,6 +445,7 @@
    * shown as grey/amber and described honestly, never faked green. */
   var ACCOUNT_CACHE_KEY = "ccc-rail-account-v1";
   var ACCOUNT_POLL_MS = 30000;
+  var desktopSettings = window.matchMedia("(min-width: 1201px)");
   var NETWORK_HANDOFF_PARAM = "open_network";
   // Static icon for the signed-out avatar; identity text never goes through
   // innerHTML — the paired letter is written with textContent like the rest.
@@ -507,6 +511,19 @@
   popErr.style.display = "none";
   var popActions = document.createElement("div");
   popActions.className = "acc-actions";
+  var popSettings = document.createElement("button");
+  popSettings.type = "button";
+  popSettings.className = "acc-btn";
+  popSettings.textContent = "Settings";
+  popSettings.setAttribute("data-rail-settings", "");
+  popSettings.addEventListener("click", function () {
+    closePop(false);
+    accountBtn.focus();
+    var settings = document.getElementById("settingsBtn");
+    if (settings) settings.click();
+    else window.location.href = "/?ccc_settings=preferences";
+  });
+  popActions.appendChild(popSettings);
   // Stable action buttons: repaints update label/class/handler instead of
   // rebuilding nodes, so a focused button keeps focus across refreshes.
   var popPrimary = document.createElement("button");
@@ -592,9 +609,33 @@
     var st = cccAccountState(lastStatus, statusFresh, lastFetchErr);
     accDot.className = "ccc-account-dot " + st.dot;
     setGlyph(accGlyph, st.letter);
-    accountBtn.title = "Account: " + st.sub;
+    syncSettingsEntry(st.sub);
     if (popOpen) renderPop();
   }
+
+  function syncSettingsEntry(status) {
+    var desktop = desktopSettings.matches;
+    var settings = document.getElementById("settingsBtn");
+    document.body.classList.toggle("ccc-rail-settings", desktop);
+    popSettings.hidden = !desktop;
+    accLabel.textContent = desktop ? "Settings" : "Account";
+    accountBtn.title = (desktop ? "Settings and account: " : "Account: ") + status;
+    accountBtn.setAttribute("aria-label", desktop ? "Settings and account" : "Account");
+    pop.setAttribute("aria-label", desktop ? "Settings and account" : "Account");
+    if (settings) {
+      if (desktop) {
+        settings.removeAttribute("data-tour");
+        accountBtn.setAttribute("data-tour", "settings");
+      } else {
+        settings.setAttribute("data-tour", "settings");
+        accountBtn.removeAttribute("data-tour");
+      }
+    }
+  }
+  desktopSettings.addEventListener("change", function () {
+    paintAccount();
+    if (popOpen && popSettings.hidden && document.activeElement === popSettings) popPrimary.focus();
+  });
 
   function shortId(id) {
     id = String(id || "");
@@ -749,7 +790,7 @@
     document.addEventListener("pointerdown", onDocPointer, true);
     document.addEventListener("keydown", onPopKey, true);
     fetchStatus();
-    var first = pop.querySelector(".acc-btn");
+    var first = pop.querySelector(".acc-btn:not([hidden])");
     if (first) first.focus();
   }
 
