@@ -5203,14 +5203,15 @@
     justify-self: stretch;
     overflow: visible;
     width: 100%;
+    min-width: 0;
   }
   .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-combo {
     flex: 1 1 auto;
     min-width: 0;
   }
   .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-picker {
-    flex: 1 1 auto;
-    width: 100%;
+    flex: 1 1 0;
+    width: 0;
     max-width: none;
     min-width: 0;
     padding: 9px 12px;
@@ -5218,8 +5219,10 @@
   }
   .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-menu-btn,
   .conv-input-context.is-new-session .spawn-cwd-row .spawn-cwd-browse-btn {
+    flex: 0 0 auto;
     width: 36px;
-    height: 100%;
+    height: auto;
+    min-height: 38px;
     font-size: 14px;
   }
   .conv-input-context .new-session-object-context {
@@ -5240,7 +5243,8 @@
     grid-template-areas:
       "object object"
       "chips chips"
-      "cwd worktree";
+      "cwd worktree"
+      "account account";
   }
   .nso-label {
     color: var(--text-muted);
@@ -9938,7 +9942,8 @@
         "object"
         "chips"
         "cwd"
-        "worktree";
+        "worktree"
+        "account";
     }
     .conv-input-context.is-new-session .new-session-object-context,
     .conv-input-context.is-new-session .nso-combo,
