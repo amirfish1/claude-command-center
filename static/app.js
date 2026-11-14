@@ -56248,7 +56248,15 @@
     const current = !Number.isFinite(blockAt) || cardAt >= blockAt;
     const actions = current && tag && next.includes(tag) ? sessionQuickActions(authored, next) : [];
     const literal = question.split('\n').map(line => line.replace(/^\s*\[Q\d+(?::[a-z0-9-]+)?\]\s*/i, '')).find(line => /^(?:choose|pick|decide|answer)\b/i.test(line.trim()));
-    return (actions.length ? actions : literal ? decisionQuickActions(literal).map(choice => ({...choice, reply:(tag && !choice.reply.includes(tag) ? tag + ' ' : '') + choice.reply})) : [])
+    // Only a literal, single approval question gets binary fallback answers.
+    // Preserve its full scope (including limits) in the submitted reply.
+    const approval = question.replace(/^\s*\[Q\d+(?::[a-z0-9-]+)?\]\s*/i, '').trim();
+    const binary = /^approve\s+[^?]+\?$/i.test(approval) && !/[\r\n]/.test(approval)
+      && !/\bor\b/i.test(approval.replace(/\bno\s+[^,?]+/gi, '')) && approval.length <= 600
+      ? [{label:'Approve', reply:(tag ? tag + ' ' : '') + 'Yes — ' + approval.replace(/\?$/, '.')},
+         {label:'Decline', reply:(tag ? tag + ' ' : '') + 'No — do not proceed with this request: ' + approval}]
+      : [];
+    return (actions.length ? actions : literal ? decisionQuickActions(literal).map(choice => ({...choice, reply:(tag && !choice.reply.includes(tag) ? tag + ' ' : '') + choice.reply})) : binary)
       .filter(action => action.reply && (!tag || action.reply.includes(tag))).slice(0, 4);
   }
   function _workersTicketContextHtml(item, card, fallback) {
@@ -56257,17 +56265,20 @@
     const ref = _uxqItemRef(item);
     const category = context.category ? '<span class="workers-block-category" title="' + escapeAttr(context.categorySource + ': ' + context.category) + '">' + escapeHtml(context.category) + '</span>' : '';
     const choices = _workersTicketChoices(item, card);
-    const buttons = choices.map((choice, index) => '<button type="button" class="workers-block-choice" data-workers-choice="' + index + '" data-workers-ref="' + escapeAttr(ref) + '" title="' + escapeAttr('Review answer: ' + choice.reply) + '">' + escapeHtml(choice.label) + '</button>').join('');
-    const review = context.owner && !choices.length ? '<button type="button" class="workers-block-choice" data-workers-review="' + escapeAttr(ref) + '">Answer…</button>' : '';
+    const buttons = choices.map((choice, index) => '<button type="button" class="workers-block-choice" data-workers-choice="' + index + '" data-workers-ref="' + escapeAttr(ref) + '" title="' + escapeAttr('Send answer: ' + choice.reply) + '">' + escapeHtml(choice.label) + '</button>').join('');
+    const review = context.owner ? '<button type="button" class="workers-block-choice" data-workers-review="' + escapeAttr(ref) + '">Answer…</button>' : '';
     return '<div class="workers-ticket-context"' + (_workersTicketSessions.has(ref) ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '') + '>' + (category ? '<div class="workers-block-meta">' + category + '</div>' : '')
       + '<div class="workers-ticket-update" title="' + escapeAttr(context.full || context.text) + '">' + escapeHtml(context.text) + '</div>'
       + (buttons || review ? '<div class="workers-block-choices">' + buttons + review + '</div>' : '') + '</div>';
   }
+  const _workersAnswersPending = new Set();
   async function _workersReviewChoice(ref, index) {
+    if (_workersAnswersPending.has(ref)) return;
     const item = _uxqItemForRef(ref);
     const card = _workersLatestTicketCard(_workersTicketSessions.get(ref));
     const choice = _workersTicketChoices(item || {}, card)[index];
     if (!choice) return;
+    _workersAnswersPending.add(ref);
     try {
       const response = await fetch('/api/ux-fixes/item?ref=' + encodeURIComponent(ref), {cache:'no-store', cccPriority:'user'});
       const data = await response.json();
@@ -56277,10 +56288,20 @@
         showOpToast('This question changed. Review the current ticket before answering.', 'warn');
         return;
       }
-      _uxqOpenItemModal(data.item);
-      const input = document.querySelector('#uxqItemModal .uxq-answer-input');
-      if (input) { input.value = choice.reply; input.focus(); }
-    } catch (error) { showOpToast(error.message || 'Could not open the answer.', 'error'); }
+      const sent = await fetch('/api/ux-fixes/answer', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ref, text:choice.reply}),
+      });
+      const result = await sent.json();
+      if (!sent.ok || !result.ok) throw new Error(result.error || 'Could not send the answer.');
+      // Update immediately so another tap cannot answer the same cached block.
+      Object.assign(item, result.item || {needs_input:false});
+      _uxqItemsCache.ts = 0; _uxqHealthCache.ts = 0;
+      _uxqRenderRecentWork();
+      _renderQueuePanel();
+      showOpToast('Answer sent', 'success');
+    } catch (error) { showOpToast(error.message || 'Could not send the answer.', 'error'); }
+    finally { _workersAnswersPending.delete(ref); }
   }
   // Patch only the ticket's text on the same animation frame as its session.
   // Rebuilding the list here would discard expanded lanes and keyboard focus.

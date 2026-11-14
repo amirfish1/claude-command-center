@@ -46,24 +46,55 @@ test('literal choices preserve question tag and unsafe or stale session choices 
   assert.equal(ctx._workersTicketChoices(free,card).length,1);
 });
 
-test('choice click rechecks block generation, prepares a draft, and never submits it', async () => {
-  const input = {value:'',focus(){}}; let modal = null; const calls = [];
-  const ctx = setup({_uxqItemForRef:()=>block, _uxqOpenItemModal:item=>{modal=item;},
-    document:{querySelector:()=>input}, showOpToast:()=>{},
-    fetch:async (url,init)=>{calls.push({url,init});return {ok:true,json:async()=>({ok:true,item:{...block}})};}});
+
+test('approval questions get scoped binary answers; ambiguous and offline questions do not', () => {
+  const ctx = setup();
+  const item = {...block, block_question:'[Q42:scope] Approve the queued 48-request focused validation?'};
+  const choices = ctx._workersTicketChoices(item, null);
+  assert.deepEqual(Array.from(choices, c=>c.label), ['Approve','Decline']);
+  assert.match(choices[0].reply, /48-request focused validation/);
+  assert.equal(ctx._workersTicketChoices({...item,block_question:'Approve four scenarios, capped at 40 requests, no writes or sends?'},null).length,2);
+  assert.match(choices[1].reply, /^\[Q42:scope\] No/);
+  for (const question of ['Approve A or B?', 'Review the report.', 'Approve A? Also approve B?']) {
+    assert.equal(ctx._workersTicketChoices({...item,block_question:question},null).length,0);
+  }
+});
+
+test('one tap submits once; stale generations and changed owners do not submit', async () => {
+  let modal = null; const calls = []; const item = {...block};
+  const ctx = setup({_uxqItemForRef:()=>item, _uxqOpenItemModal:value=>{modal=value;},
+    _uxqItemsCache:{}, _uxqHealthCache:{}, _uxqRenderRecentWork(){}, _renderQueuePanel(){},
+    showOpToast:()=>{},
+    fetch:async (url,init)=>{
+      calls.push({url,init});
+      return {ok:true,json:async()=>({ok:true,item:{...block,needs_input:!init.method}})};
+    }});
   ctx._workersTicketSessions.set(block.ref,{cards:[]});
+  await Promise.all([ctx._workersReviewChoice(block.ref,0),ctx._workersReviewChoice(block.ref,0)]);
+  assert.equal(modal,null);
+  assert.equal(calls.length,2);
+  assert.equal(calls[1].init.method,'POST');
+  assert.match(JSON.parse(calls[1].init.body).text,/\[Q42:scope\] Keep narrow/);
   await ctx._workersReviewChoice(block.ref,0);
-  assert.equal(modal.ref,block.ref);
-  assert.match(input.value,/\[Q42:scope\] Keep narrow/);
-  assert.equal(calls.length,1);
-  assert.equal(calls[0].init.method,undefined);
-  input.value=''; modal=null;
+  assert.equal(calls.length,2);
+  item.needs_input=true;
   ctx.fetch=async()=>({ok:true,json:async()=>({ok:true,item:{...block,blocked_at:'2026-01-02T10:00:00Z'}})});
   await ctx._workersReviewChoice(block.ref,0);
-  assert.equal(input.value,'');
   assert.notEqual(modal.blocked_at,block.blocked_at);
-  input.value='';
+  modal=null;
   ctx.fetch=async()=>({ok:true,json:async()=>({ok:true,item:{...block,wait:{on:'worker',block_at:block.blocked_at}}})});
   await ctx._workersReviewChoice(block.ref,0);
-  assert.equal(input.value,'', 'a changed wait owner cannot receive an answer draft');
+  assert.equal(modal.wait.on,'worker');
+});
+
+test('failed send reports an error and releases the pending guard for retry', async () => {
+  let sends=0; const errors=[];
+  const ctx=setup({_uxqItemForRef:()=>({...block}), showOpToast:text=>errors.push(text),
+    fetch:async(url,init)=>init.method
+      ? (sends++, {ok:false,json:async()=>({error:'Try again'})})
+      : {ok:true,json:async()=>({ok:true,item:{...block}})}});
+  await ctx._workersReviewChoice(block.ref,0);
+  await ctx._workersReviewChoice(block.ref,0);
+  assert.equal(sends,2);
+  assert.deepEqual(errors,['Try again','Try again']);
 });
