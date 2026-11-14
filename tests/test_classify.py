@@ -1901,6 +1901,45 @@ class TestShellCommandPreview(unittest.TestCase):
         self.assertNotIn("curl -s", label)
         self.assertNotIn("python3 -c", label)
 
+    def test_chained_scripts_keep_source_in_disclosure_only(self):
+        cmd = (
+            "cd /tmp/demo && python3 - <<'EOF'\n"
+            "import json\n"
+            "state = json.loads('{}')\n"
+            "print(json.dumps(state))\n"
+            "EOF\n"
+            "cat > /tmp/demo/check.cjs <<'EOF'\n"
+            "const browser = await puppeteer.launch();\n"
+            + "const sourceOnly = 'not a preview';\n" * 80
+            + "EOF\n"
+            "node /tmp/demo/check.cjs\n"
+        )
+        ev = {"type": "assistant", "message": {"content": [{
+            "type": "tool_use", "id": "script-chain", "name": "Bash",
+            "input": {"command": cmd},
+        }]}}
+
+        block = self.server._parse_conversation_event(ev, 1)["blocks"][0]
+
+        self.assertIn("Python script: reads JSON; writes JSON", block["detail"])
+        self.assertIn("Writes check.cjs", block["detail"])
+        self.assertIn("node /tmp/demo/check.cjs", block["detail"])
+        self.assertNotIn("puppeteer.launch", block["detail"])
+        self.assertNotIn("sourceOnly", block["detail"])
+        self.assertLessEqual(len(block["detail"]), 240)
+        self.assertEqual(block["command"], cmd.strip())
+        self.assertEqual(block["command_kind"], "Python script")
+
+    def test_many_heredocs_have_bounded_preview(self):
+        cmd = "\n".join(
+            "node <<'EOF'\nconst sourceOnly = 1;\nEOF" for _ in range(30)
+        )
+        label = self.server._shell_command_activity_label(cmd, max_len=1200)
+
+        self.assertLessEqual(len(label), 240)
+        self.assertNotIn("sourceOnly", label)
+        self.assertIn("expand to view", label)
+
     def test_inline_shell_comment_ignores_hash_inside_quotes(self):
         cmd = "python3 -c \"print('# not a shell comment')\""
 
