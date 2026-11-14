@@ -1,0 +1,1 @@
+- Reuse the warm session census for `ccc sessions --live`, avoiding spurious refresh errors between calls while preserving older live sessions and explicit time filters.

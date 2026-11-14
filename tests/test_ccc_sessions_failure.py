@@ -131,3 +131,21 @@ def test_time_window_uses_warm_census_and_preserves_filter(cli, api, capsys, sin
     result = json.loads(capsys.readouterr().out)
     assert result['sessions'] == [handler.census_payload['sessions'][0]]
     assert handler.calls == [handler.warm_census_path]
+
+
+@pytest.mark.parametrize('since', [None, 7200])
+def test_live_query_uses_warm_census_without_implicit_age_limit(cli, api, capsys, since):
+    base, handler = api
+    handler.census_delay = 0
+    handler.warm_census_path = '/api/sessions/census?since=86400'
+    handler.census_payload = {'ok': True, 'sessions': [
+        {'session_id': 'recent-live', 'state': 'working', 'last_event_age_s': 60},
+        {'session_id': 'old-live', 'state': 'idle', 'last_event_age_s': 172800},
+        {'session_id': 'unknown-live', 'state': 'waiting', 'last_event_age_s': None},
+        {'session_id': 'ended', 'state': 'ended', 'last_event_age_s': 30},
+    ]}
+    assert cli.cmd_sessions(SimpleNamespace(server=base, since=since, live=True, json=True)) == 0
+    rows = json.loads(capsys.readouterr().out)['sessions']
+    expected = handler.census_payload['sessions'][:3 if since is None else 1]
+    assert rows == expected
+    assert handler.calls == [handler.warm_census_path]

@@ -330,13 +330,11 @@ def cmd_sessions(args):
     import time
     request_started = time.monotonic()
     try:
-        census_path = "/api/sessions/census"
-        if effective_since is not None:
-            # The server keeps the default window warm, while occasional
-            # narrower queries otherwise hit cold per-window cache slots.
-            # Filter that superset below; wider windows still need their own
-            # candidate pool to include recently ended sessions.
-            census_path += f"?since={max(_DEFAULT_SESSIONS_SINCE_S, effective_since)}"
+        # The warm default census includes every live row regardless of age.
+        # Reuse it for live-only queries too, without imposing an age filter;
+        # the separate live-only cache otherwise goes cold between CLI calls.
+        census_since = max(_DEFAULT_SESSIONS_SINCE_S, effective_since or 0)
+        census_path = f"/api/sessions/census?since={census_since}"
         payload = _get_json(base, census_path)
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         _sessions_failure(base, e, time.monotonic() - request_started)
