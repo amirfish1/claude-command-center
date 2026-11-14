@@ -19,7 +19,7 @@ test('WatchTower commands retain distinct ticket targets and queue context', () 
   assert.deepEqual(labels('wt defer --reason APP-99 APP-12 --until +24h'), ['wt defer · APP-12']);
   assert.deepEqual(labels('wt close APP-12 --summary=APP-99 --no-code'), ['wt close · APP-12']);
   assert.deepEqual(labels('wt status --queue=APP'), ['wt status · APP']);
-  assert.deepEqual(labels('wt claim \\\n+    -q APP --worker test-worker --json'), ['wt claim · APP']);
+  assert.deepEqual(labels(['wt claim \\', '    -q APP --worker test-worker --json'].join('\n')), ['wt claim · APP']);
   assert.deepEqual(labels('wt add -q APP --note "Mention APP-99; quoted text"; wt find OTHER-2'),
     ['wt add · APP', 'wt find · OTHER-2']);
   assert.deepEqual(labels('wt status\necho APP-99'), ['wt status']);
