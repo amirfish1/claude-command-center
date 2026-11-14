@@ -4237,29 +4237,45 @@
   .peer-sender > * { white-space: nowrap; font-size: inherit; font-style: normal; }
   .peer-sender-mode { font-size: 10px; }
   .peer-sender-name { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-  .event.user_text.peer-message .user-msg { border-left: 2px solid color-mix(in srgb, var(--accent, #4c8bf5) 45%, transparent); padding-left: 8px; }
   /* Cross-session (UDS peer) delivery gets its own green tint so it reads
      distinctly from a normal chat turn -- e.g. the WatchTower reconciler's
      release instruction, or any other Claude-to-Claude peer message.
      Keep the tint quiet and the report body upright for sustained reading. */
   .conversations-view .event.user_text.peer-message,
   .conv-pane.has-conv-bg .conversations-view .event.user_text.peer-message {
-    background:
-      linear-gradient(135deg, rgba(63, 185, 80, 0.10), rgba(63, 185, 80, 0.05) 70%) padding-box,
-      linear-gradient(135deg, rgba(63, 185, 80, 0.35), rgba(63, 185, 80, 0.15) 70%) border-box;
-    box-shadow: 0 2px 14px rgba(63, 185, 80, 0.05);
+    display: block;
+    width: fit-content;
+    max-width: min(100%, 76ch);
+    margin-left: 0;
+    padding: 12px 16px;
+    border: 1px solid color-mix(in srgb, var(--green) 28%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--green) 6%, transparent);
+    box-shadow: none;
   }
-  .conversations-view .event.user_text.peer-message .user-msg {
+  .conversations-view .event.user_text.peer-message .user-msg,
+  .conv-pane.has-conv-bg .conversations-view .event.user_text.peer-message .user-msg {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    border-radius: 0;
+    color: var(--conv-text, var(--text));
     font-size: 14px;
     font-style: normal;
     font-weight: 400;
   }
+  .conversations-view .event.user_text.peer-message.has-user-steer .user-msg { padding-right: 0; }
+  .event.user_text.peer-message .peer-sender { margin-bottom: 8px; }
+  .event.user_text.peer-message.has-user-steer .peer-sender { max-width: calc(100% - 44px); }
+  .event.user_text.peer-message .peer-sender-mode { white-space: normal; overflow-wrap: anywhere; }
   /* Structured reports share one reading layout across conversation engines. */
   .event.user_text.peer-message .peer-structured { white-space: normal; line-height: 1.65; max-width: 72ch; font-style: normal; font-weight: 400; }
-  .peer-report-preview { cursor: pointer; min-height: 44px; overflow-wrap: anywhere; }
+  .peer-report-preview { cursor: pointer; min-height: 44px; overflow-wrap: anywhere; line-height: 1.6; }
   .peer-report-preview:focus-visible { outline: 2px solid var(--accent, #4c8bf5); outline-offset: 3px; border-radius: 4px; }
-  .peer-report-summary { margin-left: 0.6em; }
-  .peer-report-expand { display: block; font-size: 0.86em; text-decoration: underline; text-underline-offset: 3px; }
+  .peer-report-summary { display: block; margin: 4px 0; }
+  .peer-report-expand { display: block; font-size: 0.86em; color: var(--conv-accent, var(--accent)); text-decoration: underline; text-underline-offset: 3px; }
   .peer-report[open] > .peer-report-preview { margin-bottom: 12px; }
   .peer-report-body { overflow-wrap: anywhere; }
   .peer-structured .peer-para { margin: 0 0 8px; }
@@ -26562,6 +26578,7 @@ body.has-gc-reader .pwa-install-banner {
 
 /* Peer reports remain reading text inside the decorative conversation theme. */
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text.peer-message .user-msg {
+  color: var(--conv-text, var(--text)) !important;
   font-weight: 400 !important;
   letter-spacing: normal !important;
 }
@@ -26573,20 +26590,15 @@ body.has-gc-reader .pwa-install-banner {
   font-weight: bold;
 }
 
-/* Cross-session (UDS peer) messages must keep their green tint even under
-   the stitch background theme. The stitch rule above uses !important, so
-   the non-important green rule near .peer-message (and the has-conv-bg
-   variant fixed in 6d949a0e) both lose to it. Beating an !important rule
-   requires our own !important PLUS equal-or-greater specificity -- add
-   .peer-message to match stitch's selector shape exactly, which makes ours
-   the more specific of the two !important declarations regardless of
-   source order. */
+/* Reports keep their quiet surface and complete disclosure under stitch's
+   important decorative bubble rules, including its clipped corner. */
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text.peer-message:not(.is-pinned-in-sticky) {
-  background:
-    linear-gradient(135deg, rgba(63, 185, 80, 0.10), rgba(63, 185, 80, 0.05) 70%) padding-box,
-    linear-gradient(135deg, rgba(63, 185, 80, 0.35), rgba(63, 185, 80, 0.15) 70%) border-box !important;
-  box-shadow: 0 2px 14px rgba(63, 185, 80, 0.05) !important;
+  clip-path: none !important;
+  border-radius: 12px !important;
+  background: color-mix(in srgb, var(--green) 6%, transparent) !important;
+  box-shadow: none !important;
 }
+.conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text.peer-message .user-msg::after { content: none !important; }
 
 /* Remove terminal prompt from subsequent user messages in the session */
 .conv-pane[data-conv-bg="stitch"] .conversations-view .event.user_text:not(.is-pinned-in-sticky) ~ .event.user_text:not(.is-pinned-in-sticky) .user-msg::after {
@@ -32118,7 +32130,7 @@ body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assis
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) > .event-token-chips,
 body.conv-compact.conv-compact .conversations-view .event.assistant:has(> .assistant-text):not(:has(~ .event.assistant .assistant-text)) > .event-model-meta { display: block !important; }
 /* User asks can expand on click; assistant commentary stays fully readable. */
-body.conv-compact.conv-compact .conversations-view .event.user_text:not(.cc-open):not(:has(img)) .user-msg {
+body.conv-compact.conv-compact .conversations-view .event.user_text:not(.peer-message):not(.cc-open):not(:has(img)) .user-msg {
   display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
   overflow: hidden; cursor: pointer;
 }
