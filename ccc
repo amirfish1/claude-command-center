@@ -1749,11 +1749,12 @@ def _pid_alive(pid):
         return False
 
 
-def _post_restart(base, target):
+def _post_restart(base, target, routine=False):
     """(status, payload) from the drain-aware restart endpoint; status -1
-    when the server could not be reached."""
+    when the server could not be reached. `routine` lets the server hold the
+    restart (409, retried by the runner) while a read-aloud is playing."""
     try:
-        return _post_json(base, _RESTART_PATHS[target], {}, timeout=120)
+        return _post_json(base, _RESTART_PATHS[target], {"routine": True} if routine else {}, timeout=120)
     except OSError as e:
         return -1, {"ok": False, "error": str(e)}
 
@@ -1777,9 +1778,9 @@ def _wait_dashboard_back(base, before_pid, timeout=120, before_started_at=None):
     return None
 
 
-def _restart_now(base, target, wait=True):
+def _restart_now(base, target, wait=True, routine=False):
     import time
-    status, payload = _post_restart(base, target)
+    status, payload = _post_restart(base, target, routine=routine)
     if status == 200 and payload.get("ok", True):
         _restart_state_update(lambda s: s.update(last_restart=time.time(), last_target=target))
         print(f"ccc restart: {target} restart started")
@@ -1811,7 +1812,7 @@ def cmd_restart(args):
             due = float(state.get("last_restart") or 0) + RESTART_DEBOUNCE_S
             return _defer_restart(base, target, max(due, time.time() + 1),
                                   f"last restart was {int(since)}s ago")
-    status, payload = _restart_now(base, target)
+    status, payload = _restart_now(base, target, routine=not args.now)
     if status == 0:
         return 0
     if status == 409:
@@ -1840,7 +1841,7 @@ def _run_pending_restart(base, due):
         # Clear before posting: the dashboard restart kills nothing of ours
         # (we are detached), but a request arriving mid-restart must queue anew.
         _restart_state_update(lambda s: s.pop("pending", None))
-        status, payload = _restart_now(base, target)
+        status, payload = _restart_now(base, target, routine=True)
         if status == 0:
             continue
         retries = int(pending.get("retries") or 0) + 1

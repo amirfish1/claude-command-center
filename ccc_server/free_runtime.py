@@ -660,6 +660,9 @@ def local_tts_open(text, voice="", prio="fg"):
             return _CachedClip(cached_bytes), _KOKORO_LABEL + cached_voice
     voice = _kokoro_voice(voice)
     key = (text, voice)
+    if prio != "bg":
+        global _LAST_FG_OPEN
+        _LAST_FG_OPEN = time.time()
     cached = _clip_cache_get(key)
     if cached is not None:
         return _CachedClip(cached), _KOKORO_LABEL + voice
@@ -991,6 +994,62 @@ def tts_session_create(texts, voice=""):
         _TTS_SESSIONS[sid] = session
     threading.Thread(target=session.run, name="tts-session", daemon=True).start()
     return sid
+
+
+# --- Restart protection (CCC-144) -------------------------------------------
+# A dashboard restart cuts the stream of a read being heard and the retry hits
+# a cold voice server (a 16 s stall on Nov 12). A routine restart waits while a
+# read is playing. Finite on every side: an abandoned read stops counting once
+# its expected end passes, and one hold never exceeds RESTART_HOLD_MAX_S, which
+# is under what `ccc restart` retries (10 x 60 s) so the restart still lands.
+RESTART_HOLD_MAX_S = 8 * 60
+_READ_END_GRACE_S = 20.0     # paused/buffering slack past the expected end
+_READ_MAX_S = 15 * 60        # no read is trusted to play longer than this
+_FG_RECENT_S = 45.0          # non-session reads: a fg clip was opened this recently
+_LAST_FG_OPEN = 0.0
+_HOLD_SINCE = None
+
+
+def read_aloud_active(now=None):
+    """Seconds of read-aloud still expected, or 0.0 when nothing is playing."""
+    import time
+    now = time.time() if now is None else now
+    best = 0.0
+    with _TTS_SESSIONS_LOCK:
+        sessions = list(_TTS_SESSIONS.values())
+    for session in sessions:
+        if session.cancelled:
+            continue
+        with session.cond:
+            seconds = session.size / _TTS_SESSION_BYTES_PER_S
+            generating = not session.done
+            touched = session.touched
+        if generating and now - touched <= _FG_RECENT_S:
+            end = now + _FG_RECENT_S                      # still being made and read
+        else:
+            end = session.created + min(seconds, _READ_MAX_S) + _READ_END_GRACE_S
+        best = max(best, end - now)
+    if _LAST_FG_OPEN and now - _LAST_FG_OPEN < _FG_RECENT_S:
+        best = max(best, _FG_RECENT_S - (now - _LAST_FG_OPEN))
+    return max(0.0, best)
+
+
+def restart_hold(now=None):
+    """None when a routine restart may proceed; else a dict saying why it waits."""
+    import time
+    global _HOLD_SINCE
+    now = time.time() if now is None else now
+    left = read_aloud_active(now)
+    if left <= 0:
+        _HOLD_SINCE = None
+        return None
+    if _HOLD_SINCE is None:
+        _HOLD_SINCE = now
+    held = now - _HOLD_SINCE
+    if held >= RESTART_HOLD_MAX_S:
+        return None                                       # finite: never block updates
+    return {"reason": "read-aloud playing", "playing_s": round(left, 1),
+            "held_s": round(held, 1), "max_hold_s": RESTART_HOLD_MAX_S}
 
 
 def tts_session_get(sid):

@@ -36897,6 +36897,22 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # the handoff below succeeds: adopt/drain need a live worker, so
             # restarting it first would strand this dashboard's sessions.
             restart_all = path.endswith("/all")
+            # Routine restarts (`ccc restart` without --now) wait while a read
+            # is playing, so the stream is not cut and the retry does not hit
+            # a cold voice (CCC-144). Bounded (restart_hold); the button, the
+            # updater and `--now` send no "routine" flag and are never held.
+            try:
+                _rlen = int(self.headers.get("Content-Length", "0") or 0)
+                _rbody = json.loads(self.rfile.read(_rlen)) if 0 < _rlen <= 4096 else {}
+            except (ValueError, OSError):
+                _rbody = {}
+            if isinstance(_rbody, dict) and _rbody.get("routine"):
+                _hold = _free_runtime.restart_hold()
+                if _hold:
+                    _log_activity("restart", "HELD", "read-aloud playing: %s" % json.dumps(_hold))
+                    self.send_json({"ok": False, "error": "read-aloud is playing; restart deferred",
+                                    "read_aloud": _hold}, 409)
+                    return
             ok, precheck_err, adopted, protected = _safe_worker_restart_precheck(
                 reason_prefix="dashboard-restart",
             )

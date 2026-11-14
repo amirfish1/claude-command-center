@@ -1,0 +1,1 @@
+- Routine `ccc restart` now waits (up to 8 minutes) while a read-aloud is playing, so a restart no longer cuts the voice mid-read. The Restart button, auto-update and `ccc restart --now` are unchanged.
