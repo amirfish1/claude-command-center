@@ -126,6 +126,10 @@
     const params = new URLSearchParams(window.location.search || '');
     window.__CCC_CONVERSATION_POPOUT__ = params.get('ccc_popout') === 'conversation'
       || params.get('popout') === 'conversation';
+    // An app's agent pane (static/app-kit.js): the conversation only, so
+    // boot work for panels it never shows is skipped.
+    window.__CCC_APP_EMBED__ = window.__CCC_CONVERSATION_POPOUT__ && window.parent !== window
+      && params.get('embed') === 'app';
     if (window.__CCC_CONVERSATION_POPOUT__) return;
     // One request for both consumers below; the boot already competes
     // with the archive list for the browser's six connection slots.
@@ -174,6 +178,43 @@
 <link rel="stylesheet" href="/static/settings-task-search.css">
 </head>
 <body class="voice-call-btn-off">
+<script>
+  // A page load on an open app (/?ccc_app=<id>): start the app's frame now,
+  // from the rail's saved app list, so it loads beside the dashboard's own
+  // boot instead of after it. mobile-app-nav.js adopts the frame, and the
+  // dashboard's background reads wait for the app (app.js startup gate).
+  (function () {
+    if (window.__CCC_CONVERSATION_POPOUT__ || window.self !== window.top) return;
+    try {
+      var id = new URLSearchParams(window.location.search || '').get('ccc_app');
+      if (!id || id === 'sessions' || id === 'queues') return;
+      var apps = JSON.parse(localStorage.getItem('ccc-rail-apps-v1') || '[]') || [];
+      var app = null;
+      for (var i = 0; i < apps.length; i++) if (apps[i] && apps[i].id === id) app = apps[i];
+      if (!app || app.enabled === false) return;
+      var u = new URL(app.nav || app.url, window.location.origin);
+      if (u.origin !== window.location.origin || u.pathname === '/') return;
+      var f = document.createElement('iframe');
+      f.id = 'cccMobileAppFrame';
+      f.title = app.label || id;
+      f.dataset.appUrl = u.pathname + u.search + u.hash;
+      f.dataset.early = '1';
+      // Stand-in geometry until mobile-app-nav.js brings the real rules.
+      f.style.cssText = window.matchMedia('(max-width: 1200px)').matches
+        ? 'position:fixed;top:0;left:0;width:100%;height:calc(100% - 70px);border:0;z-index:900;background:var(--bg,#0f1115)'
+        : 'position:fixed;top:0;left:var(--ccc-rail-w,76px);width:calc(100% - var(--ccc-rail-w,76px));height:100%;border:0;z-index:900;background:var(--bg,#0f1115)';
+      f.src = f.dataset.appUrl;
+      document.body.appendChild(f);
+      window.__cccAppFrameReady = new Promise(function (resolve) {
+        window.addEventListener('message', function (e) {
+          if (e.origin === window.location.origin && e.source === f.contentWindow
+              && e.data && e.data.type === 'ccc:app-fully-ready') resolve();
+        });
+        f.addEventListener('error', resolve);
+      });
+    } catch (_) {}
+  })();
+</script>
   <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
        Simple (data-nav-chrome="simple") drives Home/Tasks/Helpers/More;
        Advanced (data-nav-chrome="advanced") is ☰ (All / Other / Jobs /

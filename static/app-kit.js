@@ -17,6 +17,15 @@
 //
 // Mark the page's own content with data-ccc-content (default: <main>) and,
 // optionally, where the routine cards go with data-ccc-routines.
+//
+// Load time. The kit reports how long the app took to be fully ready (its
+// own content drawn and the agent pane showing its conversation) as the
+// app_ready perf event. By default "content drawn" is the first frame after
+// the page's HTML is parsed.
+// A page that draws from data it fetches says when itself: add
+// data-ready="event" to the script tag and, once drawn, run
+//   window.cccAppContentReady = { ms: performance.now() };
+//   window.dispatchEvent(new CustomEvent('ccc:app-ready', { detail: window.cccAppContentReady }));
 // Loaded with #thumb (the Apps home preview) it skips the agent pane.
 (function () {
   'use strict';
@@ -97,6 +106,64 @@
   var state = null, agentId = '', shell = null, frames = null, hero = null, barName = null, backBtn = null;
   var frameFor = {}, tips = null, tipsDrawn = '', lastFilled = '';
 
+  // ---- load time ---------------------------------------------------------
+  // agent: 'unknown' until this browser's remembered agent or the server
+  // says whether the app has one; then 'yes' or 'none'.
+  var AGENT_KEY = 'ccc-app-agent:' + APP;
+  var ready = { content: null, cached: false, agentAt: null, agent: 'unknown', sent: false, hidden: document.hidden };
+  document.addEventListener('visibilitychange', function () { if (document.hidden) ready.hidden = true; });
+  // The dashboard loads the app someone used last in the background and
+  // keeps an open one parked when they switch away. Nobody waited for a
+  // background load, and a parked app has nothing to keep fresh.
+  function hostFrame() { try { return window.frameElement; } catch (_) { return null; } }
+  function parked() { var f = hostFrame(); return !!f && (f.hidden || f.dataset.parked === '1'); }
+  if (parked()) ready.hidden = true;
+  function noteContent(d) {
+    if (ready.content != null) return;
+    ready.content = d && typeof d.ms === 'number' ? d.ms : performance.now();
+    ready.cached = !!(d && d.cached);
+    sendReady();
+  }
+  function sendReady() {
+    if (ready.sent || thumb || ready.content == null || ready.agent === 'unknown') return;
+    if (ready.agent === 'yes' && ready.agentAt == null) return;
+    ready.sent = true;
+    var out = { app: APP, ms: Math.round(Math.max(ready.content, ready.agentAt || 0)), content_ms: Math.round(ready.content),
+      agent_ms: ready.agentAt == null ? null : Math.round(ready.agentAt), cached: ready.cached, framed: window.parent !== window };
+    window.cccAppReady = out;
+    window.dispatchEvent(new CustomEvent('ccc:app-fully-ready', { detail: out }));
+    if (window.parent !== window) {
+      try { window.parent.postMessage({ type: 'ccc:app-fully-ready', app: APP, ms: out.ms }, location.origin); } catch (_) {}
+    }
+    // A tab that was in the background while loading had its timers
+    // throttled: not a real sample of what someone waited for.
+    if (ready.hidden) return;
+    try {
+      fetch('/api/perf-event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+        body: JSON.stringify({ kind: 'app_ready', ms: out.ms, detail: out }) }).catch(function () {});
+    } catch (_) {}
+  }
+  if (window.cccAppContentReady) noteContent(window.cccAppContentReady);
+  window.addEventListener('ccc:app-ready', function (e) { noteContent(e.detail); });
+  if (me.dataset.ready !== 'event') {
+    // Not the load event: that one also waits for the agent pane's frame.
+    var drawn = function () { requestAnimationFrame(function () { noteContent(); }); };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', drawn); else drawn();
+  }
+  // The agent pane says when its conversation is on screen.
+  window.addEventListener('message', function (e) {
+    var d = e.data, f = frameFor[agentId];
+    if (e.origin !== location.origin || !d || d.type !== 'ccc:embed-ready' || !f || e.source !== f.contentWindow) return;
+    if (ready.agentAt == null) { ready.agentAt = performance.now(); sendReady(); }
+  });
+  function rememberAgent(id) {
+    try { if (id) localStorage.setItem(AGENT_KEY, id); else localStorage.removeItem(AGENT_KEY); } catch (_) {}
+  }
+  function dropFrame(id) {
+    var f = frameFor[id];
+    if (f) { f.remove(); delete frameFor[id]; }
+  }
+
   // "Try asking" chips: what this app's agent can do, from app.json.
   function drawTips() {
     if (!tips || !state) return;
@@ -137,7 +204,9 @@
     if (!f) {
       f = frameFor[id] = $('iframe');
       f.title = 'Agent session';
-      f.src = '/?ccc_popout=conversation&conv=' + encodeURIComponent(id);
+      // embed=app: the dashboard page boots lean there, with no chrome of its
+      // own and no reads for panels this pane never shows.
+      f.src = '/?ccc_popout=conversation&embed=app&conv=' + encodeURIComponent(id);
       frames.appendChild(f);
     }
     Object.keys(frameFor).forEach(function (k) { frameFor[k].hidden = k !== id; });
@@ -153,7 +222,7 @@
     showHero('<div class="big">🤖</div><div>Starting the agent…</div>');
     return api('/api/apps/agent', { app: APP, fresh: !!fresh }).then(function (r) {
       if (!r.ok) { showHero('<div class="big">🤖</div><div>Could not start the agent: ' + esc(r.error) + '</div><button type="button" class="ccck-btn" data-k="start">Try again</button>'); return ''; }
-      agentId = r.session_id; showSession(agentId, 'Agent'); return agentId;
+      agentId = r.session_id; rememberAgent(agentId); showSession(agentId, 'Agent'); return agentId;
     });
   }
   function setMode(m) {
@@ -287,8 +356,14 @@
       if (!r.ok) return;
       state = r; draw(); drawTips(); noteStamp(r.stamp);
       var id = (r.agent && r.agent.session_id) || '';
-      if (shell && id !== agentId) { agentId = id; if (id) showSession(id, 'Agent'); }
-      else if (shell && !id && !hero.dataset.asked) { hero.dataset.asked = '1'; noAgent(); }
+      if (shell && id !== agentId) {
+        // The pane may already be showing the agent this browser remembered.
+        if (agentId) dropFrame(agentId);
+        agentId = id; rememberAgent(id);
+        if (id) showSession(id, 'Agent');
+      }
+      if (shell && !id && !hero.dataset.asked) { hero.dataset.asked = '1'; noAgent(); }
+      if (shell && ready.agent === 'unknown') { ready.agent = id ? 'yes' : 'none'; sendReady(); }
     });
   }
   function readEditor(c) {
@@ -383,12 +458,21 @@
   function boot() {
     var content = document.querySelector('[data-ccc-content]') || document.querySelector('main');
     if (!content) return;
-    if (!thumb) buildShell(content);
+    if (!thumb) {
+      buildShell(content);
+      // Open the agent this browser saw last time straight away, before the
+      // server has answered; refresh() corrects it if the app's agent changed.
+      var known = '';
+      try { known = localStorage.getItem(AGENT_KEY) || ''; } catch (_) {}
+      if (/^[A-Za-z0-9_.:-]{1,200}$/.test(known)) { agentId = known; ready.agent = 'yes'; showSession(known, 'Agent'); }
+    } else { ready.agent = 'none'; }
     buildRoutines(content);
     refresh();
     // Keep the cards current without a refresh button.
-    setInterval(function () { if (!document.hidden) refresh(); }, 10000);
-    document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
+    setInterval(function () { if (!document.hidden && !parked()) refresh(); }, 10000);
+    document.addEventListener('visibilitychange', function () { if (!document.hidden && !parked()) refresh(); });
+    // The dashboard says when it brings a parked app back to the front.
+    window.addEventListener('ccc:app-shown', function () { refresh(); });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

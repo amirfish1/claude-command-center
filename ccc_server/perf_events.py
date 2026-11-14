@@ -97,6 +97,10 @@ TTS_GAP_MS = _env_int("CCC_PERF_TTS_GAP_MS", 250)
 # switch or a full navigation); rail_apps = the rail's /api/apps fetch.
 VIEW_SWITCH_MS = _env_int("CCC_PERF_VIEW_SWITCH_MS", 3000)
 RAIL_APPS_MS = _env_int("CCC_PERF_RAIL_APPS_MS", 1000)
+# app_ready = an app page's navigation start -> fully ready: its own content
+# drawn and, when it has one, the agent pane showing its conversation
+# (static/app-kit.js). detail carries the two halves (content_ms, agent_ms).
+APP_READY_MS = _env_int("CCC_PERF_APP_READY_MS", 1000)
 WARM_WINDOW_S = _env_int("CCC_PERF_WARM_WINDOW_S", 3600)
 
 # Startup archive loads use the cold budget even when a persisted cache
@@ -195,7 +199,7 @@ def _in_warmup(now=None):
 
 _VALID_KINDS = ("archive_load", "conv_open", "list_read", "live_build",
                 "tts_start", "tts_gap", "conv_open_cached",
-                "view_switch", "rail_apps")
+                "view_switch", "rail_apps", "app_ready")
 # Recorded and summarized with a breach verdict, but never self-filed: the
 # speaker kinds are tracked by a standing deep ticket (CCC-144) and its gates;
 # conv_open_cached (click -> saved-copy paint) by CCC-143 next to conv_open,
@@ -328,6 +332,8 @@ def _threshold_for(kind, warm):
         return VIEW_SWITCH_MS
     if kind == "rail_apps":
         return RAIL_APPS_MS
+    if kind == "app_ready":
+        return APP_READY_MS
     return CONV_OPEN_MS
 
 
@@ -542,9 +548,30 @@ def _worst_rows(rows, limit=5):
             "warm": bool(r.get("warm")),
             "conv_id": r.get("conv_id") or "",
             "boot_id": r.get("boot_id") or "",
+            # app_ready samples name the app page they measured.
+            "app": _row_app(r),
         }
         for r in ordered
     ]
+
+
+def _row_app(row):
+    detail = row.get("detail")
+    app = detail.get("app") if isinstance(detail, dict) else ""
+    return app if isinstance(app, str) else ""
+
+
+def _app_ready_by_app(rows):
+    """app_ready stats per app page, so one slow app is not averaged away."""
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(_row_app(row) or "?", []).append(row)
+    out = {}
+    for app, app_rows in sorted(grouped.items()):
+        stats = _kind_stats(app_rows)
+        stats.pop("worst", None)
+        out[app] = stats
+    return out
 
 
 def _kind_stats(rows):
@@ -590,8 +617,10 @@ def summarize(hours=24, now=None):
             "tts_gap_ms": TTS_GAP_MS,
             "view_switch_ms": VIEW_SWITCH_MS,
             "rail_apps_ms": RAIL_APPS_MS,
+            "app_ready_ms": APP_READY_MS,
         },
         "kinds": kinds,
+        "apps": _app_ready_by_app([e for e in events if e.get("kind") == "app_ready"]),
         "ticket": _ticket_summary(_load_ticket_state()),
     }
 
@@ -876,7 +905,7 @@ def _build_note(pattern, state):
                 row.get("ts") or "?",
                 row.get("ms") or 0,
                 "warm" if row.get("warm") else "cold",
-                row.get("conv_id") or "-",
+                row.get("conv_id") or row.get("app") or "-",
             )
         )
     last_ref = state.get("last_ref")

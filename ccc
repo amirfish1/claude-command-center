@@ -2529,7 +2529,48 @@ def cmd_app(args):
         _app_set_focus(args, "", forget=args.forget)
         print("CCC shows everything again.")
         return 0
+    if args.app_command == "speed":
+        return _app_speed(args)
     return 1
+
+
+def _app_speed(args):
+    """Print how long app pages took to become fully ready (the app_ready
+    samples every app page reports), against the budget."""
+    base = _resolve_server(args.server)
+    if not base:
+        print("ccc: CCC is not running, so there is nothing to read.", file=sys.stderr)
+        return 1
+    try:
+        summary = _get_json(base, f"/api/perf/summary?hours={int(args.hours)}", timeout=30)
+    except (OSError, ValueError) as e:
+        print(f"ccc: could not read load times: {e}", file=sys.stderr)
+        return 1
+    budget = (summary.get("thresholds") or {}).get("app_ready_ms")
+    apps = summary.get("apps")
+    if budget is None or not isinstance(apps, dict):
+        print("ccc: this CCC does not record app load times yet. Update and restart it.",
+              file=sys.stderr)
+        return 1
+    if args.id:
+        apps = {k: v for k, v in apps.items() if k == args.id}
+    if args.json:
+        print(json.dumps({"hours": summary.get("hours"), "budget_ms": budget, "apps": apps},
+                         indent=2))
+        return 0
+    if not apps:
+        what = f"'{args.id}'" if args.id else "any app"
+        print(f"No loads of {what} recorded in the last {summary.get('hours')} hours.")
+        return 0
+    print(f"Time to fully ready, last {summary.get('hours')} hours (budget {budget} ms)")
+    print(f"{'app':<20} {'loads':>6} {'typical':>9} {'slow':>9} {'worst':>9} {'over budget':>12}")
+    over = False
+    for app, st in apps.items():
+        over = over or bool(st.get("breaches"))
+        print(f"{app:<20} {st.get('count', 0):>6} {str(st.get('p50', 0)) + ' ms':>9} "
+              f"{str(st.get('p95', 0)) + ' ms':>9} {str(st.get('max', 0)) + ' ms':>9} "
+              f"{st.get('breaches', 0):>12}")
+    return 2 if over and args.check else 0
 
 
 def _vault_module():
@@ -3321,6 +3362,13 @@ def main(argv=None):
     ap = asub.add_parser("unlock", help="show all of CCC again")
     ap.add_argument("--forget", action="store_true",
                     help="also remove the button that locks back to the app")
+    ap.set_defaults(func=cmd_app)
+    ap = asub.add_parser("speed", help="how long app pages take to become fully ready")
+    ap.add_argument("id", nargs="?", help="only this app (default: every app)")
+    ap.add_argument("--hours", type=int, default=24, help="look back this many hours (default 24)")
+    ap.add_argument("--check", action="store_true",
+                    help="exit 2 when any load went over the budget")
+    ap.add_argument("--json", action="store_true", help="raw numbers as JSON")
     ap.set_defaults(func=cmd_app)
 
     p = sub.add_parser("secret", help="request a credential through the CCC dashboard")

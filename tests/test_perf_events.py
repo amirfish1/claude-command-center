@@ -215,6 +215,32 @@ class TestSummarize(PerfEventsTestBase):
         self.assertEqual(summary["thresholds"]["archive_load_cold_ms"], pe.ARCHIVE_COLD_MS)
         self.assertIn("ticket", summary)
 
+    def test_app_ready_is_budgeted_summarized_per_app_and_alertable(self):
+        # An app page reports navigation -> fully ready (content drawn and
+        # agent pane showing). Over the budget it is a breach, it is grouped
+        # per app, and unlike view_switch it can file a ticket.
+        fast = pe.record_event("app_ready", pe.APP_READY_MS - 200,
+                               detail={"app": "trips", "content_ms": 80, "agent_ms": 700})
+        self.assertTrue(fast["ok"])
+        self.assertFalse(fast["breach"])
+        for ms in (pe.APP_READY_MS + 500, pe.APP_READY_MS + 900):
+            self.assertTrue(pe.record_event("app_ready", ms, detail={"app": "trips"})["breach"])
+        pe.record_event("app_ready", 300, detail={"app": "notes"})
+
+        summary = pe.summarize(hours=24)
+        self.assertEqual(summary["thresholds"]["app_ready_ms"], pe.APP_READY_MS)
+        self.assertEqual(summary["kinds"]["app_ready"]["count"], 4)
+        self.assertEqual(summary["kinds"]["app_ready"]["worst"][0]["app"], "trips")
+        self.assertEqual(summary["apps"]["trips"]["count"], 3)
+        self.assertEqual(summary["apps"]["trips"]["breaches"], 2)
+        self.assertEqual(summary["apps"]["notes"]["breaches"], 0)
+        self.assertNotIn("worst", summary["apps"]["trips"])
+
+        self.assertNotIn("app_ready", pe._NO_SELF_FILE_KINDS)
+        pattern = pe.evaluate_breach_pattern(pe.read_events(0))
+        self.assertIsNotNone(pattern)
+        self.assertEqual(pattern["kind"], "app_ready")
+
     def test_hours_clamped(self):
         summary = pe.summarize(hours=99999)
         self.assertEqual(summary["hours"], 720)

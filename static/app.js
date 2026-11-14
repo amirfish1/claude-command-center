@@ -2771,6 +2771,7 @@
     // landed on the GIL-bound server alongside the archive bootstrap
     // request, stretching it from ~150ms to 1.4-3s. _releaseStartupApiReads
     // flips the flag before replaying the queue, so replays pass through.
+    if (_appEmbedSkips(input, init)) return _appEmbedSkippedResponse();
     if (!_startupApiReadsReleased && !_startupCriticalApiRead(input, init)) {
       return new Promise((resolve, reject) => {
         _startupDeferredApiReads.push({ input, init, resolve, reject });
@@ -2828,9 +2829,13 @@
   const _archiveBootstrapTimeout = setTimeout(() => {
     try { _archiveBootstrapController.abort(); } catch (_) {}
   }, 45 * 1000);
-  const _archiveBootstrapFetchPromise = backgroundApiFetch(
-    _archiveBootstrapUrl, { signal: _archiveBootstrapController.signal }
-  ).catch(() => null).finally(() => clearTimeout(_archiveBootstrapTimeout));
+  // A single-conversation popout never draws the list, so it must not ask
+  // for it: this is the heaviest read the server has, and an app's agent pane
+  // boots one of these popouts on every open.
+  const _archiveBootstrapFetchPromise = (window.__CCC_CONVERSATION_POPOUT__
+    ? Promise.resolve(null)
+    : backgroundApiFetch(_archiveBootstrapUrl, { signal: _archiveBootstrapController.signal }).catch(() => null)
+  ).finally(() => clearTimeout(_archiveBootstrapTimeout));
   let _archiveBootstrapConsumed = false;
 
   // Optional boot reads used to issue all at once and fill every HTTP/1.1
@@ -2871,6 +2876,9 @@
     if (!req) return true;
     if (req.method !== 'GET') return !_startupPathMatches(req.pathname, _startupDeferrableBeacons);
     if (req.pathname === '/api/sessions/live-activity') return false;
+    // The page is loading on an app (/?ccc_app=<id>): the rail's app list is
+    // what opens it when this browser has no saved copy of that list.
+    if (req.pathname === '/api/apps' && /[?&]ccc_app=/.test(window.location.search || '')) return true;
     if (req.pathname === '/api/sessions' && req.searchParams && (req.searchParams.get('peers_only') === '1' || req.searchParams.get('federated') === '1')) {
       return false;
     }
@@ -2887,7 +2895,37 @@
     return req.method !== 'GET' || _startupPathMatches(req.pathname, _startupDirectReplayPaths);
   }
 
+  // An app's agent pane (/?ccc_popout=conversation&embed=app, framed by
+  // app-kit.js) is one conversation and a composer. The dashboard modules
+  // loaded alongside it still ask for settings, savings, CI, queues and
+  // usage: about forty reads per open, then their polls, for panels that are
+  // never on screen there. Answer those here instead of sending them.
+  const APP_EMBED_MODE = !!window.__CCC_APP_EMBED__;
+  const _appEmbedSkipPrefixes = [
+    '/api/settings', '/api/savings', '/api/headroom', '/api/ci', '/api/free-failover',
+    '/api/queue/list', '/api/queue/import-doc', '/api/config-consent', '/api/telemetry/status',
+    '/api/throughput', '/api/objects', '/api/codex/stuck-summary', '/api/health',
+    '/api/cloud-relay/indicator', '/api/phone-access/status', '/api/car-mode/status',
+    '/api/version', '/api/decision-inbox', '/api/engines/installed', '/api/free-runtime/status',
+    '/api/today-stars', '/api/group-chats', '/api/watchtower/alerts', '/api/repo/list',
+    '/api/system/anomalies',
+  ];
+  function _appEmbedSkips(input, init) {
+    // Reads the window flag, not APP_EMBED_MODE: backgroundApiFetch can be
+    // called before that constant is initialised.
+    if (!window.__CCC_APP_EMBED__) return false;
+    const req = _startupApiPath(input, init);
+    if (!req || req.method !== 'GET') return false;
+    return req.pathname === '/api/apps' || _startupPathMatches(req.pathname, _appEmbedSkipPrefixes);
+  }
+  function _appEmbedSkippedResponse() {
+    return Promise.resolve(new Response('{"ok":false,"error":"not loaded in an app agent pane"}', {
+      status: 503, headers: { 'Content-Type': 'application/json' },
+    }));
+  }
+
   function startupBudgetedFetch(input, init) {
+    if (_appEmbedSkips(input, init)) return _appEmbedSkippedResponse();
     if (_startupApiReadsReleased || _startupCriticalApiRead(input, init)) {
       return _startupBaseFetch(input, init);
     }
@@ -2916,6 +2954,9 @@
     };
     pending.then(settle, settle);
   };
+  // The page loaded on an open app (index.html starts its frame first): the
+  // app and its agent pane are what is on screen, so they go first too.
+  if (window.__cccAppFrameReady) window.__cccStartupHoldForOpen(window.__cccAppFrameReady);
   function _releaseStartupApiReads() {
     if (_startupApiReadsReleased) return;
     const now = performance.now();
@@ -3134,7 +3175,14 @@
   // reader-only popout never does, so its session reads (usage -> model
   // pill, workspace row) sat queued until the 20s timer or a first click
   // (CCC-1209: popout showed no model name).
-  if (READER_ONLY_POPOUT) _releaseStartupApiReads();
+  // A conversation popout releases them once its conversation has painted
+  // (bootConversationPopoutDirect), not before: released at boot, ~80 reads
+  // went out with the tail fetch and it waited seconds behind them.
+  if (CONV_POPOUT_MODE && CONV_POPOUT_TARGET && CONV_POPOUT_TARGET !== '__new__') {
+    clearTimeout(_startupApiReleaseTimer);
+    _startupApiReleaseTimer = setTimeout(_releaseStartupApiReads, STARTUP_OPEN_HOLD_MAX_MS);
+  } else if (READER_ONLY_POPOUT) _releaseStartupApiReads();
+  if (APP_EMBED_MODE && document.body) document.body.classList.add('ccc-app-embed');
   // Reader-on-right toggle for the flow popout — persisted across
   // popout reloads. Applied at boot so the layout doesn't flash from
   // full-width-flow → split on first paint.
@@ -26194,7 +26242,27 @@
     });
     hideLoadingOverlay();
     _markFirstSessionsLoaded();
-    await selectConversation(row.id, activePaneId());
+    try {
+      await selectConversation(row.id, activePaneId());
+    } finally {
+      // The conversation is on screen: let the held boot reads go, and tell
+      // a host page (an app measuring its own load) that the pane is ready.
+      // A pane behind a tab (an app on a phone) gets no animation frame, so
+      // a short timer stands in for the paint.
+      let embedReadySent = false;
+      const embedReady = () => {
+        if (embedReadySent) return;
+        embedReadySent = true;
+        _releaseStartupApiReads();
+        if (window.parent !== window) {
+          try {
+            window.parent.postMessage({ type: 'ccc:embed-ready', conv: CONV_POPOUT_TARGET, ms: Math.round(performance.now()) }, window.location.origin);
+          } catch (_) {}
+        }
+      };
+      requestAnimationFrame(() => setTimeout(embedReady, 0));
+      setTimeout(embedReady, 250);
+    }
     return true;
   }
 

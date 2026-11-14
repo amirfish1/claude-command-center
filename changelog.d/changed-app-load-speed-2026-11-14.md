@@ -1,0 +1,1 @@
+Apps open much faster: the page draws from a saved copy, the agent pane loads a trimmed conversation view, the app you used last stays loaded in the background so opening or switching back to it is instant, and a page opened straight on an app loads the app before the dashboard behind it.

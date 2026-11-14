@@ -53,6 +53,10 @@ folder. Add `--focus` to make it the only thing on screen; `ccc app focus <id>`
 and `ccc app unlock` switch that later. See
 [Sharing an app](applications.md#sharing-an-app).
 
+`ccc app speed` shows how long each app page took to become fully ready
+against the one-second budget. See
+[Load time](applications.md#load-time-one-second-to-fully-ready).
+
 ## Choose a session or model
 
 `ccc sessions` shows live sessions, including spawned children under their

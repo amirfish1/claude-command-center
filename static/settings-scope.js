@@ -127,6 +127,9 @@
   // ~10s of frozen page per large open). Only added nodes can bring a new root
   // inside them, the transcript never holds one, and a target needs one check.
   const transcript='.conversations-view';
+  // An app's agent pane shows a conversation and no settings: scanning the
+  // whole page for controls there cost about a third of a second per open.
+  if(window.__CCC_APP_EMBED__)return;
   new MutationObserver(records=>{
     if(scheduled)return;
     const targets=new Set();

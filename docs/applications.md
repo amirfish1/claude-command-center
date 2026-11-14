@@ -169,6 +169,54 @@ window.addEventListener('ccc:app-changed', e => {
 Only files directly in the app folder count. CCC's `ccc-state.json` and the
 page's own saves under `data/` do not fire it.
 
+### Load time: one second to fully ready
+
+An app page is **fully ready** when its own content is drawn and, if it has an
+agent, the agent pane is showing the conversation. The budget is one second
+from the start of the page's navigation. `app-kit.js` measures every load and
+reports it, so a slow app shows up without anyone timing it by hand.
+
+- **Read it.** `ccc app speed` prints loads, typical, slow (p95) and worst
+  times per app for the last 24 hours against the budget (`ccc app speed <id>`
+  for one app, `--hours N` for a longer window, `--check` to exit 2 when any
+  load went over). The same numbers are in `GET /api/perf/summary` under
+  `apps` and `kinds.app_ready`.
+- **Change the budget.** `CCC_PERF_APP_READY_MS` (default `1000`).
+- **Tell the kit when your content is drawn.** By default content counts as
+  drawn at the first frame after `DOMContentLoaded`. A page that fetches its
+  data first should say so itself, or its number is flattering:
+
+  ```html
+  <script src="/static/app-kit.js" data-app="trips" data-ready="event"></script>
+  ```
+  ```js
+  // once the data is on screen; cached = drawn from a saved copy
+  window.cccAppContentReady = {ms: performance.now(), cached: false};
+  window.dispatchEvent(new Event('ccc:app-ready'));
+  ```
+
+  When both halves are in, the kit sets `window.cccAppReady`
+  (`{app, ms, content_ms, agent_ms, cached, framed}`) and fires
+  `ccc:app-fully-ready` on `window`. Loads that happened in a hidden tab are
+  not reported.
+
+What keeps a page inside the budget:
+
+- **Draw from a saved copy first.** Keep the last data you drew in
+  `localStorage`, draw it immediately, then fetch and redraw only if something
+  changed. This is what takes a table from seconds to under 100 ms.
+- **Fetch each file once.** Do not let several sections read the same JSON.
+- **Draw what is on screen.** Build folded or below-the-fold sections when
+  they are opened.
+
+CCC does its part: the agent pane loads a trimmed conversation view
+(`embed=app`) that skips the dashboard's sidebar, settings and status reads;
+the kit reopens the agent it showed last time instead of waiting to be told
+which one it is; the dashboard keeps the app you used last loaded in the
+background, so opening it or switching back to it is instant; and a page
+opened straight on an app starts loading the app before the dashboard behind
+it. `ccc:app-shown` fires on `window` when a kept-alive page is shown again.
+
 ### Alerts outside the dashboard
 
 Routine notifications can also go to your phone. Create

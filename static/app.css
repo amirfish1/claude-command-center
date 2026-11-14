@@ -454,6 +454,15 @@
   body.conversation-popout .toolbar {
     display: none !important;
   }
+  /* An app's agent pane (embed=app): one conversation and a composer. The
+     session title, CI progress, process pills and side-panel button belong
+     to the dashboard, not to someone using an app. */
+  body.ccc-app-embed [data-local-ci-host],
+  body.ccc-app-embed #convToolbar,
+  body.ccc-app-embed .conv-pane-header,
+  body.ccc-app-embed .popout-side-panel-btn {
+    display: none !important;
+  }
   body.conversation-popout .ccc-topbar,
   body.conversation-popout .font-size-controls,
   body.conversation-popout #mobileBackBtn,
@@ -34966,3 +34975,12 @@ a.local-ci-job:hover { color: var(--accent); }
 .workers-block-choice:hover { background: var(--surface-2); }
 .workers-block-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @container sidebar (max-width: 420px) { .workers-block-choice { min-height: 36px; } }
+
+/* An app's agent pane (embed=app) is narrow, so the phone layout's rules
+   apply to it. Those re-show the CI row and the session title bar with more
+   specific selectors; this keeps the pane to one conversation and a composer. */
+body.ccc-app-embed.conversation-popout .main > #localCiMobileReader,
+body.ccc-app-embed.conversation-popout .main > #convToolbar,
+body.ccc-app-embed.conversation-popout .main > .toolbar {
+  display: none !important;
+}
