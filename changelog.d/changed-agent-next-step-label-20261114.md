@@ -1,0 +1,1 @@
+- Make the agent-owned next-step label explicitly state that work proceeds without waiting for acknowledgment.

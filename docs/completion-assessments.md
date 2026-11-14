@@ -73,7 +73,7 @@ structured reports.
 
 Open work needs a concrete plan even when no human input is required. New
 remaining actions include `owner:"agent"`, `owner:"user"`, or `owner:"external"`,
-and are ordered by what happens next. The card labels these **My next step**,
+and are ordered by what happens next. The card labels these **The next step I am doing next without waiting for an ack**,
 **Your next step**, or **Waiting on**. Legacy entries without an owner use
 **Next step**; CCC does not guess the owner. An open report without a plan
 shows **Next step: Not stated** with one **Ask for next step** button that
