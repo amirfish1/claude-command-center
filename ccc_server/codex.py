@@ -1201,116 +1201,32 @@ class _CodexAppServerTransport:
 
 
 def _read_exact(sock, n):
-    chunks = []
-    remaining = n
-    while remaining > 0:
-        chunk = sock.recv(remaining)
-        if not chunk:
-            raise OSError("socket closed")
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
+    from ccc_server.codex_managed_websocket import read_exact
+    return read_exact(sock, n)
 
 
 def _websocket_send_frame(sock, opcode, payload=b"", *, mask=True):
-    payload = payload or b""
-    first = 0x80 | (opcode & 0x0F)
-    length = len(payload)
-    if length <= 125:
-        header = bytes([first, (0x80 if mask else 0) | length])
-    elif length <= 0xFFFF:
-        header = bytes([first, (0x80 if mask else 0) | 126]) + length.to_bytes(2, "big")
-    else:
-        header = bytes([first, (0x80 if mask else 0) | 127]) + length.to_bytes(8, "big")
-    if not mask:
-        sock.sendall(header + payload)
-        return
-    key = os.urandom(4)
-    masked = bytes(b ^ key[i % 4] for i, b in enumerate(payload))
-    sock.sendall(header + key + masked)
+    from ccc_server.codex_managed_websocket import send_frame
+    return send_frame(sock, opcode, payload, mask=mask)
 
 
 def _websocket_send_text(sock, text):
-    _websocket_send_frame(sock, 0x1, str(text).encode("utf-8"), mask=True)
+    from ccc_server.codex_managed_websocket import send_text
+    return send_text(sock, text)
 
 
 def _websocket_recv_text(sock):
-    fragments = []
-    while True:
-        first, second = _read_exact(sock, 2)
-        fin = bool(first & 0x80)
-        opcode = first & 0x0F
-        masked = bool(second & 0x80)
-        length = second & 0x7F
-        if length == 126:
-            length = int.from_bytes(_read_exact(sock, 2), "big")
-        elif length == 127:
-            length = int.from_bytes(_read_exact(sock, 8), "big")
-        mask_key = _read_exact(sock, 4) if masked else b""
-        payload = _read_exact(sock, length) if length else b""
-        if masked and payload:
-            payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
-        if opcode == 0x8:
-            raise OSError("websocket closed")
-        if opcode == 0x9:
-            _websocket_send_frame(sock, 0xA, payload, mask=True)
-            continue
-        if opcode == 0xA:
-            continue
-        if opcode == 0x1:
-            fragments = [payload]
-        elif opcode == 0x0:
-            fragments.append(payload)
-        else:
-            continue
-        if fin:
-            return b"".join(fragments).decode("utf-8", "replace")
+    from ccc_server.codex_managed_websocket import recv_text
+    return recv_text(sock)
 
 
 def _connect_codex_managed_app_server(path):
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(10)
+    from ccc_server.codex_managed_websocket import connect
+    sock = connect(path)
     try:
-        sock.connect(str(path))
-        key = base64.b64encode(os.urandom(16)).decode("ascii")
-        request = (
-            "GET / HTTP/1.1\r\n"
-            "Host: localhost\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            f"Sec-WebSocket-Key: {key}\r\n"
-            "Sec-WebSocket-Version: 13\r\n"
-            "\r\n"
-        )
-        sock.sendall(request.encode("ascii"))
-        response = b""
-        while b"\r\n\r\n" not in response and len(response) < 16384:
-            chunk = sock.recv(4096)
-            if not chunk:
-                raise OSError("managed app-server closed during websocket handshake")
-            response += chunk
-        header = response.split(b"\r\n\r\n", 1)[0].decode("iso-8859-1", "replace")
-        lines = header.split("\r\n")
-        if not lines or " 101 " not in f" {lines[0]} ":
-            raise OSError("managed app-server did not accept websocket upgrade")
-        accept = ""
-        for line in lines[1:]:
-            name, _, value = line.partition(":")
-            if name.lower() == "sec-websocket-accept":
-                accept = value.strip()
-                break
-        expected = base64.b64encode(hashlib.sha1(
-            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
-        ).digest()).decode("ascii")
-        if accept and accept != expected:
-            raise OSError("managed app-server websocket accept key mismatch")
-        sock.settimeout(None)
         return _core._CodexAppServerTransport("managed-unix", sock=sock)
-    except Exception:
-        try:
-            sock.close()
-        except OSError:
-            pass
+    except BaseException:
+        sock.close()
         raise
 
 
