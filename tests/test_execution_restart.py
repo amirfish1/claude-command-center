@@ -485,3 +485,23 @@ assert 'ccc_server.codex_managed_proof' not in sys.modules
     result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', program],
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
+
+
+def test_generic_client_release_cannot_admit_managed_recovery_without_proof(tmp_path):
+    from ccc_server.execution_authority import AttestationClient
+    profile = worker_profile('/private/state', '1001:1001', control_stdio=True)
+    with pytest.raises(Refused, match='accepted root coordinator'):
+        AttestationClient(tmp_path / 'absent').release(None, profile)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_root_generic_release_rejects_managed_profile_before_observing_json_claim(monkeypatch):
+    from ccc_server import execution_authority as authority
+    profile = worker_profile('/private/state', '1001:1001', control_stdio=True)
+    monkeypatch.setattr(authority, 'read_anchor', lambda _: {})
+    monkeypatch.setattr(authority, 'RootDocker', lambda: object())
+    monkeypatch.setattr(authority, 'LinuxProcesses', lambda: object())
+    monkeypatch.setattr(authority, 'authenticate_self', lambda *_: object())
+    monkeypatch.setenv('CCC_ATTESTATION_QUERY', json.dumps({'operation': 'release', 'fact': {}, 'profile': profile.value()}))
+    with pytest.raises(Refused, match='accepted root coordinator'):
+        authority.main()

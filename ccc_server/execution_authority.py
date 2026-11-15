@@ -261,6 +261,8 @@ def main():
         # claimed binding and admission stop before SIGCONT.
         claim = query["fact"]
         profile = _profile(query["profile"])
+        if profile.control_stdio:
+            raise Refused('managed recovery admission requires the accepted root coordinator')
         identity = ProcessIdentity(**claim["identity"])
         fact = verifier.observe(identity.container_id, profile, identity)
         if _wire(fact) != claim:
@@ -344,6 +346,8 @@ class AttestationClient:
         return facts["observed"]
 
     def release(self, fact, profile):
+        if profile.control_stdio:
+            raise Refused('managed recovery admission requires the accepted root coordinator')
         facts = self._request({"operation": "release", "fact": _wire(fact), "profile": profile.value()})
         if facts != {"released": fact}:
             raise Refused("authenticated release differs from prepared identity")
