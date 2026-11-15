@@ -331,3 +331,12 @@ def test_run_context_preserves_trigger_commit_and_account(monkeypatch):
     assert context['actor'] == 'rerunner'
     assert context['commit_subject'] == 'Fix tests'
     assert context['head_branch'] == 'main'
+
+
+def test_cloud_receipt_marker_preserves_compute_attribution():
+    receipt = {'steps': [{'name': 'CI compute: Claude Cloud', 'status': 'completed', 'conclusion': 'success'}]}
+    assert local_ci._compute_provider([receipt]) == 'claude_cloud'
+    receipt['steps'][0]['conclusion'] = 'skipped'
+    assert local_ci._compute_provider([receipt]) is None
+    receipt['steps'][0].update(status='queued', conclusion=None)
+    assert local_ci._compute_provider([receipt]) is None
