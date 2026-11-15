@@ -36,6 +36,7 @@ def test_restart_releases_waiting_reads_without_executing_them(monkeypatch, gate
     monkeypatch.setattr(server, '_background_api_read_slots',
                         threading.Semaphore(1) if gate == 'route' else Gate())
     monkeypatch.setattr(server, '_BG_ROUTE_CPU', {})
+    monkeypatch.setattr(server, '_save_bg_route_cpu', lambda: None)
     executed = []
     pool = ThreadPoolExecutor()
     try:
