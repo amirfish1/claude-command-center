@@ -33,7 +33,8 @@ def test_restart_releases_waiting_reads_without_executing_them(monkeypatch, gate
 
     monkeypatch.setattr(server, '_ACCEPT_PAUSED', stopping)
     monkeypatch.setattr(server, '_BG_ROUTE_LOCKS', {'/queued': Gate()} if gate == 'route' else {})
-    monkeypatch.setattr(server, '_background_api_read_slots', Gate())
+    monkeypatch.setattr(server, '_background_api_read_slots',
+                        threading.Semaphore(1) if gate == 'route' else Gate())
     monkeypatch.setattr(server, '_BG_ROUTE_CPU', {})
     executed = []
     pool = ThreadPoolExecutor()
