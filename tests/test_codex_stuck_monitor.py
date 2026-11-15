@@ -28,7 +28,10 @@ class CodexStuckSummaryTests(unittest.TestCase):
         def rollout_path(row):
             return paths[row["id"]]
 
+        tail_reads = []
+
         def tail_meta(path):
+            tail_reads.append(path)
             return {"last_event_type": "assistant", "pending_tool": None}
 
         def authoritative_state(
@@ -64,6 +67,7 @@ class CodexStuckSummaryTests(unittest.TestCase):
         self.assertEqual(summary["candidates"], 2)
         self.assertEqual(summary["recent_sessions"], 3)
         self.assertEqual(summary["threshold_s"], 900)
+        self.assertNotIn(paths["fresh-mid-turn"], tail_reads)
 
 
 class CodexStuckMonitorUiTests(unittest.TestCase):

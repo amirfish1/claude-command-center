@@ -1,1 +1,1 @@
-- Reduce peer-message acknowledgment delays while the Codex stuck-session counter refreshes by reading only thread metadata in one SQLite batch, without limiting candidate coverage.
+- Reduce peer-message acknowledgment delays while the Codex stuck-session counter refreshes by batching thread metadata and skipping fresh transcript reads, without limiting candidate coverage.

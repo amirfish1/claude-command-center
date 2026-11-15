@@ -12133,6 +12133,10 @@ def _build_codex_stuck_summary_uncached(now):
         if max(0.0, now - float(mtime or 0)) > recent_window:
             continue
         recent_sessions += 1
+        # Fresh rollouts cannot be classified as stuck. Avoid rebuilding
+        # their full transcript metadata just to confirm that fact.
+        if max(0.0, now - float(mtime or 0)) < threshold:
+            continue
         try:
             tail = _core._extract_codex_tail_meta(path) or {}
             coarse = _core._codex_row_state(tail, mtime, now, pool_alive, sid in live_ids)
