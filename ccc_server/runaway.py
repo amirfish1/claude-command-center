@@ -16,7 +16,9 @@ No LLM judges the work. Two cheap facts decide, read from the transcript:
   * whether anything changes: a turn is productive when it edits a file,
     commits / pushes, closes a ticket or opens / merges a PR, or reports
     ScheduleWakeup(noop=false). ScheduleWakeup(noop=true) is the session
-    itself saying nothing changed.
+    itself saying nothing changed. A turn that makes WORK_TOOL_CALLS or more
+    tool calls is working (running tests, checking production) and also ends
+    a stagnant run, though it does not count as productive.
 
 A session is flagged when it is still active, its autonomous streak is long
 (MIN_AUTO_TURNS turns over MIN_AUTO_SPAN_S), it spent at least MIN_COST since
@@ -71,7 +73,7 @@ CODEX_DAYS_BACK = 14            # a long-lived rollout stays in its start-day di
 INITIAL_TAIL_BYTES = 16 * 1024 * 1024
 INITIAL_TAIL_ROWS = 3000        # SQLite engines: rows read for a cold candidate
 SCAN_TTL_S = 300.0  # the card polls every 5 min; a rescan costs seconds in the busy server
-PARSE_VERSION = 2  # completed read-only reports now count as progress
+PARSE_VERSION = 3  # v3: tool-heavy turns end a stagnant run
 PRUNE_AFTER_S = 7 * 86400
 
 MIN_AUTO_TURNS = 6
@@ -81,6 +83,10 @@ STAGNANT_TURNS = 5
 # its last turns went (CCC-264: 24 of 39 turns productive, 7 trailing no-ops,
 # owner leased it as a false positive).
 MAX_PRODUCTIVE_SHARE = 0.5
+# A turn with this many tool calls is verifying or handing off, not idling
+# (CCC-338: in 5 of 6 false positives the "stagnant" turns made 3-10 calls
+# each; in the true positives and the Oct 29 IOS_US loop they made 0-2).
+WORK_TOOL_CALLS = 4
 # Cost-weighted tokens (fresh input + 1.25x cache write + 0.1x cache read +
 # 5x output): roughly what a turn bills, unlike raw totals that cache reads
 # dominate. The floor keeps cheap pings ("reply RECEIVED") from flagging.
@@ -207,7 +213,7 @@ def _ts(value):
 
 
 def _open_turn(st, trigger, ts):
-    st["turn"] = {"trigger": trigger, "productive": False, "noop": False}
+    st["turn"] = {"trigger": trigger, "productive": False, "noop": False, "tools": 0}
     if trigger == HUMAN:
         st["streak"] = _new_streak()
         st["last_human"] = ts or st["last_ts"]
@@ -250,6 +256,8 @@ def _close_turn(st):
     if turn["productive"] and not turn["noop"]:
         sk["productive"] += 1
         sk["stagnant"] = 0
+    elif turn.get("tools", 0) >= WORK_TOOL_CALLS and not turn["noop"]:
+        sk["stagnant"] = 0
     else:
         sk["stagnant"] += 1
 
@@ -271,6 +279,7 @@ def _mark_tool(st, name, payload):
         elif payload.get("noop") is False:
             turn["productive"] = True
         return
+    turn["tools"] = turn.get("tools", 0) + 1
     if name in _PRODUCTIVE_TOOLS or _progress_text(payload):
         turn["productive"] = True
 

@@ -487,3 +487,20 @@ def test_flag_history_is_logged_once_per_streak(env):
     r = rows[0]
     assert r["session_id"] == "dddddddd-4444" and r["reasons"] == ["stagnant"]
     assert r["flagged_at"] == NOW and r["auto_turns"] == 8 and r["cost_tokens"] > 0
+
+
+def test_tool_heavy_turns_are_working_not_stagnant(env):
+    """CCC-338: verification turns (tests, production checks) are not idle."""
+    _, projects, _, kw = env
+    busy = [("Bash", {"command": "pytest -q tests/x_%d.py" % i}) for i in range(runaway.WORK_TOOL_CALLS)]
+    write(projects / "p" / "ffffffff-6666.jsonl", timer_loop(NOW - 5 * 3600, 8, tools=busy))
+    flagged, _ = runaway.scan(now=NOW, **kw)
+    assert flagged == []
+
+
+def test_light_status_checks_still_stagnate(env):
+    _, projects, _, kw = env
+    light = [("Bash", {"command": "git status"})] * (runaway.WORK_TOOL_CALLS - 1)
+    write(projects / "p" / "abababab-7777.jsonl", timer_loop(NOW - 5 * 3600, 8, tools=light))
+    flagged, _ = runaway.scan(now=NOW, **kw)
+    assert [e["session_id"] for e in flagged] == ["abababab-7777"]
