@@ -292,7 +292,14 @@
   function startAgent(fresh) {
     showHero('<div class="big">🤖</div><div>Starting the agent…</div>');
     return api('/api/apps/agent', { app: APP, fresh: !!fresh }).then(function (r) {
-      if (!r.ok) { showHero('<div class="big">🤖</div><div>Could not start the agent: ' + esc(r.error) + '</div><button type="button" class="ccck-btn" data-k="start">Try again</button>'); return ''; }
+      if (!r.ok) {
+        // No agent program on this computer (someone who installed a shared
+        // app): say what to install instead of naming a CLI and an env var.
+        var why = /CLI not found/i.test(r.error || '')
+          ? '<b>The agent needs Claude Code, which is not on this computer.</b><br>The page works without it. <a href="https://claude.com/claude-code" target="_blank" rel="noopener">Install Claude Code</a>, then press Try again.'
+          : 'Could not start the agent: ' + esc(r.error);
+        showHero('<div class="big">🤖</div><div>' + why + '</div><button type="button" class="ccck-btn" data-k="start">Try again</button>'); return '';
+      }
       agentId = r.session_id; rememberAgent(agentId); showSession(agentId, 'Agent'); return agentId;
     });
   }
