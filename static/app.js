@@ -15770,6 +15770,7 @@
         .then(d => {
           _ttsTogglePending = false;
           if (d && d.tts) _ttsUpdateDiagnosticsQueue(d.tts);
+          try { if (typeof window.__cccPollBgRuns === 'function') window.__cccPollBgRuns(); } catch (_) {}
           if (next) {
             try { if (typeof scheduleTtsPrefetch === 'function') scheduleTtsPrefetch(); } catch (_) {}
           }
@@ -80103,6 +80104,7 @@
     const t = p.totals || {};
     const cpu = p.cpu || {};
     const mem = p.memory || {};
+    const tts = (p.tts && typeof p.tts === 'object' && Object.keys(p.tts).length) ? p.tts : null;
     const hot = (p.alerts || []).length > 0;
     // Host CPU/mem pressure is always shown (not only when busy) so a calm
     // host reads as calm instead of the chip silently vanishing.
@@ -80111,10 +80113,18 @@
     const chips = [];
     if (cpu.cores) chips.push(`CPU ${Number(cpu.load_per_core).toFixed(1)}×`);
     if (mem.used_pct != null) chips.push(`mem ${Math.round(mem.used_pct)}%`);
+    if (tts) {
+      if (tts.enabled === false) {
+        chips.push('TTS off');
+      } else {
+        const ttsLoad = Number(tts.load_per_core || 0);
+        chips.push(`TTS ${ttsLoad >= 1 ? ttsLoad.toFixed(1) : ttsLoad.toFixed(2)}×`);
+      }
+    }
     chips.push(`⚙ ${t.runs_last_hour || 0}/h`);
     const saturated = cpu.level === 'saturated' || mem.level === 'saturated';
     $bgRunsBtn.textContent = `${hot || saturated ? '⚠ ' : ''}${chips.join(' · ')}`;
-    $bgRunsBtn.title = 'Host pressure (CPU load per core, memory used) and background runs per hour (headless claude -p). Click for details.';
+    $bgRunsBtn.title = 'Host pressure (CPU load per core, memory used, TTS load per core) and background runs per hour (headless claude -p). Click for details.';
     $bgRunsBtn.classList.toggle('is-pressure-busy', !saturated && (cpu.level === 'busy' || mem.level === 'busy'));
     $bgRunsBtn.classList.toggle('is-pressure-saturated', saturated);
     $bgRunsBtn.style.display = '';
@@ -80132,6 +80142,26 @@
       const swap = mem.swap_used_pct != null ? ` · swap ${mem.swap_used_pct}%` : '';
       html += `<div class="bg-runs-row${mem.level === 'saturated' ? ' is-alert' : ''}"><span>Memory · ${escapeHtml(mem.level || '?')}</span><span class="bg-runs-meta" title="stalled = share of the last 10s tasks waited on memory (PSI)">${Math.round(mem.used_pct)}% of ${(mem.total_mb / 1024).toFixed(0)} GB${swap}${mpsi}</span></div>`;
     }
+    if (tts) {
+      let ttsMeta = '';
+      let ttsTitle = 'TTS server contribution to host CPU load (1m average ×/core and CPU cores used)';
+      if (tts.enabled === false) {
+        ttsMeta = '0.00×/core · disabled';
+      } else if (!tts.running && !tts.queued) {
+        ttsMeta = '0.00×/core · not running';
+      } else {
+        const lpc = Number(tts.load_per_core || 0).toFixed(2);
+        const coresUsed = Number(tts.cores || 0).toFixed(1);
+        const qSuffix = tts.queued ? ` · ${tts.queued} queued` : '';
+        ttsMeta = `${lpc}×/core · ${coresUsed} cores${qSuffix}`;
+        const details = [];
+        if (tts.recent_cores != null) details.push(`recent ~10s: ${Number(tts.recent_cores).toFixed(2)} cores`);
+        if (tts.threads) details.push(`pool: ${tts.threads} threads`);
+        if (tts.cpu_time_s != null) details.push(`cumulative CPU: ${tts.cpu_time_s}s`);
+        if (details.length) ttsTitle += ` — ${details.join('; ')}`;
+      }
+      html += `<div class="bg-runs-row"><span>TTS · ${escapeHtml(tts.level || 'idle')}</span><span class="bg-runs-meta" title="${escapeHtml(ttsTitle)}">${escapeHtml(ttsMeta)}</span></div>`;
+    }
     html += (p.groups || []).filter(g => g.runs_last_day).map(g => {
       const name = escapeHtml(g.spawner + (g.kind ? ' · ' + g.kind : ''));
       const cls = alerting.has(g.spawner + '|' + g.kind) ? ' is-alert' : '';
@@ -80145,6 +80175,7 @@
       if (r.ok) renderBgRuns(await r.json());
     } catch (_) { /* transient; next poll retries */ }
   }
+  window.__cccPollBgRuns = pollBgRuns;
   if ($bgRunsBtn) {
     $bgRunsBtn.addEventListener('click', () => {
       $bgRunsPanel.hidden = !$bgRunsPanel.hidden;

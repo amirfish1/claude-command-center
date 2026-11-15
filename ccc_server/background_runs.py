@@ -176,8 +176,18 @@ def memory_pressure():
     return out
 
 
+def tts_pressure(host_cores=None):
+    """TTS server CPU/load contribution (`×/core` and CPU cores used over 1 min)."""
+    try:
+        from ccc_server import free_runtime
+        return free_runtime.tts_pressure(host_cores=host_cores)
+    except Exception:
+        return {}
+
+
 def _with_pressure(payload):
-    return dict(payload, cpu=cpu_pressure(), memory=memory_pressure())
+    cpu = cpu_pressure()
+    return dict(payload, cpu=cpu, memory=memory_pressure(), tts=tts_pressure(host_cores=cpu.get("cores")))
 
 
 def background_runs_payload(now=None, projects_root=None, markers=None, use_cache=True):
