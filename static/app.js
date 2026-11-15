@@ -27063,15 +27063,16 @@
   function spawningSelectionStillPending(id) {
     try {
       if (!id) return false;
+      const waiting = c => !!(c && !c.spawn_failed && c.pending_spawn !== false && !c._landedResolved);
       const pid = String(id).replace(/^spawning-/, '');
       if (pendingSpawns.has(pid)) {
         const c = pendingSpawns.get(pid);
-        return !!(c && !c.spawn_failed);
+        return waiting(c);
       }
       for (const c of pendingSpawns.values()) {
-        if (c && c.id === id) return !c.spawn_failed;
+        if (c && c.id === id) return waiting(c);
       }
-      return (conversationsData || []).some(c => c && c.id === id && !c.spawn_failed);
+      return (conversationsData || []).some(c => c && c.id === id && waiting(c));
     } catch (_) {
       // Unknown state (e.g. TDZ during early boot): fail closed and keep the
       // protective pause, matching the pre-fix behavior.
@@ -27469,6 +27470,18 @@
   // "Thinking..." card forever while the answer lands on the real row
   // (CCC-165).
   const _resolvedPlaceholderTargets = new Map();
+
+  function resolvedSpawnConversationId(id) {
+    if (!String(id || '').startsWith('spawning-')) return id;
+    const card = (conversationsData || []).find(c => c && c.id === id)
+      || Array.from(pendingSpawns.values()).find(c => c && c.id === id);
+    if (card?.spawn_failed) return id;
+    // A resolved mapping is proof of landing even while archive refresh is
+    // still chasing this spawn. A preassigned expected id alone is not.
+    const resolved = _resolvedPlaceholderTargets.get(id)
+      || (card?._landedResolved && card.session_id);
+    return resolved && !String(resolved).startsWith('spawning-') ? resolved : id;
+  }
 
   function resolvePlaceholderPanes(placeholderIds, real) {
     const realId = real && (real.id || real.session_id);
@@ -28123,6 +28136,7 @@
             ph.pending_spawn = false;
             ph.session_id = expectedSid;
             const placeholderId = ph.id || ('spawning-' + pid);
+            ph.id = expectedSid;
             if (currentConversation === placeholderId || currentConversation === ('spawning-' + pid)) {
               rebindCurrentSelectionToRealCard(Object.assign({}, ph, { id: expectedSid }));
             }
@@ -54064,6 +54078,7 @@
   }
 
   async function selectConversation(id, paneId) {
+    id = resolvedSpawnConversationId(id);
     paneId = paneId || activePaneId();
     // Perf metric 2 start (conv_open): overwritten on every click, so a click
     // superseded by a later one before its render lands is simply dropped —
@@ -64325,10 +64340,9 @@
     // until /api/sessions swaps in the durable transcript row.
     if (id.startsWith('spawning-')) {
       const c = (conversationsData || []).find(x => x.id === id);
-      const resolvedId = _resolvedPlaceholderTargets.get(id);
-      if (resolvedId && !pendingSpawns.has(String(id).replace(/^spawning-/, ''))
-          && !(c && c.spawn_failed)) {
-        selectConversation(resolvedId, fetchPaneId);
+      const resolvedId = resolvedSpawnConversationId(id);
+      if (resolvedId !== id) {
+        await selectConversation(resolvedId, fetchPaneId);
         return;
       }
       if (!c) return;
