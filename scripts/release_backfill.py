@@ -162,7 +162,7 @@ def sha256(filename):
 def worktree(destination, ref):
     if not destination.exists():
         run("git", "worktree", "add", "--detach", destination, ref)
-    if run("git", "rev-parse", "HEAD", cwd=destination) != run("git", "rev-parse", ref):
+    if run("git", "rev-parse", "HEAD", cwd=destination) != run("git", "rev-parse", ref + "^{commit}"):
         raise ValueError(f"backfill workspace does not match {ref}: {destination}")
 
 

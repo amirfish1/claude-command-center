@@ -175,7 +175,7 @@ PY
 ''')
     cmd("git", "add", "docs/appcast.xml", "scripts/release-dmg.sh", cwd=repo)
     cmd("git", "commit", "-m", "test: initial source", cwd=repo)
-    cmd("git", "tag", "v1.0.0", cwd=repo)
+    cmd("git", "tag", "-a", "v1.0.0", "-m", "Release v1.0.0", cwd=repo)
     (repo / "docs/appcast.xml").write_text(feed("2.0.0"))
     cmd("git", "add", "docs/appcast.xml", cwd=repo)
     cmd("git", "commit", "-m", "test: newer release", cwd=repo)
