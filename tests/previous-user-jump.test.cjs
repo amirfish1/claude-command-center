@@ -61,6 +61,18 @@ test('a hidden original ask becomes readable and is reached in one click',async(
  try{await page.click('.conv-scroll-last-btn');await at(page,'u10');assert.equal(await page.$eval('#u10',el=>el.checkVisibility({checkVisibilityCSS:true})),true);}finally{await page.close();}
 });
 
+test('Next never targets the original ask already shown in the sticky header',async()=>{
+ // One-prompt worker session read from the top: the hidden pinned ask was the
+ // only "next" stop, so each tap nudged the view a few pixels (phone report).
+ const page=await open(user('u10','is-pinned-in-sticky')+'<div class="conv-cache-chip" style="height:20px;margin-top:60px"></div>'+reply()+reply()+reply(),390);
+ try{
+  await page.evaluate(()=>{view.scrollTop=0;updateConversationEndAffordance(view);});
+  const s=await page.evaluate(()=>({target:_nextUserMessageTarget(view)?.id||null,
+   next:view._convNextButton.classList.contains('visible'),end:view._convEndButton.classList.contains('visible')}));
+  assert.deepEqual(s,{target:null,next:false,end:true});
+ }finally{await page.close();}
+});
+
 test('Previous and Next step between actual user turns, including a mirrored ask',async()=>{
  const page=await open(user('u10')+reply()+user('peer20','peer-message')+user('skill21','skill-loaded-event')+user('task22','task-notification-event')+user('provisional23','provisional') .replace('data-jsonl-line="23"','data-live-key="turn:item"')+reply()+user('u30','is-dynamic-pinned-in-sticky')+reply()+reply());
  try{await page.click('.conv-scroll-last-btn');await at(page,'u30');assert.equal(await page.$eval('#u30',el=>getComputedStyle(el).visibility),'visible');await page.click('.conv-scroll-last-btn');await at(page,'u10');await page.click('.conv-scroll-next-btn');await at(page,'u30');}finally{await page.close();}

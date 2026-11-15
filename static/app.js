@@ -51936,8 +51936,12 @@
     // whose start sits below the pane top. The dead zone between the two
     // thresholds (-8..+20; jumps pin a message at +12) keeps the message
     // currently at the top from being its own previous/next target.
+    // The pinned original ask is already on screen in the sticky header, so it
+    // is never a forward stop: in a one-prompt worker session it was the only
+    // target, and each tap nudged the view a few pixels instead of moving down.
     const viewTop = _convReadingTop(view);
     for (let i = 0; i < list.length; i++) {
+      if (list[i].classList.contains('is-pinned-in-sticky') && !list[i].getClientRects().length) continue;
       const top = _convUserMessageTop(list[i], view);
       if (top !== null && top > viewTop + 20) return list[i];
     }

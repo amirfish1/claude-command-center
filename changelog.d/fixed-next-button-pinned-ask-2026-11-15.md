@@ -1,0 +1,1 @@
+- On phones, the Next (↓) button no longer nudges the view a few pixels in one-prompt sessions; it hides when there is no later message of yours, leaving End to jump down.
