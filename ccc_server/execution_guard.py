@@ -11,7 +11,6 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import runpy
 import signal
 import sys
 import types
@@ -19,6 +18,7 @@ import types
 
 EXCLUDED = ("/state", "/tmp", "/run", "/proc", "/sys", "/dev")
 EXCLUDED_FILES = {"/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}
+DATA_ROOTS = ("/state", "/tmp", "/run/data")
 
 
 def install_kernel_policy():
@@ -72,12 +72,13 @@ def measured_filename(filename):
 
 
 class SourceGuard:
-    def __init__(self, commands, generated_sources=(), unix_sockets=()):
+    def __init__(self, commands, generated_sources=(), unix_sockets=(), state_files=()):
         self.commands = {tuple(command) for command in commands}
         self.code = set()
         self.generated_sources = set(generated_sources)
         self._deriving = False
         self.unix_sockets = set(unix_sockets)
+        self.state_files = set(state_files)
 
     def register(self, code):
         self.code.add(code)
@@ -91,7 +92,20 @@ class SourceGuard:
         return self.register(compile(Path(filename).read_bytes(), filename, "exec", dont_inherit=True))
 
     def audit(self, event, args):
-        if event == "compile":
+        if event == "open":
+            filename, _, flags = args
+            if isinstance(filename, (str, bytes)):
+                if not os.path.isabs(filename):
+                    raise RuntimeError("execution refused: unmeasured relative file access")
+                filename = os.path.realpath(os.fsdecode(filename))
+                writing_only = flags & os.O_ACCMODE == os.O_WRONLY
+                if any(filename == root or filename.startswith(root + "/") for root in DATA_ROOTS):
+                    if not writing_only and filename not in self.state_files:
+                        raise RuntimeError("execution refused: undeclared mutable input/configuration")
+                elif filename.startswith(("/proc/", "/sys/", "/dev/")):
+                    if filename.endswith("/mem") or (flags & os.O_ACCMODE != os.O_RDONLY and filename != "/dev/null"):
+                        raise RuntimeError("execution refused: unsafe runtime file access")
+        elif event == "compile":
             source, filename = args
             if self._deriving:
                 return
@@ -195,7 +209,7 @@ def main():
                                tuple(tuple(p) for p in value["commands"]),
                                value["network"], value["user"],
                                tuple(tuple(p) for p in value["generated_sources"]),
-                               tuple(value["unix_sockets"]))
+                               tuple(value["unix_sockets"]), tuple(value["state_files"]))
     if canonical(profile.value()) != canonical(value):
         raise RuntimeError("execution refused: unknown execution profile")
     # No application code executes before installation. Pre-imported modules
@@ -203,7 +217,7 @@ def main():
     generated = [(filename, Path(measured_filename(source)).read_bytes())
                  for filename, source in profile.generated_sources]
     install_kernel_policy()
-    guard = SourceGuard(profile.commands, generated, profile.unix_sockets)
+    guard = SourceGuard(profile.commands, generated, profile.unix_sockets, profile.state_files)
     guard.install()
     # Every launch begins behind this kernel admission stop. A root authority
     # re-observes the exact prepared identity before the coordinator releases

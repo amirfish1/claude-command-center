@@ -7,6 +7,8 @@ container environment claims, mutable checkout hashes and caller JSON are not.
 """
 
 from dataclasses import dataclass
+import copy
+import gzip
 import hashlib
 import io
 import json
@@ -14,7 +16,6 @@ import os
 from pathlib import Path
 import posixpath
 import re
-import stat
 import subprocess
 import tarfile
 import tempfile
@@ -81,7 +82,7 @@ def _resolve(entries, name, seen=()):
     return "/".join(resolved)
 
 
-def manifest_from_tar(fileobj):
+def manifest_from_tar(fileobj, *, verify_links=True):
     """Canonical whole rootfs, including every dependency, never just CCC files.
 
     Tar ownership/timestamps are not executable identity; full permission bits
@@ -130,10 +131,11 @@ def manifest_from_tar(fileobj):
         entries[name].update(type="file", sha256=target["sha256"], size=target["size"])
     for name in hardlinks:
         hardlink(name)
-    for name, entry in entries.items():
-        _resolve(entries, name)
-        if entry["type"] == "symlink":
-            _resolve(entries, _target(name, entry["target"]))
+    if verify_links:
+        for name, entry in entries.items():
+            _resolve(entries, name)
+            if entry["type"] == "symlink":
+                _resolve(entries, _target(name, entry["target"]))
     return canonical({"format": "ccc-execution-rootfs-v1",
                       "entries": [entries[name] for name in sorted(entries)]})
 
@@ -143,6 +145,110 @@ class Artifact:
     image_id: str
     executed_build_sha256: str
     manifest: bytes
+
+
+def manifest_from_saved_image(data, image_id):
+    """Measure the stored image, not Docker's mutable initialization layer.
+
+    Builder artifacts are deliberately flattened single-layer imports. Unknown
+    layered/whiteout layouts refuse rather than partially applying OCI layers.
+    Verify both config identity and its uncompressed layer digest.
+    """
+    with tarfile.open(fileobj=io.BytesIO(data)) as saved:
+        manifests = json.load(saved.extractfile("manifest.json"))
+        if len(manifests) != 1 or len(manifests[0]["Layers"]) != 1:
+            raise Refused("execution artifact must be a flattened single-layer image")
+        record = manifests[0]
+        config_bytes = saved.extractfile(record["Config"]).read()
+        config = json.loads(config_bytes)
+        if config.get("rootfs", {}).get("type") != "layers":
+            raise Refused("unsupported image rootfs format")
+        layer = saved.extractfile(record["Layers"][0]).read()
+        if "sha256:" + digest(config_bytes) != image_id:
+            # Docker 29/containerd uses the OCI manifest digest as Image.Id;
+            # older engines use the config digest. Verify the entire chain.
+            root = saved.extractfile("blobs/sha256/" + image_id.removeprefix("sha256:")).read()
+            if "sha256:" + digest(root) != image_id:
+                raise Refused("saved OCI manifest differs from pinned image ID")
+            descriptor = json.loads(root)
+            if descriptor.get("schemaVersion") != 2:
+                raise Refused("unsupported OCI manifest format")
+            if descriptor["config"]["digest"] != "sha256:" + digest(config_bytes):
+                raise Refused("saved config differs from OCI manifest")
+            if len(descriptor["layers"]) != 1 or descriptor["layers"][0]["digest"] != "sha256:" + digest(layer):
+                raise Refused("saved layer differs from OCI manifest")
+            media = descriptor["layers"][0]["mediaType"]
+            if media.endswith("+gzip") or media.endswith(".gzip"):
+                layer = gzip.decompress(layer)
+            elif not media.endswith(".tar"):
+                raise Refused("unsupported execution layer compression")
+        if config["rootfs"]["diff_ids"] != ["sha256:" + digest(layer)]:
+            raise Refused("saved layer differs from content-addressed config")
+        with tarfile.open(fileobj=io.BytesIO(layer)) as archive:
+            if any(posixpath.basename(member.name).startswith(".wh.") for member in archive):
+                raise Refused("unexpected whiteout in flattened execution artifact")
+        return manifest_from_tar(io.BytesIO(layer))
+
+
+def image_etc_mount(image_id):
+    # Docker 29's overlayfs image-mount ID hex-encodes the container ID and
+    # source. Full IDs exceed NAME_MAX. Unique digest lookup is resolved back
+    # to the exact full image ID by the root verifier before execution.
+    return {"Type": "image", "Source": image_id[:31], "Target": "/etc", "ReadOnly": True,
+            "ImageOptions": {"Subpath": "opt/ccc-runtime/etc"}}
+
+
+def runtime_mount_snapshot(container):
+    mounts = copy.deepcopy(container.get("Mounts", []))
+    for mount in mounts:
+        if mount["Type"] == "image" and mount["Destination"] == "/etc":
+            # Root-daemon backing paths contain this container's ID. That is
+            # an identity field, not safety policy. Content is independently
+            # pinned/verified against the full immutable source image.
+            mount["Source"] = container["Image"] + ":opt/ccc-runtime/etc"
+            mount["Name"] = container["Image"]
+    return sorted(mounts, key=lambda m: m["Destination"])
+
+
+def committed_source_tar(repo, revision):
+    """Read every tracked blob; mutable/export-ignore attributes cannot filter it."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    command = ["git", "--no-replace-objects", "-C", str(repo)]
+    records = subprocess.check_output([*command, "ls-tree", "-r", "-z", revision], env=env).split(b"\0")
+    files = []
+    for record in records:
+        if not record:
+            continue
+        header, filename = record.split(b"\t", 1)
+        mode, kind, sha = header.decode("ascii").split()
+        if kind != "blob" or mode not in ("100644", "100755", "120000"):
+            raise Refused("submodule or unsupported committed source type")
+        files.append((_relative(filename.decode("utf-8")), mode, sha))
+    blobs = io.BytesIO(subprocess.check_output([*command, "cat-file", "--batch"],
+                                               input="".join(sha + "\n" for _, _, sha in files).encode(), env=env))
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w") as archive:
+        directories = sorted({str(parent) for name, _, _ in files for parent in Path(name).parents if str(parent) != "."})
+        for name in directories:
+            item = tarfile.TarInfo(name)
+            item.type, item.mode = tarfile.DIRTYPE, 0o755
+            archive.addfile(item)
+        for name, mode, expected_sha in files:
+            sha, kind, size = blobs.readline().decode("ascii").split()
+            payload = blobs.read(int(size))
+            if sha != expected_sha or kind != "blob" or blobs.read(1) != b"\n":
+                raise Refused("committed source blob identity changed")
+            if hashlib.sha1(b"blob " + str(len(payload)).encode() + b"\0" + payload).hexdigest() != sha:
+                raise Refused("committed source blob content does not match SHA")
+            item = tarfile.TarInfo(name)
+            item.mode = 0o755 if mode == "100755" else 0o644
+            if mode == "120000":
+                item.type, item.mode, item.linkname = tarfile.SYMTYPE, 0o777, payload.decode("utf-8")
+                archive.addfile(item)
+            else:
+                item.size = len(payload)
+                archive.addfile(item, io.BytesIO(payload))
+    return output.getvalue()
 
 
 class DockerImages:
@@ -171,7 +277,7 @@ class DockerImages:
             raise Refused("Docker returned an unpinned image")
         if info.get("Config", {}).get("Volumes"):
             raise Refused("image declares unmeasured volumes")
-        manifest = manifest_from_tar(io.BytesIO(self.export(info["Id"])))
+        manifest = manifest_from_saved_image(self.command("image", "save", info["Id"]), info["Id"])
         return Artifact(info["Id"], digest(manifest), manifest)
 
 
@@ -193,7 +299,7 @@ def build_artifact(base_digest, repo, revision, *, prune_base_links=(), docker=N
         raise Refused("base registry digest not verified by Docker")
     if base.get("Config", {}).get("Volumes"):
         raise Refused("base declares external volumes")
-    source = subprocess.check_output(["git", "-C", str(repo), "archive", revision])
+    source = committed_source_tar(repo, revision)
     base_bytes = docker.export(base["Id"])
     prune = {_relative(name) for name in prune_base_links}
     with tempfile.TemporaryFile() as output:
@@ -227,14 +333,44 @@ def build_artifact(base_digest, repo, revision, *, prune_base_links=(), docker=N
                     item = tarfile.TarInfo("etc/mtab")
                     item.mode = 0o644
                     target.addfile(item)
+                if "etc" not in members or "opt/ccc-runtime" in members:
+                    raise Refused("base lacks etc or shadows runtime snapshot")
+                for name in ("opt", "opt/ccc-runtime"):
+                    if name not in members:
+                        item = tarfile.TarInfo(name)
+                        item.type, item.mode = tarfile.DIRTYPE, 0o755
+                        target.addfile(item)
+                for name, original_item in members.items():
+                    if (name == "etc" or name.startswith("etc/")) and name not in prune:
+                        item = copy.copy(original_item)
+                        item.name = "opt/ccc-runtime/" + name
+                        item.pax_headers = {k: v for k, v in item.pax_headers.items() if k not in ("path", "linkpath")}
+                        target.addfile(item, original.extractfile(original_item) if item.isfile() else None)
+                aliases = set()
+                for name, item in members.items():
+                    if name.startswith("etc/") and item.issym() and name not in prune and not item.linkname.startswith("/"):
+                        destination = posixpath.normpath(_target(name, item.linkname))
+                        first = destination.split("/", 1)[0]
+                        if first != "etc":
+                            _resolve(base_entries, name)
+                            aliases.add(first)
+                for name in sorted(aliases):
+                    item = tarfile.TarInfo("opt/ccc-runtime/" + name)
+                    item.type, item.mode, item.linkname = tarfile.SYMTYPE, 0o777, "/" + name
+                    target.addfile(item)
+                if "etc/mtab" in prune:
+                    item = tarfile.TarInfo("opt/ccc-runtime/etc/mtab")
+                    item.mode = 0o644
+                    target.addfile(item)
             for name in ("opt", "opt/ccc"):
-                if name not in members:
+                if name not in members and name != "opt":
                     item = tarfile.TarInfo(name)
                     item.type, item.mode = tarfile.DIRTYPE, 0o755
                     target.addfile(item)
             with tarfile.open(fileobj=io.BytesIO(source)) as tracked:
                 for item in tracked:
                     item.name = "opt/ccc/" + _relative(item.name)
+                    item.pax_headers = {k: v for k, v in item.pax_headers.items() if k not in ("path", "linkpath")}
                     if item.islnk():
                         item.linkname = "opt/ccc/" + _relative(item.linkname)
                     item.uid = item.gid = 0
@@ -275,6 +411,7 @@ class ExecutionProfile:
     user: str = "65532:65532"
     generated_sources: tuple = ()  # (compiler filename, measured source file)
     unix_sockets: tuple = ()  # Explicit private data sockets; peer proof separate.
+    state_files: tuple = ()  # Exact mutable ledger/input files, never configuration.
 
     def value(self):
         if not self.entry.startswith("/opt/ccc/") or "/../" in self.entry:
@@ -297,6 +434,10 @@ class ExecutionProfile:
                 raise Refused("unmeasured interpreter/loader configuration")
             if not isinstance(val, str):
                 raise Refused("non-string environment value")
+            if val.startswith(_DATA_ROOTS) and key != "CCC_STATE_DIR":
+                raise Refused("mutable environment-backed configuration is unsupported")
+            if ".." in val.split("/"):
+                raise Refused("unmeasurable environment path traversal")
         destinations = set()
         for source, destination, read_only in self.data_mounts:
             if destination not in _DATA_ROOTS or destination in destinations:
@@ -312,10 +453,17 @@ class ExecutionProfile:
         for filename in self.unix_sockets:
             if not filename.startswith(tuple(root + "/" for root in _DATA_ROOTS)) or "/../" in filename:
                 raise Refused("only explicit private data sockets are supported")
+        for filename in self.state_files:
+            if not filename.startswith(tuple(root + "/" for root in _DATA_ROOTS)) or "/../" in filename:
+                raise Refused("state input must be an exact private data file")
+            if posixpath.basename(filename) in ("config.json", "settings.json", ".env") or filename.endswith((".toml", ".ini", ".yaml", ".yml")):
+                raise Refused("mutable configuration is not an attested state input")
         return {"format": "ccc-execution-profile-v1", "entry": self.entry,
                 "argv": list(self.argv), "environment": sorted(env.items()),
                 "generated_sources": list(self.generated_sources),
                 "unix_sockets": list(self.unix_sockets),
+                "state_files": list(self.state_files),
+                "configuration_policy": "image-or-public-environment-only-v1",
                 "kernel_policy": "deny-exec-ptrace-memfd-v1",
                 "data_mounts": sorted(self.data_mounts), "commands": list(self.commands),
                 "network": self.network, "user": self.user,
@@ -327,6 +475,7 @@ class ExecutionProfile:
                                             "/etc/hostname", "/etc/resolv.conf"],
                 "temporary_filesystem": "readonly-root-no-tmpfs",
                 "automatic_files_readonly": True,
+                "etc_snapshot": "readonly-image-subtree-v1",
                 "entry_admission": "sigstop-before-application-root-release-only",
                 "inherited_descriptors": "docker-stdio-only"}
 
@@ -345,8 +494,8 @@ class ExecutionProfile:
                                "CapAdd": [], "SecurityOpt": ["no-new-privileges"],
                                "NetworkMode": self.network, "PidMode": "",
                                "IpcMode": "none", "Runtime": "runc", "Init": False,
-                               "Mounts": [{"Type": "bind", "Source": src, "Target": dst,
-                                           "ReadOnly": ro} for src, dst, ro in self.data_mounts]}}
+                               "Mounts": [image_etc_mount(image_id), *[{"Type": "bind", "Source": src, "Target": dst,
+                                           "ReadOnly": ro} for src, dst, ro in self.data_mounts]]}}
 
 
 @dataclass(frozen=True)
@@ -463,8 +612,12 @@ def verify_container(container, profile, processes):
     if any(host.get(key) for key in ("Privileged", "Init", "Binds", "VolumesFrom", "Devices",
                                      "DeviceRequests", "Tmpfs", "ExtraHosts", "Links")):
         raise Refused("unmeasured runtime facility")
+    image_mounts = [m for m in container.get("Mounts", []) if m["Destination"] == "/etc"]
+    if (len(image_mounts) != 1 or image_mounts[0]["Type"] != "image" or image_mounts[0]["RW"]
+            or image_mounts[0].get("Name") != container["Image"][:31]):
+        raise Refused("etc is not the pinned read-only image subtree")
     actual_mounts = sorted((item["Source"], item["Destination"], not item["RW"])
-                           for item in container.get("Mounts", []))
+                           for item in container.get("Mounts", []) if item["Destination"] != "/etc")
     if actual_mounts != sorted(profile.data_mounts):
         raise Refused("unmeasured bind/volume/plugin mount")
     identity = processes.identity(container)
@@ -475,6 +628,8 @@ def verify_container(container, profile, processes):
     mounts = processes.mounts(identity)
     if "ro" not in mounts.get("/", set()):
         raise Refused("kernel reports writable root filesystem")
+    if "ro" not in mounts.get("/etc", set()):
+        raise Refused("kernel reports writable etc snapshot")
     for _, destination, _ in profile.data_mounts:
         if not {"noexec", "nosuid", "nodev"} <= mounts.get(destination, set()):
             raise Refused("data mount permits executable content")
@@ -486,7 +641,7 @@ def verify_container(container, profile, processes):
     if any(m == "/dev/shm" or m.startswith("/dev/shm/") or m == "/dev/mqueue"
            for m in mounts):
         raise Refused("shared-memory/message-queue mount is not permitted")
-    allowed = {"/", "/proc", "/sys", "/dev", "/dev/pts", "/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}
+    allowed = {"/", "/etc", "/proc", "/sys", "/dev", "/dev/pts", "/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}
     allowed.update(dst for _, dst, _ in profile.data_mounts)
     for destination in mounts:
         if destination in allowed or destination.startswith(("/proc/", "/sys/", "/dev/pts/")):
@@ -510,7 +665,7 @@ def measured_profile_sha256(container, profile):
                              "host_config": container["HostConfig"],
                              "engine_runtime": {key: container.get(key) for key in
                                                 ("Platform", "Driver", "AppArmorProfile", "ProcessLabel", "MountLabel")},
-                             "mounts": sorted(container.get("Mounts", []), key=lambda m: m["Destination"])}))
+                             "mounts": runtime_mount_snapshot(container)}))
 
 
 class TrustedLaunchVerifier:
@@ -540,6 +695,7 @@ class TrustedLaunchVerifier:
         ident = self.docker.request("POST", "/containers/create?name=ccc-execution-" + launch_id,
                                     profile.config(image_id))["Id"]
         try:
+            self.docker.verify_runtime_etc(self.docker.inspect_container(ident), artifact)
             self.docker.request("POST", "/containers/" + ident + "/start")
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
@@ -576,6 +732,7 @@ class TrustedLaunchVerifier:
         artifact = self.docker.measure(before["Image"])
         if artifact.image_id != before["Image"] or digest(artifact.manifest) != artifact.executed_build_sha256:
             raise Refused("fake or inconsistent artifact digest")
+        self.docker.verify_runtime_etc(before, artifact)
         entries = {e["path"]: e for e in json.loads(artifact.manifest)["entries"]}
         resolved = _resolve(entries, "usr/local/bin/python3")
         executable = entries[resolved]

@@ -5,6 +5,7 @@ Docker image construction is a separately recorded source-build check.
 """
 
 import copy
+import gzip
 import importlib.util
 import io
 import json
@@ -17,7 +18,7 @@ import pytest
 
 from ccc_server.execution_artifact import (
     Artifact, ExecutionProfile, ProcessIdentity, Refused, TrustedLaunchVerifier, VerifiedLaunch, build_artifact,
-    canonical, digest, manifest_from_tar, measured_profile_sha256, verify_container,
+    canonical, digest, manifest_from_tar, manifest_from_saved_image, measured_profile_sha256, verify_container,
 )
 from ccc_server.execution_authority import read_anchor
 
@@ -81,6 +82,39 @@ def test_special_files_refuse(kind):
         manifest_from_tar(data)
 
 
+def saved_image(layer, *, oci=True, wrong_diff=False, corrupt_layer=False):
+    config = canonical({'rootfs': {'type': 'layers', 'diff_ids': ['sha256:' + ('f' * 64 if wrong_diff else digest(layer))]}})
+    config_name = 'blobs/sha256/' + digest(config)
+    payload = gzip.compress(layer, mtime=0) if oci else layer
+    layer_name = 'blobs/sha256/' + digest(payload)
+    record = {'Config': config_name, 'Layers': [layer_name]}
+    files = {config_name: config, layer_name: payload if not corrupt_layer else b'corrupted',
+             'manifest.json': canonical([record])}
+    if oci:
+        root = canonical({'schemaVersion': 2, 'config': {'digest': 'sha256:' + digest(config)},
+                          'layers': [{'digest': 'sha256:' + digest(payload),
+                                      'mediaType': 'application/vnd.oci.image.layer.v1.tar+gzip'}]})
+        image_id = 'sha256:' + digest(root)
+        files['blobs/sha256/' + digest(root)] = root
+    else:
+        image_id = 'sha256:' + digest(config)
+    return archive(files).read(), image_id
+
+
+@pytest.mark.parametrize('oci', [False, True])
+def test_saved_image_chain_verifies_legacy_and_containerd_layouts(oci):
+    layer = archive({'usr/python': b'interpreter'}).read()
+    saved, image_id = saved_image(layer, oci=oci)
+    assert manifest_from_saved_image(saved, image_id) == manifest_from_tar(io.BytesIO(layer))
+
+
+@pytest.mark.parametrize('option', ['wrong_diff', 'corrupt_layer'])
+def test_saved_image_rejects_fake_content_chain(option):
+    saved, image_id = saved_image(archive({'source': b'code'}).read(), **{option: True})
+    with pytest.raises(Refused):
+        manifest_from_saved_image(saved, image_id)
+
+
 def fixture():
     files = {"usr/local/bin/python3.12": b"python", "opt/ccc/worker.py": b"worker",
              "opt/ccc/ccc_server/execution_guard.py": b"guard",
@@ -91,7 +125,9 @@ def fixture():
     ident = "b" * 64
     config = profile.config(artifact.image_id)
     container = {"Id": ident, "Image": artifact.image_id, "Config": config,
-                 "HostConfig": config.pop("HostConfig"), "Mounts": [],
+                 "HostConfig": config.pop("HostConfig"),
+                 "Mounts": [{"Type": "image", "Name": artifact.image_id[:31],
+                             "Source": "/root-daemon/image-mount", "Destination": "/etc", "RW": False}],
                  "State": {"Running": True, "Paused": False, "Pid": 123,
                            "StartedAt": "2026-01-01T00:00:00Z"}}
 
@@ -107,13 +143,16 @@ def fixture():
         def changes(self, _):
             return self.layer_changes
 
+        def verify_runtime_etc(self, *_):
+            pass
+
         def measure(self, _):
             return artifact
 
     class Processes:
         start = 456
         sha = digest(b"python")
-        mount_table = {"/": {"ro"}, "/dev": {"rw", "nosuid"}, "/dev/pts": {"rw"},
+        mount_table = {"/": {"ro"}, "/etc": {"ro"}, "/dev": {"rw", "nosuid"}, "/dev/pts": {"rw"},
                        "/etc/hosts": {"ro"}, "/etc/hostname": {"ro"}, "/etc/resolv.conf": {"ro"}}
 
         def identity(self, value):
@@ -268,6 +307,8 @@ def test_distinct_control_profile_and_ordered_upgrade_are_not_interchangeable():
         if ref.startswith('d'):
             value['Image'] = replacement.image_id
             value['Config']['Image'] = replacement.image_id
+            value['HostConfig']['Mounts'][0]['Source'] = replacement.image_id[:31]
+            value['Mounts'][0]['Name'] = replacement.image_id[:31]
         return value
 
     docker.inspect_container = actual
@@ -292,14 +333,16 @@ def test_build_uses_only_committed_source_and_explicit_base_link_pruning(tmp_pat
     repo.mkdir()
     subprocess.run(['git', 'init', '-q', str(repo)], check=True)
     (repo / 'worker.py').write_text('print("committed")')
-    subprocess.run(['git', '-C', str(repo), 'add', 'worker.py'], check=True)
+    (repo / '.gitattributes').write_text('worker.py export-ignore\n')
+    subprocess.run(['git', '-C', str(repo), 'add', 'worker.py', '.gitattributes'], check=True)
     subprocess.run(['git', '-C', str(repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
                     '-c', 'commit.gpgsign=false', 'commit', '-qm', 'test source'], check=True)
     revision = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
     (repo / 'worker.py').write_text('local uncommitted change')
     (repo / 'untracked-plugin.py').write_text('untracked')
     base_digest = 'example.invalid/python@sha256:' + 'a' * 64
-    base = archive({'usr/python': b'interpreter'}, [('missing-doc', '/missing')]).read()
+    base = archive({'usr/python': b'interpreter', 'etc/example.conf': b'fixed',
+                    'etc/á-public.pem': b'certificate'}, [('missing-doc', '/missing')]).read()
 
     class Images:
         imported = None
@@ -327,6 +370,7 @@ def test_build_uses_only_committed_source_and_explicit_base_link_pruning(tmp_pat
     assert entries['opt/ccc/worker.py']['sha256'] == digest(b'print("committed")')
     assert 'opt/ccc/untracked-plugin.py' not in entries
     assert 'missing-doc' not in entries
+    assert entries['opt/ccc-runtime/etc/á-public.pem']['sha256'] == digest(b'certificate')
     with pytest.raises(Refused):
         build_artifact(base_digest, repo, revision, prune_base_links=['usr/python'], docker=images)
 
@@ -363,6 +407,7 @@ def test_native_profiles_and_missing_kernel_guard_refuse():
         TrustedLaunchVerifier(docker, processes).observe(container['Id'], profile)
 
 
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux seccomp execution boundary')
 def test_actual_kernel_filter_denies_even_a_bypass_of_python_subprocess_audit():
     # Ordinary Python only. execve is denied BEFORE /bin/true can execute.
     guard_path = Path(__file__).resolve().parents[1] / 'ccc_server/execution_guard.py'
@@ -397,9 +442,11 @@ def test_authority_bootstrap_requires_actual_pinned_execution(monkeypatch, mutat
                'State': {'Pid': authority.os.getpid(), 'Running': True, 'StartedAt': 'test'},
                'Mounts': [{'Source': source, 'Destination': destination, 'Type': 'bind', 'RW': False}
                           for source, destination in [(authority.SOCKET, authority.SOCKET),
-                                                      ('/root/test-anchor.json', authority.ANCHOR)]]}
+                                                      ('/root/test-anchor.json', authority.ANCHOR)]] +
+                         [{'Source': '/root-daemon/image-mount', 'Destination': '/etc',
+                           'Type': 'image', 'Name': artifact.image_id[:31], 'RW': False}]}
     anchor['execution_profile_sha256'] = authority.authority_profile_sha256(current)
-    processes.mount_table = {'/': {'ro'}, authority.ANCHOR: {'ro'}, authority.SOCKET: {'ro'}}
+    processes.mount_table = {'/': {'ro'}, '/etc': {'ro'}, authority.ANCHOR: {'ro'}, authority.SOCKET: {'ro'}}
 
     class Docker:
         def request(self, *_):
@@ -413,6 +460,9 @@ def test_authority_bootstrap_requires_actual_pinned_execution(monkeypatch, mutat
 
         def changes(self, _):
             return [{'Kind': 0}] if mutation == 'layer' else []
+
+        def verify_runtime_etc(self, *_):
+            pass
 
     monkeypatch.setattr(authority.os, 'geteuid', lambda: 0)
     monkeypatch.setattr(authority, 'sys', SimpleNamespace(flags=SimpleNamespace(isolated=True, no_site=True),
@@ -503,3 +553,70 @@ exec(guard.compile_file({str(entry)!r}), {{'__name__':'__main__'}})
     assert (result.returncode == 0) == ok, result.stderr
     if ok:
         assert result.stdout.strip() == '2'
+
+
+@pytest.mark.parametrize('declared', [False, True])
+def test_actual_guard_refuses_undeclared_mutable_configuration_reads(tmp_path, declared):
+    data = tmp_path / 'private-data'
+    data.mkdir()
+    ledger = data / 'pending-inputs.json'
+    ledger.write_text('{"inputs":[]}')
+    entry = tmp_path / 'entry.py'
+    entry.write_text(f'print(open({str(ledger)!r}).read())')
+    guard_path = Path(__file__).resolve().parents[1] / 'ccc_server/execution_guard.py'
+    program = f"""
+import importlib.util,sys
+spec=importlib.util.spec_from_file_location('guard', {str(guard_path)!r})
+module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+module.EXCLUDED=('/state', '/proc', '/sys'); module.DATA_ROOTS=({str(data)!r},)
+guard=module.SourceGuard((), state_files=({str(ledger)!r},) if {declared!r} else ())
+guard.install()
+exec(guard.compile_file({str(entry)!r}), {{'__name__':'__main__'}})
+"""
+    result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', program], capture_output=True, text=True)
+    assert (result.returncode == 0) == declared, result.stderr
+    if not declared:
+        assert 'undeclared mutable input/configuration' in result.stderr
+
+
+def test_mutable_configuration_profiles_refuse():
+    for kwargs in ({'state_files': ('/state/settings.json',)},
+                   {'environment': (('OPENSSL_CONF', '/state/settings'),)},
+                   {'environment': (('OPENSSL_CONF', '../../state/settings'),)}):
+        with pytest.raises(Refused):
+            ExecutionProfile('/opt/ccc/worker.py', **kwargs).value()
+
+
+def test_image_snapshot_profile_ignores_only_container_specific_backing_path():
+    container, _, profile, docker, _ = fixture()
+    first = measured_profile_sha256(container, profile)
+    container['Mounts'][0]['Source'] = '/root-daemon/other-container-id'
+    assert measured_profile_sha256(container, profile) == first
+    container['HostConfig']['Mounts'][0]['ImageOptions']['Subpath'] = 'unmeasured'
+    assert measured_profile_sha256(container, profile) != first
+
+
+@pytest.mark.parametrize('wrong', [None, 'image', 'bytes', 'mode', 'type'])
+def test_actual_etc_snapshot_must_match_immutable_source(wrong):
+    from ccc_server.execution_authority import RootDocker
+    manifest = manifest_from_tar(archive({'etc/fixed.conf': b'fixed'}))
+    artifact = Artifact('sha256:' + 'a' * 64, digest(manifest), manifest)
+    data = archive({'etc/fixed.conf': b'changed' if wrong == 'bytes' else b'fixed'},
+                   modes={'etc/fixed.conf': 0o644 if wrong == 'mode' else 0o755}).read()
+    if wrong == 'type':
+        data = archive({}, [('etc/fixed.conf', '/outside')]).read()
+    container = {'Id': 'b' * 64, 'Image': artifact.image_id,
+                 'HostConfig': ExecutionProfile('/opt/ccc/worker.py').config(artifact.image_id)['HostConfig']}
+
+    class Docker(RootDocker):
+        def request(self, method, endpoint, body=None, *, raw=False):
+            if endpoint.startswith('/images/'):
+                return {'Id': 'sha256:' + 'f' * 64 if wrong == 'image' else artifact.image_id}
+            assert endpoint.endswith('/archive?path=/etc')
+            return data
+
+    if wrong is None:
+        Docker().verify_runtime_etc(container, artifact)
+    else:
+        with pytest.raises(Refused):
+            Docker().verify_runtime_etc(container, artifact)

@@ -26,6 +26,7 @@ from ccc_server.execution_artifact import (
     Artifact, ExecutionProfile, LinuxProcesses, ProcessIdentity, Refused,
     TrustedLaunchVerifier, VerifiedLaunch, canonical, digest, manifest_from_tar,
     _verified_launch,
+    image_etc_mount, manifest_from_saved_image, runtime_mount_snapshot,
 )
 
 
@@ -77,7 +78,7 @@ class RootDocker:
     def request(self, method, endpoint, body=None, *, raw=False):
         connection = _Connection("localhost", timeout=45)
         try:
-            connection.request(method, "/v1.45" + endpoint,
+            connection.request(method, "/v1.52" + endpoint,
                                body=canonical(body) if body is not None else None,
                                headers={"Content-Type": "application/json"})
             response = connection.getresponse()
@@ -95,14 +96,26 @@ class RootDocker:
         info = self.request("GET", "/images/" + quote(image, safe="") + "/json")
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", info["Id"]) or info.get("Config", {}).get("Volumes"):
             raise Refused("unmeasured image or external volume")
-        ident = self.request("POST", "/containers/create",
-                             {"Image": info["Id"], "Entrypoint": ["/unused"]})["Id"]
-        try:
-            data = self.request("GET", "/containers/" + ident + "/export", raw=True)
-            manifest = manifest_from_tar(io.BytesIO(data))
-            return Artifact(info["Id"], digest(manifest), manifest)
-        finally:
-            self.request("DELETE", "/containers/" + ident)
+        data = self.request("GET", "/images/" + quote(info["Id"], safe="") + "/get", raw=True)
+        manifest = manifest_from_saved_image(data, info["Id"])
+        return Artifact(info["Id"], digest(manifest), manifest)
+
+    def verify_runtime_etc(self, container, artifact):
+        expected_mount = image_etc_mount(artifact.image_id)
+        mounts = [m for m in container["HostConfig"].get("Mounts", []) if m["Target"] == "/etc"]
+        if mounts != [expected_mount]:
+            raise Refused("unmeasured etc image-mount specification")
+        source = self.request("GET", "/images/" + quote(expected_mount["Source"], safe="") + "/json")
+        if source["Id"] != artifact.image_id:
+            raise Refused("image subtree did not resolve to the exact full image ID")
+        archive = self.request("GET", "/containers/" + container["Id"] + "/archive?path=/etc", raw=True)
+        actual = json.loads(manifest_from_tar(io.BytesIO(archive), verify_links=False))["entries"]
+        excluded = {"etc/hosts", "etc/hostname", "etc/resolv.conf"}
+        expected = [e for e in json.loads(artifact.manifest)["entries"]
+                    if (e["path"] == "etc" or e["path"].startswith("etc/")) and e["path"] not in excluded]
+        actual = [e for e in actual if e["path"] not in excluded]
+        if canonical(actual) != canonical(expected):
+            raise Refused("mounted etc bytes/modes/types differ from the measured image")
 
 
 def authority_config(anchor, anchor_source, query):
@@ -112,7 +125,8 @@ def authority_config(anchor, anchor_source, query):
                            "IpcMode": "none", "Runtime": "runc", "CapDrop": ["ALL"],
                            # Read-only /proc executable access to another uid.
                            "CapAdd": ["SYS_PTRACE"], "SecurityOpt": ["no-new-privileges"],
-                           "Mounts": [{"Type": "bind", "Source": SOCKET, "Target": SOCKET, "ReadOnly": True},
+                           "Mounts": [image_etc_mount(anchor["image_id"]),
+                                      {"Type": "bind", "Source": SOCKET, "Target": SOCKET, "ReadOnly": True},
                                       {"Type": "bind", "Source": str(anchor_source), "Target": ANCHOR, "ReadOnly": True}]}}
 
 
@@ -125,7 +139,7 @@ def authority_profile_sha256(container):
                              "host_config": container["HostConfig"],
                              "engine_runtime": {key: container.get(key) for key in
                                                 ("Platform", "Driver", "AppArmorProfile", "ProcessLabel", "MountLabel")},
-                             "mounts": sorted(container.get("Mounts", []), key=lambda m: m["Destination"])}))
+                             "mounts": runtime_mount_snapshot(container)}))
 
 
 def authenticate_self(docker, anchor, processes):
@@ -161,7 +175,9 @@ def authenticate_self(docker, anchor, processes):
     if any(host.get(k) for k in ("Privileged", "Init", "Binds", "VolumesFrom", "Devices", "DeviceRequests", "Tmpfs")):
         raise Refused("unmeasured authority facility")
     mounts = current.get("Mounts", [])
-    if len(mounts) != 2 or {m["Destination"] for m in mounts} != {SOCKET, ANCHOR} or any(m["RW"] or m["Type"] != "bind" for m in mounts):
+    if (len(mounts) != 3 or {m["Destination"] for m in mounts} != {SOCKET, ANCHOR, "/etc"}
+            or any(m["RW"] for m in mounts)
+            or any(m["Type"] != "bind" for m in mounts if m["Destination"] != "/etc")):
         raise Refused("unmeasured authority mounts")
     if next(m for m in mounts if m["Destination"] == SOCKET)["Source"] != SOCKET:
         raise Refused("untrusted Docker socket source")
@@ -170,6 +186,7 @@ def authenticate_self(docker, anchor, processes):
     artifact = docker.measure(anchor["image_id"])
     if artifact.executed_build_sha256 != anchor["executed_build_sha256"]:
         raise Refused("authority executable closure changed")
+    docker.verify_runtime_etc(current, artifact)
     identity = processes.identity(current)
     from ccc_server.execution_artifact import _resolve
     entries = {e["path"]: e for e in json.loads(artifact.manifest)["entries"]}
@@ -177,14 +194,15 @@ def authenticate_self(docker, anchor, processes):
     if processes.executable(identity) != python["sha256"]:
         raise Refused("authority executable differs from pinned image")
     kernel_mounts = processes.mounts(identity)
-    if "ro" not in kernel_mounts.get("/", set()) or "ro" not in kernel_mounts.get(ANCHOR, set()):
+    if ("ro" not in kernel_mounts.get("/", set()) or "ro" not in kernel_mounts.get(ANCHOR, set())
+            or "ro" not in kernel_mounts.get("/etc", set())):
         raise Refused("authority/anchor is mutable")
     for destination in ("/etc/hosts", "/etc/hostname", "/etc/resolv.conf"):
         if destination in kernel_mounts and "ro" not in kernel_mounts[destination]:
             raise Refused("writable Docker-generated authority file")
     if any(m in kernel_mounts for m in ("/dev/shm", "/dev/mqueue")):
         raise Refused("authority has unmeasured writable IPC mounts")
-    allowed = {"/", SOCKET, ANCHOR, "/proc", "/sys", "/dev", "/dev/pts", "/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}
+    allowed = {"/", "/etc", SOCKET, ANCHOR, "/proc", "/sys", "/dev", "/dev/pts", "/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}
     if any(m not in allowed and not m.startswith(("/proc/", "/sys/", "/dev/pts/")) for m in kernel_mounts):
         raise Refused("authority has unmeasured mounts")
     return identity
@@ -197,7 +215,7 @@ def _profile(value):
                                tuple(tuple(x) for x in value["commands"]),
                                value["network"], value["user"],
                                tuple(tuple(x) for x in value["generated_sources"]),
-                               tuple(value["unix_sockets"]))
+                               tuple(value["unix_sockets"]), tuple(value["state_files"]))
     if canonical(profile.value()) != canonical(value):
         raise Refused("unsupported profile format/fields")
     return profile
@@ -223,7 +241,10 @@ def main():
     query = json.loads(os.environ["CCC_ATTESTATION_QUERY"])
     verifier = TrustedLaunchVerifier(docker, processes)
     operation = query.pop("operation", None)
-    if operation == "transition" and set(query) == {"refs", "profiles", "tested_pair", "identities"}:
+    if operation == "observe" and set(query) == {"container_id", "profile", "expected_identity"}:
+        identity = ProcessIdentity(**query["expected_identity"]) if query["expected_identity"] is not None else None
+        facts = {"observed": verifier.observe(query["container_id"], _profile(query["profile"]), identity)}
+    elif operation == "transition" and set(query) == {"refs", "profiles", "tested_pair", "identities"}:
         profiles = {role: _profile(value) for role, value in query["profiles"].items()}
         identities = {role: ProcessIdentity(**value) for role, value in query["identities"].items()}
         facts = verifier.verify_transition(query["refs"], profiles, query["tested_pair"], identities)
@@ -263,7 +284,8 @@ class AttestationClient:
     def _request(self, query):
         anchor = read_anchor(self.anchor_path)
         docker = RootDocker()
-        if docker.measure(anchor["image_id"]).executed_build_sha256 != anchor["executed_build_sha256"]:
+        artifact = docker.measure(anchor["image_id"])
+        if artifact.executed_build_sha256 != anchor["executed_build_sha256"]:
             raise Refused("pinned authority rootfs mismatch")
         config = authority_config(anchor, self.anchor_path, query)
         ident = docker.request("POST", "/containers/create", config)["Id"]
@@ -273,6 +295,7 @@ class AttestationClient:
                 raise Refused("root daemon created the wrong authority image")
             if authority_profile_sha256(actual) != anchor["execution_profile_sha256"]:
                 raise Refused("authority launch profile differs from root anchor")
+            docker.verify_runtime_etc(actual, artifact)
             docker.request("POST", "/containers/" + ident + "/start")
             result = docker.request("POST", "/containers/" + ident + "/wait?condition=not-running")
             logs = docker.request("GET", "/containers/" + ident + "/logs?stdout=1&stderr=1", raw=True)
@@ -305,6 +328,16 @@ class AttestationClient:
         if set(facts) != {"prepared"} or facts["prepared"].image_id != image_id or facts["prepared"].executed_build_sha256 != executed_build_sha256:
             raise Refused("authenticated prepared launch differs from request")
         return facts["prepared"]
+
+    def observe(self, container_id, profile, expected_identity=None):
+        facts = self._request({"operation": "observe", "container_id": container_id,
+                               "profile": profile.value(),
+                               "expected_identity": vars(expected_identity) if expected_identity is not None else None})
+        if set(facts) != {"observed"} or facts["observed"].identity.container_id != container_id:
+            raise Refused("authenticated observation differs from requested launch")
+        if expected_identity is not None and facts["observed"].identity != expected_identity:
+            raise Refused("authenticated PID/start identity differs")
+        return facts["observed"]
 
     def release(self, fact, profile):
         facts = self._request({"operation": "release", "fact": _wire(fact), "profile": profile.value()})
