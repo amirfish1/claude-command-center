@@ -599,14 +599,17 @@ def _codex_deleted_thread_ids():
     return {str(sid) for sid in deleted if sid}
 
 
-def _codex_thread_registry_entries():
+def _codex_thread_registry_entries(session_ids=None):
     try:
         threads = _cached_codex_thread_registry_data().get("threads") or {}
     except Exception:
         return {}
+    entries = threads.items() if session_ids is None else (
+        (sid, threads.get(sid)) for sid in session_ids
+    )
     return {
         str(sid): copy.deepcopy(rec)
-        for sid, rec in threads.items()
+        for sid, rec in entries
         if sid and isinstance(rec, dict)
     }
 

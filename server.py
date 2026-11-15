@@ -15323,11 +15323,14 @@ def _spawn_registry_entry_for_session(session_id, engine=None):
     return None
 
 
-def _spawn_registry_entries_by_session(engine=None):
+def _spawn_registry_entries_by_session(engine=None, session_ids=None):
     """Return registry entries keyed by native session id.
 
     Used by list builders so they do not re-read the registry once per row.
     """
+    wanted = None if session_ids is None else set(session_ids)
+    if wanted is not None and not wanted:
+        return {}
     out = {}
     try:
         entries = _load_spawn_registry()
@@ -15338,10 +15341,12 @@ def _spawn_registry_entries_by_session(engine=None):
             continue
         for key in ("session_id", "resumed_sid"):
             sid = str(entry.get(key) or "").strip()
-            if sid and sid not in out:
+            if sid and sid not in out and (wanted is None or sid in wanted):
                 out[sid] = entry
     if engine in (None, "codex"):
-        for sid, entry in _codex_thread_registry_entries().items():
+        registry = (_codex_thread_registry_entries() if wanted is None else
+                    _codex_thread_registry_entries(session_ids=wanted - out.keys()))
+        for sid, entry in registry.items():
             if sid and sid not in out:
                 shaped = _codex_thread_registry_spawn_shape(entry)
                 shaped.update({
@@ -18625,10 +18630,20 @@ def _archive_overlay_codex_sessions(rows, now=None):
         return []
     now = time.time() if now is None else now
     archived, trashed = _load_conversation_lifecycle_sets()
+    eligible = []
+    for row in missing:
+        stamp = _codex_ts_seconds(row, "updated") or _codex_ts_seconds(row, "created")
+        if row["id"] not in archived and row["id"] not in trashed and stamp and stamp >= now - 86400:
+            eligible.append(row)
+    missing = eligible
+    if not missing:
+        return []
     parents = _session_graph.parent_snapshot()
     names = _load_session_name_overrides()
     task_titles = _auto_titled_session_ids()
-    spawns = _spawn_registry_entries_by_session(engine="codex")
+    spawns = _spawn_registry_entries_by_session(
+        engine="codex", session_ids={row["id"] for row in missing},
+    )
     out = []
     for row in missing:
         sid = row["id"]

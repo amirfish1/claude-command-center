@@ -10,7 +10,8 @@ def test_indexed_threads_fill_stale_sidebar_without_transcript_or_engine_io(tmp_
     monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), {"trashed"}))
     monkeypatch.setattr(server, "_load_session_name_overrides", lambda: {})
     monkeypatch.setattr(server, "_auto_titled_session_ids", lambda: {})
-    monkeypatch.setattr(server, "_spawn_registry_entries_by_session", lambda **kw: {})
+    spawn_lookup = mock.Mock(return_value={})
+    monkeypatch.setattr(server, "_spawn_registry_entries_by_session", spawn_lookup)
     fetch = mock.Mock(return_value=[
         {"id": "known", "updated_at": 100000},
         {"id": "new-thread", "title": "Review changes", "updated_at": 100000, "model": "test-model"},
@@ -30,6 +31,21 @@ def test_indexed_threads_fill_stale_sidebar_without_transcript_or_engine_io(tmp_
     fetch.assert_called_once()
     assert fetch.call_args.kwargs["limit"] == 200
     assert "first_user_message" not in fetch.call_args.kwargs["columns"]
+    forbidden.assert_not_called()
+    spawn_lookup.assert_called_once_with(engine="codex", session_ids={"new-thread"})
+
+
+def test_ineligible_missing_threads_skip_registry_and_graph(monkeypatch):
+    monkeypatch.setattr(server, "_codex_fetch_threads", lambda **kw: [
+        {"id": "old", "updated_at": 1},
+        {"id": "trashed", "updated_at": 100000},
+        {"id": "no-time"},
+    ])
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), {"trashed"}))
+    forbidden = mock.Mock(side_effect=AssertionError("No registry work for invisible rows"))
+    monkeypatch.setattr(server, "_spawn_registry_entries_by_session", forbidden)
+    monkeypatch.setattr(server, "_load_session_name_overrides", forbidden)
+    assert server._archive_overlay_codex_sessions([], now=100100) == []
     forbidden.assert_not_called()
 
 
