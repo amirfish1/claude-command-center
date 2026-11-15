@@ -171,3 +171,34 @@ assert CODEX_APP_SERVER_STATE_FILE.parent == state_dir()
     result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', program],
                             env=environment, capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux seccomp signal isolation')
+def test_kernel_visible_peer_is_not_signal_authority():
+    victim = subprocess.Popen([sys.executable, '-I', '-S', '-c', 'import time;time.sleep(20)'])
+    try:
+        program = f'''
+import sys,os,signal
+sys.path.insert(0,{str(ROOT)!r})
+from ccc_server.execution_guard import install_kernel_policy
+install_kernel_policy(restrict_signals=True)
+os.kill({victim.pid},0)
+for target,number in [({victim.pid},signal.SIGTERM),(os.getpid(),signal.SIGCONT)]:
+ try: os.kill(target,number)
+ except PermissionError: pass
+ else: raise AssertionError('signal authority escaped')
+fd=os.pidfd_open({victim.pid})
+try:
+ try: signal.pidfd_send_signal(fd,signal.SIGTERM)
+ except PermissionError: pass
+ else: raise AssertionError('pidfd signal authority escaped')
+finally: os.close(fd)
+assert 'ctypes' not in sys.modules
+'''
+        result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', program],
+                                capture_output=True, text=True, timeout=5)
+        assert result.returncode == 0, result.stderr
+        assert victim.poll() is None
+    finally:
+        victim.terminate()
+        victim.wait(timeout=5)

@@ -504,7 +504,7 @@ class ExecutionProfile:
                 "unix_sockets": list(self.unix_sockets),
                 "state_files": list(self.state_files),
                 "configuration_policy": "image-or-public-environment-only-v1",
-                "kernel_policy": "deny-exec-ptrace-memfd-namespaces-v2",
+                "kernel_policy": "deny-exec-ptrace-memfd-namespaces-signals-v3",
                 "native_import_policy": "stdlib-extensions-no-ctypes-tests-v1",
                 "data_mounts": sorted(self.data_mounts), "commands": list(self.commands),
                 "network": self.network, "user": self.user,

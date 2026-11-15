@@ -13,6 +13,8 @@ STATE_FILES = tuple('/state/' + name for name in (
     'worker.token', 'worker.pid', 'control-plane.sqlite3',
     'control-plane.sqlite3-wal', 'control-plane.sqlite3-shm',
     'codex-restart-fence.json', 'codex-restart-fence.lock',
+    'archive-sticky.json', 'ship-acks.json', 'spawned-pids.json',
+    'spawned-pids.lock',
 ))
 
 

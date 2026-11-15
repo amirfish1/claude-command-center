@@ -23,7 +23,7 @@ EXCLUDED_FILES = {"/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}
 DATA_ROOTS = ("/state", "/tmp", "/run/data")
 
 
-def install_kernel_policy():
+def install_kernel_policy(*, restrict_signals=False):
     """After immutable Python bootstrap, deny every further OS executable.
 
     This deliberately supports a Python client/control process, not arbitrary
@@ -55,6 +55,20 @@ def install_kernel_policy():
                          (0x15, 0, 3, clone), (0x20, 0, 0, 16),
                          (0x45, 0, 1, 0x7e020000), (0x06, 0, 0, 0x50001),
                          (0x20, 0, 0, 0)])
+    if restrict_signals:
+        # Host PID visibility is observation, never authority to signal another
+        # worker/daemon. Allow kill(pid, 0) probes and only our admission STOP.
+        # The immutable guardian forwards shutdown through its own child pidfd;
+        # application code cannot acquire that authority.
+        kill, tkill, tgkill = (62, 200, 234) if architecture == 'x86_64' else (129, 130, 131)
+        instructions.extend([
+            (0x15, 0, 7, kill), (0x20, 0, 0, 24),
+            (0x15, 4, 0, 0), (0x15, 0, 2, int(signal.SIGSTOP)),
+            (0x20, 0, 0, 16), (0x15, 1, 0, os.getpid()),
+            (0x06, 0, 0, 0x50001), (0x06, 0, 0, 0x7fff0000),
+            (0x20, 0, 0, 0),
+        ])
+        denied = (*denied, tkill, tgkill, 424)  # pidfd_send_signal
     for syscall in denied:
         instructions.extend([(0x15, 0, 1, syscall), (0x06, 0, 0, 0x50001)])
     instructions.append((0x06, 0, 0, 0x7fff0000))
@@ -287,6 +301,7 @@ def main():
             raise SystemExit(os.waitstatus_to_exitcode(status))
         finally:
             os.close(descriptor)
+    install_kernel_policy(restrict_signals=True)
     guard = SourceGuard(profile.commands, generated, profile.unix_sockets, profile.state_files)
     guard.install()
     # Every launch begins behind this kernel admission stop. A root authority
