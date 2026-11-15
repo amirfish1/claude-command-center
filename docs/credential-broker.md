@@ -49,9 +49,10 @@ If the session environment is unavailable, pass `--session-id` explicitly.
 
 A **credential requests** panel appears automatically, including the service
 alias, reason, reported session and expiry. Submit the masked value or choose
-**Deny**. Requests disappear automatically after answering, cancellation or
+**Deny**. Check **View hidden** to inspect the entered value; uncheck it to mask
+the value again. Requests disappear automatically after answering, cancellation or
 expiry. The browser clears typed values on submission and when the page is
-hidden; it does not save them in browser storage.
+hidden, and resets **View hidden**; it does not save them in browser storage.
 
 Values stay in server memory by default and are delivered once. Restarting CCC
 loses unanswered requests and unconsumed ephemeral values. Choose **Remember for
