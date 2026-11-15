@@ -1,0 +1,1 @@
+- The dashboard no longer leaves defunct (zombie) helper processes behind after each in-place restart.

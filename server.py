@@ -48263,6 +48263,10 @@ def _tune_thread_switch_interval():
 def main():
     # State files, logs and transcripts hold secrets: create everything owner-only.
     os.umask(0o077)
+    # An in-place restart (os.execvp) keeps the previous image's children but
+    # loses the Popen objects that reaped them. Must run before any spawn.
+    from ccc_server import inherited_children as _inherited_children
+    _inherited_children.start()
     _tune_thread_switch_interval()
     _tune_thread_switch_interval()
     # Parse CLI overrides for this server instance. Env var PORT and the
