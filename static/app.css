@@ -3059,6 +3059,27 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .conv-pane-ticket {
+    flex: 0 0 auto;
+    max-width: 40%;
+    min-height: 28px;
+    padding: 3px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text);
+    font: 600 12px/1.2 var(--font-mono, monospace);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  .conv-pane-ticket[hidden] { display: none; }
+  .conv-pane-ticket:hover { border-color: var(--text-muted); }
+  .conv-pane-ticket:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (pointer: coarse) {
+    .conv-pane-ticket { min-width: 44px; min-height: 44px; }
+  }
   /* CCC-213: name + "(short id)". flex-wrap pushes the id onto a second
      line (clipped by the 1-line height) whenever the name alone fills the
      row, so the id shows only when there's room and never squeezes it. */
@@ -34035,6 +34056,8 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .conv-avatar-stack > .conv-avatar-number { font-size:10px; }
 .conv-idea-avatar > .conv-avatar-model { z-index:2; }
 .conv-repo-portrait { cursor:default; }
+.conv-repo-portrait > .conv-avatar-background img { object-fit:contain; background:var(--bg-secondary, #334155); opacity:1; filter:none; }
+.conv-repo-portrait > .conv-avatar-background .repo-avatar-initials { display:flex; font-size:13px; }
 .conv-pane-category .conv-idea-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; }
 
 /* Optional TTS scheduler inspector; kept outside transcript text and copying. */
