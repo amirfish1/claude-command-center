@@ -200,9 +200,20 @@ def build_artifact(base_digest, repo, revision, *, prune_base_links=(), docker=N
         with tarfile.open(fileobj=output, mode="w") as target:
             with tarfile.open(fileobj=io.BytesIO(base_bytes)) as original:
                 members = {m.name.rstrip("/"): m for m in original}
+                base_entries = {name: {"type": "symlink" if item.issym() else
+                                      "directory" if item.isdir() else "file",
+                                      "target": item.linkname}
+                                for name, item in members.items()}
                 for name in prune:
                     item = members.get(name)
-                    if not item or not item.issym() or _target(name, item.linkname) in members:
+                    if not item or not item.issym():
+                        raise Refused("pruning requires an explicitly missing base link: " + name)
+                    try:
+                        _resolve(base_entries, name)
+                    except Refused as exc:
+                        if not str(exc).startswith("missing artifact entry:"):
+                            raise
+                    else:
                         raise Refused("pruning requires an explicitly missing base link: " + name)
                 for name, item in members.items():
                     if name not in prune:
@@ -579,7 +590,7 @@ class TrustedLaunchVerifier:
         if (set(refs) != set(roles) or set(profiles) != set(roles)
                 or set(expected_identities) != set(roles) or set(tested_pair) != set(roles)):
             raise Refused("all three exact role identities are required")
-        if len(set(expected_identities.values())) != 3:
+        if len({(i.pid, i.start_ticks, i.boot_id) for i in expected_identities.values()}) != 3:
             raise Refused("worker/control/replacement must have distinct process identities")
         facts = {role: self.observe(refs[role], profiles[role], expected_identities[role])
                  for role in roles}
