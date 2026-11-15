@@ -12731,21 +12731,27 @@ def _sys_gui_apps(rows):
     return apps
 
 
-def _sys_last_activity_min(uuid, now, proj_dirs):
-    """Minutes since the session transcript was last written, or None. Stats
-    <proj>/<uuid>.jsonl across project dirs — no cwd-encoding assumptions."""
-    if not uuid:
-        return None
-    target = uuid + ".jsonl"
-    best = None
+def _sys_last_activity_minutes(session_ids, now, proj_dirs):
+    """Batch transcript activity without probing every session in every project."""
+    targets = {sid + ".jsonl" for sid in session_ids if sid}
+    if not targets:
+        return {}
+    latest = {}
     for proj in proj_dirs:
+        directory = os.path.join(_SYS_PROJECTS_DIR, proj)
         try:
-            mt = os.path.getmtime(os.path.join(_SYS_PROJECTS_DIR, proj, target))
+            matches = targets.intersection(os.listdir(directory))
         except OSError:
             continue
-        if best is None or mt > best:
-            best = mt
-    return ((now - best) / 60.0) if best is not None else None
+        for target in matches:
+            try:
+                mt = os.path.getmtime(os.path.join(directory, target))
+            except OSError:
+                continue
+            # A resumed session can have copies in several projects.
+            if target not in latest or mt > latest[target]:
+                latest[target] = mt
+    return {name[:-6]: (now - mt) / 60.0 for name, mt in latest.items()}
 
 
 def _sys_cwds(pids):
@@ -12827,10 +12833,18 @@ def _sys_sessions(rows, now):
     # surface them (wt_worker flag) but never offer them as reap targets.
     wt_pids, wt_sids = _wt_live_worker_guard()
 
-    sessions = []
+    candidates = []
     for r in rows:
         if _sys_label(r["cmd"]) != "claude CLI":
             continue
+        sid = pid_to_sid.get(r["pid"]) or \
+            (m.group(1) if (m := _SYS_SESSION_UUID_RE.search(r["cmd"])) else None)
+        candidates.append((r, sid))
+    activity = _sys_last_activity_minutes(
+        (sid for _, sid in candidates), now, proj_dirs)
+
+    sessions = []
+    for r, sid in candidates:
         desc = descendants(r["pid"])
         drows = [by_pid[p] for p in desc if p in by_pid]
         tree_rss = r["rss_mb"] + sum(d["rss_mb"] for d in drows)
@@ -12838,10 +12852,7 @@ def _sys_sessions(rows, now):
         worker = next((d for d in drows if _SYS_WORKER_RE.search(d["cmd"])), None)
         interactive = bool(r["tty"]) and r["tty"] not in ("??", "?", "-", "")
         busy = bool(worker) or tree_cpu >= _SYS_BUSY_CPU
-        # Registry pid->sid is authoritative; fall back to the uuid in argv.
-        sid = pid_to_sid.get(r["pid"]) or \
-            (m.group(1) if (m := _SYS_SESSION_UUID_RE.search(r["cmd"])) else None)
-        idle_known = _sys_last_activity_min(sid, now, proj_dirs)
+        idle_known = activity.get(sid)
         idle_min = idle_known if idle_known is not None else r["etime_min"]
         wt_worker = r["pid"] in wt_pids or bool(sid and sid in wt_sids)
         sessions.append({
@@ -13110,7 +13121,7 @@ def build_system_health(force=False):
             return snap["data"]
         data = _build_system_health_uncached()
         snap["data"] = data
-        snap["ts"] = now
+        snap["ts"] = time.time()
         return data
 
 

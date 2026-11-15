@@ -1,0 +1,1 @@
+- Keep resource snapshots responsive with large session archives by looking up transcript activity once per project and caching completed snapshots for their full lifetime.
