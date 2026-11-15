@@ -32,3 +32,20 @@ def fetch_rows(conn, sql, params, columns):
         # Some SQLite versions emit non-standard JSON for non-finite reals.
         pass
     return [tuple(row) for row in conn.execute(sql, params)]
+
+
+def iter_dict_rows(conn, sql, params, columns, *, batch_size=256):
+    """Page a stable read transaction into detached mappings.
+
+    The caller supplies deterministic ordering and keeps its transaction open
+    for iteration. Each SQLite aggregate is bounded even for a large registry.
+    """
+    offset = 0
+    while True:
+        rows = fetch_rows(conn, f"SELECT * FROM ({sql}) LIMIT ? OFFSET ?",
+                          (*params, batch_size, offset), columns)
+        for row in rows:
+            yield dict(zip(columns, row))
+        if len(rows) < batch_size:
+            return
+        offset += len(rows)

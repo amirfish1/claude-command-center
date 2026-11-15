@@ -21,8 +21,9 @@ from ccc_server.paths import COMMAND_CENTER_STATE_DIR
 DB_PATH = COMMAND_CENTER_STATE_DIR / "local-ci.sqlite3"
 
 _lock = threading.Lock()
-_cached = {"jobs": []}
+_cached = {"jobs": [], "completed": [], "pending": True}
 _checked = 0.0
+_refreshing = False
 
 
 def _runner_roots(names):
@@ -332,17 +333,34 @@ def _collect():
     return {"jobs": rows, "completed": _recent_completed(), "checked_at": time.time()}
 
 
+def _refresh_progress():
+    global _cached, _checked, _refreshing
+    payload = None
+    try:
+        payload = _collect()
+    except (OSError, ValueError, sqlite3.Error, subprocess.TimeoutExpired):
+        with _lock:
+            payload = dict(_cached, unavailable=True, pending=False)
+    finally:
+        with _lock:
+            if payload is not None:
+                _cached = payload
+                _checked = time.monotonic()
+            _refreshing = False
+
+
 def local_ci_progress():
-    """Shared ten-second cache; concurrent dashboard requests never fan out."""
-    global _cached, _checked
+    """Serve the last snapshot, including at boot; refresh once off-thread."""
+    global _refreshing
     with _lock:
-        if time.monotonic() - _checked >= 10:
+        if not _refreshing and time.monotonic() - _checked >= 10:
+            _refreshing = True
             try:
-                _cached = _collect()
-            except (OSError, ValueError, sqlite3.Error, subprocess.TimeoutExpired):
-                _cached = {"jobs": [], "completed": [], "unavailable": True}
-            _checked = time.monotonic()
-        return _cached
+                threading.Thread(target=_refresh_progress, daemon=True,
+                                 name="local-ci-refresh").start()
+            except RuntimeError:
+                _refreshing = False
+        return dict(_cached)
 
 
 def local_ci_setup():

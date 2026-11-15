@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ccc_server.sqlite_batch import fetch_rows
 from ccc_server import hermes as _hermes
 from ccc_server import lineage as _lineage
 from ccc_server import sandbox_harvest as _sandbox_harvest
@@ -1354,7 +1355,7 @@ def _backfill_missing_embeddings(conn: sqlite3.Connection) -> int:
     were indexed before semb_pending queueing existed (or from any other gap
     between sdoc and semb) -- never a full-corpus scan, and never called on a
     user-facing path. Returns the number of sids queued."""
-    rows = conn.execute(
+    rows = fetch_rows(conn,
         """
         SELECT sid FROM sdoc
         WHERE sid NOT IN (SELECT sid FROM semb)
@@ -1362,7 +1363,8 @@ def _backfill_missing_embeddings(conn: sqlite3.Connection) -> int:
         LIMIT ?
         """,
         (_MAX_EMBED_SESSIONS_PER_SYNC,),
-    ).fetchall()
+        ("sid",),
+    )
     if not rows:
         return 0
     with conn:

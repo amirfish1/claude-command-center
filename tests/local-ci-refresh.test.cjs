@@ -65,6 +65,13 @@ for (const width of [1280, 390]) test('CI survives refresh before live status re
     assert.match(context, /TEST-42/);
     assert.equal(await page.$eval(host, el => el.scrollWidth <= el.clientWidth), true);
     assert.equal(await page.evaluate(() => ciReadPriorities[0]), 'user', 'cold CI read bypasses startup background queue');
+    data = {jobs:[], completed:[], pending:true};
+    await page.reload({waitUntil:'domcontentloaded'});
+    await page.waitForFunction(() => ciReadPriorities.length > 0);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(await page.$eval(host + ' progress', el => el.value), 50,
+      'pending cold cache cannot overwrite the saved active run');
+    data = {jobs:[active], completed:[]};
     hold = true;
     await page.reload({waitUntil:'domcontentloaded'});
     // No waitForSelector: saved progress must already exist at DOM ready,

@@ -30,6 +30,8 @@ import re
 import shlex
 import shutil
 import sqlite3
+
+from ccc_server.sqlite_batch import fetch_rows
 import subprocess
 import threading
 import time
@@ -1386,14 +1388,14 @@ def _devin_cli_session_versions(con, raw_ids):
     out = {}
     placeholders = ",".join("?" * len(raw_ids))
     try:
-        for row in con.execute(
+        for row in fetch_rows(con,
             "SELECT v.session_id, v.max_row, v.n, m.created_at FROM ("
             "SELECT session_id, MAX(row_id) AS max_row, COUNT(*) AS n "
             "FROM message_nodes WHERE session_id IN ({}) GROUP BY session_id"
             ") v JOIN message_nodes m ON m.row_id = v.max_row".format(
                 placeholders
             ),
-            raw_ids,
+            raw_ids, ("session_id", "max_row", "n", "created_at"),
         ):
             out[str(row[0] or "").strip()] = [
                 int(row[1] or 0), int(row[2] or 0), row[3],

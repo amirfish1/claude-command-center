@@ -9913,15 +9913,51 @@ def _prune_antigravity_models_to_latest_tiers(models, default_id=None):
 
 
 _MODEL_CATALOG_REFRESHING = threading.Event()
+_MODEL_CATALOG_REFRESH_LOCK = threading.Lock()
+_MODEL_CATALOG_SNAPSHOT_FILE = COMMAND_CENTER_STATE_DIR / "engine-models-snapshot.json"
+_MODEL_CATALOG_BOOT_CACHE = None
 
 
 def _refresh_engine_model_catalog_bg():
     try:
-        _build_engine_model_catalog(force_refresh=True)
+        payload = _build_engine_model_catalog(force_refresh=True)
+        _write_json_atomic(_MODEL_CATALOG_SNAPSHOT_FILE, payload)
     except Exception:
         pass
     finally:
         _MODEL_CATALOG_REFRESHING.clear()
+
+
+def _schedule_engine_model_catalog_refresh():
+    with _MODEL_CATALOG_REFRESH_LOCK:
+        if _MODEL_CATALOG_REFRESHING.is_set():
+            return
+        _MODEL_CATALOG_REFRESHING.set()
+        try:
+            threading.Thread(target=_refresh_engine_model_catalog_bg, daemon=True,
+                             name="model-catalog-refresh").start()
+        except RuntimeError:
+            _MODEL_CATALOG_REFRESHING.clear()
+
+
+def _read_engine_model_catalog():
+    """HTTP reads never join a cold discovery build or its build lock."""
+    global _MODEL_CATALOG_BOOT_CACHE
+    if _MODEL_CATALOG_CACHE["data"] is not None:
+        return _build_engine_model_catalog_impl(False)
+    with _MODEL_CATALOG_REFRESH_LOCK:
+        if _MODEL_CATALOG_BOOT_CACHE is None:
+            try:
+                snapshot = json.loads(_MODEL_CATALOG_SNAPSHOT_FILE.read_text())
+                if not all(isinstance(snapshot.get(key), dict) for key in ('catalog', 'engines')):
+                    raise ValueError("Invalid catalog snapshot")
+            except (OSError, ValueError, AttributeError):
+                snapshot = {"catalog": {}, "engines": {}, "enforced": [],
+                            "efforts_by_engine": {}, "kimi_thinking": {}}
+            _MODEL_CATALOG_BOOT_CACHE = snapshot
+        payload = copy.deepcopy(_MODEL_CATALOG_BOOT_CACHE)
+    _schedule_engine_model_catalog_refresh()
+    return dict(payload, pending=True)
 
 
 _MODEL_CATALOG_BUILD_LOCK = threading.RLock()
@@ -9954,11 +9990,7 @@ def _build_engine_model_catalog_impl(force_refresh=False):
         # GIL (CCC-143). Explicit invalidation sets data=None, so a settings
         # change still rebuilds synchronously below.
         if now - _MODEL_CATALOG_CACHE["ts"] >= _MODEL_CATALOG_TTL_SEC and not _MODEL_CATALOG_REFRESHING.is_set():
-            _MODEL_CATALOG_REFRESHING.set()
-            threading.Thread(
-                target=_refresh_engine_model_catalog_bg, daemon=True,
-                name="model-catalog-refresh",
-            ).start()
+            _schedule_engine_model_catalog_refresh()
         return copy.deepcopy(cached)
 
     catalog = {}
@@ -34385,7 +34417,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # Server-owned model catalog. `engines` preserves the original
             # id-only shape for scripts; `catalog` is the richer UI contract
             # populated from curated fallbacks plus local harness/default state.
-            self.send_json(_build_engine_model_catalog())
+            self.send_json(_read_engine_model_catalog())
         elif path == "/api/engines/installed":
             # Cheap on-disk inventory of every engine CCC knows (spawnable
             # bin resolvers + read-only session stores). Backs the First

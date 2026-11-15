@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ccc_server.decision_coverage import wait_kind
-from ccc_server.decision_registry import CLOSED_PREFIX, DecisionRegistry
+from ccc_server.decision_registry import CLOSED_PREFIX, REQUEST_COLUMNS, DecisionRegistry
+from ccc_server.sqlite_batch import iter_dict_rows
 
 _LEADING_TAG = re.compile(r'\s*(\[Q\d+:[a-z0-9-]+\])')
 
@@ -25,24 +26,35 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
     connection.row_factory = sqlite3.Row
     try:
         connection.execute('BEGIN')
-        metadata = {r['key']: r['value'] for r in connection.execute('SELECT * FROM metadata')}
+        metadata = {r['key']: r['value'] for r in iter_dict_rows(connection,
+            'SELECT key,value FROM metadata ORDER BY key', (), ('key', 'value'))}
         binding = json.loads(metadata.get('source_scope:watchtower-block', 'null'))
         store_id = binding['scope']['store_id'] if binding else None
         answers = {}
         consumed = {}
         has_session_events = connection.execute("SELECT 1 FROM sqlite_master WHERE name='session_question_events'").fetchone()
         if connection.execute("SELECT 1 FROM sqlite_master WHERE name='session_answer_receipts'").fetchone():
-            consumed = {r['answer_id']: bool(r['consumed']) for r in connection.execute('SELECT answer_id,consumed FROM session_answer_receipts')}
+            consumed = {r['answer_id']: bool(r['consumed']) for r in iter_dict_rows(connection,
+                'SELECT answer_id,consumed FROM session_answer_receipts ORDER BY answer_id',
+                (), ('answer_id', 'consumed'))}
         if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='answers'").fetchone():
-            for saved_answer in connection.execute('SELECT * FROM answers ORDER BY rowid'):
+            for saved_answer in iter_dict_rows(connection,
+                    'SELECT request_id,answer_id,state,payload FROM answers ORDER BY rowid',
+                    (), ('request_id', 'answer_id', 'state', 'payload')):
                 frozen = json.loads(saved_answer['payload'])['answer']
                 answers[saved_answer['request_id']] = dict(answer_id=saved_answer['answer_id'],
                     state=saved_answer['state'], text=frozen['text'],
                     expected_revision=frozen['expected_revision'])
                 if saved_answer['answer_id'] in consumed:
                     answers[saved_answer['request_id']]['session_consumed'] = consumed[saved_answer['answer_id']]
+        promoted_ids = set()
+        if has_session_events:
+            promoted_ids = {r['request_id'] for r in iter_dict_rows(connection,
+                "SELECT DISTINCT request_id FROM session_question_events WHERE operation='promote' ORDER BY request_id",
+                (), ('request_id',))}
         result = []
-        for saved in connection.execute('SELECT * FROM requests ORDER BY adapter,origin_id,generation'):
+        for saved in iter_dict_rows(connection,
+                'SELECT * FROM requests ORDER BY adapter,origin_id,generation', (), REQUEST_COLUMNS):
             record = DecisionRegistry._record(saved)
             content = record['content']
             body = content.get('body') or ''
@@ -66,9 +78,7 @@ def read_requests(database, *, answers_enabled=False, source_current=False):
                             and (record['answer_state'] == 'none' or record['delivery_state'] == 'rejected'))
             delivery_owner = metadata.get('delivery_owner:' + record['request_id'])
             session_source = record['adapter'] == 'session-question'
-            promoted = bool(session_source and has_session_events and connection.execute(
-                "SELECT 1 FROM session_question_events WHERE request_id=? AND operation='promote'",
-                (record['request_id'],)).fetchone())
+            promoted = bool(session_source and record['request_id'] in promoted_ids)
             current_source = session_source or source_current
             can_answer = bool(answers_enabled and current_source and needs_answer
                               and (record['adapter'] == 'watchtower-block' or promoted)

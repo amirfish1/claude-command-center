@@ -153,3 +153,28 @@ test('visible queue snapshots are not starved by unrelated background reads', as
   ctx.releaseSlow();
   await Promise.all([...slow, ...snapshots]);
 });
+
+
+test('startup backlog is spaced while explicit user reads start immediately', async () => {
+  const ctx = harness();
+  const reads = Array.from({length: 8}, (_, i) => ctx.fetchViaGate('/api/optional-' + i));
+  ctx.release();
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(urls(ctx).filter(u => u.startsWith('GET /api/optional-')).length, 1);
+  const user = ctx.fetchViaGate('/api/explicit-file', {cccPriority:'user'});
+  assert.ok(urls(ctx).includes('GET /api/explicit-file'));
+  await user;
+  await Promise.all(reads);
+  assert.equal(urls(ctx).filter(u => u.startsWith('GET /api/optional-')).length, 8);
+});
+
+test('slow startup probes have at most two unfinished reads', async () => {
+  const ctx = harness(true);
+  const reads = Array.from({length: 6}, (_, i) => ctx.fetchViaGate('/api/sessions/live-activity?i=' + i));
+  ctx.release();
+  await new Promise(r => setTimeout(r, 400));
+  assert.equal(urls(ctx).filter(u => u === 'GET /api/sessions/live-activity').length, 2);
+  await ctx.fetchViaGate('/api/config', {cccPriority:'user'});
+  ctx.releaseSlow();
+  await Promise.all(reads);
+});

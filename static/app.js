@@ -2922,10 +2922,30 @@
     _startupOpenFetches.clear();
     clearTimeout(_startupApiReleaseTimer);
     const queued = _startupDeferredApiReads.splice(0);
-    queued.forEach(task => {
+    // Space optional startup reads instead of dumping the entire backlog
+    // into the server when the first rows paint. Two unfinished reads keep
+    // slow probes from consuming every connection; user reads still bypass.
+    let active = 0;
+    let timer = null;
+    let nextStart = 0;
+    function drain() {
+      if (timer !== null || active >= 2 || !queued.length) return;
+      const delay = Math.max(0, nextStart - performance.now());
+      if (delay > 0) {
+        timer = setTimeout(() => { timer = null; drain(); }, delay);
+        return;
+      }
+      const task = queued.shift();
       const send = _startupReplaysDirect(task.input, task.init) ? _startupBaseFetch : backgroundApiFetch;
-      send(task.input, task.init).then(task.resolve, task.reject);
-    });
+      active++;
+      nextStart = performance.now() + 150;
+      send(task.input, task.init).then(task.resolve, task.reject).finally(() => {
+        active--;
+        drain();
+      });
+      drain();
+    }
+    drain();
   }
 
   window.fetch = startupBudgetedFetch;
@@ -67517,6 +67537,7 @@
     try {
       const res = await fetch('/api/engines/models', { cache: 'no-store' });
       const data = await res.json().catch(() => ({}));
+      if (data.pending) setTimeout(refreshEngineModelCatalog, 3000);
       const catalog = data && data.catalog && typeof data.catalog === 'object' ? data.catalog : {};
       Object.keys(catalog).forEach((engine) => {
         const info = catalog[engine] || {};
@@ -102755,6 +102776,7 @@
       if (!response.ok) throw new Error('CI progress unavailable');
       const data = await response.json();
       if (data.unavailable) throw new Error('CI progress unavailable');
+      if (data.pending) return; // Keep saved progress until the cold refresh completes.
       snapshotAt = Date.now();
       showingSaved = false;
       saveSnapshot(data);

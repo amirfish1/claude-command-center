@@ -20,8 +20,13 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from pathlib import Path
 
+from ccc_server.sqlite_batch import iter_dict_rows
+
 
 CLOSED_PREFIX = 'closed:'
+REQUEST_COLUMNS = ('request_id', 'installation_id', 'adapter', 'origin_id',
+                   'generation', 'revision', 'content', 'aliases', 'status',
+                   'answer_state', 'delivery_state')
 
 
 def _json(value):
@@ -256,8 +261,10 @@ class DecisionRegistry:
         db = sqlite3.connect(str(self.db_path), timeout=self.timeout)
         db.row_factory = sqlite3.Row
         try:
-            return [self._record(row) for row in db.execute(
-                "SELECT * FROM requests ORDER BY adapter, origin_id, generation")]
+            db.execute('BEGIN')
+            return [self._record(row) for row in iter_dict_rows(db,
+                "SELECT * FROM requests ORDER BY adapter, origin_id, generation",
+                (), REQUEST_COLUMNS)]
         finally:
             db.close()
 
@@ -363,7 +370,9 @@ class DecisionRegistry:
                 seen.add((origin, generation))
                 touched.append(self._upsert(db, adapter=adapter, origin_id=origin,
                     generation=generation, content=request, aliases=_aliases(request), status='open'))
-            rows = db.execute('SELECT * FROM requests WHERE adapter=?', (adapter,)).fetchall()
+            rows = list(iter_dict_rows(db,
+                'SELECT * FROM requests WHERE adapter=? ORDER BY rowid',
+                (adapter,), REQUEST_COLUMNS))
             for row in rows:
                 if (row['origin_id'], row['generation']) in seen:
                     continue

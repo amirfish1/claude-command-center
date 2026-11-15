@@ -5842,3 +5842,67 @@ def test_census_missing_transcripts_do_not_repeat_filesystem_search(monkeypatch,
     assert next(r for r in rows if r['session_id'] == 'known')['name'] == 'Find the regression'
     assert lookup.call_count == 1, 'negative bulk lookups must not be searched again per row'
     assert checks.call_count <= len(activity), 'do not stat every missing sid in every project'
+
+
+def test_decision_projection_batches_large_registries_without_per_request_reads(tmp_path, monkeypatch):
+    from ccc_server import sqlite_batch
+    from ccc_server.decision_registry import DecisionRegistry
+    from ccc_server.decision_requests import read_requests
+    registry = DecisionRegistry(tmp_path / 'requests.sqlite3')
+    count = 1200
+    with registry._transaction() as db:
+        db.executemany('INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?)', [
+            (str(i), registry.installation_id, 'session-question', f'question-{i:04}',
+             '1', 1, json.dumps({'visibility': 'global', 'kind': 'question',
+                                'body': f'Question {i}', 'created_at': str(i)}),
+             '[]', 'open', 'none', 'none') for i in range(count)])
+        db.execute('CREATE TABLE session_question_events (request_id TEXT, operation TEXT)')
+        db.executemany('INSERT INTO session_question_events VALUES (?,?)',
+                       [(str(i), 'promote') for i in range(count)])
+    original = sqlite_batch.fetch_rows
+    calls = []
+    def tracked(conn, sql, params, columns):
+        calls.append(sql)
+        assert 'LIMIT ? OFFSET ?' in sql
+        return original(conn, sql, params, columns)
+    monkeypatch.setattr(sqlite_batch, 'fetch_rows', tracked)
+    start = time.monotonic()
+    result = read_requests(registry.db_path, answers_enabled=True)
+    assert len(result) == count and all(row['can_answer'] for row in result)
+    assert [row['body'] for row in result] == [f'Question {i}' for i in range(count)]
+    assert len(calls) <= 12, 'projection repeated a query per request'
+    assert time.monotonic() - start < 3
+    calls.clear()
+    assert len(registry.list_requests()) == count
+    assert len(calls) == 5
+
+
+def test_devin_version_batch_uses_one_row_callback_for_many_sessions():
+    import sqlite3
+    from ccc_server.devin import _devin_cli_session_versions
+    with sqlite3.connect(':memory:') as db:
+        db.execute('CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY, session_id TEXT, created_at TEXT)')
+        db.executemany('INSERT INTO message_nodes VALUES (?,?,?)',
+                       [(i, f'session-{i // 2}', str(i)) for i in range(1000)])
+        callbacks = []
+        db.row_factory = lambda _cur, row: (callbacks.append(1), row)[1]
+        result = _devin_cli_session_versions(db, [f'session-{i}' for i in range(500)])
+    assert len(result) == 500 and result['session-499'] == [999, 2, '999']
+    assert len(callbacks) == 1
+
+
+def test_embedding_backfill_batches_only_one_bounded_slice(monkeypatch):
+    import sqlite3
+    from ccc_server import session_fts
+    with sqlite3.connect(':memory:') as db:
+        db.execute('CREATE TABLE sdoc (sid TEXT)')
+        db.execute('CREATE TABLE semb (sid TEXT)')
+        db.execute('CREATE TABLE semb_pending (sid TEXT PRIMARY KEY)')
+        db.executemany('INSERT INTO sdoc VALUES (?)', [(str(i),) for i in range(2000)])
+        callbacks = []
+        db.row_factory = lambda _cur, row: (callbacks.append(1), row)[1]
+        monkeypatch.setattr(session_fts, '_MAX_EMBED_SESSIONS_PER_SYNC', 32)
+        assert session_fts._backfill_missing_embeddings(db) == 32
+        assert len(callbacks) == 1
+        assert session_fts._backfill_missing_embeddings(db) == 32
+        assert db.execute('SELECT COUNT(*) FROM semb_pending').fetchone()[0] == 64

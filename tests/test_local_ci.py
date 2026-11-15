@@ -1,6 +1,8 @@
 """Local runner discovery and progress semantics (no network)."""
 import json
 import pytest
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -68,13 +70,34 @@ def test_idle_has_no_network_calls():
         run.assert_not_called()
 
 
-def test_multiple_dashboard_reads_share_ten_second_cache():
-    with patch.object(local_ci, '_checked', 0), \
-         patch.object(local_ci, '_cached', {'jobs': []}), \
-         patch.object(local_ci.time, 'monotonic', return_value=100), \
-         patch.object(local_ci, '_collect', return_value={'jobs': [{'name': 'test'}]}) as collect:
-        assert local_ci.local_ci_progress() == local_ci.local_ci_progress()
-        assert collect.call_count == 1
+def test_multiple_dashboard_reads_share_ten_second_cache(monkeypatch):
+    entered, release, done = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+    def collect():
+        calls.append(1)
+        entered.set()
+        release.wait(3)
+        return {'jobs': [{'name': 'test'}], 'completed': []}
+    monkeypatch.setattr(local_ci, '_collect', collect)
+    monkeypatch.setattr(local_ci, '_refreshing', False)
+    real_refresh = local_ci._refresh_progress
+    def refresh():
+        try:
+            real_refresh()
+        finally:
+            done.set()
+    monkeypatch.setattr(local_ci, '_refresh_progress', refresh)
+    try:
+        start = time.monotonic()
+        for _ in range(50):
+            assert local_ci.local_ci_progress() == {'jobs': [], 'completed': []}
+        assert time.monotonic() - start < 1
+        assert entered.wait(1) and calls == [1]
+    finally:
+        release.set()
+        assert done.wait(3)
+    assert local_ci.local_ci_progress()['jobs'] == [{'name': 'test'}]
+    assert calls == [1]
 
 
 def test_setup_reports_missing_cli_and_no_runners_without_network():
