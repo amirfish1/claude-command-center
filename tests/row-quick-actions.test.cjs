@@ -172,7 +172,7 @@ test('human row replies use composer provenance without promoting automated send
   for (const call of humanSteers) assert.match(call, /userInitiated: true/);
 });
 
-test('row speaker shows only for rows with an answer, and only on hover with a mouse (CCC-256)', async () => {
+test('row pop-out works without an answer and appears on hover or keyboard focus', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
@@ -181,42 +181,50 @@ test('row speaker shows only for rows with an answer, and only on hover with a m
       <span class="conv-title">${id}</span><div class="conv-outcome is-inline"><span class="conv-outcome-step">x</span></div></div></div></div>`;
     await page.setContent(`<style>${css}</style><div id="convList" style="width:380px">${rowHtml('answered')}${rowHtml('empty')}</div>`);
     await page.addScriptTag({ content: `
-      window.rows = {answered:{session_id:'answered', hasAnswer:true, session_state:{}}, empty:{session_id:'empty', hasAnswer:false, session_state:{}}};
-      let _ttsDirectBtn = null;
+      window.rows = {answered:{id:'conversation-answered', session_id:'answered', repo_path:'/example/project', hasAnswer:true, session_state:{}}, empty:{session_id:'empty', hasAnswer:false, session_state:{}}};
       const _ultraFreshRow = sid => window.rows[sid];
       const _ultraFreshCurrent = c => c;
       const _applyLiveOverlayToRow = c => c;
       const rowOutcomeView = c => ({kind:'update', text:'x', hasAnswer:c.hasAnswer});
       const showOpToast = () => {};
       ${helpers}
-      window.syncAudio = syncRowAnswerAudio;
-      syncRowAnswerAudio();
+      window.syncPopouts = syncRowPopouts;
+      window.popouts = [];
+      const openConversationPopout = (...args) => popouts.push(args.slice(0, 2));
+      syncRowPopouts();
     ` });
-    const speakers = () => page.$$eval('.conv-row-read', els => els.map(b => b.closest('.conv-item').dataset.sessionId));
-    assert.deepEqual(await speakers(), ['answered'], 'no speaker on a row with nothing to read');
-    const vis = () => page.evaluate(() => getComputedStyle(document.querySelector('.conv-row-read')).visibility);
+    const popoutRows = () => page.$$eval('.conv-row-popout', els => els.map(b => b.closest('.conv-item').dataset.sessionId));
+    assert.deepEqual(await popoutRows(), ['answered', 'empty'], 'sessions can pop out before an answer exists');
+    const vis = () => page.evaluate(() => getComputedStyle(document.querySelector('.conv-row-popout')).opacity);
     await page.mouse.move(1400, 790);
-    assert.equal(await vis(), 'hidden', 'hidden until the row is hovered');
+    assert.equal(await vis(), '0', 'hidden until the row is hovered');
     const box = await page.evaluate(() => { const r = document.querySelector('[data-session-id="answered"]').getBoundingClientRect(); return {x:r.x + 20, y:r.y + 5}; });
     await page.mouse.move(box.x, box.y);
-    assert.equal(await vis(), 'visible', 'hovering the row reveals its speaker');
+    assert.equal(await vis(), '1', 'hovering the row reveals its pop-out');
     await page.mouse.move(1400, 790);
-    await page.evaluate(() => document.querySelector('.conv-row-read').classList.add('speaking'));
-    assert.equal(await vis(), 'visible', 'stays visible while reading');
-    await page.evaluate(() => { document.querySelector('.conv-row-read').classList.remove('speaking'); rows.answered.hasAnswer = false; syncAudio(); });
-    assert.deepEqual(await speakers(), [], 'speaker removed once the answer goes stale');
+    await page.focus('.conv-row-popout');
+    assert.equal(await vis(), '1', 'keyboard focus reveals the pop-out');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await page.evaluate(() => popouts), [['conversation-answered', '/example/project']], 'opens the clicked conversation in its repo');
+    await page.evaluate(() => { rows.answered.pending_spawn = true; syncPopouts(); });
+    assert.deepEqual(await popoutRows(), ['empty'], 'pending spawns have no pop-out');
+    await page.evaluate(() => document.activeElement.blur());
+    const mobileHtml = await page.content();
+    await page.emulate({viewport:{width:390,height:844,isMobile:true,hasTouch:true},userAgent:'mobile'});
+    await page.setContent(mobileHtml);
+    assert.equal(await vis(), '1', 'touch devices do not require hover');
   } finally {
     await browser.close();
   }
 });
 
-test('decision chips share their line with the row speaker (CCC-281)', () => {
+test('decision chips share their line with the row pop-out (CCC-281)', () => {
   const css = fs.readFileSync('static/app.css', 'utf8');
   const rule = css.match(/\.conv-quick-action-slot\.is-decision \{([^}]*)\}/);
   assert.ok(rule, 'decision slot rule exists');
-  assert.doesNotMatch(rule[1], /flex:\s*1 1 100%/, 'a full-width chip slot pushes the speaker to its own line');
+  assert.doesNotMatch(rule[1], /flex:\s*1 1 100%/, 'a full-width chip slot pushes the pop-out to its own line');
   assert.match(rule[1], /min-width:\s*0/);
   const app = fs.readFileSync('static/app.js', 'utf8');
-  const slotInserts = app.match(/host\.insertBefore\(slot, host\.querySelector\(':scope > \[data-role="read-row-answer"\]'\)\)/g) || [];
-  assert.equal(slotInserts.length, 2, 'chip slots go before an existing speaker');
+  const slotInserts = app.match(/host\.insertBefore\(slot, host\.querySelector\(':scope > \[data-role="popout-row-session"\]'\)\)/g) || [];
+  assert.equal(slotInserts.length, 2, 'chip slots go before an existing pop-out');
 });

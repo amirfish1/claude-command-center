@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-test('phone decisions wrap long labels below the prompt beside audio', async () => {
+test('phone decisions wrap long labels below the prompt beside the pop-out', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
@@ -17,7 +17,7 @@ test('phone decisions wrap long labels below the prompt beside audio', async () 
         <div class="conv-outcome is-inline is-next is-next-step">
           <span class="conv-outcome-step" data-label="Decide">Restore the earlier session, or leave it archived.</span>
           <span class="conv-quick-action-slot is-decision"><button class="conv-quick-action">Leave the earlier session archived and keep all existing work</button><button class="conv-quick-action">Unarchive it</button></span>
-          <button class="conv-row-read" aria-label="Read reply">▶</button>
+          <button class="conv-row-popout" aria-label="Pop out session">↗</button>
         </div></div></div></div>`);
       const layout = await page.evaluate(() => {
         const prompt = document.querySelector('.conv-outcome-step').getBoundingClientRect();
@@ -52,14 +52,14 @@ test('desktop child decisions escape the compact summary column', async () => {
         <div class="conv-outcome is-inline is-next is-next-step">
           <span class="conv-outcome-step" data-label="Decide">Approve this row, decline this row, or keep it pending.</span>
           <span class="conv-quick-action-slot is-decision"><button class="conv-quick-action">Approve row</button><button class="conv-quick-action">Decline row</button></span>
-          <button class="conv-row-read" aria-label="Read reply">▶</button>
+          <button class="conv-row-popout" aria-label="Pop out session">↗</button>
         </div><span class="conv-meta-col"></span><span class="conv-pct-badge">14%</span><span class="conv-row-end">8m</span>
         </div></div></div>`);
       const layout = await page.evaluate(() => {
         const rect = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
         return { title: rect('.conv-title'), outcome: rect('.conv-outcome'), row: rect('.conv-main-row'),
           buttons: [...document.querySelectorAll('.conv-quick-action')].map(b => b.getBoundingClientRect().toJSON()),
-          speaker: rect('.conv-row-read') };
+          popout: rect('.conv-row-popout') };
       });
       assert.ok(layout.outcome.top >= layout.title.bottom, 'decision belongs below the child title');
       assert.ok(layout.outcome.width >= layout.row.width - 1, 'decision uses the full child row');
@@ -67,7 +67,7 @@ test('desktop child decisions escape the compact summary column', async () => {
         assert.ok(button.width >= 90 && button.height <= 32, 'short labels stay horizontal');
         assert.ok(button.right <= layout.row.right + 1, 'choices stay inside the row');
       }
-      assert.ok(layout.speaker.top < layout.outcome.bottom, 'audio remains in the decision area');
+      assert.ok(layout.popout.top < layout.outcome.bottom, 'pop-out remains in the decision area');
     }
   } finally { await browser.close(); }
 });

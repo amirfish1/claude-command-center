@@ -19125,67 +19125,39 @@
 
   // Row actions are model-authored replies supplied in the answer footer.
   // Rendering a chip never asks another model to interpret the answer.
-  function syncRowAnswerAudio(sid) {
+  function syncRowPopouts(sid) {
     const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
     document.querySelectorAll(selector).forEach(row => {
-      const id = row.dataset.sessionId;
-      const base = _ultraFreshRow(id);
-      // A speaker is only worth showing when there is an answer to read
-      // (CCC-256): empty, still-starting and placeholder rows get none.
-      const readable = !!base && !base.pending_spawn && base.source !== 'backlog' && base.source !== 'github_pr'
-        && rowOutcomeView(_ultraFreshCurrent(base)).hasAnswer;
-      if (!readable) {
-        row.querySelectorAll('[data-role="read-row-answer"]').forEach(btn => {
-          if (_ttsDirectBtn !== btn && !btn.disabled) btn.remove();
-        });
+      const base = _ultraFreshRow(row.dataset.sessionId);
+      const available = !!base && !base.pending_spawn && base.source !== 'backlog' && base.source !== 'github_pr';
+      if (!available) {
+        row.querySelectorAll('[data-role="popout-row-session"]').forEach(btn => btn.remove());
         return;
       }
       const desktop = row.querySelector('.conv-outcome') || row.querySelector('.conv-row-end');
       [desktop, row.querySelector('.wa-line2')].filter(Boolean).forEach(host => {
-        if (host.querySelector('[data-role="read-row-answer"]')) return;
+        if (host.querySelector('[data-role="popout-row-session"]')) return;
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'conv-row-read';
-        btn.dataset.role = 'read-row-answer';
-        btn.title = 'Read last answer';
+        btn.className = 'conv-row-popout';
+        btn.dataset.role = 'popout-row-session';
+        btn.title = 'Pop out session';
         btn.setAttribute('aria-label', btn.title);
-        btn.textContent = '\u{1F50A}';
+        btn.innerHTML = '<svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true">'
+          + '<path d="M5 1H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>'
+          + '<path d="M7 1h4v4M11 1 6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
         host.appendChild(btn);
       });
     });
   }
-  document.addEventListener('click', async ev => {
-    const btn = ev.target.closest && ev.target.closest('[data-role="read-row-answer"]');
+  document.addEventListener('click', ev => {
+    const btn = ev.target.closest && ev.target.closest('[data-role="popout-row-session"]');
     if (!btn) return;
     ev.preventDefault(); ev.stopImmediatePropagation();
-    const sid = btn.closest('.conv-item[data-session-id]')?.dataset.sessionId;
-    if (!sid || btn.disabled) return;
-    if (_ttsActiveConvId === sid && _ttsDirectBtn?.dataset.role === 'read-row-answer' && _ttsUtterance) {
-      if (_ttsActive && !_ttsPaused) {
-        _ttsEnginePause(); _ttsPaused = true;
-        _setTtsDirectBtnState(btn, 'paused');
-      } else if (_ttsPaused) {
-        _ttsEngineResume(); _ttsPaused = false;
-        _setTtsDirectBtnState(btn, 'speaking');
-      }
-      return;
-    }
-    btn.disabled = true;
-    btn.setAttribute('aria-busy', 'true');
-    try {
-      _primeTtsEngine();
-      const res = await fetch('/api/conversations/' + encodeURIComponent(sid) + '?tail=120');
-      if (!res.ok) throw new Error('Could not load the last answer');
-      const data = await res.json();
-      const text = _spokenTextFromEvents(data.events);
-      if (!text) throw new Error('No assistant answer to read yet');
-      if (!speakTextDirect(text, sid, activePaneId(), btn)) throw new Error('Your browser does not support text-to-speech');
-    } catch (error) {
-      showOpToast(String(error.message || error), 'error');
-    } finally {
-      btn.disabled = false;
-      btn.removeAttribute('aria-busy');
-    }
+    const row = btn.closest('.conv-item[data-session-id]');
+    const base = row && _ultraFreshRow(row.dataset.sessionId);
+    if (!base || base.pending_spawn || base.source === 'backlog' || base.source === 'github_pr') return;
+    openConversationPopout(base.id || base.session_id, base.repo_path, btn);
   }, true);
   const _rowQuickActionSending = new Set();
   const _rowQuickActionFeedback = new Map();
@@ -19807,7 +19779,7 @@
           if (!slot) {
             slot = document.createElement('span');
             slot.className = 'conv-quick-action-slot';
-            host.insertBefore(slot, host.querySelector(':scope > [data-role="read-row-answer"]'));
+            host.insertBefore(slot, host.querySelector(':scope > [data-role="popout-row-session"]'));
           }
           delete slot.dataset.quickActionKey;
           if (slot.dataset.feedbackState === feedback.state) return;
@@ -19832,13 +19804,13 @@
         if (!slot) {
           slot = document.createElement('span');
           slot.className = 'conv-quick-action-slot';
-          // Chips first, then the row speaker on the same line (CCC-281).
-          host.insertBefore(slot, host.querySelector(':scope > [data-role="read-row-answer"]'));
+          // Chips first, then the row pop-out on the same line (CCC-281).
+          host.insertBefore(slot, host.querySelector(':scope > [data-role="popout-row-session"]'));
         }
         paintRowQuickAction(slot, source);
       });
     });
-    syncRowAnswerAudio(sid);
+    syncRowPopouts(sid);
   }
   document.addEventListener('click', async ev => {
     const btn = ev.target.closest && ev.target.closest('[data-role="quick-action"]');
@@ -34855,7 +34827,7 @@
     '[data-role="handoff"]',
     '[data-role="handoff-answer"]',
     '[data-role="handoff-takeback"]',
-    '[data-role="read-row-answer"]',
+    '[data-role="popout-row-session"]',
     '[data-role="report-decision"]',
     '.conv-title-input',
     '.conv-session-origin-chip[data-parent-sid]',

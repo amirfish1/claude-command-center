@@ -33744,8 +33744,8 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 /* The beside-the-title column is too narrow for option chips and they broke
    one letter per line; a decision takes its own full-width line instead. */
 #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-quick-action-slot.is-decision) { flex: 1 1 100%; order: 5; }
-/* The chips share their line with the row speaker instead of filling it
-   and pushing the speaker onto a line of its own (CCC-281). */
+/* The chips share their line with the row pop-out instead of filling it
+   and pushing the pop-out onto a line of its own (CCC-281). */
 .conv-quick-action-slot.is-decision { flex: 1 1 0; min-width: 0; flex-wrap: wrap; gap: 6px; }
 /* Long choices wrap in narrow sidebars; a pill radius turns them into tall
    ovals. Keep the complete label in a compact, left-aligned control. */
@@ -33757,33 +33757,30 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
   overflow-wrap: break-word;
   white-space: normal;
 }
-.conv-row-read {
+.conv-row-popout {
   display: inline-flex; align-items: center; justify-content: center;
   flex: 0 0 auto; min-width: 32px; min-height: 32px; margin-left: 4px;
   border: 1px solid var(--border); border-radius: 999px;
   background: var(--surface-2); color: var(--text-muted); cursor: pointer;
 }
-.conv-row-read:hover, .conv-row-read:focus-visible, .conv-row-read.speaking { color: var(--accent); border-color: var(--accent); }
-.conv-row-read:disabled { opacity: .6; cursor: wait; }
-.conv-row-read.paused { opacity: .65; }
-/* With a mouse, a row's speaker appears only on hover/focus (or while it is
-   reading) so a list of rows is not a column of speaker icons (CCC-256).
-   Visibility, not display, so the row does not reflow on hover. Touch keeps
-   it visible: there is no hover to reveal it. */
+.conv-row-popout:hover, .conv-row-popout:focus-visible { color: var(--accent); border-color: var(--accent); }
+/* Mouse hover and keyboard focus reveal the pop-out without reflow.
+   Opacity keeps the button reachable by Tab. Touch keeps it visible. */
 @media not all and (pointer: coarse) {
-  #convList .conv-item:not(:hover):not(:focus-within) .conv-row-read:not(.speaking):not(.paused):not([aria-busy]) {
-    visibility: hidden;
+  #convList .conv-item:not(:hover):not(:focus-within) .conv-row-popout {
+    opacity: 0;
+    pointer-events: none;
   }
 }
-#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) {
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-popout) {
   display: flex !important; align-items: flex-end; gap: 4px;
 }
-#convList#convList .conv-item .conv-outcome:has(.conv-row-read):not(:has(.conv-quick-action-slot.is-decision)) .conv-outcome-step {
+#convList#convList .conv-item .conv-outcome:has(.conv-row-popout):not(:has(.conv-quick-action-slot.is-decision)) .conv-outcome-step {
   flex: 1 1 auto; min-width: 0; width: auto;
 }
 /* The inline step clamps at two lines; reserve both so a streamed message
    that wraps does not grow the row under the pointer. */
-#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) .conv-outcome-step {
+#convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-popout) .conv-outcome-step {
   min-height: 2lh;
 }
 .conv-quick-action {
@@ -34296,11 +34293,11 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 #convList#convList .conv-subagent-cluster-body > .conv-item.conv-item:not(:last-child) {
   border-bottom-color: transparent !important;
 }
-#convList#convList .conv-subagent-cluster > .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-read) .conv-outcome-step {
+#convList#convList .conv-subagent-cluster > .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-popout) .conv-outcome-step {
   min-height: 0;
 }
 @media not all and (pointer: coarse) {
-  #convList#convList .conv-subagent-cluster .conv-row-read {
+  #convList#convList .conv-subagent-cluster .conv-row-popout {
     min-width: 22px;
     min-height: 22px;
     align-self: center;
