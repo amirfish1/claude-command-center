@@ -6,15 +6,17 @@ const root=path.resolve(__dirname,'..'),scratch=fs.mkdtempSync(path.join(os.tmpd
 const app=fs.readFileSync(path.join(root,'static/app.js'),'utf8'),html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
 function between(a,b){const i=app.indexOf(a),j=app.indexOf(b,i+a.length);assert(i>=0&&j>i,a);return app.slice(i,j);}
 const nativeSystem=between('  function _sysFocusables() {','  // ── Restart controls');
-const nativeResource=between('  let _sysHealthPollPromise = null;','  function _shBar(');
+const nativeResource=between('  let _sysHealthPollPromise = null;','  // ── System Processes');
+const nativeFormat=between('  function _shFmtMB(', '  function _ensureSysHealthModal(');
 const integration=between('  window.cccSettingsHealth?.mount({','  // Trigger check on load');
 const encoded=JSON.stringify(html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')).replace(/</g,'\\u003c');
 const fixture=`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/settings-health.css"><link rel="stylesheet" href="/static/engine-connection.css"><link rel="stylesheet" href="/static/service-connections.css"><style>body{display:block}#sysModal.open{display:flex!important}#settingsModal .settings-modal{width:min(1100px,96vw)}#settingsPane>.settings-section{display:none!important}#settingsPane>.settings-section.is-active-section{display:block!important}#sysDialog [hidden]{display:none!important}#sysDialog{padding:20px}</style><button id="opener" style="min-height:44px">System</button><button id="sidebarMoreBtn">More</button><script src="/static/settings-health.js"></script><script src="/static/engine-connection.js"></script><script src="/static/service-connections.js"></script><script>
 const parsed=new DOMParser().parseFromString(${encoded},'text/html');for(const id of ['sysModal','settingsModal'])document.body.append(parsed.getElementById(id));
 const $sysModal=document.getElementById('sysModal'),$sysDialog=document.getElementById('sysDialog'),$sysChip=document.getElementById('opener'),$sysBackdrop=document.getElementById('sysBackdrop'),$settingsModal=document.getElementById('settingsModal');
 let _sysReturnFocus=null,_sysLastRollupLevel='',_sysRestartInFlight=false,_sysPollTimer=null,_sysSpawnedTickTimer=null,_sysHealthTimer=null,_sysProcessesTimer=null,_sysJobsTimer=null,settingsSearchFocusTimer=null;
+const nativeFetch=fetch;window.fetch=(url,options)=>{if(url==='/api/system-health')window.__resourcePriority=options?.cccPriority;return nativeFetch(url,options);};
 window.__calls=[];const isImeKey=()=>false;function showOpToast(){}function sysRefresh(){window.__calls.push('services');return Promise.resolve({});}function renderSysSpawnedList(){}function _pollSystemProcesses(){}function refreshControlPlaneStatus(){window.__calls.push('worker');}function _wtQueueRefresh(){window.__calls.push('queue');}
-function _renderSystemHealth(d){document.getElementById('sysHealthBody').textContent='Inert resource snapshot';}
+${nativeFormat}
 ${nativeResource}
 ${nativeSystem}
 function openSettingsModal(){$settingsModal.hidden=false;$settingsModal.classList.add("open");}function closeSettingsModal(){$settingsModal.hidden=true;$settingsModal.classList.remove("open");}function clearSettingsSearch(){}
@@ -29,7 +31,7 @@ window.cccRoutingPolicy={open:async(...args)=>{window.__calls.push(['policy',...
 ${integration}
 document.getElementById('opener').onclick=()=>sysOpenModal(document.getElementById('opener'));
 document.getElementById('settingsModalClose').onclick=()=>{closeSettingsModal();document.getElementById('opener').focus();};
-window.__legacy=()=>{navigate('maintenance');document.getElementById('settingsHealthOpen').click();};
+window.__settings=()=>{sysCloseModal();navigate('maintenance');};
 </script>`;
 let browser,child,url;
 test.before(async()=>{
@@ -38,79 +40,90 @@ test.before(async()=>{
  browser=await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
 });
 test.after(async()=>{await browser?.close();if(child){child.kill();await once(child,'exit');}console.log('Health screenshots:',scratch);});
-async function open(t,width=1440,{fail=false,stale=false}={}){
- for(const [name,on]of [['fail',fail],['stale',stale]]){const p=path.join(scratch,name);if(on)fs.writeFileSync(p,'1');else fs.rmSync(p,{force:true});}
+async function open(t,width=1440,{fail=false,stale=false,resourceFail=false}={}){
+ for(const [name,on]of [['fail',fail],['stale',stale],['resource-fail',resourceFail]]){const p=path.join(scratch,name);if(on)fs.writeFileSync(p,'1');else fs.rmSync(p,{force:true});}
  const context=await browser.createBrowserContext(),page=await context.newPage();t.after(()=>context.close());await page.setViewport({width,height:900});const errors=[],requests=[];page.on('pageerror',e=>errors.push(e.message));await page.setRequestInterception(true);page.on('request',r=>{if(new URL(r.url()).origin!==url){r.abort();return;}requests.push({method:r.method(),url:new URL(r.url()).pathname});r.continue();});
- await page.goto(url);await page.click('#opener');await page.waitForFunction(()=>document.getElementById('settingsHealthStatus')?.textContent.includes('cached observations')||document.getElementById('settingsHealthStatus')?.textContent.includes('unavailable'));
+ await page.goto(url);await page.click('#opener');await page.waitForFunction(()=>document.getElementById('sysHealthBody')?.textContent.includes('Memory')||document.getElementById('sysHealthBody')?.textContent.includes('unavailable'));
  assert.deepEqual(errors,[]);return{page,requests,errors};
 }
-for(const width of [1440,390])test('default health entry is read-only, actionable and fits '+width,async t=>{
+
+for(const width of [1440,390])test('Health shows measured resources directly without setup, prose, or destination buttons at '+width,async t=>{
  const before=fs.readFileSync(path.join(scratch,'spawn-defaults.json'),'utf8'),{page,requests}=await open(t,width);
  assert.equal(await page.$eval('#sysTabContentHealth',n=>getComputedStyle(n).display),'block');
  assert.deepEqual(await page.evaluate(()=>window.__calls),[]);
- assert.deepEqual(requests.filter(r=>r.url.startsWith('/api/')).map(r=>r.url),['/api/settings/health']);
- assert.match(await page.$eval('[data-health-check="engine-codex"]',n=>n.textContent),/Needs attention.*CLI not detected/s);
- assert.match(await page.$eval('[data-health-check="connections"]',n=>n.textContent),/Unchecked.*does not establish validity/s);
- assert.match(await page.$eval('[data-health-check="policy-reasoning_effort"]',n=>n.textContent),/Needs attention/);
+ assert.equal(await page.evaluate(()=>window.__resourcePriority),'user');
+ assert.deepEqual(requests.filter(r=>r.url.startsWith('/api/')).map(r=>r.url),['/api/system-health']);
+ assert.match(await page.$eval('#sysHealthBody',n=>n.textContent),/4.0 GB \/ 8.0 GB/);
+ assert.match(await page.$eval('#sysHealthBody',n=>n.textContent),/1.25 \/ 1.50 \/ 1.75/);
+ assert.match(await page.$eval('#sysHealthBody',n=>n.textContent),/PID 104/);
+ assert.match(await page.$eval('#sysHealthBody',n=>n.textContent),/Example app/);
+ assert.equal(await page.$$eval('#sysTabContentHealth [data-health-repair],#sysTabContentHealth [data-open],#sysHealthBody button,#sysHealthBody a,#sysHealthBody .sh-def',ns=>ns.length),0);
+ assert.deepEqual(await page.$$eval('#sysTabContentHealth button',ns=>ns.map(n=>n.textContent)),['Refresh']);
+ assert.doesNotMatch(await page.$eval('#sysTabContentHealth',n=>n.textContent),/Other evidence|CLI detected|Open engine setup|Health checks|shared app-server processes|Reaping SIGTERM/);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ assert.deepEqual(await page.$$eval('#sysHealthBody .sh-sesscol',ns=>ns.filter(n=>n.scrollWidth>n.clientWidth+1).map(n=>n.textContent)),[]);
  assert.deepEqual(await page.$$eval('#sysDialog .sys-tab',ns=>ns.filter(n=>{const r=n.getBoundingClientRect(),p=n.parentElement.getBoundingClientRect();return r.right>p.right+1||r.left<p.left-1;}).map(n=>n.id)),[]);
- if(width===390)assert.deepEqual(await page.$$eval('#settingsHealth button',ns=>ns.filter(n=>n.getBoundingClientRect().height<44).map(n=>n.textContent)),[]);
  await page.screenshot({path:path.join(scratch,'health-'+width+'.png'),fullPage:true});
  assert.equal(fs.readFileSync(path.join(scratch,'spawn-defaults.json'),'utf8'),before);
 });
-test('keyboard engine repair opens selected canonical flow and returns to its issue',async t=>{
- const{page,requests}=await open(t,390);await page.focus('#health-repair-engine-codex');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.activeElement.id==='engineConnectionSelect');
- assert.equal(await page.$eval('#engineConnectionSelect',n=>n.value),'codex');assert.equal(await page.$eval('#sysModal',n=>n.classList.contains('open')),false);
- await page.focus('#settingsHealthReturn');await page.keyboard.press('Enter');assert.equal(await page.evaluate(()=>document.activeElement.id),'health-repair-engine-codex');
+async function settings(page){
+ await page.evaluate(()=>window.__settings());
+ await page.waitForFunction(()=>!document.getElementById('settingsHealthRefresh').disabled&&document.getElementById('settingsHealthStatus').textContent!=='Not checked');
+}
+test('Settings retains its configuration summary and canonical fix destinations without writes',async t=>{
+ const{page,requests}=await open(t,390);await settings(page);
+ assert.equal(await page.$eval('#sysModal',n=>n.classList.contains('open')),false);
+ assert.ok(await page.$('#settingsSection-maintenance #settingsHealthInline'));
+ assert.match(await page.$eval('[data-health-inline="engine-codex"]',n=>n.textContent),/CLI not detected/);
+ assert.match(await page.$eval('[data-health-inline="policy-reasoning_effort"]',n=>n.textContent),/Saved effort/);
+ assert.equal(await page.$$eval('[data-health-inline="connections"],[data-health-inline="engine-claude"]',ns=>ns.length),0);
+ await page.focus('#health-fix-engine-codex');await page.keyboard.press('Enter');
+ assert.equal(await page.$eval('#settingsSection-engines',n=>n.classList.contains('is-active-section')),true);
+ assert.equal(requests.some(r=>r.method!=='GET'),false);
+ assert.deepEqual(requests.filter(r=>r.url.startsWith('/api/')).map(r=>r.url),['/api/system-health','/api/settings/health']);
+});
+test('configuration checks refresh failure and expiry never become a passing observation',async t=>{
+ const{page,requests}=await open(t,390);await settings(page);
+ fs.writeFileSync(path.join(scratch,'fail'),'1');await page.click('#settingsHealthRefresh');
+ await page.waitForFunction(()=>document.getElementById('settingsHealthStatus').textContent==='Unavailable');
+ assert.equal(await page.$$eval('[data-health-inline]',ns=>ns.length),0);
+ fs.rmSync(path.join(scratch,'fail'));await page.focus('#settingsHealthRefresh');await page.keyboard.press('Enter');
+ await page.waitForSelector('#health-fix-engine-codex');
+ assert.equal(await page.evaluate(()=>document.activeElement.id),'settingsHealthRefresh');
+ const count=requests.length;
+ await page.evaluate(()=>{const now=Date.now;Date.now=()=>now()+31000;document.dispatchEvent(new Event('visibilitychange'));});
+ assert.equal(await page.$eval('#settingsHealthStatus',n=>n.textContent),'Stale');
+ assert.equal(await page.$$eval('[data-health-inline]',ns=>ns.length),0);
+ assert.equal(requests.length,count);
  assert.equal(requests.some(r=>r.method!=='GET'),false);
 });
-test('policy repair passes no preset and opens a staged destination without saving',async t=>{
- const{page,requests}=await open(t);await page.click('#health-repair-policy-reasoning_effort');assert.deepEqual(await page.evaluate(()=>window.__calls),[['policy','defaults']]);assert.equal(await page.evaluate(()=>document.activeElement.id),'routingPolicyContext');assert.equal(requests.some(r=>r.method!=='GET'),false);
+test('unknown or malformed configuration reads stay unavailable and can be retried',async t=>{
+ const{page}=await open(t,1440,{fail:true});await settings(page);
+ assert.equal(await page.$eval('#settingsHealthStatus',n=>n.textContent),'Unavailable');
+ fs.rmSync(path.join(scratch,'fail'));await page.click('#settingsHealthRefresh');await page.waitForSelector('#health-fix-engine-codex');
+ await page.evaluate(()=>{const original=fetch;window.fetch=(...args)=>args[0]==='/api/settings/health'?Promise.resolve({ok:true,json:async()=>({checks:[]})}):original(...args);});
+ await page.click('#settingsHealthRefresh');await page.waitForFunction(()=>document.getElementById('settingsHealthStatus').textContent==='Unavailable');
+ assert.equal(await page.$$eval('[data-health-inline]',ns=>ns.length),0);
 });
-test('connections repair opens canonical directory with no credential read',async t=>{
- const{page,requests}=await open(t,390);await page.click('#settingsHealthChecks summary');await page.click('#health-repair-connections');assert.equal(await page.$eval('#settingsSection-vault',n=>n.classList.contains('is-active-section')),true);assert.equal(await page.$eval('#serviceConnections',n=>!!n.getClientRects().length),true);assert.deepEqual(requests.filter(r=>r.url.startsWith('/api/')).map(r=>r.url),['/api/settings/health']);
+test('unavailable resource read clears values and the local Refresh action recovers without writes',async t=>{
+ const{page,requests}=await open(t,390,{resourceFail:true});
+ assert.equal(await page.$eval('#sysHealthBody',n=>n.textContent),'Resource snapshot unavailable.');
+ fs.rmSync(path.join(scratch,'resource-fail'));await page.click('#sysHealthRefreshBtn');
+ await page.waitForFunction(()=>document.getElementById('sysHealthBody').textContent.includes('Memory'));
+ assert.equal(requests.filter(r=>r.url==='/api/system-health').length,2);
+ assert.equal(requests.some(r=>r.method!=='GET'),false);
 });
-test('explicit service repair uses native Services tab and focuses it',async t=>{
- const{page}=await open(t,390);await page.focus('#health-repair-worker');await page.keyboard.press('Enter');assert.deepEqual(await page.evaluate(()=>window.__calls),['services']);assert.equal(await page.evaluate(()=>document.activeElement.id),'sysRowWorker');
-});
-test('resources remain available only after explicit load',async t=>{
- const{page,requests}=await open(t);assert.equal(requests.some(r=>r.url==='/api/system-health'),false);await page.click('#sysTabContentHealth>details>summary');await page.click('#sysTabContentHealth>details>button');await page.waitForFunction(()=>document.getElementById('sysHealthBody').textContent==='Inert resource snapshot');assert.equal(requests.filter(r=>r.url==='/api/system-health').length,1);
-});
-test('failed health read is unavailable, retry recovers without writes',async t=>{
- const{page,requests}=await open(t,390,{fail:true});assert.equal(await page.$$eval('#settingsHealthChecks li',n=>n.length),0);assert.match(await page.$eval('#settingsHealthStatus',n=>n.textContent),/unavailable.*Retry/);fs.rmSync(path.join(scratch,'fail'));await page.focus('#settingsHealthRefresh');await page.keyboard.press('Enter');await page.waitForSelector('#health-repair-worker');assert.equal(await page.evaluate(()=>document.activeElement.id),'settingsHealthRefresh');assert.equal(requests.some(r=>r.method!=='GET'),false);
-});
-test('refresh failure marks prior evidence stale; no all-healthy wall',async t=>{
- const{page}=await open(t);fs.writeFileSync(path.join(scratch,'fail'),'1');await page.click('#settingsHealthRefresh');await page.waitForFunction(()=>document.getElementById('settingsHealthStatus').textContent.includes('unavailable'));assert.match(await page.$eval('[data-health-check="engine-codex"]',n=>n.textContent),/Stale.*expired/s);await page.screenshot({path:path.join(scratch,'unavailable.png'),fullPage:true});
-});
-test('expired native cache remains stale instead of a current failure',async t=>{
- const{page}=await open(t,390,{stale:true});assert.match(await page.$eval('[data-health-check="engine-codex"]',n=>n.textContent),/Stale/);assert.match(await page.$eval('[data-health-check="watchtower"]',n=>n.textContent),/Stale/);
-});
-test('legacy maintenance entry preserves preferences and leads to health, Escape returns',async t=>{
- const{page}=await open(t,390);await page.click('#sysCloseBtn');await page.evaluate(()=>window.__legacy());await page.waitForSelector('#settingsHealthRefresh');assert.equal(await page.$eval('#settingsModal',n=>n.hidden),true);await page.keyboard.press('Escape');assert.equal(await page.$eval('#sysModal',n=>n.classList.contains('open')),false);
-});
-
-test('native System Tab trap works on phone and Escape restores its visible opener',async t=>{
+test('native System keyboard trap and Escape still return to the visible opener',async t=>{
  const{page}=await open(t,390);
- await page.evaluate(()=>{window.__first=document.getElementById('sysCloseBtn');window.__last=document.querySelector('#sysTabContentHealth .settings-health-links button:last-child');window.__last.focus();});
- await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.activeElement===window.__first),true);
- await page.keyboard.down('Shift');await page.keyboard.press('Tab');await page.keyboard.up('Shift');assert.equal(await page.evaluate(()=>document.activeElement===window.__last),true);
+ await page.focus('#sysHealthRefreshBtn');await page.keyboard.press('Tab');
+ assert.equal(await page.evaluate(()=>document.activeElement.id),'sysCloseBtn');
+ await page.keyboard.down('Shift');await page.keyboard.press('Tab');await page.keyboard.up('Shift');
+ assert.equal(await page.evaluate(()=>document.activeElement.id),'sysHealthRefreshBtn');
  await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.id),'opener');
 });
 test('System close skips an occluded opener and returns to mobile More',async t=>{
  const{page}=await open(t,390);await page.evaluate(()=>{const opener=document.getElementById('opener');opener.style.cssText='position:fixed;left:10px;top:10px;width:80px;height:44px;z-index:1';const more=document.createElement('button');more.textContent='More';more.dataset.mobileNavMenu='';more.style.cssText='position:fixed;left:10px;top:10px;width:80px;height:44px;z-index:2';document.body.append(more);});await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.matches('[data-mobile-nav-menu]')),true);
 });
-test('clock expiry marks evidence stale without another request and preserves repair focus',async t=>{
- const{page,requests}=await open(t);await page.focus('#health-repair-worker');const count=requests.length;
- await page.evaluate(()=>{const now=Date.now;Date.now=()=>now()+31000;document.dispatchEvent(new Event('visibilitychange'));});
- assert.equal(await page.evaluate(()=>document.activeElement.id),'health-repair-worker');assert.match(await page.$eval('[data-health-check="worker"]',n=>n.textContent),/Stale/);assert.equal(requests.length,count);
-});
-test('malformed read never becomes a passing result and can be retried',async t=>{
- const{page}=await open(t);await page.evaluate(()=>{const original=fetch;window.fetch=(...args)=>args[0]==='/api/settings/health'?Promise.resolve({ok:true,json:async()=>({checks:[]})}):original(...args);});await page.click('#settingsHealthRefresh');await page.waitForFunction(()=>document.getElementById('settingsHealthStatus').textContent.includes('unavailable'));assert.match(await page.$eval('#settingsHealthChecks',n=>n.textContent),/Stale/);
-});
-test('phone supporting evidence and resource entry remain readable with native sizing',async t=>{
- const{page}=await open(t,390);await page.click('#settingsHealthChecks summary');await page.$eval('#health-repair-connections',n=>n.scrollIntoView({block:'center'}));await page.screenshot({path:path.join(scratch,'health-phone-details.png'),fullPage:true});assert.equal(await page.$eval('#sysCloseBtn',n=>n.getBoundingClientRect().height>=44),true);
-});
-
 test('native Settings defaults refresh uses the nonmigrating policy GET',async t=>{
  const{page}=await open(t);
  const load=between('  async function loadSpawnDefaults(options) {','  let _emnInstalled');
@@ -119,4 +132,18 @@ test('native Settings defaults refresh uses the nonmigrating policy GET',async t
   return new Function('return (async()=>{let _spawnDefaultsLoaded=false;const urls=[];const fetch=async url=>{urls.push(url);return {ok:true,json:async()=>({ok:true})};};function mergeSpawnDefaults(){}function syncSpawnEngineDependentUi(){}function renderSpawnDefaultsInline(){}'+load+refresh+'refreshSpawnEngineValue();await Promise.resolve();await Promise.resolve();await Promise.resolve();return urls;})()')();
  },{load,refresh});
  assert.deepEqual(urls,['/api/spawn-defaults?policy=1']);
+});
+
+test('a stalled resource request aborts and a later Refresh recovers',async t=>{
+ const{page}=await open(t);
+ await page.evaluate(()=>{
+   const originalFetch=fetch,originalTimer=setTimeout;
+   window.__restoreResource=()=>{window.fetch=originalFetch;window.setTimeout=originalTimer;};
+   window.fetch=(url,options)=>url==='/api/system-health'?new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true})):originalFetch(url,options);
+   window.setTimeout=(fn,ms,...args)=>originalTimer(fn,ms===10000?5:ms,...args);
+   document.getElementById('sysHealthRefreshBtn').click();
+ });
+ await page.waitForFunction(()=>document.getElementById('sysHealthBody').textContent==='Resource snapshot unavailable.');
+ await page.evaluate(()=>window.__restoreResource());await page.click('#sysHealthRefreshBtn');
+ await page.waitForFunction(()=>document.getElementById('sysHealthBody').textContent.includes('Memory'));
 });

@@ -32,7 +32,15 @@ class Handler(server.CommandCenterHandler):
             engines._ENGINES_INSTALLED_CACHE={'ts':time.monotonic()-age,'data':{'engines':[{'engine':'codex','installed':False},{'engine':'claude','installed':True}]}}
             server._system_services_cache={'ts':time.time()-age,'payload':{'ok':True,'services':[{'id':'worker','state':'offline'},{'id':'watchtower','state':'offline','api_ok':False,'api_probe_age_s':1}]}}
             return super().do_GET()
-        if self.path=='/api/system-health':self.send_json({'fixture':True});return
+        if self.path=='/api/system-health':
+            if (base/'resource-fail').exists():self.send_json({'error':'Fixture unavailable'},503);return
+            self.send_json({'memory':{'used_mb':4096,'total_mb':8192,'available_mb':4096,'compressed_mb':0,'pressure':'normal'},
+                'cpu':{'load1':1.25,'load5':1.5,'load15':1.75,'cores':4},
+                'hogs':[{'cpu':42,'label':'example-worker','pid':101,'etime_min':5}],
+                'anomalies':[{'kind':'runaway','label':'example-process','pid':102,'tree_rss_mb':256,'reason':'42% CPU','key':'test-anomaly'}],
+                'apps':[{'id':'test-app','name':'Example app','pid':103,'rss_mb':512,'age_min':10,'cpu':3,'quit_supported':True}],
+                'session_totals':{'count':2,'tree_rss_mb':1024,'reapable':2,'reapable_rss_mb':1024},
+                'sessions':[{'session_id':'example-session','name':'Example session with a long title that must fit a narrow phone screen','pid':104,'tree_pids':[104],'tree_rss_mb':1024,'nprocs':1,'reapable':True,'idle_known':True,'idle_min':130}]});return
         if self.path.startswith('/static/') and self.path.count('/')==2 and self.path.endswith(('.js','.css')):return super().do_GET()
         self.send_json({'error':'Forbidden fixture route'},403)
     def do_POST(self):self.send_json({'error':'No writes permitted'},403)

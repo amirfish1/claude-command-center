@@ -1028,11 +1028,7 @@
     setInterval(tick, 60000);
   }
   // ---- System Health panel -------------------------------------------------
-  // Full-screen overlay opened from the footer health cluster. While open it
-  // polls /api/system-health (machine memory/swap, CPU hogs, Claude session
-  // trees with last-activity, plus GUI app servers) and can reap a stale
-  // session tree or gracefully quit a shared GUI app. The reap is guarded
-  // server-side — only headless/idle/stale trees can die.
+  // Resource and process measurements; configuration checks live in Settings.
   let _sysHealthTimer = null;
   function _shFmtMB(mb) {
     if (mb == null) return '-';
@@ -1058,24 +1054,18 @@
     const shortcut = document.getElementById('cccSystemPill');
     const opener = shortcut?.closest('.ccc-account-pop') ? document.querySelector('.ccc-account') : shortcut;
     sysOpenModal(opener, 'health');
-    // Opened from the system pill / CPU chip: the user wants live CPU and
-    // memory, not setup boilerplate. Show the resource snapshot first, loaded.
-    const rd = document.getElementById('sysResourceDetails');
-    if (rd) rd.open = true;
-    _pollSystemHealth();
-  }
-  function _closeSystemHealth() {
-    sysCloseModal();
   }
   let _sysHealthPollPromise = null;
   function _pollSystemHealth() {
     if (document.hidden) return;
     if (_sysHealthPollPromise) return _sysHealthPollPromise;
-    _sysHealthPollPromise = fetch('/api/system-health', { cache: 'no-store' })
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    _sysHealthPollPromise = fetch('/api/system-health', { cache: 'no-store', cccPriority: 'user', signal: controller.signal })
       .then(function (r) { if (!r.ok) throw new Error('Resource snapshot unavailable'); return r.json(); })
-      .then(function (d) { if (!d || typeof d !== 'object') throw new Error('Resource snapshot unavailable'); _renderSystemHealth(d); })
-      .catch(function () { const body = document.getElementById('sysHealthBody'); if (body) body.textContent = 'Resource snapshot unavailable. Load again to retry; no healthy result is inferred.'; })
-      .finally(function () { _sysHealthPollPromise = null; });
+      .then(function (d) { if (!d || !d.memory || typeof d.memory !== 'object' || !d.cpu || typeof d.cpu !== 'object' || !Array.isArray(d.sessions)) throw new Error('Resource snapshot unavailable'); _renderSystemHealth(d); })
+      .catch(function () { const body = document.getElementById('sysHealthBody'); if (body) body.textContent = 'Resource snapshot unavailable.'; })
+      .finally(function () { clearTimeout(timeout); _sysHealthPollPromise = null; });
     return _sysHealthPollPromise;
   }
   function _shBar(used, total, warn, crit) {
@@ -1112,7 +1102,7 @@
                 '</span><span class="sh-meta">PID ' + h.pid + ' · ' + _shFmtIdle(h.etime_min) + '</span></div>';
       });
     } else {
-      html += '<div class="sh-meta" style="margin-top:5px">no sustained CPU hogs</div>';
+      html += '<div class="sh-meta" style="margin-top:5px">CPU hogs · 0</div>';
     }
     html += '</div>';
 
@@ -1123,7 +1113,7 @@
       anoms.forEach(function (a) {
         html += '<div class="sh-sess"><span class="sh-badge ' + (a.kind === 'runaway' ? 'sh-crit' : 'sh-warn') + '">' + _shEsc(a.kind) +
                 '</span><span>' + _shEsc(a.label) + '</span><span class="sh-meta">PID ' + a.pid + ' · ' + _shFmtMB(a.tree_rss_mb) + ' · ' +
-                _shEsc(a.reason) + '</span><button class="sh-btn" data-anomaly-review="' + _shEsc(a.key) + '">Review</button></div>';
+                _shEsc(a.reason) + '</span></div>';
       });
       html += '</div>';
     }
@@ -1133,18 +1123,13 @@
     const at = d.app_totals || {};
     if (apps.length) {
       html += '<div><div class="sh-sec-title">GUI apps - ' + (at.count || apps.length) + ' · ' + _shFmtMB(at.rss_mb) + '</div>';
-      html += '<div class="sh-def">These are shared app-server processes, not per-session trees. Quit asks macOS to close the app cleanly. Sessions stay on disk and reopen later. Hard kill is not offered.</div>';
       apps.forEach(function (a) {
-        const quitBtn = a.quit_supported
-          ? '<button class="sh-btn" data-quit-app="' + _shEsc(a.id) + '" data-quit-name="' + _shEsc(a.name || a.app_name || 'app') + '">Quit</button>'
-          : '';
         html += '<div class="sh-sess"><span class="sh-badge sh-ok" title="Shared GUI app process; non-reapable">app</span>' +
                 '<div class="sh-sesscol">' +
                   '<div><span class="sh-name">' + _shEsc(a.name || a.app_name || a.id) + '</span></div>' +
                   '<div class="sh-meta">up ' + _shFmtIdle(a.age_min) + ' · ' + _shFmtMB(a.rss_mb) + ' · ' + (a.cpu || 0) + '% cpu · ' + (a.nprocs || 1) + 'p · PID ' + a.pid + '</div>' +
                 '</div>' +
                 '<span class="sh-spacer"></span>' +
-                quitBtn +
                 '</div>';
       });
       html += '</div>';
@@ -1157,121 +1142,31 @@
     html += '<div><div class="sh-sec-title" style="display:flex;align-items:center;gap:8px">' +
             '<span>Claude sessions - ' + (t.count || 0) + ' · ' + _shFmtMB(t.tree_rss_mb) +
             (t.reapable ? ' · <span class="sh-warn">' + t.reapable + ' reapable (' + _shFmtMB(t.reapable_rss_mb) + ')</span>' : '') + '</span>' +
-            (t.reapable > 1 ? '<button class="sh-btn sh-btn-danger" data-reapall="1" title="Reap every stale tree below">Reap all stale</button>' : '') +
             '</div>';
-    html += '<div class="sh-def"><b>Stale</b> = no terminal attached · idle ≥ ' + staleLabel +
-            ' (no transcript activity) · not running an encode/transcode. Reaping SIGTERMs the whole process tree. ' +
-            'Sessions you’re in (⌨) or actively working (⚙) are never offered.</div>';
     (d.sessions || []).forEach(function (s) {
-      let badge, btn = '', badgeTitle = '', badgeCls = '';
+      let badge, badgeTitle = '', badgeCls = '';
       if (s.concurrent) {
-        badge = '⚠ concurrent'; btn = ''; badgeCls = ' sh-warn';
-        badgeTitle = '2+ live processes share this session id (e.g. a terminal + a headless agent). Killing one is the riskiest move - resolve it deliberately, not from here.';
-      } else if (s.interactive) { badge = '⌨ in use'; badgeTitle = 'A terminal is attached (you’re in this session) - never reaped'; }
-      else if (s.busy) { badge = '⚙ ' + (s.worker || (s.tree_cpu + '% cpu')); badgeCls = ' sh-ok'; badgeTitle = 'Working (encode/transcode child or live CPU) - never reaped'; }
-      else if (s.reapable) { badge = '🧹 stale'; btn = 'danger'; badgeCls = ' sh-warn'; badgeTitle = 'Headless · idle ≥ ' + staleLabel + ' · not working - safe to reap'; }
-      else { badge = 'idle'; btn = 'plain'; badgeTitle = 'Headless and idle, but more recent than ' + staleLabel + ' - not stale yet'; }
+        badge = '⚠ concurrent'; badgeCls = ' sh-warn';
+        badgeTitle = 'Multiple live processes share this session ID.';
+      } else if (s.interactive) { badge = '⌨ in use'; badgeTitle = 'Terminal attached'; }
+      else if (s.busy) { badge = '⚙ ' + (s.worker || (s.tree_cpu + '% cpu')); badgeCls = ' sh-ok'; badgeTitle = 'Active child process or CPU activity'; }
+      else if (s.reapable) { badge = '🧹 stale'; badgeCls = ' sh-warn'; badgeTitle = 'Headless · idle ≥ ' + staleLabel + ' · no active work'; }
+      else { badge = 'idle'; badgeTitle = 'Headless and idle, but more recent than ' + staleLabel + ' - not stale yet'; }
       const when = s.idle_known ? 'idle ' + _shFmtIdle(s.idle_min) : 'up ' + _shFmtIdle(s.age_min);
       const epTag = s.entrypoint ? ' · ' + _shEsc(s.entrypoint) : '';
       const nameMain = s.name ? _shEsc(s.name) : _shEsc(s.cwd_short);
       const repoTag = s.name ? '<span class="sh-repo">' + _shEsc(s.cwd_short) + '</span>' : '';
-      const nameAttr = s.session_id
-        ? ' data-open="' + _shEsc(s.session_id) + '" title="Open this session in CCC"'
-        : '';
       html += '<div class="sh-sess"><span class="sh-badge' + badgeCls + '" title="' + _shEsc(badgeTitle) + '">' + _shEsc(badge) + '</span>' +
               '<div class="sh-sesscol">' +
-                '<div><span class="sh-name"' + nameAttr + '>' + nameMain + '</span>' + repoTag + '</div>' +
+                '<div><span class="sh-name">' + nameMain + '</span>' + repoTag + '</div>' +
                 '<div class="sh-meta">' + when + ' · ' + _shFmtMB(s.tree_rss_mb) + ' · ' + s.nprocs + 'p · PID ' + s.pid + epTag + '</div>' +
               '</div>' +
               '<span class="sh-spacer"></span>' +
-              (btn ? '<button class="sh-btn ' + (btn === 'danger' ? 'sh-btn-danger' : '') + '" data-reap="' + s.tree_pids.join(',') + '">kill tree</button>' : '') +
               '</div>';
     });
     html += '</div>';
 
     body.innerHTML = html;
-
-    Array.prototype.forEach.call(body.querySelectorAll('[data-reap]'), function (b) {
-      b.addEventListener('click', function () {
-        _confirmReap(b, b.getAttribute('data-reap').split(',').map(Number));
-      });
-    });
-    Array.prototype.forEach.call(body.querySelectorAll('[data-quit-app]'), function (b) {
-      b.addEventListener('click', function () {
-        _confirmQuitApp(b, b.getAttribute('data-quit-app'));
-      });
-    });
-    Array.prototype.forEach.call(body.querySelectorAll('[data-anomaly-review]'), function (b) {
-      b.addEventListener('click', function () {
-        const key = b.getAttribute('data-anomaly-review');
-        const a = (d.anomalies || []).filter(function (x) { return x.key === key; });
-        if (a.length) _showAnomalyPrompt(a, true);
-      });
-    });
-    // Session name → open that conversation in CCC and close the panel.
-    Array.prototype.forEach.call(body.querySelectorAll('.sh-name[data-open]'), function (el) {
-      el.addEventListener('click', function () {
-        const sid = el.getAttribute('data-open');
-        _closeSystemHealth();
-        try {
-          if (typeof selectConversation === 'function') selectConversation(sid);
-          else window.location.search = '?session=' + encodeURIComponent(sid);
-        } catch (e) {}
-      });
-    });
-    const ra = body.querySelector('[data-reapall]');
-    if (ra) ra.addEventListener('click', function () {
-      let pids = [];
-      (d.sessions || []).forEach(function (s) { if (s.reapable) pids = pids.concat(s.tree_pids); });
-      _confirmReap(ra, pids);
-    });
-  }
-  function _confirmReap(btn, pids) {
-    // Two-step in-button confirm (no native dialog): first click arms, second
-    // reaps. Auto-disarms after 3s.
-    if (btn.dataset.armed !== '1') {
-      btn.dataset.armed = '1';
-      btn.dataset.prev = btn.textContent;
-      btn.textContent = 'confirm reap?';
-      btn.classList.add('sh-btn-danger');
-      setTimeout(function () {
-        if (btn.dataset.armed === '1') { btn.dataset.armed = '0'; btn.textContent = btn.dataset.prev || 'kill tree'; }
-      }, 3000);
-      return;
-    }
-    btn.dataset.armed = '0';
-    btn.textContent = 'reaping…';
-    fetch('/api/system-health/reap', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pids: pids }),
-    }).then(function (r) { return r.json(); })
-      .then(function () { _pollSystemHealth(); })
-      .catch(function () { _pollSystemHealth(); });
-  }
-  function _confirmQuitApp(btn, appId) {
-    // Two-step confirm: quitting a GUI app is graceful and sessions survive on
-    // disk, but it closes the whole shared app process.
-    if (btn.dataset.armed !== '1') {
-      btn.dataset.armed = '1';
-      btn.dataset.prev = btn.textContent;
-      btn.textContent = 'confirm quit?';
-      btn.title = 'Sessions stay on disk and reopen later. Hard kill is not offered.';
-      setTimeout(function () {
-        if (btn.dataset.armed === '1') { btn.dataset.armed = '0'; btn.textContent = btn.dataset.prev || 'Quit'; }
-      }, 3000);
-      return;
-    }
-    btn.dataset.armed = '0';
-    btn.textContent = 'quitting...';
-    fetch('/api/system-health/quit-app', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app_id: appId }),
-    }).then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d && !d.ok && typeof showOpToast === 'function') showOpToast('Quit failed: ' + (d.error || 'unknown'), 'error');
-        _pollSystemHealth();
-      })
-      .catch(function () { _pollSystemHealth(); });
   }
 
   // ── System Processes (Process Audit & Killness Score) ─────────────────────
@@ -87004,7 +86899,7 @@
       if ($contentJobs) $contentJobs.style.display = 'none';
       if ($sysDialog) $sysDialog.classList.remove('is-wide');
       
-      if (window.cccSettingsHealth) window.cccSettingsHealth.refresh(); else _pollSystemHealth();
+      _pollSystemHealth();
       if (_sysHealthTimer) { clearInterval(_sysHealthTimer); _sysHealthTimer = null; }
       if (_sysPollTimer) { clearInterval(_sysPollTimer); _sysPollTimer = null; }
       if (_sysProcessesTimer) { clearInterval(_sysProcessesTimer); _sysProcessesTimer = null; }
@@ -87140,6 +87035,7 @@
   const $tabBtnJobs = document.getElementById('sysTabBtnJobs');
   if ($tabBtnStatus) $tabBtnStatus.addEventListener('click', () => sysSelectTab('status'));
   if ($tabBtnHealth) $tabBtnHealth.addEventListener('click', () => sysSelectTab('health'));
+  document.getElementById('sysHealthRefreshBtn')?.addEventListener('click', _pollSystemHealth);
   if ($tabBtnProcesses) $tabBtnProcesses.addEventListener('click', () => sysSelectTab('processes'));
   if ($tabBtnJobs) $tabBtnJobs.addEventListener('click', () => sysSelectTab('jobs'));
   document.addEventListener('keydown', (e) => {
@@ -101573,15 +101469,6 @@
   });
 
   window.cccSettingsHealth?.mount({
-    closeSystem: sysCloseModal,
-    closeSettings: closeSettingsModal,
-    openHealth: opener => sysOpenModal(opener, 'health'),
-    services: id => {
-      sysSelectTab('status');
-      const target = document.getElementById(id === 'worker' ? 'sysRowWorker' : id === 'watchtower' ? 'sysRowWt' : 'sysTabBtnStatus');
-      if (target) { target.tabIndex = -1; target.focus(); }
-    },
-    resources: _pollSystemHealth,
     navigate: section => {
       clearTimeout(settingsSearchFocusTimer);
       if ($settingsModal.hidden) openSettingsModal({focusSearch:false}); else clearSettingsSearch();
