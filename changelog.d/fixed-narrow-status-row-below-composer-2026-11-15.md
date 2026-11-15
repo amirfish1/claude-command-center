@@ -1,0 +1,1 @@
+- Narrow (≤1200px) conversations show the status row (branch, context, model) below the composer, matching wide mode.

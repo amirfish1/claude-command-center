@@ -28892,6 +28892,25 @@ a.settings-row:focus-visible .settings-launcher-btn { text-decoration: underline
    _initConvActionsMenu): the info bar (path, context meter, model chip) sits
    BELOW the composer row instead of above it. Same breakpoint and body
    selectors as the mobile status layout above, so it wins over its areas. */
+/* CCC-404: narrow mode keeps the status row (branch, context, model, TS)
+   directly BELOW the composer, as in wide mode. New-session panes keep it
+   above: that strip holds the folder and model pickers. */
+@media (max-width: 1200px) {
+  body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail:not(.has-new-session-context),
+  body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail:not(.has-new-session-context) {
+    grid-template-areas:
+      "header"
+      "present-toolbar"
+      "conv"
+      "goal"
+      "model"
+      "queued"
+      "input"
+      "context"
+      "hint";
+  }
+}
+
 @media (max-width: 1200px) {
   body.status-pos-right:not(.popout-rail-forced) .conv-pane.has-status-rail:not(.has-new-session-context):has(> .conv-input-bar.actions-in-menu),
   body.status-pos-right.status-rail-collapsed:not(.popout-rail-forced) .conv-pane.has-status-rail:not(.has-new-session-context):has(> .conv-input-bar.actions-in-menu) {
