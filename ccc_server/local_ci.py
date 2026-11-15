@@ -194,7 +194,10 @@ def _execution(job, local_names=()):
 def _cloud_step(job):
     """Identify delegated compute separately from the Actions receiver."""
     return next((step for step in job.get("steps", [])
-                 if re.fullmatch(r"Run .+ in Claude Cloud", step.get("name", ""))), None)
+                 if step.get("conclusion") != "skipped" and (
+                     re.fullmatch(r"Run .+ in Claude Cloud", step.get("name", ""))
+                     or step.get("name") == "CI compute: Claude Cloud"
+                     and step.get("status") in ("in_progress", "completed"))), None)
 
 
 def _compute_provider(jobs):
