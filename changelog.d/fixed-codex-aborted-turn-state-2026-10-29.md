@@ -1,0 +1,1 @@
+- Codex sessions whose turn was interrupted or aborted no longer keep showing as working; a late end-of-turn receipt from another turn cannot mark a newer active turn idle.

@@ -23,7 +23,7 @@ def test_cancelled_restart_releases_only_its_drain(tmp_path, monkeypatch, replac
             return {'ok': True, 'available': True}
         return runtime.dispatch(method, params or {})
     monkeypatch.setattr(server, '_control_plane_request', request)
-    ok, _, _, protected = server._safe_worker_restart_precheck('dashboard-restart')
+    ok, _, _, protected = server._safe_worker_restart_precheck('dashboard-restart', restarts_worker=False)
     assert ok
     owned = runtime.ledger.drain_state()
     if replacement:
