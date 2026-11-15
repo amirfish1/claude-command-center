@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Dispatch CI to a Claude cloud task and wait for its commit status."""
 
+import base64
 import json
 import os
 import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -74,7 +76,7 @@ def dispatch_and_wait(config, request=request_json, clock=time.monotonic, sleep=
     )
     session_id = result.get("claude_code_session_id", "")
     session_url = result.get("claude_code_session_url", "")
-    if not re.fullmatch(r"session_[A-Za-z0-9]+", session_id):
+    if not re.fullmatch(r"(?:session|cse)_[A-Za-z0-9]+", session_id):
         raise RuntimeError("Dispatch response did not contain a cloud session ID")
     if session_url != "https://claude.ai/code/" + session_id:
         raise RuntimeError("Dispatch response did not contain the expected cloud session URL")
@@ -84,30 +86,49 @@ def dispatch_and_wait(config, request=request_json, clock=time.monotonic, sleep=
         with open(summary, "a", encoding="utf-8") as output:
             output.write("[Claude cloud CI](%s) tests `%s`\n" % (session_url, sha))
     deadline = clock() + config.get("timeout", 2700)
-    # The context includes the run attempt: a green result from another run
-    # or from a repair commit must never pass this workflow.
-    endpoint = "https://api.github.com/repos/%s/commits/%s/statuses?per_page=100" % (repository, sha)
+    # The cloud proxy allows git pushes but blocks status writes. Receive a
+    # result through a dedicated branch; never put a GitHub token in the VM.
+    report_branch = "claude/cloud-ci-results/%s/%s" % (run_id, attempt)
+    endpoint = "https://api.github.com/repos/%s/contents/.github/claude-cloud-ci-result.json?ref=%s" % (
+        repository, urllib.parse.quote(report_branch, safe=""),
+    )
     while clock() < deadline:
-        for page in range(1, 11):
-            statuses = request(endpoint + "&page=%s" % page, config["github_token"])
-            if not isinstance(statuses, list):
-                raise RuntimeError("Unexpected GitHub status response")
-            match = next((status for status in statuses if status.get("context") == context), None)
-            if match:
-                state = match.get("state")
-                if state == "success":
-                    print("Cloud checks passed for " + sha)
-                    return 0
-                if state in ("failure", "error"):
-                    print("Cloud checks reported %s; see %s" % (state, session_url))
-                    return 1
-                if state != "pending":
-                    raise RuntimeError("Unexpected cloud check state")
-                break
-            if len(statuses) < 100:
-                break
+        try:
+            response = request(endpoint, config["github_token"])
+        except RuntimeError as error:
+            if str(error) != "Remote API returned HTTP 404":
+                raise
+        else:
+            if response.get("encoding") != "base64" or not isinstance(response.get("content"), str):
+                raise RuntimeError("Unexpected GitHub report response")
+            report = json.loads(base64.b64decode(response["content"]))
+            return verify_report(report, repository, sha, context)
         sleep(min(20, max(0, deadline - clock())))
     raise RuntimeError("Timed out waiting for cloud test status; the cloud session may still be running")
+
+
+CHECKS = {
+    "public-docs-boundary", "py-compile-3.9", "py-compile-3.10",
+    "py-compile-3.11", "py-compile-3.12", "py-compile-3.13",
+    "unittest", "smoke", "python39-smoke", "telemetry-worker", "install-smoke",
+}
+
+
+def verify_report(report, repository, sha, context):
+    if not isinstance(report, dict) or any(report.get(key) != expected for key, expected in (
+        ("repository", repository), ("sha", sha), ("status_context", context),
+    )):
+        raise RuntimeError("Cloud report does not match this repository, SHA and run attempt")
+    checks = report.get("checks")
+    if not isinstance(checks, dict) or set(checks) != CHECKS:
+        raise RuntimeError("Cloud report must include every required Linux check")
+    if any(state not in ("success", "failure", "error") for state in checks.values()):
+        raise RuntimeError("Cloud report contains an invalid or unfinished check")
+    if any(state != "success" for state in checks.values()):
+        print("Cloud checks failed or were incomplete for " + sha)
+        return 1
+    print("All cloud Linux checks passed for " + sha)
+    return 0
 
 
 def main():

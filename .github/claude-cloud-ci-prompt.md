@@ -14,10 +14,9 @@ stop without modifying the repository or publishing a passing status.
 
 Check out the requested commit and confirm `git rev-parse HEAD` matches.
 Keep the original commit ID for its final result even if a repair creates
-a new commit. Publish a `pending` GitHub commit status with the supplied
-context using the cloud's authenticated GitHub REST proxy. If status writes
-are unavailable, report the blocker and never claim integration succeeded.
-Never print credentials or copy them into tracked files.
+a new commit. The cloud GitHub proxy does not permit commit-status writes;
+use the result branch described below. Never request a GitHub token, print
+credentials, or copy them into tracked files.
 
 Read `.github/workflows/ci.yml` at the requested commit. Execute every Linux
 check with its exact assertions and dependency pins:
@@ -40,18 +39,28 @@ errors, not passed checks. Do not edit tests, exclude failing tests, reduce
 matrix coverage, or change workflow gates to obtain a green result. macOS-only
 checks require a macOS runner and stay in the existing GitHub workflows.
 
-Publish the requested SHA and context as `success` only if all requested Linux
-checks ran and passed, `failure` for failed test assertions, or `error` for
-incomplete execution. Use the cloud session URL as `target_url` when available.
+After all independent checks finish, publish a result by git push to a new
+branch `claude/cloud-ci-results/<run-id>/<attempt>`, using the two numeric
+segments of `status_context`. Create a separate worktree based on the requested
+SHA, add only `.github/claude-cloud-ci-result.json`, and commit and push that
+branch without force. The JSON object must contain `repository`, the original
+`sha`, the exact `status_context`, and a `checks` object with exactly these keys:
+`public-docs-boundary`, `py-compile-3.9`, `py-compile-3.10`, `py-compile-3.11`,
+`py-compile-3.12`, `py-compile-3.13`, `unittest`, `smoke`, `python39-smoke`,
+`telemetry-worker`, `install-smoke`. Each value is `success` only if that entire
+check ran and passed, `failure` for a failed assertion, or `error` for incomplete
+execution. Do not include raw logs or secrets in the JSON. GitHub Actions reads
+this report and sets its own check result; no API write credential is needed.
 The agent session ending successfully does not mean the tests passed.
 
 If an actual code defect caused failures, attempt one focused repair on a
 separate `claude/` branch. Rerun affected checks, then the full Linux checks.
 Commit and push only that repair branch after the relevant checks pass. Use a
 Conventional Commit subject. Do not open a PR or post a public comment; return
-the branch and diff for review. Never change the original SHA's failed status
+the branch and diff for review. Never rewrite the original SHA's failed report
 to success because a different repair SHA passed. Record each tested SHA and
-its result separately.
+its result separately. Publish the original result before starting repairs so
+the workflow need not wait for a repair to finish.
 
 Finish with a per-check table containing the command, tested commit, exit code,
 and totals, followed by the repair branch, rerun evidence, and any blockers.

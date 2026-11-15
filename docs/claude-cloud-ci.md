@@ -27,13 +27,16 @@ supplied by the payload. Its fields are `repository`, `sha`, `ref`,
 Run every Linux check and version matrix in `.github/workflows/ci.yml`, using
 the workflow's dependency pins, plus the Docker install smoke test. Preserve
 all assertions and report infrastructure errors separately from failed tests.
-Publish GitHub commit statuses through the cloud GitHub REST proxy using the
-payload's exact SHA and `status_context`: `pending` before execution, `success`
-only after every requested check passes, `failure` for failed assertions, and
-`error` if execution is incomplete. A successful agent session is not proof
-that tests passed.
+Publish `.github/claude-cloud-ci-result.json` on a dedicated
+`claude/cloud-ci-results/<run-id>/<attempt>` branch. The report must match the
+payload's repository, exact SHA and `status_context`, and enumerate all eleven
+Linux checks listed in the task prompt. Each check is `success` only after it
+passes, `failure` for failed assertions, or `error` if execution is incomplete.
+The cloud proxy blocks commit-status API writes, so the dispatcher reads this
+report and sets the workflow result itself. No GitHub token enters the cloud
+VM. A successful agent session is not proof that tests passed.
 
-When a test fails, keep the original commit's failed status. Attempt a bounded
+When a test fails, keep the original commit's failed report. Attempt a bounded
 repair on a separate `claude/` branch and rerun the checks. Never weaken tests,
 edit workflow gates to pass, push directly to the default branch, merge, release,
 deploy, or post external messages. Return the repair branch for review.
@@ -52,7 +55,7 @@ does not expose token creation. See Anthropic's
 ## Verify before enabling
 
 Manually dispatch `Claude Cloud CI` on `main`. Verify the linked session runs
-all checks on the requested SHA and publishes the matching status. Exercise a
+all checks on the requested SHA and pushes the matching report. Exercise a
 known failing test on a temporary trusted branch, verify the workflow fails,
 and inspect the separate repair branch and its rerun evidence.
 
@@ -66,7 +69,7 @@ existing test jobs. Enabling the cloud workflow alone does not disable them.
 To stop automatic dispatch, delete the variable or set it to `false`.
 
 The dispatcher rejects redirects and unexpected fire endpoints, never retries
-an ambiguous dispatch, and waits only for a status matching this run attempt
-and exact SHA. Timeout, missing configuration, or missing results fails the
+an ambiguous dispatch, and waits only for a complete report matching this run
+attempt and exact SHA. Timeout, missing configuration, or missing results fails the
 workflow. Cancelling a GitHub run or timing out stops the waiter; it does not
 cancel an already started cloud session. Stop that session in Claude when needed.

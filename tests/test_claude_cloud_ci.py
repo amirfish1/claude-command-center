@@ -1,6 +1,8 @@
 """The cloud bridge must fail closed on missing or unrelated results."""
 
+import base64
 import importlib.util
+import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,51 +32,72 @@ def config():
     }
 
 
+def report_response(config, **updates):
+    report = {"repository": config["repository"], "sha": config["sha"],
+              "status_context": "claude-cloud-ci/123/2",
+              "checks": {name: "success" for name in bridge.CHECKS}}
+    report.update(updates)
+    return {"encoding": "base64", "content": base64.b64encode(json.dumps(report).encode()).decode()}
+
+
 class Transport:
-    def __init__(self, statuses):
-        self.statuses = iter(statuses)
+    def __init__(self, reports, session_id="session_test"):
+        self.reports = iter(reports)
         self.calls = []
+        self.session_id = session_id
 
     def __call__(self, url, token, body=None, headers=None):
         self.calls.append((url, token, body, headers))
         if body is not None:
             return {
-                "claude_code_session_id": "session_test",
-                "claude_code_session_url": "https://claude.ai/code/session_test",
+                "claude_code_session_id": self.session_id,
+                "claude_code_session_url": "https://claude.ai/code/" + self.session_id,
             }
-        return next(self.statuses)
+        result = next(self.reports)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
-def test_waits_for_this_run_and_attempt(config):
+@pytest.mark.parametrize("session_id", ["session_test", "cse_test"])
+def test_waits_for_this_run_and_attempt(config, session_id):
     remote = Transport([
-        [{"context": "claude-cloud-ci/123/1", "state": "success"}],
-        [{"context": "claude-cloud-ci/123/2", "state": "pending"}],
-        [{"context": "claude-cloud-ci/123/2", "state": "success"}],
-    ])
+        RuntimeError("Remote API returned HTTP 404"), report_response(config),
+    ], session_id)
     assert bridge.dispatch_and_wait(config, remote, lambda: 0, lambda _: None) == 0
-    assert len(remote.calls) == 4
-    assert all(config["sha"] in call[0] for call in remote.calls[1:])
+    assert len(remote.calls) == 3
+    assert all("claude%2Fcloud-ci-results%2F123%2F2" in call[0] for call in remote.calls[1:])
     assert remote.calls[0][1] == config["fire_token"]
     assert all(call[1] == config["github_token"] for call in remote.calls[1:])
 
 
 @pytest.mark.parametrize("state", ["failure", "error"])
 def test_failed_or_incomplete_checks_fail_workflow(config, state):
-    remote = Transport([[{"context": "claude-cloud-ci/123/2", "state": state}]])
+    checks = {name: "success" for name in bridge.CHECKS}
+    checks["unittest"] = state
+    remote = Transport([report_response(config, checks=checks)])
     assert bridge.dispatch_and_wait(config, remote, lambda: 0, lambda _: None) == 1
 
 
-def test_status_pagination(config):
-    remote = Transport([
-        [{"context": "unrelated", "state": "success"}] * 100,
-        [{"context": "claude-cloud-ci/123/2", "state": "success"}],
-    ])
-    assert bridge.dispatch_and_wait(config, remote, lambda: 0, lambda _: None) == 0
-    assert remote.calls[-1][0].endswith("&page=2")
+@pytest.mark.parametrize("updates", [
+    {"sha": "b" * 40}, {"status_context": "claude-cloud-ci/123/1"},
+    {"repository": "other/repo"}, {"checks": {"unittest": "success"}},
+    {"checks": {name: "pending" for name in bridge.CHECKS}},
+])
+def test_unrelated_or_incomplete_report_cannot_pass(config, updates):
+    remote = Transport([report_response(config, **updates)])
+    with pytest.raises(RuntimeError):
+        bridge.dispatch_and_wait(config, remote, lambda: 0, lambda _: None)
+
+
+def test_api_permission_error_is_not_hidden_as_missing_report(config):
+    remote = Transport([RuntimeError("Remote API returned HTTP 403")])
+    with pytest.raises(RuntimeError, match="403"):
+        bridge.dispatch_and_wait(config, remote, lambda: 0, lambda _: None)
 
 
 def test_timeout_does_not_redispatch(config):
-    remote = Transport([[]])
+    remote = Transport([RuntimeError("Remote API returned HTTP 404")])
     times = iter([0, 0, 1, 41])
     with pytest.raises(RuntimeError, match="Timed out"):
         bridge.dispatch_and_wait(config, remote, lambda: next(times), lambda _: None)
