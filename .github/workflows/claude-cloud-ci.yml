@@ -1,0 +1,38 @@
+name: Claude Cloud CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**']
+
+permissions:
+  contents: read
+  statuses: read
+
+concurrency:
+  group: claude-cloud-ci-${{ github.ref }}
+  # Cancelling the waiter does not cancel a cloud session already dispatched.
+  cancel-in-progress: false
+
+jobs:
+  cloud:
+    # Opt in after the pilot has passed. Fork code never receives the task
+    # token or triggers an agent with the maintainer's connected identity.
+    if: >-
+      (github.event_name == 'workflow_dispatch' || vars.CLAUDE_CLOUD_CI_ENABLED == 'true') &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests and repair failures in Claude Cloud
+        env:
+          CLAUDE_CLOUD_CI_FIRE_URL: ${{ secrets.CLAUDE_CLOUD_CI_FIRE_URL }}
+          CLAUDE_CLOUD_CI_FIRE_TOKEN: ${{ secrets.CLAUDE_CLOUD_CI_FIRE_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUD_CI_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CLOUD_CI_REF: ${{ github.head_ref || github.ref_name }}
+        run: python3 scripts/claude-cloud-ci.py
