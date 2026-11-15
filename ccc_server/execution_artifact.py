@@ -450,6 +450,7 @@ class ExecutionProfile:
     unix_sockets: tuple = ()  # Explicit private data sockets; peer proof separate.
     state_files: tuple = ()  # Exact mutable ledger/input files, never configuration.
     identity_namespace: str = "private"  # Explicit kernel PID and cgroup visibility.
+    control_stdio: bool = False  # Enable managed restart control protocol over stdio.
 
     def value(self):
         if not self.entry.startswith("/opt/ccc/") or "/../" in self.entry:

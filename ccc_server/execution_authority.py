@@ -297,7 +297,8 @@ def _profile(value):
                                value["network"], value["user"],
                                tuple(tuple(x) for x in value["generated_sources"]),
                                tuple(value["unix_sockets"]), tuple(value["state_files"]),
-                               value["pid_namespace"], value["control_stdio"])
+                               value.get("identity_namespace", value.get("pid_namespace", "private")),
+                               value.get("control_stdio", False))
     if canonical(profile.value()) != canonical(value):
         raise Refused("unsupported profile format/fields")
     return profile
