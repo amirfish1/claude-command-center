@@ -15,7 +15,7 @@ function harness() {
     fetch: (url, options) => {leases.push({url, ...options, payload: JSON.parse(options.body)}); return Promise.resolve();},
   });
   vm.runInContext(`
-    let _ttsActive = true, _ttsPaused = false, _ttsNeural = null, _ttsNeuralToken = 0;
+    let _ttsActive = true, _ttsPaused = false, _ttsNeural = null, _ttsNeuralToken = 0, _ttsBrowserPlayback = null;
     const _ttsSetStreaming = () => {};
   ` + source.slice(source.indexOf('  const _ttsPriorityClient ='), source.indexOf('  function _ttsLog('))
     + source.slice(source.indexOf('  function _ttsEnginePause('), source.indexOf('  function _ttsEngineResume('))

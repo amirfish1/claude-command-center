@@ -1,0 +1,1 @@
+- Add an optional Phonon English browser voice pilot with verified downloads, a bounded audio buffer and fallback to the existing voice. Off by default; device and listening-quality acceptance remain part of the pilot.

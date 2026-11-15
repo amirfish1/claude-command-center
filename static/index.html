@@ -2961,6 +2961,19 @@
               </div>
             </div>
 
+            <div class="settings-row" data-keywords="voice speak tts read aloud phonon browser pilot english">
+              <div class="settings-row-main">
+                <div class="settings-row-label">Browser voice pilot</div>
+                <div class="settings-row-desc">Try Phonon for English read-aloud on this device. Downloads about 65 MB once. Uses your current voice while loading or if playback fails.</div>
+                <div class="settings-row-desc" id="settingsBrowserVoiceStatus" role="status">Off. Your current voice is used.</div>
+              </div>
+              <div class="settings-row-control">
+                <button type="button" class="settings-toggle" id="settingsBrowserVoiceToggle" role="switch" aria-checked="false" aria-label="Browser voice pilot">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
+              </div>
+            </div>
+
             <div class="settings-row" data-keywords="tts speaker voice speech off disable stop kokoro cpu synthesis">
               <div class="settings-row-main">
                 <div class="settings-row-label">Text-to-speech</div>
@@ -4270,6 +4283,7 @@
 <script src="/static/notify.js"></script>
 <script src="/static/router-detected.js" defer></script>
 <script src="/static/local-speech.js"></script>
+<script src="/static/browser-voice.js"></script>
 <script src="/static/settings-actions.js"></script>
 <script src="/static/settings-context.js"></script>
 <script src="/static/settings-launch-preview.js"></script>

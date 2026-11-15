@@ -48,7 +48,7 @@
   }
   function hashRoute(){
     let hash;try{hash=decodeURIComponent(location.hash.slice(1));}catch(_){return;}
-    const aliases={voice:'listening',voiceModal:'conversation',voiceSettingsBtn:'conversation',carModeModal:'operator',carModeMenuBtn:'operator',settingsTtsVoiceDefault:'reading',localSpeechStatus:'offline',localSpeechInstall:'offline',simpleVoiceMobileRow:'access',settingsVoiceMobileToggle:'access',settingsVoiceCallBtnToggle:'access',voiceShowMobileBtn:'access'};
+    const aliases={voice:'listening',voiceModal:'conversation',voiceSettingsBtn:'conversation',carModeModal:'operator',carModeMenuBtn:'operator',settingsTtsVoiceDefault:'reading',settingsBrowserVoiceToggle:'reading',localSpeechStatus:'offline',localSpeechInstall:'offline',simpleVoiceMobileRow:'access',settingsVoiceMobileToggle:'access',settingsVoiceCallBtnToggle:'access',voiceShowMobileBtn:'access'};
     const id=hash.replace(/^settings[\/-]/,'');const task=id.match(/^voice-(listening|reading|conversation|offline|access|operator)$/);if(task)open(task[1]);else if(aliases[id])open(aliases[id]);
   }
   function mount(integration){
@@ -67,6 +67,7 @@
     const legacy=create('div');legacy.hidden=true;legacy.id='voiceSetupLegacy';host.append(legacy);
     function moveRow(id,target){const element=get(id);if(!element)return;const row=element.closest('.settings-row');if(row)target.append(row);}
     moveRow('settingsTtsVoiceDefault',get('voiceSetup-reading'));moveRow('settingsTtsEnabledToggle',get('voiceSetup-offline'));moveRow('localSpeechInstall',get('voiceSetup-offline'));moveRow('settingsVoiceCallBtnToggle',get('voiceSetup-access'));
+    moveRow('settingsBrowserVoiceToggle',get('voiceSetup-reading'));
     const readingRow=get('settingsTtsVoiceDefault').closest('.settings-row');
     readingRow.querySelector('.settings-row-label').textContent='Voice';
     readingRow.querySelector('.settings-row-desc').textContent='';

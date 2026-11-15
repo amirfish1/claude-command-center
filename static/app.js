@@ -15299,6 +15299,9 @@
   let _ttsNeuralToken = 0;
   let _ttsNeuralCooldownUntil = 0;
   let _ttsBrowserPlayback = null;
+  window.addEventListener('ccc:browser-voice', event => {
+    _ttsLog('BROWSER-STATE', JSON.stringify(event.detail));
+  });
   function _ttsEnginePause() {
     _ttsPriorityStop();
     _ttsBrowserPlayback?.pause();
@@ -15777,6 +15780,7 @@
     _ttsEnabled = next;
     try { localStorage.setItem('ccc-tts-enabled', next ? '1' : '0'); } catch (_) {}
     if (!next) {
+      window.cccBrowserVoice?.suspend();
       for (const ctrl of Array.from(_ttsInFlightAborts)) {
         try { ctrl.abort(); } catch (_) {}
       }
@@ -15793,6 +15797,7 @@
       try { if (typeof stopTextToSpeech === 'function') stopTextToSpeech(); } catch (_) {}
     }
     _ttsSyncEnabledControls();
+    if (next) window.cccBrowserVoice?.warm();
     _ttsUpdateDiagnosticsQueue();
     if (persistServer && typeof fetch === 'function') {
       _ttsTogglePending = true;
@@ -16140,6 +16145,7 @@
   // Hover and viewport preparation leave the composer's latest-reply bar alone.
   function _ttsPrefetchHead(rawText, paneId, quiet, sourceBtn) {
     if (typeof _ttsEnabled !== 'undefined' && !_ttsEnabled) return;
+    if (window.cccBrowserVoice?.ready) return;
     const mk = quiet === 'viewport' ? '__viewport:' + paneId : quiet ? '__quiet' : paneId;
     if (Date.now() < _ttsNeuralCooldownUntil) { _ttsLog('SKIP', 'prefetch: cooldown, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')'); return; }
     if (document.hidden) { _ttsLog('SKIP', 'prefetch: tab hidden'); return; }
@@ -17737,7 +17743,8 @@
     // instantly; otherwise it is fetched now (a 160-char head takes ~1-2 s).
     // The Mac voice is only the fallback when that fetch or playback fails.
     const _ttsHebrew = _ttsIsHebrew(text);
-    const browserVoice = !_ttsHebrew && !!window.cccBrowserVoice?.ready;
+    const browserVoice = !_ttsHebrew && !/[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u.test(text)
+      && (!_ttsKeepVoice || _ttsKeepVoice.startsWith('Browser:')) && !!window.cccBrowserVoice?.ready;
     const _ttsHeadReady = !_ttsHebrew && Date.now() >= _ttsNeuralCooldownUntil;
     {
       const h = _ttsHeadChunk(text, baseOffset);
@@ -17746,7 +17753,7 @@
       if (_ttsHebrew) why = 'Hebrew: the free voice has none';
       else if (Date.now() < _ttsNeuralCooldownUntil) why = 'free voice cooling down, ' + Math.round((_ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + _ttsNeuralCooldownWhy + ')';
       _ttsStartWhy = why;
-      _ttsLog('START', why ? 'MAC VOICE: ' + why
+      _ttsLog('START', browserVoice ? 'browser voice, resident Phonon 31M' : why ? 'MAC VOICE: ' + why
         : 'free voice, ' + (e && e.ready ? 'chunk ready' : e ? 'chunk still generating' : 'fetching first chunk now'));
     }
     if (!browserVoice && Date.now() >= _ttsNeuralCooldownUntil && _ttsHeadReady) {
@@ -17951,6 +17958,10 @@
       },
       onposition(data) {
         if (stale()) return;
+        if (state.perf) {
+          state.perf.stalls = data.underruns || 0;
+          state.perf.maxStall = Math.max(state.perf.maxStall, data.maxGapMs || 0);
+        }
         const word = _ttsWordAtProgress(chunk.text, data.played, data.duration, words);
         if (!word) return;
         _ttsLastCharIndex = chunk.start + word.start;

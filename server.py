@@ -31014,6 +31014,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
+        if path.startswith("/api/browser-voice/"):
+            from ccc_server import browser_voice
+            browser_voice.handle(self, "GET")
+            return
+
         if path.startswith("/api/decisions-fix/report/"):
             from ccc_server import decision_report_jobs
             result, status = decision_report_jobs.status(path.rsplit("/", 1)[-1])
@@ -35927,6 +35932,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             return
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
         if self._phone_pin_blocked(path):
+            return
+        if path.startswith("/api/browser-voice/"):
+            from ccc_server import browser_voice
+            browser_voice.handle(self, "POST")
             return
         if path.startswith("/api/ticket-audio/"):
             from ccc_server import ticket_audio

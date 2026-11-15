@@ -65,7 +65,9 @@ for(const width of [1440,390])test('one native workflow with truthful input/outp
  assert.deepEqual(await page.evaluate(()=>window.__parkedVoiceReads),['/api/free-runtime/tts-voices']);
  assert.deepEqual((await page.evaluate(()=>window.__priorityVoiceReads)).sort(),['/api/free-runtime/tts-voices','/api/voice/config','/api/voice/voices']);
  assert(await page.$eval('#settingsTtsVoiceDefault',n=>n.options.length>0));
- for(const id of ['voiceSelect','settingsTtsVoiceDefault','settingsVoiceCallBtnToggle','localSpeechInstall','carModeAnthropicKey'])assert.equal(await page.$$eval('#'+id,n=>n.length),1);
+ for(const id of ['voiceSelect','settingsTtsVoiceDefault','settingsBrowserVoiceToggle','settingsVoiceCallBtnToggle','localSpeechInstall','carModeAnthropicKey'])assert.equal(await page.$$eval('#'+id,n=>n.length),1);
+ assert.equal(await page.$eval('#settingsBrowserVoiceToggle',n=>n.closest('.voice-setup-section').id),'voiceSetup-reading');
+ assert.equal(await page.$eval('#settingsBrowserVoiceToggle',n=>n.getAttribute('aria-checked')),'false');
  assert.equal(await page.$eval('#voiceModal',n=>n.hidden),true);assert.equal(await page.$eval('#carModeModal',n=>n.hidden),true);assert.equal(await page.$eval('#settingsSoundsToggle',n=>n.closest('.settings-section').id),'settingsSection-notifications');assert.equal(await page.$eval('#voiceSetupLegacy #settingsVoiceMobileToggle',n=>!!n),true);
  assert.match(await page.$eval('#voiceSetupListeningStatus',n=>n.textContent),/permission.*not been checked/);assert.match(await page.$eval('#voiceSetup-reading',n=>n.textContent),/speaker button/);assert.match(await page.$eval('#voiceSetup-offline',n=>n.textContent),/Does not enable offline dictation/);
  assert.equal(await page.$$eval('#voiceSetup details:not([open])',n=>n.length),4);await page.$eval('#voiceSetup',n=>n.scrollIntoView({block:'start'}));await page.screenshot({path:path.join(scratch,'setup-'+width+'.png'),fullPage:true});const bounds=await page.$eval('#voiceSetup',n=>({scroll:n.scrollWidth,width:n.clientWidth}));assert(bounds.scroll<=bounds.width+1);
