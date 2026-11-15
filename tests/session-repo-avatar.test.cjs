@@ -31,6 +31,7 @@ context.escapeAttr = text => text;
 context.escapeHtml = text => text;
 context.ideaTicketsOn = () => true;
 context._hashHue = () => 100;
+vm.runInContext(source.slice(source.indexOf('  function repoInitials('), source.indexOf('  function repoAvatarHtml(')), context);
 const portraitStart = source.indexOf('  function _avatarModelBadgeHtml(');
 const portraitEnd = source.indexOf('  // Same cleanup as server _archive_list_preview', portraitStart);
 vm.runInContext(source.slice(portraitStart, portraitEnd), context);

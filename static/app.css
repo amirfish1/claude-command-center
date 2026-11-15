@@ -25,6 +25,19 @@
     --cb-text: #d6deeb;
     --cb-muted: #9aa7b5;
     --accent-contrast: #ffffff;     /* readable text/icon color on var(--accent) */
+    /* Engine identity colors must contrast with the current theme surfaces. */
+    --engine-claude: #f09a78;
+    --engine-codex: #3dd68c;
+    --engine-gemini: #c084fc;
+    --engine-cursor: #f08a6b;
+    --engine-antigravity: #f2cc60;
+    --engine-hermes: #2dd4bf;
+    --engine-kimi: #7dd3fc;
+    --engine-copilot: #56d364;
+    --engine-grok: #f472b6;
+    --engine-copilotchat: #818cf8;
+    --engine-devin: #8b5cf6;
+    --engine-opencode: #fb923c;
     --status-rail-width: 260px;
     /* Inter primary, system stack fallback. Inter is loaded from Google Fonts
        in index.html with `display=swap`, so the system font paints first and
@@ -48,6 +61,18 @@
     --orch-chip-text: #6639a6;
     --red: #cf222e;
     --cyan: #0e7490;
+    --engine-claude: #a34221;
+    --engine-codex: #096b3b;
+    --engine-gemini: #7541b0;
+    --engine-cursor: #a63c1b;
+    --engine-antigravity: #805b00;
+    --engine-hermes: #0b7165;
+    --engine-kimi: #096789;
+    --engine-copilot: #236e2b;
+    --engine-grok: #a12868;
+    --engine-copilotchat: #454eb0;
+    --engine-devin: #6c3bd1;
+    --engine-opencode: #a34b00;
   }
   :root[data-font="mono"] {
     --font-ui: 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
@@ -9180,73 +9205,73 @@
   .conv-session-icon.claude,
   .conv-pane-cat-icon.claude,
   .conv-avatar-model.claude {
-    color: #f09a78;
+    color: var(--engine-claude);
     --icon-shadow-color: rgba(240, 154, 120, 0.45);
   }
   .conv-session-icon.codex,
   .conv-pane-cat-icon.codex,
   .conv-avatar-model.codex {
-    color: #3dd68c;
+    color: var(--engine-codex);
     --icon-shadow-color: rgba(61, 214, 140, 0.45);
   }
   .conv-session-icon.gemini,
   .conv-pane-cat-icon.gemini,
   .conv-avatar-model.gemini {
-    color: #c084fc;
+    color: var(--engine-gemini);
     --icon-shadow-color: rgba(192, 132, 252, 0.45);
   }
   .conv-session-icon.cursor,
   .conv-pane-cat-icon.cursor,
   .conv-avatar-model.cursor {
-    color: #f08a6b;
+    color: var(--engine-cursor);
     --icon-shadow-color: rgba(226, 104, 64, 0.45);
   }
   .conv-session-icon.antigravity,
   .conv-pane-cat-icon.antigravity,
   .conv-avatar-model.antigravity {
-    color: #f2cc60;
+    color: var(--engine-antigravity);
     --icon-shadow-color: rgba(242, 204, 96, 0.42);
   }
   .conv-session-icon.hermes,
   .conv-pane-cat-icon.hermes,
   .conv-avatar-model.hermes {
-    color: #2dd4bf;
+    color: var(--engine-hermes);
     --icon-shadow-color: rgba(45, 212, 191, 0.42);
   }
   .conv-session-icon.kimi,
   .conv-pane-cat-icon.kimi,
   .conv-avatar-model.kimi {
-    color: #7dd3fc;
+    color: var(--engine-kimi);
     --icon-shadow-color: rgba(125, 211, 252, 0.42);
   }
   .conv-session-icon.copilot,
   .conv-pane-cat-icon.copilot,
   .conv-avatar-model.copilot {
-    color: #56d364;
+    color: var(--engine-copilot);
     --icon-shadow-color: rgba(86, 211, 100, 0.42);
   }
   .conv-session-icon.grok,
   .conv-pane-cat-icon.grok,
   .conv-avatar-model.grok {
-    color: #f472b6;
+    color: var(--engine-grok);
     --icon-shadow-color: rgba(244, 114, 182, 0.42);
   }
   .conv-session-icon.copilotchat,
   .conv-pane-cat-icon.copilotchat,
   .conv-avatar-model.copilotchat {
-    color: #818cf8;
+    color: var(--engine-copilotchat);
     --icon-shadow-color: rgba(129, 140, 248, 0.42);
   }
   .conv-session-icon.devin,
   .conv-pane-cat-icon.devin,
   .conv-avatar-model.devin {
-    color: #8b5cf6;
+    color: var(--engine-devin);
     --icon-shadow-color: rgba(139, 92, 246, 0.42);
   }
   .conv-session-icon.opencode,
   .conv-pane-cat-icon.opencode,
   .conv-avatar-model.opencode {
-    color: #fb923c;
+    color: var(--engine-opencode);
     --icon-shadow-color: rgba(251, 146, 60, 0.42);
   }
   /* Unified session cost palette */
@@ -9274,6 +9299,11 @@
   :is(.conv-session-icon, .conv-pane-cat-icon).cost-low .conv-session-svg {
     opacity: 0.48;
     filter: brightness(0.8) saturate(0.72);
+  }
+  /* Light-mode engine identity must not fade or brighten away with cost. */
+  :root[data-theme="light"] :is(.conv-session-icon, .conv-pane-cat-icon)[class*="cost-"] .conv-session-svg {
+    opacity: 1;
+    filter: none;
   }
   /* End unified session cost palette */
   .conv-session-icon.pkood {
@@ -15716,17 +15746,17 @@
     display: block;
   }
   .conv-archived-engine-trigger.is-filtered.claude,
-  .conv-archived-engine-btn.claude { color: #f09a78; }
+  .conv-archived-engine-btn.claude { color: var(--engine-claude); }
   .conv-archived-engine-trigger.is-filtered.codex,
-  .conv-archived-engine-btn.codex { color: #3dd68c; }
+  .conv-archived-engine-btn.codex { color: var(--engine-codex); }
   .conv-archived-engine-trigger.is-filtered.kimi,
-  .conv-archived-engine-btn.kimi { color: #7dd3fc; }
+  .conv-archived-engine-btn.kimi { color: var(--engine-kimi); }
   .conv-archived-engine-trigger.is-filtered.devin,
-  .conv-archived-engine-btn.devin { color: #a78bfa; }
+  .conv-archived-engine-btn.devin { color: var(--engine-devin); }
   .conv-archived-engine-trigger.is-filtered.antigravity,
-  .conv-archived-engine-btn.antigravity { color: #f2cc60; }
+  .conv-archived-engine-btn.antigravity { color: var(--engine-antigravity); }
   .conv-archived-engine-trigger.is-filtered.grok,
-  .conv-archived-engine-btn.grok { color: #f472b6; }
+  .conv-archived-engine-btn.grok { color: var(--engine-grok); }
   .conv-archived-engine-btn.is-active {
     background: color-mix(in srgb, currentColor 18%, transparent);
     box-shadow: inset 0 0 0 1px currentColor;
@@ -31184,22 +31214,19 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   align-items: center;
   gap: 2px;
   width: 20px;
-  height: 18px;
+  height: 20px;
   justify-content: center;
   box-sizing: border-box;
-  padding: 1px 3px;
+  padding: 3px;
   border: 0;
   border-radius: 5px;
-  background: transparent;
+  background: var(--surface);
   color: var(--text);
   font: 8px/1.2 system-ui, sans-serif;
   white-space: nowrap;
 }
-.conv-avatar-engine, .conv-avatar-engine svg { display: block; width: 12px; height: 12px; }
-.conv-avatar-model.cost-low .conv-avatar-engine { opacity: 0.45; }
-.conv-avatar-model.cost-medium .conv-avatar-engine { opacity: 0.65; }
-.conv-avatar-model.cost-high .conv-avatar-engine { opacity: 0.82; }
-.conv-avatar-model.cost-premium .conv-avatar-engine { opacity: 1; filter: drop-shadow(0 0 2px currentColor); }
+/* Keep identity readable regardless of repository art or model cost. */
+.conv-avatar-engine, .conv-avatar-engine svg { display: block; width: 14px; height: 14px; }
 @media (max-width: 1200px) {
   #convList .conv-item > .wa-row:has(.conv-idea-avatar) { gap: 10px; }
   .wa-av.conv-idea-avatar { align-self: flex-start; margin-top: 8px; }
@@ -34133,7 +34160,7 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
   padding: 0;
 }
 #convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine,
-#convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine svg { width: 11px; height: 11px; opacity: 0.8; filter: none; }
+#convList#convList .conv-item .conv-idea-avatar.is-child-mini .conv-avatar-engine svg { width: 11px; height: 11px; opacity: 1; filter: none; }
 /* Doubled id + :has(mini) outranks the CCC-261 desktop child-row indent
    (+36px, sized for the old avatar), so lane titles start beside the mark. */
 #convList#convList .conv-item.is-current-child-row:has(.conv-idea-avatar.is-child-mini) { --conv-content-left: calc(var(--conv-icon-left) + 22px); }
@@ -34235,7 +34262,7 @@ body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session { grid-t
 #convList#convList.session-workspace .conv-avatar-initials { font-size: 10px; }
 #convList#convList .conv-item:not(.is-current-child-row) .conv-avatar-stack > .conv-avatar-number { font-size: 11px; opacity: .85; }
 #convList#convList.session-workspace .conv-item:not(.is-current-child-row) .conv-main-row > .conv-auto-switch { top: 59px; left: calc(var(--conv-icon-left) + 2px); }
-#convList.session-workspace .conv-avatar-model { filter: none; transform: scale(.8); }
+#convList.session-workspace .conv-avatar-model { filter: none; transform: none; }
 #convList#convList.session-workspace .conv-main-row.has-inline-step .conv-title { font-size: 15px !important; line-height: 21px !important; font-weight: 550; }
 #convList#convList.session-workspace .conv-main-row.has-inline-step > .conv-outcome .conv-outcome-step { font-size: 13px; line-height: 19px; }
 #convList.session-workspace .conv-working-dot,
