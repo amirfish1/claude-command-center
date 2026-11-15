@@ -102421,7 +102421,7 @@
   }).observe(document.body, {attributes:true, attributeFilter:['class']});
 })();
 
-// Preserve the desktop header's DOM order when switching across the breakpoint.
+// CI, usage and savings share one header line on phones and desktop.
 (function initMobileHomeStatus() {
   const header = document.querySelector('.sidebar-header');
   const usage = document.getElementById('headroomBars');
@@ -102431,22 +102431,21 @@
   line.className = 'mobile-home-status';
   line.setAttribute('aria-label', 'CI, engine usage and savings');
   line.tabIndex = 0;
-  const anchors = [ci, usage].map(node => {
-    const anchor = document.createComment('status position');
-    node.before(anchor); return anchor;
-  });
   const query = matchMedia('(max-width: 1200px)');
   const sync = () => {
-    if (query.matches) {
-      const simpleHeader = document.body.classList.contains('ccc-simple-mode') && document.getElementById('mobileSimpleHeader');
-      const destination = simpleHeader || header;
-      if (line.parentNode !== destination) destination.append(line);
-      if (ci.parentNode !== line) line.append(ci, usage);
-    }
-    else if (line.isConnected) { [ci, usage].forEach((node, i) => anchors[i].after(node)); line.remove(); }
+    // One status line at every width; only phones have the Simple header.
+    const simpleHeader = query.matches && document.body.classList.contains('ccc-simple-mode') && document.getElementById('mobileSimpleHeader');
+    const destination = simpleHeader || header;
+    if (line.parentNode !== destination) destination.append(line);
+    if (ci.parentNode !== line) line.append(ci, usage);
   };
   query.addEventListener('change', sync); sync();
   new MutationObserver(sync).observe(document.body, {attributes:true, attributeFilter:['class']});
+  // A mouse wheel has no sideways axis: let it reach entries past the sidebar edge.
+  line.addEventListener('wheel', event => {
+    if (line.scrollWidth <= line.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    line.scrollLeft += event.deltaY; event.preventDefault();
+  }, {passive:false});
   const wordmark = document.querySelector('.msh-wordmark');
   if (wordmark) wordmark.textContent = 'Claude Command Center';
   const close = () => { ci.classList.remove('is-expanded'); ci.querySelector('.local-ci-mobile-toggle')?.setAttribute('aria-expanded', 'false'); };
@@ -102749,11 +102748,17 @@
           popup.className = 'mobile-ci-details';
           popup.append(...rows); host.append(popup);
         }
+        // The details float under the status line; on desktop they keep the sidebar's width.
+        const placePopup = () => {
+          const box = host.closest('.mobile-home-status').getBoundingClientRect();
+          popup.style.top = box.bottom + 'px';
+          if (matchMedia('(min-width: 1201px)').matches) Object.assign(popup.style, {left:box.left + 'px', right:'auto', width:box.width + 'px'});
+        };
         toggle.addEventListener('click', () => {
           toggle.setAttribute('aria-expanded', String(host.classList.toggle('is-expanded')));
-          if (popup) popup.style.top = toggle.getBoundingClientRect().bottom + 'px';
+          if (popup) placePopup();
         });
-        if (popup && host.classList.contains('is-expanded')) popup.style.top = host.closest('.mobile-home-status').getBoundingClientRect().bottom + 'px';
+        if (popup && host.classList.contains('is-expanded')) placePopup();
         host.prepend(toggle);
         if (focusedToggle) toggle.focus({preventScroll:true});
       }

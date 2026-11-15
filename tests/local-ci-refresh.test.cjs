@@ -37,7 +37,7 @@ for (const width of [1280, 390]) test('CI survives refresh before live status re
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.end(`<style>${css}</style><div style="width:${Math.min(width, 330)}px;padding:12px;box-sizing:border-box">
         <div data-local-ci-host id="localCiProgress" hidden></div>
-        <div class="sidebar"><div data-local-ci-host class="local-ci-mobile" id="localCiMobileList" hidden></div></div>
+        <div class="sidebar">${width > 1200 ? '<div class="mobile-home-status">' : ''}<div data-local-ci-host class="local-ci-mobile" id="localCiMobileList" hidden></div>${width > 1200 ? '</div>' : ''}</div>
         </div><script>
           const nativeFetch = window.fetch.bind(window);
           window.ciReadPriorities = [];
@@ -55,7 +55,7 @@ for (const width of [1280, 390]) test('CI survives refresh before live status re
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.setViewport({width, height:600});
-    const host = width === 390 ? '#localCiMobileList' : '#localCiProgress';
+    const host = '#localCiMobileList'; // desktop shows the same one-line status
     await page.goto(`http://127.0.0.1:${server.address().port}`, {waitUntil:'domcontentloaded'});
     await page.waitForSelector(host + ' progress[value="50"]');
     const context = await page.$eval(host + ' .local-ci-context', el => el.textContent);
@@ -86,7 +86,7 @@ for (const width of [1280, 390]) test('CI survives refresh before live status re
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await page.waitForFunction(selector => document.querySelector(selector).textContent.includes('Passed'), {}, host);
     assert.doesNotMatch(await page.$eval(host, el => el.textContent), /Saved/);
-    if (width <= 1200) await page.click(host + ' .local-ci-mobile-toggle');
+    await page.click(host + ' .local-ci-mobile-toggle');
     await page.click(host + ' .local-ci-group > .local-ci-dismiss');
     await page.waitForFunction(selector => document.querySelector(selector).hidden, {}, host);
     hold = true;
