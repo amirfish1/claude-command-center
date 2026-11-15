@@ -35500,3 +35500,9 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 @media (pointer: coarse) {
   #convList.workers-view .workers-block-choice { min-height: 28px; }
 }
+
+.local-ci-runner { white-space: nowrap; }
+.local-ci-inline-icons { display: inline-flex; gap: 3px; margin-inline-end: 4px; vertical-align: middle; }
+.local-ci-inline-icons svg { width: 13px; height: 13px; }
+
+.local-ci-job-provider + .local-ci-name { flex: 1; min-width: 0; }

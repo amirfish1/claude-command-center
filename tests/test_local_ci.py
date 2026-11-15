@@ -281,6 +281,36 @@ def test_execution_requires_runner_evidence_not_discovery_source():
     assert local_ci._execution({'runner_name':'unrecognized'}) == 'unknown'
 
 
+def test_cloud_compute_requires_delegation_step_not_job_title():
+    assert local_ci._cloud_step({'name': 'Claude Cloud', 'steps': [{'name': 'npm test'}]}) is None
+    cloud = {'steps': [{'name': 'Run checks in Claude Cloud', 'status': 'in_progress'}]}
+    assert local_ci._compute_provider([cloud, {'conclusion': 'skipped'}]) == 'claude_cloud'
+    assert local_ci._compute_provider([cloud, {'steps': [{'name': 'npm test'}]}]) is None
+    assert local_ci._workflow_percent({'jobs': [cloud] + [{'status': 'completed', 'conclusion': 'skipped'}] * 9}) is None
+
+
+def test_cloud_receiver_keeps_host_evidence_without_inventing_test_progress(monkeypatch):
+    identity = {'repo': 'example/project', 'runner': 'local', 'run_id': '123', 'attempt': 1}
+    monkeypatch.setattr(local_ci, '_worker_roots', lambda: [Path('/unused')])
+    monkeypatch.setattr(local_ci, '_identity', lambda root: identity)
+    cloud = {'runner_name': 'local', 'labels': ['self-hosted'], 'status': 'in_progress',
+             'name': 'Cloud regression', 'steps': [
+                 {'name': 'Checkout', 'status': 'completed'},
+                 {'name': 'Run checks in Claude Cloud', 'status': 'in_progress'}]}
+    monkeypatch.setattr(local_ci, '_api', lambda route: {'jobs': [cloud, {'status': 'completed', 'conclusion': 'skipped'}]} if '/jobs?' in route else {'status': 'in_progress'})
+    row = local_ci._collect()['jobs'][0]
+    assert row['compute_provider'] == 'claude_cloud'
+    assert row['execution'] == 'self_hosted'
+    assert row['percent'] is None and row['workflow_percent'] is None
+    monkeypatch.setattr(local_ci, '_api', lambda route: {
+        'status': 'completed', 'name': 'Cloud regression', 'conclusion': 'failure',
+        'updated_at': '2026-01-01T12:00:00Z'})
+    row = local_ci._collect()['completed'][0]
+    assert row['compute_provider'] == 'claude_cloud'
+    assert row['conclusion'] == 'failure'
+    assert row['execution'] == 'self_hosted'
+
+
 def test_workflow_progress_includes_completed_parallel_and_queued_jobs():
     payload = {'total_count':3, 'jobs':[
         {'status':'completed'},
