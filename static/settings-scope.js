@@ -122,7 +122,11 @@
     }
     return state;
   }
-  function schedule(){if(!scheduled){scheduled=true;queueMicrotask(mount);}}
+  // An open app covers the whole dashboard and shares its thread: the scan
+  // (most of a second on a full page) waits until the app closes.
+  let deferred=false;
+  const covered=()=>{if(document.body.classList.contains('ccc-mobile-app-open'))return true;const f=document.getElementById('cccMobileAppFrame');return !!(f&&f.dataset.early&&!f.hidden);};
+  function schedule(){if(covered()){deferred=true;return;}if(!scheduled){scheduled=true;queueMicrotask(mount);}}
   window.cccSettingsScope=Object.freeze({families,describe,mount,audit:()=>candidates().filter(n=>describe(n)===unknown||n.dataset.settingsScope!==describe(n).id||!(n.getAttribute('aria-describedby')||'').split(/\s+/).some(id=>id.startsWith('settings-scope-')&&document.getElementById(id))).map(n=>({tag:n.tagName,id:n.id||'',section:n.closest('.settings-section')?.dataset.sectionId||''}))});
   // Runs for every DOM change on the page, so it must stay cheap: searching the
   // subtree of each record's target made a transcript render quadratic (CCC-143:
@@ -134,6 +138,8 @@
   if(window.__CCC_APP_EMBED__)return;
   new MutationObserver(records=>{
     if(scheduled)return;
+    if(covered()){deferred=true;return;}
+    if(deferred){deferred=false;schedule();return;}
     const targets=new Set();
     const skip=node=>node.nodeType!==1||!!node.closest(transcript)||!!node.closest('[data-settings-scope-help]');
     const inRoot=node=>!skip(node)&&!!node.closest(roots);
@@ -143,5 +149,5 @@
       for(const node of record.addedNodes)if(added(node)){schedule();return;}
     }
   }).observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['class','id','data-section-id','data-context-preferences','data-role']});
-  mount();
+  if(covered())deferred=true;else mount();
 })();

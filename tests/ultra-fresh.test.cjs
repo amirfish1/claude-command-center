@@ -98,6 +98,7 @@ test('streamed attention changes reorder within Active despite a permanent hover
       const readyToCloseArchiveHtml = () => '';
       const _ttsDirectBtn = null;
       const _pausePeriodicSidebarRender = () => true;
+      const _dashboardCoveredByApp = () => false;
       let _sidebarRenderRaf = 0, _sidebarLifecycleRenderPending = false, _sidebarRenderPendingWhilePaused = false;
       window.renders = [];
       const renderSidebar = (rows, opts) => {

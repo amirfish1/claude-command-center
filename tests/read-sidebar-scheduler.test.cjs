@@ -116,12 +116,66 @@ test('poll renders wait while an app covers the dashboard, then paint when it cl
   assert.equal(h.paints.length, 1, 'the held render lands once the app closes');
 });
 
-test('a lifecycle render still runs under an open app', () => {
+test('a lifecycle render under an open app waits and lands once on close', () => {
   const h = harness();
   h.context.stopRead();
   h.context.appOpen = true;
   h.context._scheduleSidebarRender({lifecycle: true}); h.flush();
+  h.context._scheduleSidebarRender(); h.flush();
+  assert.equal(h.paints.length, 0, 'nothing under an open app is rebuilt');
+  h.context.appOpen = false;
+  h.context._flushDeferredSidebarRenderIfAny(); h.flush();
+  assert.deepEqual(h.paints.map(p => p.force), [true], 'the lifecycle render survives the wait');
+});
+
+test('an app closing mid-frame does not drop a render queued before it opened', () => {
+  const h = harness();
+  h.context.stopRead();
+  h.context._scheduleSidebarRender({lifecycle: true});
+  h.context.appOpen = true; h.flush();
+  assert.equal(h.paints.length, 0);
+  h.context.appOpen = false;
+  h.context._flushDeferredSidebarRenderIfAny(); h.flush();
   assert.deepEqual(h.paints.map(p => p.force), [true]);
+});
+
+test('first list paint, saved-conversation restore and stuck recovery wait for the app to close', () => {
+  const boot = app.slice(app.indexOf('  async function setArchiveMode('), app.indexOf('  (function wireArchiveMode('));
+  assert.ok(boot.indexOf('await _whenDashboardUncovered();') > boot.indexOf('await refreshArchiveData();'));
+  assert.ok(boot.indexOf('await _whenDashboardUncovered();') < boot.indexOf('selectConversation('),
+    'the saved transcript must not load under the app');
+  const render = fn('renderArchiveList');
+  assert.ok(render.indexOf('_dashboardCoveredByApp()') > 0
+    && render.indexOf('_dashboardCoveredByApp()') < render.indexOf('opts.force'), 'forced renders wait too');
+  assert.ok(fn('_recoverArchiveRenderIfStuck').includes('if (_dashboardCoveredByApp()) return Promise.resolve();'));
+
+  // The cover helpers themselves: the early app frame counts before the app
+  // is marked open, and waiters resolve (without a second repaint) on close.
+  let repaints = 0, frame = {dataset: {early: '1'}, hidden: false};
+  const body = {classList: {has: false, contains() { return this.has; }}};
+  const ctx = vm.createContext({
+    document: {body, getElementById: () => frame},
+    renderArchiveList: () => { repaints++; }, _archiveQuery: () => '',
+    _flushDeferredSidebarRenderIfAny() {},
+  });
+  vm.runInContext(`let _dashboardUncoverWaiters = [], _archiveRenderDeferredForApp = false;
+    ${['_dashboardCoveredByApp', '_whenDashboardUncovered', '_dashboardUncovered'].map(fn).join('\n')}
+    this.covered = _dashboardCoveredByApp; this.wait = _whenDashboardUncovered;
+    this.uncovered = _dashboardUncovered; this.defer = () => { _archiveRenderDeferredForApp = true; };`, ctx);
+  assert.equal(ctx.covered(), true, 'a page opened as an app is covered before the frame is marked open');
+  frame = null;
+  assert.equal(ctx.covered(), false, 'an app that does not exist stops holding the list');
+  frame = {dataset: {}, hidden: false};
+  assert.equal(ctx.covered(), false, 'a prewarmed frame is not an open app');
+  body.classList.has = true;
+  assert.equal(ctx.covered(), true);
+  let resolved = false;
+  ctx.wait().then(() => { resolved = true; });
+  ctx.defer(); body.classList.has = false; ctx.uncovered();
+  assert.equal(repaints, 0, 'the boot waiter paints; no duplicate repaint');
+  ctx.defer(); ctx.uncovered();
+  assert.equal(repaints, 1, 'without a boot waiter the skipped render is repainted');
+  return Promise.resolve().then(() => assert.equal(resolved, true));
 });
 
 test('the toolbar check is batched per frame and the queue digest skips a covered dashboard', () => {

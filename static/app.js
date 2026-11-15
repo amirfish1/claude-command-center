@@ -3027,20 +3027,51 @@
   // underneath it paints nothing anyone can see and freezes the app: on a
   // busy install those rebuilds were about half of the dashboard's script
   // time while an app was open. Poll-driven list renders wait until the app
-  // closes; user-forced and lifecycle renders still run.
+  // closes. So do the first list paint and the last-conversation restore:
+  // most recorded app freezes fell in the seconds after the app opened, when
+  // the hidden dashboard was still booting underneath it.
+  //
+  // A page loaded as /?ccc_app=<id> is covered from its first script: index.html
+  // puts the app frame up early, before the app list has loaded and the frame
+  // is marked open. That frame is removed if the app turns out not to exist.
   function _dashboardCoveredByApp() {
     const body = document.body;
-    return !!(body && body.classList.contains('ccc-mobile-app-open'));
+    if (!body) return false;
+    if (body.classList.contains('ccc-mobile-app-open')) return true;
+    const early = document.getElementById('cccMobileAppFrame');
+    return !!(early && early.dataset && early.dataset.early && !early.hidden);
+  }
+  let _dashboardUncoverWaiters = [];
+  let _archiveRenderDeferredForApp = false;
+  // Resolves once no app covers the dashboard (at once when none does).
+  function _whenDashboardUncovered() {
+    if (!_dashboardCoveredByApp()) return Promise.resolve();
+    return new Promise(resolve => { _dashboardUncoverWaiters.push(resolve); });
+  }
+  function _dashboardUncovered() {
+    const waiters = _dashboardUncoverWaiters;
+    _dashboardUncoverWaiters = [];
+    // Boot waiters paint the list themselves; without one, repaint what was
+    // skipped while the app was open.
+    waiters.forEach(resolve => { try { resolve(); } catch (_) {} });
+    const repaint = !waiters.length && _archiveRenderDeferredForApp;
+    _archiveRenderDeferredForApp = false;
+    if (repaint) {
+      try { renderArchiveList(_archiveQuery(), { force: true }); } catch (_) {}
+    }
+    try { _flushDeferredSidebarRenderIfAny(); } catch (_) {}
   }
   (function flushSidebarWhenAppCloses() {
     if (!window.MutationObserver || !document.body) return;
     let covered = _dashboardCoveredByApp();
-    new MutationObserver(() => {
+    const check = () => {
       const now = _dashboardCoveredByApp();
       if (now === covered) return;
       covered = now;
-      if (!now) { try { _flushDeferredSidebarRenderIfAny(); } catch (_) {} }
-    }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      if (!now) _dashboardUncovered();
+    };
+    // childList: an early frame for an app that no longer exists is removed.
+    new MutationObserver(check).observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
   })();
   // Sidebar list renders must still run while #convSearch is focused —
   // otherwise the debounced filter never paints until blur/Enter (the
@@ -34481,12 +34512,19 @@
   }
   function _flushDeferredSidebarRenderIfAny() {
     if (!_sidebarRenderPendingWhilePaused) return;
-    if (_pausePeriodicSidebarRender()) return;
+    if (_dashboardCoveredByApp()) return;
+    if (!_sidebarLifecycleRenderPending && _pausePeriodicSidebarRender()) return;
     _sidebarRenderPendingWhilePaused = false;
     _scheduleSidebarRender();
   }
   function _scheduleSidebarRender(opts = {}) {
     if (opts.lifecycle) _sidebarLifecycleRenderPending = true;
+    // Under an open app even a lifecycle render paints nothing visible; it
+    // stays pending and runs when the app closes.
+    if (_dashboardCoveredByApp()) {
+      _sidebarRenderPendingWhilePaused = true;
+      return;
+    }
     if (!_sidebarLifecycleRenderPending && _pausePeriodicSidebarRender()) {
       _sidebarRenderPendingWhilePaused = true;
       return;
@@ -34494,6 +34532,10 @@
     if (_sidebarRenderRaf) return;
     _sidebarRenderRaf = requestAnimationFrame(() => {
       _sidebarRenderRaf = 0;
+      if (_dashboardCoveredByApp()) {
+        _sidebarRenderPendingWhilePaused = true;
+        return;
+      }
       const lifecycle = _sidebarLifecycleRenderPending;
       _sidebarLifecycleRenderPending = false;
       if (!lifecycle && _pausePeriodicSidebarRender()) {
@@ -82873,6 +82915,8 @@
     return null;
   }
   function _recoverArchiveRenderIfStuck() {
+    // The loader is expected under an open app; closing the app paints it.
+    if (_dashboardCoveredByApp()) return Promise.resolve();
     if (!_archiveListStillShowsLoader()) {
       _archiveStuckRetryCount = 0;
       return Promise.resolve();
@@ -83195,6 +83239,9 @@
     const $list = document.getElementById('convList');
     if (!$list) return;
     if (_renameInProgress) return;
+    // Forced renders wait too: nothing under an open app is visible, and
+    // shaping every row there froze the app. Repainted when the app closes.
+    if (_dashboardCoveredByApp()) { _archiveRenderDeferredForApp = true; return; }
     if (deferSidebarRenderIfDragging()) return;
     if (!(opts && opts.force) && !pendingSpawns.size && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }
     const q = (filter || '').trim().toLowerCase();
@@ -83791,6 +83838,9 @@
     _renderQueuePanel();
     _paintArchiveSidebarCache();
     await refreshArchiveData();
+    // Opened straight into an app: the list paint and the saved conversation's
+    // transcript below would run under it, unseen, on the app's own thread.
+    await _whenDashboardUncovered();
     // Shape only the saved active row first. This uses the normal archive
     // pipeline to initialize session metadata/capabilities, but avoids making
     // transcript restoration wait behind shaping and mounting every row.
