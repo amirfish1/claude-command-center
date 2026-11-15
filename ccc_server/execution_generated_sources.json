@@ -18,6 +18,16 @@
     },
     {
       "filename": "<string>",
+      "sha256": "3d8b4f6bb50ee6be746f7b93c179a1acd96698aa35d9b803db305205f993017e",
+      "source": "def __create_fn__():\n def __eq__(self,other):\n  if other.__class__ is self.__class__:\n   return (self.home,self.state_dir,self.ccc_root,self.hook_scripts_dir,self.codex_present,self.claude_present,self.wt_bin,self.hook_command,)==(other.home,other.state_dir,other.ccc_root,other.hook_scripts_dir,other.codex_present,other.claude_present,other.wt_bin,other.hook_command,)\n  return NotImplemented\n return __eq__"
+    },
+    {
+      "filename": "<string>",
+      "sha256": "2ba92b322ba8b95f41420b46d0efb4210377a26e7699cd787b0f3af826636346",
+      "source": "def __create_fn__():\n def __eq__(self,other):\n  if other.__class__ is self.__class__:\n   return (self.installed,self.up_to_date,self.files,self.remove_files,self.error,)==(other.installed,other.up_to_date,other.files,other.remove_files,other.error,)\n  return NotImplemented\n return __eq__"
+    },
+    {
+      "filename": "<string>",
       "sha256": "0a51b7da42800fde741b1eb601de1dcfdc5c25c151c1ad5373ed62d990923475",
       "source": "def __create_fn__():\n def __hash__(self):\n  return hash((self.events,self.resync_required,self.boot_id,self.latest_seq,))\n return __hash__"
     },
@@ -28,8 +38,28 @@
     },
     {
       "filename": "<string>",
+      "sha256": "b373c6707eb5f945d39cfd3cfdd77a078610157d52c7fc7774499bca16e7565c",
+      "source": "def __create_fn__():\n def __repr__(self):\n  return self.__class__.__qualname__ + f\"(home={self.home!r}, state_dir={self.state_dir!r}, ccc_root={self.ccc_root!r}, hook_scripts_dir={self.hook_scripts_dir!r}, codex_present={self.codex_present!r}, claude_present={self.claude_present!r}, wt_bin={self.wt_bin!r}, hook_command={self.hook_command!r})\"\n return __repr__"
+    },
+    {
+      "filename": "<string>",
+      "sha256": "fbdecfb5199e1bbaae195b410215021afce70e74241fa01c84143dc3b669aebf",
+      "source": "def __create_fn__():\n def __repr__(self):\n  return self.__class__.__qualname__ + f\"(installed={self.installed!r}, up_to_date={self.up_to_date!r}, files={self.files!r}, remove_files={self.remove_files!r}, error={self.error!r})\"\n return __repr__"
+    },
+    {
+      "filename": "<string>",
       "sha256": "9214bfef4fe417d83e55f1e07895f73a0ab0b14bee9d5222f1697e3b5ee24dfa",
       "source": "def __create_fn__(__dataclass_type_events__, __dataclass_type_resync_required__, __dataclass_type_boot_id__, __dataclass_type_latest_seq__, __dataclass_HAS_DEFAULT_FACTORY__, __dataclass_builtins_object__, __dataclass_return_type__):\n def __init__(self,events:__dataclass_type_events__,resync_required:__dataclass_type_resync_required__,boot_id:__dataclass_type_boot_id__,latest_seq:__dataclass_type_latest_seq__)->__dataclass_return_type__:\n  __dataclass_builtins_object__.__setattr__(self,'events',events)\n  __dataclass_builtins_object__.__setattr__(self,'resync_required',resync_required)\n  __dataclass_builtins_object__.__setattr__(self,'boot_id',boot_id)\n  __dataclass_builtins_object__.__setattr__(self,'latest_seq',latest_seq)\n return __init__"
+    },
+    {
+      "filename": "<string>",
+      "sha256": "6897dae9747a0fd9cda77dbf6188c2926cf0c66b6539aa0cd212d150f361e1cc",
+      "source": "def __create_fn__(__dataclass_type_home__, __dataclass_type_state_dir__, __dataclass_type_ccc_root__, __dataclass_type_hook_scripts_dir__, __dataclass_type_codex_present__, __dataclass_type_claude_present__, __dataclass_type_wt_bin__, __dataclass_type_hook_command__, __dataclass_HAS_DEFAULT_FACTORY__, __dataclass_builtins_object__, __dataclass_dflt_codex_present__, __dataclass_dflt_claude_present__, __dataclass_dflt_wt_bin__, __dataclass_dflt_hook_command__, __dataclass_return_type__):\n def __init__(self,home:__dataclass_type_home__,state_dir:__dataclass_type_state_dir__,ccc_root:__dataclass_type_ccc_root__,hook_scripts_dir:__dataclass_type_hook_scripts_dir__,codex_present:__dataclass_type_codex_present__=__dataclass_dflt_codex_present__,claude_present:__dataclass_type_claude_present__=__dataclass_dflt_claude_present__,wt_bin:__dataclass_type_wt_bin__=__dataclass_dflt_wt_bin__,hook_command:__dataclass_type_hook_command__=__dataclass_dflt_hook_command__)->__dataclass_return_type__:\n  self.home=home\n  self.state_dir=state_dir\n  self.ccc_root=ccc_root\n  self.hook_scripts_dir=hook_scripts_dir\n  self.codex_present=codex_present\n  self.claude_present=claude_present\n  self.wt_bin=wt_bin\n  self.hook_command=hook_command\n return __init__"
+    },
+    {
+      "filename": "<string>",
+      "sha256": "2e9aafbfd8cbc2266d38d69c0d361acd8048f6097759334145b7e6d6638c6a45",
+      "source": "def __create_fn__(__dataclass_type_installed__, __dataclass_type_up_to_date__, __dataclass_type_files__, __dataclass_type_remove_files__, __dataclass_type_error__, __dataclass_HAS_DEFAULT_FACTORY__, __dataclass_builtins_object__, __dataclass_dflt_installed__, __dataclass_dflt_up_to_date__, __dataclass_dflt_files__, __dataclass_dflt_remove_files__, __dataclass_dflt_error__, __dataclass_return_type__):\n def __init__(self,installed:__dataclass_type_installed__=__dataclass_dflt_installed__,up_to_date:__dataclass_type_up_to_date__=__dataclass_dflt_up_to_date__,files:__dataclass_type_files__=__dataclass_HAS_DEFAULT_FACTORY__,remove_files:__dataclass_type_remove_files__=__dataclass_HAS_DEFAULT_FACTORY__,error:__dataclass_type_error__=__dataclass_dflt_error__)->__dataclass_return_type__:\n  self.installed=installed\n  self.up_to_date=up_to_date\n  self.files=__dataclass_dflt_files__() if files is __dataclass_HAS_DEFAULT_FACTORY__ else files\n  self.remove_files=__dataclass_dflt_remove_files__() if remove_files is __dataclass_HAS_DEFAULT_FACTORY__ else remove_files\n  self.error=error\n return __init__"
     },
     {
       "filename": "<string>",
@@ -40,6 +70,11 @@
       "filename": "<string>",
       "sha256": "50b6f869df5e0a21101ea68a9e4b4e6b746e70e5cd5aad4db55ee90317fe0062",
       "source": "def __create_fn__(cls, FrozenInstanceError):\n def __setattr__(self,name,value):\n  if type(self) is cls or name in {'events', 'resync_required', 'boot_id', 'latest_seq'}:\n   raise FrozenInstanceError(f\"cannot assign to field {name!r}\")\n  super(cls, self).__setattr__(name, value)\n return __setattr__"
+    },
+    {
+      "filename": "<string>",
+      "sha256": "f8fd6fbe8bb95f45d13b974a85289ec1fe23451a505fa5612fc14c334956fe83",
+      "source": "lambda _cls, a, b, size: _tuple_new(_cls, (a, b, size))"
     },
     {
       "filename": "<string>",

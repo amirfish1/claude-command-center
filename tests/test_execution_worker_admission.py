@@ -154,3 +154,20 @@ def test_optional_display_revision_probe_tolerates_execution_refusal(monkeypatch
     scope = {'subprocess': subprocess, '_install_dir': lambda: ROOT}
     exec(compile(ast.Module(body=[function], type_ignores=[]), '<test-display-probe>', 'exec'), scope)
     assert scope['_compute_server_code_rev']() == ''
+
+
+def test_shared_paths_use_the_explicit_ledger_state_root(tmp_path):
+    import os
+    program = f'''
+import sys
+sys.path.insert(0,{str(ROOT)!r})
+from ccc_server.paths import COMMAND_CENTER_STATE_DIR, CODEX_APP_SERVER_STATE_FILE
+from control_plane import state_dir
+assert COMMAND_CENTER_STATE_DIR == state_dir()
+assert CODEX_APP_SERVER_STATE_FILE.parent == state_dir()
+'''
+    environment = dict(os.environ, CCC_STATE_DIR=str(tmp_path / 'state'))
+    environment.pop('CCC_CODEX_RUNTIME_DIR', None)
+    result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', program],
+                            env=environment, capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr

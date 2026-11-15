@@ -12,7 +12,10 @@ from pathlib import Path
 import shutil
 
 # Core state directory and derived paths
-COMMAND_CENTER_STATE_DIR = Path.home() / ".claude" / "command-center"
+_STATE_DIR_OVERRIDE = os.environ.get("CCC_STATE_DIR", "").strip()
+COMMAND_CENTER_STATE_DIR = (Path(os.path.expanduser(_STATE_DIR_OVERRIDE))
+                            if _STATE_DIR_OVERRIDE
+                            else Path.home() / ".claude" / "command-center")
 COMMAND_CENTER_PASTED_IMAGES_DIR = COMMAND_CENTER_STATE_DIR / "pasted-images"
 COMMAND_CENTER_ATTACHMENTS_DIR = COMMAND_CENTER_STATE_DIR / "attachments"
 PYTHON_STACK_DUMP_LOG = COMMAND_CENTER_STATE_DIR / "logs" / "python-stacks.log"

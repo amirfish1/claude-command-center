@@ -46,7 +46,7 @@ def _resolve(root, dotted):
 def _imports(path):
     """Yield dotted module names referenced by `path` (any depth)."""
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (OSError, SyntaxError, ValueError):
         return
     for node in ast.walk(tree):
