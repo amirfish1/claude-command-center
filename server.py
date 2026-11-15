@@ -37197,7 +37197,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "reconciled": reconciled,
                 "drain_replayed": drain_replayed,
                 "note": (
-                    "Worker restart failed; dispatch resumed on the healthy worker."
+                    "Worker restart failed; the existing worker is still healthy."
                     if healthy and not outcome.get("restarted") else
                     ("Worker restarted and reconciled ("
                         + str(reconciled) + " item(s) reclaimed).") if healthy

@@ -61,7 +61,10 @@ def test_restart_completion_recovers_only_its_own_pause(restart, monkeypatch, en
     if entry == 'automatic':
         server._worker_compat_self_heal_restart()
     else:
-        worker_endpoint()(SimpleNamespace(send_json=Mock()))
+        reply = Mock()
+        worker_endpoint()(SimpleNamespace(send_json=reply))
+        if healthy and not restarted:
+            assert reply.call_args.args[0]['note'] == 'Worker restart failed; the existing worker is still healthy.'
     current = runtime.ledger.drain_state()
     if new_pause:
         assert current == replacement
