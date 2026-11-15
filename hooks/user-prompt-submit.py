@@ -33,6 +33,12 @@ NEXT_STEP_USER must describe the actual pending question. Use NEXT_ACTION: null
 when no reply choice or approval is needed. Do not invent choices, ask again
 for authorized work, or create buttons claiming offline tasks were completed.
 Keep your existing completion-assessment and footer requirements.
+
+If a tool is denied or cancelled, promptly report the tool, the rejection
+and the blocked next step to the user instead of silently pausing. State
+whether the source is known; runtime cancellation text alone does not prove
+who requested it. Do not infer permission to retry, bypass a denial or lift
+a hold. Honour explicit user stops and existing permission boundaries.
 """
 
 

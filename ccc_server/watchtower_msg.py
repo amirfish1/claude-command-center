@@ -802,10 +802,14 @@ def _try_uds_peer_delivery(session_id, text, *, source, mode="send", peer_sender
         ask_text = attribution.carry(ask_text, attr, app="ccc")
     content = ccc_peer_uds.wrap(ask_text, from_addr=from_addr, from_name=from_name, from_mode=from_mode)
     token = ccc_peer_uds.load_peer_token(_core.SESSIONS_REGISTRY, target["pid"], target["socket_path"])
-    priority = "now" if str(mode or "") == "steer" else "next"
+    # Native priority=now aborts an in-flight PreToolUse hook and labels its
+    # cancelled tool as a USER refusal, even for a harmless peer update.
+    # next reaches the next tool boundary within the active turn, preserving
+    # teammate steering without manufacturing a user stop. Human composer
+    # input and explicit Stop use separate transports and never reach here.
     try:
         lines = ccc_peer_uds.build_frame_lines(
-            content, token=token, from_addr=from_addr, msg_id=msg_id, priority=priority,
+            content, token=token, from_addr=from_addr, msg_id=msg_id, priority="next",
         )
     except ValueError:
         return None

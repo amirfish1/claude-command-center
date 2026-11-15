@@ -184,13 +184,15 @@ def test_try_uds_delivers_and_returns_receipt(monkeypatch, tmp_path):
     assert "please review" in user["message"]["content"]
 
 
-def test_try_uds_steer_uses_priority_now(monkeypatch, tmp_path):
+def test_try_uds_steer_delivers_at_tool_boundary_without_aborting(monkeypatch, tmp_path):
     sent = []
     _enable_uds(monkeypatch, tmp_path, _dialable_row(tmp_path), sent)
     monkeypatch.setattr(server, "_transcript_peer_receipt", lambda *a, **k: "delivered")
     monkeypatch.setattr(server, "_find_live_spawn_entry_for_session", lambda sid: None)
-    server._try_uds_peer_delivery("target-sid", "stop", source="ask", mode="steer")
-    assert sent[0][1][-1]["priority"] == "now"
+    result = server._try_uds_peer_delivery("target-sid", "status update", source="ask", mode="steer")
+    assert result["ok"] and result["receipt"] == "delivered"
+    assert sent[0][1][-1]["priority"] == "next"
+    assert not result.get("interrupted")
 
 
 def test_try_uds_attests_bypass_only_for_ccc_spawned_sender(monkeypatch, tmp_path):
