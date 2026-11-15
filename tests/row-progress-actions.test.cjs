@@ -174,7 +174,7 @@ test('pending-work chips send the concrete task once and reject a resumed transc
         <div class="conv-outcome is-plan"></div><div class="wa-line2"></div></div></div>`);
       const helpers = app.slice(app.indexOf('  // Row actions are model-authored replies'),app.indexOf('  // CCC-1218:'));
       await page.addScriptTag({content:`
-        window.row=${JSON.stringify(current)}; window.sent=[]; window.toasts=[]; window.running=false;
+        window.row=${JSON.stringify(current)}; window.sent=[]; window.toasts=[]; window.running=false; window.checkOptions=[];
         const _ultraFreshRow=()=>row, _ultraFreshCurrent=c=>c, _applyLiveOverlayToRow=c=>c;
         const sessionIsOptimisticallySending=()=>false, preSendPreviewFor=()=>null;
         const rowHandoff=()=>null, sessionAttentionStep=()=>null;
@@ -183,14 +183,16 @@ test('pending-work chips send the concrete task once and reject a resumed transc
         const refreshConversationList=()=>{},showOpToast=(...args)=>toasts.push(args);
         ${['_ultraFreshTime','sidebarSessionWorking','sessionReadyToClose','rowOutcomeView',
           'sessionCompletionDetails','_ultraFreshParseState'].map(source).join('\n')}
-        window.fetch=async()=>({ok:true,json:async()=>({events:running
+        window.fetch=async(url,options)=>{checkOptions.push(options);return {ok:true,json:async()=>({events:running
           ? [{type:'user_text',text:'Already resumed'}]
           : [{type:'assistant',blocks:[{kind:'text',text:'<session-state>\\nDID: '+row.session_state.did
-            +'\\nNEXT_STEP_USER: None.\\nCOMPLETION: '+JSON.stringify(row.session_state.completion)+'\\n</session-state>'}]}]})});
+            +'\\nNEXT_STEP_USER: None.\\nCOMPLETION: '+JSON.stringify(row.session_state.completion)+'\\n</session-state>'}]}]})}};
         ${helpers}
         window.syncActions=syncRowQuickActions;syncActions();
       `});
       await page.waitForSelector('.conv-quick-action');
+      assert.equal(await page.evaluate(()=>checkOptions[0].cccPriority),'user','visible controls cannot queue behind background polls');
+      assert.equal(await page.evaluate(()=>checkOptions[0].cache),'no-store');
       await page.evaluate(()=>{running=true;document.querySelector('.conv-quick-action').click();});
       await page.waitForFunction(()=>toasts.some(t=>/transcript changed/.test(t[0])));
       assert.equal(await page.evaluate(()=>sent.length),0);

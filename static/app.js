@@ -19769,7 +19769,9 @@
     check.pending = (async () => {
       try {
         const res = await fetch('/api/conversations/' + encodeURIComponent(source.sid) + '?tail=20',
-          { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+          // This bounded read decides which controls the visible row offers.
+          // Background polls can otherwise exhaust its timeout before send.
+          { cache: 'no-store', cccPriority: 'user', signal: AbortSignal.timeout(5000) });
         check.idle = res.ok && rowInvestigationTranscriptIdle(source, (await res.json()).events);
       } catch (_) { check.idle = false; /* Failed confirmation removes the chip. */ }
       finally {
