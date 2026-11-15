@@ -1,0 +1,1 @@
+Opening an app (for example Ski) no longer freezes while the dashboard behind it keeps working: the session list hidden under an open app is not rebuilt by background refreshes until you leave the app, its queue digest is skipped there, and a toolbar layout check that ran on every change now runs once per frame.

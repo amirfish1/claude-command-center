@@ -16,6 +16,7 @@ function harness() {
     Date: {now: () => now},
     document: {getElementById: () => ({value: ''}), querySelector: () => null},
     shouldPausePeriodicUiWork: () => false,
+    appOpen: false, _dashboardCoveredByApp: () => context.appOpen,
     isConversationListScrollActive: () => false,
     requestAnimationFrame: callback => {frames.push(callback); return frames.length;},
     filterConversations: () => context.archiveData,
@@ -99,3 +100,35 @@ test('authoritative session state and conversation edits bypass passive read pau
   assert.equal(h.paints.length, 3);
   assert.equal(h.paints.at(-1).rows[0].display_name, 'Renamed');
 });
+
+test('poll renders wait while an app covers the dashboard, then paint when it closes', () => {
+  const h = harness();
+  h.context.stopRead();
+  h.context.appOpen = true;
+  for (let elapsed = 0; elapsed <= 60000; elapsed += 5000) {
+    h.time(60000 + elapsed);
+    h.context._scheduleSidebarRender();
+    h.flush();
+  }
+  assert.equal(h.paints.length, 0, 'the list under an open app is never rebuilt by a poll');
+  h.context.appOpen = false;
+  h.context._flushDeferredSidebarRenderIfAny(); h.flush();
+  assert.equal(h.paints.length, 1, 'the held render lands once the app closes');
+});
+
+test('a lifecycle render still runs under an open app', () => {
+  const h = harness();
+  h.context.stopRead();
+  h.context.appOpen = true;
+  h.context._scheduleSidebarRender({lifecycle: true}); h.flush();
+  assert.deepEqual(h.paints.map(p => p.force), [true]);
+});
+
+test('the toolbar check is batched per frame and the queue digest skips a covered dashboard', () => {
+  assert.ok(!app.includes('new MutationObserver(_refreshToolbarEmptiness)'),
+    'a layout read per mutation forces a synchronous layout each time');
+  assert.ok(/if \(!opts\.force && _dashboardCoveredByApp\(\)\) return uxFixesQueueMeta;/.test(
+    app.slice(app.indexOf('  async function refreshUxFixesQueueMeta('), app.indexOf('_queueListFetch()', app.indexOf('  async function refreshUxFixesQueueMeta(')))));
+  assert.ok(fn('shouldPauseSidebarRender').includes('if (_dashboardCoveredByApp()) return true;'));
+});
+

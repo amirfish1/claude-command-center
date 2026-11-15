@@ -317,6 +317,9 @@ class _Child:
                     "detail": live["detail"], "data": live["data"],
                     "pid": os.getpid()}
 
+    def system_health(self, req):
+        return {"ok": True, "data": self.server._build_system_health_uncached()}
+
     # ship-graph-warm -----------------------------------------------------
     def ship_sync(self, req):
         from ccc_server import ship_graph
@@ -337,6 +340,7 @@ class _Child:
             fn = {"gh_tick": self.gh_tick, "ux_health": self.ux_health,
                   "ship_sync": self.ship_sync, "fts_sync": self.fts_sync,
                   "live_activity": self.live_activity,
+                  "system_health": self.system_health,
                   "ping": lambda r: {"ok": True}}.get(op)
             try:
                 reply = fn(req) if fn else {"ok": False, "error": "unknown op"}

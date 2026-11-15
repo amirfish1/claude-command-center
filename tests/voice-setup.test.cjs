@@ -23,6 +23,15 @@ const simple=document.createElement('div');simple.id='simpleHolder';simple.appen
 const $settingsPane=document.getElementById('settingsPane'),$settingsRail=document.getElementById('settingsRail');
 let _settingsSearchIndex=null;function refreshSettingsQueues(){}function startEnginesHub(){}function closeSettingsModal(){window.__closed=true;window.cccVoiceSetup?.leave();}
 window.__toasts=[];function showOpToast(...v){window.__toasts.push(v);}let currentConversation=null;function _normalizeModelId(v){return v;}function paneConversationId(){return null;}
+// Hold background voice reads indefinitely to exercise opening Settings during startup.
+const nativeFetch=window.fetch.bind(window);window.__priorityVoiceReads=[];window.__parkedVoiceReads=[];
+window.fetch=(url,init)=>{
+ if(['/api/free-runtime/tts-voices','/api/voice/config','/api/voice/voices'].includes(url)&&(!init?.method||init.method==='GET')){
+  if(init?.cccPriority!=='user'){window.__parkedVoiceReads.push(url);return new Promise(()=>{});}
+  window.__priorityVoiceReads.push(url);
+ }
+ return nativeFetch(url,init);
+};
 window.__forbidden=[];Object.defineProperty(navigator,'mediaDevices',{value:{getUserMedia(){window.__forbidden.push('microphone');throw new Error('Microphone forbidden');}},configurable:true});
 window.SpeechRecognition=class{constructor(){window.__forbidden.push('recognition');throw new Error('Recognition forbidden');}};
 if(window.speechSynthesis)window.speechSynthesis.speak=()=>window.__forbidden.push('playback');
@@ -38,7 +47,7 @@ ${car}
 ${tts}
 ${wiring}
 window.__open=part=>window.cccVoiceSetup.open(part);
-window.cccVoiceSetup.mount({navigate:()=>{window.__closed=false;const disclosure=document.querySelector('#settingsSection-voice>details');if(disclosure)disclosure.open=true;},load:loadVoiceConfig,loadOperator:fetchCarModeStatus,refreshVoices:refreshTtsVoiceOptions});
+window.cccVoiceSetup.mount({navigate:()=>{window.__closed=false;const disclosure=document.querySelector('#settingsSection-voice>details');if(disclosure)disclosure.open=true;},load:loadVoiceConfig,loadOperator:fetchCarModeStatus,refreshVoices:()=>refreshTtsVoiceOptions({userInitiated:true})});
 window.__refreshTts=refreshTtsVoiceOptions;
 </script><script src="/static/local-speech.js"></script></body></html>`;
 let child,browser,url,original;const file=path.join(scratch,'voice','voice.json');
@@ -53,6 +62,9 @@ async function open(t,width=1440,fragment='',part='conversation'){
 const read=()=>JSON.parse(fs.readFileSync(file,'utf8'));
 for(const width of [1440,390])test('one native workflow with truthful input/output scopes and no writes at '+width,async t=>{
  const{page,posts}=await open(t,width,'',null);assert.equal(fs.readFileSync(file,'utf8'),original);assert.deepEqual(posts,[]);
+ assert.deepEqual(await page.evaluate(()=>window.__parkedVoiceReads),['/api/free-runtime/tts-voices']);
+ assert.deepEqual((await page.evaluate(()=>window.__priorityVoiceReads)).sort(),['/api/free-runtime/tts-voices','/api/voice/config','/api/voice/voices']);
+ assert(await page.$eval('#settingsTtsVoiceDefault',n=>n.options.length>0));
  for(const id of ['voiceSelect','settingsTtsVoiceDefault','settingsVoiceCallBtnToggle','localSpeechInstall','carModeAnthropicKey'])assert.equal(await page.$$eval('#'+id,n=>n.length),1);
  assert.equal(await page.$eval('#voiceModal',n=>n.hidden),true);assert.equal(await page.$eval('#carModeModal',n=>n.hidden),true);assert.equal(await page.$eval('#settingsSoundsToggle',n=>n.closest('.settings-section').id),'settingsSection-notifications');assert.equal(await page.$eval('#voiceSetupLegacy #settingsVoiceMobileToggle',n=>!!n),true);
  assert.match(await page.$eval('#voiceSetupListeningStatus',n=>n.textContent),/permission.*not been checked/);assert.match(await page.$eval('#voiceSetup-reading',n=>n.textContent),/speaker button/);assert.match(await page.$eval('#voiceSetup-offline',n=>n.textContent),/Does not enable offline dictation/);

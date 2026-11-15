@@ -158,6 +158,7 @@ class _PriorityLock:
             self._cond.notify_all()
 
 
+_START_MONO = time.monotonic()
 _SYNTH_LOCK = _PriorityLock()
 _SYNTH_CACHE = {}  # (text, voice) -> (samples, rate, nbytes), LRU order
 _SYNTH_CACHE_LOCK = threading.Lock()
@@ -264,6 +265,8 @@ class Handler(BaseHTTPRequestHandler):
                              "busy": _SYNTH_LOCK._busy,
                              "fg_waiting": _SYNTH_LOCK._fg_waiting,
                              "bg_waiting": _SYNTH_LOCK._bg_waiting,
+                             "cpu_time_s": round(time.process_time(), 4),
+                             "uptime_s": round(max(0.0, time.monotonic() - _START_MONO), 2),
                              "background_cpu_budget": _SYNTH_LOCK._background_budget(),
                              "background_wait_s": round(max(0.0, _SYNTH_LOCK._bg_ready_at - time.monotonic()), 2)})
         else:

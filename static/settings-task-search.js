@@ -21,7 +21,7 @@
     ['history','Review or undo configuration changes','preferences','settingsConfigurationHistory','undo history revert changes restore','editor'],
     ['transfer','Export or import preferences','preferences','settingsHostProfiles','export import transfer portable preferences profile','editor'],
     ['reset','Preview a browser preference reset','preferences','settingsSection-preferences','reset defaults browser clear preferences','editor'],
-    ['health','Find configuration problems','health','settingsHealth','health broken failure invalid diagnose repair','editor'],
+    ['health','Find configuration problems','maintenance','settingsHealth','health broken failure invalid diagnose repair','editor'],
     ['capabilities','Review optional capabilities','capabilities','settingsCapabilities','optional capability capabilities enable remote offline free','editor'],
   ].map(([id,title,section,target,words,scope])=>Object.freeze({id,title,section,target,words:words.split(' '),scope}));
   const ignored=new Set('a an the to for of my this that please how do i can want use set change turn on off stop make in with and'.split(' '));

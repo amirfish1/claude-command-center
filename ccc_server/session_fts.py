@@ -1894,6 +1894,33 @@ def _literal_phrase_query(q: str) -> str:
 _HISTORY_LITERAL_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
+def _rank_topic_parents(conn: sqlite3.Connection, sids: list[str]) -> list[str]:
+    """Add bounded, query-specific evidence from distinct matching children.
+
+    Only the original retrieval candidates vote; added parents cannot vote
+    again for grandparents. Missing parents and unrelated children add no
+    evidence. Reciprocal ranks keep this independent of BM25 score scales.
+    """
+    sids = list(dict.fromkeys(sids))
+    if not sids:
+        return []
+    parent_of, _ = _lineage._load_spawn_edges()
+    evidence: dict[str, float] = {}
+    for rank, sid in enumerate(sids, 1):
+        parent = parent_of.get(sid)
+        if parent and parent != sid:
+            evidence[parent] = evidence.get(parent, 0.0) + 0.6 / (60 + rank)
+    if not evidence:
+        return sids
+    # A graph can outlive a deleted transcript. Do not return phantom hits.
+    available = _meta_for_sids(conn, list(evidence))
+    ranks = {sid: 1.0 / (60 + rank) for rank, sid in enumerate(sids, 1)}
+    for parent, bonus in evidence.items():
+        if parent in ranks or parent in available:
+            ranks[parent] = ranks.get(parent, 0.0) + min(bonus, 2.0 / 61)
+    return sorted(ranks, key=lambda sid: -ranks[sid])
+
+
 def search_sessions(query: str, limit: int = 20, force_refresh: bool = False) -> list[dict]:
     """Search indexed sessions with BM25.
 
@@ -1984,6 +2011,7 @@ def search_sessions(query: str, limit: int = 20, force_refresh: bool = False) ->
             channels.append(lst)
             weights.append(w)
     final_sids = _rrf(channels, weights=weights) if channels else []
+    final_sids = _rank_topic_parents(conn, final_sids)
 
     return [{"session_id": sid, "score": scores.get(sid, 0.0)} for sid in final_sids[:limit]]
 

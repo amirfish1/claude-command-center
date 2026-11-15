@@ -339,8 +339,8 @@
        server-side instead of dispatching, which otherwise reads as every
        session being silently "busy" (observed 2026-08-06: a leaked
        worker-restart drain parked 31 messages for 4 hours with no signal).
-       Rides the 20s control-plane poll; Resume lifts the drain and replays
-       the queue, Details opens Settings > Maintenance. -->
+       Rides the 20s control-plane poll. Restart pauses clear automatically;
+       Resume is offered for other pauses. Details opens System status. -->
   <div id="drainPausedBanner" class="drain-paused-banner" hidden role="alert" aria-live="assertive">
     <span class="drain-paused-banner__icon" aria-hidden="true">&#9208;</span>
     <span class="drain-paused-banner__text" id="drainPausedBannerText"></span>
@@ -1334,6 +1334,7 @@
                  by the popout's dedicated poll (_popoutProcPills), which has no
                  rail; empty spans are display:none. -->
             <span class="conv-pane-proc ccc-breadcrumb-proc" data-role="pane-proc"></span>
+            <button type="button" class="conv-pane-ticket" data-role="pane-ticket" hidden></button>
             <!-- CCC-213: the short session id rides after the name only
                  while both fit; the wrapper wraps it onto a clipped 2nd line. -->
             <span class="conv-pane-title-wrap">
@@ -2378,6 +2379,7 @@
 
       <!-- Tab Content: Health -->
       <div id="sysTabContentHealth" style="display: none;">
+        <button type="button" class="settings-action-btn" id="sysHealthRefreshBtn">Refresh</button>
         <div class="sh-body" id="sysHealthBody" style="padding: 0; display: flex; flex-direction: column; gap: 16px;">
           <div style="opacity:.6">Loading…</div>
         </div>

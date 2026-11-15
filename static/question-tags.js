@@ -266,25 +266,47 @@
 
   // A reply chip for a question a ticket is waiting on must answer the ticket:
   // a chat message reaches the worker but leaves the ticket blocked. Returns
-  // null for any other reply, which stays an ordinary chat message.
-  function answerTicket(reply) {
+  // null for any other reply, which stays an ordinary chat message. A chip
+  // in another session also sends that conversation a decision receipt.
+  var pendingAnswers = new Map();
+  function answerTicket(reply, sourceSessionId) {
     var tag = /\[Q(\d+)[:\]]/.exec(reply || '');
     var q = tag && index.byN[tag[1]];
-    if (!q || !q.ticket || !q.ticket.open) return null;
-    return fetch('/api/ux-fixes/answer', {
+    if (!q || !q.ticket) return null;
+    var ref = q.ticket.ref;
+    if (pendingAnswers.has(ref)) return pendingAnswers.get(ref);
+    if (!q.ticket.open) return null;
+    var pending = fetch('/api/ux-fixes/answer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ref: q.ticket.ref, text: reply }),
     }).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (d) {
+      return r.json().catch(function () { return {}; }).then(async function (d) {
         if (!r.ok || !d.ok) throw new Error(d.error || 'HTTP ' + r.status);
         q.ticket.open = false;
         q.answered = true;
-        paintChips();
-        loadQueue();
-        return q.ticket.ref;
+        try { paintChips(); loadQueue(); } catch (_) { /* A repaint cannot undo an accepted answer. */ }
+        // The endpoint already notifies the ticket's worker. Only a distinct
+        // originating conversation needs a second message, and it must say
+        // the answer was recorded so its agent does not submit it again.
+        if (sourceSessionId && sourceSessionId !== q.ticket.session_id) {
+          var receipt = 'Decision recorded on ' + ref + ':\n\n' + reply
+            + '\n\nThis answer is already recorded on the ticket. This is the receipt for this conversation; do not submit the answer again.';
+          try {
+            var sent = await window.cccSendQuestionAnswer(sourceSessionId, receipt, {echo:true});
+            if (!sent || !sent.ok) throw new Error(sent && sent.error || 'Send was not confirmed');
+          } catch (cause) {
+            var error = new Error(ref + ' was answered, but this conversation\'s receipt was not confirmed: '
+              + (cause.message || cause) + '. Check the conversation before retrying.');
+            error.ticketAnswered = true;
+            throw error;
+          }
+        }
+        return ref;
       });
-    });
+    }).finally(function () { pendingAnswers.delete(ref); });
+    pendingAnswers.set(ref, pending);
+    return pending;
   }
 
   function talkToWorker(n) {

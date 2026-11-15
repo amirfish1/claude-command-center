@@ -88,7 +88,17 @@ test('a ticket name always opens its session; the count button discloses larger 
     assert.equal(await page.$eval(multi+' .workers-ticket-session-body',el=>el.hidden),false,'the rest of the row still discloses');
     await page.click('[data-workers-ticket="EXAMPLE-5"] .workers-ticket-title');
     assert.equal(await page.evaluate(()=>picked.at(-1)),'devincli-claimer','a ticket with no listed session opens its claimer');
-    assert.equal(await page.$$eval('[data-workers-ticket="EXAMPLE-3"] .workers-ticket-title',es=>es.length),0,'no known session, no dead button');
+    const unlisted = '[data-workers-ticket="EXAMPLE-3"]';
+    await page.click(unlisted+' .fq-recent-state');
+    assert.equal(await page.evaluate(()=>tickets.at(-1)),'EXAMPLE-3','an unlisted-session row opens ticket details instead of doing nothing');
+    await page.click(unlisted+' .workers-ticket-title');
+    await page.click(unlisted+' .workers-ticket-context');
+    await page.focus(unlisted+' .workers-ticket-title');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Space');
+    assert.deepEqual(await page.evaluate(()=>tickets.slice(-5)),Array(5).fill('EXAMPLE-3'),'title, context and keyboard activation reach the same ticket');
+    await page.click('[data-workers-ticket="EXAMPLE-5"] .fq-recent-state');
+    assert.equal(await page.evaluate(()=>picked.at(-1)),'devincli-claimer','row metadata also opens a known claimer outside the rendered groups');
     await page.click('[data-workers-ticket="EXAMPLE-4"] .workers-ticket-title');
     assert.equal(await page.evaluate(()=>picked.at(-1)),'solo');
     await page.click('[data-workers-ticket="EXAMPLE-3"] .workers-ticket-link');
@@ -96,6 +106,8 @@ test('a ticket name always opens its session; the count button discloses larger 
     await page.evaluate(()=>_uxqRenderRecentWork());
     assert.equal(await page.$$eval(single+' .workers-ticket-toggle',es=>es.length),0,'poll cannot restore old disclosure');
     await page.setViewport({width:390,height:760});
+    await page.click(unlisted+' .fq-recent-state');
+    assert.equal(await page.evaluate(()=>tickets.at(-1)),'EXAMPLE-3');
     await page.click(single+' .workers-ticket-title');
     assert.equal(await page.evaluate(()=>picked.at(-1)),'owner');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth),true);

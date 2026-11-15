@@ -13,34 +13,6 @@
 .sidebar.is-narrow .sidebar-header-brand .sh-version,
 .sidebar.is-narrow .sidebar-header-brand .sh-discord-btn { display: none; }
 
-/* Usage left: one line per engine (name, bar, value) with aligned bars.
-   The reset note stays in the tooltip. Savings sits on the heading line. */
-.sidebar.is-narrow .headroom-bars { position: relative; }
-.sidebar.is-narrow .headroom-bars .hb-heading { margin-bottom: 4px; line-height: 20px; }
-.sidebar.is-narrow .headroom-bars .hb-grid,
-.sidebar.is-narrow .headroom-bars .hb-grid:has(> .ccc-sav-ticker:not([hidden])) {
-  display: grid;
-  grid-template-columns: max-content minmax(24px, 1fr) max-content;
-  gap: 3px 8px;
-}
-.sidebar.is-narrow .headroom-bars .hb-grid > .hb-chip {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: subgrid;
-  align-items: center;
-  padding: 0;
-}
-.sidebar.is-narrow .headroom-bars .hb-top { display: contents; }
-.sidebar.is-narrow .headroom-bars .hb-name { grid-column: 1; grid-row: 1; }
-.sidebar.is-narrow .headroom-bars .hb-bar { grid-column: 2; grid-row: 1; margin: 0; }
-.sidebar.is-narrow .headroom-bars .hb-val { grid-column: 3; grid-row: 1; text-align: right; }
-.sidebar.is-narrow .headroom-bars .hb-sub { display: none; }
-.sidebar.is-narrow .headroom-bars .hb-grid > .ccc-sav-ticker:not([hidden]) {
-  position: absolute;
-  top: 0;
-  right: 0;
-}
-
 /* Actions: New session and Ticket share the first line; search, collapse and
    "..." share the second. Nothing wraps on its own. */
 .sidebar.is-narrow .new-session-panel { padding: 10px 14px; }

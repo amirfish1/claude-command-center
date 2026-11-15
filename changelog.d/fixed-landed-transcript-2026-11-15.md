@@ -1,0 +1,1 @@
+Reopening a newly landed Claude session now uses its real transcript immediately, even while the archive list is catching up. Resolved spawn cards no longer open an empty transcript or keep background refresh paused.

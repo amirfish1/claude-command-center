@@ -192,7 +192,8 @@ const fixture = `
           list.dispatchEvent(new Event('scroll'));
         });
         await page.waitForFunction(() => document.body.classList.contains('mobile-home-collapsed'));
-        assert.equal(await page.$eval('.mobile-home-status', el => getComputedStyle(el).display), 'none');
+        // The status line fades out first; it leaves the layout when the fold ends.
+        await page.waitForFunction(() => getComputedStyle(document.querySelector('.mobile-home-status')).display === 'none');
         assert.equal(await page.$eval('.new-session-panel', el => getComputedStyle(el).display), 'none');
         assert.equal(await page.$eval('.mobile-home-new', el => el.getBoundingClientRect().width), 44);
         assert.ok(await page.$eval('.sidebar-header-brand', el => el.getBoundingClientRect().height > 0 && getComputedStyle(el).opacity !== '0'));
@@ -223,6 +224,28 @@ const fixture = `
       } else {
         assert.equal(geometry.railVisible, width > 1200, 'desktop retains app rail; tablet uses mobile navigation');
         assert.equal(geometry.passedVisible, false, 'reader has no CI strip');
+        if (width > 1200) {
+          await page.evaluate(() => document.body.classList.remove('mobile-show-main', 'conv-list-collapsed'));
+          await page.waitForSelector('.sidebar-header > .mobile-home-status .hb-chip', {visible:true});
+          await page.waitForSelector('.mobile-home-status .local-ci-mobile-toggle');
+          const status = await page.evaluate(() => {
+            const line = document.querySelector('.mobile-home-status');
+            const rect = el => el.getBoundingClientRect().toJSON();
+            return {line:rect(line), sidebar:rect(document.querySelector('.sidebar')),
+              entries:[...line.querySelectorAll('.local-ci-mobile-toggle,.hb-chip')].map(rect),
+              stacked:[...document.querySelectorAll('#localCiProgress,.hb-heading,.hb-bar,.hb-sub')].filter(el => el.getClientRects().length).length};
+          });
+          assert.ok(status.line.height > 0 && status.line.height <= 26, 'desktop CI and usage occupy one compact row');
+          assert.ok(status.entries.length >= 4, 'CI and three engines');
+          for (const entry of status.entries) assert.ok(entry.top >= status.line.top && entry.bottom <= status.line.bottom, 'desktop status entries share the row');
+          assert.equal(status.stacked, 0, 'no stacked CI list, usage heading, bars or reset notes');
+          await page.click('.mobile-home-status .local-ci-mobile-toggle');
+          const popup = await page.$eval('.mobile-ci-details', el => el.getBoundingClientRect().toJSON());
+          assert.ok(popup.height > 0 && popup.left >= status.sidebar.left && popup.right <= status.sidebar.right + 1, 'CI details open inside the sidebar');
+          assert.equal(await page.$eval('.mobile-home-status', el => el.getBoundingClientRect().height <= 26), true, 'CI details float without growing the row');
+          await page.screenshot({path:'/tmp/ccc-desktop-status-line.png'});
+          await page.keyboard.press('Escape');
+        }
       }
       console.log('PASS width ' + width);
     }

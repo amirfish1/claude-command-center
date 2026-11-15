@@ -28,6 +28,7 @@ test('terminal chatter is hidden, active work streams, and recorded block wins o
   const reason = ctx._workersTicketContext(block, {outcome:{kind:'update',text:'No claimable tickets remain.'}});
   assert.match(reason.text, /Choose: keep narrow/);
   assert.doesNotMatch(reason.text, /claimable/);
+  assert.match(ctx._workersTicketContextHtml(block, null), /data-workers-ticket-row="TEST-1"/, 'owner context remains clickable without an attached session');
   assert.equal(ctx._workersTicketState({...block,wait:{on:'worker',block_at:block.blocked_at}}).label, 'Waiting for worker');
   ctx._workersTicketSessions.set('TEST-2', {cards:[{outcome:{kind:'next',text:'Old owner step.'},bucket:'needs-you'}]});
   assert.equal(ctx._workersTicketState({ref:'TEST-2',status:'in_progress'}).label, 'Idle');

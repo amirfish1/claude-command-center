@@ -1,0 +1,1 @@
+Session search and recall now retrieve and boost parent sessions with multiple topic-matching children, using bounded relevance evidence rather than total family size. Explicit query syntax keeps exact-match behavior.

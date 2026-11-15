@@ -37,7 +37,6 @@ test('every rule is scoped to the narrow class', () => {
   }
 });
 
-test('the usage strip cannot overlap: one grid line per engine', () => {
-  assert.match(css, /\.hb-grid > \.hb-chip \{[^}]*grid-template-columns: subgrid/);
-  assert.match(css, /\.hb-sub \{ display: none; \}/);
+test('the usage strip keeps the shared one-line status when narrow', () => {
+  assert.doesNotMatch(css, /headroom-bars|hb-/);
 });

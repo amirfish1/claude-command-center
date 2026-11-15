@@ -12731,21 +12731,27 @@ def _sys_gui_apps(rows):
     return apps
 
 
-def _sys_last_activity_min(uuid, now, proj_dirs):
-    """Minutes since the session transcript was last written, or None. Stats
-    <proj>/<uuid>.jsonl across project dirs — no cwd-encoding assumptions."""
-    if not uuid:
-        return None
-    target = uuid + ".jsonl"
-    best = None
+def _sys_last_activity_minutes(session_ids, now, proj_dirs):
+    """Batch transcript activity without probing every session in every project."""
+    targets = {sid + ".jsonl" for sid in session_ids if sid}
+    if not targets:
+        return {}
+    latest = {}
     for proj in proj_dirs:
+        directory = os.path.join(_SYS_PROJECTS_DIR, proj)
         try:
-            mt = os.path.getmtime(os.path.join(_SYS_PROJECTS_DIR, proj, target))
+            matches = targets.intersection(os.listdir(directory))
         except OSError:
             continue
-        if best is None or mt > best:
-            best = mt
-    return ((now - best) / 60.0) if best is not None else None
+        for target in matches:
+            try:
+                mt = os.path.getmtime(os.path.join(directory, target))
+            except OSError:
+                continue
+            # A resumed session can have copies in several projects.
+            if target not in latest or mt > latest[target]:
+                latest[target] = mt
+    return {name[:-6]: (now - mt) / 60.0 for name, mt in latest.items()}
 
 
 def _sys_cwds(pids):
@@ -12827,10 +12833,18 @@ def _sys_sessions(rows, now):
     # surface them (wt_worker flag) but never offer them as reap targets.
     wt_pids, wt_sids = _wt_live_worker_guard()
 
-    sessions = []
+    candidates = []
     for r in rows:
         if _sys_label(r["cmd"]) != "claude CLI":
             continue
+        sid = pid_to_sid.get(r["pid"]) or \
+            (m.group(1) if (m := _SYS_SESSION_UUID_RE.search(r["cmd"])) else None)
+        candidates.append((r, sid))
+    activity = _sys_last_activity_minutes(
+        (sid for _, sid in candidates), now, proj_dirs)
+
+    sessions = []
+    for r, sid in candidates:
         desc = descendants(r["pid"])
         drows = [by_pid[p] for p in desc if p in by_pid]
         tree_rss = r["rss_mb"] + sum(d["rss_mb"] for d in drows)
@@ -12838,10 +12852,7 @@ def _sys_sessions(rows, now):
         worker = next((d for d in drows if _SYS_WORKER_RE.search(d["cmd"])), None)
         interactive = bool(r["tty"]) and r["tty"] not in ("??", "?", "-", "")
         busy = bool(worker) or tree_cpu >= _SYS_BUSY_CPU
-        # Registry pid->sid is authoritative; fall back to the uuid in argv.
-        sid = pid_to_sid.get(r["pid"]) or \
-            (m.group(1) if (m := _SYS_SESSION_UUID_RE.search(r["cmd"])) else None)
-        idle_known = _sys_last_activity_min(sid, now, proj_dirs)
+        idle_known = activity.get(sid)
         idle_min = idle_known if idle_known is not None else r["etime_min"]
         wt_worker = r["pid"] in wt_pids or bool(sid and sid in wt_sids)
         sessions.append({
@@ -13108,9 +13119,16 @@ def build_system_health(force=False):
         now = time.time()
         if not force and snap["data"] is not None and now - snap["ts"] < _SYSTEM_HEALTH_TTL:
             return snap["data"]
-        data = _build_system_health_uncached()
+        # Process/registry scans contend with dashboard warmers for the GIL.
+        # Reuse the existing live helper; destructive guards always read here.
+        from ccc_server import bg_helper
+        reply = None
+        if (not force and not bg_helper.is_child() and bg_helper.live_enabled()
+                and os.environ.get("CCC_WORKER_PROCESS") != "1"):
+            reply = bg_helper.call("system_health", role="live", timeout=5.0)
+        data = reply["data"] if reply else _build_system_health_uncached()
         snap["data"] = data
-        snap["ts"] = now
+        snap["ts"] = time.time()
         return data
 
 
@@ -17569,9 +17587,9 @@ def _archive_list_warm(cache_options, window, stale_ok):
 
 
 try:
-    _ARCHIVE_REFRESH_MIN_GAP_S = max(0.0, float(os.environ.get("CCC_ARCHIVE_REFRESH_MIN_GAP_S", "120")))
+    _ARCHIVE_REFRESH_MIN_GAP_S = max(0.0, float(os.environ.get("CCC_ARCHIVE_REFRESH_MIN_GAP_S", "600")))
 except ValueError:
-    _ARCHIVE_REFRESH_MIN_GAP_S = 120.0
+    _ARCHIVE_REFRESH_MIN_GAP_S = 600.0
 _archive_refresh_last_start = {}  # key -> epoch of the last detached refresh start
 
 
@@ -20827,15 +20845,15 @@ def _worker_compat_self_heal_restart(reason_prefix="worker-compat-selfheal"):
     if not ok:
         return {"ok": False, "restarted": False, "precheck_error": precheck_err}
     outcome = _restart_worker_process()
-    healthy = False
-    if outcome.get("restarted"):
-        healthy = _wait_worker_healthy()
-        if healthy:
-            _control_plane_request("work.reconcile", {})
-            _control_plane_request("drain.set", {
-                "enabled": False,
-                "reason": "worker restart complete",
-            })
+    # A failed restart can leave the old worker healthy. The temporary
+    # pause is no longer needed once either process can accept work.
+    healthy = _wait_worker_healthy()
+    if healthy:
+        _control_plane_request("work.reconcile", {})
+        _control_plane_request("drain.release", {
+            "expected": (protected or {}).get("drain"),
+            "reason": "worker restart complete",
+        })
     return {
         "ok": bool(outcome.get("restarted")),
         "restarted": bool(outcome.get("restarted")),
@@ -21406,18 +21424,20 @@ def _auto_update_tick():
         return {"action": "busy", "tag": chk["tag"], "reasons": busy}
     # Same handoff the Restart button runs: adopt/drain so live sessions
     # survive. The "dashboard-restart" drain is released on the next boot.
-    ok, precheck_err, _, _ = _safe_worker_restart_precheck(reason_prefix="dashboard-restart")
+    ok, precheck_err, _, protected = _safe_worker_restart_precheck(reason_prefix="dashboard-restart")
     if not ok:
         _log_activity("update", "skip", f"{chk['tag']} available, restart precheck refused: {precheck_err}")
         return {"action": "busy", "tag": chk["tag"], "reasons": ["restart precheck refused"]}
     _log_activity("update", "apply", f"auto-updating to {chk['tag']} (idle)")
     result = _self_update()
     if not result.get("ok"):
-        _control_plane_request("drain.set", {"enabled": False, "reason": "auto-update aborted"})
+        _control_plane_request("drain.release", {
+            "expected": protected.get("drain"), "reason": "auto-update aborted",
+        })
         _log_activity("update", "fail", f"{chk['tag']}: {result.get('error')}")
         return {"action": "error", "tag": chk["tag"], "error": result.get("error")}
     _log_activity("update", "restart", f"now at {chk['tag']} ({result.get('new_sha', '')[:12]})")
-    _schedule_restart(caller="auto-updater", reason="release-update")
+    _schedule_restart(caller="auto-updater", reason="release-update", protected=protected)
     return {"action": "applied", "tag": chk["tag"], "result": result}
 
 
@@ -23121,7 +23141,7 @@ def _serve_http(server):
         server.server_close()
 
 
-def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart"):
+def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart", protected=None):
     """Arm a launchctl kickstart or os.execvp() that replaces this process with a fresh
     `python server.py` after `delay` seconds. Called AFTER the HTTP response
     is flushed so the client sees {ok:true} before the socket dies."""
@@ -23132,6 +23152,14 @@ def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart
         except Exception:
             pass
         if not _quiesce_http_for_restart():
+            if protected and protected.get("drain"):
+                resumed = _control_plane_request("drain.release", {
+                    "expected": protected["drain"],
+                    "reason": "dashboard restart cancelled",
+                })
+                if not resumed.get("ok"):
+                    print("[restart] could not release cancelled restart drain: "
+                          f"{resumed.get('error') or resumed.get('code')}", flush=True)
             return
         from ccc_server import restart_audit
         restart_audit.record_restart(caller, reason)
@@ -23151,7 +23179,16 @@ def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart
                 except Exception:
                     pass
                 break
-        os.execvp(sys.executable, _server_launch_argv())
+        try:
+            os.execvp(sys.executable, _server_launch_argv())
+        except OSError as exc:
+            _ACCEPT_PAUSED.clear()
+            if protected and protected.get("drain"):
+                _control_plane_request("drain.release", {
+                    "expected": protected["drain"],
+                    "reason": "dashboard restart failed",
+                })
+            print(f"[restart] failed: {exc}", flush=True)
     t = threading.Timer(delay, _go)
     t.daemon = True
     t.start()
@@ -37145,22 +37182,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             healthy = False
             reconciled = None
             drain_replayed = None
-            if outcome.get("restarted"):
-                healthy = _wait_worker_healthy()
-                if healthy:
-                    recon = _control_plane_request("work.reconcile", {})
-                    if isinstance(recon, dict) and recon.get("ok"):
-                        reconciled = int(recon.get("reconciled") or 0)
-                    # Lift the precheck drain now that the worker answers:
-                    # nobody else released "worker-restart:" drains (startup
-                    # only cleared "dashboard-restart:" ones), so a successful
-                    # restart left every later submit deferring forever.
-                    rel = _control_plane_request("drain.set", {
-                        "enabled": False,
-                        "reason": "worker restart complete",
-                    })
-                    if isinstance(rel, dict) and rel.get("ok"):
-                        drain_replayed = int(rel.get("replayed") or 0)
+            healthy = _wait_worker_healthy()
+            if healthy:
+                recon = _control_plane_request("work.reconcile", {})
+                if isinstance(recon, dict) and recon.get("ok"):
+                    reconciled = int(recon.get("reconciled") or 0)
+                # Release only this restart's pause; another operator may
+                # have paused dispatch while we waited for worker health.
+                rel = _control_plane_request("drain.release", {
+                    "expected": (protected or {}).get("drain"),
+                    "reason": "worker restart complete",
+                })
+                if isinstance(rel, dict) and rel.get("ok"):
+                    drain_replayed = int(rel.get("replayed") or 0)
             self.send_json({
                 "ok": bool(outcome.get("restarted")),
                 "worker": outcome,
@@ -37170,6 +37204,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "reconciled": reconciled,
                 "drain_replayed": drain_replayed,
                 "note": (
+                    "Worker restart failed; the existing worker is still healthy."
+                    if healthy and not outcome.get("restarted") else
                     ("Worker restarted and reconciled ("
                         + str(reconciled) + " item(s) reclaimed).") if healthy
                     else "Worker restarted, but hasn't answered yet -- "
@@ -37248,7 +37284,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
             from ccc_server import restart_audit
-            _schedule_restart(caller=restart_audit.request_caller(self, _rbody), reason=path)
+            _schedule_restart(caller=restart_audit.request_caller(self, _rbody), reason=path,
+                              protected=protected)
             return
         if path == "/api/template-gallery/open":
             # Open the editable gallery source for the local CCC install.
@@ -48252,6 +48289,10 @@ def _tune_thread_switch_interval():
 def main():
     # State files, logs and transcripts hold secrets: create everything owner-only.
     os.umask(0o077)
+    # An in-place restart (os.execvp) keeps the previous image's children but
+    # loses the Popen objects that reaped them. Must run before any spawn.
+    from ccc_server import inherited_children as _inherited_children
+    _inherited_children.start()
     _tune_thread_switch_interval()
     _tune_thread_switch_interval()
     # Parse CLI overrides for this server instance. Env var PORT and the
@@ -48358,15 +48399,15 @@ def main():
         if (
             drain.get("enabled")
             and str(drain.get("reason") or "").startswith(
-                ("dashboard-restart:", "worker-restart:")
+                ("dashboard-restart:", "worker-restart:", "worker-compat-selfheal:")
             )
         ):
             # "worker-restart:" drains are normally lifted by the restart
             # handler itself once the worker is healthy; this catches the
             # ones it leaked (dashboard died mid-restart), which otherwise
             # defer every queued submit forever.
-            resumed = _control_plane_request("drain.set", {
-                "enabled": False,
+            resumed = _control_plane_request("drain.release", {
+                "expected": drain,
                 "reason": "dashboard online",
             })
             print(

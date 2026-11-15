@@ -810,6 +810,151 @@ def tts_queue_stats():
     }
 
 
+_TTS_CPU_LOCK = threading.Lock()
+_TTS_CPU_HISTORY = {"pid": None, "samples": None}
+_TTS_HEALTH_MEMO = {"mono": 0.0, "port": None, "health": {}}
+
+
+def _proc_cpu_stats(pid):
+    """Return (cpu_time_s, proc_uptime_s_or_None) for `pid` from Linux /proc, or (None, None)."""
+    if not isinstance(pid, int) or pid <= 1:
+        return None, None
+    try:
+        with open(f"/proc/{pid}/stat", "r") as fh:
+            raw = fh.read()
+        rparen = raw.rfind(")")
+        if rparen < 0:
+            return None, None
+        fields = raw[rparen + 2:].split()
+        utime = int(fields[11])
+        stime = int(fields[12])
+        starttime = int(fields[19])
+        clk = os.sysconf("SC_CLK_TCK")
+        if clk <= 0:
+            return None, None
+        cpu_s = (utime + stime) / float(clk)
+        proc_uptime = None
+        try:
+            with open("/proc/uptime", "r") as ufh:
+                boot_up = float(ufh.read().split()[0])
+            proc_uptime = max(0.0, boot_up - starttime / float(clk))
+        except (OSError, ValueError, IndexError):
+            pass
+        return cpu_s, proc_uptime
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None, None
+
+
+def _local_tts_probe_for_pressure(mono_now):
+    """Fast non-starting /health probe of the local voice server, cached for 2s."""
+    import urllib.request
+    port = _LOCAL_TTS_PORT if _LOCAL_TTS_PROCESS is not None else _local_tts_saved_port()
+    with _TTS_CPU_LOCK:
+        if (_TTS_HEALTH_MEMO["port"] == port
+                and 0.0 <= mono_now - _TTS_HEALTH_MEMO["mono"] < 2.0):
+            return dict(_TTS_HEALTH_MEMO["health"])
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=0.15) as resp:
+            health = json.loads(resp.read(4096))
+            if not isinstance(health, dict):
+                health = {}
+    except (OSError, ValueError):
+        health = {}
+    with _TTS_CPU_LOCK:
+        _TTS_HEALTH_MEMO.update(mono=mono_now, port=port, health=dict(health))
+    return health
+
+
+def tts_pressure(now_mono=None, host_cores=None):
+    """Measure the TTS server's CPU/load contribution in host load-per-core (`×/core`) units."""
+    from collections import deque
+    import time
+    mono_now = time.monotonic() if now_mono is None else float(now_mono)
+    h_cores = max(1, int(host_cores or os.cpu_count() or 1))
+    q = tts_queue_stats()
+    if not q.get("enabled", True):
+        with _TTS_CPU_LOCK:
+            _TTS_CPU_HISTORY["pid"] = None
+            if _TTS_CPU_HISTORY["samples"] is not None:
+                _TTS_CPU_HISTORY["samples"].clear()
+        return {
+            "enabled": False,
+            "running": False,
+            "busy": False,
+            "level": "off",
+            "cores": 0.0,
+            "recent_cores": 0.0,
+            "load_per_core": 0.0,
+            "host_cores": h_cores,
+            "queued": 0,
+        }
+    queued = int(q.get("queued") or 0)
+    health = _local_tts_probe_for_pressure(mono_now)
+    running = bool(health.get("ok"))
+    pid = health.get("pid") if running else None
+    if not isinstance(pid, int) and _LOCAL_TTS_PROCESS is not None and _LOCAL_TTS_PROCESS.poll() is None:
+        pid = _LOCAL_TTS_PROCESS.pid
+        running = True
+    if running:
+        server_waiting = max(0, int(health.get("fg_waiting") or 0)) + max(0, int(health.get("bg_waiting") or 0))
+        server_queued = (1 if health.get("busy") else 0) + server_waiting + int(q.get("session_waiting") or 0)
+        queued = max(queued, server_queued)
+    busy = bool(health.get("busy")) or queued > 0
+    cpu_s, proc_up = _proc_cpu_stats(pid) if pid else (None, None)
+    if cpu_s is None and running and isinstance(health.get("cpu_time_s"), (int, float)):
+        cpu_s = float(health["cpu_time_s"])
+    if proc_up is None and running and isinstance(health.get("uptime_s"), (int, float)):
+        proc_up = float(health["uptime_s"])
+    cores_1m = 0.0
+    cores_recent = 0.0
+    if running and cpu_s is not None:
+        with _TTS_CPU_LOCK:
+            samples = _TTS_CPU_HISTORY["samples"]
+            if samples is None:
+                samples = deque()
+                _TTS_CPU_HISTORY["samples"] = samples
+            if _TTS_CPU_HISTORY["pid"] != pid or (samples and cpu_s < samples[-1][1] - 1e-6):
+                _TTS_CPU_HISTORY["pid"] = pid
+                samples.clear()
+            if not samples or mono_now - samples[-1][0] >= 1.0:
+                samples.append((mono_now, cpu_s))
+                while len(samples) > 2 and mono_now - samples[1][0] >= 60.0:
+                    samples.popleft()
+            if len(samples) >= 2:
+                dt_1m = samples[-1][0] - samples[0][0]
+                if dt_1m >= 0.5:
+                    cores_1m = max(0.0, (samples[-1][1] - samples[0][1]) / dt_1m)
+                ref = samples[-2]
+                for s in reversed(samples):
+                    ref = s
+                    if mono_now - s[0] >= 10.0:
+                        break
+                dt_rec = samples[-1][0] - ref[0]
+                if dt_rec >= 0.5:
+                    cores_recent = max(0.0, (samples[-1][1] - ref[1]) / dt_rec)
+            elif proc_up is not None and 0.5 <= proc_up <= 120.0:
+                cores_1m = max(0.0, cpu_s / proc_up)
+                cores_recent = cores_1m
+    load_per_core = round(cores_1m / h_cores, 2)
+    level = "busy" if (busy or cores_1m >= 0.25 or cores_recent >= 0.25) else "idle"
+    out = {
+        "enabled": True,
+        "running": running,
+        "busy": busy,
+        "level": level,
+        "cores": round(cores_1m, 2),
+        "recent_cores": round(cores_recent, 2),
+        "load_per_core": load_per_core,
+        "host_cores": h_cores,
+        "queued": queued,
+    }
+    if running and health.get("threads"):
+        out["threads"] = int(health["threads"])
+    if cpu_s is not None:
+        out["cpu_time_s"] = round(cpu_s, 1)
+    return out
+
+
 def local_tts_open(text, voice="", prio="fg"):
     """(open HTTP response, label) streaming Kokoro mp3, or (None, "") when unavailable.
 
@@ -1269,14 +1414,21 @@ def local_tts_keepalive(interval=60.0):
     """Keep the installed local voice up: start it at boot, restart it after a
     crash, so the first Speak never pays the ~30 s model load. Runs forever."""
     import time
+    next_check = 0.0
+    step = min(10.0, max(1.0, float(interval)))
     while True:
+        now = time.monotonic()
         try:
-            if tts_enabled() and local_tts_installed():
-                _local_tts_renice_check()
-                _local_tts_start()
+            if now >= next_check:
+                if tts_enabled() and local_tts_installed():
+                    _local_tts_renice_check()
+                    _local_tts_start()
+                next_check = now + interval
+            if tts_enabled():
+                tts_pressure(now_mono=now)
         except Exception:
             pass
-        time.sleep(interval)
+        time.sleep(step)
 
 
 def _local_tts_renice_check():

@@ -1,0 +1,1 @@
+- Keep the live-only session census warm after first use so occasional HTTP callers do not repeatedly receive refreshing responses.

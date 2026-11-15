@@ -28,7 +28,10 @@ class CodexStuckSummaryTests(unittest.TestCase):
         def rollout_path(row):
             return paths[row["id"]]
 
+        tail_reads = []
+
         def tail_meta(path):
+            tail_reads.append(path)
             return {"last_event_type": "assistant", "pending_tool": None}
 
         def authoritative_state(
@@ -64,6 +67,7 @@ class CodexStuckSummaryTests(unittest.TestCase):
         self.assertEqual(summary["candidates"], 2)
         self.assertEqual(summary["recent_sessions"], 3)
         self.assertEqual(summary["threshold_s"], 900)
+        self.assertNotIn(paths["fresh-mid-turn"], tail_reads)
 
 
 class CodexStuckMonitorUiTests(unittest.TestCase):
@@ -89,7 +93,7 @@ def test_concurrent_cold_stuck_summary_builds_once(monkeypatch):
     monkeypatch.setitem(_cx._codex_stuck_summary_cache, "ts", 0.0)
     calls = []
 
-    def slow_fetch():
+    def slow_fetch(**kwargs):
         calls.append(1)
         _time.sleep(0.2)
         return []
@@ -107,3 +111,69 @@ def test_concurrent_cold_stuck_summary_builds_once(monkeypatch):
     assert len(out) == 6 and all(o["count"] == 0 for o in out)
     _cx.build_codex_stuck_summary(force=True)
     assert len(calls) == 2
+
+
+def test_summary_reads_all_candidates_without_prompt_payloads_or_row_callbacks(tmp_path, monkeypatch):
+    import os
+    import sqlite3
+
+    from ccc_server import codex, codex_accounts
+
+    now = 10_000.0
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text("{}\n")
+    os.utime(rollout, (9_000, 9_000))
+    db = tmp_path / "state.sqlite"
+    with sqlite3.connect(db) as con:
+        con.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, "
+                    "created_at INTEGER, updated_at INTEGER, updated_at_ms INTEGER, "
+                    "first_user_message TEXT)")
+        con.executemany("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?)", [
+            (f"thread-{i:04}", str(rollout), 8_000, 9_000 + i // 2,
+             None if i % 2 else (9_000 + i // 2) * 1000, "unused prompt" * 1_000)
+            for i in range(1_300)
+        ])
+
+    callbacks, prompt_reads = [], []
+    real_connect = sqlite3.connect
+
+    class MetadataConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=(), /):
+            self.row_factory = lambda cursor, row: (
+                callbacks.append(1) or sqlite3.Row(cursor, row))
+            return super().execute(sql, parameters)
+
+    def connect(*args, **kwargs):
+        con = real_connect(*args, **kwargs, factory=MetadataConnection)
+
+        def authorize(action, table, column, *_):
+            if action == sqlite3.SQLITE_READ and column == "first_user_message":
+                prompt_reads.append(column)
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        con.set_authorizer(authorize)
+        return con
+
+    monkeypatch.setattr(codex.sqlite3, "connect", connect)
+    monkeypatch.setattr(codex_accounts, "homes", lambda: [tmp_path])
+    monkeypatch.setattr(server, "_codex_home", lambda: tmp_path)
+    monkeypatch.setattr(codex, "_codex_state_db_candidates", lambda *args: [db])
+    monkeypatch.setattr(codex, "_CODEX_THREADS_CACHE", {})
+    monkeypatch.setattr(server, "_codex_deleted_thread_ids", lambda: set())
+    monkeypatch.setattr(server, "_codex_pool_alive", lambda now: False)
+    monkeypatch.setattr(server, "_live_engine_session_ids", lambda: set())
+    monkeypatch.setattr(server, "_extract_codex_tail_meta", lambda path: {})
+    monkeypatch.setattr(server, "_codex_row_state", lambda *args: "stuck")
+    monkeypatch.setattr(server, "_codex_state_fields", lambda sid, *a, **kw: {
+        "codex_state": "stuck" if sid == "thread-0000" else "working",
+    })
+    monkeypatch.setattr(server, "_codex_recent_window_s", lambda: 3_600)
+
+    result = server.build_codex_stuck_summary(now=now, force=True)
+
+    assert result["session_ids"] == ["thread-0000"]
+    assert result["candidates"] == result["recent_sessions"] == 1_300
+    assert prompt_reads == []
+    # Schema metadata plus one aggregated result, independent of fleet size.
+    assert len(callbacks) < 20

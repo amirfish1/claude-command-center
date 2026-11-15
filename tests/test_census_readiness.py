@@ -137,3 +137,33 @@ def test_real_http_reports_warming_promptly_then_serves_the_census(monkeypatch):
         httpd.server_close()
         thread.join(2)
         settled(cache)
+
+
+def test_warmup_keeps_requested_live_only_census_fresh():
+    cache = CensusCache(fresh_s=.01, max_stale_s=.1)
+    refreshed = threading.Event()
+    live_calls = []
+
+    def build(key):
+        if key is None:
+            live_calls.append(key)
+            if len(live_calls) > 1:
+                refreshed.set()
+            return {'ok': True, 'sessions': [{'session_id': 'live'}]}
+        return {'ok': True, 'sessions': [{'session_id': 'archive'}]}
+
+    cache.get(None, build)
+    settled(cache, None)
+    with cache.lock:
+        cache.slots[None]['at'] -= 1
+    stop = cache.start_warmup(build)
+    try:
+        assert refreshed.wait(3), 'live-only refresh must not require another request'
+        settled(cache, None)
+        settled(cache)
+        body, status = cache.get(None, build)
+        assert status == 200
+        assert body['sessions'] == [{'session_id': 'live'}], 'query scopes stay separate'
+        assert cache.readiness()['state'] == 'ready'
+    finally:
+        stop.set()

@@ -73,7 +73,7 @@ structured reports.
 
 Open work needs a concrete plan even when no human input is required. New
 remaining actions include `owner:"agent"`, `owner:"user"`, or `owner:"external"`,
-and are ordered by what happens next. The card labels these **The next step I am doing next without waiting for an ack**,
+and are ordered by what happens next. The card labels these **Doing next**,
 **Your next step**, or **Waiting on**. Legacy entries without an owner use
 **Next step**; CCC does not guess the owner. An open report without a plan
 shows **Next step: Not stated** with one **Ask for next step** button that
@@ -135,3 +135,15 @@ paths for Claude launches and Codex thread start/resume. Already running Claude
 processes need a new launch to receive updated instructions. Other engines can
 emit this footer and use the same parser, but CCC does not assume they received
 the instruction. No additional model call is made at turn end.
+
+## Terminal size and token cost
+
+The agent-owned next-step label is **Doing next**. Footer guidance asks for short
+clauses and evidence fragments, compact JSON, and grouped related actions without
+dropping unresolved obligations. It targets roughly 120–180 words when the scope
+allows. These are writing limits, not a change to validation or Close gates.
+
+CCC collapses machine details, but terminal clients may render HTML comments
+literally. Hidden JSON still consumes generated output tokens. Shortening the
+actual text reduces that overhead; hiding it alone does not. Existing sessions
+may retain previously injected guidance until their instructions are refreshed.
