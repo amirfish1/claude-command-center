@@ -316,6 +316,13 @@ def activity_error_alerts(wt_home=None, now=None):
 # notify=True (watchtower/queue.py _notify_ticket_event). A dead one proves
 # delivery failed, not that its recipient is gone or its question still open.
 _DEAD_NOTIFY_RE = re.compile(r"^\[watchtower\]\s+(\S+)\s+(.*?)(?:\s*—\s*|$)")
+# WT's sender envelope prepends one header line (compact "[sender: ..." or
+# legacy "[Message attribution v1: ...") before the notice body.
+_SENDER_HEADER_RE = re.compile(r"^\[(?:sender: |Message attribution v1: )[^\n]*\]\s*\n")
+
+
+def _strip_sender_header(text):
+    return _SENDER_HEADER_RE.sub("", text, count=1).strip()
 # Verbs that hand something to a human get "Needs your input" wording; a dead
 # claimed/closed echo is informational, not a question.
 _NEEDS_INPUT_VERBS = ("needs input", "awaits product decision")
@@ -435,7 +442,7 @@ def dead_notify_alerts(wt_home=None, now=None, items_path=None):
             continue
         if m.get("status") not in ("dead", "pending", "delivered"):
             continue
-        parsed = _DEAD_NOTIFY_RE.match(str(m.get("text") or "").strip())
+        parsed = _DEAD_NOTIFY_RE.match(_strip_sender_header(str(m.get("text") or "").strip()))
         ref = parsed.group(1) if parsed else ""
         verb = (parsed.group(2) or "").strip() if parsed else ""
         event_ts = _iso_to_epoch(m.get("created_at"))
