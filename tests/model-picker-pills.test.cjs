@@ -10,12 +10,13 @@ let browser;
 test.before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 test.after(async () => { await browser?.close(); });
 
-async function pickerPage(picks, fetched = []) {
+async function pickerPage(picks, fetched = picks || []) {
   const page = await browser.newPage();
   await page.setContent('<div id="nsModelPickerPills"></div>');
   await page.evaluate(({ picker, picks, fetched }) => {
     window._defaultModelsByEngine = { codex: 'model-a' };
-    window.spawnDefaultsState = { engine: 'codex', models: {} };
+    window.spawnDefaultsState = { engine: 'codex', models: {}, blockedModels: new Set(), disabled_engines: [] };
+    window._emnInstalled = { codex: true, claude: true };
     window.spawnEffortChoiceDirty = true;
     window.nsAdvisor = { manual: false, applying: false, data: {config: {enabled: false}} };
     window.$convInputEffortSelect = { value: 'high' };
@@ -25,9 +26,10 @@ async function pickerPage(picks, fetched = []) {
     window.MODEL_OPTIONS_BY_ENGINE = {};
     // Catalog ownership is covered separately; this fixture exercises the
     // strip's ordering, model deduplication and independent effort choice.
-    window.SPAWN_DEFAULT_ENGINES = ['codex'];
+    window.SPAWN_DEFAULT_ENGINES = ['codex', 'claude'];
     window._modelAllowedForEngine = () => true;
-    window._normalizeModelId = value => value;
+    window._normalizeModelId = value => String(value || '').replace(/^claude-/, '');
+    window.scheduleClaudePrewarm = () => {};
     window._spawnEngineChosenByUser = false;
     window._spawnModelChosenByUserForEngine = new Set();
     window.currentConversation = picks ? 'fixture' : '__new__';
@@ -111,14 +113,14 @@ async function enableRankedPicker(page) {
       : [{engine: 'codex', model: 'routine-first', effort: 'medium', unavailable: ''},
          {engine: 'codex', model: 'routine-next', effort: 'low', unavailable: ''},
          {engine: 'codex', model: 'unavailable-model', effort: 'low', unavailable: 'Engine unavailable'}];
-    window.currentSpawnChoice = () => ({engine: getSpawnEngine(), model: _defaultModelsByEngine.codex, effort: $convInputEffortSelect.value});
+    window.currentSpawnChoice = () => ({engine: getSpawnEngine(), model: _defaultModelsByEngine[getSpawnEngine()], effort: $convInputEffortSelect.value});
     window.getConvView = () => null;
     window.updateInputBar = () => {};
     renderNsModelPickerPills();
   });
 }
 
-test('advisor replaces unrelated history with numbered depth rankings and explicit thinking', async () => {
+test('advisor keeps depth rankings and explicit thinking separate from manual history', async () => {
   const page = await pickerPage([pick('unrelated-expensive-model')]);
   try {
     await enableRankedPicker(page);
@@ -162,5 +164,50 @@ test('a late history response cannot overwrite the active advisor ranking', asyn
       await _fetchServerModelPicksPromise;
     });
     assert.deepEqual(await page.$$eval('[data-rank]', buttons => buttons.map(b => b.dataset.model)), ['routine-first', 'routine-next']);
+  } finally { await page.close(); }
+});
+
+
+test('ranked composer refreshes recent models and offers Fable as an explicit manual override', async () => {
+  const history = [{engine: 'claude', model: 'fable-5-2', count: 26, last_used: 100}];
+  const page = await pickerPage([], history);
+  try {
+    await page.evaluate(() => {
+      $convInputEngineSelect = {options: [{value:'claude'}, {value:'codex'}], value:'codex'};
+      MODEL_OPTIONS_BY_ENGINE.claude = [{id:'fable-5-2',label:'Fable 5.2'}];
+    });
+    await enableRankedPicker(page);
+    await page.waitForSelector('[data-recent][data-model="fable-5-2"]');
+    assert.match(await page.$eval('[data-recent]', el => el.textContent), /Recent.*Fable 5.2/);
+    assert.equal(await page.$eval('[data-recent]', el => el.hasAttribute('data-rank')), false);
+    assert.deepEqual(await page.$$eval('[data-rank]', buttons => buttons.map(b => b.dataset.model)), ['routine-first', 'routine-next']);
+    await page.click('[data-recent]');
+    assert.deepEqual(await page.evaluate(() => currentSpawnChoice()), {engine:'claude',model:'fable-5-2',effort:'high'});
+    assert.equal(await page.evaluate(() => nsAdvisor.manual), true);
+    assert.equal(await page.$eval('[data-recent]', el => el.getAttribute('aria-checked')), 'true');
+    await page.evaluate(() => { nsAdvisor.depth = 'deep'; renderNsModelPickerPills(); });
+    assert.deepEqual(await page.$$eval('[data-rank]', buttons => buttons.map(b => b.dataset.model)), ['deep-model']);
+    assert.ok(await page.$('[data-recent][data-model="fable-5-2"]'));
+  } finally { await page.close(); }
+});
+
+test('recent shortcuts deduplicate aliases and efforts, exclude ranked or blocked models, and cap at three', async () => {
+  const history = [
+    {engine:'claude',model:'claude-fable-5-2',count:20,last_used:100},
+    {engine:'claude',model:'fable-5-2',effort:'low',count:10,last_used:99},
+    ...['routine-first','blocked','unavailable','hidden-engine','extra-1','extra-2','extra-3'].map(model => ({engine: model === 'hidden-engine' ? 'claude' : 'codex',model,count:1,last_used:90})),
+  ];
+  const page = await pickerPage(history);
+  try {
+    await page.evaluate(() => {
+      $convInputEngineSelect = {options:[{value:'claude'}, {value:'codex'}],value:'codex'};
+      spawnDefaultsState.blockedModels.add('blocked');
+      MODEL_OPTIONS_BY_ENGINE.codex = [{id:'unavailable',available:false}];
+      MODEL_OPTIONS_BY_ENGINE.claude = [{id:'fable-5-2',label:'Fable 5.2'},{id:'hidden-engine',disabled:true}];
+    });
+    await enableRankedPicker(page);
+    assert.deepEqual(await page.$$eval('[data-recent]', buttons => buttons.map(b => b.dataset.model)), ['fable-5-2','extra-1','extra-2']);
+    await page.evaluate(() => { spawnDefaultsState.disabled_engines = ['claude']; renderNsModelPickerPills(); });
+    assert.equal(await page.$$eval('[data-recent][data-engine="claude"]', buttons => buttons.length), 0);
   } finally { await page.close(); }
 });

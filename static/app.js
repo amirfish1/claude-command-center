@@ -95182,6 +95182,28 @@
     host.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
 
+  // Usage shortcuts are manual choices, never additions to the advisor's
+  // task-capability shortlist or candidates for automatic selection.
+  function recentNsModelPicks(ranked, history) {
+    const key = p => JSON.stringify([p.engine, _normalizeModelId(p.model)]);
+    const seen = new Set(ranked.map(key));
+    const blocked = new Set(Array.from(spawnDefaultsState.blockedModels || [], _normalizeModelId));
+    return getTopSpawnPicks(history).filter(p => {
+      if (!(p.count > 0 || p.last_used > 0)) return false;
+      const option = Array.from($convInputEngineSelect?.options || []).find(o => o.value === p.engine);
+      if (!option || option.disabled || option.hidden || !_emnInstalled?.[p.engine]
+          || (spawnDefaultsState.disabled_engines || []).includes(p.engine)) return false;
+      const model = (MODEL_OPTIONS_BY_ENGINE[p.engine] || []).find(m => _normalizeModelId(m.id) === _normalizeModelId(p.model));
+      if (blocked.has(_normalizeModelId(p.model)) || model?.policy_blocked
+          || model?.disabled || model?.available === false || seen.has(key(p))) return false;
+      seen.add(key(p));
+      return true;
+    }).slice(0, 3).map(p => {
+      const model = (MODEL_OPTIONS_BY_ENGINE[p.engine] || []).find(m => _normalizeModelId(m.id) === _normalizeModelId(p.model));
+      return { ...p, model: model?.id || p.model, recent: true };
+    });
+  }
+
   function renderNsModelPickerPills(paneId) {
     const container = document.getElementById('nsModelPickerPills');
     if (!container) return;
@@ -95205,34 +95227,40 @@
         });
       }
       container.classList.toggle('is-depth-ranked', ranked);
-      container.setAttribute('aria-label', ranked ? (nsAdvisor.depth === 'deep' ? 'Deep' : 'Routine') + ' models, ranked' : 'Model shortcuts');
+      container.setAttribute('aria-label', ranked ? 'Recent models and ' + (nsAdvisor.depth === 'deep' ? 'Deep' : 'Routine') + ' models, ranked' : 'Model shortcuts');
       const labelHost = container.closest('.conv-model-picker-inner')?.querySelector('.conv-model-picker-label');
       if (labelHost) labelHost.textContent = ranked ? (nsAdvisor.depth === 'deep' ? 'Deep rank' : 'Routine rank') : 'Model';
       container.innerHTML = picks.map((p, index) => {
-        const isSel = p.engine === currentEngine && p.model === currentModel && (!ranked || (p.effort || '') === currentEffort);
-        const label = getModelPillLabel(p.engine, p.model, ranked ? p.effort : '');
+        const recommended = ranked && !p.recent;
+        const isSel = p.engine === currentEngine && _normalizeModelId(p.model) === _normalizeModelId(currentModel)
+          && (!recommended || (p.effort || '') === currentEffort);
+        const label = (p.recent ? 'Recent · ' : '') + getModelPillLabel(p.engine, p.model, recommended ? p.effort : '');
         const badge = MODEL_PICKER_ENGINE_GLYPHS[p.engine] || '?';
         const badgeClass = 'orch-glyph orch-glyph-' + p.engine;
-        const title = [ranked ? '#' + (index + 1) : '', p.engine, p.model, ranked ? p.effort : '', ranked ? p.reason : ''].filter(Boolean).join(' · ');
+        const title = [recommended ? '#' + p.rank : p.recent ? 'Recently used · manual choice' : '', p.engine, p.model, recommended ? p.effort : '', recommended ? p.reason : ''].filter(Boolean).join(' · ');
         return '<button type="button" class="orch-tier-chip' + (isSel ? ' is-selected' : '') + '"'
           + ' role="radio" aria-checked="' + (isSel ? 'true' : 'false') + '"'
           + ' data-engine="' + escapeAttr(p.engine) + '"'
           + ' data-model="' + escapeAttr(p.model) + '"'
-          + (ranked ? ' data-effort="' + escapeAttr(p.effort || '') + '" data-rank="' + (index + 1) + '"' : '')
+          + (recommended ? ' data-effort="' + escapeAttr(p.effort || '') + '" data-rank="' + p.rank + '"' : '')
+          + (p.recent ? ' data-recent="true"' : '')
           + ' title="' + escapeAttr(title) + '">'
-          + (ranked ? '<span class="ns-model-rank">#' + (index + 1) + '</span>' : '')
+          + (recommended ? '<span class="ns-model-rank">#' + p.rank + '</span>' : '')
           + '<span class="' + badgeClass + '">' + escapeHtml(badge) + '</span>'
           + escapeHtml(label) + '</button>';
       }).join('');
       container.querySelectorAll('.orch-tier-chip').forEach((chip, index) => {
         chip.addEventListener('click', () => {
-          if (ranked) {
+          if (ranked && !picks[index].recent) {
             markNsAdvisorManual();
             applyNsAdvisorChoice(picks[index]);
             const overrides = document.getElementById('nsModelOverrides');
             if (overrides) overrides.open = false;
             renderNsAdvisor();
-          } else selectSpawnPick(chip.getAttribute('data-engine'), chip.getAttribute('data-model'));
+          } else {
+            selectSpawnPick(chip.getAttribute('data-engine'), chip.getAttribute('data-model'));
+            if (ranked) renderNsAdvisor();
+          }
         });
       });
       if (ranked) {
@@ -95247,8 +95275,15 @@
       if (window.CCCFreeRuntime && typeof CCCFreeRuntime.sync === 'function') CCCFreeRuntime.sync(currentEngine);
     };
 
+    const renderRanked = history => {
+      const choices = nsAdvisorChoices().filter(choice => !choice.unavailable);
+      doRender(recentNsModelPicks(choices, history).concat(choices.map((p, index) => ({ ...p, rank: index + 1 }))), true);
+    };
     if (nsAdvisorRanksPicker()) {
-      doRender(nsAdvisorChoices().filter(choice => !choice.unavailable), true);
+      renderRanked(_cachedServerModelPicks);
+      fetchModelPickerPicksFromServer(true).then(fetched => {
+        if (currentConversation === '__new__' && nsAdvisorRanksPicker()) renderRanked(fetched);
+      });
       return;
     }
     // Don't flash unrelated history models while preferences are loading.
@@ -95259,8 +95294,10 @@
     const picks = getTopSpawnPicks();
     doRender(picks);
     fetchModelPickerPicksFromServer(true).then(fetched => {
-      // An in-flight history response must not overwrite a depth ranking.
-      if (currentConversation === '__new__' && !nsAdvisorRanksPicker()) doRender(fetched);
+      // Resolve against the current depth and mode, not a stale request's UI.
+      if (currentConversation !== '__new__') return;
+      if (nsAdvisorRanksPicker()) renderRanked(fetched);
+      else doRender(fetched);
     });
   }
 
@@ -95275,8 +95312,8 @@
     pillsContainer.querySelectorAll('.orch-tier-chip').forEach(chip => {
       const cEngine = chip.getAttribute('data-engine');
       const cModel = chip.getAttribute('data-model');
-      const isSel = cEngine === currentEngine && cModel === currentModel
-        && (!pillsContainer.classList.contains('is-depth-ranked') || (chip.getAttribute('data-effort') || '') === ($convInputEffortSelect?.value || ''));
+      const isSel = cEngine === currentEngine && _normalizeModelId(cModel) === _normalizeModelId(currentModel)
+        && (!chip.hasAttribute('data-rank') || (chip.getAttribute('data-effort') || '') === ($convInputEffortSelect?.value || ''));
       chip.classList.toggle('is-selected', isSel);
       chip.setAttribute('aria-checked', isSel ? 'true' : 'false');
     });
