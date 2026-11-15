@@ -316,7 +316,7 @@ class WorkerServer(socketserver.ThreadingUnixStreamServer):
 
 
 def _release_stale_restart_drain(runtime):
-    """Lift a "worker-restart:" drain left over from the restart window.
+    """Lift a worker restart drain left over from the restart window.
 
     That drain protects the restart that produced THIS worker process; once
     the worker is serving, the window is over. The dashboard's restart
@@ -325,10 +325,9 @@ def _release_stale_restart_drain(runtime):
     """
     drain = runtime.ledger.drain_state()
     if drain.get("enabled") and str(drain.get("reason") or "").startswith(
-        "worker-restart:"
+        ("worker-restart:", "worker-compat-selfheal:")
     ):
-        runtime.ledger.set_drain(False, "worker online")
-        return True
+        return runtime.ledger.release_drain(drain, "worker online")
     return False
 
 

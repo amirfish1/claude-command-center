@@ -339,8 +339,8 @@
        server-side instead of dispatching, which otherwise reads as every
        session being silently "busy" (observed 2026-08-06: a leaked
        worker-restart drain parked 31 messages for 4 hours with no signal).
-       Rides the 20s control-plane poll; Resume lifts the drain and replays
-       the queue, Details opens Settings > Maintenance. -->
+       Rides the 20s control-plane poll. Restart pauses clear automatically;
+       Resume is offered for other pauses. Details opens System status. -->
   <div id="drainPausedBanner" class="drain-paused-banner" hidden role="alert" aria-live="assertive">
     <span class="drain-paused-banner__icon" aria-hidden="true">&#9208;</span>
     <span class="drain-paused-banner__text" id="drainPausedBannerText"></span>

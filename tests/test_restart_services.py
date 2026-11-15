@@ -586,7 +586,7 @@ class SafeWorkerRestartPrecheckTests(unittest.TestCase):
         kick = block.index("_restart_worker_process()")
         wait = block.index("_wait_worker_healthy(")
         reconcile = block.index('"work.reconcile"')
-        release = block.index('"drain.set"')
+        release = block.index('"drain.release"')
         self.assertLess(precheck, kick)
         self.assertLess(kick, wait)
         self.assertLess(wait, reconcile)

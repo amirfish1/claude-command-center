@@ -20838,15 +20838,15 @@ def _worker_compat_self_heal_restart(reason_prefix="worker-compat-selfheal"):
     if not ok:
         return {"ok": False, "restarted": False, "precheck_error": precheck_err}
     outcome = _restart_worker_process()
-    healthy = False
-    if outcome.get("restarted"):
-        healthy = _wait_worker_healthy()
-        if healthy:
-            _control_plane_request("work.reconcile", {})
-            _control_plane_request("drain.set", {
-                "enabled": False,
-                "reason": "worker restart complete",
-            })
+    # A failed restart can leave the old worker healthy. The temporary
+    # pause is no longer needed once either process can accept work.
+    healthy = _wait_worker_healthy()
+    if healthy:
+        _control_plane_request("work.reconcile", {})
+        _control_plane_request("drain.release", {
+            "expected": (protected or {}).get("drain"),
+            "reason": "worker restart complete",
+        })
     return {
         "ok": bool(outcome.get("restarted")),
         "restarted": bool(outcome.get("restarted")),
@@ -23172,7 +23172,16 @@ def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart
                 except Exception:
                     pass
                 break
-        os.execvp(sys.executable, _server_launch_argv())
+        try:
+            os.execvp(sys.executable, _server_launch_argv())
+        except OSError as exc:
+            _ACCEPT_PAUSED.clear()
+            if protected and protected.get("drain"):
+                _control_plane_request("drain.release", {
+                    "expected": protected["drain"],
+                    "reason": "dashboard restart failed",
+                })
+            print(f"[restart] failed: {exc}", flush=True)
     t = threading.Timer(delay, _go)
     t.daemon = True
     t.start()
@@ -37166,22 +37175,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             healthy = False
             reconciled = None
             drain_replayed = None
-            if outcome.get("restarted"):
-                healthy = _wait_worker_healthy()
-                if healthy:
-                    recon = _control_plane_request("work.reconcile", {})
-                    if isinstance(recon, dict) and recon.get("ok"):
-                        reconciled = int(recon.get("reconciled") or 0)
-                    # Lift the precheck drain now that the worker answers:
-                    # nobody else released "worker-restart:" drains (startup
-                    # only cleared "dashboard-restart:" ones), so a successful
-                    # restart left every later submit deferring forever.
-                    rel = _control_plane_request("drain.set", {
-                        "enabled": False,
-                        "reason": "worker restart complete",
-                    })
-                    if isinstance(rel, dict) and rel.get("ok"):
-                        drain_replayed = int(rel.get("replayed") or 0)
+            healthy = _wait_worker_healthy()
+            if healthy:
+                recon = _control_plane_request("work.reconcile", {})
+                if isinstance(recon, dict) and recon.get("ok"):
+                    reconciled = int(recon.get("reconciled") or 0)
+                # Release only this restart's pause; another operator may
+                # have paused dispatch while we waited for worker health.
+                rel = _control_plane_request("drain.release", {
+                    "expected": (protected or {}).get("drain"),
+                    "reason": "worker restart complete",
+                })
+                if isinstance(rel, dict) and rel.get("ok"):
+                    drain_replayed = int(rel.get("replayed") or 0)
             self.send_json({
                 "ok": bool(outcome.get("restarted")),
                 "worker": outcome,
@@ -37191,6 +37197,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "reconciled": reconciled,
                 "drain_replayed": drain_replayed,
                 "note": (
+                    "Worker restart failed; dispatch resumed on the healthy worker."
+                    if healthy and not outcome.get("restarted") else
                     ("Worker restarted and reconciled ("
                         + str(reconciled) + " item(s) reclaimed).") if healthy
                     else "Worker restarted, but hasn't answered yet -- "
@@ -48384,15 +48392,15 @@ def main():
         if (
             drain.get("enabled")
             and str(drain.get("reason") or "").startswith(
-                ("dashboard-restart:", "worker-restart:")
+                ("dashboard-restart:", "worker-restart:", "worker-compat-selfheal:")
             )
         ):
             # "worker-restart:" drains are normally lifted by the restart
             # handler itself once the worker is healthy; this catches the
             # ones it leaked (dashboard died mid-restart), which otherwise
             # defer every queued submit forever.
-            resumed = _control_plane_request("drain.set", {
-                "enabled": False,
+            resumed = _control_plane_request("drain.release", {
+                "expected": drain,
                 "reason": "dashboard online",
             })
             print(

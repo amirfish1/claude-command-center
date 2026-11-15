@@ -87958,11 +87958,13 @@
     const queued = controlPlaneDrainQueued > 0
       ? ' ' + controlPlaneDrainQueued + ' message(s) held.'
       : '';
+    const restarting = /^(dashboard-restart|worker-restart|worker-compat-selfheal):/.test(controlPlaneDrainReason);
     if ($drainPausedBannerText) {
-      $drainPausedBannerText.textContent =
-        'Dispatch paused' + reason + '. New sends are queuing, not sending.'
-        + queued;
+      $drainPausedBannerText.textContent = restarting
+        ? 'Restart in progress. Dispatch resumes automatically.' + queued
+        : 'Dispatch paused' + reason + '. New sends are queuing, not sending.' + queued;
     }
+    if ($drainPausedResumeBtn) $drainPausedResumeBtn.hidden = restarting;
     $drainPausedBanner.hidden = false;
   }
 
