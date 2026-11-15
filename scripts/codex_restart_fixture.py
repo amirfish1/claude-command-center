@@ -40,8 +40,14 @@ def _json(raw):
         return result
     def nonfinite(value):
         raise Stop('nonfinite JSON number')
+    def finite_float(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise Stop('nonfinite JSON number')
+        return result
     try:
-        result = json.loads(raw, object_pairs_hook=unique, parse_constant=nonfinite)
+        result = json.loads(raw, object_pairs_hook=unique, parse_constant=nonfinite,
+                            parse_float=finite_float)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise Stop('invalid JSON') from exc
     if not isinstance(result, dict):

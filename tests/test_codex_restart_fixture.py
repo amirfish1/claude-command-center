@@ -85,7 +85,7 @@ def test_changed_or_missing_budget_never_reinitializes(tmp_path, grant):
 
 
 @pytest.mark.parametrize('corrupt', ['{', '{}', '{"format":1,"format":1}',
-    '{"format":1,"last_wall":NaN}', '[1,2]'])
+    '{"format":1,"last_wall":NaN}', '{"format":1,"last_wall":1e999}', '[1,2]'])
 def test_corrupt_state_refuses(tmp_path, grant, corrupt):
     root = private(tmp_path)
     fixture.Budget(root, grant)
