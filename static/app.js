@@ -3085,10 +3085,31 @@
       try { _flushDeferredSidebarRenderIfAny(); } catch (_) {}
     }, 600);
   }
+  // An open app (/?ccc_app=<id>) is an iframe laid over the whole dashboard,
+  // and it shares this page's main thread. Rebuilding the session list
+  // underneath it paints nothing anyone can see and freezes the app: on a
+  // busy install those rebuilds were about half of the dashboard's script
+  // time while an app was open. Poll-driven list renders wait until the app
+  // closes; user-forced and lifecycle renders still run.
+  function _dashboardCoveredByApp() {
+    const body = document.body;
+    return !!(body && body.classList.contains('ccc-mobile-app-open'));
+  }
+  (function flushSidebarWhenAppCloses() {
+    if (!window.MutationObserver || !document.body) return;
+    let covered = _dashboardCoveredByApp();
+    new MutationObserver(() => {
+      const now = _dashboardCoveredByApp();
+      if (now === covered) return;
+      covered = now;
+      if (!now) { try { _flushDeferredSidebarRenderIfAny(); } catch (_) {} }
+    }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  })();
   // Sidebar list renders must still run while #convSearch is focused —
   // otherwise the debounced filter never paints until blur/Enter (the
   // pause guard was written for background pollers, not the search box).
   function shouldPauseSidebarRender() {
+    if (_dashboardCoveredByApp()) return true;
     if (isConversationListScrollActive()) return true;
     const ae = document.activeElement;
     if (ae && ae.id === 'convSearch') return false;
@@ -34470,7 +34491,7 @@
     } catch (_) { return false; }
   }
   function _pausePeriodicSidebarRender() {
-    return _readAloudThrottlesSidebar() || shouldPausePeriodicUiWork() || isConversationListScrollActive() || Date.now() < _convRowActionHoverUntil || _sidebarHasHoveredConvItem();
+    return _dashboardCoveredByApp() || _readAloudThrottlesSidebar() || shouldPausePeriodicUiWork() || isConversationListScrollActive() || Date.now() < _convRowActionHoverUntil || _sidebarHasHoveredConvItem();
   }
   function _flushDeferredSidebarRenderIfAny() {
     if (!_sidebarRenderPendingWhilePaused) return;
@@ -51438,6 +51459,25 @@
     } catch (_) {}
     rowName = workerTitleForPane(fullRow, String(rowName || title || '').trim());
     const headerTitle = opts.title !== undefined ? workerTitleForPane(fullRow, String(title || '').trim()) : rowName;
+    // Keep ticket identity visible even when a long task name is ellipsized.
+    const ticketEl = pane.querySelector('[data-role="pane-ticket"]');
+    if (ticketEl) {
+      let ref = '';
+      if (fullRow && opts.category === undefined) {
+        try { ref = workerRowFacts(fullRow, headerTitle).ticketRef || ''; } catch (_) {}
+      }
+      ticketEl.hidden = !ref;
+      ticketEl.textContent = ref;
+      if (ref) {
+        ticketEl.dataset.workerTicket = ref;
+        ticketEl.title = 'Open ticket ' + ref;
+        ticketEl.setAttribute('aria-label', 'Open ticket ' + ref);
+      } else {
+        delete ticketEl.dataset.workerTicket;
+        ticketEl.removeAttribute('title');
+        ticketEl.removeAttribute('aria-label');
+      }
+    }
     // CCC-149: the single-pane desktop header borrows the phone toolbar's
     // look (avatar + session name), so carry the sidebar row's avatar.
     const avatarEl = pane.querySelector('[data-role="pane-avatar"]');
@@ -78558,10 +78598,17 @@
     }
     _refreshToolbarEmptiness();
     // Re-check when DOM mutations could change visibility (state-driven
-    // toolbar buttons appearing/disappearing). Cheap — only fires on
-    // actual mutation.
+    // toolbar buttons appearing/disappearing). Each check reads layout, and
+    // a read right after a mutation forces a full synchronous layout of the
+    // page (seconds in total while a long conversation renders), so batches
+    // of mutations share one check on the next frame.
     if (window.MutationObserver && $convToolbar) {
-      const mo = new MutationObserver(_refreshToolbarEmptiness);
+      let toolbarCheckQueued = false;
+      const mo = new MutationObserver(() => {
+        if (toolbarCheckQueued) return;
+        toolbarCheckQueued = true;
+        requestAnimationFrame(() => { toolbarCheckQueued = false; _refreshToolbarEmptiness(); });
+      });
       mo.observe($convToolbar, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
     }
 
@@ -81826,7 +81873,7 @@
   // ticket instead of selecting the row. Clicks elsewhere in the strip fall
   // through to the row as usual.
   document.addEventListener('click', ev => {
-    const ticket = ev.target.closest && ev.target.closest('.conv-worker-history [data-worker-ticket], .conv-avatar-ticket[data-worker-ticket]');
+    const ticket = ev.target.closest && ev.target.closest('.conv-worker-history [data-worker-ticket], .conv-avatar-ticket[data-worker-ticket], .conv-pane-ticket[data-worker-ticket]');
     if (!ticket) return;
     ev.stopPropagation();
     ev.preventDefault();
@@ -81934,6 +81981,8 @@
     const fresh = _uxFixesQueueMetaLoadedAt
       && (Date.now() - _uxFixesQueueMetaLoadedAt) < UX_FIXES_QUEUE_META_TTL_MS;
     if (!opts.force && fresh) return uxFixesQueueMeta;
+    // The chips this feeds are on session rows hidden under an open app.
+    if (!opts.force && _dashboardCoveredByApp()) return uxFixesQueueMeta;
     _uxFixesQueueMetaPromise = (async () => {
       try {
         const data = await _queueListFetch();
