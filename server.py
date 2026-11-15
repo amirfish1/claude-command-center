@@ -37534,6 +37534,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _spawn_timeline_save()
             self.send_json({"ok": True, "timeline": _spawn_timeline_get(sid)})
             return
+        if path == '/api/restart/managed':
+            # Explicit source-only opt-in. The mutable dashboard never selects
+            # a barrier: only the root-pinned one-shot image can accept proof,
+            # freeze, stop its exact worker and admit the replacement.
+            from ccc_server.execution_restart import launch, MAX_PACKET
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= MAX_PACKET:
+                    raise ValueError('managed request exceeds packet bound')
+                result = launch(json.loads(self.rfile.read(length)))
+            except Exception as exc:
+                self.send_json({'ok': False, 'code': 'codex_restart_pending',
+                    'fallback': 'queue', 'outcome': 'unknown',
+                    'error': 'Managed transition unproven; reconcile before retry: ' + str(exc)[:200]}, 409)
+                return
+            self.send_json(result)
+            return
         if path == "/api/restart/worker":
             # Restart ONLY the execution worker. The common case after a
             # server.py fix: worker_engines.py lazily imports server, so the

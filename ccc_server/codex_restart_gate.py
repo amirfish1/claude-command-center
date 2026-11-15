@@ -77,6 +77,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 
 # Everything else is refused while frozen, reads included: no method may
 # load a thread. Cancellation keeps working; the rest are the barrier's own
@@ -94,6 +95,7 @@ _owner = ""
 _committed = False
 _fence_path = None          # persisted fence; None = in-memory only (tests)
 _authorities = []           # [{"token", "owner_pid", "owner_pgid", "worker_pid"}]
+_observation = threading.local()
 WORKER_UNIT = "ccc-worker.service"
 
 
@@ -130,7 +132,57 @@ def frozen(now=None):
 def blocks(method, now=None):
     """True if `method` must not be sent right now. Callers hold the
     app-server condition, which acquire() sets the freeze under."""
-    return method not in ALLOWED_WHILE_FROZEN and frozen(now)
+    observed_reads = getattr(_observation, 'methods', ())
+    return method not in ALLOWED_WHILE_FROZEN and method not in observed_reads and frozen(now)
+
+
+@contextmanager
+def managed_observation(*, recovery=False):
+    """Fixed internal reads; no transport send/input or legacy gate override.
+
+    A replacement may re-subscribe only after root releases its admission stop.
+    The permission is thread-local and never supplied by request JSON.
+    """
+    previous = getattr(_observation, 'methods', ())
+    _observation.methods = frozenset({'thread/read', 'thread/turns/list',
+                                     'thread/queue/list', 'thread/goal/get'}) | (
+        {'thread/resume'} if recovery else set())
+    try:
+        yield
+    finally:
+        _observation.methods = previous
+
+
+def capture_managed(collect, *, token=None, seal=False, owner_pid=None):
+    """Freeze and capture facts, NEVER a permission for a legacy caller to kill.
+
+    Only the measured root coordinator validates proof acceptance and decides
+    whether to stop its exact container. Replies intentionally have no legacy
+    frozen/committed success fields. A seal persists the existing fence.
+    """
+    lock = _app_server_lock()
+    if lock is None:
+        raise ValueError('managed transport is not loaded')
+    with lock, _state_lock:
+        owned, refused = _take_lease_unlocked(token, DEFAULT_TTL_S, 'managed observation', _now())
+        if refused:
+            raise ValueError(refused['reason'])
+    try:
+        facts, unchanged = collect()
+        with lock, _state_lock:
+            remaining = _frozen_until - _now()
+            if _owner != owned or (not _committed and remaining <= 0) or not unchanged():
+                raise ValueError('managed freeze or observation changed')
+            if seal:
+                if not token or not _fence_path:
+                    raise ValueError('managed seal requires an existing durable freeze')
+                result = _proved(owned, 'managed observation sealed', remaining, True, owner_pid)
+                if not result.get('committed'):
+                    raise ValueError('managed fence could not be persisted')
+        return {'lease': owned, 'sealed': seal, 'observation': facts}
+    except BaseException:
+        release(owned)
+        raise
 
 
 def refusal():

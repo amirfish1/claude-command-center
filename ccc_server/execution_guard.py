@@ -132,13 +132,14 @@ def measured_generated_sources(entries):
 
 
 class SourceGuard:
-    def __init__(self, commands, generated_sources=(), unix_sockets=(), state_files=()):
+    def __init__(self, commands, generated_sources=(), unix_sockets=(), state_files=(), managed_control=False):
         self.commands = {tuple(command) for command in commands}
         self.code = set()
         self.generated_sources = set(generated_sources)
         self._deriving = False
         self.unix_sockets = set(unix_sockets)
         self.state_files = set(state_files)
+        self.managed_control = managed_control
 
     def register(self, code):
         self.code.add(code)
@@ -160,7 +161,15 @@ class SourceGuard:
                 filename = os.path.realpath(os.fsdecode(filename))
                 writing_only = flags & os.O_ACCMODE == os.O_WRONLY
                 if any(filename == root or filename.startswith(root + "/") for root in DATA_ROOTS):
-                    if not writing_only and filename not in self.state_files:
+                    # Stable IDs are data, not a wildcard source/config grant.
+                    # Existing recovery validates each journal's digest/schema.
+                    journal = self.managed_control and re.fullmatch(
+                        r'/state/pending-input-handoffs/claim-recovery/[0-9a-f]{64}\.json', filename)
+                    fence_marker = self.managed_control and re.fullmatch(
+                        r'/state/codex-restart-fence\.json\.done\.[0-9a-f]{32}', filename)
+                    directory = self.managed_control and bool(flags & getattr(os, 'O_DIRECTORY', 0))
+                    if (not writing_only and filename not in self.state_files
+                            and not journal and not fence_marker and not directory):
                         raise RuntimeError("execution refused: undeclared mutable input/configuration")
                 elif filename.startswith(("/proc/", "/sys/", "/dev/")):
                     if filename.endswith("/mem") or (flags & os.O_ACCMODE != os.O_RDONLY and filename != "/dev/null"):
@@ -276,7 +285,7 @@ def main():
                                value["network"], value["user"],
                                tuple(tuple(p) for p in value["generated_sources"]),
                                tuple(value["unix_sockets"]), tuple(value["state_files"]),
-                               value["pid_namespace"])
+                               value["pid_namespace"], value["control_stdio"])
     if canonical(profile.value()) != canonical(value):
         raise RuntimeError("execution refused: unknown execution profile")
     # No application code executes before installation. Pre-imported modules
@@ -302,7 +311,8 @@ def main():
         finally:
             os.close(descriptor)
     install_kernel_policy(restrict_signals=True)
-    guard = SourceGuard(profile.commands, generated, profile.unix_sockets, profile.state_files)
+    guard = SourceGuard(profile.commands, generated, profile.unix_sockets, profile.state_files,
+                        managed_control=profile.control_stdio)
     guard.install()
     # Every launch begins behind this kernel admission stop. A root authority
     # re-observes the exact prepared identity before the coordinator releases

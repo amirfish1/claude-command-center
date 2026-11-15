@@ -450,9 +450,14 @@ class ExecutionProfile:
     unix_sockets: tuple = ()  # Explicit private data sockets; peer proof separate.
     state_files: tuple = ()  # Exact mutable ledger/input files, never configuration.
     identity_namespace: str = "private"  # Explicit kernel PID and cgroup visibility.
-    control_stdio: bool = False  # Enable managed restart control protocol over stdio.
+    control_stdio: bool = False  # Fixed data protocol, never a shell/code channel.
 
     def value(self):
+        if type(self.control_stdio) is not bool:
+            raise Refused("invalid control stdio policy")
+        if self.control_stdio and (self.entry != '/opt/ccc/ccc_worker.py'
+                                   or '--managed-control-stdio' not in self.argv):
+            raise Refused("stdio control requires the fixed worker handler")
         if not self.entry.startswith("/opt/ccc/") or "/../" in self.entry:
             raise Refused("entry must be measured CCC source")
         if not re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", self.user):
@@ -475,7 +480,8 @@ class ExecutionProfile:
                 raise Refused("unmeasured interpreter/loader configuration")
             if not isinstance(val, str):
                 raise Refused("non-string environment value")
-            if val.startswith(_DATA_ROOTS) and key != "CCC_STATE_DIR":
+            socket_setting = key == 'CCC_CODEX_APP_SERVER_SOCKET' and val in self.unix_sockets
+            if val.startswith(_DATA_ROOTS) and key != "CCC_STATE_DIR" and not socket_setting:
                 raise Refused("mutable environment-backed configuration is unsupported")
             if ".." in val.split("/"):
                 raise Refused("unmeasurable environment path traversal")
@@ -520,7 +526,9 @@ class ExecutionProfile:
                 "automatic_files_readonly": True,
                 "etc_snapshot": "readonly-image-subtree-v1",
                 "entry_admission": "guardian-child-stop-root-pidfd-release-v1",
-                "inherited_descriptors": "docker-stdio-only"}
+                "inherited_descriptors": "docker-stdio-only",
+                "mutable_inputs": 'fixed-managed-journals-v1' if self.control_stdio else 'exact-files-only-v1',
+                "control_stdio": self.control_stdio}
 
     @property
     def sha256(self):
@@ -529,6 +537,7 @@ class ExecutionProfile:
     def config(self, image_id):
         self.value()
         return {"Image": image_id, "User": self.user, "WorkingDir": "/opt/ccc",
+                "OpenStdin": self.control_stdio, "StdinOnce": False, "Tty": False,
                 "Entrypoint": ["/usr/local/bin/python3", "-I", "-S", "-B",
                                "/opt/ccc/ccc_server/execution_guard.py"],
                 "Cmd": [canonical(self.value()).decode()],
@@ -651,7 +660,9 @@ def verify_container(container, profile, processes):
     """Kernel/daemon facts only. No digest or 'readonly' claim from the worker."""
     expected = profile.config(container["Image"])
     config, host = container["Config"], container["HostConfig"]
-    if container.get("ExecIDs") or config.get("Tty") or config.get("OpenStdin"):
+    if (container.get("ExecIDs") or config.get("Tty")
+            or bool(config.get("OpenStdin")) != profile.control_stdio
+            or config.get("StdinOnce")):
         raise Refused("unmeasured exec session or inherited input facility")
     if config.get("Healthcheck") and config["Healthcheck"].get("Test") != ["NONE"]:
         raise Refused("unmeasured healthcheck subprocess")
