@@ -78,6 +78,9 @@ class _SessionGraph:
         # "already enriched" skip would miss whichever file wasn't written
         # yet at the first glob).
         self._claude_task_enriched = {}
+        # In-memory hints only: keep live stats fresh without rediscovering
+        # every known Task transcript across all projects on every poll.
+        self._task_transcript_paths = {}
         # parent_sid -> set of child_sids already enriched for Kimi Code
         # Agent subagents (agents/<name>/wire.jsonl under the session dir).
         self._kimi_subagents_enriched = set()
@@ -423,10 +426,12 @@ class _SessionGraph:
             # transcript's mtime plus an `active` verdict from its tail.
             if meta.get("source") == "claude-task-tool" and parent:
                 try:
-                    for f in _core.PROJECTS_ROOT.glob(
-                        f"*/{parent}/subagents/{node}.jsonl"
-                    ):
-                        st = f.stat()
+                    for f in self._task_transcript_candidates(parent, node):
+                        try:
+                            st = f.stat()
+                        except OSError:
+                            continue  # A removed copy must not hide another.
+                        self._remember_task_transcript(parent, node, f)
                         out["mtime"] = st.st_mtime
                         out["active"] = _agent_transcript_active(
                             f, st.st_mtime, st.st_size
@@ -439,6 +444,25 @@ class _SessionGraph:
             return out
 
         return build(root, 0)
+
+    def _remember_task_transcript(self, parent, child, transcript, *, replace=True):
+        key = (str(_core.PROJECTS_ROOT), parent, child)
+        with self._lock:
+            if not replace and key in self._task_transcript_paths:
+                return
+            if key not in self._task_transcript_paths and len(self._task_transcript_paths) >= 2048:
+                self._task_transcript_paths.pop(next(iter(self._task_transcript_paths)))
+            self._task_transcript_paths[key] = transcript
+
+    def _task_transcript_candidates(self, parent, child):
+        key = (str(_core.PROJECTS_ROOT), parent, child)
+        with self._lock:
+            known = self._task_transcript_paths.get(key)
+        if known is not None:
+            yield known
+        # A cold graph, deleted path or copied transcript still resolves
+        # through all projects. The caller stops after the first valid stat.
+        yield from _core.PROJECTS_ROOT.glob(f"*/{parent}/subagents/{child}.jsonl")
 
     def all_edges(self):
         """Return a list of (parent, child, meta) tuples for debugging."""
@@ -630,6 +654,7 @@ def _session_graph_enrich_claude_task_subagents(parent_sid):
             agent_id = agent_file.stem  # e.g. "agent-a7d894abf5832d"
             if not agent_id.startswith("agent-"):
                 continue
+            _core._session_graph._remember_task_transcript(parent_sid, agent_id, agent_file, replace=False)
             name = None
             model = None
             meta_file = agent_file.with_name(f"{agent_id}.meta.json")

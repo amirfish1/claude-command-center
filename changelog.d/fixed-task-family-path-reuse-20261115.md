@@ -1,0 +1,1 @@
+- Reuse discovered Task-subagent transcript paths during family polling while keeping live activity checks and copied-transcript recovery fresh.

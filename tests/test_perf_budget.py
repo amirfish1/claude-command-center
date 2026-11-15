@@ -6002,3 +6002,40 @@ def test_known_claude_status_and_usage_do_not_walk_other_projects(tmp_path, monk
     usage = morning_launch.extract_session_usage(sid)
     assert usage['total_input_tokens'] == 12
     assert usage['total_output_tokens'] == 3
+
+
+def test_known_task_liveness_uses_fresh_stats_without_project_globs(tmp_path, monkeypatch):
+    from ccc_server import session_graph
+    root = tmp_path / 'projects'
+    agents = root / 'known' / 'parent-session' / 'subagents'
+    agents.mkdir(parents=True)
+    transcript = agents / 'agent-child.jsonl'
+    transcript.write_text(json.dumps({'type': 'assistant', 'message': {
+        'content': [{'type': 'tool_use', 'id': 'tool-1', 'name': 'Read', 'input': {}}]}}) + '\n')
+    graph = session_graph._SessionGraph(tmp_path / 'graph.json')
+    monkeypatch.setattr(server, 'PROJECTS_ROOT', root)
+    monkeypatch.setattr(server, '_session_graph', graph)
+    session_graph._session_graph_enrich_claude_task_subagents('parent-session')
+    original_glob = type(root).glob
+    calls = []
+    def observed_glob(path, pattern, *args, **kwargs):
+        calls.append((path, pattern))
+        return original_glob(path, pattern, *args, **kwargs)
+    monkeypatch.setattr(type(root), 'glob', observed_glob)
+    child = graph.family_tree('parent-session')['children'][0]
+    assert child['active'] is True and not calls
+    transcript.write_text(json.dumps({'type': 'assistant', 'message': {
+        'content': [{'type': 'text', 'text': 'Finished.'}], 'stop_reason': 'end_turn'}}) + '\n')
+    child = graph.family_tree('parent-session')['children'][0]
+    assert child['active'] is False and child['mtime'] == transcript.stat().st_mtime
+    assert not calls, 'known children re-walked every project during family polling'
+    # Removed copies fall back to another project, then become cheap again.
+    other = root / 'copy' / 'parent-session' / 'subagents' / transcript.name
+    other.parent.mkdir(parents=True)
+    other.write_bytes(transcript.read_bytes())
+    transcript.unlink()
+    assert graph.family_tree('parent-session')['children'][0]['mtime'] == other.stat().st_mtime
+    assert calls
+    calls.clear()
+    assert graph.family_tree('parent-session')['children'][0]['active'] is False
+    assert not calls
