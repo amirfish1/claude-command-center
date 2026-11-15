@@ -11266,6 +11266,35 @@ def _codex_cwd_matches_repo(cwd, repo_path, git_top_cache):
 _codex_tail_resume = {}
 
 
+def _codex_saved_tail_resume(cached, path, st):
+    """Validate a disk cursor before trusting append-only parser state."""
+    if not cached or cached.get("engine") != "codex" or cached.get("meta_version") != _CODEX_META_VERSION:
+        return None
+    state = cached.get("_tail_checkpoint")
+    if not isinstance(state, dict) or state.get("version") != 1:
+        return None
+    try:
+        offset, pos = state["offset"], state["pos"]
+        if (not isinstance(offset, int) or not isinstance(pos, int)
+                or offset < 0 or pos < 0 or offset > st.st_size
+                or state["device"] != st.st_dev or state["inode"] != st.st_ino
+                or st.st_mtime < cached.get("mtime", 0)
+                or not isinstance(state["pending_calls"], dict)
+                or not all(isinstance(v, dict) for v in state["pending_calls"].values())):
+            return None
+        length = min(4096, offset)
+        with open(path, "rb") as source:
+            if hashlib.sha256(source.read(length)).hexdigest() != state["head"]:
+                return None
+            source.seek(offset - length)
+            if hashlib.sha256(source.read(length)).hexdigest() != state["tail"]:
+                return None
+        return {"meta_version": _CODEX_META_VERSION, "offset": offset, "pos": pos,
+                "pending_calls": copy.deepcopy(state["pending_calls"]), "meta": cached}
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 def _extract_codex_tail_meta(path):
     try:
         st = path.stat()
@@ -11290,6 +11319,11 @@ def _extract_codex_tail_meta(path):
     # parse state and read only the bytes appended since the last call.
     with _core._conv_meta_cache_lock:
         resume = _core._codex_tail_resume.get(spath)
+    if resume is None:
+        # Detached archive workers have no in-memory cursor. Restore the same
+        # pending-tool/cumulative-usage state instead of parsing the full live
+        # rollout again on every worker launch.
+        resume = _codex_saved_tail_resume(cached, path, st)
     if (
         resume
         and resume.get("meta_version") == _CODEX_META_VERSION
@@ -11637,9 +11671,25 @@ def _extract_codex_tail_meta(path):
                     if ts_epoch:
                         meta["last_meaningful_ts"] = ts_epoch
             end_offset = start_offset
+            # Hash bounded anchors, not the whole history. Together with the
+            # inode/device and cursor length they reject replaced/truncated
+            # files and ordinary in-place rewrites before a later process
+            # reuses the saved parser state.
+            length = min(4096, end_offset)
+            f.seek(0)
+            head_digest = hashlib.sha256(f.read(length)).hexdigest()
+            f.seek(end_offset - length)
+            tail_digest = hashlib.sha256(f.read(length)).hexdigest()
+            identity = os.fstat(f.fileno())
     except OSError:
         return {}
 
+    meta["_tail_checkpoint"] = {
+        "version": 1, "device": identity.st_dev, "inode": identity.st_ino,
+        "offset": end_offset, "pos": pos,
+        "pending_calls": copy.deepcopy(pending_calls),
+        "head": head_digest, "tail": tail_digest,
+    }
     meta["mtime"] = mtime
     if not meta.get("last_meaningful_ts"):
         meta["last_meaningful_ts"] = mtime

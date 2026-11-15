@@ -124,6 +124,7 @@ def _meta_sans_volatile(meta: dict) -> dict:
     full-vs-incremental comparison is apples-to-apples."""
     out = dict(meta)
     out.pop("mtime", None)
+    out.pop("_tail_checkpoint", None)  # private file/cursor identity, not conversation metadata
     out.pop("pending_tool_ts", None)  # falls back to mtime when no event ts
     return out
 
@@ -200,3 +201,111 @@ def test_partial_trailing_line_not_consumed(tmp_path):
     meta2 = server._extract_codex_tail_meta(Path(p))
     assert server._codex_tail_resume[str(p)]["offset"] > off_complete
     assert meta2["last_prompt"] == "half message"
+
+
+def test_disk_reload_reads_only_appended_records_and_retains_pending_tool(tmp_path, monkeypatch):
+    """A fresh archive worker must finish an old call without rereading history."""
+    import builtins
+    import copy
+    from pathlib import Path
+    p = tmp_path / 'persisted.jsonl'
+    monkeypatch.setattr(server, '_CONV_META_CACHE_FILE', tmp_path / 'metadata.json')
+    p.write_text(''.join(SCRIPT[:4]) + (_agent('Padding history ' * 100) * 1000)
+                 + _call('pr-call', name='exec_command', args={'cmd': 'gh pr create'}))
+    server._extract_codex_tail_meta(p)
+    server._save_conv_meta_cache()
+    server._conv_meta_cache.clear()
+    server._codex_tail_resume.clear()
+    server._load_conv_meta_cache()
+    tail = _call_out('pr-call', 'https://github.com/example/project/pull/42') + ''.join(SCRIPT[4:])
+    with p.open('a') as out:
+        out.write(tail)
+    reads = []
+    original = builtins.open
+    class Tracked:
+        def __init__(self, source): self.source = source
+        def __getattr__(self, name): return getattr(self.source, name)
+        def __enter__(self): self.source.__enter__(); return self
+        def __exit__(self, *args): return self.source.__exit__(*args)
+        def read(self, *args):
+            data = self.source.read(*args); reads.append(len(data)); return data
+        def readline(self, *args):
+            data = self.source.readline(*args); reads.append(len(data)); return data
+    def tracked(candidate, *args, **kwargs):
+        source = original(candidate, *args, **kwargs)
+        return Tracked(source) if Path(candidate) == p and args and args[0] == 'rb' else source
+    with monkeypatch.context() as context:
+        context.setattr(builtins, 'open', tracked)
+        resumed = copy.deepcopy(server._extract_codex_tail_meta(p))
+    assert sum(reads) <= len(tail.encode()) + 16384, 'restored cursor reread historical rollout bytes'
+    server._conv_meta_cache.clear(); server._codex_tail_resume.clear()
+    full = server._extract_codex_tail_meta(p)
+    assert _meta_sans_volatile(resumed) == _meta_sans_volatile(full)
+    assert resumed['pending_tool'] and resumed['has_edit']
+    assert resumed['tail_pr_number'] == 42, 'the pending call must survive worker exit'
+
+
+@pytest.mark.parametrize('mutation', ['truncate', 'replace', 'rewrite-head', 'rewrite-tail', 'invalid-cursor'])
+def test_saved_cursor_falls_back_after_invalid_history(tmp_path, monkeypatch, mutation):
+    import copy
+    p = tmp_path / 'changed.jsonl'
+    monkeypatch.setattr(server, '_CONV_META_CACHE_FILE', tmp_path / 'metadata.json')
+    p.write_text(''.join(SCRIPT))
+    server._extract_codex_tail_meta(p)
+    server._save_conv_meta_cache()
+    server._conv_meta_cache.clear(); server._codex_tail_resume.clear()
+    server._load_conv_meta_cache()
+    if mutation == 'truncate':
+        p.write_text(_user('New short history'))
+    elif mutation == 'replace':
+        replacement = tmp_path / 'new.jsonl'
+        replacement.write_text(_user('Replacement') + _agent('New ' * 1000))
+        replacement.replace(p)
+    elif mutation == 'rewrite-head':
+        p.write_text(_session_meta(cwd='/example/replaced') + ''.join(SCRIPT[1:]) + _agent('More data'))
+    elif mutation == 'rewrite-tail':
+        p.write_text(''.join(SCRIPT[:-1]) + _user('A replacement ending ' * 100))
+    else:
+        server._conv_meta_cache[str(p)]['_tail_checkpoint']['offset'] = -10
+        with p.open('a') as out: out.write(_agent('Fresh append'))
+    resumed = copy.deepcopy(server._extract_codex_tail_meta(p))
+    server._conv_meta_cache.clear(); server._codex_tail_resume.clear()
+    full = server._extract_codex_tail_meta(p)
+    assert _meta_sans_volatile(resumed) == _meta_sans_volatile(full)
+
+
+def test_saved_cursor_keeps_partial_record_unconsumed_across_reload(tmp_path, monkeypatch):
+    p = tmp_path / 'partial-reload.jsonl'
+    monkeypatch.setattr(server, '_CONV_META_CACHE_FILE', tmp_path / 'metadata.json')
+    prefix = _session_meta() + _user('Complete prompt')
+    p.write_text(prefix + '{"type":"event_msg","payload":{"type":"user_message","message":"Part')
+    server._extract_codex_tail_meta(p)
+    server._save_conv_meta_cache()
+    server._conv_meta_cache.clear(); server._codex_tail_resume.clear()
+    server._load_conv_meta_cache()
+    with p.open('a') as out: out.write('ial prompt"}}\n')
+    assert server._extract_codex_tail_meta(p)['last_prompt'] == 'Partial prompt'
+
+
+def test_saved_cursor_preserves_usage_delta_and_counter_resets(tmp_path, monkeypatch):
+    import copy
+    p = tmp_path / 'usage-reload.jsonl'
+    monkeypatch.setattr(server, '_CONV_META_CACHE_FILE', tmp_path / 'metadata.json')
+    def usage(i, cached, output):
+        totals = {'input_tokens': i, 'cached_input_tokens': cached,
+                  'output_tokens': output, 'total_tokens': i + output}
+        return _ev({'type': 'event_msg', 'timestamp': '2026-06-02T10:00:04Z', 'payload': {'type': 'token_count',
+            'info': {'last_token_usage': totals, 'total_token_usage': totals}}})
+    lines = [_session_meta(model='gpt-6-astra') + _user('Usage test'), usage(100000, 80000, 10000),
+             usage(200000, 160000, 20000), usage(200000, 160000, 20000),
+             usage(10000, 8000, 1000)]
+    for line in lines:
+        with p.open('a') as out: out.write(line)
+        resumed = copy.deepcopy(server._extract_codex_tail_meta(p))
+        server._save_conv_meta_cache()
+        server._conv_meta_cache.clear(); server._codex_tail_resume.clear()
+        server._load_conv_meta_cache()
+    server._conv_meta_cache.clear(); server._codex_tail_resume.clear()
+    full = server._extract_codex_tail_meta(p)
+    assert _meta_sans_volatile(resumed) == _meta_sans_volatile(full)
+    assert resumed['cost_usd'] > 0
