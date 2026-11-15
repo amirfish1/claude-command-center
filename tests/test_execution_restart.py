@@ -74,6 +74,8 @@ def harness(packet):
                 value['observation']['worker_epoch'] = 'changed'
             if operation == 'ready' and mutate.get('replacement-daemon'):
                 value['observation']['daemon']['socket_inode'] += 1
+            if operation == 'ready' and mutate.get('replacement-worker'):
+                value['observation']['worker']['start_ticks'] += 1
             return value
         def stop_exact(self, fact):
             events.append(('stop', fact.identity.container_id))
@@ -186,6 +188,13 @@ def test_root_acceptance_change_during_final_validation_refuses_exact_stop(harne
     with pytest.raises(Refused, match='before exact stop'):
         harness.coordinator.run(harness.raw, harness.evidence)
     assert not any(e[0] in ('stop', 'release') for e in harness.events)
+
+
+def test_replacement_observation_must_match_its_actual_application_before_thaw(harness):
+    harness.mutate['replacement-worker'] = True
+    with pytest.raises(Refused, match='snapshot identity mismatch'):
+        harness.coordinator.run(harness.raw, harness.evidence)
+    assert ('control', 'resume') not in harness.events
 
 
 def test_stdio_protocol_cannot_dispatch_arbitrary_worker_methods():

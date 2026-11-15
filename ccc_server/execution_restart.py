@@ -55,11 +55,11 @@ class Coordinator:
             self.anchor['executed_build_sha256'], self.anchor['execution_profile_sha256'], '')
         return facts
 
-    def _validate(self, raw, evidence, receipt, facts):
+    def _validate(self, raw, evidence, receipt, facts, observed_worker=None):
         from ccc_server import codex_managed_recovery as recovery
         observation = receipt.get('observation')
         _need(isinstance(observation, dict), 'missing worker observation')
-        ident = facts['worker'].identity
+        ident = (observed_worker or facts['worker']).identity
         _need(observation.get('worker') == {'pid': ident.pid, 'start_ticks': ident.start_ticks,
                                            'boot_id': ident.boot_id}, 'worker snapshot identity mismatch')
         daemon = observation.get('daemon')
@@ -155,8 +155,7 @@ class Coordinator:
                   'root authority/acceptance changed before recovery')
             # Validate native classes using the already accepted ordered pair;
             # replacement identity is checked separately, not A->B reinterpreted as B->B.
-            check = dict(ready, observation=dict(ready['observation'], worker=final['observation']['worker']))
-            self._validate(raw, evidence, check, final_facts)
+            self._validate(raw, evidence, ready, final_facts, observed_worker=live)
             _need(ready['observation']['daemon'] == final['observation']['daemon']
                   and set(ready['observation']['threads']) == set(final['observation']['threads']),
                   'replacement native continuity changed')
