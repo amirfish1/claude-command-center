@@ -125,12 +125,19 @@ class WorkerRuntime:
                     "error": "worker has not imported server yet",
                 }
             return {"ok": True, "status": server_mod._system_app_server_status()}
-        if method == "drain.set":
-            state = self.ledger.set_drain(
-                params.get("enabled"), params.get("reason") or ""
-            )
+        if method in ("drain.set", "drain.release"):
+            released = None
+            if method == "drain.release":
+                released = self.ledger.release_drain(
+                    params.get("expected"), params.get("reason") or ""
+                )
+                state = self.ledger.drain_state()
+            else:
+                state = self.ledger.set_drain(
+                    params.get("enabled"), params.get("reason") or ""
+                )
             replayed = []
-            if not state.get("enabled"):
+            if not state.get("enabled") and released is not False:
                 queued = self.ledger.list(states=["queued"], limit=2000)
                 dispatchable = any(
                     isinstance(item.get("payload"), dict)
@@ -144,6 +151,7 @@ class WorkerRuntime:
                 "ok": True,
                 "drain": state,
                 "replayed": len(replayed),
+                **({"released": released} if released is not None else {}),
                 **self.ledger.summary(),
             }
         if method == "work.submit":

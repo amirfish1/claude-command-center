@@ -21406,18 +21406,20 @@ def _auto_update_tick():
         return {"action": "busy", "tag": chk["tag"], "reasons": busy}
     # Same handoff the Restart button runs: adopt/drain so live sessions
     # survive. The "dashboard-restart" drain is released on the next boot.
-    ok, precheck_err, _, _ = _safe_worker_restart_precheck(reason_prefix="dashboard-restart")
+    ok, precheck_err, _, protected = _safe_worker_restart_precheck(reason_prefix="dashboard-restart")
     if not ok:
         _log_activity("update", "skip", f"{chk['tag']} available, restart precheck refused: {precheck_err}")
         return {"action": "busy", "tag": chk["tag"], "reasons": ["restart precheck refused"]}
     _log_activity("update", "apply", f"auto-updating to {chk['tag']} (idle)")
     result = _self_update()
     if not result.get("ok"):
-        _control_plane_request("drain.set", {"enabled": False, "reason": "auto-update aborted"})
+        _control_plane_request("drain.release", {
+            "expected": protected.get("drain"), "reason": "auto-update aborted",
+        })
         _log_activity("update", "fail", f"{chk['tag']}: {result.get('error')}")
         return {"action": "error", "tag": chk["tag"], "error": result.get("error")}
     _log_activity("update", "restart", f"now at {chk['tag']} ({result.get('new_sha', '')[:12]})")
-    _schedule_restart(caller="auto-updater", reason="release-update")
+    _schedule_restart(caller="auto-updater", reason="release-update", protected=protected)
     return {"action": "applied", "tag": chk["tag"], "result": result}
 
 
@@ -23121,7 +23123,7 @@ def _serve_http(server):
         server.server_close()
 
 
-def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart"):
+def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart", protected=None):
     """Arm a launchctl kickstart or os.execvp() that replaces this process with a fresh
     `python server.py` after `delay` seconds. Called AFTER the HTTP response
     is flushed so the client sees {ok:true} before the socket dies."""
@@ -23132,6 +23134,14 @@ def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart
         except Exception:
             pass
         if not _quiesce_http_for_restart():
+            if protected and protected.get("drain"):
+                resumed = _control_plane_request("drain.release", {
+                    "expected": protected["drain"],
+                    "reason": "dashboard restart cancelled",
+                })
+                if not resumed.get("ok"):
+                    print("[restart] could not release cancelled restart drain: "
+                          f"{resumed.get('error') or resumed.get('code')}", flush=True)
             return
         from ccc_server import restart_audit
         restart_audit.record_restart(caller, reason)
@@ -37248,7 +37258,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 pass
             from ccc_server import restart_audit
-            _schedule_restart(caller=restart_audit.request_caller(self, _rbody), reason=path)
+            _schedule_restart(caller=restart_audit.request_caller(self, _rbody), reason=path,
+                              protected=protected)
             return
         if path == "/api/template-gallery/open":
             # Open the editable gallery source for the local CCC install.

@@ -1,0 +1,1 @@
+- Cancelled dashboard restarts resume their worker queue without releasing a newer drain owned by another operation.

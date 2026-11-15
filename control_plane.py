@@ -291,6 +291,20 @@ class WorkLedger:
                 "enabled": False, "reason": "", "requested_at": None,
             }
 
+    def release_drain(self, expected, reason=""):
+        """Compare and release in one write so a newer drain stays owned."""
+        if not isinstance(expected, dict) or not expected.get("enabled") or not expected.get("reason"):
+            return False
+        value = {"enabled": False, "reason": str(reason or "")[:500],
+                 "requested_at": None}
+        with self._session() as conn:
+            changed = conn.execute(
+                "UPDATE control_meta SET value_json=?, updated_at=? "
+                "WHERE key='drain' AND value_json=?",
+                (_json(value), time.time(), _json(expected)),
+            )
+            return changed.rowcount == 1
+
     @staticmethod
     def _row(row):
         if row is None:
