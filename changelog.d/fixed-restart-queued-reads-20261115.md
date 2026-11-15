@@ -1,0 +1,1 @@
+- Dashboard restarts now defer queued background reads with a retry response, so a backlog cannot consume the shutdown drain window. Reads already running and accepted writes still finish.

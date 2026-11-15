@@ -30851,8 +30851,9 @@ def _run_api_request(is_background, callback, route=None):
     """Keep slow dashboard probes from crowding out foreground requests."""
     if not is_background:
         return callback()
+    from ccc_server.http_read_admission import read_slot
     if route is None:
-        with _background_api_read_slots:
+        with read_slot(_background_api_read_slots, _ACCEPT_PAUSED):
             return callback()
     with _BG_ROUTE_GUARD:
         if route not in _BG_ROUTE_LOCKS and len(_BG_ROUTE_LOCKS) >= _BG_ROUTE_MAX_KEYS:
@@ -30861,21 +30862,23 @@ def _run_api_request(is_background, callback, route=None):
                     _BG_ROUTE_LOCKS.pop(k, None)
                     break
         route_lock = _BG_ROUTE_LOCKS.setdefault(route, threading.Lock())
-    with route_lock:
+    with read_slot(route_lock, _ACCEPT_PAUSED):
         cheap = _bg_route_is_cheap(route)
-        if not cheap:
-            _background_api_read_slots.acquire()
-        c0 = time.thread_time()
+        c0 = None
         try:
-            return callback()
+            if cheap:
+                c0 = time.thread_time()
+                return callback()
+            with read_slot(_background_api_read_slots, _ACCEPT_PAUSED):
+                c0 = time.thread_time()
+                return callback()
         finally:
-            if not cheap:
-                _background_api_read_slots.release()
-            try:
-                _bg_route_note_cpu(route, time.thread_time() - c0)
-                _save_bg_route_cpu()
-            except Exception:
-                pass
+            if c0 is not None:
+                try:
+                    _bg_route_note_cpu(route, time.thread_time() - c0)
+                    _save_bg_route_cpu()
+                except Exception:
+                    pass
 
 
 def _spawn_stream_idle_sleep_s(consecutive_empty):
@@ -30940,6 +30943,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def do_GET(self):
+        from ccc_server.http_read_admission import ReadDeferredForRestart
         if not self._check_proxy_secret():
             return
         path = urllib.parse.urlparse(self.path).path.rstrip("/")
@@ -30948,10 +30952,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         is_background = _is_background_api_read(
             path, self.headers.get("X-CCC-Background") == "1"
         )
-        return _run_api_request(
-            is_background, self._do_GET,
-            route=_normalize_bg_route(path) if is_background else None,
-        )
+        try:
+            return _run_api_request(
+                is_background, self._do_GET,
+                route=_normalize_bg_route(path) if is_background else None,
+            )
+        except ReadDeferredForRestart:
+            self._send_restart_retry()
 
     def _do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -45985,6 +45992,19 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # http.server's default behaviour. Swallow it.
             pass
 
+    def _send_restart_retry(self):
+        body = b'{"ok":false,"restarting":true,"error":"Server restarting"}'
+        self.send_response(503)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.send_header("Retry-After", "1")
+        self.send_header("X-CCC-Restarting", "1")
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+        self.close_connection = True
+
     def parse_request(self):
         # Count the request as in flight once its request line parsed, so a
         # restart can let it finish (CCC-282). Idle keep-alive waits never
@@ -45994,17 +46014,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # A connection accepted before the fence can finish parsing
             # afterwards. Refuse before dispatch: even a POST is safe to
             # retry ONLY with this explicit non-execution acknowledgement.
-            body = b'{"ok":false,"restarting":true,"error":"Server restarting"}'
-            self.send_response(503)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Connection", "close")
-            self.send_header("Retry-After", "1")
-            self.send_header("X-CCC-Restarting", "1")
-            self.end_headers()
-            self.wfile.write(body)
-            self.wfile.flush()
-            self.close_connection = True
+            self._send_restart_retry()
             return False
         return ok
 
