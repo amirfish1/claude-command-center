@@ -15,10 +15,10 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Mapping
+from ccc_server.codex_managed_contract import GOAL_STATES
 
 FORMAT = 1
 REQUIRED_PROOFS = frozenset({'P1', 'P2b', 'P3', 'P4a', 'P4b', 'P4c', 'P5', 'P6'})
-GOAL_STATES = frozenset({'active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'})
 ISOLATION_CHECKS = frozenset({'different_host_netns', 'loopback_only', 'no_routes',
                               'tcp4_denied', 'udp4_denied', 'tcp6_denied',
                               'udp6_denied', 'dns_denied', 'fixture_reachable',
