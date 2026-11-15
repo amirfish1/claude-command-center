@@ -30,6 +30,12 @@ class CensusCache:
         def refresh():
             while not stop.is_set():
                 self.get(86400, builder)
+                # The bare HTTP endpoint uses a distinct live-only query.
+                # Warm it after first use, without adding a startup build.
+                with self.lock:
+                    live_requested = None in self.slots
+                if live_requested:
+                    self.get(None, builder)
                 stop.wait(max(.01, self.fresh_s))
 
         threading.Thread(target=refresh, name='ccc-census-warmup', daemon=True).start()
