@@ -79,6 +79,61 @@ class HookLabelTests(unittest.TestCase):
         r = subprocess.run([sys.executable, str(HOOK)], input="not json", capture_output=True, text=True)
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
 
+    def test_start_records_codex_parent_and_preserves_nearest_parent(self):
+        for environment, expected in [
+            ("CODEX_THREAD_ID=codex-parent-0001", "codex-parent-0001"),
+            ("CODEX_THREAD_ID=codex-parent-0001 CLAUDE_CODE_SESSION_ID=claude-parent-0001", "claude-parent-0001"),
+            ("CODEX_THREAD_ID=codex-parent-0001 CCC_PARENT_SESSION_ID=explicit-parent-0001", "explicit-parent-0001"),
+            ("CODEX_THREAD_ID=child-0001", None),
+            ("CODEX_THREAD_ID=bad/id", None),
+        ]:
+            with self.subTest(environment=environment), tempfile.TemporaryDirectory() as d, \
+                    patch.object(self.mod, "MARKERS_DIR", d), \
+                    patch.object(self.mod.sys, "stdin", io.StringIO('{"session_id":"child-0001"}')), \
+                    patch.object(self.mod.os, "getppid", return_value=123), \
+                    patch.object(self.mod, "_ps_table", return_value={123: (1, "claude -p task")}), \
+                    patch.object(self.mod, "_claude_env", return_value=environment):
+                self.mod.main()
+                marker_path = Path(d) / "child-0001.json"
+                marker = json.loads(marker_path.read_text()) if marker_path.exists() else {}
+                self.assertEqual(marker.get("parent_session_id"), expected)
+
+    def test_resume_does_not_reattribute_to_resuming_codex(self):
+        with tempfile.TemporaryDirectory() as d, patch.object(self.mod, "MARKERS_DIR", d), \
+                patch.object(self.mod.sys, "stdin", io.StringIO('{"session_id":"child-0001"}')), \
+                patch.object(self.mod, "_ps_table") as scan, \
+                patch.object(self.mod, "_claude_env", return_value="CODEX_THREAD_ID=unrelated-parent"):
+            marker_path = Path(d) / "child-0001.json"
+            original = {"caller": "helper.py", "parent_session_id": "original-parent"}
+            marker_path.write_text(json.dumps(original))
+            self.mod.main()
+            self.assertEqual(json.loads(marker_path.read_text()), original)
+            scan.assert_not_called()
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "procfs launch contract")
+    def test_codex_parent_survives_real_short_lived_launcher(self):
+        with tempfile.TemporaryDirectory() as d:
+            launcher = Path(d) / "claude"
+            launcher.symlink_to(sys.executable)
+            hook_code = (
+                "import runpy; "
+                f"m = runpy.run_path({str(HOOK)!r}); "
+                f"m['main'].__globals__['MARKERS_DIR'] = {d!r}; m['main']()"
+            )
+            launcher_code = (
+                "import subprocess, sys; "
+                f"subprocess.run([sys.executable, '-c', {hook_code!r}], "
+                f"input={json.dumps({'session_id': 'child-0001'})!r}, text=True, check=True)"
+            )
+            environment = dict(os.environ, CODEX_THREAD_ID="codex-parent-0001")
+            for key in ("CCC_PARENT_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CCC_SESSION_RUNTIME"):
+                environment.pop(key, None)
+            result = subprocess.run([str(launcher), "-c", launcher_code], env=environment,
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            marker = json.loads((Path(d) / "child-0001.json").read_text())
+            self.assertEqual(marker["parent_session_id"], "codex-parent-0001")
+
 
 if __name__ == "__main__":
     unittest.main()

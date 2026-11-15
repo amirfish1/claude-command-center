@@ -9,11 +9,12 @@ with:
 
   caller              human label: the launching script/app ("grade-findings.ts",
                       "Terminal", "Cursor"), never a bare "Terminal" guess
-  parent_session_id   the launching Claude session, when the launcher was one
+  parent_session_id   the launching Claude or Codex session, when known
 
 The parent id comes from CLAUDE_CODE_SESSION_ID in the claude process's own
-environment (inherited from the Bash tool that ran the script). CCC_PARENT_SESSION_ID
-and CCC_CALLER_NAME override it for scripts that want to say so explicitly.
+environment (inherited from the Bash tool that ran the script), or CODEX_THREAD_ID
+for a Codex launcher. CCC_PARENT_SESSION_ID and CCC_CALLER_NAME override it for
+scripts that want to say so explicitly.
 
 The marker is written once (first start wins; resume/compact don't rewrite it)
 and carries no lane/spawned_via, so it never moves a session between lanes.
@@ -29,6 +30,7 @@ import sys
 MARKERS_DIR = os.path.expanduser("~/.claude/command-center/spawn-markers")
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{7,127}$")
 ENV_SID_RE = re.compile(r"(?:^|\s)CLAUDE_CODE_SESSION_ID=([A-Za-z0-9][A-Za-z0-9_.-]{7,127})(?=\s|$)")
+ENV_CODEX_RE = re.compile(r"(?:^|\s)CODEX_THREAD_ID=([A-Za-z0-9][A-Za-z0-9_.-]{7,127})(?=\s|$)")
 ENV_PARENT_RE = re.compile(r"(?:^|\s)CCC_PARENT_SESSION_ID=([A-Za-z0-9][A-Za-z0-9_.:-]{7,166})(?=\s|$)")
 ENV_CALLER_RE = re.compile(r"(?:^|\s)CCC_CALLER_NAME=(\S{1,80})(?=\s|$)")
 
@@ -156,7 +158,9 @@ def main():
             pid = entry[0]
         if claude_pid is not None:
             env = _claude_env(claude_pid)
-            m = ENV_PARENT_RE.search(env) or ENV_SID_RE.search(env)
+            # A nested Claude inherits the Codex grandparent too. Prefer the
+            # nearer Claude parent (and explicit overrides) over that ID.
+            m = ENV_PARENT_RE.search(env) or ENV_SID_RE.search(env) or ENV_CODEX_RE.search(env)
             if m and m.group(1) != sid:
                 parent = m.group(1)
             m = ENV_CALLER_RE.search(env)
