@@ -21,6 +21,44 @@ EXCLUDED = ("/state", "/tmp", "/run", "/proc", "/sys", "/dev")
 EXCLUDED_FILES = {"/etc/hosts", "/etc/hostname", "/etc/resolv.conf"}
 
 
+def install_kernel_policy():
+    """After immutable Python bootstrap, deny every further OS executable.
+
+    This deliberately supports a Python client/control process, not arbitrary
+    native subprocess profiles. Forked children inherit the filter. Optional
+    native tools require a separate measured broker; unknown is not permission.
+    """
+    import ctypes
+    architecture = os.uname().machine
+    policies = {"x86_64": (0xc000003e, (59, 322, 101, 311, 319)),
+                "aarch64": (0xc00000b7, (221, 281, 117, 271, 279))}
+    if architecture not in policies:
+        raise RuntimeError("execution refused: unsupported kernel architecture")
+    arch, denied = policies[architecture]
+
+    class Instruction(ctypes.Structure):
+        _fields_ = [("code", ctypes.c_ushort), ("jt", ctypes.c_ubyte),
+                    ("jf", ctypes.c_ubyte), ("k", ctypes.c_uint)]
+
+    class Program(ctypes.Structure):
+        _fields_ = [("length", ctypes.c_ushort), ("filter", ctypes.POINTER(Instruction))]
+
+    instructions = [(0x20, 0, 0, 4), (0x15, 1, 0, arch), (0x06, 0, 0, 0x80000000),
+                    (0x20, 0, 0, 0), (0x35, 0, 1, 0x40000000), (0x06, 0, 0, 0x50001)]
+    for syscall in denied:
+        instructions.extend([(0x15, 0, 1, syscall), (0x06, 0, 0, 0x50001)])
+    instructions.append((0x06, 0, 0, 0x7fff0000))
+    buffer = (Instruction * len(instructions))(*(Instruction(*values) for values in instructions))
+    program = Program(len(instructions), buffer)
+    libc = ctypes.CDLL(None, use_errno=True)
+    if (libc.prctl(38, 1, 0, 0, 0) or libc.prctl(4, 0, 0, 0, 0)
+            or libc.prctl(22, 2, ctypes.byref(program), 0, 0)):
+        raise OSError(ctypes.get_errno(), "execution refused: seccomp installation failed")
+    for name in list(sys.modules):
+        if name == "ctypes" or name.startswith("ctypes.") or name == "_ctypes":
+            del sys.modules[name]
+
+
 def measured_filename(filename):
     if not isinstance(filename, str) or not filename.startswith("/"):
         raise RuntimeError("execution refused: non-file source")
@@ -34,11 +72,12 @@ def measured_filename(filename):
 
 
 class SourceGuard:
-    def __init__(self, commands, generated_sources=()):
+    def __init__(self, commands, generated_sources=(), unix_sockets=()):
         self.commands = {tuple(command) for command in commands}
         self.code = set()
         self.generated_sources = set(generated_sources)
         self._deriving = False
+        self.unix_sockets = set(unix_sockets)
 
     def register(self, code):
         self.code.add(code)
@@ -97,6 +136,10 @@ class SourceGuard:
                 raise RuntimeError("execution refused: subprocess environment drift")
         elif event == "os.exec":
             raise RuntimeError("execution refused: process identity replacement")
+        elif event == "socket.connect":
+            connection, address = args
+            if connection.family == 1 and address not in self.unix_sockets:
+                raise RuntimeError("execution refused: undeclared Unix socket")
 
     def install(self):
         guard = self
@@ -151,14 +194,16 @@ def main():
                                tuple(tuple(p) for p in value["data_mounts"]),
                                tuple(tuple(p) for p in value["commands"]),
                                value["network"], value["user"],
-                               tuple(tuple(p) for p in value["generated_sources"]))
+                               tuple(tuple(p) for p in value["generated_sources"]),
+                               tuple(value["unix_sockets"]))
     if canonical(profile.value()) != canonical(value):
         raise RuntimeError("execution refused: unknown execution profile")
     # No application code executes before installation. Pre-imported modules
     # above come exclusively from the immutable interpreter/base/source image.
     generated = [(filename, Path(measured_filename(source)).read_bytes())
                  for filename, source in profile.generated_sources]
-    guard = SourceGuard(profile.commands, generated)
+    install_kernel_policy()
+    guard = SourceGuard(profile.commands, generated, profile.unix_sockets)
     guard.install()
     # Every launch begins behind this kernel admission stop. A root authority
     # re-observes the exact prepared identity before the coordinator releases

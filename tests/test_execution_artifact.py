@@ -16,7 +16,7 @@ import tarfile
 import pytest
 
 from ccc_server.execution_artifact import (
-    Artifact, ExecutionProfile, ProcessIdentity, Refused, TrustedLaunchVerifier, build_artifact,
+    Artifact, ExecutionProfile, ProcessIdentity, Refused, TrustedLaunchVerifier, VerifiedLaunch, build_artifact,
     canonical, digest, manifest_from_tar, measured_profile_sha256, verify_container,
 )
 from ccc_server.execution_authority import read_anchor
@@ -125,6 +125,9 @@ def fixture():
 
         def mounts(self, _):
             return self.mount_table
+
+        def security(self, _):
+            return {'NoNewPrivs': '1', 'Seccomp': '2', 'Seccomp_filters': '2'}
 
         mappings = [("/usr/local/bin/python3.12", "r-xp")]
 
@@ -351,6 +354,36 @@ def test_prepared_launch_stops_before_admission_and_release_rechecks_identity():
     assert requests == before
 
 
+def test_native_profiles_and_missing_kernel_guard_refuse():
+    container, _, profile, docker, processes = fixture()
+    with pytest.raises(Refused, match='subprocess closure'):
+        ExecutionProfile(profile.entry, commands=(('/bin/true',),)).value()
+    processes.security = lambda _: {'NoNewPrivs': '1', 'Seccomp': '2', 'Seccomp_filters': '1'}
+    with pytest.raises(Refused, match='kernel execution guard'):
+        TrustedLaunchVerifier(docker, processes).observe(container['Id'], profile)
+
+
+def test_actual_kernel_filter_denies_even_a_bypass_of_python_subprocess_audit():
+    # Ordinary Python only. execve is denied BEFORE /bin/true can execute.
+    guard_path = Path(__file__).resolve().parents[1] / 'ccc_server/execution_guard.py'
+    program = f"""
+import importlib.util,subprocess,errno,os
+spec=importlib.util.spec_from_file_location('guard', {str(guard_path)!r})
+module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+module.install_kernel_policy()
+try:
+    subprocess.run(['/bin/true'], check=True)
+except PermissionError as exc:
+    assert exc.errno == errno.EPERM
+    print('kernel-denied')
+else:
+    raise AssertionError('execve bypassed the kernel filter')
+"""
+    result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', program], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'kernel-denied'
+
+
 @pytest.mark.parametrize('mutation', [None, 'image', 'profile', 'mount', 'executable', 'layer'])
 def test_authority_bootstrap_requires_actual_pinned_execution(monkeypatch, mutation):
     from types import SimpleNamespace
@@ -408,6 +441,9 @@ def test_unprovisioned_or_writable_authority_cannot_issue_facts(tmp_path):
     target.chmod(0o666)
     with pytest.raises(Refused, match="root-controlled"):
         read_anchor(target)
+    with pytest.raises(Refused, match='authenticated authority'):
+        VerifiedLaunch(ProcessIdentity('a' * 64, 1, 2, 'boot', 'start'),
+                       'sha256:' + 'a' * 64, 'b' * 64, 'c' * 64, 'd' * 64)
 
 
 @pytest.mark.parametrize("action,ok", [

@@ -220,6 +220,13 @@ def build_artifact(base_digest, repo, revision, *, prune_base_links=(), docker=N
                         if name == "opt/ccc" or name.startswith("opt/ccc/"):
                             raise Refused("base shadows source destination")
                         target.addfile(item, original.extractfile(item) if item.isfile() else None)
+                if "etc/mtab" in prune:
+                    # Docker recreates a missing mtab as an unresolved link to
+                    # runtime /proc. An empty measured regular table prevents
+                    # that implicit mutation; mount checks use kernel procfs.
+                    item = tarfile.TarInfo("etc/mtab")
+                    item.mode = 0o644
+                    target.addfile(item)
             for name in ("opt", "opt/ccc"):
                 if name not in members:
                     item = tarfile.TarInfo(name)
@@ -236,9 +243,13 @@ def build_artifact(base_digest, repo, revision, *, prune_base_links=(), docker=N
         manifest = manifest_from_tar(output)
         output.seek(0)
         image_id = docker.command("import", "-", input=output.read()).decode().strip()
-    measured = docker.measure(image_id)
-    if measured.manifest != manifest:
-        raise Refused("imported image differs from canonical build")
+    try:
+        measured = docker.measure(image_id)
+        if measured.manifest != manifest:
+            raise Refused("imported image differs from canonical build")
+    except BaseException:
+        docker.command("image", "rm", image_id)
+        raise
     return measured
 
 
@@ -250,7 +261,7 @@ _DATA_ROOTS = ("/state", "/tmp", "/run/data")
 class ExecutionProfile:
     """No wildcard imports, shell commands, host code, or secret config hashes.
 
-    Extra executable tools must be in the image and exact argv allowlisted.
+    Native subprocesses are kernel-denied; nonempty command policies refuse.
     Data mounts are allowed only at the fixed non-code roots and require
     kernel-confirmed noexec,nosuid,nodev. Network namespaces can be shared with
     an explicitly pinned sibling whose own network mode is none.
@@ -259,10 +270,11 @@ class ExecutionProfile:
     argv: tuple = ()
     environment: tuple = ()
     data_mounts: tuple = ()  # (source, destination, read_only)
-    commands: tuple = ()    # exact argv tuples, including measured executable
+    commands: tuple = ()    # Reserved for a measured broker; must remain empty.
     network: str = "none"
     user: str = "65532:65532"
     generated_sources: tuple = ()  # (compiler filename, measured source file)
+    unix_sockets: tuple = ()  # Explicit private data sockets; peer proof separate.
 
     def value(self):
         if not self.entry.startswith("/opt/ccc/") or "/../" in self.entry:
@@ -292,20 +304,19 @@ class ExecutionProfile:
             if not source.startswith("/") or type(read_only) is not bool:
                 raise Refused("invalid data mount")
             destinations.add(destination)
-        for command in self.commands:
-            if not command or not command[0].startswith("/"):
-                raise Refused("subprocess must use an exact measured executable")
-            if command[0].startswith(_DATA_ROOTS + ("/proc/", "/dev/")):
-                raise Refused("subprocess executable is outside artifact")
-            # Interpreters/shells would turn data arguments into executable code.
-            if re.search(r"(?:sh|bash|dash|python[\d.]*|node|perl|ruby|env)$", command[0]):
-                raise Refused("subprocess interpreters are not supported")
+        if self.commands:
+            raise Refused("native subprocess closure is unsupported; kernel execution stays denied")
         for filename, source_path in self.generated_sources:
             if filename != "<string>" or not source_path.startswith("/opt/ccc/") or "/../" in source_path:
                 raise Refused("generated code must come from measured source files")
+        for filename in self.unix_sockets:
+            if not filename.startswith(tuple(root + "/" for root in _DATA_ROOTS)) or "/../" in filename:
+                raise Refused("only explicit private data sockets are supported")
         return {"format": "ccc-execution-profile-v1", "entry": self.entry,
                 "argv": list(self.argv), "environment": sorted(env.items()),
                 "generated_sources": list(self.generated_sources),
+                "unix_sockets": list(self.unix_sockets),
+                "kernel_policy": "deny-exec-ptrace-memfd-v1",
                 "data_mounts": sorted(self.data_mounts), "commands": list(self.commands),
                 "network": self.network, "user": self.user,
                 "import_policy": "isolated-source-audit-v1", "readonly_rootfs": True,
@@ -347,7 +358,10 @@ class ProcessIdentity:
     started_at: str
 
 
-@dataclass(frozen=True)
+_VERIFIED_FACT = object()
+
+
+@dataclass(frozen=True, init=False)
 class VerifiedLaunch:
     identity: ProcessIdentity
     image_id: str
@@ -355,8 +369,28 @@ class VerifiedLaunch:
     execution_profile_sha256: str
     executable_sha256: str
 
+    def __init__(self, identity, image_id, executed_build_sha256,
+                 execution_profile_sha256, executable_sha256, *, _token=None):
+        if _token is not _VERIFIED_FACT:
+            raise Refused("verified facts require the authenticated authority boundary")
+        for name, value in (("identity", identity), ("image_id", image_id),
+                            ("executed_build_sha256", executed_build_sha256),
+                            ("execution_profile_sha256", execution_profile_sha256),
+                            ("executable_sha256", executable_sha256)):
+            object.__setattr__(self, name, value)
+
+
+def _verified_launch(identity, image_id, artifact_sha, profile_sha, executable_sha):
+    # Internal authority/client transport only; never expose a JSON constructor
+    # at an application endpoint. Python code in the approved image is trusted.
+    return VerifiedLaunch(identity, image_id, artifact_sha, profile_sha, executable_sha,
+                          _token=_VERIFIED_FACT)
+
 
 class LinuxProcesses:
+    def security(self, identity):
+        return dict(line.split(":", 1) for line in Path(f"/proc/{identity.pid}/status").read_text().splitlines() if ":" in line)
+
     def executable_mappings(self, identity):
         result = []
         for line in Path(f"/proc/{identity.pid}/maps").read_text().splitlines():
@@ -434,6 +468,10 @@ def verify_container(container, profile, processes):
     if actual_mounts != sorted(profile.data_mounts):
         raise Refused("unmeasured bind/volume/plugin mount")
     identity = processes.identity(container)
+    security = processes.security(identity)
+    if (security.get("NoNewPrivs", "").strip() != "1" or security.get("Seccomp", "").strip() != "2"
+            or int(security.get("Seccomp_filters", "0")) < 2):
+        raise Refused("kernel execution guard is not installed")
     mounts = processes.mounts(identity)
     if "ro" not in mounts.get("/", set()):
         raise Refused("kernel reports writable root filesystem")
@@ -470,6 +508,8 @@ def measured_profile_sha256(container, profile):
                            for value in config.get("Env") or [] for key in [value.partition("=")[0]])
     return digest(canonical({"policy": profile.value(), "config": config,
                              "host_config": container["HostConfig"],
+                             "engine_runtime": {key: container.get(key) for key in
+                                                ("Platform", "Driver", "AppArmorProfile", "ProcessLabel", "MountLabel")},
                              "mounts": sorted(container.get("Mounts", []), key=lambda m: m["Destination"])}))
 
 
@@ -554,10 +594,6 @@ class TrustedLaunchVerifier:
         for filename in (profile.entry, "/opt/ccc/ccc_server/execution_guard.py"):
             if entries.get(filename.lstrip("/"), {}).get("type") != "file":
                 raise Refused("entry/guard absent from measured image")
-        for command in profile.commands:
-            resolved = _resolve(entries, command[0].lstrip("/"))
-            if entries[resolved]["type"] != "file" or not entries[resolved]["mode"] & 0o111:
-                raise Refused("unmeasured subprocess executable")
         for _, filename in profile.generated_sources:
             if entries.get(filename.lstrip("/"), {}).get("type") != "file":
                 raise Refused("generated-code source absent from measured image")
@@ -575,7 +611,7 @@ class TrustedLaunchVerifier:
             raise Refused("process/configuration changed during attestation")
         if expected_identity is not None and identity != expected_identity:
             raise Refused("PID/start/launch identity mismatch")
-        return VerifiedLaunch(identity, artifact.image_id, artifact.executed_build_sha256,
+        return _verified_launch(identity, artifact.image_id, artifact.executed_build_sha256,
                               measured_profile_sha256(before, profile), executable["sha256"])
 
     def verify_transition(self, refs, profiles, tested_pair, expected_identities):

@@ -25,6 +25,7 @@ if __name__ == "__main__":
 from ccc_server.execution_artifact import (
     Artifact, ExecutionProfile, LinuxProcesses, ProcessIdentity, Refused,
     TrustedLaunchVerifier, VerifiedLaunch, canonical, digest, manifest_from_tar,
+    _verified_launch,
 )
 
 
@@ -122,6 +123,8 @@ def authority_profile_sha256(container):
     config["Env"] = ["CCC_ATTESTATION_QUERY=<request-data>"]
     return digest(canonical({"format": "ccc-authority-profile-v1", "config": config,
                              "host_config": container["HostConfig"],
+                             "engine_runtime": {key: container.get(key) for key in
+                                                ("Platform", "Driver", "AppArmorProfile", "ProcessLabel", "MountLabel")},
                              "mounts": sorted(container.get("Mounts", []), key=lambda m: m["Destination"])}))
 
 
@@ -193,7 +196,8 @@ def _profile(value):
                                tuple(tuple(x) for x in value["data_mounts"]),
                                tuple(tuple(x) for x in value["commands"]),
                                value["network"], value["user"],
-                               tuple(tuple(x) for x in value["generated_sources"]))
+                               tuple(tuple(x) for x in value["generated_sources"]),
+                               tuple(value["unix_sockets"]))
     if canonical(profile.value()) != canonical(value):
         raise Refused("unsupported profile format/fields")
     return profile
@@ -207,7 +211,7 @@ def _wire(fact):
 
 
 def _fact(value):
-    return VerifiedLaunch(ProcessIdentity(**value["identity"]), value["image_id"],
+    return _verified_launch(ProcessIdentity(**value["identity"]), value["image_id"],
                           value["executed_build_sha256"], value["execution_profile_sha256"],
                           value["executable_sha256"])
 
@@ -230,8 +234,13 @@ def main():
     elif operation == "release" and set(query) == {"fact", "profile"}:
         # Caller JSON cannot attest itself: release re-observes its complete
         # claimed binding and admission stop before SIGCONT.
-        fact = _fact(query["fact"])
-        verifier.release(fact, _profile(query["profile"]))
+        claim = query["fact"]
+        profile = _profile(query["profile"])
+        identity = ProcessIdentity(**claim["identity"])
+        fact = verifier.observe(identity.container_id, profile, identity)
+        if _wire(fact) != claim:
+            raise Refused("claimed release binding differs from actual launch")
+        verifier.release(fact, profile)
         facts = {"released": fact}
     else:
         raise Refused("unsupported attestation request")
