@@ -45,6 +45,7 @@ async function open(browser, viewport, label) {
   });
   const started = Date.now();
   await page.goto(URL_, { waitUntil: 'load', timeout: 60000 });
+  await page.waitForSelector('#convList', { visible: true, timeout: 30000 });
   await page.waitForSelector('#convList .conv-quick-action', { timeout: 30000 });
   const readyMs = Date.now() - started;
   await sleep(1200);
@@ -70,6 +71,8 @@ const rowText = (page, sid) => page.evaluate((id) => {
   const browser = await puppeteer.launch({ headless: 'new', executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const { page, problems, offsite, readyMs } = await open(browser, { width: 1440, height: 900 }, 'desktop');
+    check('fresh desktop opens with the session list visible', await page.evaluate(() =>
+      !document.body.classList.contains('conv-list-collapsed') && document.querySelector('#convList').checkVisibility()));
     await page.screenshot({ path: path.join(OUT, '01-fleet-and-decisions.png') });
     const start = await counts(page);
     check('many agents at once', start.total >= 20 && start.working >= 8, JSON.stringify(start));
@@ -125,7 +128,9 @@ const rowText = (page, sid) => page.evaluate((id) => {
     await page.screenshot({ path: path.join(OUT, '03-decision-landed.png') });
     const after = await rowText(page, sid);
     const transcript = await page.$eval('#convSplit', (e) => e.innerText).catch(() => '');
-    check('row lands without chips', !after.includes(chip.label) && !await rowWorking(page, sid), after.slice(0, 90));
+    check('row lands without chips', await page.evaluate((id) => !document.querySelector(
+      '#convList .conv-item[data-session-id="' + id + '"] .conv-quick-action'), sid)
+      && !await rowWorking(page, sid), after.slice(0, 90));
     check('reply and result reach the transcript', /Round once on the order total/.test(transcript) && /Moved rounding/.test(transcript));
     const landed = await counts(page);
     check('who-needs-you count falls', landed.needsYou < start.needsYou + 2, JSON.stringify(landed));
@@ -163,11 +168,14 @@ const rowText = (page, sid) => page.evaluate((id) => {
 
     // Settings, usage and menus: no blank, error or real-looking number.
     const BAD = /could not|unavailable|retrying|error|undefined|NaN|not found|loading…/i;
-    await page.click('.session-usage-drawer summary');
-    await sleep(800);
-    const usage = await page.$eval('.session-usage-drawer', (e) => e.innerText);
-    check('Usage & diagnostics shows plan bars, not measured numbers', /Claude/.test(await page.$eval('#headroomBars', (e) => e.innerText)) && !/speaker cache|list reads/i.test(usage), usage.replace(/\s+/g, ' ').slice(0, 80));
-    await page.click('#settingsBtn');
+    check('plan bars are visible and machine diagnostics stay hidden', await page.evaluate(() =>
+      document.querySelector('#headroomBars').checkVisibility()
+      && /Claude/.test(document.querySelector('#headroomBars').innerText)
+      && !document.querySelector('.session-usage-drawer').checkVisibility()));
+    await page.click('.ccc-account');
+    await page.waitForSelector('[data-rail-settings]', { visible: true });
+    await page.click('[data-rail-settings]');
+    await page.waitForSelector('#settingsRail', { visible: true });
     await sleep(700);
     const rail = await page.$$eval('#settingsRail .settings-rail-item', (els) => els.filter((e) => e.getClientRects().length).map((e) => e.dataset.sectionTarget));
     const sectionProblems = [];
@@ -205,7 +213,11 @@ const rowText = (page, sid) => page.evaluate((id) => {
     await page.evaluate(() => document.querySelector('[data-conv-tab="workers"]').click());
     await sleep(2500);
     const wText = await page.evaluate(() => document.querySelector('#convList').innerText);
-    check('Workers tab shows invented queues and workers', /SHOP/.test(wText) && /shop-worker-1/.test(wText) && !/could not|unavailable|undefined/i.test(wText), wText.replace(/\s+/g, ' ').slice(0, 90));
+    const workers = await page.evaluate(async () => (await (await fetch('/api/wt/workers')).json()).workers);
+    check('Workers tab shows invented claimed and waiting tickets',
+      /SHOP-44/.test(wText) && /TEA-OPS-9/.test(wText) && /Awaiting worker/.test(wText)
+      && workers.some(w => w.worker_id === 'shop-worker-1' && w.alive && w.ticket === 'SHOP-44')
+      && !/could not|unavailable|undefined/i.test(wText), wText.replace(/\s+/g, ' ').slice(0, 90));
     await page.screenshot({ path: path.join(OUT, '11-workers.png') });
     await page.evaluate(() => [...document.querySelectorAll('[data-conv-tab]')].find((x) => /^active/i.test(x.innerText.trim())).click());
     await sleep(500);
@@ -243,6 +255,21 @@ const rowText = (page, sid) => page.evaluate((id) => {
     check('no page errors or real API calls', problems.length === 0, problems.slice(0, 4).join(' | '));
     check('first decisions visible quickly', readyMs < 10000, readyMs + ' ms');
     check('nothing leaves the browser', offsite.size === 0, [...offsite].join(', '));
+
+    // Demo defaults must not overwrite a visitor's explicit layout choice.
+    await page.click('#convListCollapseBtn');
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('#convListRestoreBtn', { visible: true });
+    await page.waitForSelector('#convListCollapseBtn[aria-expanded="false"]');
+    check('saved collapsed list survives a reload', await page.evaluate(() =>
+      document.body.classList.contains('conv-list-collapsed') && localStorage.getItem('ccc-conv-list-collapsed') === '1'));
+    await page.click('#convListRestoreBtn');
+    await page.waitForFunction(() => localStorage.getItem('ccc-conv-list-collapsed') === '0'
+      && !document.body.classList.contains('conv-list-collapsed'));
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('#convList', { visible: true });
+    check('saved open list survives a reload', await page.evaluate(() =>
+      !document.body.classList.contains('conv-list-collapsed') && localStorage.getItem('ccc-conv-list-collapsed') === '0'));
     await page.close();
 
     const phone = await open(browser, { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }, 'phone');

@@ -1,0 +1,1 @@
+- Restore the browser demo's visible session list and interactive guided decisions in fresh builds, while preserving saved layout choices.

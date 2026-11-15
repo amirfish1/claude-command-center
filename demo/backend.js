@@ -19,6 +19,8 @@
     'ccc-last-seen-version': 'demo', 'ccc-whats-new-dismissed-version': 'demo',
     'ccc-pwa-install-dismissed': '9999999999999', 'ccc-telemetry-bar-dismissed': '1',
     'ccc-onboarded': '1', 'ccc-engines-first-run-done': '1', 'ccc-tour-done': '1', 'ccc-status-rail-collapsed': '1',
+    // The guided path starts with a decision in the session list.
+    'ccc-conv-list-collapsed': '0',
   };
   try { for (const k in PREFS) if (localStorage.getItem(k) === null) localStorage.setItem(k, PREFS[k]); } catch (_) {}
 
@@ -119,9 +121,17 @@
 
   // The real server pushes "the list changed" over SSE; do the same in-page so
   // a row flips at the moment its session does, not at the next slow poll.
+  const bootId = 'try-demo-' + Date.now();
+  let patchSeq = 0;
   function invalidateRows() {
     const events = window.__cccDashboardEvents;
     if (!events) return;
+    // Lifecycle patches carry fresh state through passive list-refresh
+    // throttles, including while the transcript receives its first reply.
+    for (const { s } of sessions) events.apply({
+      schema: 1, boot_id: bootId, seq: ++patchSeq, topic: 'session.patch',
+      entity: { type: 'session', id: s.session_id }, patch: JSON.parse(JSON.stringify(s)),
+    });
     events.schedule('sessions');
     events.schedule('archive');
   }
@@ -371,7 +381,8 @@
     const rec = byId.get(id);
     if (!rec) return { sessions: [] };
     const s = rec.s;
-    return { live: s.state === 'working' || s.needs_approval, status: s.sidecar_status, sidecar_tool: s.sidecar_tool,
+    return { live: s.state === 'working' || s.needs_approval, state: s.state,
+      status: s.sidecar_status, sidecar_status: s.sidecar_status, sidecar_ts: s.sidecar_ts || 0, sidecar_tool: s.sidecar_tool,
       sidecar_file: s.sidecar_file, sidecar_in_flight: s.sidecar_in_flight, needs_approval: s.needs_approval,
       needs_approval_message: s.needs_approval_message || '', approval_hook_parked: s.needs_approval,
       headless_present: s.state === 'working' };
@@ -436,15 +447,18 @@
   }
 
   const realFetch = window.fetch.bind(window);
-  window.fetch = function demoBackendFetch(input, init) {
-    const url = typeof input === 'string' ? input : (input && input.url) || '';
+  window.fetch = async function demoBackendFetch(input, init) {
+    const url = typeof input === 'string' || input instanceof URL ? input : (input && input.url) || '';
     let u;
     try { u = new URL(url, location.href); } catch (_) { return realFetch(input, init); }
     if (u.origin !== location.origin || !u.pathname.includes('/api/')) return realFetch(input, init);
     const path = u.pathname.slice(u.pathname.indexOf('/api/'));
-    const method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+    // Transport wrappers can pass a Request with the JSON body already inside
+    // it. Apply init overrides before reading either form of fetch input.
+    const request = new Request(input instanceof Request ? input : u, init);
+    const method = request.method.toUpperCase();
     let body = null;
-    try { body = init && init.body ? JSON.parse(init.body) : null; } catch (_) {}
+    try { const text = await request.text(); if (text) body = JSON.parse(text); } catch (_) {}
     const result = answer(path, u.searchParams, method, body);
     return new Promise(res => setTimeout(() => res(new Response(JSON.stringify(result), {
       status: 200, headers: { 'content-type': 'application/json' } })), 15));
