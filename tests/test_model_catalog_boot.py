@@ -47,3 +47,24 @@ def test_concurrent_cold_callers_build_once(monkeypatch):
     [t.join(30) for t in ts]
     assert len(calls) == 1
     assert len(out) == 5 and all(o == out[0] for o in out)
+
+
+def test_catalog_owner_signature_is_frozen_only_during_one_build(monkeypatch):
+    class CountedList(list):
+        reads = 0
+        def __iter__(self):
+            self.reads += 1
+            return super().__iter__()
+    options = CountedList([{'id': 'example-model'}])
+    monkeypatch.setattr(server, '_ENGINE_CURATED_MODELS', {'example': options})
+    def build(_force):
+        for _ in range(1000):
+            assert server._model_catalog_known_engines('example-model') == {'example'}
+        return {}
+    monkeypatch.setattr(server, '_build_engine_model_catalog_impl', build)
+    monkeypatch.setattr(server, '_MODEL_CATALOG_OWNER_INDEX', {'sig': None, 'index': {}})
+    server._build_engine_model_catalog(force_refresh=True)
+    assert options.reads == 2
+    assert getattr(server._MODEL_POLICY_TLS, 'catalog_owners', None) is None
+    options.append({'id': 'new-model'})
+    assert server._model_catalog_known_engines('new-model') == {'example'}

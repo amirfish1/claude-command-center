@@ -5906,3 +5906,29 @@ def test_embedding_backfill_batches_only_one_bounded_slice(monkeypatch):
         assert len(callbacks) == 1
         assert session_fts._backfill_missing_embeddings(db) == 32
         assert db.execute('SELECT COUNT(*) FROM semb_pending').fetchone()[0] == 64
+
+
+def test_model_observations_dedupe_before_catalog_enrichment(monkeypatch):
+    row = {'engine': 'claude', 'model': 'example-model'}
+    monkeypatch.setattr(server, '_load_session_overrides', lambda: {str(i): row for i in range(5000)})
+    monkeypatch.setattr(server, '_load_spawn_registry', lambda: [row] * 5000)
+    monkeypatch.setattr(server, '_codex_thread_registry_entries', lambda: {str(i): row for i in range(5000)})
+    monkeypatch.setattr(server, '_spawned_sessions', [row] * 5000)
+    monkeypatch.setattr(server, '_conv_meta_cache', {str(i): row for i in range(5000)})
+    records = server._observed_model_records()
+    assert len(records) == 5
+    assert {r['source'] for r in records} == {
+        'session-override', 'spawn-registry', 'codex-registry', 'live-spawn', 'transcript-cache'}
+
+
+def test_existing_model_bucket_never_reloads_its_default(monkeypatch):
+    monkeypatch.setattr(server, '_model_catalog_allows_model', lambda *a: True)
+    monkeypatch.setattr(server, '_model_policy_blocks', lambda *a: False)
+    def forbidden(*a):
+        raise AssertionError('per-model enrichment re-read the engine default')
+    monkeypatch.setattr(server, '_spawn_fallback_model_for_engine', forbidden)
+    catalog = {'codex': {'models': [], '_index': {}, 'default': 'configured'}}
+    for i in range(2000):
+        server._model_catalog_add(catalog, 'codex', 'example-model', source='observed')
+    assert len(catalog['codex']['models']) == 1
+    assert catalog['codex']['default'] == 'configured'

@@ -9107,6 +9107,9 @@ def _model_catalog_owner_index():
     """key -> engines index over _ENGINE_CURATED_MODELS, rebuilt only when the
     curated table changes. The per-model scan it replaces ran ~120k key
     normalisations per catalog build (~1.7s of a 2.5s rebuild, CCC-143)."""
+    snapshot = getattr(_MODEL_POLICY_TLS, "catalog_owners", None)
+    if snapshot is not None:
+        return snapshot
     sig = tuple(
         (engine, tuple(option.get("id") for option in options))
         for engine, options in _ENGINE_CURATED_MODELS.items()
@@ -9175,12 +9178,14 @@ def _model_catalog_add(catalog, engine, model, *, label=None, source="observed",
             return
     if not _model_catalog_allows_model(engine, model):
         return
-    bucket = catalog.setdefault(engine, {
-        "default": _spawn_fallback_model_for_engine(engine),
-        "supports_custom": _ENGINE_SUPPORTS_CUSTOM_MODELS.get(engine, True),
-        "models": [],
-        "_index": {},
-    })
+    if engine not in catalog:
+        catalog[engine] = {
+            "default": _spawn_fallback_model_for_engine(engine),
+            "supports_custom": _ENGINE_SUPPORTS_CUSTOM_MODELS.get(engine, True),
+            "models": [],
+            "_index": {},
+        }
+    bucket = catalog[engine]
     key = _model_catalog_key(model)
     index = bucket.setdefault("_index", {})
     entry = index.get(key)
@@ -9748,11 +9753,13 @@ def _codex_model_availability_error(model):
 
 
 def _observed_model_records():
-    rows = []
+    rows, seen = [], set()
 
     def add(engine, model, source):
         model = _clean_spawn_default_model(model)
-        if model:
+        key = (engine, model, source)
+        if model and key not in seen:
+            seen.add(key)
             rows.append({"engine": engine, "id": model, "label": model, "source": source})
 
     try:
@@ -9977,7 +9984,11 @@ def _build_engine_model_catalog(force_refresh=False):
         if not force_refresh and _MODEL_CATALOG_CACHE["data"] is not None:
             return _build_engine_model_catalog_impl(False)
         with _model_policy_snapshot():
-            return _build_engine_model_catalog_impl(force_refresh)
+            _MODEL_POLICY_TLS.catalog_owners = _model_catalog_owner_index()
+            try:
+                return _build_engine_model_catalog_impl(force_refresh)
+            finally:
+                _MODEL_POLICY_TLS.catalog_owners = None
 
 
 def _build_engine_model_catalog_impl(force_refresh=False):
