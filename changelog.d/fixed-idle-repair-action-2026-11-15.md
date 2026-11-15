@@ -1,0 +1,1 @@
+- Idle sessions with a scoped, reversible agent repair offer a transcript-checked Fix issue action limited to that first step.

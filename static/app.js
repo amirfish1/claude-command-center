@@ -19687,6 +19687,20 @@
     if (build) {
       if (!['plan', 'next'].includes(info.kind)) return null;
       next = c.session_state.completion.remaining_actions[0].text;
+    } else if (info.kind === 'plan' && info.planOwner === 'agent' && !info.eventDriven
+        && !actions.length && /^(?:fix|repair)\b/i.test(info.text)) {
+      // An idle agent's first repair needs a concrete way to resume. Copy
+      // only that scoped, reversible step, never the later unfinished work.
+      const completion = c.session_state?.completion;
+      const planned = completion?.remaining_actions?.[0];
+      next = info.text;
+      if (planned?.within_scope !== true || planned.reversible !== true
+          || completion.decision_dependency?.score !== 0
+          || next.length > 340 || /[\x00-\x1f]/.test(next)) return null;
+      const reply = 'Carry out only this pending repair: ' + next.replace(/[.!?]+$/, '')
+        + '. Honor its prerequisites and verify the result. Do not advance to later tasks. Preserve existing approval and spending limits.';
+      if (reply.length > 400) return null;
+      actions = [{ label: 'Fix issue', reply, derived: true }];
     } else if (info.kind === 'plan' && info.planOwner === 'agent' && info.eventDriven && !actions.length) {
       // Offer the actual pending task, not a generic status request. Its
       // trigger remains part of the reply; a chip never waives prerequisites.

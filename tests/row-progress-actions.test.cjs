@@ -111,14 +111,64 @@ test('unassigned retry tasks keep prerequisites and require a fresh matching fin
   }
 });
 
+test('idle agent repairs offer only the first reversible step after fresh confirmation', () => {
+  const r=row();
+  const task='fix country select, reach the next fields in dry run; success = fields listed';
+  const completion=r.session_state.completion;
+  completion.resolution.score=0.3;
+  completion.verification.score=0.4;
+  completion.delivery.score=0.2;
+  completion.remaining_actions=[
+    {text:'Agent: '+task,within_scope:true,reversible:true,confidence:0.7,downside:0.1},
+    {text:'Agent: submit the final transaction',within_scope:true,reversible:false,confidence:0.5,downside:0.5},
+  ];
+  const candidate=actionSource(r,true);
+  assert.equal(candidate.action.label,'Fix issue');
+  assert.ok(candidate.action.reply.includes(task));
+  assert.match(candidate.action.reply,/only this pending repair/);
+  assert.match(candidate.action.reply,/Do not advance to later tasks/);
+  assert.match(candidate.action.reply,/Preserve existing approval and spending limits/);
+  assert.doesNotMatch(candidate.action.reply,/submit the final transaction/);
+  assert.ok(candidate.action.reply.length<=400);
+  assert.equal(actionSource(r),null,'retained footer cannot establish idleness');
+  const final={type:'assistant',blocks:[{kind:'text',text:'<session-state>\nNEXT_STEP_USER: None\nNEXT_ACTION: null\nCOMPLETION: '
+    +JSON.stringify(completion)+'\n</session-state>'}]};
+  assert.equal(transcriptIdle(candidate,[final]),true);
+  for(const event of [{type:'user_text',text:'Continue'}, {type:'tool_result',text:'Still working'},
+    {type:'assistant',blocks:[{kind:'tool_use'}]}])
+    assert.equal(transcriptIdle(candidate,[final,event]),false);
+  checks.set(r.session_id,{key:candidate.key,idle:true,until:Date.now()+3000});
+  assert.equal(actionSource(r).action.label,'Fix issue');
+  const original={...completion.remaining_actions[0]};
+  for(const change of [{text:task},{text:'User: '+task},{text:'External: '+task},
+    {within_scope:false},{reversible:false},{text:'Agent: fix '+ 'x'.repeat(300)},
+    {text:'Agent: fix the form\nthen submit it'}]) {
+    completion.remaining_actions[0]={...original,...change};
+    assert.equal(actionSource(r,true),null,JSON.stringify(change));
+  }
+  completion.remaining_actions[0]={...original,owner:'agent',text:'Repair the form in dry run'};
+  assert.equal(actionSource(r,true).action.label,'Fix issue','structured owners and repair verb work');
+  assert.equal(actionSource(r),null,'a changed repair invalidates the prior transcript check');
+  completion.decision_dependency.score=0.5;
+  assert.equal(actionSource(r,true),null,'a decision blocks derived repairs');
+  completion.decision_dependency.score=0;
+  for(const flags of [{state:'working'},{codex_state:'working'},{archived:true},{trashed:true},
+    {needs_approval:true},{question_waiting:true},{pending_spawn:true},{last_event_type:'user'}])
+    assert.equal(actionSource({...r,...flags},true),null,JSON.stringify(flags));
+  r.session_state.next_step_user='Review the repair first.';
+  r.session_state.next_action={label:'Review',reply:'Review the repair first.'};
+  assert.equal(actionSource(r,true).action.label,'Review','authored replies retain priority');
+});
+
 test('pending-work chips send the concrete task once and reject a resumed transcript', async () => {
   const puppeteer = require('../require-puppeteer.js');
   const { findChromePath } = require('../puppeteer-browser-config.js');
   const browser = await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
   try {
-    for (const retry of [false, true]) {
+    for (const mode of ['callback', 'retry', 'repair']) {
       const current=row();
-      if (retry) current.session_state.completion.remaining_actions[0].text='Re-run the task once the connector is available';
+      if (mode==='retry') current.session_state.completion.remaining_actions[0].text='Re-run the task once the connector is available';
+      if (mode==='repair') current.session_state.completion.remaining_actions[0].text='Agent: fix the form in dry run; success = fields listed';
       const page = await browser.newPage();
       await page.setContent(`<div id="convList"><div class="conv-item" style="height:100px" data-session-id="callback-session">
         <div class="conv-outcome is-plan"></div><div class="wa-line2"></div></div></div>`);
