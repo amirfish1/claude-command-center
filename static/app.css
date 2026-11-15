@@ -31852,13 +31852,19 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 .conv-frozen-ask__bubble:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .conv-frozen-ask__bubble > .original-ask-expand { float: right; margin: 1px 0 0 10px; }
 .conv-frozen-ask__bubble > .user-msg {
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  overflow: hidden;
-  white-space: normal; overflow-wrap: anywhere;
+  /* Two lines, always. max-height is the guarantee; the line clamp only
+     adds the ellipsis where the engine honours it (a long ask once filled
+     a whole phone screen when the clamp alone was trusted). */
+  display: -webkit-box !important; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  max-height: 2.9em !important;
+  overflow: hidden !important;
+  white-space: normal !important; overflow-wrap: anywhere;
+  margin: 0;
   color: var(--text);
   font-size: 14.5px; line-height: 1.45; font-weight: 410;
 }
 .conv-frozen-ask__bubble > .user-msg :is(img, .msg-image) { display: none; }
+.conv-frozen-ask__bubble { max-height: 64px; overflow: hidden; }
 
 /* CCC-1206: (+) on the Original ask opens it in a large-font reading modal. */
 .original-ask-expand {

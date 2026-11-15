@@ -14,7 +14,7 @@ const fixture = `
     const reply = '<div class="event assistant"><div class="assistant-text">' +
       Array.from({length:120}, (_, i) => '<p>Reply paragraph ' + i + ' with enough words to take a full line.</p>').join('') + '</div></div>';
     view.innerHTML = withUser
-      ? ['First question', 'Second question', 'Third question'].map(q =>
+      ? ['First question', 'Second question', 'Third question ' + Array.from({length:60}, (_, i) => 'long detail ' + i + ';').join(' ') + '\\nmore\\nlines\\nhere'].map(q =>
           '<div class="event user_text"><div class="user-msg" data-raw-text="' + q + '">' + q + '</div></div>' + reply).join('')
       : reply + reply;
     view.scrollTop = view.scrollHeight;
@@ -39,6 +39,7 @@ const fixture = `
     return {
       visible, text: visible ? bar.querySelector('.user-msg').textContent : '',
       scrollHeight: view.scrollHeight,
+      height: visible ? Math.round(bubble.getBoundingClientRect().height) : null,
       offset: visible ? Math.round(bubble.getBoundingClientRect().top - view.getBoundingClientRect().top) : null,
     };
   };
@@ -78,7 +79,8 @@ const fixture = `
 
       const third = await at('Third question');
       assert.equal(third.visible, true, 'the ask freezes once the reader scrolls up');
-      assert.equal(third.text, 'Third question', 'the ask being answered is the one shown');
+      assert.ok(third.text.startsWith('Third question'), 'the ask being answered is the one shown');
+      assert.ok(third.height <= 64, 'a long ask stays two lines tall, got ' + third.height);
       assert.ok(third.offset >= 0 && third.offset < 40, 'it sits at the top of the transcript');
       assert.equal(third.scrollHeight, bottom.scrollHeight, 'freezing never changes the scroll height');
       if (process.env.CCC_FROZEN_ASK_SHOTS) await page.screenshot({path:'/tmp/ccc-frozen-ask-' + width + '.png'});
