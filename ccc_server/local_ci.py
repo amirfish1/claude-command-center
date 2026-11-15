@@ -191,10 +191,24 @@ def _execution(job, local_names=()):
     return "local" if job.get("runner_name") in local_names else "unknown"
 
 
+def _cloud_step(job):
+    """Identify delegated compute separately from the Actions receiver."""
+    return next((step for step in job.get("steps", [])
+                 if re.fullmatch(r"Run .+ in Claude Cloud", step.get("name", ""))), None)
+
+
+def _compute_provider(jobs):
+    executed = [job for job in jobs if job.get("conclusion") != "skipped"]
+    return "claude_cloud" if executed and all(_cloud_step(job) for job in executed) else None
+
+
 def _workflow_percent(payload):
     """Average job progress, including finished and queued jobs in the run."""
     jobs = payload.get("jobs") or []
     if not jobs or (payload.get("total_count") or len(jobs)) > len(jobs):
+        return None
+    if any((_cloud_step(job) or {}).get("status") == "in_progress" for job in jobs):
+        # Receiver step completion cannot measure tests running in another VM.
         return None
     progress = []
     for job in jobs:
@@ -296,10 +310,12 @@ def _collect():
             record["started_at"] = run["run_started_at"]
             record["workflow_started_at"] = run["run_started_at"]
         if run and run.get("status") == "completed":
-            if not record.get("execution"):
+            if not record.get("execution") or "compute_provider" not in record:
                 payload = _api(route + "/jobs?per_page=100") or {}
-                locations = {_execution(job) for job in payload.get("jobs", [])}
+                locations = {_execution(job) for job in payload.get("jobs", [])
+                             if job.get("conclusion") != "skipped"}
                 record["execution"] = next(iter(locations)) if len(locations) == 1 else "unknown"
+                record["compute_provider"] = _compute_provider(payload.get("jobs", []))
             record.update(status="completed", name=run.get("name") or "CI",
                           conclusion=run.get("conclusion") or "unknown", percent=100, workflow_percent=100,
                           completed_at=run.get("updated_at") or run.get("run_started_at") or "",
@@ -308,12 +324,14 @@ def _collect():
         if not local_names and not record.get("hosted"):
             continue
         payload = _api(route + "/jobs?per_page=100") or {}
+        record["compute_provider"] = _compute_provider(payload.get("jobs", []))
         record["workflow_percent"] = _workflow_percent(payload)
         record["workflow_failed"] = any(job.get("conclusion") in ("failure", "timed_out", "startup_failure", "action_required")
                                         for job in payload.get("jobs", []))
         jobs = [job for job in payload.get("jobs", []) if (record.get("hosted") or job.get("runner_name") in local_names)
                 and job.get("status") in ("in_progress", "queued")]
-        locations = {_execution(job, local_names) for job in payload.get("jobs", [])}
+        locations = {_execution(job, local_names) for job in payload.get("jobs", [])
+                     if job.get("conclusion") != "skipped"}
         record["execution"] = next(iter(locations)) if len(locations) == 1 else "unknown"
         if not jobs:
             rows.append(dict(record, id=key, name="CI", percent=None, completed_steps=0,
@@ -325,9 +343,11 @@ def _collect():
                             if step.get("status") == "in_progress"), "Starting job")
             rows.append(dict(record, id=key, name=job.get("name") or "CI",
                              execution=_execution(job, local_names),
+                             compute_provider="claude_cloud" if _cloud_step(job) else None,
                              runner=job.get("runner_name") or record.get("runner", ""),
                              started_at=job.get("started_at"),
-                             percent=min(99, int(done * 100 / len(steps))) if steps else None,
+                             percent=None if (_cloud_step(job) or {}).get("status") == "in_progress"
+                             else min(99, int(done * 100 / len(steps))) if steps else None,
                              completed_steps=done, total_steps=len(steps), current_step=current, url=url))
     _save_records(records)
     return {"jobs": rows, "completed": _recent_completed(), "checked_at": time.time()}

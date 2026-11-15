@@ -102523,6 +102523,16 @@
     });
     return button;
   }
+  const githubIcon = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';
+  const machineIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>';
+  const unknownIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.2 2.4c-.7.3-.7 1.1-.7 1.6m0 3h.01"/></svg>';
+  const cloudIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 2v6m0 8v6M2 12h6m8 0h6M3.34 7l5.2 3m6.92 4 5.2 3M7 3.34l3 5.2m4 6.92 3 5.2M3.34 17l5.2-3m6.92-4 5.2-3M7 20.66l3-5.2m4-6.92 3-5.2"/></svg>';
+  const locationTitles = {cloud:'Claude Cloud', github:'GitHub-hosted runner', machine:'Self-hosted runner', unknown:'Runner location unverified'};
+  const providerKind = job => job.compute_provider === 'claude_cloud' ? 'cloud'
+    : job.execution === 'github_hosted' ? 'github'
+    : ['local', 'self_hosted'].includes(job.execution) ? 'machine' : 'unknown';
+  const providerLabels = {cloud:'Cloud', github:'GitHub', machine:'Self', unknown:'Unverified'};
+  const providerIcons = {cloud:cloudIcon, github:githubIcon, machine:machineIcon, unknown:unknownIcon};
   function render(data) {
     lastData = data;
     const completed = (data.completed || []).filter(job => !dismissed.has(job.id));
@@ -102560,21 +102570,16 @@
           });
           const summary = document.createElement('summary');
           summary.className = 'local-ci-summary';
-          const locations = new Set(members.map(({job}) => job.execution === 'github_hosted' ? 'github'
-            : ['local','self_hosted'].includes(job.execution) ? 'machine' : 'unknown'));
-          shell.dataset.runnerLabel = [...locations].map(location => ({github:'GH', machine:'Self', unknown:'Unverified'})[location]).join('/');
+          const locations = new Set(members.map(({job}) => providerKind(job)));
+          shell.dataset.runnerLabel = [...locations].map(location => providerLabels[location]).join('/');
           const runner = document.createElement('span');
           runner.className = 'local-ci-runner';
           runner.setAttribute('role', 'img');
-          const githubIcon = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>';
-          const machineIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>';
-          const unknownIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.2 2.4c-.7.3-.7 1.1-.7 1.6m0 3h.01"/></svg>';
-          runner.title = locations.has('unknown') ? 'Runner location unverified'
-            : locations.size > 1 ? 'GitHub-hosted and machine-hosted runners'
-            : locations.has('github') ? 'GitHub-hosted runner' : 'Machine-hosted runner';
+          runner.title = [...locations].map(location => locationTitles[location]).join(' + ');
+          if (locations.has('cloud')) runner.title += ' · GitHub Actions receives the cloud test result';
           runner.setAttribute('aria-label', runner.title);
-          runner.innerHTML = locations.has('unknown') ? unknownIcon
-            : (locations.has('github') ? githubIcon : '') + (locations.has('machine') ? machineIcon : '');
+          runner.innerHTML = [...locations].map(location => providerIcons[location]).join('');
+          runner.append(document.createTextNode(' ' + shell.dataset.runnerLabel));
           const tickets = [...new Set(members.flatMap(({job}) => [...(job.origin?.tickets || []), ...(job.origin?.pusher?.tickets || [])]))];
           const pusher = members.map(({job}) => job.origin?.pusher).find(Boolean);
           const title = document.createElement('span');
@@ -102595,6 +102600,7 @@
           }
           const values = [...workflows.values()].map(items => {
             if (items.every(item => item.done)) return 100;
+            if (items.some(item => !item.done && item.job.compute_provider === 'claude_cloud')) return null;
             const reported = items.find(item => Number.isFinite(item.job.workflow_percent));
             if (reported) return reported.job.workflow_percent;
             if (items.some(item => !item.done && !Number.isFinite(item.job.percent))) return null;
@@ -102606,7 +102612,8 @@
           shell.dataset.outcome = failures ? 'failure' : live ? 'active' : passed === members.length ? 'success' : 'neutral';
           summary.title = [first.repo, first.head_sha, first.commit_subject,
             pusher && [pusher.engine, pusher.session_id, pusher.worker && 'control-plane worker'].filter(Boolean).join(' · '),
-            ...tickets, counts, 'Progress averages each workflow once, including finished jobs; queued jobs start at 0%. Step completion, not time remaining.',
+            ...tickets, counts, locations.has('cloud') && live ? 'Cloud tests are running; GitHub receiver steps do not measure test progress.'
+              : 'Progress averages each workflow once, including finished jobs; queued jobs start at 0%. Step completion, not time remaining.',
             'Expand for individual checks and attribution'].filter(Boolean).join('\n');
           const overallBar = document.createElement('progress');
           overallBar.className = 'local-ci-overall-progress';
@@ -102648,25 +102655,41 @@
         label.className = 'local-ci-label';
         const name = document.createElement('span');
         name.className = 'local-ci-name';
-        name.textContent = (job.provider === 'vercel' ? 'Vercel · ' : 'GitHub Actions · ') + String(job.repo || '').split('/').pop() + ' · ' + job.name;
+        name.textContent = (job.provider === 'vercel' ? 'Vercel · ' : job.compute_provider === 'claude_cloud' ? 'Claude Cloud · ' : 'GitHub Actions · ') + String(job.repo || '').split('/').pop() + ' · ' + job.name;
         const percent = document.createElement('span');
         percent.className = 'local-ci-percent';
+        const cloudRunning = !done && job.compute_provider === 'claude_cloud';
         percent.textContent = job.provider === 'vercel' ? job.status : done ? (conclusions[job.conclusion] || 'Completed')
+          : cloudRunning ? 'Running in Cloud'
           : job.percent == null ? 'Running' : job.percent + '%';
         const outcome = done ? (job.conclusion === 'success' ? 'success'
           : ['failure','timed_out','startup_failure','action_required'].includes(job.conclusion) ? 'failure' : 'neutral') : 'active';
         entry.dataset.outcome = outcome;
+        if (job.provider !== 'vercel') {
+          const kind = providerKind(job);
+          const provider = document.createElement('span');
+          provider.className = 'local-ci-runner local-ci-job-provider';
+          provider.title = locationTitles[kind];
+          if (kind === 'cloud') provider.title += ' · result receiver: ' +
+            ({github_hosted:'GitHub-hosted runner', self_hosted:'Self-hosted runner', local:'This machine'}[job.execution] || 'Runner location unverified');
+          provider.setAttribute('role', 'img');
+          provider.setAttribute('aria-label', provider.title);
+          provider.innerHTML = providerIcons[kind];
+          provider.append(document.createTextNode(' ' + providerLabels[kind]));
+          label.append(provider);
+        }
         label.append(name, percent);
         const bar = document.createElement('progress');
         bar.max = 100;
         if (done) bar.value = 100;
-        else if (job.percent != null) bar.value = job.percent;
-        bar.setAttribute('aria-label', name.textContent + ': ' + (job.provider === 'vercel' ? job.status : done ? percent.textContent : 'completed steps'));
+        else if (!cloudRunning && job.percent != null) bar.value = job.percent;
+        bar.setAttribute('aria-label', name.textContent + ': ' + (cloudRunning ? 'Cloud test progress unavailable' : job.provider === 'vercel' ? job.status : done ? percent.textContent : 'completed steps'));
         const step = document.createElement('span');
         step.className = 'local-ci-step';
         step.textContent = job.provider === 'vercel' ? job.current_step : (showingSaved ? 'Saved · ' : '') + (done ? 'Completed' + (job.completed_at ? ' · ' + new Date(job.completed_at).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '') : job.current_step);
         row.title = job.repo + ' · ' + (done ? percent.textContent : job.current_step)
-          + (done || job.provider === 'vercel' ? '' : '\n' + job.completed_steps + '/' + job.total_steps + ' steps complete (not time remaining)');
+          + (done || job.provider === 'vercel' ? '' : cloudRunning ? '\nCloud test progress unavailable; GitHub Actions is receiving results.'
+            : '\n' + job.completed_steps + '/' + job.total_steps + ' steps complete (not time remaining)');
         const detail = document.createElement('span');
         detail.className = 'local-ci-detail';
         detail.append(step);
@@ -102681,7 +102704,8 @@
         if (job.provider !== 'vercel' && job === first) {
           const context = document.createElement('span');
           context.className = 'local-ci-context';
-          const location = {github_hosted:'GitHub-hosted runner', self_hosted:'Self-hosted runner', local:'This machine'}[job.execution] || 'Runner location unverified';
+          const receiver = {github_hosted:'GitHub-hosted runner', self_hosted:'Self-hosted runner', local:'This machine'}[job.execution] || 'Runner location unverified';
+          const location = job.compute_provider === 'claude_cloud' ? 'Claude Cloud · result receiver: ' + receiver : receiver;
           const trigger = [job.event, job.actor, job.head_sha && job.head_sha.slice(0, 7)].filter(Boolean).join(' · ');
           const origin = {sessions:[...new Set(members.flatMap(({job}) => job.origin?.sessions || []))],
             tickets:[...new Set(members.flatMap(({job}) => [...(job.origin?.tickets || []), ...(job.origin?.pusher?.tickets || [])]))]};
@@ -102717,6 +102741,11 @@
           item.className = 'local-ci-inline-run';
           item.dataset.outcome = row.dataset.outcome || 'active';
           const status = row.querySelector('.local-ci-summary-status, .local-ci-percent');
+          const icons = document.createElement('span');
+          icons.className = 'local-ci-inline-icons';
+          icons.setAttribute('aria-hidden', 'true');
+          for (const icon of row.querySelectorAll('.local-ci-summary .local-ci-runner svg')) icons.append(icon.cloneNode(true));
+          if (icons.childElementCount) item.append(icons);
           item.append((row.dataset.runnerLabel || 'Unverified') + ' ' + (status?.textContent || 'Running') + ' ');
           const timer = row.querySelector('[data-ci-started-at]');
           if (timer) item.append(timer.cloneNode(true));
