@@ -2286,6 +2286,25 @@
   .thinking-silent-note { font-size: 11px; opacity: 0.55; }
   .event.assistant.is-silent-thinking-only { display: none !important; }
 
+  .thinking-run-source { display: none !important; }
+  .event.assistant.thinking-run-event > :not(.thinking-run) { display: none !important; }
+  .event.assistant.thinking-run-event:not(:has(> .thinking-run)) { display: none !important; }
+  .thinking-run > .thinking-toggle {
+    display: block; background: none; border: 0; padding: 0;
+    font: inherit; font-size: 11px; font-weight: 600; text-align: start; min-height: 28px;
+  }
+  .thinking-run > .thinking-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .thinking-run-preview {
+    line-height: 1.5; height: 3em; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow-wrap: anywhere;
+  }
+  .thinking-run > [hidden] { display: none !important; }
+  .thinking-run > .t-body { overflow-wrap: anywhere; }
+  @media (pointer: coarse) {
+    .thinking-run > .thinking-toggle { min-height: 44px; }
+  }
+
   /* ACP plan card (kimi TodoList whole-plan replace) — kimi-web TodoCard look. */
   .plan-card {
     font-size: 12px; margin: 4px 0; padding: 6px 10px;
@@ -32230,6 +32249,9 @@ body.conv-compact.conv-compact .conversations-view .thinking-block:not(.cc-open)
 }
 body.conv-compact.conv-compact .conversations-view .thinking-block.cc-open .t-body {
   display: block; -webkit-line-clamp: unset; max-height: none;
+}
+body.conv-compact.conv-compact .conversations-view .thinking-run.is-expanded > .t-body {
+  display: block; -webkit-line-clamp: unset; max-height: 400px;
 }
 /* Tool commands wrap so the complete command stays readable. */
 body.conv-compact.conv-compact .conversations-view .tool-call { padding: 0 !important; }

@@ -242,7 +242,9 @@ test('a fresh open resumes following after leaving the previous conversation scr
 // scroll decision together. The isolated gesture tests above keep the DOM in
 // place, which misses the momentary empty viewport during a history response.
 const prependStart = app.indexOf('  function _prependConversationEvents(');
-const prepend = app.slice(prependStart, app.indexOf('  // ── Spawn stats', prependStart));
+const thinkingStart = app.indexOf('  function _syncThinkingRuns(');
+const prepend = app.slice(thinkingStart, app.indexOf('  function renderConversationEvents(', thinkingStart))
+  + '\n' + app.slice(prependStart, app.indexOf('  // ── Spawn stats', prependStart));
 const renderStart = app.indexOf('  function renderConversationEvents(');
 const bottomStart = app.indexOf('    const wasAtBottom =', renderStart);
 const renderBottom = app.slice(bottomStart, app.indexOf('\n', bottomStart));

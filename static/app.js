@@ -58460,7 +58460,11 @@
     const canRequestRun = status === 'open' && !hasActiveClaim;
     const runQueued = canRequestRun && !!item.run_requested;
     const runBusy = _uxqRunBusyRefs.has(ref);
-    const timeline = Array.isArray(item.timeline) ? item.timeline : [];
+    // List rows carry `history` but not `timeline`; the modal opens from the
+    // row before the item fetch hydrates (or when it fails), so fall back to
+    // history or a blocked ticket shows no question at all.
+    const timeline = Array.isArray(item.timeline) ? item.timeline
+      : (Array.isArray(item.history) ? item.history.filter(ev => ev && ev.event) : []);
     // Who it waits on (CCC-244), same projection as the queue row.
     const attention = _uxqTicketAttention(item);
 
@@ -64022,6 +64026,7 @@
     _currentToolCount = savedToolCount;
     _firstUserMsgRendered = savedFirstUser || renderedFirstUser;
     _dynamicAskState = renderedDynamicAsk || savedDynamicAsk;
+    _syncThinkingRuns($view);
     $view.scrollTop = scrollTopBefore + Math.max(0, $view.scrollHeight - scrollHeightBefore);
     updateConversationEndAffordance($view);
     return ok;
@@ -72713,6 +72718,74 @@
     finally { if (pane._teRequestSid === sid) pane._teRequestSid = null; }
   }
 
+  // Keep consecutive reasoning updates in one stable display slot. Source
+  // blocks remain untouched for line dedupe, provisional reconciliation and
+  // merged-turn coverage; only the presentation shows the latest thought.
+  function _syncThinkingRuns(view) {
+    const stale = new Set(view.querySelectorAll('.thinking-run'));
+    const chrome = '.line-num, .msg-ts, .actor-chip, .event-model-meta, .event-token-chips, .assistant-message-actions';
+    let run = null;
+    const visit = (source) => {
+      if (!source.classList.contains('thinking-run-source')) source.classList.add('thinking-run-source');
+      if (!run) {
+        run = source.previousElementSibling;
+        if (!run?.classList.contains('thinking-run')) {
+          run = document.createElement('div');
+          run.className = 'thinking-block thinking-run';
+          run.innerHTML = '<button type="button" class="thinking-toggle" aria-expanded="false" title="Show full latest thought">Thinking</button>'
+            + '<div class="thinking-run-preview" dir="auto"></div><div class="t-body" dir="auto" hidden></div>';
+          const slot = run;
+          slot.querySelector('button').addEventListener('click', () => {
+            const open = slot.classList.toggle('is-expanded');
+            slot.querySelector('button').setAttribute('aria-expanded', String(open));
+            slot.querySelector('button').title = open ? 'Show latest thought preview' : 'Show full latest thought';
+            slot.querySelector('.t-body').hidden = !open;
+            slot.querySelector('.thinking-run-preview').hidden = open;
+          });
+          source.before(run);
+        }
+      }
+      stale.delete(run);
+      run._latestThinkingSource = source;
+    };
+    for (const event of view.children) {
+      if (event.matches('.conv-codex-state, .conv-live-tool-inline, .conv-live-tool-strip')) continue;
+      if (!event.matches('.event.assistant, .kimi-turn') || event.classList.contains('ccc-video-cleared')) {
+        run = null;
+        continue;
+      }
+      let thoughtsOnly = true;
+      let hasThought = false;
+      for (const block of Array.from(event.children)) {
+        if (block.matches('.thinking-run, .kimi-marker, .kimi-answer-meta, ' + chrome)) continue;
+        if (block.matches('.thinking-block:not(.thinking-block-silent), .kimi-thinking')) {
+          visit(block);
+          hasThought = true;
+        } else {
+          run = null;
+          thoughtsOnly = false;
+        }
+      }
+      if (event.matches('.event.assistant')) event.classList.toggle('thinking-run-event', hasThought && thoughtsOnly);
+    }
+    for (const slot of view.querySelectorAll('.thinking-run')) {
+      if (stale.has(slot)) { slot.remove(); continue; }
+      // Read only the last source in each run, not every older thought on
+      // every poll. Both renderers already escaped/rendered this safely.
+      const source = slot._latestThinkingSource;
+      const sourceBody = source.querySelector('.t-body, .kimi-thinking-full') || source;
+      const html = sourceBody.innerHTML;
+      const text = Array.from(sourceBody.childNodes).map(node => node.textContent || '').join('\n\n');
+      const body = slot.querySelector('.t-body');
+      if (slot._thinkingHtml !== html) { body.innerHTML = html; slot._thinkingHtml = html; }
+      // A growing streamed item may contain earlier paragraphs: keep the
+      // newest paragraph in the preview while expansion retains the whole item.
+      const preview = text.trim().split(/\n\s*\n/).filter(Boolean).pop() || '';
+      const teaser = slot.querySelector('.thinking-run-preview');
+      if (teaser.textContent !== preview) teaser.textContent = preview;
+    }
+  }
+
   function renderConversationEvents(events, paneId, opts) {
     if (!Array.isArray(events)) return true;  // defensive: backlog/unknown responses
     // Do not defer transcript rendering while the composer is focused.
@@ -74725,6 +74798,7 @@
     // Fold before measuring or scrolling the transcript. Deferring this to
     // the mutation observer measures expanded tools, then shrinks the view
     // on the next frame and visibly jumps the reader during live updates.
+    _syncThinkingRuns($view);
     if (document.body.classList.contains('conv-compact')) _ccMarkRuns($view);
     anchorCodexStateBadge($view);
     // When a compact-resume event just landed, scroll the boundary
@@ -89779,11 +89853,13 @@
         // Codex/Kimi merge events into turns. Walk their visible blocks;
         // hidden reconciliation markers and answer chrome are transparent.
         for (const c of el.children) {
-          if (c.matches('.kimi-marker, .kimi-answer-meta')) continue;
+          if (c.matches('.kimi-marker, .kimi-answer-meta, .thinking-run-source')) continue;
           if (c.matches('.acp-needs-approval, :has(.acp-needs-approval)')) {
             units.push({ el: c, kind: 'break' });
           } else if (c.matches('.kimi-tool-group, .kimi-tool')) {
             units.push({ el: c, kind: 'tool', calls: Math.max(1, c.querySelectorAll('.kimi-tool').length) });
+          } else if (c.matches('.thinking-run')) {
+            units.push({ el: c, kind: 'break' });
           } else if (c.matches('.kimi-thinking')) {
             units.push({ el: c, kind: 'think' });
           } else {
@@ -89796,9 +89872,11 @@
         if (cl.contains('is-silent-thinking-only')) { units.push({ el, kind: 'passive' }); continue; }
         let found = false;
         for (const c of el.children) {
+          if (c.classList.contains('thinking-run-source')) continue;
           const cc = c.classList;
           if (cc.contains('tool-call-group')) { found = true; units.push({ el: c, kind: 'tool', calls: Math.max(1, c.querySelectorAll('.tool-call').length) }); }
           else if (cc.contains('tool-call')) { found = true; units.push({ el: c, kind: 'tool', calls: 1 }); }
+          else if (cc.contains('thinking-run')) { found = true; units.push({ el: c, kind: 'break' }); }
           else if (cc.contains('thinking-block')) { found = true; units.push({ el: c, kind: cc.contains('thinking-block-silent') ? 'passive' : 'think' }); }
           else if (cc.contains('assistant-text')) { found = true; units.push({ el: c, kind: 'break' }); }
         }
