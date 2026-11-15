@@ -1222,6 +1222,9 @@ case "${CCC_CONTROL_PLANE_ENGINES:-1}" in
   0|false|False|no|No) ;;
   *)
     worker_health="$("$PYTHON" "$HERE/ccc_worker.py" --health 2>/dev/null || true)"
+    # codex_live_turns: Codex turns on the worker's stdio app-server hold no
+    # ledger job, but a worker restart aborts them all (CCC-250). A failed reply
+    # or a missing field (an older worker) is unknown, never idle.
     read -r existing_worker_pid existing_worker_idle worker_compatible <<EOF
 $(printf '%s' "$worker_health" | "$PYTHON" -c '
 import json, sys
@@ -1231,9 +1234,6 @@ except Exception:
     data = {}
 worker = data.get("worker") if isinstance(data.get("worker"), dict) else {}
 capabilities = worker.get("capabilities") or []
-# codex_live_turns: Codex turns on the worker's stdio app-server hold no
-# ledger job, but a worker restart aborts them all (CCC-250). A failed reply
-# or a missing field (an older worker) is unknown, never idle.
 idle = bool(data.get("ok")) and all(
     key in data and not int(data.get(key) or 0)
     for key in ("active", "queued", "uncertain", "codex_live_turns")
