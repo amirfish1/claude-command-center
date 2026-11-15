@@ -1,0 +1,1 @@
+- Avoid parsing Codex tool activity when resolving the working directory for peer messages, preserving the latest complete turn context.

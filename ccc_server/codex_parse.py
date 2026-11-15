@@ -18,6 +18,30 @@ from ccc_server import core as _core
 _CODEX_SESSION_META_PARENT_CACHE = {}
 
 
+def codex_rollout_cwd(path):
+    """Read the latest complete cwd context without interpreting tool activity."""
+    cwd = None
+    try:
+        with open(path, "rb") as fh:
+            for raw in fh:
+                # Large tool outputs dominate rollouts. Their contents are
+                # irrelevant to routing, including command/activity formatting.
+                if not raw.endswith(b"\n") or b'"cwd"' not in raw:
+                    continue
+                try:
+                    event = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if not isinstance(event, dict) or event.get("type") not in ("session_meta", "turn_context"):
+                    continue
+                payload = event.get("payload")
+                if isinstance(payload, dict) and payload.get("cwd"):
+                    cwd = payload["cwd"]
+    except OSError:
+        pass
+    return cwd
+
+
 def _codex_subagent_parent_id(row, path):
     """Parent thread of a Codex subagent thread, or ''.
 

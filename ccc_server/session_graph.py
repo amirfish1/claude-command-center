@@ -6325,14 +6325,12 @@ def find_session_cwd(session_id):
             return cwd
     codex_row = _core._codex_thread_row(session_id)
     if codex_row:
+        from ccc_server.codex_parse import codex_rollout_cwd
+
         cwd = codex_row.get("cwd")
         path = _core._codex_rollout_path_from_row(codex_row)
         if path:
-            try:
-                tail = _core._extract_codex_tail_meta(path) or {}
-                cwd = tail.get("cwd") or cwd
-            except Exception:
-                pass
+            cwd = codex_rollout_cwd(path) or cwd
         if cwd:
             cwd = _resolve_session_cwd(session_id, cwd)
             _core._session_cwd_cache[session_id] = cwd
