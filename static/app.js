@@ -47123,12 +47123,13 @@
             ? _allTabClusterCost(b) - _allTabClusterCost(a)
             : _allTabClusterMtime(b) - _allTabClusterMtime(a);
         });
-        // Today-starred clusters lead Active in their own small group, still
-        // newest-first; stars expire at local midnight (todayStarActive).
+        // Today stars lead Active. Project view keeps each folder whole;
+        // chronological view gives the starred topics a separate Today group.
         if (opts.todayFirst) {
           const starred = clusters.filter(cl => todayStarActive(cl.rows[0] && cl.rows[0].card));
           if (starred.length) {
             const rest = clusters.filter(cl => !starred.includes(cl));
+            if (_arcShouldGroupByFolder) return renderClusterList(starred.concat(rest));
             return '<div class="today-star-group" aria-label="Starred for today">'
               + '<div class="today-star-heading"><span aria-hidden="true">&#9733;</span> Today</div>'
               + renderClusterList(starred) + '</div>' + renderClusterList(rest);
