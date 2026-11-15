@@ -180,6 +180,18 @@ class TestDeadNotifyAlerts(_Fixture):
         self.assertEqual(a["title"], "Needs your input: WREN-DESIGN-1574")
         self.assertEqual(a["detail"], "ticket notification could not be delivered")
 
+    def test_sender_header_is_stripped_before_parsing(self):
+        hdr = "[sender: wt:notify (service) \u00b7 msg 0319be9f-f2e2-4a11-8c3d-123456789abc]\n"
+        legacy = '[Message attribution v1: {"a": 1}]\n'
+        for h in (hdr, legacy):
+            self._write_outbox([self._dead_notify(
+                "BECKY-3532", text=h + "[watchtower] BECKY-3532 needs input \u2014 ok?")])
+            a = self.collect()["alerts"][0]
+            self.assertEqual(a["id"], "dead-notify:BECKY-3532")
+            self.assertEqual(a["queue"], "BECKY")
+            self.assertEqual(a["severity"], "error")
+            self.assertEqual(a["title"], "Needs your input: BECKY-3532")
+
     def test_dead_notice_does_not_fade_with_the_error_freshness_window(self):
         # The ERROR-line window is 15min; a dead notice is a one-shot fact and
         # must stay pinned until acked no matter how old.
