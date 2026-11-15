@@ -308,6 +308,11 @@ Choose **Watch > Releases** on GitHub for update notifications.
 - [Decision Inbox](docs/decision-inbox.md): choose the next step for stalled work
 - [Throughput usage database](docs/usage-db.md) and cost comparisons
 - Agents working together: [CLI](docs/cli.md) · [spawn, send, and ask APIs](docs/orchestration.md) · [12-skill pack](skills/README.md). Usage integrations read `GET /api/usage/current`
+- **6.0 breaking change:** the dormant `/api/outcomes` API and `ccc spawn --outcome-id`
+  have been removed. Spawn requests containing `outcome_id` now return 400;
+  sessions no longer inherit outcome context or record outcome associations.
+  Ordinary spawn, parent-session lineage, decision APIs, session census and queue
+  APIs retain their contracts. See [migration details](docs/outcomes-api.md).
 - [Skill integrations](docs/features.md#agents-working-together) · [installed-pack inventory](docs/skills-ecosystem-inventory.md) · [Cookbook: wire your own app into CCC](cookbook/README.md)
 - [Architecture](docs/architecture.md) · [Configuration](docs/configuration.md) · [Shared-clone Git guard](docs/shared-clone-guard.md)
 - Roadmap: see [Features](docs/features.md) and [Engine support](docs/engine-support.md); request improvements in [GitHub issues](https://github.com/amirfish1/claude-command-center/issues)

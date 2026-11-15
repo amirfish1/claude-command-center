@@ -1,0 +1,1 @@
+Removed the dormant `/api/outcomes` API, `ccc spawn --outcome-id`, and outcome-specific spawn context, inheritance and association. Spawn requests containing `outcome_id` now return 400. This breaking API/CLI removal raises the version to 6.0.0; ordinary session, decision and queue contracts remain unchanged.
