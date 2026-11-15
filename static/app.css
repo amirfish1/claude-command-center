@@ -2300,7 +2300,9 @@
     overflow-wrap: anywhere;
   }
   .thinking-run > [hidden] { display: none !important; }
-  .thinking-run > .t-body { overflow-wrap: anywhere; }
+  .thinking-run { cursor: pointer; }
+  /* Expanded shows the whole thought, not a nested 400px scroller. */
+  .thinking-run > .t-body { overflow-wrap: anywhere; max-height: none; }
   @media (pointer: coarse) {
     .thinking-run > .thinking-toggle { min-height: 44px; }
   }
@@ -32374,7 +32376,7 @@ body.conv-compact.conv-compact .conversations-view .thinking-block.cc-open .t-bo
   display: block; -webkit-line-clamp: unset; max-height: none;
 }
 body.conv-compact.conv-compact .conversations-view .thinking-run.is-expanded > .t-body {
-  display: block; -webkit-line-clamp: unset; max-height: 400px;
+  display: block; -webkit-line-clamp: unset; max-height: none;
 }
 /* Tool commands wrap so the complete command stays readable. */
 body.conv-compact.conv-compact .conversations-view .tool-call { padding: 0 !important; }

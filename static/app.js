@@ -52037,15 +52037,36 @@
     }
     // Phones use a single row above the composer rather than a tall stack
     // obscuring the conversation. Measure actual controls to fit each slot.
+    let clearance = 0;
     if (matchMedia('(max-width: 700px)').matches) {
       let rowRight = right;
+      let anyVisible = false;
       for (const control of [btn, nextBtn, lastBtn, segBtn]) {
         if (!control) continue;
         control.style.right = rowRight + 'px';
         control.style.bottom = endBottom + 'px';
-        if (control.classList.contains('visible')) rowRight += (control.offsetWidth || 44) + 6;
+        if (control.classList.contains('visible')) {
+          rowRight += (control.offsetWidth || 44) + 6;
+          anyVisible = true;
+        }
       }
       above = endBottom + step;
+      // The row floats over the transcript's last lines; give the scroller
+      // that much extra bottom room so the final text can scroll clear of it.
+      // Reserve it for any scrollable transcript, not only while a button is
+      // showing: End hides on reaching the bottom, and dropping the room
+      // there would clamp scrollTop upward and read as the user scrolling up.
+      const scrollable = view.scrollHeight > view.clientHeight + CONV_BOTTOM_TOLERANCE;
+      if ((anyVisible || scrollable) && !view.classList.contains('is-presentation-mode')) {
+        const rowHeight = btn.offsetHeight || 44;
+        const rowTop = hostRect.bottom - endBottom - rowHeight;
+        clearance = Math.max(0, Math.round(viewRect.bottom - rowTop + 8));
+      }
+    }
+    const clearancePx = clearance ? clearance + 'px' : '';
+    if (view.style.paddingBottom !== clearancePx) {
+      view.style.paddingBottom = clearancePx;
+      if (view._pinnedToBottom) view.scrollTop = view.scrollHeight;
     }
     // The floating speaker tops the same right-hand column, so every floating
     // control covers one narrow strip instead of a second one on the left.
@@ -73016,7 +73037,11 @@
           run.innerHTML = '<button type="button" class="thinking-toggle" aria-expanded="false" title="Show full latest thought">Thinking</button>'
             + '<div class="thinking-run-preview" dir="auto"></div><div class="t-body" dir="auto" hidden></div>';
           const slot = run;
-          slot.querySelector('button').addEventListener('click', () => {
+          // The whole block toggles, not just the small label: on a phone the
+          // preview text is the obvious tap target. Links and text selections
+          // inside the expanded thought pass through.
+          slot.addEventListener('click', (ev) => {
+            if (ev.target.closest('a') || (!ev.target.closest('button') && String(window.getSelection?.() || '').trim())) return;
             const open = slot.classList.toggle('is-expanded');
             slot.querySelector('button').setAttribute('aria-expanded', String(open));
             slot.querySelector('button').title = open ? 'Show latest thought preview' : 'Show full latest thought';
@@ -90618,7 +90643,8 @@
     const sel = window.getSelection && window.getSelection();
     if (sel && String(sel).trim()) return;
     const el = t.closest('.assistant-text, .event.user_text, .thinking-block, .tool-call');
-    if (el) el.classList.toggle('cc-open');
+    // Latest-thought slots fold and unfold through their own handler.
+    if (el && !el.classList.contains('thinking-run')) el.classList.toggle('cc-open');
   }, true);
   document.addEventListener('click', (ev) => {
     const b = ev.target && ev.target.closest ? ev.target.closest('.conv-view-seg [data-conv-view]') : null;

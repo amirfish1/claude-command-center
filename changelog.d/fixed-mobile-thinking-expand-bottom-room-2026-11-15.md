@@ -1,0 +1,1 @@
+- On phones, the last lines of a conversation now scroll clear of the floating jump buttons, and tapping anywhere on the latest Thinking block expands the whole thought (tap again to collapse).
