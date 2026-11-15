@@ -309,3 +309,32 @@ def test_saved_cursor_preserves_usage_delta_and_counter_resets(tmp_path, monkeyp
     full = server._extract_codex_tail_meta(p)
     assert _meta_sans_volatile(resumed) == _meta_sans_volatile(full)
     assert resumed['cost_usd'] > 0
+
+
+@pytest.mark.parametrize('terminal', ['turn_aborted', 'task_complete'])
+def test_restored_cursor_matches_terminal_receipt_to_started_turn(tmp_path, monkeypatch, terminal):
+    """Persisted parser cursors retain the accepted exact-turn terminal logic."""
+    import copy
+    rollout = tmp_path / 'terminal.jsonl'
+    monkeypatch.setattr(server, '_CONV_META_CACHE_FILE', tmp_path / 'metadata.json')
+    started = _ev({'type': 'event_msg', 'timestamp': '2026-06-02T10:00:00Z',
+                   'payload': {'type': 'task_started', 'turn_id': 'turn-current'}})
+    rollout.write_text(_session_meta() + started + _user('continue') + _call('pending'))
+    initial = server._extract_codex_tail_meta(rollout)
+    assert initial['current_turn_id'] == 'turn-current' and initial['pending_tool']
+    server._save_conv_meta_cache()
+    server._conv_meta_cache.clear()
+    server._codex_tail_resume.clear()
+    server._load_conv_meta_cache()
+    with rollout.open('a') as stream:
+        stream.write(_ev({'type': 'event_msg', 'timestamp': '2026-06-02T10:00:04Z',
+                          'payload': {'type': terminal, 'turn_id': 'turn-current',
+                                      'reason': 'interrupted'}}))
+    restored = copy.deepcopy(server._extract_codex_tail_meta(rollout))
+    assert restored['last_event_type'] == 'result'
+    assert restored['last_terminal_turn_id'] == 'turn-current'
+    assert not restored['current_turn_id'] and not restored['pending_tool']
+    server._conv_meta_cache.clear()
+    server._codex_tail_resume.clear()
+    full = server._extract_codex_tail_meta(rollout)
+    assert _meta_sans_volatile(restored) == _meta_sans_volatile(full)

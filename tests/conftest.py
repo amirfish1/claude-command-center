@@ -57,6 +57,13 @@ if not os.environ.get("CCC_ONCALL_STATE_DIR", "").strip():
     os.environ["CCC_ONCALL_STATE_DIR"] = tempfile.mkdtemp(prefix="ccc-test-oncall-")
 
 
+# The Codex restart fence (CCC-250) must never touch the live worker's.
+os.environ.setdefault(
+    "CCC_CODEX_RESTART_FENCE",
+    os.path.join(tempfile.mkdtemp(prefix="ccc-test-fence-"), "codex-restart-fence.json"),
+)
+
+
 @pytest.fixture(autouse=True)
 def _reset_ccc_ttl_caches():
     def _reset():

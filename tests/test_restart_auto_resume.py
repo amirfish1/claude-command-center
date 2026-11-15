@@ -18,6 +18,9 @@ def restart(tmp_path, monkeypatch):
     engines.reconcile_uncertain.return_value = []
     engines.retire_stale_uncertain.return_value = []
     runtime._engine_host = engines
+    # This suite proves drain ownership; native turn safety is covered by
+    # test_codex_restart_gate. Keep its successful precheck explicit.
+    monkeypatch.setattr(server, "_codex_restart_freeze", lambda *a, **k: (True, None))
     monkeypatch.setattr(server, '_dashboard_owned_active_executions', lambda: [])
 
     def request(method, params=None, **kwargs):
@@ -50,7 +53,8 @@ def test_restart_completion_recovers_only_its_own_pause(restart, monkeypatch, en
     runtime, engines = restart
     replacement = None
 
-    def restart_process():
+    def restart_process(**kwargs):
+        assert kwargs == {"codex_final_check": True}
         nonlocal replacement
         if new_pause:
             replacement = runtime.ledger.set_drain(True, 'operator paused dispatch')
@@ -62,7 +66,7 @@ def test_restart_completion_recovers_only_its_own_pause(restart, monkeypatch, en
         server._worker_compat_self_heal_restart()
     else:
         reply = Mock()
-        worker_endpoint()(SimpleNamespace(send_json=reply))
+        worker_endpoint()(SimpleNamespace(send_json=reply, headers={}, rfile=None))
         if healthy and not restarted:
             assert reply.call_args.args[0]['note'] == 'Worker restart failed; the existing worker is still healthy.'
     current = runtime.ledger.drain_state()
