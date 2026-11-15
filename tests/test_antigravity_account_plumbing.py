@@ -207,9 +207,6 @@ def test_generic_spawn_alias_dedupe_respects_effective_account(state, monkeypatc
         return {'session_id': 'existing'}, None
     monkeypatch.setattr(server, '_spawn_dedupe_lookup', lookup)
     monkeypatch.setattr(server, '_dedupe_existing_response', lambda *args, **kwargs: {'ok': True, 'session_id': 'existing'})
-    from ccc_server import outcome_api
-    monkeypatch.setattr(outcome_api, 'prepare_spawn', lambda *args: None)
-    monkeypatch.setattr(outcome_api, 'associate_spawn', lambda *args: None)
     request = handler('/api/sessions/spawn', {'engine': engine, 'prompt': 'hello', 'task_key': 'same-task'})
     request.do_POST()
     assert request.result[1]['code'] == 'antigravity_account_conflict'
@@ -261,9 +258,6 @@ def test_pending_secondary_retry_and_conflict_use_persisted_launch_account(
     monkeypatch.setattr(server, '_normalize_spawn_parent_session_id', lambda *args, **kwargs: ('latest', None))
     monkeypatch.setattr(server, '_model_policy_error', lambda model: None)
     monkeypatch.setattr(server, 'byok_spawn_env', lambda *args: {})
-    from ccc_server import outcome_api
-    monkeypatch.setattr(outcome_api, 'prepare_spawn', lambda *args: None)
-    monkeypatch.setattr(outcome_api, 'associate_spawn', lambda *args: None)
     monkeypatch.setattr(continuation, 'session_context', lambda query: context())
     expected_account = 'primary' if native_id else 'secondary'
     for _ in range(2):

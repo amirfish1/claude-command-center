@@ -31,6 +31,18 @@ If you expose the port to the network, the LAN, or the internet, you are giving 
 - **Subprocess discipline** — every `subprocess.run` / `Popen` call uses list-form arguments. No `shell=True`, no `eval`, no `exec`, no `os.system`.
 - **Path-traversal protection** — every static-file handler resolves the target and verifies it lives under the served root before reading.
 
+## Removed outcomes surface (6.0)
+
+`/api/outcomes` and all its subroutes are removed and return 404, including
+settings, list/detail, create, update, link and review-event operations. CCC no
+longer reads or changes the outcome enablement setting, forwards outcome intake
+or edits, or associates spawned sessions with outcomes. `ccc spawn --outcome-id`
+is rejected by the CLI parser, and `POST /api/sessions/spawn` rejects the removed
+`outcome_id` field with 400 before forwarding or launching work. Ordinary spawn,
+parent-session lineage, generic decision, session census and queue APIs keep
+their existing behavior and access checks. Existing stored outcome data is not
+migrated, enabled or deleted by this change.
+
 ## What we don't do
 
 - **No auth** beyond the optional phone-access PIN above. If you need multi-user access, fork and add it.
