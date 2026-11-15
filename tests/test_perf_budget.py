@@ -5932,3 +5932,73 @@ def test_existing_model_bucket_never_reloads_its_default(monkeypatch):
         server._model_catalog_add(catalog, 'codex', 'example-model', source='observed')
     assert len(catalog['codex']['models']) == 1
     assert catalog['codex']['default'] == 'configured'
+
+
+def test_claude_family_only_saves_changed_edges(tmp_path, monkeypatch):
+    from ccc_server import session_graph
+    root = tmp_path / 'projects'
+    project = root / 'known'
+    agents = project / 'parent-session' / 'subagents'
+    agents.mkdir(parents=True)
+    transcript = project / 'parent-session.jsonl'
+    transcript.write_text('{}\n')
+    graph = session_graph._SessionGraph(tmp_path / 'graph.json')
+    monkeypatch.setattr(server, 'PROJECTS_ROOT', root)
+    monkeypatch.setattr(server, '_session_graph', graph)
+    monkeypatch.setattr(server, '_find_session_jsonl', lambda sid: transcript)
+    def enrich():
+        graph._claude_task_enriched.clear()
+        session_graph._session_graph_enrich_claude_task_subagents('parent-session')
+    enrich()
+    assert not graph._path.exists(), 'timestamp-only poll serialized an empty graph'
+    agent = agents / 'agent-first.jsonl'
+    agent.write_text(json.dumps({'type': 'user', 'message': {'content': 'First task'}}) + '\n')
+    enrich()
+    assert graph.parent_of('agent-first') == 'parent-session'
+    first_write = graph._path.stat().st_mtime_ns
+    enrich()
+    assert graph._path.stat().st_mtime_ns == first_write, 'unchanged edges rewrote the graph'
+    later_agents = root / 'other-copy' / 'parent-session' / 'subagents'
+    later_agents.mkdir(parents=True)
+    (later_agents / 'agent-later.jsonl').write_text('{}\n')
+    enrich()
+    assert graph.parent_of('agent-later') == 'parent-session', 'later subagent was hidden by caching'
+    loaded = session_graph._SessionGraph(graph._path)
+    loaded.load()
+    assert loaded.parent_of('agent-later') == 'parent-session'
+    loaded.add_edge('other-parent', 'agent-later', name='Updated task')
+    loaded.save()
+    assert loaded.parent_of('agent-later') == 'parent-session'
+    assert loaded.edge_meta('agent-later')['name'] == 'Updated task'
+
+
+def test_known_claude_status_and_usage_do_not_walk_other_projects(tmp_path, monkeypatch):
+    from ccc_server import session_graph, morning_launch
+    root = tmp_path / 'projects'
+    project = root / 'known'
+    project.mkdir(parents=True)
+    sid = 'cached-session'
+    transcript = project / (sid + '.jsonl')
+    transcript.write_text(json.dumps({'type': 'assistant', 'message': {
+        'id': 'message-1', 'model': 'example-model', 'content': [],
+        'usage': {'input_tokens': 12, 'output_tokens': 3}}}) + '\n')
+    monkeypatch.setattr(server, 'PROJECTS_ROOT', root)
+    monkeypatch.setattr(server, '_find_session_jsonl', lambda requested: transcript)
+    for engine in ('hermes', 'kimi', 'grok', 'codex', 'gemini', 'devin_cli', 'cursor', 'antigravity'):
+        monkeypatch.setattr(server, '_is_' + engine + '_session', lambda sid: False)
+    monkeypatch.setattr(server, '_load_session_registry', lambda: {})
+    monkeypatch.setattr(server, '_load_desktop_app_metadata', lambda: {})
+    monkeypatch.setattr(server, '_get_session_override', lambda sid: {})
+    original_iterdir = Path.iterdir
+    def iterdir(directory):
+        assert directory != root, 'known transcript re-enumerated every project'
+        return original_iterdir(directory)
+    monkeypatch.setattr(Path, 'iterdir', iterdir)
+    status = session_graph.session_live_status(sid, '')
+    assert status['recently_written'] and not status['live']
+    first_mtime = status['transcript_mtime']
+    os.utime(transcript, (first_mtime + 1, first_mtime + 1))
+    assert session_graph.session_live_status(sid, '')['transcript_mtime'] > first_mtime
+    usage = morning_launch.extract_session_usage(sid)
+    assert usage['total_input_tokens'] == 12
+    assert usage['total_output_tokens'] == 3

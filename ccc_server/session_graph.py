@@ -258,6 +258,8 @@ class _SessionGraph:
             # If the child already has a different parent, keep the first
             # (matches _find_descendant_sessions' setdefault semantics).
             existing_parent = self._parent_of.get(child)
+            if existing_parent and self._edge_meta.get(child) == meta:
+                return
             if existing_parent and existing_parent != parent:
                 # Don't overwrite, but update metadata on the existing edge.
                 self._edge_meta[child] = meta
@@ -620,7 +622,7 @@ def _session_graph_enrich_claude_task_subagents(parent_sid):
         last = _core._session_graph._claude_task_enriched.get(parent_sid, 0)
         if now - last < _CLAUDE_TASK_ENRICH_THROTTLE_S:
             return
-    # Glob all project dirs for <parent>/subagents/agent-*.jsonl
+    # Search all copies: resumed transcripts can exist in several projects.
     try:
         for agent_file in _core.PROJECTS_ROOT.glob(f"*/{parent_sid}/subagents/agent-*.jsonl"):
             if not agent_file.is_file():
@@ -671,7 +673,8 @@ def _session_graph_enrich_claude_task_subagents(parent_sid):
         pass
     with _core._session_graph._lock:
         _core._session_graph._claude_task_enriched[parent_sid] = now
-        _core._session_graph._dirty = True
+        # add_edge marks actual changes dirty. A throttle timestamp alone
+        # must not serialize the entire graph on every family poll.
     _core._session_graph.save()
 
 
@@ -4259,24 +4262,15 @@ def session_live_status(session_id, session_cwd):
         return result
 
     # Recency check on the .jsonl file (for the "is actively being used" signal)
-    jsonl_name = session_id + ".jsonl"
     recent = False
     transcript_mtime = None
-    if _core.PROJECTS_ROOT.is_dir():
-        now = time.time()
-        for project_dir in _core.PROJECTS_ROOT.iterdir():
-            if not project_dir.is_dir():
-                continue
-            candidate = project_dir / jsonl_name
-            if candidate.is_file():
-                try:
-                    mtime = candidate.stat().st_mtime
-                    transcript_mtime = mtime
-                    if now - mtime < 300:  # 5 min
-                        recent = True
-                except OSError:
-                    pass
-                break
+    transcript = _core._find_session_jsonl(session_id)
+    if transcript is not None:
+        try:
+            transcript_mtime = transcript.stat().st_mtime
+            recent = time.time() - transcript_mtime < 300
+        except OSError:
+            pass
     result["recently_written"] = recent
     # Exact mtime, not just the 5-min recent bucket — this session-status poll
     # runs every 5s for the open pane (see _POLLER_META.liveStatus), far

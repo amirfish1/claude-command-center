@@ -2235,14 +2235,7 @@ def extract_session_usage(session_id):
     desktop_meta = _core._load_desktop_app_metadata().get(session_id) or {}
     if not _core.PROJECTS_ROOT.is_dir():
         return {**empty, "model": desktop_meta.get("model") or ""}
-    jsonl = None
-    for pd in _core.PROJECTS_ROOT.iterdir():
-        if not pd.is_dir():
-            continue
-        cand = pd / f"{session_id}.jsonl"
-        if cand.is_file():
-            jsonl = cand
-            break
+    jsonl = _core._find_session_jsonl(session_id)
     if not jsonl:
         return {**empty, "model": desktop_meta.get("model") or ""}
 
