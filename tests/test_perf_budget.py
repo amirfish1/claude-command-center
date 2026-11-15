@@ -6039,3 +6039,68 @@ def test_known_task_liveness_uses_fresh_stats_without_project_globs(tmp_path, mo
     calls.clear()
     assert graph.family_tree('parent-session')['children'][0]['active'] is False
     assert not calls
+
+
+def test_concurrent_family_polls_share_task_discovery(tmp_path, monkeypatch):
+    """A slow directory walk must not be duplicated by each boot request."""
+    from ccc_server import session_graph
+    import threading
+    root = tmp_path / 'projects'
+    root.mkdir()
+    graph = session_graph._SessionGraph(tmp_path / 'graph.json')
+    monkeypatch.setattr(server, 'PROJECTS_ROOT', root)
+    monkeypatch.setattr(server, '_session_graph', graph)
+    entered, release = threading.Event(), threading.Event()
+    walks = []
+    original = Path.glob
+    def glob(directory, pattern):
+        if directory == root:
+            walks.append(pattern)
+            entered.set()
+            assert release.wait(3)
+        return original(directory, pattern)
+    monkeypatch.setattr(Path, 'glob', glob)
+    first = threading.Thread(target=session_graph._session_graph_enrich_claude_task_subagents, args=('parent',))
+    first.start()
+    try:
+        assert entered.wait(3)
+        second = threading.Thread(target=session_graph._session_graph_enrich_claude_task_subagents, args=('parent',))
+        second.start()
+        second.join(.5)
+        shared = not second.is_alive()
+    finally:
+        release.set()
+        first.join(3)
+        second.join(3)
+    assert shared, 'concurrent poll waited on or duplicated the slow discovery'
+    assert len(walks) == 1
+    # Completion must not permanently hide agents written after the first poll.
+    agents = root / 'later-copy' / 'parent' / 'subagents'
+    agents.mkdir(parents=True)
+    (agents / 'agent-later.jsonl').write_text('{}\n')
+    graph._claude_task_enriched.clear()
+    session_graph._session_graph_enrich_claude_task_subagents('parent')
+    assert graph.parent_of('agent-later') == 'parent'
+
+
+def test_claude_status_polls_share_process_snapshot(monkeypatch):
+    from ccc_server import session_graph
+    from types import SimpleNamespace
+    server._reset_ttl_memo_caches()
+    scans = []
+    def run(args, **kwargs):
+        scans.append(args)
+        return SimpleNamespace(stdout='123 claude\n' if '-A' in args else 'PID TT\n123 pts/1\n')
+    monkeypatch.setattr(session_graph.subprocess, 'run', run)
+    monkeypatch.setattr(server, '_proc_cwd', lambda pid: '/example')
+    monkeypatch.setattr(server, '_proc_ancestor_terminal', lambda pid: ('terminal', 100))
+    monkeypatch.setattr(server, '_is_real_tty', lambda tty: bool(tty))
+    try:
+        for _ in range(25):
+            assert session_graph.find_live_claude_processes()[0]['pid'] == 123
+        assert len(scans) == 2, 'each status poll launched its own process enumeration'
+        server._reset_ttl_memo_caches()
+        assert session_graph.find_live_claude_processes()[0]['pid'] == 123
+        assert len(scans) == 4, 'snapshot never refreshed'
+    finally:
+        server._reset_ttl_memo_caches()

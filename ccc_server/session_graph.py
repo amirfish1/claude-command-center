@@ -78,6 +78,7 @@ class _SessionGraph:
         # "already enriched" skip would miss whichever file wasn't written
         # yet at the first glob).
         self._claude_task_enriched = {}
+        self._claude_task_enriching = set()
         # In-memory hints only: keep live stats fresh without rediscovering
         # every known Task transcript across all projects on every poll.
         self._task_transcript_paths = {}
@@ -644,8 +645,19 @@ def _session_graph_enrich_claude_task_subagents(parent_sid):
     now = time.time()
     with _core._session_graph._lock:
         last = _core._session_graph._claude_task_enriched.get(parent_sid, 0)
-        if now - last < _CLAUDE_TASK_ENRICH_THROTTLE_S:
+        if (parent_sid in _core._session_graph._claude_task_enriching
+                or now - last < _CLAUDE_TASK_ENRICH_THROTTLE_S):
             return
+        _core._session_graph._claude_task_enriching.add(parent_sid)
+    try:
+        _scan_claude_task_subagents(parent_sid)
+    finally:
+        with _core._session_graph._lock:
+            _core._session_graph._claude_task_enriching.discard(parent_sid)
+            _core._session_graph._claude_task_enriched[parent_sid] = time.time()
+
+
+def _scan_claude_task_subagents(parent_sid):
     # Search all copies: resumed transcripts can exist in several projects.
     try:
         for agent_file in _core.PROJECTS_ROOT.glob(f"*/{parent_sid}/subagents/agent-*.jsonl"):
@@ -696,10 +708,7 @@ def _session_graph_enrich_claude_task_subagents(parent_sid):
             )
     except OSError:
         pass
-    with _core._session_graph._lock:
-        _core._session_graph._claude_task_enriched[parent_sid] = now
-        # add_edge marks actual changes dirty. A throttle timestamp alone
-        # must not serialize the entire graph on every family poll.
+    # add_edge marks actual changes dirty; timestamps alone need no save.
     _core._session_graph.save()
 
 
@@ -3177,6 +3186,11 @@ def _ttl_memo(ttl_seconds):
         wrapper.cache_clear = cache_clear
         return wrapper
     return decorate
+
+
+# Defined above the memo helper for readability alongside Claude's PID helpers.
+# Share its display-only fallback across status requests, just like other engines.
+find_live_claude_processes = _ttl_memo(3.0)(find_live_claude_processes)
 
 
 @_ttl_memo(3.0)

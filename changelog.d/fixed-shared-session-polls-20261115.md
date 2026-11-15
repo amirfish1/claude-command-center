@@ -1,0 +1,1 @@
+- Share concurrent Task-child discovery and short-lived Claude process snapshots so dashboard startup polls do not repeat the same filesystem and process scans.
