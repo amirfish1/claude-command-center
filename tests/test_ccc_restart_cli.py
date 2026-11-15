@@ -249,6 +249,80 @@ class RestartReservationTests(unittest.TestCase):
             self.assertTrue(self.m._retire_restart_runner("base"))
             self.assertNotIn("runner_pid", self.state())
 
+    def test_delayed_dashboard_back_moves_window_and_already_pending_restart(self):
+        with mock.patch('time.time', return_value=10000) as clock:
+            slot = self.m._reserve_restart('base', 'dashboard')
+            def post(*args, **kwargs):
+                clock.return_value = 10001
+                return 200, {'ok': True, 'before': {'pid': 7, 'started_at': 9000}}
+            def back(*args, **kwargs):
+                clock.return_value = 10010
+                self.m._reserve_restart('base', 'dashboard')
+                clock.return_value = 10045
+                return {'pid': 7, 'started_at': 10044}
+            with mock.patch.object(self.m, '_post_restart', side_effect=post), \
+                 mock.patch.object(self.m, '_wait_dashboard_back', side_effect=back):
+                status, _ = self.m._restart_now('base', 'dashboard', reservation=slot['reservation'])
+            self.assertEqual(status, 0)
+            self.assertEqual(self.state()['last_restart'], 10045)
+            self.assertEqual(self.state()['pending']['due'], 11845)
+            clock.return_value = 11801
+            self.assertIn('pending', self.m._reserve_restart('base', runner=True))
+
+    def test_dashboard_back_does_not_overwrite_a_newer_human_reservation(self):
+        with mock.patch('time.time', return_value=10000) as clock:
+            slot = self.m._reserve_restart('base', 'dashboard')
+            def back(*args, **kwargs):
+                clock.return_value = 10010
+                self.m._reserve_restart('base', 'worker', force=True)
+                clock.return_value = 10012
+                return {'pid': 8, 'started_at': 10011}
+            with mock.patch.object(self.m, '_post_restart', return_value=(200, {'ok': True, 'before': {'pid': 7}})), \
+                 mock.patch.object(self.m, '_wait_dashboard_back', side_effect=back):
+                self.m._restart_now('base', 'dashboard', reservation=slot['reservation'])
+            self.assertEqual(self.state()['last_target'], 'worker')
+            self.assertEqual(self.state()['reservation']['at'], 10010)
+            self.assertEqual(self.state()['last_restart'], 10012)
+
+    def test_no_observed_new_generation_keeps_uncertain_window(self):
+        with mock.patch('time.time', return_value=10000):
+            slot = self.m._reserve_restart('base', 'dashboard')
+            with mock.patch.object(self.m, '_post_restart', return_value=(200, {'ok': True})), \
+                 mock.patch.object(self.m, '_wait_dashboard_back', return_value=None):
+                self.m._restart_now('base', 'dashboard', reservation=slot['reservation'])
+            self.assertEqual(self.state()['last_restart'], 10000)
+
+    def test_refusal_cannot_roll_back_a_dashboard_observed_during_request(self):
+        with mock.patch('time.time', return_value=10000) as clock:
+            slot = self.m._reserve_restart('base', 'worker')
+            clock.return_value = 10010
+            self.m._note_dashboard_back()
+            clock.return_value = 10011
+            self.m._finish_restart_reservation(slot['reservation'], 409)
+            self.assertEqual(self.state()['last_restart'], 10010)
+            self.assertIn('pending', self.m._reserve_restart('base', 'dashboard'))
+
+    def test_variable_start_delays_cannot_fit_three_generations_in_an_hour(self):
+        with mock.patch('time.time', return_value=10000) as clock:
+            starts = []
+            for number in range(3):
+                if number:
+                    clock.return_value = self.state()['last_restart'] + self.m.RESTART_DEBOUNCE_S
+                slot = self.m._reserve_restart('base', 'dashboard')
+                at = clock.return_value
+                def post(*args, **kwargs):
+                    clock.return_value = at + 1
+                    return 200, {'ok': True, 'before': {'pid': number + 1}}
+                def back(*args, **kwargs):
+                    actual = at + (40 if number == 0 else 2)
+                    starts.append(actual)
+                    clock.return_value = actual + 1
+                    return {'pid': number + 2, 'started_at': actual}
+                with mock.patch.object(self.m, '_post_restart', side_effect=post), \
+                     mock.patch.object(self.m, '_wait_dashboard_back', side_effect=back):
+                    self.m._restart_now('base', 'dashboard', reservation=slot['reservation'])
+            self.assertGreaterEqual(starts[2] - starts[0], 3600)
+
 
 class WaitDashboardBackTests(unittest.TestCase):
     """_wait_dashboard_back identifies a new process generation; execvp keeps the pid."""

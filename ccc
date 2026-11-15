@@ -1815,7 +1815,8 @@ def _reserve_restart(base, target=None, force=False, runner=False):
 
     def apply(state):
         stamp = time.time()
-        last = float(state.get("last_restart") or 0)
+        last = max(float(state.get("last_restart") or 0),
+                   float(state.get("last_dashboard_back") or 0))
         pending = state.get("pending")
         selected = target
         if runner:
@@ -1862,13 +1863,35 @@ def _finish_restart_reservation(reservation, status):
         elif status == 409:
             # The server explicitly refused before restarting. Release the
             # slot and preserve the one-minute safety retry, not a 30m wait.
-            state["last_restart"] = reservation["previous"]
+            state["last_restart"] = max(reservation["previous"],
+                                        float(state.get("last_dashboard_back") or 0))
             state["last_target"] = reservation["previous_target"]
             if state.get("pending"):
                 state["pending"]["due"] = min(state["pending"]["due"],
                                               time.time() + _RESTART_RETRY_S)
         # A lost reply may already have restarted the dashboard. Keep its
         # reserved timestamp rather than inviting another immediate restart.
+
+    _restart_state_update(apply)
+
+
+def _note_dashboard_back():
+    """A request acknowledgement precedes the new dashboard generation.
+
+    Start the full batching window when that generation is actually seen;
+    variable drain/startup delays must not compress successive warm windows.
+    Keep this independent of the reservation CAS: a newer human request may
+    own that reservation, but must not erase a real observed dashboard start.
+    """
+    import time
+
+    def apply(state):
+        observed = max(time.time(), float(state.get("last_dashboard_back") or 0))
+        state["last_dashboard_back"] = observed
+        state["last_restart"] = max(observed, float(state.get("last_restart") or 0))
+        if state.get("pending"):
+            state["pending"]["due"] = max(float(state["pending"].get("due") or 0),
+                                          state["last_restart"] + RESTART_DEBOUNCE_S)
 
     _restart_state_update(apply)
 
@@ -1938,6 +1961,7 @@ def _restart_now(base, target, wait=True, routine=False, reservation=None):
             b = payload.get("before") or {}
             back = _wait_dashboard_back(base, b.get("pid"), before_started_at=b.get("started_at"))
             if back:
+                _note_dashboard_back()
                 print(f"ccc restart: dashboard back (pid {back.get('pid')}, rev {back.get('code_rev') or '?'})")
             else:
                 print("ccc restart: dashboard has not answered yet; check `ccc doctor`", file=sys.stderr)

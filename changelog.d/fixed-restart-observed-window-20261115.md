@@ -1,0 +1,1 @@
+- Start restart batching from the observed new dashboard generation so drain and startup delays cannot shorten the warm window; keep queued requests and newer explicit targets intact.
