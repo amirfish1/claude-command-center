@@ -176,7 +176,7 @@ class TestSessionStateCard(unittest.TestCase):
         html = render_session_state(body + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
         default, detail = html.split('<details class="ssb-completion">')
         self.assertIn('Update</span>Shortened the card.', default)
-        self.assertIn('The next step I am doing next without waiting for an ack</span>At the next continuation, compare &lt;saved&gt; and restored goals.', default)
+        self.assertIn('Doing next</span>At the next continuation, compare &lt;saved&gt; and restored goals.', default)
         self.assertIn('Status</span>Open', default)
         for text in ('Needs you', 'resolution below', 'Supporting evidence.', 'Keep the original topic.', 'Why</span>', '(0.5, 0.7, 1, 0)'):
             self.assertNotIn(text, default)
@@ -193,7 +193,7 @@ class TestSessionStateCard(unittest.TestCase):
         base = {"version": 1, **{k: {"score": v, "evidence": "Checked."}
             for k, v in [("resolution", 0.5), ("verification", 0.7), ("delivery", 1), ("decision_dependency", 0)]},
             "caveats": [], "remaining_actions": []}
-        for owner, label in [('agent', 'The next step I am doing next without waiting for an ack'), ('user', 'Your next step'),
+        for owner, label in [('agent', 'Doing next'), ('user', 'Your next step'),
                 ('external', 'Waiting on'), (None, 'Next step')]:
             with self.subTest(owner=owner):
                 action = {"text": "Compare the restored goal with the saved goal.",
@@ -209,7 +209,7 @@ class TestSessionStateCard(unittest.TestCase):
                 action["owner"] = 'guessed'
                 html = render_session_state('COMPLETION: ' + json.dumps(assessment), PROJECT_ROOT / "static" / "app.js")
                 self.assertIn('Status</span>Unassessed', html)
-                self.assertNotIn('The next step I am doing next without waiting for an ack', html)
+                self.assertNotIn('Doing next', html)
 
     def test_user_owned_plan_keeps_one_actual_request_and_its_model_action(self):
         import json

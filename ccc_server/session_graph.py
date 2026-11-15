@@ -1260,8 +1260,19 @@ one short sentence each; put supporting evidence in COMPLETION.
 
 End your final reply with a compact CCC session-state block. Keep DID,
 INSIGHT and NEXT_STEP_USER visible; wrap ONLY the machine JSON lines in an
-HTML comment exactly as shown, so markdown-rendering terminals show the
-readable summary and hide the JSON (CCC parses the raw transcript either way):
+HTML comment exactly as shown. CCC hides the JSON in its rendered card;
+terminal clients may still display it. Hidden text still consumes output tokens.
+Keep the raw footer small as well as the rendered card:
+- DID and INSIGHT: one short clause each, usually 3-8 words.
+- Evidence strings: specific fragments, usually 3-8 words, not repeated prose.
+- Keep scope goal/done_when concise; preserve the actual goal and close criteria.
+- Group related same-owner actions when this retains every unresolved obligation;
+  name the next observable step and its check. Never drop blockers to save space.
+- Use compact single-line JSON, no indentation or optional default fields.
+- Do not restate the footer in a separate concluding paragraph or acknowledgement.
+Aim for about 120-180 words for the entire footer; exceed this only when the
+actual decisions or unresolved scope require it. Keep all required schema fields.
+Format:
 <session-state>
 DID: one sentence describing what you changed or learned
 INSIGHT: one sentence with the main finding, root cause, or surprise
