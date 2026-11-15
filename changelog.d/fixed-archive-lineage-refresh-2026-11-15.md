@@ -1,0 +1,1 @@
+- Reuse transcript lineage checks and persist Codex-only metadata updates across archive refresh workers, reducing repeated transcript reads.

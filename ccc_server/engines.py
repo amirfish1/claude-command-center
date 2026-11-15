@@ -5630,31 +5630,68 @@ def _continued_from_session_id_from_text(text):
     return m.group(1).strip()
 
 
-def _parent_session_id_from_transcript_return_address(path):
-    """Read a transcript's first user prompt and extract a CCC return address."""
+def _transcript_lineage_head(path):
+    """Recover both lineage markers once per transcript version, including misses.
+
+    The archive worker reloads the ordinary metadata cache on every run. Keeping
+    this small derivative there avoids rereading unchanged historical prompts
+    in every detached rebuild; no transcript or parser metadata is replaced.
+    """
+    empty = {"parent": "", "origin": ""}
     try:
-        with open(path, "r") as fh:
-            for i, line in enumerate(fh):
-                if i >= 20:
-                    break
-                line = line.strip()
-                if not line:
+        candidate = Path(path)
+        st = candidate.stat()
+        token = [1, st.st_mtime_ns, st.st_size]
+        key = str(path)
+        with _core._conv_meta_cache_lock:
+            cached = (_core._conv_meta_cache.get(key) or {}).get("lineage_head")
+            if isinstance(cached, dict) and cached.get("token") == token:
+                if all(isinstance(cached.get(k), str) for k in empty):
+                    return {k: cached[k] for k in empty}
+        result = dict(empty)
+        origin_done = False
+        with candidate.open("rb") as source:
+            for _, raw in zip(range(20), source):
+                # Codex setup and tool records can be enormous. A marker can
+                # only survive JSON decoding if its literal bytes or a Unicode
+                # escape occur. Still decode Claude user records to preserve
+                # the first non-meta prompt's stopping rule, even on a miss.
+                if not (b"Origin session id:" in raw or b"Return address" in raw
+                        or b"\\u" in raw or re.search(rb'"type"\s*:\s*"user"', raw)):
                     continue
                 try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
+                    event = json.loads(raw)
+                except (ValueError, UnicodeDecodeError):
                     continue
-                if ev.get("type") != "user" or ev.get("isMeta"):
+                if not isinstance(event, dict):
                     continue
-                parent = _core._parent_session_id_from_return_address_text(
-                    _core._extract_user_prompt_text(ev)
-                )
-                if parent:
-                    return parent
-                return ""
-    except (OSError, UnicodeDecodeError):
-        pass
-    return ""
+                if event.get("type") == "user" and not event.get("isMeta"):
+                    text = _core._extract_user_prompt_text(event)
+                    result["parent"] = _core._parent_session_id_from_return_address_text(text)
+                    if not origin_done:
+                        result["origin"] = _continued_from_session_id_from_text(text)
+                    break
+                if not origin_done:
+                    text = _codex_rollout_user_message_text(event)
+                    origin = _continued_from_session_id_from_text(text)
+                    if origin:
+                        result["origin"] = origin
+                        origin_done = True
+        after = candidate.stat()
+        # A concurrent append/rewrite must not certify a partially read head.
+        if (after.st_mtime_ns, after.st_size) == (st.st_mtime_ns, st.st_size):
+            with _core._conv_meta_cache_lock:
+                entry = _core._conv_meta_cache.setdefault(key, {"mtime": st.st_mtime})
+                entry["lineage_head"] = {"token": token, **result}
+                _core._conv_meta_cache_dirty = True
+        return result
+    except (OSError, UnicodeDecodeError, TypeError, ValueError):
+        return empty
+
+
+def _parent_session_id_from_transcript_return_address(path):
+    """Read the first non-meta Claude user prompt's return address."""
+    return _transcript_lineage_head(path)["parent"]
 
 
 def _codex_rollout_user_message_text(ev):
@@ -5685,36 +5722,8 @@ def _codex_rollout_user_message_text(ev):
 
 
 def _continued_from_session_id_from_transcript(path):
-    """Read a transcript's first user prompt and extract the continuation origin."""
-    try:
-        with open(path, "r") as fh:
-            for i, line in enumerate(fh):
-                if i >= 20:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                codex_text = _codex_rollout_user_message_text(ev)
-                if codex_text:
-                    origin = _continued_from_session_id_from_text(codex_text)
-                    if origin:
-                        return origin
-                    continue
-                if ev.get("type") != "user" or ev.get("isMeta"):
-                    continue
-                origin = _continued_from_session_id_from_text(
-                    _core._extract_user_prompt_text(ev)
-                )
-                if origin:
-                    return origin
-                return ""
-    except (OSError, UnicodeDecodeError):
-        pass
-    return ""
+    """Read the bounded prompt head, reusing unchanged positive/negative results."""
+    return _transcript_lineage_head(path)["origin"]
 
 
 def _normalize_announced_from(payload):

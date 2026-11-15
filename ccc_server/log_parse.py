@@ -1088,13 +1088,18 @@ def _save_conv_meta_cache():
     """
     global _conv_meta_cache_dirty
     with _core._conv_meta_cache_lock:
-        if not _conv_meta_cache_dirty:
+        # Extracted parsers mark dirty through _core (server.py), while this
+        # module's own parser updates its local binding. Honor both until the
+        # shared snapshot is saved; otherwise Codex-only changes are lost at
+        # each detached worker exit and reparsed on the next refresh.
+        if not (_conv_meta_cache_dirty or _core._conv_meta_cache_dirty):
             return
         snapshot = {
             "schema_version": _CONV_META_SCHEMA_VERSION,
             "entries": dict(_core._conv_meta_cache),
         }
         _conv_meta_cache_dirty = False
+        _core._conv_meta_cache_dirty = False
     try:
         _core._CONV_META_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = _core._CONV_META_CACHE_FILE.with_suffix(".json.tmp")
@@ -1105,6 +1110,7 @@ def _save_conv_meta_cache():
         # Restore the dirty flag so we'll retry on the next call.
         with _core._conv_meta_cache_lock:
             _conv_meta_cache_dirty = True
+            _core._conv_meta_cache_dirty = True
         print(f"  [conv-meta-cache] save failed: {e}")
 
 

@@ -19333,9 +19333,6 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                         _archive_response_cache_put(key, merged, signature=sig)
                         phases["cache_put_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         _sp = time.perf_counter()
-                        _save_conv_meta_cache()
-                        phases["meta_save_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
-                        _sp = time.perf_counter()
                         rows = _rehydrate_archive_cached_rows(merged)
                         phases["rehydrate_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
                         from_cache = True
@@ -19346,8 +19343,12 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                 phases["tier"] = "full"
                 rows = _build_archive_conversations(**cache_options, progress_step=progress_step)
                 _archive_response_cache_put(key, rows, signature=sig)
-                _save_conv_meta_cache()
                 from_cache = False
+        # Rehydration also derives transcript lineage. Persist after it so a
+        # fresh detached worker reuses checked heads, including negative hits.
+        _sp = time.perf_counter()
+        _save_conv_meta_cache()
+        phases["meta_save_ms"] = round((time.perf_counter() - _sp) * 1000.0, 1)
         phases["build_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
     if not from_cache:
         # The cache branches already ran all three stamps inside
