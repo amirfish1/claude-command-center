@@ -15298,12 +15298,15 @@
   let _ttsNeural = null;          // { audio, token } while a neural chunk plays
   let _ttsNeuralToken = 0;
   let _ttsNeuralCooldownUntil = 0;
+  let _ttsBrowserPlayback = null;
   function _ttsEnginePause() {
     _ttsPriorityStop();
+    _ttsBrowserPlayback?.pause();
     if (_ttsNeural && _ttsNeural.audio) { try { _ttsNeural.audio.pause(); } catch (_) {} }
     if (window.speechSynthesis) window.speechSynthesis.pause();
   }
   function _ttsEngineResume() {
+    _ttsBrowserPlayback?.resume();
     if (_ttsNeural && _ttsNeural.audio) {
       const player = _ttsNeural;
       try {
@@ -15322,6 +15325,8 @@
     _ttsPriorityStop();
     _ttsSetStreaming(false);
     _ttsNeuralToken += 1;
+    _ttsBrowserPlayback?.cancel();
+    _ttsBrowserPlayback = null;
     if (_ttsNeural && _ttsNeural.audio) {
       _ttsNeural.stopHighlight?.();
       try { _ttsNeural.audio.pause(); URL.revokeObjectURL(_ttsNeural.audio.src); } catch (_) {}
@@ -17706,7 +17711,8 @@
     p.flushed = true;
     // A single-stream read has no clip gaps: a smooth multi-clip one still
     // reports its 0 ms, or the gate would only ever see the stalled reads.
-    const smoothStream = (p.mode === 'continuous' || p.mode === 'chain') && p.started && p.clips > 1;
+    const smoothStream = p.started && (p.mode === 'browser'
+      || ((p.mode === 'continuous' || p.mode === 'chain') && p.clips > 1));
     if (!p.gaps && !p.stalls && !smoothStream) return;
     _perfEvent('tts_gap', Math.max(p.maxGap, p.maxStall), { detail: {
       max_gap_ms: Math.round(p.maxGap), gaps: p.gaps,
@@ -17731,6 +17737,7 @@
     // instantly; otherwise it is fetched now (a 160-char head takes ~1-2 s).
     // The Mac voice is only the fallback when that fetch or playback fails.
     const _ttsHebrew = _ttsIsHebrew(text);
+    const browserVoice = !_ttsHebrew && !!window.cccBrowserVoice?.ready;
     const _ttsHeadReady = !_ttsHebrew && Date.now() >= _ttsNeuralCooldownUntil;
     {
       const h = _ttsHeadChunk(text, baseOffset);
@@ -17742,7 +17749,7 @@
       _ttsLog('START', why ? 'MAC VOICE: ' + why
         : 'free voice, ' + (e && e.ready ? 'chunk ready' : e ? 'chunk still generating' : 'fetching first chunk now'));
     }
-    if (Date.now() >= _ttsNeuralCooldownUntil && _ttsHeadReady) {
+    if (!browserVoice && Date.now() >= _ttsNeuralCooldownUntil && _ttsHeadReady) {
       // Free voice: generation time scales with length (about 10 s for a
       // 1,600-char chunk), so start with a short sentence-sized chunk, then ~400-char
       // chunks (about 6 s each to make, longer than they take to play).
@@ -17772,7 +17779,7 @@
         // CCC-144 Q577). Kokoro needs ~2.6 s (p50) for a first sound on this
         // host, so it can never start a cold read instantly. iPhone
         // (continuous stream) keeps the tick: its <audio> needs the click.
-        if (perf.head !== 'ready' && _ttsHeadReady) {
+        if (!browserVoice && perf.head !== 'ready' && _ttsHeadReady) {
           if (_ttsMacBridgeOk(chunks)) perf.bridge = macBridge = true;
           else {
             perf.cue = true;
@@ -17781,7 +17788,13 @@
         }
       }
     }
-    if (_ttsForceBridge && !macBridge && _ttsHeadReady && _ttsMacBridgeOk([0, 1])) macBridge = true;
+    if (!browserVoice && _ttsForceBridge && !macBridge && _ttsHeadReady && _ttsMacBridgeOk([0, 1])) macBridge = true;
+    if (browserVoice) {
+      // Rust streams sentence boundaries inside this one read. Never wait for
+      // a page callback to start the next sentence after a main-thread stall.
+      chunks = [{ text, start: Number(baseOffset) || 0 }];
+      if (perf) Object.assign(perf, { mode: 'browser', cache: 'browser-resident', head: 'resident', clips: 1 });
+    }
     _ttsPerfTarget = '';
     // A new read frees the voice server: the old read's unfinished foreground
     // clips would otherwise keep generating and starve this one (CCC-144). A
@@ -17801,6 +17814,7 @@
       t0: Date.now(),
       perf,
       macBridge,
+      browserVoice,
       abort: _ttsFgAbort,
     };
     _ttsPerfState = perf ? _ttsChunkState : null;
@@ -17843,6 +17857,7 @@
     }
 
     const chunk = state.chunks[state.index];
+    if (state.browserVoice) { _ttsSpeakBrowser(state, chunk); return; }
     const bridging = !!(state.macBridge && state.index === 0);
     if (!bridging && _ttsNeuralUsable(state)) { _ttsSpeakChunkNeural(state, chunk); return; }
     if (bridging) _ttsMacBridgeKick(state);
@@ -17905,6 +17920,61 @@
     } catch (error) {
       utterance.onerror({ error: (error && error.name) || 'synthesis-failed' });
     }
+  }
+
+  function _ttsSpeakBrowser(state, chunk) {
+    const token = ++_ttsNeuralToken;
+    const stale = () => token !== _ttsNeuralToken || _ttsChunkState !== state;
+    _ttsUtterance = { browser: true };
+    const words = Array.from(chunk.text.matchAll(/\S+/g), m => ({ start: m.index, length: m[0].length }));
+    const fallback = error => {
+      if (stale()) return;
+      _ttsLog('BROWSER', 'fallback: ' + String(error.message || error));
+      _ttsBrowserPlayback?.cancel(); _ttsBrowserPlayback = null;
+      _ttsUtterance = null;
+      _ttsSetStreaming(false);
+      const offset = Math.max(chunk.start, _ttsLastCharIndex || 0);
+      // Re-enter the existing splitter, rather than sending an entire long
+      // browser read to the server as one oversized neural clip.
+      _ttsStartChunkedSpeech(_ttsBoundUtteranceText.slice(offset), state.paneId, offset, _ttsPaused);
+    };
+    const playback = window.cccBrowserVoice?.start(chunk.text, {
+      rate: _ttsRate, paused: !!state.pauseOnStart,
+      onstart(data) {
+        if (stale()) return;
+        state.geminiVoice = 'Browser: Phonon 31M';
+        _ttsPerfStart(state, { engine: 'browser', voice: state.geminiVoice, lagMs: data.lagMs });
+        _ttsShowVoice(state.geminiVoice);
+        _ttsSetStreaming(true);
+        setTtsButtonsBusy(false);
+        setTtsButtonsState(true, _ttsPaused, state.paneId);
+      },
+      onposition(data) {
+        if (stale()) return;
+        const word = _ttsWordAtProgress(chunk.text, data.played, data.duration, words);
+        if (!word) return;
+        _ttsLastCharIndex = chunk.start + word.start;
+        highlightTtsWord(_ttsLastCharIndex, word.length);
+        updateTtsCaption(_ttsLastCharIndex, word.length, _ttsBoundUtteranceText);
+        _ttsSetPlay();
+      },
+      ontelemetry(data) {
+        if (stale()) return;
+        if (state.perf) {
+          state.perf.stalls = data.underruns || 0;
+          state.perf.maxStall = Math.max(state.perf.maxStall, data.maxGapMs || 0);
+        }
+        _ttsLog('BROWSER', JSON.stringify({ pack: 'phonon-0.7.1-92741c5b', ...data }));
+      },
+      onend() {
+        if (stale()) return;
+        _ttsBrowserPlayback = null; _ttsUtterance = null;
+        state.index++; _ttsSpeakNextChunk();
+      },
+      onerror: fallback,
+    });
+    if (!playback) { fallback(new Error('Browser voice is not resident')); return; }
+    _ttsBrowserPlayback = playback;
   }
 
   // Speak a captured string directly — word highlight only with domElements.
@@ -50517,10 +50587,12 @@
     if (!btn) return;
     ev.preventDefault();
     ev.stopPropagation();
-    const host = btn.closest('.csh-ask-original, .event.user_text');
+    const host = btn.closest('.csh-ask-original, .event.user_text, .conv-frozen-ask');
     const msg = host && host.querySelector('.user-msg[data-raw-text]');
     const text = msg ? msg.getAttribute('data-raw-text') : '';
-    if (text) _uxqOpenNoteModal('Original ask', text, 'is-original-ask');
+    const label = (host && host.classList.contains('conv-frozen-ask') && !host.dataset.original)
+      ? 'Your message' : 'Original ask';
+    if (text) _uxqOpenNoteModal(label, text, 'is-original-ask');
   });
 
   // Breadcrumb pop-out button — delegated so it survives every
@@ -52944,9 +53016,14 @@
         let hasContentMutation = false;
         for (const m of mutations) {
           const node = m.target;
-          if (node && node.nodeType === 1 && node.closest && node.closest('.conv-sticky-header')) continue;
+          if (node && node.nodeType === 1 && node.closest && node.closest('.conv-sticky-header, .conv-frozen-ask')) continue;
           if (node && node.nodeType === 3 && node.parentNode && node.parentNode.closest
-              && node.parentNode.closest('.conv-sticky-header')) continue;
+              && node.parentNode.closest('.conv-sticky-header, .conv-frozen-ask')) continue;
+          // The frozen-ask bar is inserted/removed as a direct child of the
+          // view; that is chrome, not transcript content.
+          if (m.type === 'childList' && node === view
+              && Array.from(m.addedNodes).concat(Array.from(m.removedNodes)).every(
+                (n) => n.nodeType === 1 && n.classList.contains('conv-frozen-ask'))) continue;
           hasContentMutation = true;
           break;
         }
@@ -65103,6 +65180,86 @@
     st.rafPending = true;
     requestAnimationFrame(_dynAskUpdate);
   }
+  // Frozen ask: while the reader is scrolled up, the user message that the
+  // visible part of the transcript answers stays frozen at the top of the
+  // pane. It is the nearest user message above the viewport; a transcript
+  // with no user message loaded falls back to the session's first message.
+  // The bar is a zero-height sticky child, so showing or hiding it never
+  // changes scrollHeight. One capture listener covers every pane.
+  function _frozenAskText(el) {
+    const msgEl = el.querySelector('.user-msg');
+    return msgEl ? ((msgEl.dataset && msgEl.dataset.rawText) || msgEl.textContent || '').trim() : '';
+  }
+  function _frozenAskPick(view) {
+    if (view._pinnedToBottom !== false) return null;
+    const items = view.querySelectorAll(':scope > ' + CONV_USER_MESSAGE_SELECTOR);
+    const top = view.getBoundingClientRect().top;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const el = items[i];
+      // display:none bubbles (the original ask mirrored elsewhere) sit
+      // logically at the top of the transcript.
+      const above = !el.offsetParent || el.getBoundingClientRect().bottom <= top + 4;
+      if (!above) continue;
+      const text = _frozenAskText(el);
+      if (text) return { text, el, original: false };
+    }
+    if (items.length) return null;
+    const pane = view.closest('.conv-pane');
+    const conv = (pane && convRowForPane(pane.dataset.paneId)) || {};
+    const first = String(conv.original_ask || conv.first_message || '').trim();
+    return (first && view.querySelector(':scope > .event')) ? { text: first, el: null, original: true } : null;
+  }
+  function _frozenAskUpdate(view) {
+    view._frozenAskRaf = false;
+    let bar = view.querySelector(':scope > .conv-frozen-ask');
+    const pick = view.isConnected ? _frozenAskPick(view) : null;
+    if (!pick) {
+      if (bar) bar.hidden = true;
+      return;
+    }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'conv-frozen-ask';
+      bar.innerHTML = '<div class="conv-frozen-ask__bubble" role="button" tabindex="0"'
+        + ' title="Jump to this message">'
+        + ORIGINAL_ASK_EXPAND_BTN
+        + '<div class="user-msg" dir="auto"></div></div>';
+      const jump = () => {
+        const target = bar._askEl;
+        if (target && target.isConnected && target.offsetParent) {
+          target.scrollIntoView({ block: 'start' });
+        } else {
+          view.scrollTop = 0;
+        }
+      };
+      bar.addEventListener('click', jump);
+      bar.addEventListener('keydown', (e) => {
+        if (e.target === e.currentTarget.firstChild && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          jump();
+        }
+      });
+    }
+    if (bar.parentNode !== view) view.insertBefore(bar, view.firstChild);
+    bar._askEl = pick.el;
+    if (pick.original) bar.dataset.original = '1'; else delete bar.dataset.original;
+    const msg = bar.querySelector('.user-msg');
+    if (msg.dataset.rawText !== pick.text) {
+      msg.dataset.rawText = pick.text;
+      msg.innerHTML = linkifyPastedImages(escapeHtml(cleanIssuePrompt(pick.text)));
+    }
+    bar.hidden = false;
+  }
+  function _frozenAskSchedule(view) {
+    if (!view || view._frozenAskRaf) return;
+    view._frozenAskRaf = true;
+    requestAnimationFrame(() => _frozenAskUpdate(view));
+  }
+  document.addEventListener('scroll', (e) => {
+    const view = e.target;
+    if (view && view.classList && view.classList.contains('conversations-view')) _frozenAskSchedule(view);
+  }, { capture: true, passive: true });
+
   // Tool-call grouping state — consecutive `.event.tool-only` events fuse
   // into one collapsed `.tool-call-group` with a "Ran N commands ▾" header,
   // matching Claude Desktop's chat pane. Reset whenever the conv view is

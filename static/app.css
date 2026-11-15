@@ -31824,6 +31824,42 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
   overflow-wrap: anywhere;
 }
 
+/* Frozen ask: the user message being answered stays at the top of the
+   transcript while the reader is scrolled up. The host is a zero-height
+   sticky child so it never changes scrollHeight; the bubble hangs below it. */
+.conv-frozen-ask {
+  position: sticky; top: 0; z-index: 6;
+  height: 0; margin: 0; padding: 0;
+}
+.conv-frozen-ask[hidden] { display: none; }
+.conversations-view:has(.conv-live-tool-strip) .conv-frozen-ask {
+  top: var(--live-strip-offset, 24px);
+}
+.conv-frozen-ask__bubble {
+  position: absolute; top: 2px; left: 0; right: 0;
+  box-sizing: border-box;
+  padding: 7px 12px 7px 16px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(88, 166, 255, 0.16), rgba(163, 113, 247, 0.10) 65%, rgba(57, 210, 192, 0.08)) padding-box,
+    linear-gradient(var(--bg), var(--bg)) padding-box,
+    linear-gradient(135deg, rgba(88, 166, 255, 0.50), rgba(163, 113, 247, 0.30) 70%, rgba(57, 210, 192, 0.25)) border-box,
+    linear-gradient(var(--bg), var(--bg)) border-box;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+}
+.conv-frozen-ask__bubble:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.conv-frozen-ask__bubble > .original-ask-expand { float: right; margin: 1px 0 0 10px; }
+.conv-frozen-ask__bubble > .user-msg {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: normal; overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 14.5px; line-height: 1.45; font-weight: 410;
+}
+.conv-frozen-ask__bubble > .user-msg :is(img, .msg-image) { display: none; }
+
 /* CCC-1206: (+) on the Original ask opens it in a large-font reading modal. */
 .original-ask-expand {
   display: inline-flex; align-items: center; justify-content: center;
