@@ -8966,7 +8966,7 @@ def _codex_fetch_threads_in_home(where="", params=(), limit=None, columns=None, 
             deleted = _core._codex_deleted_thread_ids()
 
             def read_rows(query):
-                if limit and columns is not None:
+                if columns is not None:
                     return [dict(zip(selected, row)) for row in _sqlite_fetch_rows(
                         con, query, tuple(params), selected)]
                 return [dict(r) for r in con.execute(query, tuple(params)).fetchall()]
@@ -12095,7 +12095,13 @@ def build_codex_stuck_summary(now=None, force=False):
 def _build_codex_stuck_summary_uncached(now):
     now = float(now if now is not None else time.time())
     cache_now = time.monotonic()
-    rows = _core._codex_fetch_threads()
+    # The counter needs no prompts or model/source metadata. Batch this
+    # projection even without a row limit: per-row SQLite/GIL handoffs can
+    # otherwise stall peer delivery while the dashboard is busy.
+    rows = _core._codex_fetch_threads(columns=(
+        "id", "rollout_path", "created_at", "updated_at",
+        "created_at_ms", "updated_at_ms",
+    ))
     pool_alive = _core._codex_pool_alive(now)
     live_ids = _core._live_engine_session_ids()
     recent_sessions = 0
