@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dispatch CI to a Claude cloud task and wait for its commit status."""
+"""Dispatch CI to a Claude cloud task and verify its commit-specific report."""
 
 import base64
 import json

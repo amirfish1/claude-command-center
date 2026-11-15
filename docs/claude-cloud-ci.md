@@ -1,7 +1,7 @@
 # Claude Cloud CI
 
 The opt-in `Claude Cloud CI` workflow dispatches Linux tests to a Claude Code
-cloud task. GitHub hosts the small dispatcher and waits for a commit status;
+cloud task. GitHub hosts the small dispatcher and waits for a result branch;
 the tests and any repair agent run on Anthropic's infrastructure. Existing CI
 stays enabled until cloud coverage and required-check reporting are verified.
 macOS builds still require a macOS runner.
