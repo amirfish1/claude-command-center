@@ -13,6 +13,7 @@ function harness() {
     const _ttsScheduleCacheDebug=()=>{}, _ttsSetPlay=()=>{}, _ttsSetStreaming=()=>{};
     const clearTtsHighlight=()=>{}, clearTtsCaption=()=>{}, _ttsCool=()=>{}, _ttsCoolMs=()=>0;
     const _ttsLog=()=>{}, _ttsShowVoice=()=>{}, _ttsPerfStart=()=>{}, _ttsPerfSilence=()=>{};
+    const _ttsPriorityStop=()=>{}, _ttsPriorityPlaying=()=>{}, _ttsRestartWithBrowserVoice=()=>false;
     const setTtsButtonsState=()=>{}, setTtsButtonsBusy=()=>{}, ttsButtons=()=>[];
     const _ttsFetchNeural=()=>{fetches++; throw Error('Unnecessary synthesis');};
     const _ttsContinuousOk=()=>false, _ttsCanStream=()=>false, _ttsEventLagMs=()=>0;

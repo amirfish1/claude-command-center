@@ -35873,6 +35873,23 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             from ccc_server import local_speech
             local_speech.handle_api(self, install=True)
             return
+        if path == "/api/free-runtime/tts-playback":
+            # Same-origin is enforced by do_POST. This only renews an already
+            # enabled local trial; browser requests cannot enable CPU policy.
+            from ccc_server import tts_priority
+            try:
+                length = int(self.headers.get("Content-Length", "0") or 0)
+                if not 0 < length <= 1024:
+                    raise ValueError("invalid playback lease")
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError("expected object")
+                result = tts_priority.playback(payload)
+            except (ValueError, OSError):
+                self.send_json({"ok": False, "error": "invalid playback lease"}, 400)
+                return
+            self.send_json({"ok": True, **result})
+            return
         if path == "/api/free-runtime/tts-log":
             # Browser-side Speak decisions (which voice, and why the Mac voice)
             # land in activity.log next to the server's own SPEAK lines.

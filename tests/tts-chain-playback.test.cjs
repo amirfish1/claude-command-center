@@ -12,6 +12,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), '
 const start = source.indexOf('  function _ttsSpeakChunkNeural(');
 const player = source.slice(start, source.indexOf('  // One-time iOS-Safari', start));
 const wordAt = source.slice(source.indexOf('  function _ttsWordAtProgress('), source.indexOf('  // Continuous read (CCC-144)'));
+const priority = source.slice(source.indexOf('  const _ttsPriorityClient ='), source.indexOf('  function _ttsLog('));
 
 // Silent MPEG-1 Layer III frames: 128 kbps, 44.1 kHz, 417 bytes, 26.12 ms each.
 const harness = `
@@ -20,7 +21,13 @@ const harness = `
     for (let i = 0; i < frames; i++) out.set([0xff, 0xfb, 0x90, 0x64], i * 417);
     return out;
   };
-  window.fetched = []; window.logs = []; window.silences = [];
+  window.fetched = []; window.logs = []; window.silences = []; window.priorityLeases = [];
+  let _ttsActive = true;
+  const fetch = (_url, options) => {
+    window.priorityLeases.push(JSON.parse(options.body));
+    return Promise.resolve({ ok: true });
+  };
+  ${priority}
   let _ttsNeuralToken = 0, _ttsUtterance = null, _ttsNeural = null, _ttsAudio = null, _ttsRate = 1;
   let _ttsPaused = false, _ttsLastCharIndex = 0, _ttsActivePaneId = 'p1', _ttsDirectBtn = null, _ttsBoundUtteranceText = '';
   const noop = () => {};
@@ -33,7 +40,7 @@ const harness = `
   const _ttsPerfStart = noop, _ttsPerfSilence = (s, ms, kind) => window.silences.push([kind, Math.round(ms)]);
   const _ttsLog = (verb, detail) => window.logs.push(verb + ' ' + detail);
   const _ttsEngineCancel = () => { _ttsNeuralToken += 1; _ttsNeural?.cancel?.(); _ttsNeural = null; };
-  const stopTextToSpeech = () => { window.finished = true; };
+  const stopTextToSpeech = () => { _ttsPriorityStop(); window.finished = true; };
   let _ttsChunkState = null;
   const clipSeconds = {};
   const _ttsFetchNeural = (text) => {
@@ -62,7 +69,7 @@ const harness = `
   };
   window.audio = () => _ttsAudio;
   window.readState = () => _ttsChunkState;
-  window.stopRead = () => { _ttsEngineCancel(); _ttsChunkState = null; };
+  window.stopRead = () => { _ttsPriorityStop(); _ttsEngineCancel(); _ttsChunkState = null; };
   window.block = (ms) => { const end = performance.now() + ms; while (performance.now() < end); };
   window.until = (test, ms) => new Promise((resolve, reject) => {
     const t0 = performance.now();
@@ -124,13 +131,31 @@ test('a whole read plays every clip once, then finishes with no silence', async 
   const result = await page.evaluate(async () => {
     speak([0.4, 0.4, 0.4]);
     await until(() => window.finished, 8000);
-    return { logs: window.logs, silences: window.silences, fetched: window.fetched, index: readState().index };
+    return { logs: window.logs, silences: window.silences, fetched: window.fetched, index: readState().index,
+      leases: window.priorityLeases };
   });
   assert.deepEqual(result.fetched, ['clip0', 'clip1', 'clip2']);
   assert.equal(result.index, 3);
   assert.deepEqual(result.silences, []);
   assert.equal(result.logs.filter(l => l.startsWith('PLAY')).length, 3, result.logs.join('\n'));
   assert.ok(result.logs.some(l => l.startsWith('ENDED chained read')));
+  assert.deepEqual(result.leases.map(lease => lease.playing), [true, false], 'actual sound starts the lease; completion releases it');
+  await page.close();
+});
+
+test('native media pause releases priority and actual resumed sound reacquires it', async () => {
+  const page = await freshPage();
+  const leases = await page.evaluate(async () => {
+    speak([3]);
+    await until(() => audio()?.currentTime > 0.1, 5000);
+    audio().pause();
+    await until(() => window.priorityLeases.at(-1)?.playing === false, 1000);
+    await audio().play();
+    await until(() => window.priorityLeases.at(-1)?.playing === true, 1000);
+    window.stopRead();
+    return window.priorityLeases.map(l => l.playing);
+  });
+  assert.deepEqual(leases, [true, false, true, false]);
   await page.close();
 });
 

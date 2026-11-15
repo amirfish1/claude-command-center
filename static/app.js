@@ -14661,6 +14661,7 @@
 
   function setTtsButtonsState(active, failed, paneId) {
     _ttsActive = !!active;
+    if (!active) _ttsPriorityStop();
     _ttsActivePaneId = active ? (paneId || _ttsActivePaneId || activePaneId()) : null;
     ttsButtons().forEach(btn => {
       const pressed = !!active && ttsButtonPaneId(btn) === _ttsActivePaneId;
@@ -15247,6 +15248,7 @@
   let _ttsNeuralToken = 0;
   let _ttsNeuralCooldownUntil = 0;
   function _ttsEnginePause() {
+    _ttsPriorityStop();
     if (_ttsNeural && _ttsNeural.audio) { try { _ttsNeural.audio.pause(); } catch (_) {} }
     if (window.speechSynthesis) window.speechSynthesis.pause();
   }
@@ -15266,6 +15268,7 @@
     if (window.speechSynthesis) window.speechSynthesis.resume();
   }
   function _ttsEngineCancel() {
+    _ttsPriorityStop();
     _ttsSetStreaming(false);
     _ttsNeuralToken += 1;
     if (_ttsNeural && _ttsNeural.audio) {
@@ -15283,6 +15286,40 @@
   // browser voice at once instead of waiting on the network.
   // Every Speak decision goes to the console, window.__cccTtsLog (last 40) and
   // the server's activity.log ("tts" lines), so "why the Mac voice?" is answerable.
+  // Playback leases are distinct from preparation/generation. The local CPU
+  // trial is opt-in, expires automatically and can be stopped independently.
+  const _ttsPriorityClient = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+    n => n.toString(16).padStart(2, '0')).join('');
+  let _ttsPrioritySeq = 0;
+  let _ttsPriorityTimer = null;
+  let _ttsPriorityStarted = false;
+  function _ttsPrioritySend(playing) {
+    try {
+      fetch('/api/free-runtime/tts-playback', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client: _ttsPriorityClient, seq: ++_ttsPrioritySeq, playing }),
+        keepalive: true, cccRetryHandled: true, cccPriority: 'user',
+      }).catch(() => {});
+    } catch (_) {}
+  }
+  function _ttsPriorityStop() {
+    if (!_ttsPriorityStarted) return;
+    _ttsPriorityStarted = false;
+    clearInterval(_ttsPriorityTimer);
+    _ttsPriorityTimer = null;
+    _ttsPrioritySend(false);
+  }
+  function _ttsPriorityPlaying() {
+    if (_ttsPriorityStarted) return;
+    _ttsPriorityStarted = true;
+    _ttsPrioritySend(true);
+    _ttsPriorityTimer = setInterval(() => {
+      if (!_ttsActive || _ttsPaused) { _ttsPriorityStop(); return; }
+      _ttsPrioritySend(true);
+    }, 5000);
+  }
+  window.addEventListener('pagehide', _ttsPriorityStop);
+
   function _ttsLog(verb, detail) {
     const line = new Date().toISOString().slice(11, 23) + ' ' + verb + ' ' + detail;
     (window.__cccTtsLog = window.__cccTtsLog || []).push(line);
@@ -16688,7 +16725,10 @@
       };
       _ttsNeural = player;
       audio.ontimeupdate = () => { if (!audio.paused && !audio.ended) updateWord(); };
-      audio.onpause = stopHighlight;
+      audio.onpause = () => {
+        stopHighlight();
+        if (!stale() && !audio.ended) _ttsPriorityStop();
+      };
       audio.onplay = () => {
         if (stale()) return;
         setTtsButtonsState(true, false, state.paneId);
@@ -16702,6 +16742,7 @@
       let waitFrom = 0;
       audio.onplaying = () => {
         if (stale()) return;
+        _ttsPriorityPlaying();
         const now = Date.now();
         stopHighlight();
         trackWord();
@@ -16890,7 +16931,10 @@
       _ttsNeural = player;
       audio.onprogress = audio.onloadedmetadata = audio.ondurationchange = audio.oncanplay = () => { applySeek(); };
       audio.ontimeupdate = () => { if (applySeek() && !audio.paused && !audio.ended) updateWord(); };
-      audio.onpause = stopHighlight;
+      audio.onpause = () => {
+        stopHighlight();
+        if (!stale() && !audio.ended) _ttsPriorityStop();
+      };
       const label = 'Pause reading (free voice: ' + got.voice + ')';
       audio.onplay = () => {
         if (stale()) return;
@@ -16929,6 +16973,7 @@
       let waitFrom = 0;
       audio.onplaying = () => {
         if (stale() || state.seekTarget != null) return;
+        _ttsPriorityPlaying();
         const now = Date.now();
         stopHighlight();
         trackWord();
@@ -17216,7 +17261,10 @@
     };
     _ttsNeural = player;
     audio.ontimeupdate = () => { if (!audio.paused && !audio.ended) updateWord(); };
-    audio.onpause = stopHighlight;
+    audio.onpause = () => {
+      stopHighlight();
+      if (!stale() && !audio.ended) _ttsPriorityStop();
+    };
     audio.onplay = () => {
       if (stale()) return;
       setTtsButtonsState(true, false, state.paneId);
@@ -17233,6 +17281,7 @@
     let waitFrom = 0;
     audio.onplaying = () => {
       if (stale()) return;
+      _ttsPriorityPlaying();
       const now = Date.now();
       stopHighlight();
       trackWord();
