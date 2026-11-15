@@ -195,6 +195,29 @@ class TestReadEvents(PerfEventsTestBase):
     def test_missing_file_returns_empty(self):
         self.assertEqual(pe.read_events(0), [])
 
+    def test_app_samples_survive_the_main_sink_scrolling_past_its_tail(self):
+        """A busy machine fills the 2 MB tail in an hour; app loads are kept apart."""
+        now = time.time()
+        pe.record_event("app_ready", 1800, detail={"app": "ski"})
+        pe.record_event("app_freeze", 6000, detail={"app": "ski"})
+        with mock.patch.object(pe, "_TAIL_READ_BYTES", 4096):
+            filler = _row("conv_open", 100, now, pe.CONV_OPEN_MS)
+            for _ in range(200):
+                _append_raw(self.events_path(), filler)
+            events = pe.read_events(now - 3600)
+            apps = pe.summarize(hours=1)["apps"]
+        kinds = [e["kind"] for e in events]
+        # Each app row once, even though both files hold it.
+        self.assertEqual(kinds.count("app_ready"), 1)
+        self.assertEqual(kinds.count("app_freeze"), 1)
+        self.assertEqual(apps["ski"]["count"], 1)
+        self.assertEqual(apps["ski"]["freezes"], 1)
+
+    def test_app_samples_are_not_doubled_while_still_in_the_tail(self):
+        pe.record_event("app_ready", 900, detail={"app": "ski"})
+        events = pe.read_events(time.time() - 60)
+        self.assertEqual([e["kind"] for e in events], ["app_ready"])
+
 
 class TestSummarize(PerfEventsTestBase):
     def test_percentiles_and_breaches(self):
@@ -219,6 +242,10 @@ class TestSummarize(PerfEventsTestBase):
         # An app page reports navigation -> fully ready (content drawn and
         # agent pane showing). Over the budget it is a breach, it is grouped
         # per app, and unlike view_switch it can file a ticket.
+        # A calm machine: samples taken under saturation never file a ticket.
+        calm = mock.patch.object(pe, "_machine_load", return_value=(0.5, 8))
+        calm.start()
+        self.addCleanup(calm.stop)
         fast = pe.record_event("app_ready", pe.APP_READY_MS - 200,
                                detail={"app": "trips", "content_ms": 80, "agent_ms": 700})
         self.assertTrue(fast["ok"])

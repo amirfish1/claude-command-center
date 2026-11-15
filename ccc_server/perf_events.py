@@ -57,6 +57,16 @@ def _events_path():
     return PERF_EVENTS_FILE
 
 
+# App loads and freezes are a few rows a day beside tens of thousands of list
+# and build samples. On a busy machine the 2 MB tail of the main sink covers
+# an hour or two, so `ccc app speed` forgot them; they are also kept here.
+_APP_KINDS = ("app_ready", "app_freeze")
+
+
+def _app_events_path():
+    return _events_path().with_name("perf-app-events.jsonl")
+
+
 def _ticket_state_path():
     if _STATE_DIR_OVERRIDE is not None:
         return _STATE_DIR_OVERRIDE / "perf-ticket-state.json"
@@ -414,6 +424,9 @@ def record_event(kind, ms, boot_id="", conv_id="", detail=None):
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(row) + "\n")
+        if kind in _APP_KINDS:
+            with open(_app_events_path(), "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
     except OSError:
         pass
 
@@ -505,7 +518,17 @@ def read_events(since_ts):
     install. Seeking to the last ~2MB and discarding one partial leading
     line bounds the cost regardless of how big the file has grown.
     """
-    path = _events_path()
+    events = _read_tail(_events_path(), since_ts)
+    # App rows that have scrolled out of the main sink's tail.
+    seen = {(r.get("ts"), r.get("kind")) for r in events if r.get("kind") in _APP_KINDS}
+    older = [r for r in _read_tail(_app_events_path(), since_ts)
+             if r.get("kind") in _APP_KINDS and (r.get("ts"), r.get("kind")) not in seen]
+    if older:
+        events = sorted(older + events, key=lambda r: str(r.get("ts") or ""))
+    return events
+
+
+def _read_tail(path, since_ts):
     try:
         size = path.stat().st_size
     except OSError:
