@@ -44308,7 +44308,7 @@
             +     quickTrashBtn
             +     '<button type="button" class="conv-kebab-btn" data-role="kebab" title="Actions" aria-label="Row actions"><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span><span class="conv-kebab-dot"></span></button>'
             +   '</span>'
-            +   '<span class="conv-row-actions">' + sessionIdChipHtml + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + handoffBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons + '</span>'
+            +   '<span class="conv-row-actions">' + lifecycleButtons + sessionIdChipHtml + ((opts.evergreenAgent && !_egSingleLine) ? '' : pctBadgeRowActionHtml) + wakeBtn + summaryActionBtn + mergeBtn + startBtn + pinBtn + handoffBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + '</span>'
             + '</span>'
           + '</div>'
           + evergreenMetaRowHtml
