@@ -123,3 +123,71 @@ test('other replies stay chat messages, and a refused answer is reported', async
     await page.waitForSelector('[data-qtalk]');
   } finally { await browser.close(); }
 });
+
+test('a cross-session answer sends one receipt to its origin after the ticket accepts it', {timeout:15000}, async () => {
+  const browser = await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
+  try {
+    const page = await load(browser,[question(9,true)],needsYou);
+    const result = await page.evaluate(async () => {
+      const posts=[], notices=[];
+      window.fetch=async (url,options) => {
+        if(url==='/api/ux-fixes/answer')posts.push(JSON.parse(options.body));
+        return {ok:true,json:async()=>({ok:true})};
+      };
+      let finish;
+      window.cccSendQuestionAnswer=async (...args) => {
+        notices.push(args);
+        await new Promise(resolve=>finish=resolve);
+        return {ok:true};
+      };
+      const first=cccQuestionTags.answerTicket('[Q9:repair] Approve only the repair.','parent');
+      while(!finish)await new Promise(resolve=>setTimeout(resolve,0));
+      const second=cccQuestionTags.answerTicket('[Q9:repair] Approve only the repair.','parent');
+      const shared=first===second;
+      finish();
+      return {ref:await first,again:await second,shared,posts,notices};
+    });
+    assert.equal(result.ref,'OPS-7');
+    assert.equal(result.shared,true,'a repeat while the origin receipt is pending must not fall back to another chat send');
+    assert.equal(result.again,'OPS-7');
+    assert.equal(result.posts.length,1);
+    assert.equal(result.notices.length,1);
+    assert.equal(result.notices[0][0],'parent');
+    assert.match(result.notices[0][1],/^Decision recorded on OPS-7:\n\n\[Q9:repair\] Approve only the repair\./);
+    assert.match(result.notices[0][1],/do not submit the answer again/);
+    assert.deepEqual(result.notices[0][2],{echo:true});
+  } finally {await browser.close();}
+});
+
+test('the worker session is already notified by the ticket endpoint and is not injected twice', async () => {
+  const browser = await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
+  try {
+    const page=await load(browser,[question(9,true)],needsYou);
+    await page.evaluate(async () => {
+      window.fetch=async()=>({ok:true,json:async()=>({ok:true})});
+      await cccQuestionTags.answerTicket('[Q9] Yes.','worker');
+    });
+    assert.deepEqual(await page.evaluate(()=>sent),[]);
+  } finally {await browser.close();}
+});
+
+test('an origin receipt failure preserves the recorded answer and reports which delivery failed', async () => {
+  const browser = await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
+  try {
+    const page=await load(browser,[question(9,true)],needsYou);
+    const result=await page.evaluate(async () => {
+      let answers=0;
+      window.fetch=async url=>{
+        if(url==='/api/ux-fixes/answer')answers++;
+        return {ok:true,json:async()=>({ok:true})};
+      };
+      window.cccSendQuestionAnswer=async()=>({ok:false,error:'Origin offline'});
+      const error=await cccQuestionTags.answerTicket('[Q9] Yes.','parent').catch(e=>({message:e.message,ticketAnswered:e.ticketAnswered}));
+      return {error,answers,again:cccQuestionTags.answerTicket('[Q9] Yes.','parent')};
+    });
+    assert.equal(result.error.ticketAnswered,true);
+    assert.match(result.error.message,/OPS-7 was answered.*receipt was not confirmed: Origin offline/);
+    assert.equal(result.answers,1);
+    assert.equal(result.again,null);
+  } finally {await browser.close();}
+});

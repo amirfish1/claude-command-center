@@ -53,12 +53,34 @@
     return true;
   };
   // An explicit Send answer click carries the same human provenance as the composer.
-  window.cccSendQuestionAnswer = async function (sid, text) {
+  window.cccSendQuestionAnswer = async function (sid, text, opts) {
     if (!sid || !String(text || '').trim()) return {ok: false, error: 'Type an answer first.'};
-    const result = await postInjectInput(sid, text, 'send', {userInitiated: true});
+    const pane = opts?.echo && paneByPaneId(activePaneId());
+    const pending = pane && (pane.currentSession?.id === sid || pane.conversationId === sid)
+      ? appendPendingSendEcho(text, sid, pane.id) : null;
+    let result;
+    try {
+      result = await postInjectInput(sid, text, 'send', {userInitiated: true});
+    } catch (error) {
+      removePendingSendEcho(pending);
+      throw error;
+    }
+    if (!result?.ok || result.soft_block || result.submitted === false) {
+      removePendingSendEcho(pending);
+      return {...result, ok:false};
+    }
     if (result && result.ok) {
       // A successful send must remain successful if a local repaint fails.
-      try { markSessionSending(sid); refreshConversationList(); } catch (_) {}
+      try {
+        if (pending) {
+          if (result.delivery_id) bindPendingSendDeliveryId(pending, result.delivery_id);
+          if (result.queued) markPendingSendQueued(pending, 'Queued for this session.');
+          else if (result.via === 'wt-send') beginWtReceiptTracking(pending, result, {sid, rawText:text, mode:'send', paneId:pane.id});
+          else markPendingSendDelivered(pending, result);
+          scheduleFireAndWatchRefresh(pane.id);
+        }
+        markSessionSending(sid); refreshConversationList();
+      } catch (_) {}
     }
     return result;
   };
@@ -19903,7 +19925,7 @@
           throw new Error('This action changed. Review the updated row before sending.');
         }
       }
-      const ticketAnswer = window.cccQuestionTags?.answerTicket(action.reply);
+      const ticketAnswer = window.cccQuestionTags?.answerTicket(action.reply, sid);
       if (ticketAnswer) await ticketAnswer;
       const data = ticketAnswer ? { ok: true } : await postInjectInput(sid, action.reply, 'send', { userInitiated: true });
       if (!data.ok) throw new Error(data.error || 'Send failed');
@@ -19913,7 +19935,11 @@
       showOpToast((data.queued ? 'Queued: ' : 'Sent: ') + action.label);
       refreshConversationList();
     } catch (error) {
-      if (!accepted) {
+      if (error.ticketAnswered) {
+        accepted = true;
+        feedback.state = 'sent';
+        showOpToast(error.message, 'warning');
+      } else if (!accepted) {
         _rowQuickActionFeedback.delete(sid);
         showOpToast('Could not send ' + action.label + ': ' + String(error.message || error), 'error');
       } else {
@@ -20093,14 +20119,18 @@
     } else if (act === 'say') {
       const input = composerInputForPane(paneId) || $convInput;
       if (!input) return;
-      const ticketAnswer = window.cccQuestionTags?.answerTicket(value);
+      if (btn.disabled) return;
+      const sourcePane = paneByPaneId(paneId);
+      const sid = sourcePane?.currentSession?.id || sourcePane?.conversationId;
+      const ticketAnswer = window.cccQuestionTags?.answerTicket(value, sid);
       if (ticketAnswer) {
         btn.disabled = true;
         try {
           showOpToast('Answered ' + await ticketAnswer + ': block cleared', 'success');
         } catch (error) {
-          btn.disabled = false;
-          showOpToast('Answer failed: ' + String(error.message || error), 'error');
+          btn.disabled = !!error.ticketAnswered;
+          showOpToast(error.ticketAnswered ? error.message : 'Answer failed: ' + String(error.message || error),
+            error.ticketAnswered ? 'warning' : 'error');
         }
         return;
       }
