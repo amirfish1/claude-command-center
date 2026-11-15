@@ -1061,7 +1061,9 @@ def set_lease(session_id, hours, kind="lease", now=None, leases_file=None):
 
 def _refresh_memo():
     try:
-        flagged, watch = scan()
+        from ccc_server import background_work
+        with background_work.slot():
+            flagged, watch = scan()
         _MEMO.update(at=time.time(), result=(flagged, watch))
     finally:
         with _LOCK:

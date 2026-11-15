@@ -1505,8 +1505,10 @@ def usage_current_payload(now_epoch=None):
 def _poll_plan_usage_once():
     global _plan_usage_cache, _plan_usage_cache_time
     res = _fetch_plan_usage()
-    codex = _core._read_codex_usage()
-    kimi = _core._read_kimi_usage()
+    from ccc_server import background_work
+    with background_work.slot():
+        codex = _core._read_codex_usage()
+        kimi = _core._read_kimi_usage()
     if not isinstance(res, dict) or not res.get("ok"):
         if codex or kimi:
             snap = {"ts": _core._usage_snapshot_iso(), "source": "native", "codex": codex, "kimi": kimi}

@@ -292,7 +292,9 @@ def _dashboard_queue_watch_tick(previous):
 
 def _dashboard_session_watch_tick(previous):
     try:
-        raw = _sessions_state_snapshot()
+        from ccc_server import background_work
+        with background_work.slot():
+            raw = _sessions_state_snapshot()
     except Exception:
         return previous
     current = {
@@ -3744,6 +3746,7 @@ _WT_ITEMS_SNAPSHOT_FILE = (
 _WT_ITEMS_SNAPSHOT_TTL_S = 30.0
 _wt_items_memo = {"at": 0.0, "items": None}
 _wt_items_memo_lock = threading.Lock()
+_wt_items_fetch_lock = threading.Lock()
 
 
 def _wt_list_items_display_cached(max_age=_WT_ITEMS_SNAPSHOT_TTL_S):
@@ -3757,6 +3760,21 @@ def _wt_list_items_display_cached(max_age=_WT_ITEMS_SNAPSHOT_TTL_S):
     with _wt_items_memo_lock:
         if _wt_items_memo["items"] is not None and now - _wt_items_memo["at"] < max_age:
             return _wt_items_memo["items"]
+    with _wt_items_fetch_lock:
+        # Startup prewarms and synchronous overlay callers share this fetch.
+        # A fetch completed while we queued satisfies even a forced prewarm.
+        with _wt_items_memo_lock:
+            at = _wt_items_memo["at"]
+            if _wt_items_memo["items"] is not None and (
+                time.time() - at < max_age or at >= now
+            ):
+                return _wt_items_memo["items"]
+        return _wt_list_items_refresh(max_age)
+
+
+def _wt_list_items_refresh(max_age):
+    """Cold display-cache refresh; caller owns the fetch lock."""
+    now = time.time()
     snapshot_items = None
     try:
         st = _WT_ITEMS_SNAPSHOT_FILE.stat()
@@ -3795,6 +3813,21 @@ def _wt_list_items_display_cached(max_age=_WT_ITEMS_SNAPSHOT_TTL_S):
     return items
 
 
+def _wt_list_items_refresh_background(max_age=_WT_ITEMS_SNAPSHOT_TTL_S):
+    """Acquire the maintenance slot only at a background thread boundary.
+
+    Synchronous overlay callers can hold archive locks; making them acquire
+    the maintenance slot as well would invert that lock order.
+    """
+    from ccc_server import background_work
+    requested_at = time.time()
+    with background_work.slot():
+        with _wt_items_memo_lock:
+            if _wt_items_memo["items"] is not None and _wt_items_memo["at"] >= requested_at:
+                return _wt_items_memo["items"]
+        return _wt_list_items_display_cached(max_age)
+
+
 _wt_snapshot_file_memo = {"mtime": None, "items": []}
 
 
@@ -3829,7 +3862,7 @@ def _wt_list_items_for_requests():
     if not fresh and _wt_items_refresh_lock.acquire(blocking=False):
         def refresh():
             try:
-                _wt_list_items_display_cached()
+                _wt_list_items_refresh_background()
             finally:
                 _wt_items_refresh_lock.release()
         threading.Thread(target=refresh, daemon=True, name="wt-items-refresh").start()
@@ -17594,7 +17627,9 @@ def _archive_list_start_warm(slot, warm):
 
     def _run():
         try:
-            warm()
+            from ccc_server import background_work
+            with background_work.slot():
+                warm()
         except Exception:
             pass
         finally:
@@ -48484,7 +48519,7 @@ def main():
     # 11s alongside them. Warm it once, off the request path, before the
     # browser asks. Failure is fine -- the endpoints still fetch on demand.
     threading.Thread(
-        target=lambda: _wt_list_items_display_cached(max_age=0),
+        target=lambda: _wt_list_items_refresh_background(max_age=0),
         name="ccc-wt-items-prewarm", daemon=True,
     ).start()
     _load_conv_meta_cache()

@@ -2,6 +2,7 @@
 import threading
 import time
 from collections import OrderedDict
+from ccc_server import background_work as _background_work
 
 
 class CensusCache:
@@ -95,7 +96,8 @@ class CensusCache:
 
     def _build(self, key, slot, builder):
         try:
-            payload = builder(key)
+            with _background_work.slot():
+                payload = builder(key)
             if not isinstance(payload, dict) or payload.get('ok') is not True:
                 return
             with self.lock:

@@ -1,0 +1,1 @@
+- Serialize expensive dashboard cache refreshes and coalesce ticket-list prewarms so simultaneous background scans do not crowd out page requests.
