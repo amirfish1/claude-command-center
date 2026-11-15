@@ -13119,7 +13119,14 @@ def build_system_health(force=False):
         now = time.time()
         if not force and snap["data"] is not None and now - snap["ts"] < _SYSTEM_HEALTH_TTL:
             return snap["data"]
-        data = _build_system_health_uncached()
+        # Process/registry scans contend with dashboard warmers for the GIL.
+        # Reuse the existing live helper; destructive guards always read here.
+        from ccc_server import bg_helper
+        reply = None
+        if (not force and not bg_helper.is_child() and bg_helper.live_enabled()
+                and os.environ.get("CCC_WORKER_PROCESS") != "1"):
+            reply = bg_helper.call("system_health", role="live", timeout=5.0)
+        data = reply["data"] if reply else _build_system_health_uncached()
         snap["data"] = data
         snap["ts"] = time.time()
         return data

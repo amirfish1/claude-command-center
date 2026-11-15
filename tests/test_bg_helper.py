@@ -345,6 +345,34 @@ def test_live_op_reports_when_it_was_read(live_helper):
     assert reply["detail"]["phases"]["liveness"]["wall_ms"] == 1.0
 
 
+def test_resource_snapshot_uses_helper_but_reap_guard_reads_locally(live_helper, monkeypatch):
+    fake, _child = live_helper
+    helper_data = {"ts": 100.0, "memory": {"used_mb": 200}}
+    local_data = {"ts": 101.0, "memory": {"used_mb": 300}}
+    calls = []
+
+    def helper_build():
+        calls.append("helper")
+        return helper_data
+
+    def local_build():
+        calls.append("local")
+        return local_data
+
+    fake._build_system_health_uncached = helper_build
+    monkeypatch.setattr(server, "_build_system_health_uncached", local_build)
+    monkeypatch.setattr(server, "_system_health_snapshot", {"ts": 0, "data": None})
+    assert server.build_system_health() == helper_data
+    assert server.build_system_health() == helper_data
+    assert calls == ["helper"]
+    assert server.build_system_health(force=True) == local_data
+    assert calls == ["helper", "local"]
+    bg_helper._live_state.update(ready=False)
+    server._system_health_snapshot.update(ts=0, data=None)
+    assert server.build_system_health() == local_data
+    assert calls == ["helper", "local", "local"]
+
+
 def test_live_op_shares_a_fresh_build_but_rebuilds_a_stale_one(live_helper):
     fake, _child = live_helper
     bg_helper.call("live_activity", role="live", max_age_s=30)
