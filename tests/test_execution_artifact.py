@@ -197,6 +197,8 @@ def test_positive_observation_binds_actual_image_executable_profile_and_start():
     lambda c: c["HostConfig"].update(SecurityOpt=[]),
     lambda c: c["HostConfig"].update(NetworkMode="host"),
     lambda c: c["HostConfig"].update(IpcMode="host"),
+    lambda c: c["HostConfig"].update(PidMode="host"),
+    lambda c: c["HostConfig"].update(CgroupnsMode="host"),
     lambda c: c["HostConfig"].update(Init=True),
     lambda c: c["Config"].update(Env=["PYTHONPATH=/state"]),
     lambda c: c["Config"].update(Env=["CCC_PLUGIN_PATH=/state"]),

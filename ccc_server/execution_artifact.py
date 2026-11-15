@@ -17,6 +17,7 @@ from pathlib import Path
 import posixpath
 import re
 import subprocess
+import sys
 import tarfile
 import tempfile
 
@@ -251,6 +252,24 @@ def committed_source_tar(repo, revision):
     return output.getvalue()
 
 
+def committed_dependency_tar(package, repo, revision):
+    """Measure one committed import tree; never install or copy host packages."""
+    if (not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', package)
+            or package in sys.stdlib_module_names or package in ('ccc_server', 'server')):
+        raise Refused('dependency must be a distinct non-stdlib package')
+    if not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise Refused('dependency requires a full committed SHA')
+    source = committed_source_tar(repo, revision)
+    output = io.BytesIO()
+    with tarfile.open(fileobj=io.BytesIO(source)) as tracked, tarfile.open(fileobj=output, mode='w') as target:
+        selected = [item for item in tracked if item.name == package or item.name.startswith(package + '/')]
+        if not any(item.name == package + '/__init__.py' and item.isfile() for item in selected):
+            raise Refused('dependency package has no committed source initializer')
+        for item in selected:
+            target.addfile(item, tracked.extractfile(item) if item.isfile() else None)
+    return output.getvalue()
+
+
 class DockerImages:
     """Root Docker CLI adapter. Builds/export never start an agent or container."""
 
@@ -281,7 +300,7 @@ class DockerImages:
         return Artifact(info["Id"], digest(manifest), manifest)
 
 
-def build_artifact(base_digest, repo, revision, *, prune_base_links=(), docker=None):
+def build_artifact(base_digest, repo, revision, *, prune_base_links=(), dependencies=(), docker=None):
     """Import a complete pinned base plus committed source, without RUN/network.
 
     Slim distributions sometimes contain dangling documentation/runtime links.
@@ -300,6 +319,13 @@ def build_artifact(base_digest, repo, revision, *, prune_base_links=(), docker=N
     if base.get("Config", {}).get("Volumes"):
         raise Refused("base declares external volumes")
     source = committed_source_tar(repo, revision)
+    dependency_tars = []
+    names = set()
+    for package, dependency_repo, dependency_revision in dependencies:
+        if package in names:
+            raise Refused("duplicate dependency package")
+        names.add(package)
+        dependency_tars.append(committed_dependency_tar(package, dependency_repo, dependency_revision))
     base_bytes = docker.export(base["Id"])
     prune = {_relative(name) for name in prune_base_links}
     with tempfile.TemporaryFile() as output:
@@ -323,7 +349,8 @@ def build_artifact(base_digest, repo, revision, *, prune_base_links=(), docker=N
                         raise Refused("pruning requires an explicitly missing base link: " + name)
                 for name, item in members.items():
                     if name not in prune:
-                        if name == "opt/ccc" or name.startswith("opt/ccc/"):
+                        if (name in ("opt/ccc", "opt/ccc-deps")
+                                or name.startswith(("opt/ccc/", "opt/ccc-deps/"))):
                             raise Refused("base shadows source destination")
                         target.addfile(item, original.extractfile(item) if item.isfile() else None)
                 if "etc/mtab" in prune:
@@ -375,6 +402,16 @@ def build_artifact(base_digest, repo, revision, *, prune_base_links=(), docker=N
                         item.linkname = "opt/ccc/" + _relative(item.linkname)
                     item.uid = item.gid = 0
                     target.addfile(item, tracked.extractfile(item) if item.isfile() else None)
+            if dependency_tars:
+                item = tarfile.TarInfo('opt/ccc-deps')
+                item.type, item.mode = tarfile.DIRTYPE, 0o755
+                target.addfile(item)
+                for dependency in dependency_tars:
+                    with tarfile.open(fileobj=io.BytesIO(dependency)) as tracked:
+                        for item in tracked:
+                            item.name = 'opt/ccc-deps/' + _relative(item.name)
+                            item.uid = item.gid = 0
+                            target.addfile(item, tracked.extractfile(item) if item.isfile() else None)
         output.seek(0)
         manifest = manifest_from_tar(output)
         output.seek(0)
@@ -412,6 +449,7 @@ class ExecutionProfile:
     generated_sources: tuple = ()  # (compiler filename, measured source file)
     unix_sockets: tuple = ()  # Explicit private data sockets; peer proof separate.
     state_files: tuple = ()  # Exact mutable ledger/input files, never configuration.
+    identity_namespace: str = "private"  # Explicit kernel PID and cgroup visibility.
 
     def value(self):
         if not self.entry.startswith("/opt/ccc/") or "/../" in self.entry:
@@ -420,6 +458,8 @@ class ExecutionProfile:
             raise Refused("worker must be an unprivileged numeric user")
         if self.network != "none" and not re.fullmatch(r"container:[0-9a-f]{64}", self.network):
             raise Refused("network must be none or a pinned isolated sibling")
+        if self.identity_namespace not in ("private", "host"):
+            raise Refused("identity namespace must be private or host")
         env = dict(self.environment)
         if len(env) != len(self.environment):
             raise Refused("duplicate environment variable")
@@ -448,7 +488,7 @@ class ExecutionProfile:
         if self.commands:
             raise Refused("native subprocess closure is unsupported; kernel execution stays denied")
         for filename, source_path in self.generated_sources:
-            if filename != "<string>" or not source_path.startswith("/opt/ccc/") or "/../" in source_path:
+            if filename not in ("<string>", "<catalog-v1>") or not source_path.startswith("/opt/ccc/") or "/../" in source_path:
                 raise Refused("generated code must come from measured source files")
         for filename in self.unix_sockets:
             if not filename.startswith(tuple(root + "/" for root in _DATA_ROOTS)) or "/../" in filename:
@@ -470,7 +510,8 @@ class ExecutionProfile:
                 "network": self.network, "user": self.user,
                 "import_policy": "isolated-source-audit-v1", "readonly_rootfs": True,
                 "capabilities": [], "no_new_privileges": True,
-                "pid_namespace": "private", "ipc_namespace": "none",
+                "pid_namespace": self.identity_namespace, "cgroup_namespace": self.identity_namespace,
+                "ipc_namespace": "none",
                 "runtime": "runc", "init": False, "working_dir": "/opt/ccc",
                 "runtime_data_exclusions": ["/proc", "/sys", "/dev", "/etc/hosts",
                                             "/etc/hostname", "/etc/resolv.conf"],
@@ -493,7 +534,9 @@ class ExecutionProfile:
                 "Env": [key + "=" + value for key, value in sorted(self.environment)],
                 "HostConfig": {"ReadonlyRootfs": True, "CapDrop": ["ALL"],
                                "CapAdd": [], "SecurityOpt": ["no-new-privileges"],
-                               "NetworkMode": self.network, "PidMode": "",
+                               "NetworkMode": self.network,
+                               "PidMode": "host" if self.identity_namespace == "host" else "",
+                               "CgroupnsMode": self.identity_namespace,
                                "IpcMode": "none", "Runtime": "runc", "Init": False,
                                "Mounts": [image_etc_mount(image_id), *[{"Type": "bind", "Source": src, "Target": dst,
                                            "ReadOnly": ro} for src, dst, ro in self.data_mounts]]}}
@@ -628,7 +671,7 @@ def verify_container(container, profile, processes):
         env[key] = val
     if env != dict(profile.environment):
         raise Refused("unmeasured environment/configuration")
-    for key in ("ReadonlyRootfs", "NetworkMode", "PidMode", "IpcMode", "Runtime"):
+    for key in ("ReadonlyRootfs", "NetworkMode", "PidMode", "CgroupnsMode", "IpcMode", "Runtime"):
         if host.get(key) != expected["HostConfig"][key]:
             raise Refused("unsafe runtime configuration: " + key)
     if set(host.get("CapDrop") or []) != {"ALL"} or host.get("CapAdd"):

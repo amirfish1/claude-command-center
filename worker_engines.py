@@ -55,7 +55,8 @@ class EngineHost:
             return self._module
         with self._module_lock:
             if self._module is None:
-                os.environ["CCC_WORKER_PROCESS"] = "1"
+                if os.environ.get("CCC_WORKER_PROCESS") != "1":
+                    os.environ["CCC_WORKER_PROCESS"] = "1"
                 import server
                 self._module = server
                 # Capture a fingerprint of the server.py + ccc_server/*.py

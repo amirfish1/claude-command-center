@@ -122,6 +122,7 @@ def authority_config(anchor, anchor_source, query):
     return {"Image": anchor["image_id"], "Entrypoint": ENTRYPOINT, "Cmd": [],
             "User": "0:0", "WorkingDir": "/opt/ccc", "Env": ["CCC_ATTESTATION_QUERY=" + canonical(query).decode()],
             "HostConfig": {"ReadonlyRootfs": True, "NetworkMode": "none", "PidMode": "host",
+                           "CgroupnsMode": "host",
                            "IpcMode": "none", "Runtime": "runc", "CapDrop": ["ALL"],
                            # Read-only /proc executable access to another uid.
                            "CapAdd": ["SYS_PTRACE", "KILL"], "SecurityOpt": ["no-new-privileges"],
@@ -167,7 +168,7 @@ def authenticate_self(docker, anchor, processes):
     if any(not env.startswith("CCC_ATTESTATION_QUERY=") for env in config.get("Env") or []):
         raise Refused("unmeasured authority environment")
     expected = authority_config(anchor, "unused", {})["HostConfig"]
-    for key in ("ReadonlyRootfs", "NetworkMode", "PidMode", "IpcMode", "Runtime"):
+    for key in ("ReadonlyRootfs", "NetworkMode", "PidMode", "CgroupnsMode", "IpcMode", "Runtime"):
         if host.get(key) != expected[key]:
             raise Refused("unmeasured authority execution profile")
     if set(host.get("CapDrop") or []) != {"ALL"} or set(host.get("CapAdd") or []) != {"SYS_PTRACE", "KILL"}:
@@ -217,7 +218,8 @@ def _profile(value):
                                tuple(tuple(x) for x in value["commands"]),
                                value["network"], value["user"],
                                tuple(tuple(x) for x in value["generated_sources"]),
-                               tuple(value["unix_sockets"]), tuple(value["state_files"]))
+                               tuple(value["unix_sockets"]), tuple(value["state_files"]),
+                               value["pid_namespace"])
     if canonical(profile.value()) != canonical(value):
         raise Refused("unsupported profile format/fields")
     return profile

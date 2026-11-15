@@ -36,15 +36,20 @@ def main():
     parser.add_argument("--revision", required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--prune-base-link", action="append", default=[])
+    parser.add_argument("--dependency", action="append", nargs=3, default=[],
+                        metavar=("PACKAGE", "REPO", "REVISION"),
+                        help="include a pinned committed package; no host installation")
     args = parser.parse_args()
     artifact = build_artifact(args.base, args.repo, args.revision,
-                              prune_base_links=args.prune_base_link)
+                              prune_base_links=args.prune_base_link, dependencies=args.dependency)
     # Exclusive create prevents clobbering a previous proof/build manifest.
     with args.manifest.open("xb") as stream:
         stream.write(artifact.manifest)
     print(json.dumps({"image_id": artifact.image_id,
                       "executed_build_sha256": artifact.executed_build_sha256,
                       "source_revision": args.revision,
+                      "dependencies": [{"package": name, "revision": revision}
+                                       for name, _, revision in args.dependency],
                       "pruned_base_links": sorted(args.prune_base_link)}, sort_keys=True))
 
 

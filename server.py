@@ -20482,7 +20482,9 @@ def _compute_server_code_rev():
             stderr=subprocess.DEVNULL, timeout=2,
         ).decode("utf-8", "replace").strip()
         return out or ""
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError):
+        # A measured Python profile denies native Git execution. This optional
+        # display stamp is not an artifact identity or runtime acceptance.
         return ""
 
 

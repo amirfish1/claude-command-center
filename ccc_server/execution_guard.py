@@ -8,6 +8,7 @@ It is not a sandbox for hostile code already included in an approved image.
 
 import importlib.machinery
 import importlib.util
+import hashlib
 import json
 import os
 import re
@@ -78,6 +79,42 @@ def measured_filename(filename):
     if not os.path.isfile(resolved):
         raise RuntimeError("execution refused: missing source")
     return resolved
+
+
+def measured_generated_sources(entries):
+    """Load only explicitly measured fragments, never a factory exception."""
+    result = []
+    for filename, source_path in entries:
+        raw = Path(measured_filename(source_path)).read_bytes()
+        if filename != '<catalog-v1>':
+            result.append((filename, raw))
+            continue
+        if len(raw) > 1024 * 1024:
+            raise RuntimeError('execution refused: generated catalog exceeds bound')
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise RuntimeError('execution refused: duplicate catalog key')
+                value[key] = item
+            return value
+        catalog = json.loads(raw, object_pairs_hook=unique)
+        if (not isinstance(catalog, dict) or set(catalog) != {'format', 'sources'}
+                or catalog['format'] != 'ccc-generated-sources-v1'
+                or not isinstance(catalog['sources'], list) or len(catalog['sources']) > 4096):
+            raise RuntimeError('execution refused: invalid generated catalog')
+        seen = set()
+        for row in catalog['sources']:
+            if (not isinstance(row, dict) or set(row) != {'filename', 'source', 'sha256'}
+                    or row['filename'] != '<string>' or not isinstance(row['source'], str)):
+                raise RuntimeError('execution refused: invalid generated source')
+            source = row['source'].encode('utf-8')
+            if (not source or len(source) > 65536 or hashlib.sha256(source).hexdigest() != row['sha256']
+                    or source in seen):
+                raise RuntimeError('execution refused: changed or duplicate generated source')
+            seen.add(source)
+            result.append((row['filename'], source))
+    return result
 
 
 class SourceGuard:
@@ -215,7 +252,7 @@ class SourceGuard:
 def main():
     if not sys.flags.isolated or not sys.flags.no_site or not sys.dont_write_bytecode:
         raise RuntimeError("execution refused: isolated interpreter flags required")
-    sys.path.insert(0, "/opt/ccc")
+    sys.path[:0] = ["/opt/ccc", "/opt/ccc-deps"]
     from ccc_server.execution_artifact import ExecutionProfile, canonical
     value = json.loads(sys.argv[1])
     profile = ExecutionProfile(value["entry"], tuple(value["argv"]),
@@ -224,13 +261,13 @@ def main():
                                tuple(tuple(p) for p in value["commands"]),
                                value["network"], value["user"],
                                tuple(tuple(p) for p in value["generated_sources"]),
-                               tuple(value["unix_sockets"]), tuple(value["state_files"]))
+                               tuple(value["unix_sockets"]), tuple(value["state_files"]),
+                               value["pid_namespace"])
     if canonical(profile.value()) != canonical(value):
         raise RuntimeError("execution refused: unknown execution profile")
     # No application code executes before installation. Pre-imported modules
     # above come exclusively from the immutable interpreter/base/source image.
-    generated = [(filename, Path(measured_filename(source)).read_bytes())
-                 for filename, source in profile.generated_sources]
+    generated = measured_generated_sources(profile.generated_sources)
     install_kernel_policy()
     # Namespace PID 1 ignores an unhandled self-SIGSTOP. Keep an immutable
     # guardian as PID 1 and run application admission in its one child. The
