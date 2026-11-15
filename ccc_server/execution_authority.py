@@ -17,6 +17,8 @@ import socket
 import stat
 import struct
 import sys
+import time
+import secrets
 from urllib.parse import quote
 
 if __name__ == "__main__":
@@ -53,8 +55,17 @@ def read_anchor(filename):
     finally:
         os.close(fd)
     value = json.loads(data)
-    if set(value) != {"format", "image_id", "executed_build_sha256", "execution_profile_sha256"} or value["format"] != "ccc-root-authority-v1":
+    base = {"format", "image_id", "executed_build_sha256", "execution_profile_sha256"}
+    if not ((set(value) == base and value["format"] == "ccc-root-authority-v1")
+            or (set(value) == base | {"managed_acceptance"} and value["format"] == "ccc-root-authority-v2")):
         raise Refused("unsupported root authority anchor")
+    if value["format"] == "ccc-root-authority-v2":
+        accepted = value["managed_acceptance"]
+        if (not isinstance(accepted, dict) or set(accepted) != {"manifest_sha256", "reference"}
+                or not isinstance(accepted["manifest_sha256"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", accepted["manifest_sha256"])
+                or not isinstance(accepted["reference"], str) or not accepted["reference"].strip()):
+            raise Refused("root anchor lacks exact managed proof acceptance")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", value["image_id"]) or any(not re.fullmatch(r"[0-9a-f]{64}", value[k]) for k in ("executed_build_sha256", "execution_profile_sha256")):
         raise Refused("unmeasured authority image")
     return value
@@ -72,11 +83,74 @@ class _Connection(http.client.HTTPConnection):
 
 
 class RootDocker:
+    def input(self, ident, payload):
+        """Fixed Docker stdin transport; caller keeps it open until receipt."""
+        if not re.fullmatch(r'[0-9a-f]{64}', ident):
+            raise Refused('stdin requires an exact container identity')
+        connection = _Connection('localhost', timeout=45)
+        try:
+            connection.request('POST', '/v1.52/containers/' + ident
+                               + '/attach?stream=1&stdin=1&stdout=0&stderr=0',
+                               headers={'Connection': 'Upgrade', 'Upgrade': 'tcp'})
+            response = connection.getresponse()
+            if response.status != 101 or connection.sock is None:
+                raise Refused('root Docker refused fixed stdin attach')
+            connection.sock.sendall(payload)
+            return connection
+        except BaseException:
+            connection.close()
+            raise
+
+    def control(self, ident, request):
+        """One data write to the exact measured worker's Docker stdin.
+
+        No Docker exec, host socket/config mount or generic worker RPC. Logs
+        are read from that exact root-daemon container, matched to a fresh
+        request ID. Timeout after a write is uncertain and is never retried.
+        """
+        from ccc_server.managed_restart_control import PREFIX, MAX_LINE
+        if not re.fullmatch(r'[0-9a-f]{64}', ident):
+            raise Refused('control requires an exact container identity')
+        ident_query = quote(ident, safe='')
+        nonce = secrets.token_hex(16)
+        payload = canonical({'id': nonce, 'request': request}) + b'\n'
+        if len(payload) > MAX_LINE:
+            raise Refused('oversized managed control request')
+        connection = self.input(ident, payload)
+        try:
+            deadline = time.monotonic() + 25
+            while time.monotonic() < deadline:
+                data = self.request('GET', '/containers/' + ident_query
+                                    + '/logs?stdout=1&stderr=0&tail=128', raw=True)
+                stdout = _streams(data)[1]
+                for line in stdout.decode(errors='replace').splitlines():
+                    if not line.startswith(PREFIX):
+                        continue
+                    value = json.loads(line[len(PREFIX):])
+                    if value.get('id') == nonce:
+                        if value.get('ok') is not True or not isinstance(value.get('result'), dict):
+                            raise Refused('measured worker refused: ' + str(value.get('error', 'unknown'))[:200])
+                        return value['result']
+                time.sleep(.05)
+            raise Refused('managed control reply uncertain; do not retry')
+        finally:
+            connection.close()
+
+    def stop_exact(self, fact):
+        """Stop only the already authenticated owning guardian container."""
+        current = self.inspect_container(fact.identity.container_id)
+        if LinuxProcesses().identity(current) != fact.identity:
+            raise Refused('worker identity changed before exact container stop')
+        self.request('POST', '/containers/' + fact.identity.container_id + '/stop?t=10')
+        after = self.inspect_container(fact.identity.container_id)
+        if after['State'].get('Running'):
+            raise Refused('old exact worker death is unknown')
+
     def changes(self, ident):
         return self.request("GET", "/containers/" + quote(ident, safe="") + "/changes")
 
-    def request(self, method, endpoint, body=None, *, raw=False):
-        connection = _Connection("localhost", timeout=45)
+    def request(self, method, endpoint, body=None, *, raw=False, timeout=45):
+        connection = _Connection("localhost", timeout=timeout)
         try:
             connection.request(method, "/v1.52" + endpoint,
                                body=canonical(body) if body is not None else None,
@@ -121,6 +195,7 @@ class RootDocker:
 def authority_config(anchor, anchor_source, query):
     return {"Image": anchor["image_id"], "Entrypoint": ENTRYPOINT, "Cmd": [],
             "User": "0:0", "WorkingDir": "/opt/ccc", "Env": ["CCC_ATTESTATION_QUERY=" + canonical(query).decode()],
+            "OpenStdin": anchor['format'] == 'ccc-root-authority-v2', "StdinOnce": False, "Tty": False,
             "HostConfig": {"ReadonlyRootfs": True, "NetworkMode": "none", "PidMode": "host",
                            "CgroupnsMode": "host",
                            "IpcMode": "none", "Runtime": "runc", "CapDrop": ["ALL"],
@@ -165,6 +240,9 @@ def authenticate_self(docker, anchor, processes):
     if (config.get("Entrypoint") != ENTRYPOINT or config.get("Cmd") not in ([], None)
             or config.get("User") != "0:0" or config.get("WorkingDir") != "/opt/ccc"):
         raise Refused("unmeasured authority entrypoint")
+    if (bool(config.get('OpenStdin')) != (anchor['format'] == 'ccc-root-authority-v2')
+            or config.get('Tty') or config.get('StdinOnce') or current.get('ExecIDs')):
+        raise Refused('unmeasured authority input or exec session')
     if any(not env.startswith("CCC_ATTESTATION_QUERY=") for env in config.get("Env") or []):
         raise Refused("unmeasured authority environment")
     expected = authority_config(anchor, "unused", {})["HostConfig"]
@@ -219,7 +297,7 @@ def _profile(value):
                                value["network"], value["user"],
                                tuple(tuple(x) for x in value["generated_sources"]),
                                tuple(value["unix_sockets"]), tuple(value["state_files"]),
-                               value["pid_namespace"])
+                               value["pid_namespace"], value["control_stdio"])
     if canonical(profile.value()) != canonical(value):
         raise Refused("unsupported profile format/fields")
     return profile
@@ -238,6 +316,19 @@ def _fact(value):
                           value["executable_sha256"])
 
 
+def _streams(logs):
+    streams = {1: bytearray(), 2: bytearray()}
+    while logs:
+        if len(logs) < 8:
+            raise Refused('truncated authenticated authority output')
+        stream, length = logs[0], int.from_bytes(logs[4:8], 'big')
+        if stream not in streams or len(logs) < 8 + length:
+            raise Refused('invalid authority output framing')
+        streams[stream].extend(logs[8:8 + length])
+        logs = logs[8 + length:]
+    return streams
+
+
 def main():
     anchor = read_anchor(ANCHOR)
     docker, processes = RootDocker(), LinuxProcesses()
@@ -245,6 +336,21 @@ def main():
     query = json.loads(os.environ["CCC_ATTESTATION_QUERY"])
     verifier = TrustedLaunchVerifier(docker, processes)
     operation = query.pop("operation", None)
+    if operation == 'managed_restart':
+        from ccc_server.execution_restart import run_query, MAX_PACKET
+        if (set(query) != {'stdin_bytes', 'stdin_sha256'} or type(query['stdin_bytes']) is not int
+                or not 0 < query['stdin_bytes'] <= MAX_PACKET):
+            raise Refused('invalid fixed managed packet descriptor')
+        raw = sys.stdin.buffer.read(query['stdin_bytes'])
+        if len(raw) != query['stdin_bytes'] or digest(raw) != query['stdin_sha256']:
+            raise Refused('changed or incomplete managed stdin packet')
+        result = run_query(json.loads(raw), anchor=anchor, authority=authority, docker=docker,
+            processes=processes, authenticate=lambda: authenticate_self(docker, anchor, processes),
+            read_anchor=lambda: read_anchor(ANCHOR))
+        if read_anchor(ANCHOR) != anchor or authenticate_self(docker, anchor, processes) != authority:
+            raise Refused('authority changed after managed transition')
+        print(canonical({'authority': vars(authority), 'managed': result}).decode())
+        return
     if operation == "observe" and set(query) == {"container_id", "profile", "expected_identity"}:
         identity = ProcessIdentity(**query["expected_identity"]) if query["expected_identity"] is not None else None
         facts = {"observed": verifier.observe(query["container_id"], _profile(query["profile"]), identity)}
@@ -289,12 +395,23 @@ class AttestationClient:
 
     def _request(self, query):
         anchor = read_anchor(self.anchor_path)
+        managed = query.get('operation') == 'managed_restart'
+        packet = None
+        if managed:
+            from ccc_server.execution_restart import MAX_PACKET
+            if anchor['format'] != 'ccc-root-authority-v2':
+                raise Refused('root has not accepted a managed runtime proof')
+            packet = canonical({key: value for key, value in query.items() if key != 'operation'})
+            if not 0 < len(packet) <= MAX_PACKET:
+                raise Refused('managed packet exceeds bound')
+            query = {'operation': 'managed_restart', 'stdin_bytes': len(packet), 'stdin_sha256': digest(packet)}
         docker = RootDocker()
         artifact = docker.measure(anchor["image_id"])
         if artifact.executed_build_sha256 != anchor["executed_build_sha256"]:
             raise Refused("pinned authority rootfs mismatch")
         config = authority_config(anchor, self.anchor_path, query)
         ident = docker.request("POST", "/containers/create", config)["Id"]
+        input_connection = None
         try:
             actual = docker.inspect_container(ident)
             if actual["Image"] != anchor["image_id"]:
@@ -303,27 +420,33 @@ class AttestationClient:
                 raise Refused("authority launch profile differs from root anchor")
             docker.verify_runtime_etc(actual, artifact)
             docker.request("POST", "/containers/" + ident + "/start")
-            result = docker.request("POST", "/containers/" + ident + "/wait?condition=not-running")
+            if packet is not None:
+                input_connection = docker.input(ident, packet)
+            # A managed operation includes multiple full rootfs observations,
+            # two freeze snapshots and replacement reconciliation. A short
+            # single-RPC timeout must not tear down its authority midway.
+            result = docker.request("POST", "/containers/" + ident + "/wait?condition=not-running",
+                                    timeout=300 if managed else 45)
             logs = docker.request("GET", "/containers/" + ident + "/logs?stdout=1&stderr=1", raw=True)
-            streams = {1: bytearray(), 2: bytearray()}
-            while logs:
-                if len(logs) < 8:
-                    raise Refused("truncated authenticated authority output")
-                stream, length = logs[0], int.from_bytes(logs[4:8], "big")
-                if stream not in streams or len(logs) < 8 + length:
-                    raise Refused("invalid authority output framing")
-                streams[stream].extend(logs[8:8 + length])
-                logs = logs[8 + length:]
+            streams = _streams(logs)
             if result.get("StatusCode") != 0:
                 raise Refused("immutable authority refused: " + streams[2].decode(errors="replace")[-600:])
             value = json.loads(streams[1])
             if read_anchor(self.anchor_path) != anchor or value["authority"]["container_id"] != ident:
                 raise Refused("authority anchor/launch mismatch")
+            if query.get('operation') == 'managed_restart':
+                outcome = value.get('managed')
+                if (not isinstance(outcome, dict) or outcome.get('ok') is not True
+                        or outcome.get('manifest_sha256') != anchor.get('managed_acceptance', {}).get('manifest_sha256')):
+                    raise Refused('missing authenticated managed transition result')
+                return outcome
             facts = {r: _fact(f) for r, f in value["facts"].items()}
             # No caller-provided receipt reaches this conversion: only stdout
             # attached to the exact image launch just created by root Docker.
             return facts
         finally:
+            if input_connection is not None:
+                input_connection.close()
             # Exact disposable authority only; never signal an observed target.
             docker.request("DELETE", "/containers/" + ident + "?force=1")
 
@@ -334,6 +457,12 @@ class AttestationClient:
         if set(facts) != {"prepared"} or facts["prepared"].image_id != image_id or facts["prepared"].executed_build_sha256 != executed_build_sha256:
             raise Refused("authenticated prepared launch differs from request")
         return facts["prepared"]
+
+    def managed_restart(self, query):
+        """Data-only launcher; acceptance and all decisions live in root image."""
+        if not isinstance(query, dict) or 'operation' in query:
+            raise Refused('invalid managed restart request')
+        return self._request(dict(query, operation='managed_restart'))
 
     def observe(self, container_id, profile, expected_identity=None):
         facts = self._request({"operation": "observe", "container_id": container_id,
