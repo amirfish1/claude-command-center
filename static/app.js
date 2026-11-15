@@ -57334,7 +57334,7 @@
     const choices = _workersTicketChoices(item, card);
     const buttons = choices.map((choice, index) => '<button type="button" class="workers-block-choice" data-workers-choice="' + index + '" data-workers-ref="' + escapeAttr(ref) + '" title="' + escapeAttr('Send answer: ' + choice.reply) + '">' + escapeHtml(choice.label) + '</button>').join('');
     const review = context.owner ? '<button type="button" class="workers-block-choice" data-workers-review="' + escapeAttr(ref) + '">Answer…</button>' : '';
-    return '<div class="workers-ticket-context"' + (_workersTicketSessions.has(ref) ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '') + '>'
+    return '<div class="workers-ticket-context" data-workers-ticket-row="' + escapeAttr(ref) + '">'
       + '<div class="workers-ticket-update" title="' + escapeAttr(context.full || context.text) + '">' + category + escapeHtml(context.text) + '</div>'
       + (buttons || review ? '<div class="workers-block-choices">' + buttons + review + '</div>' : '') + '</div>';
   }
@@ -57448,14 +57448,15 @@
       const briefTitle = brief && row.summary ? '\n\n' + row.summary : '';
       const expanded = _workersTicketExpanded.has(ref);
       const singleSession = _workersSingleTicketSession(sessions);
-      // The name always opens the session; the count button discloses the rest.
+      // Open the session when known, otherwise the ticket's full context.
       const openSession = _workersTicketOpenSession(item, sessions);
       const titleHtml = openSession
         ? '<button type="button" class="workers-ticket-title" data-workers-ticket-open="' + escapeAttr(openSession)
           + '" aria-label="' + escapeAttr('Open session: ' + title) + '">' + escapeHtml(title) + '</button>'
-        : escapeHtml(title);
+        : '<button type="button" class="workers-ticket-title" data-uxq-recent-ref="' + escapeAttr(ref)
+          + '" aria-label="' + escapeAttr('Open ' + ref + ' details: ' + title) + '">' + escapeHtml(title) + '</button>';
       const ticketButton = '<div class="fq-recent-row' + (brief ? ' is-brief' : ' is-detailed') + '"'
-        + (sessions ? ' data-workers-ticket-row="' + escapeAttr(ref) + '"' : '')
+        + ' data-workers-ticket-row="' + escapeAttr(ref) + '"'
         + (brief ? ' title="' + escapeAttr(state + ' · ' + _uxqRelTime(row.at) + briefTitle) + '"' : '')
         + '>'
         + '<span class="fq-recent-title"><button type="button" class="fq-recent-ref workers-ticket-link" data-uxq-recent-ref="' + escapeAttr(ref) + '" aria-label="Open ' + escapeAttr(item._sessionOnly ? 'session' : ref + ' details') + '">' + escapeHtml(item._sessionOnly ? 'Session' : ref) + '</button> '
@@ -57535,6 +57536,13 @@
           if (singleSession) { selectConversation(singleSession); return; }
           const entry = toggle.closest('.workers-ticket-entry');
           const body = entry.querySelector('.workers-ticket-session-body');
+          if (!body) {
+            const item = _uxqItemForRef(ref) || _workersFallbackTickets.find(ticket => _uxqItemRef(ticket) === ref);
+            const sid = _workersTicketOpenSession(item, _workersTicketSessions.get(ref));
+            if (sid) selectConversation(sid);
+            else _uxqOpenItemDetail(ref);
+            return;
+          }
           const expanded = body.hidden;
           entry.querySelectorAll('[data-workers-ticket-toggle]').forEach(button => button.setAttribute('aria-expanded', String(expanded)));
           body.hidden = !expanded;
