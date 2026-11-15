@@ -9,7 +9,32 @@ Short, copy-pasteable checklist for cutting a new version. Not a policy doc — 
 ./scripts/cut-release.sh X.Y.Z --dry-run            # print every step, change nothing (do this first)
 ./scripts/cut-release.sh X.Y.Z --notes-file notes.md  # hand-written release notes (else uses the CHANGELOG section)
 ./scripts/cut-release.sh X.Y.Z --skip-dmg           # source/brew only (no notarized DMG / Sparkle update)
+./scripts/cut-release.sh --dmg-only vX.Y.Z --dry-run # preview a backfill of an existing release
+./scripts/cut-release.sh --dmg-only vX.Y.Z          # on the signing Mac: assets and appcast only
 ```
+
+Source-only cuts record a durable obligation in the release log directory's
+`dmg-pending` JSON file before attempting Homebrew publication. The daily job
+retries these obligations before its normal waiver checks. Set
+`CCC_RELEASE_SIGNING_HOST` to an SSH alias using the existing forced-command
+`scripts/release-trigger.sh` key on the signing Mac. The Mac's release LaunchAgent
+must use the updated checkout. No signing keys or credentials are copied.
+`CCC_RELEASE_LOG_DIR` optionally overrides the log/state directory.
+
+The forced command accepts `backfill vX.Y.Z` (or an additional 32-character
+hexadecimal request token) and forwards it through the LaunchAgent so the login keychain remains
+available. Only a matching completion receipt clears a pending tag; unrelated
+release verdicts cannot complete it. After 48 hours a deduplicated CCC ticket
+records the outstanding tag. `release-daily.sh --dry-run` lists pending work
+without SSH, publishing, or modifying pending state.
+
+Backfills keep a detached tag worktree under `dmg-builds/` in the log directory.
+Do not remove this directory during signing or recovery. Existing versioned
+assets are immutable: retries download and sign those bytes instead of rebuilding
+them. Both assets are downloaded and verified before a separate checkout publishes
+only the matching appcast item onto current remote main. An old backfill is
+inserted behind newer versions, preserving the latest update. Failed uploads or
+pushes remain retryable; a completed retry makes no new release or version bump.
 
 The source test gate runs in a temporary checkout of the current commit, so
 parallel edits cannot change source underneath imported Python functions.

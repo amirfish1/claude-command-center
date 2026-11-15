@@ -28,6 +28,12 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Backfills never roll versions, create releases or change the caller's checkout.
+if [ "${1:-}" = "--dmg-only" ]; then
+  shift
+  exec python3 "$REPO_ROOT/scripts/release_backfill.py" publish "$@"
+fi
+
 VERSION=""
 NOTES_FILE=""
 DRY_RUN=0
@@ -224,6 +230,11 @@ else
     awk "/^## \[${VERSION}\]/{f=1;next} /^## \[/{f=0} f" CHANGELOG.md > /tmp/ccc-relnotes.md
     gh release create "v${VERSION}" --title "v${VERSION}" --notes-file /tmp/ccc-relnotes.md
   fi
+fi
+
+# Record the obligation before Homebrew or sibling release steps can fail.
+if [ "$SKIP_DMG" = 1 ] && [ "$DRY_RUN" = 0 ]; then
+  python3 "$REPO_ROOT/scripts/release_backfill.py" enqueue "v${VERSION}"
 fi
 
 # ── 6. DMG: build, sign, notarize, appcast ──────────────────────────────────

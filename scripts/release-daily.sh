@@ -24,28 +24,57 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+if [ "${CCC_RELEASE_DAILY_LOCKED:-}" != 1 ]; then
+  exec python3 "$REPO_ROOT/scripts/release_backfill.py" daily "$@"
+fi
 # Also accepts the flag via SSH_ORIGINAL_COMMAND, for a forced-command ssh key.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
 # A mode file lets release-trigger.sh pass --dry-run through launchd (consumed once).
 MODE_FILE="${CCC_RELEASE_MODE_FILE:-$HOME/.claude/command-center/release-daily.mode}"
+MODE="$(cat "$MODE_FILE" 2>/dev/null || true)"
 DRY=0
-{ [ "${1:-}" = "--dry-run" ] || [ "${SSH_ORIGINAL_COMMAND:-}" = "--dry-run" ] || [ "$(cat "$MODE_FILE" 2>/dev/null)" = "--dry-run" ]; } && DRY=1
-rm -f "$MODE_FILE"
+{ [ "${1:-}" = "--dry-run" ] || [ "${SSH_ORIGINAL_COMMAND:-}" = "--dry-run" ] || [ "$MODE" = "--dry-run" ]; } && DRY=1
 MIN="${CCC_RELEASE_MIN_ENTRIES:-3}"
 EXTRA_REPOS="${CCC_RELEASE_REPOS:-$HOME/Apps/watchtower}"
 if [ "$(uname -s)" = "Darwin" ]; then LOG_DIR="$HOME/Library/Logs/ccc-release"; else LOG_DIR="$HOME/.local/state/ccc-release"; fi
+LOG_DIR="${CCC_RELEASE_LOG_DIR:-$LOG_DIR}"
+export CCC_RELEASE_LOG_DIR="$LOG_DIR"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/$(date +%Y-%m-%d).log"
 say() { echo "$(date '+%H:%M:%S') $*" | tee -a "$LOG"; }
 waive() { say "WAIVED: $*"; exit 0; }
 
-# Hosts that cannot sign/notarize (Linux) cut a source+brew release without a DMG;
-# the next run on a signing Mac does not backfill it, so run cut-release.sh there.
+# Hosts without signing support cut source releases and queue signed Mac assets.
 CUT_FLAGS="${CCC_RELEASE_CUT_FLAGS:-}"
 if [ -z "${CCC_RELEASE_CUT_FLAGS+x}" ] && [ "$(uname -s)" != "Darwin" ]; then CUT_FLAGS="--skip-dmg"; fi
-LOCK="${TMPDIR:-/tmp}/ccc-release-daily.lock"
-mkdir "$LOCK" 2>/dev/null || waive "another release run holds $LOCK"
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
+# A remote trigger requests one existing tag, never an unrelated new release.
+if [[ "$MODE" = backfill* ]]; then
+  if [[ "$MODE" =~ ^backfill\ (v[0-9]+\.[0-9]+\.[0-9]+)\ ([a-f0-9]{32})$ ]]; then
+    backfill_tag="${BASH_REMATCH[1]}"; backfill_token="${BASH_REMATCH[2]}"
+    if [ "$DRY" = 1 ]; then
+      exec bash "$REPO_ROOT/scripts/cut-release.sh" --dmg-only "$backfill_tag" --dry-run
+    fi
+    rm -f "$MODE_FILE"
+    if bash "$REPO_ROOT/scripts/cut-release.sh" --dmg-only "$backfill_tag"; then
+      say "BACKFILL-OK $backfill_tag $backfill_token"
+      exit 0
+    fi
+    say "BACKFILL-FAILED $backfill_tag $backfill_token"
+  else
+    say "FAILED: invalid backfill mode"
+  fi
+  exit 1
+fi
+[ "$DRY" = 1 ] || rm -f "$MODE_FILE"
+
+# Run before every waive gate, including dirty-tree and age waivers. Backfill
+# builds/publication use isolated worktrees and do not consume pending changes.
+backfill_args=()
+[ "$DRY" = 0 ] || backfill_args+=(--dry-run)
+python3 "$REPO_ROOT/scripts/release_backfill.py" pending "${backfill_args[@]}" || {
+  say "FAILED: pending DMG backfill state could not be processed"; exit 1;
+}
 
 STREAK_FILE="$LOG_DIR/waive-streak"
 WARNINGS=""

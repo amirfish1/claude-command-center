@@ -1,7 +1,9 @@
+import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 
@@ -66,6 +68,7 @@ def _run_release_with_formula_outcome(*, push_status, published_formula, test_st
 
         script = repo / "scripts" / "cut-release.sh"
         shutil.copy2(ROOT / "scripts" / "cut-release.sh", script)
+        shutil.copy2(ROOT / "scripts" / "release_backfill.py", repo / "scripts" / "release_backfill.py")
         (repo / "scripts" / "test-release-source.sh").write_text(
             '#!/usr/bin/env bash\nexit "$FAKE_TEST_STATUS"\n', encoding="utf-8",
         )
@@ -108,7 +111,7 @@ def _run_release_with_formula_outcome(*, push_status, published_formula, test_st
         )
         executable("gh", "#!/usr/bin/env bash\nexit 0\n")
         executable("curl", "#!/usr/bin/env bash\nprintf 'release fixture\\n'\n")
-        executable("python3", '#!/usr/bin/env bash\nif [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then exit "$FAKE_TEST_STATUS"; fi\nexit 0\n')
+        executable("python3", '#!/usr/bin/env bash\nif [[ "$1" = */release_backfill.py ]]; then exec "$FAKE_REAL_PYTHON" "$@"; fi\nif [ "$1" = "-m" ] && [ "$2" = "pytest" ]; then exit "$FAKE_TEST_STATUS"; fi\nexit 0\n')
 
         env = os.environ | {
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -117,8 +120,10 @@ def _run_release_with_formula_outcome(*, push_status, published_formula, test_st
             "FAKE_BREW_PUSH_STATUS": str(push_status),
             "FAKE_PUBLISHED_FORMULA": str(published),
             "FAKE_TEST_STATUS": str(test_status),
+            "FAKE_REAL_PYTHON": sys.executable,
+            "CCC_RELEASE_LOG_DIR": str(workspace / "release-state"),
         }
-        return subprocess.run(
+        result = subprocess.run(
             [str(script), "9.9.9", "--skip-dmg"],
             cwd=repo,
             env=env,
@@ -126,6 +131,16 @@ def _run_release_with_formula_outcome(*, push_status, published_formula, test_st
             capture_output=True,
             check=False,
         )
+        pending = workspace / "release-state/dmg-pending"
+        result.pending_dmgs = json.loads(pending.read_text()) if pending.exists() else {}
+        return result
+
+
+def test_skip_dmg_records_obligation_before_later_release_steps():
+    result = _run_release_with_formula_outcome(push_status=1, published_formula="")
+    assert result.returncode != 0
+    assert "v9.9.9" in result.pending_dmgs
+    assert "release_backfill.py" not in result.stderr
 
 
 def test_homebrew_push_rejection_aborts_before_release_success_banner():
