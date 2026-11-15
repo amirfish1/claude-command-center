@@ -73,7 +73,7 @@ test('the rendered desktop outcome includes the loading message without a footer
   assert.doesNotMatch(html, /conv-ready-close|conv-quick-action/);
 });
 
-test('a standalone phone lane has a parent button targeting the visible continuation', () => {
+test('a standalone lane has parent navigation on desktop and phone', () => {
   const start = app.indexOf('      const waParentHtml =');
   const end = app.indexOf('      const waHtml =', start);
   for (const standaloneChild of [false, true]) {
@@ -87,4 +87,8 @@ test('a standalone phone lane has a parent button targeting the visible continua
       assert.match(html, />Open parent<\/button>/);
     }
   }
+  const desktop = app.slice(app.indexOf("+ '<span class=\"conv-meta-col\">'"),
+    app.indexOf('+ earlierDetailsHtml', app.indexOf("+ '<span class=\"conv-meta-col\">'")));
+  assert.match(desktop, /\+ waParentHtml/);
+  assert.match(app, /'<div class="wa-row-footer">' \+ sessionIdChipHtml \+ waParentHtml/);
 });

@@ -44160,6 +44160,9 @@
             // occupy a column together; display:contents makes that wrapper
             // invisible to every other view's flex layout.
             + '<span class="conv-meta-col">'
+            // Flat child results have no parent row beside them. Keep the
+            // same navigation visible on desktop as in the phone footer.
+            + waParentHtml
             + earlierDetailsHtml
             + subagentClusterDisclosureHtml
             + orchChildBadgeHtml
