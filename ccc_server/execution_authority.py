@@ -124,7 +124,7 @@ def authority_config(anchor, anchor_source, query):
             "HostConfig": {"ReadonlyRootfs": True, "NetworkMode": "none", "PidMode": "host",
                            "IpcMode": "none", "Runtime": "runc", "CapDrop": ["ALL"],
                            # Read-only /proc executable access to another uid.
-                           "CapAdd": ["SYS_PTRACE"], "SecurityOpt": ["no-new-privileges"],
+                           "CapAdd": ["SYS_PTRACE", "KILL"], "SecurityOpt": ["no-new-privileges"],
                            "Mounts": [image_etc_mount(anchor["image_id"]),
                                       {"Type": "bind", "Source": SOCKET, "Target": SOCKET, "ReadOnly": True},
                                       {"Type": "bind", "Source": str(anchor_source), "Target": ANCHOR, "ReadOnly": True}]}}
@@ -134,6 +134,8 @@ def authority_profile_sha256(container):
     """Root-measured authority settings; request bytes are data, never code."""
     config = dict(container["Config"])
     config.pop("Hostname", None)
+    if len(config.get("Env") or []) != 1 or not config["Env"][0].startswith("CCC_ATTESTATION_QUERY="):
+        raise Refused("authority environment is not the single data-only request")
     config["Env"] = ["CCC_ATTESTATION_QUERY=<request-data>"]
     return digest(canonical({"format": "ccc-authority-profile-v1", "config": config,
                              "host_config": container["HostConfig"],
@@ -168,7 +170,7 @@ def authenticate_self(docker, anchor, processes):
     for key in ("ReadonlyRootfs", "NetworkMode", "PidMode", "IpcMode", "Runtime"):
         if host.get(key) != expected[key]:
             raise Refused("unmeasured authority execution profile")
-    if set(host.get("CapDrop") or []) != {"ALL"} or set(host.get("CapAdd") or []) != {"SYS_PTRACE"}:
+    if set(host.get("CapDrop") or []) != {"ALL"} or set(host.get("CapAdd") or []) != {"SYS_PTRACE", "KILL"}:
         raise Refused("unmeasured authority capabilities")
     if set(host.get("SecurityOpt") or []) not in ({"no-new-privileges"}, {"no-new-privileges=true"}):
         raise Refused("authority privileges are not fixed")

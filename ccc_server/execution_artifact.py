@@ -464,7 +464,8 @@ class ExecutionProfile:
                 "unix_sockets": list(self.unix_sockets),
                 "state_files": list(self.state_files),
                 "configuration_policy": "image-or-public-environment-only-v1",
-                "kernel_policy": "deny-exec-ptrace-memfd-v1",
+                "kernel_policy": "deny-exec-ptrace-memfd-namespaces-v2",
+                "native_import_policy": "stdlib-extensions-no-ctypes-tests-v1",
                 "data_mounts": sorted(self.data_mounts), "commands": list(self.commands),
                 "network": self.network, "user": self.user,
                 "import_policy": "isolated-source-audit-v1", "readonly_rootfs": True,
@@ -476,7 +477,7 @@ class ExecutionProfile:
                 "temporary_filesystem": "readonly-root-no-tmpfs",
                 "automatic_files_readonly": True,
                 "etc_snapshot": "readonly-image-subtree-v1",
-                "entry_admission": "sigstop-before-application-root-release-only",
+                "entry_admission": "guardian-child-stop-root-pidfd-release-v1",
                 "inherited_descriptors": "docker-stdio-only"}
 
     @property
@@ -505,6 +506,8 @@ class ProcessIdentity:
     start_ticks: int
     boot_id: str
     started_at: str
+    launcher_pid: int = 0
+    launcher_start_ticks: int = 0
 
 
 _VERIFIED_FACT = object()
@@ -537,6 +540,10 @@ def _verified_launch(identity, image_id, artifact_sha, profile_sha, executable_s
 
 
 class LinuxProcesses:
+    def environment(self, identity):
+        values = Path(f"/proc/{identity.pid}/environ").read_bytes().split(b"\0")
+        return [value.decode("utf-8") for value in values if value]
+
     def security(self, identity):
         return dict(line.split(":", 1) for line in Path(f"/proc/{identity.pid}/status").read_text().splitlines() if ":" in line)
 
@@ -556,14 +563,33 @@ class LinuxProcesses:
         return text[text.rfind(")") + 2:].split()[0] in ("T", "t")
 
     def identity(self, container):
-        pid = container["State"]["Pid"]
-        if type(pid) is not int or pid <= 0:
+        launcher = container["State"]["Pid"]
+        if type(launcher) is not int or launcher <= 0:
             raise Refused("no running process identity")
+        parent_stat = Path(f"/proc/{launcher}/stat").read_text()
+        parent_fields = parent_stat[parent_stat.rfind(")") + 2:].split()
+        pid = launcher
+        if container["Config"].get("Entrypoint", [])[-1:] == ["/opt/ccc/ccc_server/execution_guard.py"]:
+            children = Path(f"/proc/{launcher}/task/{launcher}/children").read_text().split()
+            if len(children) != 1:
+                raise Refused("guard application child not ready or ambiguous")
+            pid = int(children[0])
         text = Path(f"/proc/{pid}/stat").read_text()
         fields = text[text.rfind(")") + 2:].split()
         return ProcessIdentity(container["Id"], pid, int(fields[19]),
                                Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
-                               container["State"]["StartedAt"])
+                               container["State"]["StartedAt"], launcher, int(parent_fields[19]))
+
+    def release(self, identity):
+        import signal
+        descriptor = os.pidfd_open(identity.pid)
+        try:
+            text = Path(f"/proc/{identity.pid}/stat").read_text()
+            if int(text[text.rfind(")") + 2:].split()[19]) != identity.start_ticks:
+                raise Refused("application PID was reused before release")
+            signal.pidfd_send_signal(descriptor, signal.SIGCONT)
+        finally:
+            os.close(descriptor)
 
     def executable(self, identity):
         return digest(Path(f"/proc/{identity.pid}/exe").read_bytes())
@@ -650,7 +676,7 @@ def verify_container(container, profile, processes):
     return identity
 
 
-def measured_profile_sha256(container, profile):
+def measured_profile_sha256(container, profile, process_environment=None):
     """Bind ALL actual Docker settings, including defaults we did not request.
 
     Only the generated hostname (already covered by exact launch identity) and
@@ -661,7 +687,29 @@ def measured_profile_sha256(container, profile):
     config.pop("Hostname", None)
     config["Env"] = sorted(key + "=<excluded-credential-value>" if key.startswith("CCC_CREDENTIAL_") else value
                            for value in config.get("Env") or [] for key in [value.partition("=")[0]])
+    actual = {}
+    for value in process_environment if process_environment is not None else container["Config"].get("Env") or []:
+        key, sep, val = value.partition("=")
+        if not sep or key in actual:
+            raise Refused("invalid kernel environment snapshot")
+        actual[key] = val
+    requested = dict(profile.environment)
+    for key, value in requested.items():
+        if actual.get(key) != value:
+            raise Refused("kernel environment differs from requested configuration")
+    if any(key not in requested and key not in {"PATH", "HOME", "HOSTNAME"}
+           and not key.startswith("CCC_CREDENTIAL_") for key in actual):
+        raise Refused("unknown implicit runtime environment")
+    if actual.get("HOME", "").startswith(_DATA_ROOTS):
+        raise Refused("kernel supplied mutable HOME configuration")
+    if "HOSTNAME" in actual and "HOSTNAME" not in requested:
+        if actual["HOSTNAME"] != container["Config"].get("Hostname"):
+            raise Refused("unknown generated hostname environment")
+        actual["HOSTNAME"] = "<launch-identity>"
+    actual = {key: "<excluded-credential-value>" if key.startswith("CCC_CREDENTIAL_") else value
+              for key, value in actual.items()}
     return digest(canonical({"policy": profile.value(), "config": config,
+                             "process_environment": actual,
                              "host_config": container["HostConfig"],
                              "engine_runtime": {key: container.get(key) for key in
                                                 ("Platform", "Driver", "AppArmorProfile", "ProcessLabel", "MountLabel")},
@@ -700,11 +748,17 @@ class TrustedLaunchVerifier:
             deadline = time.monotonic() + 10
             while time.monotonic() < deadline:
                 current = self.docker.inspect_container(ident)
-                identity = self.processes.identity(current)
-                if self.processes.stopped(identity):
-                    return self.observe(ident, profile, identity)
                 if not current["State"].get("Running"):
                     raise Refused("immutable entry guard did not reach admission stop")
+                try:
+                    identity = self.processes.identity(current)
+                except Refused as exc:
+                    if str(exc) != "guard application child not ready or ambiguous":
+                        raise
+                    time.sleep(0.02)
+                    continue
+                if self.processes.stopped(identity):
+                    return self.observe(ident, profile, identity)
                 time.sleep(0.02)
             raise Refused("immutable entry guard readiness unknown")
         except BaseException:
@@ -720,7 +774,7 @@ class TrustedLaunchVerifier:
         actual = self.observe(fact.identity.container_id, profile, fact.identity)
         if actual != fact or not self.processes.stopped(fact.identity):
             raise Refused("prepared application identity/admission stop changed")
-        self.docker.request("POST", "/containers/" + fact.identity.container_id + "/kill?signal=CONT")
+        self.processes.release(fact.identity)
 
     def observe(self, container_id, profile, expected_identity=None):
         if not re.fullmatch(r"[0-9a-f]{64}", container_id):
@@ -769,7 +823,7 @@ class TrustedLaunchVerifier:
         if expected_identity is not None and identity != expected_identity:
             raise Refused("PID/start/launch identity mismatch")
         return _verified_launch(identity, artifact.image_id, artifact.executed_build_sha256,
-                              measured_profile_sha256(before, profile), executable["sha256"])
+                              measured_profile_sha256(before, profile, self.processes.environment(identity)), executable["sha256"])
 
     def verify_transition(self, refs, profiles, tested_pair, expected_identities):
         """Re-observe all three roles at BOTH caller-controlled barrier checks.

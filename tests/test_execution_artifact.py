@@ -13,12 +13,13 @@ from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import time
 
 import pytest
 
 from ccc_server.execution_artifact import (
     Artifact, ExecutionProfile, ProcessIdentity, Refused, TrustedLaunchVerifier, VerifiedLaunch, build_artifact,
-    canonical, digest, manifest_from_tar, manifest_from_saved_image, measured_profile_sha256, verify_container,
+    canonical, digest, manifest_from_tar, manifest_from_saved_image, measured_profile_sha256, verify_container, LinuxProcesses,
 )
 from ccc_server.execution_authority import read_anchor
 
@@ -168,6 +169,9 @@ def fixture():
         def security(self, _):
             return {'NoNewPrivs': '1', 'Seccomp': '2', 'Seccomp_filters': '2'}
 
+        def environment(self, _):
+            return container['Config'].get('Env', [])
+
         mappings = [("/usr/local/bin/python3.12", "r-xp")]
 
         def executable_mappings(self, _):
@@ -312,6 +316,7 @@ def test_distinct_control_profile_and_ordered_upgrade_are_not_interchangeable():
         return value
 
     docker.inspect_container = actual
+    processes.environment = lambda i: actual(i.container_id)['Config'].get('Env', [])
     docker.measure = lambda image: replacement if image == replacement.image_id else artifact
     verifier = TrustedLaunchVerifier(docker, processes)
     refs = {role: value * 64 for role, value in zip(('worker', 'control', 'replacement'), 'bcd')}
@@ -386,16 +391,19 @@ def test_prepared_launch_stops_before_admission_and_release_rechecks_identity():
 
     docker.request = request
     processes.stopped = lambda _: True
+    releases = []
+    processes.release = releases.append
     fact = verifier.prepare_launch('explicit-test-name', artifact.image_id, artifact.executed_build_sha256, profile)
     assert any('name=ccc-execution-explicit-test-name' in endpoint for _, endpoint in requests)
     assert not any('signal=CONT' in endpoint for _, endpoint in requests)
     verifier.release(fact, profile)
-    assert requests[-1][1].endswith('signal=CONT')
+    assert releases == [fact.identity]
     processes.start += 1
     before = list(requests)
     with pytest.raises(Refused, match='PID/start'):
         verifier.release(fact, profile)
     assert requests == before
+    assert releases == [fact.identity]
 
 
 def test_native_profiles_and_missing_kernel_guard_refuse():
@@ -416,6 +424,8 @@ import importlib.util,subprocess,errno,os
 spec=importlib.util.spec_from_file_location('guard', {str(guard_path)!r})
 module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
 module.install_kernel_policy()
+import ssl,sqlite3,threading
+thread=threading.Thread(target=lambda:None);thread.start();thread.join()
 try:
     subprocess.run(['/bin/true'], check=True)
 except PermissionError as exc:
@@ -503,6 +513,7 @@ def test_unprovisioned_or_writable_authority_cannot_issue_facts(tmp_path):
     ("import marshal; marshal.loads(b'bad')", False),
     ("import ctypes", False),
     ("import subprocess; subprocess.run(['/bin/sh', '-c', 'true'])", False),
+    ("import os; os.environ['UNMEASURED_SETTING']='changed'", False),
 ])
 def test_real_python_guard_blocks_data_import_bytecode_and_subprocess(tmp_path, action, ok):
     # The test source root substitutes for a measured image; the data root is
@@ -620,3 +631,42 @@ def test_actual_etc_snapshot_must_match_immutable_source(wrong):
     else:
         with pytest.raises(Refused):
             Docker().verify_runtime_etc(container, artifact)
+
+
+def test_kernel_environment_defaults_are_bound_and_unknown_inputs_refuse():
+    container, _, profile, _, _ = fixture()
+    container['Config']['Hostname'] = 'generated-launch-name'
+    env = ['PATH=/usr/bin', 'HOME=/root', 'HOSTNAME=generated-launch-name']
+    first = measured_profile_sha256(container, profile, env)
+    changed = ['PATH=/bin', 'HOME=/root', 'HOSTNAME=generated-launch-name']
+    assert measured_profile_sha256(container, profile, changed) != first
+    with pytest.raises(Refused, match='unknown implicit'):
+        measured_profile_sha256(container, profile, [*env, 'UNMEASURED_LOADER=enabled'])
+    with pytest.raises(Refused, match='mutable HOME'):
+        measured_profile_sha256(container, profile, ['HOME=/state'])
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux pidfd admission boundary')
+def test_real_pidfd_release_refuses_wrong_start_then_releases_exact_child():
+    program = 'import os,signal;os.kill(os.getpid(),signal.SIGSTOP);print("released")'
+    child = subprocess.Popen([sys.executable, '-I', '-S', '-B', '-c', program], stdout=subprocess.PIPE, text=True)
+    processes = LinuxProcesses()
+    try:
+        stat = Path(f'/proc/{child.pid}/stat').read_text()
+        start = int(stat[stat.rfind(')') + 2:].split()[19])
+        identity = ProcessIdentity('b' * 64, child.pid, start, 'test-boot', 'test-start')
+        deadline = time.monotonic() + 3
+        while not processes.stopped(identity) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert processes.stopped(identity)
+        with pytest.raises(Refused, match='PID was reused'):
+            processes.release(ProcessIdentity('b' * 64, child.pid, start + 1, 'test-boot', 'test-start'))
+        assert processes.stopped(identity)
+        processes.release(identity)
+        output, _ = child.communicate(timeout=3)
+        assert child.returncode == 0
+        assert output.strip() == 'released'
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait()

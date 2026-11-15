@@ -10,6 +10,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import sys
@@ -30,11 +31,13 @@ def install_kernel_policy():
     """
     import ctypes
     architecture = os.uname().machine
-    policies = {"x86_64": (0xc000003e, (59, 322, 101, 311, 319)),
-                "aarch64": (0xc00000b7, (221, 281, 117, 271, 279))}
+    policies = {"x86_64": (0xc000003e, 56, (59, 322, 101, 311, 319, 165, 166, 272, 308, 155, 321,
+                                          428, 429, 430, 431, 432, 442)),
+                "aarch64": (0xc00000b7, 220, (221, 281, 117, 271, 279, 40, 39, 97, 268, 41, 280,
+                                              428, 429, 430, 431, 432, 442))}
     if architecture not in policies:
         raise RuntimeError("execution refused: unsupported kernel architecture")
-    arch, denied = policies[architecture]
+    arch, clone, denied = policies[architecture]
 
     class Instruction(ctypes.Structure):
         _fields_ = [("code", ctypes.c_ushort), ("jt", ctypes.c_ubyte),
@@ -45,6 +48,12 @@ def install_kernel_policy():
 
     instructions = [(0x20, 0, 0, 4), (0x15, 1, 0, arch), (0x06, 0, 0, 0x80000000),
                     (0x20, 0, 0, 0), (0x35, 0, 1, 0x40000000), (0x06, 0, 0, 0x50001)]
+    # No new mount/user/PID/etc namespaces. clone3 has pointer arguments BPF
+    # cannot inspect: return ENOSYS so libc safely falls back to plain clone.
+    instructions.extend([(0x15, 0, 1, 435), (0x06, 0, 0, 0x50026),
+                         (0x15, 0, 3, clone), (0x20, 0, 0, 16),
+                         (0x45, 0, 1, 0x7e020000), (0x06, 0, 0, 0x50001),
+                         (0x20, 0, 0, 0)])
     for syscall in denied:
         instructions.extend([(0x15, 0, 1, syscall), (0x06, 0, 0, 0x50001)])
     instructions.append((0x06, 0, 0, 0x7fff0000))
@@ -150,6 +159,8 @@ class SourceGuard:
                 raise RuntimeError("execution refused: subprocess environment drift")
         elif event == "os.exec":
             raise RuntimeError("execution refused: process identity replacement")
+        elif event in ("os.putenv", "os.unsetenv"):
+            raise RuntimeError("execution refused: runtime configuration mutation")
         elif event == "socket.connect":
             connection, address = args
             if connection.family == 1 and address not in self.unix_sockets:
@@ -183,7 +194,11 @@ class SourceGuard:
                 measured_filename(spec.origin)
                 if isinstance(spec.loader, importlib.machinery.SourceFileLoader):
                     spec.loader = SourceLoader(fullname, spec.origin)
-                elif not isinstance(spec.loader, importlib.machinery.ExtensionFileLoader):
+                elif isinstance(spec.loader, importlib.machinery.ExtensionFileLoader):
+                    if (not re.search(r"/lib/python[0-9.]+/lib-dynload/", spec.origin)
+                            or fullname.startswith(("_test", "_xx", "_ctypes"))):
+                        raise ImportError("unmeasurable native plugin/code-generation closure")
+                else:
                     raise ImportError("unmeasured bytecode/custom import loader")
                 return spec
 
@@ -217,6 +232,24 @@ def main():
     generated = [(filename, Path(measured_filename(source)).read_bytes())
                  for filename, source in profile.generated_sources]
     install_kernel_policy()
+    # Namespace PID 1 ignores an unhandled self-SIGSTOP. Keep an immutable
+    # guardian as PID 1 and run application admission in its one child. The
+    # root verifier binds both PID/start identities; both inherit the filter.
+    child = os.fork()
+    if child:
+        descriptor = os.pidfd_open(child)
+        try:
+            def forward(number, _frame):
+                try:
+                    signal.pidfd_send_signal(descriptor, number)
+                except ProcessLookupError:
+                    pass
+            for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+                signal.signal(number, forward)
+            _, status = os.waitpid(child, 0)
+            raise SystemExit(os.waitstatus_to_exitcode(status))
+        finally:
+            os.close(descriptor)
     guard = SourceGuard(profile.commands, generated, profile.unix_sockets, profile.state_files)
     guard.install()
     # Every launch begins behind this kernel admission stop. A root authority
