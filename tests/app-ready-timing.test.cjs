@@ -8,7 +8,7 @@ const start = source.indexOf("  var AGENT_KEY =");
 const end = source.indexOf('  // Freezes:', start);
 assert.ok(start > 0 && end > start);
 
-function harness({ hidden = false, brokenAgent = false } = {}) {
+function harness({ hidden = false, brokenAgent = false, waitFrom, parentOrigin } = {}) {
   const beacons = [], events = [];
   const nav = { startTime: 0, requestStart: 5.4, responseStart: 30.6,
     responseEnd: 50, domInteractive: 110, duration: 0, name: 'private-navigation' };
@@ -36,6 +36,11 @@ function harness({ hidden = false, brokenAgent = false } = {}) {
   };
   ctx.window = ctx;
   ctx.parent = ctx;
+  if (waitFrom !== undefined) {
+    // Framed by the dashboard, whose page began before this one.
+    ctx.frameElement = { hidden: false, dataset: { waitFrom } };
+    ctx.parent = { performance: { timeOrigin: parentOrigin }, postMessage() {} };
+  }
   ctx.dispatchEvent = event => events.push(event);
   vm.createContext(ctx);
   vm.runInContext(source.slice(start, end), ctx);
@@ -98,4 +103,35 @@ test('background loads remain excluded and timing resources are bounded', () => 
   assert.equal('duration' in timing.resources[0], false);
   assert.equal(timing.resources[0].server.app, 120);
   assert.equal(Object.keys(timing.resources[0].server).length, 1);
+});
+
+test('a link to an open app counts the dashboard page that loaded first', () => {
+  // The dashboard page was requested 300 ms before this app page began.
+  const { ctx, beacons } = harness({ waitFrom: '0', parentOrigin: 100000 - 300 });
+  assert.equal(ctx.frameElement.dataset.waitFrom, undefined, 'the lead is read once');
+  ctx.noteContent({ ms: 200, cached: false });
+  vm.runInContext("ready.agent = 'yes'; ready.agentAt = 700; sendReady();", ctx);
+  assert.equal(beacons[0].ms, 1000);
+  assert.equal(beacons[0].detail.shell_lead_ms, 300);
+  assert.equal(beacons[0].detail.agent_ms, 700, 'parts stay on the app page clock');
+  assert.equal(beacons[0].detail.content_ms, 200);
+});
+
+test('a tap in the rail counts from the tap, not from the dashboard page', () => {
+  // Dashboard open for 90 s; tapped 40 ms before this app page began.
+  const { ctx, beacons } = harness({ waitFrom: '90000', parentOrigin: 100000 - 90040 });
+  ctx.noteContent({ ms: 200, cached: false });
+  vm.runInContext("ready.agent = 'none'; sendReady();", ctx);
+  assert.equal(beacons[0].ms, 240);
+  assert.equal(beacons[0].detail.shell_lead_ms, 40);
+});
+
+test('no lead without a dashboard note, or when the note is implausible', () => {
+  for (const options of [{}, { waitFrom: '0', parentOrigin: 100000 - 600000 }, { waitFrom: 'x', parentOrigin: 99000 }]) {
+    const { ctx, beacons } = harness(options);
+    ctx.noteContent({ ms: 200, cached: false });
+    vm.runInContext("ready.agent = 'none'; sendReady();", ctx);
+    assert.equal(beacons[0].ms, 200);
+    assert.equal(beacons[0].detail.shell_lead_ms, 0);
+  }
 });

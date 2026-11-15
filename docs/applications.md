@@ -173,8 +173,13 @@ page's own saves under `data/` do not fire it.
 
 An app page is **fully ready** when its own content is drawn and, if it has an
 agent, the agent pane is showing the conversation. The budget is one second
-from the start of the page's navigation. `app-kit.js` measures every load and
-reports it, so a slow app shows up without anyone timing it by hand.
+from the moment someone asked for the app: the request for the dashboard page
+on a link to an open app (`/?ccc_app=<id>`), the tap in the rail, or the
+start of the page's own navigation when it is opened directly. `app-kit.js`
+measures every load and reports it, so a slow app shows up without anyone
+timing it by hand. Each sample's `shell_lead_ms` is the part spent before the
+app page itself began; `content_ms` and `agent_ms` stay on the app page's
+clock.
 
 - **Read it.** `ccc app speed` prints loads, typical, slow (p95) and worst
   times per app for the last 24 hours against the budget (`ccc app speed <id>`

@@ -1,0 +1,1 @@
+- App load times now count the whole wait. On a link to an open app the dashboard page loads first, and that time was left out, so `ccc app speed` read up to a few seconds faster than what someone actually waited. Each sample also records that lead as `shell_lead_ms`.

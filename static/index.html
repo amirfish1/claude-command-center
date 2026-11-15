@@ -202,6 +202,7 @@
       f.title = app.label || id;
       f.dataset.appUrl = u.pathname + u.search + u.hash;
       f.dataset.early = '1';
+      f.dataset.waitFrom = '0';  // the wait began with this page's request
       // Stand-in geometry until mobile-app-nav.js brings the real rules.
       f.style.cssText = window.matchMedia('(max-width: 1200px)').matches
         ? 'position:fixed;top:0;left:0;width:100%;height:calc(100% - 70px);border:0;z-index:900;background:var(--bg,#0f1115)'

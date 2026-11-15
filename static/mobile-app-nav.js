@@ -61,7 +61,7 @@
     mark();
     if (push) history.pushState({}, '', '/');
   }
-  function open(id, push) {
+  function open(id, push, pageLoad) {
     const app = apps.find(a => a.id === id), url = app && appURL(app);
     if (!app || !url) return false;
     setMenu(false);
@@ -80,6 +80,9 @@
     const target = url.pathname + url.search + url.hash;
     const kept = frame.dataset.appUrl === target;
     if (!kept) {
+      // When the wait for this app began, for its load time: the page request
+      // on a link to the app, this moment on a tap.
+      frame.dataset.waitFrom = pageLoad ? '0' : String(Math.round(performance.now()));
       // Replacing the child location keeps app switching to one history entry.
       try { frame.contentWindow.location.replace(target); } catch (_) { frame.src = target; }
       frame.dataset.appUrl = target;
@@ -97,11 +100,17 @@
     return true;
   }
   if (dashboard) window.cccOpenApp = id => open(id, true);
-  function restore() {
+  let restored = false;
+  function restore(e) {
+    // Until the page's own app has opened (the app list can arrive after the
+    // first try), a restore belongs to the page load; later ones are back/forward.
+    const pageLoad = !restored && !(e && e.type === 'popstate');
     const id = new URLSearchParams(location.search).get('ccc_app');
-    if (!id) { close(false, location.pathname === '/q2.html' ? 'queues' : 'sessions'); return; }
+    if (!id) { restored = true; close(false, location.pathname === '/q2.html' ? 'queues' : 'sessions'); return; }
+    const opened = open(id, false, pageLoad);
+    if (opened || !pageLoad) restored = true;
     // The early frame came from a saved app list: drop it if the app is gone.
-    if (!open(id, false) && frame && !active && frame.dataset.early) { frame.remove(); frame = undefined; }
+    if (!opened && frame && !active && frame.dataset.early) { frame.remove(); frame = undefined; }
   }
   function prewarm() {
     if (frame || active || document.hidden || mobile()) return;

@@ -160,6 +160,21 @@
   function hostFrame() { try { return window.frameElement; } catch (_) { return null; } }
   function parked() { var f = hostFrame(); return !!f && (f.hidden || f.dataset.parked === '1'); }
   if (parked()) ready.hidden = true;
+  // On a link to an open app the dashboard page loads first, and after a tap
+  // in the rail the frame takes a moment to start. The dashboard notes when
+  // the wait began (its own clock, in data-wait-from); the gap up to this
+  // page's start is part of what someone waited. Read once: a later reload
+  // inside the frame is a fresh load with no lead.
+  var shellLead = (function () {
+    try {
+      var f = hostFrame();
+      if (!f || f.dataset.waitFrom == null) return 0;
+      var from = Number(f.dataset.waitFrom);
+      delete f.dataset.waitFrom;
+      var lead = window.performance.timeOrigin - (window.parent.performance.timeOrigin + from);
+      return Number.isFinite(lead) && lead > 0 && lead < 60000 ? Math.round(lead) : 0;
+    } catch (_) { return 0; }
+  })();
   function noteContent(d) {
     if (ready.content != null) return;
     ready.content = d && typeof d.ms === 'number' ? d.ms : performance.now();
@@ -170,7 +185,9 @@
     if (ready.sent || thumb || ready.content == null || ready.agent === 'unknown') return;
     if (ready.agent === 'yes' && ready.agentAt == null) return;
     ready.sent = true;
-    var out = { app: APP, ms: Math.round(Math.max(ready.content, ready.agentAt || 0)), content_ms: Math.round(ready.content),
+    // ms is the whole wait; the parts below stay on this page's own clock.
+    var out = { app: APP, ms: Math.round(Math.max(ready.content, ready.agentAt || 0)) + shellLead, shell_lead_ms: shellLead,
+      content_ms: Math.round(ready.content),
       agent_ms: ready.agentAt == null ? null : Math.round(ready.agentAt), cached: ready.cached, framed: window.parent !== window,
       load_id: loadId, page_timing: timingSnapshot(window, ''),
       agent_start_ms: ready.agentStart == null ? null : Math.round(ready.agentStart),
