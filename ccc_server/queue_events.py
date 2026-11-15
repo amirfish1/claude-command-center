@@ -2252,9 +2252,11 @@ def _codex_queued_steer_transaction(
             delivery_kwargs = {"steer": True}
             if idempotency_key:
                 delivery_kwargs["idempotency_key"] = idempotency_key
-            result = _core._resume_session_codex_native_delivery(
-                session_id, text, **delivery_kwargs,
-            )
+            from ccc_server import codex_managed_recovery as recovery
+            with recovery.queued_claim(claim):
+                result = _core._resume_session_codex_native_delivery(
+                    session_id, text, **delivery_kwargs,
+                )
         except Exception:
             if claim is None:
                 raise
@@ -2360,6 +2362,9 @@ def _codex_wedge_gate(session_id):
     the daemon), or None to proceed -- including right after a restart.
     """
     from ccc_server import codex_thread_wedge
+    from ccc_server import codex_managed_recovery as recovery
+    if recovery.known_thread(session_id):
+        return None  # CCC never becomes lifecycle owner of a tracked daemon.
 
     def turn_active():
         lock = _core._CODEX_APP_SERVER_LOCK
@@ -2397,6 +2402,9 @@ def _codex_wedge_gate(session_id):
 def _codex_queued_item_already_landed(session_id, item):
     """True when an earlier timed-out turn/start of this queued message is
     already in the rollout (so re-sending would duplicate it), else None."""
+    from ccc_server import codex_managed_recovery as recovery
+    if recovery.known_thread(session_id):
+        return None  # Text equality cannot identify a managed input.
     try:
         from ccc_server import codex_turn_reconcile
         if not codex_turn_reconcile.already_delivered(session_id, str(item)):
@@ -2436,13 +2444,7 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
     item = claim_value.get("item")
     if item is None:
         return {"ok": True, "empty": True}
-    claim = {
-        "session_id": session_id,
-        "queue_name": "resume",
-        "index": 0,
-        "item": item,
-        "claim_sequence": int(claim_value.get("claim_sequence") or 0),
-    }
+    claim = dict(claim_value, session_id=session_id, queue_name="resume", index=0)
     if _codex_queued_item_already_landed(session_id, item):
         if not _core._commit_pending_input_claim(claim):
             return {"ok": False, "code": "queued_handoff_commit_failed"}
@@ -2476,9 +2478,11 @@ def _codex_queued_delivery_transaction(session_id, *, idempotency_key=None):
             )
             _core._CODEX_QUEUED_DELIVERY_CONTEXT.token_id = ack[1]
             try:
-                return _core._resume_session_codex_native_delivery(
-                    session_id, str(item), **kwargs,
-                )
+                from ccc_server import codex_managed_recovery as recovery
+                with recovery.queued_claim(claim):
+                    return _core._resume_session_codex_native_delivery(
+                        session_id, str(item), **kwargs,
+                    )
             finally:
                 _core._CODEX_QUEUED_DELIVERY_CONTEXT.token_id = previous_token
 

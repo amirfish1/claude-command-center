@@ -57,6 +57,10 @@ if not os.environ.get("CCC_ONCALL_STATE_DIR", "").strip():
     os.environ["CCC_ONCALL_STATE_DIR"] = tempfile.mkdtemp(prefix="ccc-test-oncall-")
 
 
+# Managed identity/recovery state must never read or write the live daemon's
+# metadata; tests exercise only synthetic sockets/process observations.
+os.environ.setdefault("CCC_CODEX_RUNTIME_DIR", tempfile.mkdtemp(prefix="ccc-test-codex-runtime-"))
+
 # The Codex restart fence (CCC-250) must never touch the live worker's.
 os.environ.setdefault(
     "CCC_CODEX_RESTART_FENCE",
@@ -71,6 +75,11 @@ def _reset_ccc_ttl_caches():
         reset = getattr(mod, "_reset_ttl_memo_caches", None)
         if reset:
             reset()
+        # Real RPC-handler tests advance this module-local traffic clock.
+        # A later liveness test may use a synthetic earlier wall clock.
+        codex = sys.modules.get("ccc_server.codex")
+        if codex is not None:
+            codex._CODEX_APP_SERVER_LAST_MSG_AT = 0.0
     _reset()
     yield
     _reset()

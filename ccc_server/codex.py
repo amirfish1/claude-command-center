@@ -1222,9 +1222,18 @@ def _websocket_recv_text(sock):
 
 def _connect_codex_managed_app_server(path):
     from ccc_server.codex_managed_websocket import connect
+    from ccc_server import codex_managed_recovery as recovery
+    recovery.compatible_writers()
+    before = recovery.socket_path_identity(path)
     sock = connect(path)
     try:
-        return _core._CodexAppServerTransport("managed-unix", sock=sock)
+        identity = recovery.observe_peer(sock, path)
+        if any(identity[k] != value for k, value in before.items()):
+            raise recovery.Refused("managed socket replaced during connect")
+        transport = _core._CodexAppServerTransport("managed-unix", sock=sock)
+        transport.managed_candidate_identity = identity
+        transport.managed_socket_path = str(path)
+        return transport
     except BaseException:
         sock.close()
         raise
@@ -2752,7 +2761,8 @@ def _codex_app_server_handle_notification(method, params):
         _codex_telemetry_note_notification(method, params, thread_id, turn_id)
     except Exception:
         pass
-    if delivered_user_text:
+    from ccc_server import codex_managed_recovery as recovery
+    if delivered_user_text and not recovery.tracked_on_transport(thread_id):
         # The app-server's userMessage item is the authoritative delivery ack.
         # Reconcile any durable copy left queued by an unconfirmed/phantom-owner
         # attempt; duplicate prompts remain valid because only one copy is
@@ -2806,6 +2816,10 @@ def _codex_app_server_handle_message(payload, source_transport=None):
             _core._CODEX_APP_SERVER_LOCK.notify_all()
             return
         if "id" in payload:
+            transport = source_transport or _core._CODEX_APP_SERVER_TRANSPORT
+            if transport is not None and transport.kind == "managed-unix":
+                from ccc_server import codex_managed_recovery as recovery
+                recovery.response(transport, payload["id"], payload)
             result = payload.get("result")
             if isinstance(result, dict):
                 thread = result.get("thread")
@@ -3146,6 +3160,8 @@ def _codex_app_server_reader(transport):
                 except json.JSONDecodeError:
                     continue
                 try:
+                    from ccc_server import codex_managed_recovery as recovery
+                    recovery.notification(transport, payload)
                     if codex_client_observe(payload, transport):
                         continue
                     _core._codex_app_server_handle_message(payload, source_transport=transport)
@@ -3156,6 +3172,9 @@ def _codex_app_server_reader(transport):
         exit_reason = f"error:{e!r}"
         raise
     finally:
+        if transport.kind == "managed-unix" and getattr(transport, "managed_identity", None):
+            from ccc_server import codex_managed_recovery as recovery
+            recovery.disconnected(transport)
         codex_client_disconnect(transport)
         _core._app_server_trace("reader-exit", reason=exit_reason,
                           child_pid=getattr(transport.proc, "pid", None))
@@ -3221,6 +3240,11 @@ def _codex_app_server_request_to_transport(
                 # the restart barrier refuses while any is (CCC-250).
                 _CODEX_APP_SERVER_MUTATING_PENDING[req_id] = (method, transport)
             try:
+                from ccc_server import codex_managed_recovery as recovery
+                if transport.kind == "managed-unix":
+                    params = recovery.before_send(transport, method, params, req_id)
+                else:
+                    recovery.protect_stdio(method, params)
                 transport.send_json({
                     "jsonrpc": "2.0",
                     "id": req_id,
@@ -3233,6 +3257,11 @@ def _codex_app_server_request_to_transport(
                     kind="real" if count_as_inflight else "probe",
                     child_pid=getattr(transport.proc, "pid", None),
                 )
+            except recovery.Refused as e:
+                _CODEX_APP_SERVER_MUTATING_PENDING.pop(req_id, None)
+                return {"ok": False, "code": "managed_needs_reconciliation",
+                        "error": str(e), "fallback": "queue", "sent": False,
+                        "ambiguous": e.uncertain}
             except (BrokenPipeError, OSError) as e:
                 send_error = e
                 # A partial write may still have reached the child, so the
@@ -3273,7 +3302,8 @@ def _codex_app_server_request_to_transport(
                 "app-server", "SENDFAIL",
                 f"method={method} id={req_id} send failed: {send_error!r}",
             )
-            return {"ok": False, "error": str(send_error), "fallback": "queue"}
+            return {"ok": False, "error": str(send_error), "fallback": "queue",
+                    "ambiguous": True}
         if exited:
             proc = transport.proc
             exit_code = proc.poll() if proc is not None else None
@@ -3454,7 +3484,10 @@ def _codex_app_server_request(method, params=None, timeout=20, *, _route=True, _
         _route=_route, _null_params=_null_params,
         _expected_generation=_expected_generation,
     )
-    if method == "thread/resume" and _codex_error_needs_parent_resume(response):
+    from ccc_server import codex_managed_recovery as recovery
+    managed_thread = (method == "thread/resume" and
+                      recovery.known_thread(str((params or {}).get("threadId") or "")))
+    if method == "thread/resume" and not managed_thread and _codex_error_needs_parent_resume(response):
         response = _codex_resume_subagent_via_parent(
             params, response, timeout,
             _route=_route, _expected_generation=_expected_generation,
@@ -3668,6 +3701,19 @@ def _codex_app_server_request_once(method, params=None, timeout=20, *, _route=Tr
     response = _core._codex_app_server_request_to_transport(
         transport, method, params=None if _null_params else params, timeout=timeout,
     )
+    if (transport.kind == "managed-unix" and method in ("thread/start", "thread/resume")
+            and isinstance(response.get("result"), dict)):
+        from ccc_server import codex_managed_recovery as recovery
+        thread = response["result"].get("thread")
+        try:
+            if (not isinstance(thread, dict) or not isinstance(thread.get("id"), str)
+                    or not thread["id"] or (method == "thread/resume"
+                        and thread["id"] != params.get("threadId"))):
+                raise recovery.Refused("managed resume/start returned an unexpected thread identity")
+            recovery.track(transport, thread["id"], thread.get("path") or params.get("path"))
+        except OSError as error:
+            return {"ok": False, "code": "managed_needs_reconciliation",
+                    "error": str(error), "ambiguous": True}
     try:
         _codex_app_server_track_thread_health(method, thread_id, response)
     except Exception:
@@ -4338,9 +4384,27 @@ def _ensure_codex_app_server(*, allow_stdio=True):
                 f"managed app-server failed initialize {_CODEX_MANAGED_MAX_FAILS}x; "
                 f"skipping it for {int(_codex_managed_cooldown_s())}s and using stdio",
             )
+        if init.get("result") is not None and kind == "managed-unix":
+            from ccc_server import codex_managed_recovery as recovery
+            try:
+                identity = recovery.observe_peer(transport.sock, arg)
+                if identity != transport.managed_candidate_identity:
+                    raise recovery.Refused("managed identity changed during initialize")
+                recovery.verify_initialize(identity, init)
+                transport.send_json({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+                recovery.connected(transport, identity)
+                with recovery.recovery_reads():
+                    recovery.reattach(transport, lambda method, params, timeout:
+                        _core._codex_app_server_request_to_transport(
+                            transport, method, params, timeout=timeout))
+                if recovery.observe_peer(transport.sock, arg) != identity:
+                    raise recovery.Refused("managed identity changed during recovery")
+            except (OSError, ValueError, TypeError):
+                init = {"error": "managed identity/recovery is unproven"}
         if init.get("result") is not None:
             try:
-                transport.send_json({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+                if kind != "managed-unix":
+                    transport.send_json({"jsonrpc": "2.0", "method": "initialized", "params": {}})
             except (BrokenPipeError, OSError):
                 pass
             with _core._CODEX_APP_SERVER_LOCK:
@@ -5916,6 +5980,8 @@ def _codex_unsubscribe_idle_thread(session_id):
         # Recheck on the wire, under the same mutex as resume -> turn/start.
         # Do not start a replacement transport solely to release an old one.
         transport = _core._CODEX_APP_SERVER_TRANSPORT
+        if transport is not None and transport.kind == "managed-unix":
+            return False  # Disconnect/restart must never become unsubscribe.
         if transport is None or transport is _CODEX_IDLE_UNSUBSCRIBE_UNSUPPORTED_TRANSPORT:
             return False
         response = _core._codex_app_server_request_to_transport(
@@ -5949,6 +6015,9 @@ def _codex_unsubscribe_idle_thread(session_id):
 
 def _schedule_codex_idle_unsubscribe(session_id):
     """Run outside the notification reader, which must receive RPC replies."""
+    transport = _core._CODEX_APP_SERVER_TRANSPORT
+    if transport is not None and transport.kind == "managed-unix":
+        return
     with _core._CODEX_APP_SERVER_LOCK:
         if session_id in _CODEX_IDLE_UNSUBSCRIBE_PENDING:
             return

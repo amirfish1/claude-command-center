@@ -139,8 +139,13 @@ def test_invalid_fragment_control_utf8_size_and_eof_fail_without_waiting(raw):
         sender.close()
 
 
-def test_actual_managed_transport_wrappers_preserve_upgrade_frame(peer):
-    from ccc_server import codex
+def test_actual_managed_transport_wrappers_preserve_upgrade_frame(peer, monkeypatch):
+    from ccc_server import codex, codex_managed_recovery as recovery
+    # Framing-only fixture is ordinary Python in this process, not a pinned
+    # native daemon. Identity rejection is covered by managed-recovery tests.
+    monkeypatch.setattr(recovery, 'compatible_writers', lambda: None)
+    monkeypatch.setattr(recovery, 'socket_path_identity', lambda _: {})
+    monkeypatch.setattr(recovery, 'observe_peer', lambda *_: {})
     def respond(connection, header):
         connection.sendall(header + frame(b'{"method":"first"}'))
     transport = codex._connect_codex_managed_app_server(peer(respond))

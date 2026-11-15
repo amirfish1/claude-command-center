@@ -771,9 +771,11 @@ def _client_operation(data):
                 _CLIENT_ACTIONS[action_id]["result"] = result
                 _CLIENT_ACTIONS[action_id]["state"] = "complete"
             return result
-    result = _client_rpc(method, None if descriptor.get("params_type") == "null" else params,
-                         timeout=_client_rpc_timeout(method, params),
-                         expected_generation=generation if mutating else None)
+    from ccc_server import codex_managed_recovery as recovery
+    with recovery.native_action(action_id if mutating and method.startswith("thread/queue/") else None):
+        result = _client_rpc(method, None if descriptor.get("params_type") == "null" else params,
+                             timeout=_client_rpc_timeout(method, params),
+                             expected_generation=generation if mutating else None)
     if mutating and method.startswith("thread/queue/") and not result.get("uncertain"):
         from ccc_server.codex_queue_owner import finish_native_queue_action
         try:

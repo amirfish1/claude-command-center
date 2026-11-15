@@ -117,6 +117,7 @@ class WorkerRuntime:
                         "work-graph-v1",
                         "safe-drain-v1",
                         "pending-input-cas-v1",
+                        "codex-managed-recovery-v1",
                         "codex-turn-gate-v1",
                     ],
                 },
