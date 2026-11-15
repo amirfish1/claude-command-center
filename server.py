@@ -17569,9 +17569,9 @@ def _archive_list_warm(cache_options, window, stale_ok):
 
 
 try:
-    _ARCHIVE_REFRESH_MIN_GAP_S = max(0.0, float(os.environ.get("CCC_ARCHIVE_REFRESH_MIN_GAP_S", "120")))
+    _ARCHIVE_REFRESH_MIN_GAP_S = max(0.0, float(os.environ.get("CCC_ARCHIVE_REFRESH_MIN_GAP_S", "600")))
 except ValueError:
-    _ARCHIVE_REFRESH_MIN_GAP_S = 120.0
+    _ARCHIVE_REFRESH_MIN_GAP_S = 600.0
 _archive_refresh_last_start = {}  # key -> epoch of the last detached refresh start
 
 

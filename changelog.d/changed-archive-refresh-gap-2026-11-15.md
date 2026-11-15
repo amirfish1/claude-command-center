@@ -1,0 +1,1 @@
+The archive list now rebuilds at most every 10 minutes instead of every 2 (a build takes about 5 minutes of CPU, so the old gap kept one core busy around the clock). New transcripts still refresh it immediately.
