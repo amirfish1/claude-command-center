@@ -222,11 +222,22 @@ ccc restart dashboard  # dashboard only (POST /api/restart)
 and worker restarts in a day were agents restarting after their own commits,
 each skipping the drain/adopt handoff and each costing a ~30s cold warmup
 (OPS-150). `ccc restart` goes through the drain-aware endpoints and debounces:
-a request within 5 minutes of the last restart (`CCC_RESTART_DEBOUNCE_S`)
+a request within 30 minutes of the last restart (`CCC_RESTART_DEBOUNCE_S`)
 becomes one pending restart that a detached runner fires when the window ends,
 merging targets (worker + dashboard = all), so the newest commit still goes
-live. A 409 (the server says a restart is unsafe right now) is retried every
-minute, up to 10 times. State lives in
+live. Callers reserve the restart slot under a shared file lock, so simultaneous
+agents cannot each trigger the first restart. The pending runner rechecks the
+window before dispatching. An immediate restart fulfills matching queued work;
+uncovered targets stay queued without broadening the human's request.
+
+Static-only and documentation-only changes do not need a restart. Reload the
+page for static assets. Batch Python changes behind one restart owner and reuse
+its verified live revision instead of requesting a restart per ticket. The
+default window allows at most two routine dashboard restarts per hour; an
+explicit override or human `--now` can shorten it. A 409 (the server says a
+restart is unsafe right now) is retried every minute, up to 10 times. A lost
+reply retains the reserved window because the restart may already have happened.
+State lives in
 `~/.claude/command-center/restart-debounce.json`, runner output in
 `restart-debounce.log` next to it. `--now` skips the window; use it only when a
 human asked for an immediate restart. The raw `launchctl kickstart -k

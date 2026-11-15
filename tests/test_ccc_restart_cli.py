@@ -18,7 +18,9 @@ import tempfile
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 CCC = str(Path(__file__).resolve().parent.parent / "ccc")
 
@@ -69,7 +71,7 @@ class _Stub(http.server.BaseHTTPRequestHandler):
 
 class CccRestartCliTests(unittest.TestCase):
     def setUp(self):
-        _Stub.posts, _Stub.refuse = [], 0
+        _Stub.posts, _Stub.refuse, _Stub.pid = [], 0, 1000
         self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Stub)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.base = f"http://127.0.0.1:{self.srv.server_address[1]}"
@@ -120,6 +122,17 @@ class CccRestartCliTests(unittest.TestCase):
         self.ccc("worker", "--now")
         self.assertEqual(_Stub.posts, [("200", "/api/restart/worker")] * 2)
 
+    def test_concurrent_processes_share_one_restart_slot(self):
+        self.env.pop("CCC_RESTART_DEBOUNCE_S")
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results = list(pool.map(lambda _: self.ccc("worker"), range(6)))
+        for result in results:
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(_Stub.posts, [("200", "/api/restart/worker")])
+        state = json.loads((Path(self.home) / ".claude/command-center/restart-debounce.json").read_text())
+        self.assertEqual(state["pending"]["target"], "worker")
+        self.assertGreater(state["pending"]["due"] - time.time(), 1700)
+
     def test_refused_restart_is_retried_not_dropped(self):
         _Stub.refuse = 1
         r = self.ccc("worker")
@@ -141,6 +154,100 @@ class CccRestartCliTests(unittest.TestCase):
         r = self.ccc("worker")
         self.assertEqual(r.returncode, 1)
         self.assertIn("failed", r.stderr)
+
+
+class RestartReservationTests(unittest.TestCase):
+    def setUp(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("CCC_RESTART_DEBOUNCE_S", None)
+            self.m = _load_ccc_cli()
+        self.home = tempfile.TemporaryDirectory()
+        self.addCleanup(self.home.cleanup)
+        self.m.RESTART_STATE_FILE = str(Path(self.home.name) / "restart.json")
+        # Exercise the real file lock and state transitions, without starting
+        # a long-lived runner. Model its ownership as this exact process.
+        self.m._spawn_restart_runner = lambda *_: os.getpid()
+
+    def state(self):
+        return self.m._restart_state_update(lambda s: dict(s))
+
+    def test_busy_hour_keeps_a_fixed_half_hour_window(self):
+        with mock.patch("time.time", return_value=10000) as clock:
+            starts = []
+            for minute in range(60):
+                clock.return_value = 10000 + minute * 60
+                pending = self.state().get("pending")
+                if pending and pending["due"] <= clock.return_value:
+                    runner_slot = self.m._reserve_restart("base", runner=True)
+                    if runner_slot.get("reservation"):
+                        starts.append(clock.return_value)
+                        self.m._finish_restart_reservation(runner_slot["reservation"], 200)
+                slot = self.m._reserve_restart("base", "dashboard")
+                if slot.get("reservation"):
+                    starts.append(clock.return_value)
+                    self.m._finish_restart_reservation(slot["reservation"], 200)
+            self.assertEqual(starts, [10000, 11800])
+            self.assertEqual(self.state()["pending"]["due"], 13600)
+
+    def test_two_callers_at_expiry_cannot_both_reserve(self):
+        with mock.patch("time.time", return_value=10000):
+            barrier = threading.Barrier(8)
+
+            def reserve(_):
+                barrier.wait()
+                return self.m._reserve_restart("base", "dashboard")
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                slots = list(pool.map(reserve, range(8)))
+            self.assertEqual(sum("reservation" in slot for slot in slots), 1)
+            self.assertEqual(self.state()["pending"]["due"], 11800)
+
+    def test_refusal_releases_slot_but_lost_reply_preserves_it(self):
+        with mock.patch("time.time", return_value=10000):
+            first = self.m._reserve_restart("base", "worker")
+            self.m._reserve_restart("base", "worker")
+            self.m._finish_restart_reservation(first["reservation"], 409)
+            self.assertEqual(self.state()["last_restart"], 0)
+            self.assertEqual(self.state()["pending"]["due"], 10060)
+            self.m._restart_state_update(lambda s: s.pop("pending"))
+            second = self.m._reserve_restart("base", "worker")
+            self.m._finish_restart_reservation(second["reservation"], -1)
+            self.assertEqual(self.state()["last_restart"], 10000)
+
+    def test_now_fulfills_matching_pending_work_once(self):
+        with mock.patch("time.time", return_value=10000):
+            self.m._reserve_restart("base", "dashboard")
+            self.m._reserve_restart("base", "dashboard")
+            immediate = self.m._reserve_restart("base", "dashboard", force=True)
+            self.assertEqual(immediate["target"], "dashboard")
+            self.assertNotIn("pending", self.state())
+            self.assertTrue(self.m._reserve_restart("base", runner=True)["stop"])
+
+    def test_now_preserves_uncovered_target_and_runner_rechecks_window(self):
+        with mock.patch("time.time", return_value=10000) as clock:
+            self.m._reserve_restart("base", "dashboard")
+            self.m._reserve_restart("base", "all")
+            clock.return_value = 11799
+            immediate = self.m._reserve_restart("base", "dashboard", force=True)
+            self.m._finish_restart_reservation(immediate["reservation"], 200)
+            self.assertEqual(immediate["target"], "dashboard")
+            self.assertEqual(self.state()["pending"]["target"], "worker")
+            clock.return_value = 11800
+            slot = self.m._reserve_restart("base", runner=True)
+            self.assertNotIn("reservation", slot)
+            self.assertEqual(slot["pending"]["due"], 13599)
+
+    def test_request_arriving_as_runner_exits_keeps_an_owner(self):
+        with mock.patch("time.time", return_value=10000):
+            self.m._reserve_restart("base", "dashboard")
+            self.m._reserve_restart("base", "worker")
+            before = self.state()
+            self.assertFalse(self.m._retire_restart_runner("base"))
+            self.assertEqual(self.state()["pending"], before["pending"])
+            self.assertEqual(self.state()["runner_pid"], os.getpid())
+            self.m._restart_state_update(lambda s: s.pop("pending"))
+            self.assertTrue(self.m._retire_restart_runner("base"))
+            self.assertNotIn("runner_pid", self.state())
 
 
 class WaitDashboardBackTests(unittest.TestCase):
