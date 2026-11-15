@@ -11062,6 +11062,10 @@
     if (ev.key !== 'Escape') return;
     document.querySelectorAll('.conv-item.is-actions-open').forEach(row => row.classList.remove('is-actions-open'));
   });
+  // The dropdown is position:fixed, so it would float away from its row.
+  document.addEventListener('scroll', () => {
+    document.querySelectorAll('.conv-item.is-actions-open').forEach(row => row.classList.remove('is-actions-open'));
+  }, { capture: true, passive: true });
 
   document.addEventListener('click', async (ev) => {
     const btn = ev.target.closest('[data-copy-assistant-message]');
@@ -49513,7 +49517,21 @@
         $convList.querySelectorAll('.conv-item.is-actions-open').forEach(row => {
           if (row !== item) row.classList.remove('is-actions-open');
         });
+        // Measure the kebab before the row flips: the open state may hide it.
+        const r = btn.getBoundingClientRect();
         item.classList.toggle('is-actions-open', willOpen);
+        if (willOpen) {
+          // Anchor the dropdown to the kebab; flip above when it would run
+          // off the bottom of the viewport.
+          const menu = item.querySelector('.conv-row-actions');
+          if (menu) {
+            const mh = menu.offsetHeight;
+            const top = (window.innerHeight - r.bottom >= mh + 8)
+              ? r.bottom + 4 : Math.max(8, r.top - mh - 4);
+            menu.style.setProperty('--ca-top', top + 'px');
+            menu.style.setProperty('--ca-right', Math.max(8, window.innerWidth - r.right) + 'px');
+          }
+        }
       });
     });
     $convList.querySelectorAll('[data-role="today-star"]').forEach(btn => {
