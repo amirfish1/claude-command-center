@@ -17478,6 +17478,16 @@
     body:not(.kanban-split).mobile-show-main .main {
       transform: translateX(0);
     }
+    /* The full-width session list (~16k elements) stays under the opaque
+       reader while a conversation is open. Skip its style and layout work
+       there: every forced recalc in the reader (Load earlier, scroll
+       buttons) re-styled it too. `hidden` keeps its rendering state and
+       scroll position, so Back shows it at once. The hide waits for the
+       0.2s slide-in to finish; showing it again on Back is immediate. */
+    body:not(.kanban-split).mobile-show-main .sidebar {
+      content-visibility: hidden;
+      transition: content-visibility 0s linear 0.25s allow-discrete;
+    }
 
     /* Mobile bottom navigation sets the rail width to zero. Windows that
        explicitly keep desktop chrome still leave room for the rail. */
@@ -32726,7 +32736,7 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 .conv-input-bar:has(.f2c-config) { z-index: 20; }
 /* The toolbar row's narrow-width overflow guard would clip the open sheet. */
 .conv-input-bar .conv-input-row-bottom:has(.f2c-config) { overflow: visible !important; }
-body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
+body.has-f2c-config #pwaInstallBanner { display: none !important; }
 .conv-pane:has(.f2c-config) .conv-ready-archive-footer:not([hidden]) { display: none; }
 @media (max-width: 1200px) {
   /* Opens upward from the offer row, across its full width. Not in flow:
@@ -32775,7 +32785,7 @@ body:has(.f2c-config) #pwaInstallBanner { display: none !important; }
 .ffv-crumb { flex: 1; min-width: 0; font: 12px var(--font-mono, ui-monospace, monospace); color: var(--text-muted, #8b949e); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ffv-btn { border: 1px solid var(--border, #30363d); background: transparent; color: var(--text, #e6edf3); border-radius: 6px; padding: 4px 10px; font: 12px var(--font-ui); cursor: pointer; text-decoration: none; }
 .ffv-btn:hover { background: rgba(139,148,158,0.15); }
-body:has(.img-lightbox.open) .ffv-overlay { visibility: hidden; }
+body.has-img-lightbox-open .ffv-overlay { visibility: hidden; }
 .ffv-body { flex: 1; display: flex; min-height: 0; }
 .ffv-list { width: 300px; flex: none; overflow: auto; border-right: 1px solid var(--border, #30363d); }
 .ffv-row { display: flex; gap: 8px; align-items: center; padding: 7px 14px; cursor: pointer; font-size: 13px; }
@@ -34550,7 +34560,7 @@ body.has-mobile-bottom-nav .pwa-install-banner {
   .settings-usage-row > .settings-usage-track { grid-column:1 / -1; grid-row:2; }
 }
 /* Keep passive notifications behind the active Settings dialog. */
-body:has(#settingsModal.open) #cccNotifyStack { z-index: 9998; }
+body.has-settings-modal-open #cccNotifyStack { z-index: 9998; }
 /* Defaults need labeled rows: compact engine-list strips clip long models. */
 :is(#settingsSection-defaults, #routingPolicyEditor) .eng-card { display: block; padding: 18px; }
 :is(#settingsSection-defaults, #routingPolicyEditor) .eng-card-head { margin-bottom: 12px; }
@@ -35030,7 +35040,7 @@ body.conv-compact .conversations-view .cc-run-open .cc-run-thumbs { display: non
 /* Narrow layout (bottom nav present): the hamburger menu already lists every
    app, so the left app rail is dropped and everything offset by it collapses. */
 @media (max-width: 1200px) {
-  html:has(body.has-mobile-bottom-nav) { --ccc-rail-w: 0px !important; }
+  html.has-mobile-bottom-nav { --ccc-rail-w: 0px !important; }
   body.has-mobile-bottom-nav { padding-left: 0 !important; }
   body.has-mobile-bottom-nav :is(.ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag, .ccc-account-wrap, .ccc-account-pop) { display: none !important; }
 }

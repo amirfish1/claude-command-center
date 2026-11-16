@@ -29,8 +29,8 @@
       bottom:calc(var(--ccc-mobile-app-nav-height, 70px) + 20px); z-index:9401;
       padding:8px 12px; border-radius:8px; background:var(--bg); color:var(--text); font-size:14px;
     }
-    body:has(.upd-overlay.open) #mobileTicketRecord,
-    body:has(.upd-overlay.open) #mobileTicketRecordStatus { display:none; }
+    body.has-upd-overlay-open #mobileTicketRecord,
+    body.has-upd-overlay-open #mobileTicketRecordStatus { display:none; }
   `;
   document.head.append(style);
   document.body.append(button, status);

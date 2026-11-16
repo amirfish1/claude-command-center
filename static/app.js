@@ -23301,6 +23301,9 @@
     const show = _mobileBottomNavShouldShow();
     nav.style.display = show ? '' : 'none';
     document.body.classList.toggle('has-mobile-bottom-nav', show);
+    // Mirrored on <html> for the --ccc-rail-w override, which used to be
+    // html:has(body.has-mobile-bottom-nav) (see syncBodyHasFlags).
+    document.documentElement.classList.toggle('has-mobile-bottom-nav', show);
     if (!show || isSimpleMode()) _setMobileAskOpen(false);
     if (!show) return;
     let tab = 'inprogress';
@@ -52263,9 +52266,12 @@
       : null;
     const scrollable = !presentationDeck
       && view.scrollHeight > view.clientHeight + CONV_BOTTOM_TOLERANCE;
+    // Read once, before the class writes below: a second read after them
+    // forces another full style recalc (each one cost ~120ms on phones).
+    const atBottom = scrollable && isConversationAtBottom(view);
     const show = presentationDeck
       ? (Number(view._presentationIndex) || 0) < presentationDeck.length - 1
-      : scrollable && !isConversationAtBottom(view);
+      : scrollable && !atBottom;
     btn.classList.toggle('visible', show);
     btn.setAttribute('aria-hidden', show ? 'false' : 'true');
     btn.tabIndex = show ? 0 : -1;
@@ -52305,7 +52311,7 @@
     // (End still jumps straight to the bottom).
     const nextBtn = view._convNextButton;
     if (nextBtn) {
-      const showNext = !!(scrollable && !isConversationAtBottom(view)
+      const showNext = !!(scrollable && !atBottom
         && _nextUserMessageTarget(view));
       nextBtn.classList.toggle('visible', showNext);
       nextBtn.setAttribute('aria-hidden', showNext ? 'false' : 'true');
@@ -53160,11 +53166,59 @@
     const on = !!(view && gc && gc.parentElement === view);
     if (document.body.classList.contains('has-gc-reader') !== on) document.body.classList.toggle('has-gc-reader', on);
   }
+  // More body flags standing in for `body:has(...)` (CSS in app.css,
+  // issue-flow.css, mobile-app-nav.js, mobile-ticket-record.js,
+  // free-runtime.js). Each body-anchored :has() made every DOM write anywhere
+  // re-match :has() across the whole ~20k-element document at the next layout
+  // read: on a phone, "Load earlier messages" paid ~120ms per forced style
+  // recalc, a dozen times per page. Never add a body/html-anchored :has();
+  // add a flag here (tests/test_no_body_has_selectors.py enforces it).
+  // Live collections and id lookups keep each check cheap; the observer runs
+  // as a microtask, so a flag lands before the next paint.
+  const _bodyHasLive = {};
+  function _bodyHasAny(cls, test) {
+    const list = _bodyHasLive[cls] || (_bodyHasLive[cls] = document.getElementsByClassName(cls));
+    for (let i = 0; i < list.length; i++) if (test(list[i])) return true;
+    return false;
+  }
+  const _BODY_HAS_FLAGS = [
+    ['has-f2c-config', () => _bodyHasAny('f2c-config', () => true)],
+    ['has-img-lightbox-open', () => _bodyHasAny('img-lightbox', (el) => el.classList.contains('open'))],
+    ['has-settings-modal-open', () => !!document.getElementById('settingsModal')?.classList.contains('open')],
+    ['has-start-view', () => !!document.getElementById('cccStartView')],
+    ['has-upd-overlay-open', () => _bodyHasAny('upd-overlay', (el) => el.classList.contains('open'))],
+    ['has-mobile-nav-menu-open', () => _bodyHasAny('mobile-nav-menu',
+      (el) => !el.hidden && !!el.closest('#mobileBottomNav'))],
+    ['has-new-session-composer', () => _bodyHasAny('conv-input-context',
+      (el) => el.classList.contains('is-new-session'))],
+  ];
+  const _BODY_HAS_ATTR_TARGET = /(^|\s)(f2c-config|img-lightbox|upd-overlay|mobile-nav-menu|conv-input-context)(\s|$)/;
+  function syncBodyHasFlags(records) {
+    const cl = document.body && document.body.classList;
+    if (!cl) return;
+    // Class/hidden flips elsewhere (scroll affordances, row chips) cannot
+    // change a flag; skip the scan unless a watched element flipped or nodes
+    // were added/removed.
+    if (Array.isArray(records) && records.every((r) => r.type === 'attributes'
+        && r.target.id !== 'settingsModal'
+        && !_BODY_HAS_ATTR_TARGET.test(typeof r.target.className === 'string' ? r.target.className : ''))) return;
+    for (const [flag, test] of _BODY_HAS_FLAGS) {
+      const on = test();
+      if (cl.contains(flag) !== on) cl.toggle(flag, on);
+    }
+  }
   (function _initHasFlagSync() {
     const init = () => {
       syncAllPaneHasFlags();
       syncBodyTextFocusFlag();
       syncBodyGcReaderFlag();
+      syncBodyHasFlags();
+      if (typeof MutationObserver === 'function' && !document.body._bodyHasFlagObserver) {
+        document.body._bodyHasFlagObserver = new MutationObserver(syncBodyHasFlags);
+        document.body._bodyHasFlagObserver.observe(document.body, {
+          childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden'],
+        });
+      }
       const view = document.getElementById('conversationsView');
       if (view && typeof MutationObserver === 'function' && !view._gcFlagObserver) {
         view._gcFlagObserver = new MutationObserver(syncBodyGcReaderFlag);

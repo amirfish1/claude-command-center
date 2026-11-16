@@ -16,7 +16,7 @@
     body.ccc-mobile-app-open #pwaInstallBanner { display:none !important; }
     body.has-mobile-bottom-nav #mobileBottomNav { bottom:auto; top:calc(var(--app-vv-top, 0px) + var(--app-vh, 100dvh)); transform:translateY(-100%); padding:4px max(4px, env(safe-area-inset-right, 0px)) max(2px, env(safe-area-inset-bottom, 0px)) max(4px, env(safe-area-inset-left, 0px)); }
     body.ccc-mobile-app-open.has-mobile-bottom-nav #mobileBottomNav { display:flex !important; z-index:950; }
-    body:has(#mobileBottomNav .mobile-nav-menu:not([hidden])) #pwaInstallBanner { display:none !important; }
+    body.has-mobile-nav-menu-open #pwaInstallBanner { display:none !important; }
     #mobileBottomNav .mobile-nav-menu { max-height:calc(100dvh - 100px); overflow-y:auto; overscroll-behavior:contain; min-width:220px; max-width:calc(100vw - 16px); }
     #mobileBottomNav .ccc-mobile-app-list { display:flex; flex-direction:column; border-top:1px solid var(--border); margin-top:6px; padding-top:6px; }
     #mobileBottomNav .ccc-mobile-settings { border-top:1px solid var(--border); margin-top:6px; border-radius:0; position:sticky; bottom:-6px; z-index:1; background:var(--surface, #161b22); }
