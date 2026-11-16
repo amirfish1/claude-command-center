@@ -37,6 +37,7 @@ test('list badge stays compact and retains owner detail only in tooltip and head
  assert.match(list,/conv-driver-label">Session 12345678/);
  assert.doesNotMatch(list,/conv-driver-owner|conv-driver-label">Driven by Session/);
  assert.match(list,/Last owner input: not recorded/);
+ assert.match(list,/\(12345678-1234-1234-1234-123456789abc\)/);
  assert.doesNotMatch(render(row,200,true),/conv-driver-owner/);
  row.last_owner_input_at=50;
  assert.match(render(row,200,true),/conv-driver-owner/);

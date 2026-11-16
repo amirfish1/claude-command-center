@@ -3903,6 +3903,7 @@
     const kind = driver.kind || 'unknown';
     if (!header && kind === 'unknown') return '';
     let name = String(driver.name || driver.id || '').trim();
+    const fullName = name;
     if (/^[0-9a-f]{8}-[0-9a-f-]{20,}$/i.test(name)) name = name.slice(0, 8);
     const label = kind === 'human' ? 'You'
       : kind === 'session' ? 'Session ' + (name || 'unknown')
@@ -3918,7 +3919,7 @@
       return Number(ts) > 0 && Number.isFinite(date.getTime()) ? date.toISOString() : 'not recorded';
     };
     const owner = Number(c.last_owner_input_at || 0);
-    const tip = 'Driven by ' + label + ' · ' + stamp(driver.at)
+    const tip = 'Driven by ' + label + (fullName && fullName !== name ? ' (' + fullName + ')' : '') + ' · ' + stamp(driver.at)
       + '\nLast owner input: ' + stamp(owner) + '. Recorded attribution; not an authentication claim.';
     return '<span class="conv-driver" data-role="session-driver" data-driver-session-id="' + escapeAttr(c.session_id || c.id || '') + '" data-driver-kind="' + escapeAttr(kind) + '" title="' + escapeAttr(tip) + '">'
       + '<span class="conv-driver-label">' + (header ? 'Driven by ' : '') + escapeHtml(label) + '</span>'
