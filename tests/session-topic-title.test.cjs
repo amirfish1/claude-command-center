@@ -6,7 +6,9 @@ const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 function load(rows) {
   const start = source.indexOf('  function isGenericHandoffTitle(');
   const end = source.indexOf('  // One row per continuation chain.', start);
-  return vm.runInNewContext(source.slice(start, end) + '\nrowRawTitle;', {
+  const displayStart = source.indexOf('  const LEADING_PATH_OR_URL_RE =');
+  const displayEnd = source.indexOf('  // Extract the first sentence / line', displayStart);
+  return vm.runInNewContext(source.slice(displayStart, displayEnd) + source.slice(start, end) + '\nrowRawTitle;', {
     cleanIssuePrompt: s => s,
     firstSentenceOf: (s, limit) => s.slice(0, limit),
     stripGhIssueProjectTag: s => s,
@@ -23,6 +25,20 @@ test('manual topic survives continuation while the current task remains visible'
   const title = load([root, leg]);
   assert.equal(title(leg).rawTitle, 'Dashboard design: Fix attention sections');
   assert.equal(title(leg).titleSource, 'user');
+});
+test('continuation topics compare using the rendered title normalization', () => {
+  const root = { session_id: 'root', display_name: 'Build pre-send QA gate' };
+  const leg = { session_id: 'leg', continued_from_session_id: 'root', name_overridden: true,
+    display_name: 'Build pre send QA gate: add review routes' };
+  const title = load([root, leg]);
+  assert.equal(title(leg).rawTitle, leg.display_name);
+  leg.continuation_topic_title = root.display_name;
+  assert.equal(title(leg).rawTitle, leg.display_name, 'persisted topics use the same comparison');
+  leg.display_name = 'Build pre send QA gate';
+  assert.equal(title(leg).rawTitle, root.display_name, 'identical visible names need no task suffix');
+  leg.display_name = 'Build pre send QA gateway';
+  assert.equal(title(leg).rawTitle, 'Build pre-send QA gate: Build pre send QA gateway',
+    'a distinct task that only starts with the topic still keeps both names');
 });
 test('multiple continuations preserve the original topic without stacking subtasks', () => {
   const rows = [

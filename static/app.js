@@ -5630,7 +5630,9 @@
       .find(t => t && t !== '(untitled)' && !isContinuationBoilerplateTitle(t)) || '';
     if (!topicTitle || topicTitle === '(untitled)' || isContinuationBoilerplateTitle(topicTitle)) return local;
     if (!taskTitle) return { rawTitle: topicTitle, titleSource: topic.titleSource };
-    const norm = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
+    // Compare the names as the row displays them: a saved continuation name
+    // may already contain the topic with spaces where its origin used hyphens.
+    const norm = s => sidebarRowDisplayTitle(s).toLowerCase().replace(/\s+/g, ' ').trim();
     if (norm(taskTitle) === norm(topicTitle)) return { rawTitle: topicTitle, titleSource: topic.titleSource };
     if (norm(taskTitle).startsWith(norm(topicTitle) + ':')) return { rawTitle: taskTitle, titleSource: topic.titleSource };
     return { rawTitle: topicTitle + ': ' + taskTitle, titleSource: topic.titleSource,
