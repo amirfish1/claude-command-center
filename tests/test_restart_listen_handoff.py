@@ -93,7 +93,7 @@ class ListenSocketHandoffTests(unittest.TestCase):
         os.environ[server._LISTEN_FD_ENV] = "not-a-fd"
         self.assertIsNone(server._take_inherited_listen_socket("127.0.0.1", 8091))
 
-    def test_connection_made_during_exec_is_served_by_successor(self):
+    def test_connection_made_during_forced_exec_is_served_by_successor(self):
         # Real exec: the predecessor publishes its listener and execs; a
         # client that connected before the exec is answered afterwards.
         script = textwrap.dedent(f"""
@@ -112,7 +112,11 @@ class ListenSocketHandoffTests(unittest.TestCase):
             port = s.getsockname()[1]
             print(port, flush=True)
             sys.stdin.readline()   # client has connected (queued, not accepted)
-            assert server._prepare_listen_socket_handoff(s)
+            from types import SimpleNamespace
+            server._HTTPD_SERVER = SimpleNamespace(socket=s)
+            handler = SimpleNamespace(path="/stuck-read")
+            assert server._inflight_begin(handler)
+            assert server._quiesce_http_for_restart(timeout=0, force=True)
             os.environ["STAGE"] = "after"; os.environ["PORT_"] = str(port)
             os.execv(sys.executable, [sys.executable, __file__])
         """)

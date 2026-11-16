@@ -965,6 +965,7 @@ class RestartMergedBodyTests(unittest.TestCase):
         kick.assert_called_once_with(codex_final_check=False)
         caller.assert_called_once_with(handler, payload)
         self.assertEqual(schedule.call_args.kwargs["protected"], protected)
+        self.assertFalse(schedule.call_args.kwargs["force"])
         self.assertEqual(handler.send_json.call_args.args[0]["ok"], True)
 
     def test_only_boolean_true_can_override(self):
@@ -987,3 +988,4 @@ class RestartMergedBodyTests(unittest.TestCase):
         self.assertFalse(precheck.call_args.kwargs["restarts_worker"])
         kick.assert_not_called()
         schedule.assert_called_once()
+        self.assertTrue(schedule.call_args.kwargs["force"])

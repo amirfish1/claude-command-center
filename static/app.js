@@ -88750,6 +88750,28 @@
   // endpoint '/api/restart' restarts this dashboard only; '/api/restart/all'
   // also kicks the execution worker (server-side, after the session handoff,
   // so a live worker is still there to hand off to).
+  async function restartWaitForGeneration(before, maxSeconds) {
+    const deadline = Date.now() + maxSeconds * 1000;
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      let version;
+      try {
+        const response = await fetch('/api/version', {
+          cache: 'no-store', signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) continue;
+        version = await response.json();
+      } catch (_) { continue; }
+      if ((before.started_at && version.started_at && version.started_at !== before.started_at)
+          || (before.pid && version.pid && version.pid !== before.pid)) return true;
+      const outcome = version.restart_outcome || {};
+      if (outcome.state === 'cancelled' || outcome.state === 'failed') {
+        throw new Error('Restart ' + outcome.state + ': ' + (outcome.reason || 'unknown reason'));
+      }
+    }
+    return false;
+  }
+
   async function restartServerRun(endpoint) {
     endpoint = (typeof endpoint === 'string' && endpoint) ? endpoint : '/api/restart';
     const withWorker = endpoint.endsWith('/all');
@@ -88768,23 +88790,31 @@
           + ' comes back.'
     );
     try {
-      sessionStorage.setItem('ccc-restarting', '1');
       localStorage.setItem(ARCHIVE_WINDOW_KEY, '7d');
     } catch (_) {}
 
     let postError = null;
+    let before = null;
     try {
+      // A stuck version read must not prevent the recovery POST. Its reply
+      // normally supplies the baseline; this read also covers a lost reply.
+      try {
+        const baseline = await fetch('/api/version', {cache: 'no-store', signal: AbortSignal.timeout(5000)});
+        if (baseline.ok) before = await baseline.json();
+      } catch (_) {}
       const r = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
       const data = await r.json().catch(() => ({}));
+      if (data.before) before = data.before;
       if (data && data.port) restartServerSetPort(data.port);
       if (!r.ok || !data.ok) {
         postError = new Error((data && data.error) || ('restart failed (' + r.status + ')'));
       }
-    } catch (_) {
-      // The socket can drop while execvp replaces the process; poll below.
+    } catch (error) {
+      // A lost POST reply may still have restarted; require a known baseline.
+      if (!before) postError = error;
     }
 
     if (postError) {
@@ -88796,15 +88826,20 @@
       return;
     }
 
-    const ok = await updWaitForServer(30);
+    let ok = false;
+    let failure = 'New dashboard generation not observed within 120s; restart outcome unknown.';
+    try {
+      if (before) ok = await restartWaitForGeneration(before, 120);
+    } catch (error) { failure = error.message; }
     if (ok) {
+      try { sessionStorage.setItem('ccc-restarting', '1'); } catch (_) {}
       location.reload();
     } else {
       try { sessionStorage.removeItem('ccc-restarting'); } catch (_) {}
       const $overlay = document.getElementById('cccLoadingOverlay');
       if ($overlay) $overlay.classList.add('fade-out', 'gone');
       $restartServerBtn.disabled = false;
-      showOpToast("Server didn't come back within 30s - try reloading manually", 'error');
+      showOpToast(failure, 'error');
     }
   }
 

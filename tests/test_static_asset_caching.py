@@ -8,6 +8,7 @@ mark stamped URLs immutable, and gzip each file version once.
 import email
 import io
 import sys
+import time
 from pathlib import Path
 
 
@@ -30,6 +31,8 @@ def _get(server, path, headers=None):
     )
     handler.rfile = io.BytesIO()
     handler.wfile = io.BytesIO()
+    handler._ccc_req_t0 = time.time()
+    handler._ccc_req_cpu0 = time.thread_time()
     handler._do_GET()
     raw = handler.wfile.getvalue()
     head, _, body = raw.partition(b"\r\n\r\n")
@@ -60,11 +63,15 @@ def test_static_asset_carries_etag_and_answers_304(tmp_path, monkeypatch):
     assert hdrs["etag"] == f'"{int(st.st_mtime)}-{st.st_size}"'
     assert "no-store" not in hdrs["cache-control"]
     assert body == asset.read_bytes()
+    assert 'app;dur=' in hdrs['server-timing']
+    assert 'cpu;dur=' in hdrs['server-timing']
+    assert 'cache;desc="miss"' in hdrs['server-timing']
 
     status, hdrs, body = _get(server, "/static/x.js", {"If-None-Match": hdrs["etag"]})
     assert status == 304
     assert body == b""
     assert hdrs["etag"] == f'"{int(st.st_mtime)}-{st.st_size}"'
+    assert 'cache;desc="validated"' in hdrs['server-timing']
 
     status, _, _ = _get(server, "/static/x.js", {"If-None-Match": '"stale"'})
     assert status == 200
@@ -95,11 +102,13 @@ def test_gzipped_asset_is_compressed_once_per_file_version(tmp_path, monkeypatch
     real = gzip_mod.compress
     monkeypatch.setattr(server.gzip, "compress", lambda b, **kw: (calls.append(len(b)), real(b, **kw))[1])
 
-    for _ in range(3):
+    for attempt in range(3):
         status, hdrs, body = _get(server, "/static/x.js", {"Accept-Encoding": "gzip"})
         assert status == 200
         assert hdrs.get("content-encoding") == "gzip"
         assert gzip_mod.decompress(body) == asset.read_bytes()
+        expected_cache = 'miss' if attempt == 0 else 'hit'
+        assert f'cache;desc="{expected_cache}"' in hdrs['server-timing']
     assert len(calls) == 1
 
     asset.write_bytes(b"// changed " + b"y" * 4096)
