@@ -176,3 +176,12 @@ def test_queued_peer_body_keeps_origin_instead_of_becoming_owner(tmp_path, monke
     assert meta['turn_driver']['kind'] == 'session'
     assert meta['turn_driver']['name'] == 'reviewer'
     assert meta['last_owner_input_at'] == driver.epoch('2026-01-01T00:00:00Z')
+
+
+def test_persisted_list_bodies_advance_with_row_schema(monkeypatch, tmp_path):
+    import server
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    key = server._archive_response_cache_key()
+    old = server._archive_list_disk_path(key, '1d')
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_BUILD_ID', 'next-row-schema')
+    assert server._archive_list_disk_path(key, '1d') != old

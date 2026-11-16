@@ -16718,7 +16718,8 @@ def find_all_conversations(
 # v11: Exclude injected setup messages from Codex prompt/title metadata.
 # v12: Reparse session footers so cached rows retain short action labels.
 # v14: Recompute Close gates; inapplicable delivery no longer passes.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 15
+# v16: Rebuild persisted rows to include turn-driver and owner-input metadata.
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 16
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
@@ -17567,7 +17568,9 @@ _ARCHIVE_LIST_DISK_LOCK = threading.Lock()
 
 
 def _archive_list_disk_path(cache_key, window):
-    h = hashlib.sha1(repr((cache_key, window)).encode()).hexdigest()[:16]
+    # Saved response bodies must advance with the row schema too; otherwise
+    # an upgraded parser initially serves a body with the old missing fields.
+    h = hashlib.sha1(repr((_ARCHIVE_RESPONSE_CACHE_BUILD_ID, cache_key, window)).encode()).hexdigest()[:16]
     return _ARCHIVE_LIST_DISK_DIR / f"{h}.json.gz"
 
 
