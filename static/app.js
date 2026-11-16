@@ -36871,28 +36871,36 @@
 
   function _convLiveRevealWords(container, paneId, wordIdx) {
     if (!container || !container.isConnected) return;
-    const count = Number(container.dataset.liveWordCount || 0);
-    if (wordIdx >= count) {
-      container.classList.remove('conv-live-word-reveal');
-      return;
+    // This text has already arrived. Keep a brief entrance, but don't make
+    // readers wait for a serial timer per word. A missed frame catches up
+    // against the same deadline instead of extending the display backlog.
+    const words = container.querySelectorAll('.conv-live-word');
+    const count = words.length;
+    const totalMs = Math.max(120, Math.min(600, (container.textContent || '').length));
+    const started = performance.now();
+    let shimmer = null;
+    function revealFrame(now) {
+      if (shimmer) shimmer.classList.remove('gc-typing-shimmer');
+      if (!container.isConnected) return;
+      const $view = getConvViewForPane(paneId) || $conversationsView;
+      const shouldStick = _convShouldLiveRevealStickToBottom($view);
+      const end = Math.min(count, Math.max(wordIdx + 1,
+        Math.ceil(count * (now - started) / totalMs)));
+      for (; wordIdx < end; wordIdx++) {
+        const span = words[wordIdx];
+        _replayRevealRun(span);
+      }
+      if (wordIdx < count) {
+        shimmer = words[wordIdx - 1];
+        shimmer.classList.add('gc-typing-shimmer');
+        requestAnimationFrame(revealFrame);
+      } else {
+        container.classList.remove('conv-live-word-reveal');
+      }
+      if (shouldStick && $view) scrollConversationToEnd($view);
+      else if ($view) updateConversationEndAffordance($view);
     }
-
-    const $view = getConvViewForPane(paneId) || $conversationsView;
-    const shouldStick = _convShouldLiveRevealStickToBottom($view);
-    const span = container.querySelector(`.conv-live-word[data-run-id="${wordIdx}"]`);
-    if (span) {
-      _replayRevealRun(span);
-      span.classList.add('gc-typing-shimmer');
-    }
-    if (shouldStick && $view) scrollConversationToEnd($view);
-    else if ($view) updateConversationEndAffordance($view);
-
-    const totalMs = Math.max(900, Math.min(4500, (container.textContent || '').length * 4));
-    const perWord = Math.max(12, Math.min(220, totalMs / Math.max(1, count)));
-    setTimeout(() => {
-      if (span) span.classList.remove('gc-typing-shimmer');
-      _convLiveRevealWords(container, paneId, wordIdx + 1);
-    }, perWord);
+    revealFrame(started);
   }
 
   function startConvReplay(paneId) {
