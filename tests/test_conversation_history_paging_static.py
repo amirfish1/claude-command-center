@@ -11,10 +11,7 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         init_start = app_js.index("  } else {\n    restoreSplitState();")
         init_js = app_js[init_start:app_js.index("  attachAllPaneDropZones();", init_start)]
-        fetch_js = app_js[
-            app_js.index("async function fetchConversationEvents(paneId)"):
-            app_js.index("window.CCCConversationState.bindLegacyProperty(window, splitState, '_firstUserMsgRendered'", app_js.index("async function fetchConversationEvents(paneId)"))
-        ]
+        fetch_js = pathlib.Path(PROJECT_ROOT, "static", "conversation-transport.js").read_text(encoding="utf-8")
 
         self.assertLess(
             init_js.index("prefetchRestoredConversationTails();"),
@@ -72,8 +69,7 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
     def test_non_streamed_hermes_sessions_do_not_consume_cached_tail(self):
         """Hermes has no follow-up SSE to reconcile a stale prefetched snapshot."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        fetch_start = app_js.index("async function fetchConversationEvents(paneId)")
-        fetch_js = app_js[fetch_start:app_js.index("window.CCCConversationState.bindLegacyProperty(window, splitState, '_firstUserMsgRendered'", fetch_start)]
+        fetch_js = pathlib.Path(PROJECT_ROOT, "static", "conversation-transport.js").read_text(encoding="utf-8")
 
         self.assertIn("_prefetchSource !== 'hermes'", fetch_js)
 
@@ -84,10 +80,7 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
             app_js.index("async function loadEarlierPage()"):
             app_js.index("banner.addEventListener('click', loadEarlier);", app_js.index("async function loadEarlierPage()"))
         ]
-        fetch_js = app_js[
-            app_js.index("async function fetchConversationEvents(paneId)"):
-            app_js.index("window.CCCConversationState.bindLegacyProperty(window, splitState, '_firstUserMsgRendered'", app_js.index("async function fetchConversationEvents(paneId)"))
-        ]
+        fetch_js = pathlib.Path(PROJECT_ROOT, "static", "conversation-transport.js").read_text(encoding="utf-8")
 
         self.assertIn("pane.loadBeforeLine =", load_js)
         self.assertNotIn("pane.wantFull = true; pane.lastLine = 0;", load_js)

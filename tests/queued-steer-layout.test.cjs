@@ -180,17 +180,16 @@ test('an authoritative queue snapshot retires a server card that was already del
  }finally{await page.close();}
 });
 test('transcript SSE deltas preserve queued cards and panel height until a queue snapshot drains them',async()=>{
- const start=app.indexOf('    source.onmessage = (ev) => {',app.indexOf('  function startConvStream('));
- const handler=app.slice(start,app.indexOf('    source.onerror =',start));
- assert.ok(start>=0);
+
  const page=await fixture();try{
-  const out=await page.evaluate(handler=>{
+  await page.addScriptTag({path:require.resolve('../static/conversation-transport.js')});
+  const out=await page.evaluate(()=>{
    makeRow('Queued release report.\n'+'Build output\n'.repeat(40));
    makeRow('Second queued message');sync();
    const tray=document.querySelector('.queued-steer-tray');
    const before=tray.getBoundingClientRect().height;
-   const source={};const streamPaneId='left',streamConvId='session-one';
-   state.eventSource=source;state.lastLine=0;
+   const streamConvId='session-one';
+   state.lastLine=0;
    const bumpWatchdog=()=>{},ffcInvalidate=()=>{},fetchSessionUsage=()=>{};
    const currentConversation=streamConvId,splitState={activeIndex:0};
    const paneIndexByPaneId=()=>0;
@@ -199,14 +198,23 @@ test('transcript SSE deltas preserve queued cards and panel height until a queue
     syncQueuedSteerTray(getConvView(),paneId,opts.queueSnapshot!==false);
     return true;
    };
-   eval(handler);
+   window.EventSource=class {constructor(){window.testStream=this;} addEventListener(){} close(){}};
+   const transportState={splitState,conversationsData,renderConversationEvents,
+     get currentConversation(){return currentConversation;},
+     get convLastLine(){return state.lastLine;},set convLastLine(value){state.lastLine=value;}};
+   const transport=CCCConversationTransport.createController({state:transportState,helpers:{
+     activePaneId,paneByPaneId,paneIndexByPaneId,ffcInvalidate,fetchSessionUsage,
+     _refreshTokenEconomizerAnnotation:()=>{}}});
+   transport.startConvStream('left');
+   const source=window.testStream;
    for(let i=0;i<10;i++)source.onmessage({data:JSON.stringify({events:[{type:'assistant',text:'Still working',line:i+1}],last_line:i+1})});
    const after=tray.getBoundingClientRect().height;
    const count=queuedSteerCardCount(document.querySelector('.queued-steer-tray'));
    const sameTray=tray===document.querySelector('.queued-steer-tray');
    syncQueuedSteerTray(getConvView(),'left',true);
+   transport.stopConvStream('left');
    return {count,sameTray,before,after,lastLine:state.lastLine,drained:!document.querySelector('.queued-steer-tray')};
-  },handler);
+  });
   assert.equal(out.count,2);assert.equal(out.sameTray,true);
   assert.ok(out.before>0);assert.equal(out.after,out.before);
   assert.equal(out.lastLine,10);assert.equal(out.drained,true);
@@ -256,11 +264,11 @@ test('queued Steer button is shown for Codex',async()=>{
  }finally{await page.close();}
 });
 test('conversation rendering treats every fetch response but older history as an authoritative queue snapshot',()=>{
- const source=fs.readFileSync('static/app.js','utf8');
+ const source=fs.readFileSync('static/conversation-events.js','utf8');
  assert.match(source,/syncQueuedSteerTray\(\$view, paneId,\s*!opts\.prepending && !!\(opts\.initialLoad \|\| opts\.queueSnapshot !== false\)\)/);
 });
 test('a queue-snapshot render does not dedupe server queued rows against the tray it replaces (CCC-246)',()=>{
- const source=fs.readFileSync('static/app.js','utf8');
+ const source=fs.readFileSync('static/conversation-events.js','utf8');
  assert.match(source,/const _replacesTray = !opts\.provisionalOverlay && !opts\.prepending\s*&& !!\(opts\.initialLoad \|\| opts\.queueSnapshot !== false\);/);
  assert.match(source,/\[!_replacesTray && _queuedScope && _queuedScope\.querySelector\('\.queued-steer-tray'\), \$view\]/);
 });
@@ -274,9 +282,9 @@ test('Codex live-overlay forwards only agent events and is non-authoritative for
  }finally{await page.close();}
 });
 test('provisional overlay render skips queued-tray and durable-send reconciliation',()=>{
- const source=fs.readFileSync('static/app.js','utf8');
- const tail=source.slice(source.indexOf('// The app-server live overlay is agent-output-only'),source.indexOf('// The optimistic "Sending…" pill needs two things:'));
- assert.match(tail,/if \(!opts\.provisionalOverlay\) \{[\s\S]*syncQueuedSteerTray[\s\S]*if \(_pendingSends\.length\)/);
+ const source=fs.readFileSync('static/conversation-events.js','utf8');
+ const tail=source.slice(source.indexOf('// The app-server live overlay is agent-output-only'));
+ assert.match(tail,/if \(!opts\.provisionalOverlay\) \{[\s\S]*syncQueuedSteerTray[\s\S]*if \(state\._pendingSends\.length\)/);
 });
 test('queued Steer is a distinct keyed action from the Send that created it',async()=>{
  const start=app.indexOf('  async function postInjectInput(');
