@@ -107,7 +107,7 @@ def _iter_common_cli_candidates(cmd):
             yield p
 
 
-def _is_pid_alive(pid, perm_alive=False):
+def _is_pid_alive(pid, perm_alive=False, unknown_alive=False):
     """Check if a process is alive without sending a terminating signal.
 
     On Unix, `os.kill(pid, 0)` performs an error check only (does not send a signal).
@@ -117,13 +117,15 @@ def _is_pid_alive(pid, perm_alive=False):
     `perm_alive`: on POSIX, treat PermissionError (pid owned by another user)
     as alive. Default False keeps the historical OSError -> dead behaviour.
     (Windows access-denied always means alive.)
+    `unknown_alive`: conservative callers may treat an unexpected probe
+    failure as alive; a missing process still always returns False.
     """
     try:
         pid = int(pid)
     except (ValueError, TypeError):
-        return False
+        return bool(unknown_alive)
     if pid <= 0:
-        return False
+        return bool(unknown_alive)
     import sys
     if sys.platform == "win32":
         try:
@@ -145,21 +147,27 @@ def _is_pid_alive(pid, perm_alive=False):
             SYNCHRONIZE = 0x00100000
             handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
             if not handle:
-                return kernel32.GetLastError() == 5  # ERROR_ACCESS_DENIED means process exists
+                error = kernel32.GetLastError()
+                if error == 5:  # ERROR_ACCESS_DENIED means process exists.
+                    return True
+                return bool(unknown_alive) if error != 87 else False
             try:
                 # 258 = WAIT_TIMEOUT (still running), 0 = WAIT_OBJECT_0 (terminated)
-                return kernel32.WaitForSingleObject(handle, 0) == 258
+                status = kernel32.WaitForSingleObject(handle, 0)
+                return status == 258 or (status != 0 and bool(unknown_alive))
             finally:
                 kernel32.CloseHandle(handle)
         except Exception:
-            return False
+            return bool(unknown_alive)
     try:
         os.kill(pid, 0)
         return True
     except PermissionError:
         return bool(perm_alive)
-    except (OSError, ProcessLookupError):
+    except ProcessLookupError:
         return False
+    except OSError:
+        return bool(unknown_alive)
 
 
 def _path_is_within(child, parent):

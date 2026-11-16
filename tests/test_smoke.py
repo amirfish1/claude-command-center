@@ -548,7 +548,7 @@ class TestServerImports(unittest.TestCase):
             2,
             "Every archive-row shaping branch must preserve thread provenance.",
         )
-        self.assertIn("= _sessionProvenanceChipHtml(c, Number(opts.currentChildDepth || 0) > 0);", app_js)
+        self.assertIn("= _sessionProvenanceChipHtml(c, Number(opts.currentChildDepth || 0) > 0 && !standaloneChild);", app_js)
         self.assertIn("+ sessionProvenanceChipHtml", app_js)
         self.assertIn(".conv-session-origin-chip {", app_css)
 
@@ -1576,13 +1576,13 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(args[0], [server._SYS_OSASCRIPT, "-e", 'tell application "Cursor" to quit'])
         self.assertFalse(kwargs.get("shell", False))
 
-    def test_system_health_ui_wires_gui_app_quit(self):
+    def test_system_health_ui_marks_shared_gui_apps_non_reapable(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn("/api/system-health/quit-app", app_js)
-        self.assertIn("data-quit-app", app_js)
-        self.assertIn("function _confirmQuitApp", app_js)
-        self.assertIn("Sessions stay on disk", app_js)
-        self.assertIn("Hard kill is not offered", app_js)
+        apps = app_js[app_js.index("// GUI app-server engines"):app_js.index("// Claude sessions")]
+        self.assertIn("Shared GUI app process; non-reapable", apps)
+        self.assertIn("_shEsc(a.name || a.app_name || a.id)", apps)
+        self.assertNotIn("data-quit-app", apps)
+        self.assertNotIn("data-kill", apps)
 
     def test_system_processes_tab_and_endpoints(self):
         """Processes tab in System status dialog audits killness scores and wires /api/system/processes."""
@@ -2013,7 +2013,9 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const _allTabLaneOverride = (c) => {", app_js)
         self.assertIn("const _allTabLaneFor = (c, seen = new Set()) =>", app_js)
         self.assertIn("const _allTabCodingConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'coding');", app_js)
-        self.assertIn("const _allTabWorkerConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'workers');", app_js)
+        workers = app_js[app_js.index("const _allTabWorkerConvs ="):app_js.index("const _wkTicketRefOf =")]
+        self.assertIn("const lane = _allTabLaneFor(c);", workers)
+        self.assertIn("lane === 'workers' || (_ticketView && _sidebarLanes.ticketViewLane(lane))", workers)
         self.assertIn("const _allTabHermesMessageConvs = _allTabConvs.filter(c => _allTabLaneFor(c) === 'messages');", app_js)
         # CCC-778: the top-level Coding/Workers tabs are the All/Other lane
         # pre-filtered by sidebar tab; CCC-851: Other always shows the
@@ -3129,7 +3131,7 @@ class TestServerImports(unittest.TestCase):
         # Completed rows were quieted (adabdd4e): no green DONE label.
         self.assertNotIn(".conv-item .conv-outcome-did::before", app_css)
         # Since ecf8bda3 the brief leads with the next step when there is one.
-        self.assertIn("if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking || _readyToCloseRow))", app_js)
+        self.assertIn("if (!isBacklogRow && !isGithubPrRow && ((_ss && (_ss.did || _ss.next_step_user)) || _latest || _outWorking || _readyToCloseRow || c._statusLoading))", app_js)
         self.assertNotIn("conv-outcome-next", app_js[app_js.index("// Outcome line (GOAL-1)"):app_js.index("const summaryDetailHtml", app_js.index("// Outcome line (GOAL-1)"))])
 
     def test_code_blocks_keep_readable_contrast_in_light_theme(self):
@@ -3271,7 +3273,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("data-session-id-short", app_js)
         self.assertIn("const sessionIdChipHtml = sidebarSessionIdChipHtml(c);", app_js)
         # The id chip lives in the row actions since the d51ee3fa declutter.
-        self.assertIn("'<span class=\"conv-row-actions\">' + sessionIdChipHtml", app_js)
+        self.assertIn("'<span class=\"conv-row-actions\">' + lifecycleButtons + sessionIdChipHtml", app_js)
         self.assertIn("function handleSidebarSessionIdCopyClick(ev)", app_js)
         self.assertIn("document.addEventListener('click', handleSidebarSessionIdCopyClick, true);", app_js)
         self.assertIn("Copied session ID", app_js)
@@ -7697,6 +7699,8 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def setUp(self):
         self.tmp_home = tempfile.mkdtemp(prefix="ccc-repo-context-home-")
+        self._prev_ccc_state = os.environ.get("CCC_STATE_DIR")
+        os.environ["CCC_STATE_DIR"] = str(pathlib.Path(self.tmp_home, ".claude", "command-center"))
         self._prev_home = os.environ.get("HOME")
         self._prev_userprofile = os.environ.get("USERPROFILE")
         self._prev_watchtower_env = {
@@ -7734,6 +7738,10 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def tearDown(self):
         _drain_codex_background_threads()
+        if self._prev_ccc_state is None:
+            os.environ.pop("CCC_STATE_DIR", None)
+        else:
+            os.environ["CCC_STATE_DIR"] = self._prev_ccc_state
         if self._prev_home is None:
             os.environ.pop("HOME", None)
         else:
@@ -9560,7 +9568,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["via"], "codex-steer")
-        resume.assert_called_once_with(sid, "hello", steer=True, preserve_queued_steer=False)
+        resume.assert_called_once_with(sid, "hello", steer=True, _steer_fallback=True, preserve_queued_steer=False)
         inject.assert_not_called()
 
     def test_codex_steer_unavailable_falls_back_to_send(self):
@@ -9589,7 +9597,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertEqual(result["via"], "codex-app-turn")
         self.assertEqual(
             resume.call_args_list,
-            [mock.call(sid, "continue", steer=True, preserve_queued_steer=False), mock.call(sid, "continue")],
+            [mock.call(sid, "continue", steer=True, _steer_fallback=True, preserve_queued_steer=False), mock.call(sid, "continue")],
         )
 
     def test_queued_codex_steer_unavailable_preserves_existing_queue(self):
@@ -9652,7 +9660,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         resume.assert_called_once_with(
-            sid, "continue", steer=True, preserve_queued_steer=False
+            sid, "continue", steer=True, _steer_fallback=True, preserve_queued_steer=False
         )
 
     def test_codex_without_live_tty_uses_resume(self):
@@ -12477,7 +12485,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         error = {"error": {"message": f"thread not found: {sid}"}}
         try:
             with mock.patch.object(server, "_control_plane_engine_call", return_value=None), \
-                 mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+                 mock.patch.object(server, "_ensure_codex_app_server", return_value=mock.Mock(kind="stdio")), \
                  mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=error), \
                  mock.patch.object(server, "_codex_rollout_exists_on_disk", return_value=rollout_exists), \
                  mock.patch.object(server, "_codex_app_server_shutdown") as recycle:
@@ -12511,7 +12519,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         ok = {"result": {"thread": {"id": sid, "status": {"type": "idle"}}}}
         server._CODEX_APP_SERVER_FALSE_MISSES = 0
         try:
-            with mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+            with mock.patch.object(server, "_ensure_codex_app_server", return_value=mock.Mock(kind="stdio")), \
                  mock.patch.object(server, "_codex_rollout_exists_on_disk", return_value=True), \
                  mock.patch.object(server, "_codex_app_server_shutdown") as recycle:
                 with mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=error):
@@ -13409,7 +13417,7 @@ class TestRepoContextHelpers(unittest.TestCase):
             server._CODEX_APP_SERVER_TURN_THREAD.clear()
 
         response = {"result": {"turn": {"id": "ccc-turn"}}}
-        with mock.patch.object(server, "_ensure_codex_app_server", return_value=object()), \
+        with mock.patch.object(server, "_ensure_codex_app_server", return_value=mock.Mock(kind="stdio")), \
              mock.patch.object(server, "_codex_app_server_request_to_transport", return_value=response):
             result = server._codex_app_server_request(
                 "turn/start", {"threadId": sid, "input": []}, timeout=1,
@@ -14182,6 +14190,11 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_codex_app_server_prefers_managed_socket(self):
         server = self.server
+        from ccc_server import codex_managed_recovery as recovery
+        identity = dict(recovery.process_identity(), socket_device=1, socket_inode=2,
+                        directory_device=1, directory_inode=3,
+                        binary_sha256=next(iter(recovery.SUPPORTED)), version='0.169.0',
+                        protocol_sha256=next(iter(recovery.SUPPORTED.values()))[1])
 
         class FakeTransport:
             kind = "managed-unix"
@@ -14189,6 +14202,8 @@ class TestRepoContextHelpers(unittest.TestCase):
 
             def __init__(self):
                 self.sent = []
+                self.sock = object()
+                self.managed_candidate_identity = identity
 
             def alive(self):
                 return True
@@ -14214,7 +14229,8 @@ class TestRepoContextHelpers(unittest.TestCase):
             try:
                 with mock.patch.object(server, "_codex_managed_app_server_socket_path", return_value=sock), \
                      mock.patch.object(server, "_connect_codex_managed_app_server", return_value=transport), \
-                     mock.patch.object(server, "_codex_app_server_request_to_transport", return_value={"result": {}}), \
+                     mock.patch.object(server, "_codex_app_server_request_to_transport", return_value={"result": {"userAgent": "codex/0.169.0", "data": []}}), \
+                     mock.patch.object(recovery, "observe_peer", return_value=identity) as observe, \
                      mock.patch.object(server.threading, "Thread", FakeThread), \
                      mock.patch.object(server.subprocess, "Popen") as popen:
                     result = server._ensure_codex_app_server()
@@ -14223,6 +14239,9 @@ class TestRepoContextHelpers(unittest.TestCase):
 
         self.assertIs(result, transport)
         self.assertEqual(result.kind, "managed-unix")
+        self.assertEqual(observe.call_count, 2)
+        self.assertFalse(result.managed_recovering)
+        self.assertEqual(result.managed_identity, identity)
         popen.assert_not_called()
 
     def test_codex_app_server_falls_back_to_stdio_when_managed_fails(self):
@@ -16183,7 +16202,7 @@ class TestModelPicker(unittest.TestCase):
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         self.assertIn("/api/conversations/[^/]+/files", src)
         self.assertIn("class=\"conv-pin-btn", js)
-        self.assertIn("mergeBtn + startBtn + pinBtn + handoffBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn + lifecycleButtons", js)
+        self.assertIn("mergeBtn + startBtn + pinBtn + handoffBtn + moveLaneBtn + elevateObjectBtn + detachSubsessionBtn", js)
         self.assertIn("Pinned to top", js)
         self.assertIn("_minPinnedRank", js)
         self.assertNotIn("conv-pinned-section", js)

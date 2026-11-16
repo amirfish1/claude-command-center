@@ -80672,7 +80672,7 @@
         if (tts.recent_cores != null) details.push(`recent ~10s: ${Number(tts.recent_cores).toFixed(2)} cores`);
         if (tts.threads) details.push(`pool: ${tts.threads} threads`);
         if (tts.cpu_time_s != null) details.push(`cumulative CPU: ${tts.cpu_time_s}s`);
-        if (details.length) ttsTitle += ` — ${details.join('; ')}`;
+        if (details.length) ttsTitle += `: ${details.join('; ')}`;
       }
       html += `<div class="bg-runs-row"><span>TTS · ${escapeHtml(tts.level || 'idle')}</span><span class="bg-runs-meta" title="${escapeHtml(ttsTitle)}">${escapeHtml(ttsMeta)}</span></div>`;
     }

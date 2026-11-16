@@ -18,6 +18,7 @@ from pathlib import Path
 import subprocess
 import threading
 import time
+from ccc_server.paths import _is_pid_alive
 
 POLL_S = 5.0
 
@@ -62,12 +63,8 @@ def reap_once(pids):
     remaining = set()
     for pid in pids:
         if not _is_zombie(pid):
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+            if not _is_pid_alive(pid, perm_alive=True, unknown_alive=True):
                 continue  # already reaped by someone else
-            except OSError:
-                pass
             remaining.add(pid)
             continue
         try:

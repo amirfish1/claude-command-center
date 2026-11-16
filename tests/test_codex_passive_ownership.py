@@ -1,5 +1,7 @@
 """Passive observation must not acquire a Codex conversation's writer lock."""
 
+from types import SimpleNamespace
+
 import pytest
 
 import server
@@ -18,7 +20,7 @@ def isolated(monkeypatch):
     monkeypatch.setattr(server, "_codex_goals_snapshot", lambda: {})
     monkeypatch.setattr(server, "_log_activity", lambda *a, **k: None)
     monkeypatch.setattr(server, "_schedule_codex_idle_unsubscribe", lambda sid: None)
-    monkeypatch.setattr(server, "_CODEX_APP_SERVER_TRANSPORT", object())
+    monkeypatch.setattr(server, "_CODEX_APP_SERVER_TRANSPORT", SimpleNamespace(kind="stdio"))
     monkeypatch.setattr(codex, "_CODEX_IDLE_UNSUBSCRIBE_UNSUPPORTED_TRANSPORT", None)
 
 

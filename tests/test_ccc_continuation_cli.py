@@ -399,7 +399,7 @@ class ContinuationCliTests(unittest.TestCase):
              redirect_stdout(out):
             rc = ccc.main(["sessions", "--live"])
         self.assertEqual(rc, 0)
-        self.assertEqual(requested_paths, ["/api/sessions/census"])
+        self.assertEqual(requested_paths, ["/api/sessions/census?since=86400"])
         rendered = out.getvalue()
         self.assertIn("live-1", rendered)
         self.assertNotIn("ended-1", rendered)

@@ -298,13 +298,12 @@ def acquire(reason="", ttl_s=DEFAULT_TTL_S, now=None, token=None, commit=False,
 
 
 def _pid_alive(pid):
+    from ccc_server.paths import _is_pid_alive
     try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
-        return False
-    except (PermissionError, OSError, ValueError, TypeError):
+        pid = int(pid)
+    except (ValueError, TypeError):
         return True
-    return True
+    return _is_pid_alive(pid, perm_alive=True, unknown_alive=True)
 
 
 def _group_alive(pgid):

@@ -81,8 +81,8 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         """Loading earlier history should prepend one bounded window."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         load_js = app_js[
-            app_js.index("async function loadEarlier()"):
-            app_js.index("banner.addEventListener('click', loadEarlier);", app_js.index("async function loadEarlier()"))
+            app_js.index("async function loadEarlierPage()"):
+            app_js.index("banner.addEventListener('click', loadEarlier);", app_js.index("async function loadEarlierPage()"))
         ]
         fetch_js = app_js[
             app_js.index("async function fetchConversationEvents(paneId)"):

@@ -224,6 +224,13 @@ def isolated_attribution_state(tmp_path, monkeypatch):
     """Legacy suites cover rollback; attribution integration tests opt in."""
     monkeypatch.setenv("WATCHTOWER_STATE_DIR", str(tmp_path / "wt-attribution"))
     monkeypatch.setenv("CCC_STATE_DIR", str(tmp_path / "ccc-attribution"))
+    monkeypatch.setenv("CCC_CODEX_RUNTIME_DIR", str(tmp_path / "codex-runtime"))
+    registry = tmp_path / "codex-threads.json"
+    monkeypatch.setenv("CCC_CODEX_THREAD_REGISTRY", str(registry))
+    server = sys.modules.get("server")
+    if server is not None:
+        monkeypatch.setattr(server, "CODEX_THREAD_REGISTRY_FILE", registry)
+        monkeypatch.setattr(server, "CODEX_APP_SERVER_STATE_FILE", tmp_path / "codex-runtime" / "codex-app-server-state.json")
     monkeypatch.setenv("CCC_ATTRIBUTION_EMIT", "0")
     monkeypatch.setenv("WT_UDS_RECONCILE_S", "0")
 

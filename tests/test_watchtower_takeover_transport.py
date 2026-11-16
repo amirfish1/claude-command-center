@@ -117,8 +117,22 @@ def test_native_settings_preserved_except_explicit_session_model_effort(connecte
     assert params == {"threadId": SID, "input": [{"type": "text", "text": "takeover prompt"}], **expected}
 
 
-def test_real_managed_rpc_wait_releases_recursive_condition_for_reader(connected, monkeypatch):
+def test_real_managed_rpc_wait_releases_recursive_condition_for_reader(connected, monkeypatch, tmp_path):
+    from ccc_server import codex_managed_recovery as recovery
+
     calls, transport = connected
+    # The real managed RPC requires a verified epoch and explicit thread
+    # ownership. Preserve those guards while exercising the condition wait.
+    identity = dict(recovery.process_identity(), socket_device=1, socket_inode=2,
+                    directory_device=1, directory_inode=3,
+                    binary_sha256=next(iter(recovery.SUPPORTED)), version='0.169.0',
+                    protocol_sha256=next(iter(recovery.SUPPORTED.values()))[1])
+    monkeypatch.setattr(server, 'PENDING_INPUTS_FILE', tmp_path / 'pending.json')
+    monkeypatch.setattr(server, 'PENDING_INPUT_HANDOFF_DIR', tmp_path / 'handoffs')
+    monkeypatch.setattr(server, '_pending_writer_compatibility_status', lambda: {'ok': True})
+    recovery.connected(transport, identity)
+    transport.managed_recovering = False
+    recovery.track(transport, SID, '/state/rollout.jsonl')
     readers = []
     replies = []
     monkeypatch.setattr(server, "_CODEX_APP_SERVER_RESPONSES", {})
@@ -157,6 +171,7 @@ def test_real_managed_rpc_wait_releases_recursive_condition_for_reader(connected
         assert not reader.is_alive()
     assert result["same_session"] is True and result["queued"] is False
     assert replies == ["thread/read", "turn/start"]
+    assert calls[1][1]['clientUserMessageId']
     assert server._CODEX_APP_SERVER_INFLIGHT == 0
     assert server._CODEX_APP_SERVER_RESPONSES == {}
 

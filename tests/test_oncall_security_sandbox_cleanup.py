@@ -26,7 +26,11 @@ def test_timeout_reaps_proof_process_group(tmp_path):
             scope['run']([sys.executable, '-c', program, str(marker)], timeout=1)
         assert marker.exists(), 'fixture child did not start'
         stat = Path('/proc') / marker.read_text() / 'stat'
-        assert not stat.exists() or stat.read_text().split(') ', 1)[1].split()[0] in ('Z', 'X')
+        try:
+            state = stat.read_text().split(') ', 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError):
+            state = None  # The child was reaped before /proc could be read.
+        assert state in (None, 'Z', 'X')
     finally:
         if marker.exists():
             try:

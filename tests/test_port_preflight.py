@@ -88,7 +88,7 @@ def test_run_sh_stops_at_a_terminal_when_ccc_already_runs():
     guard = run_sh.index('[ "$port_state" = "ccc" ] && [ -t 1 ]')
     assert "CCC is already running at http://localhost:$PORT" in run_sh
     # Before the worker block, so a second launch starts no duplicate worker.
-    assert guard < run_sh.index('ccc_worker.py" --health')
+    assert guard < run_sh.index('worker_health=', guard)
 
 
 def test_port_in_use_is_one_line_not_a_traceback(capsys):

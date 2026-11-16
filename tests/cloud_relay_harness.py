@@ -480,7 +480,7 @@ class LocalCCCFixture:
     # at the host filesystem (that is how a scratch fixture once migrated
     # real personal WatchTower data).
     _ISOLATED_ENV_KEYS = (
-        "HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+        "HOME", "CCC_STATE_DIR", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
         "XDG_STATE_HOME", "WATCHTOWER_DATA_DIR",
     )
     _ISOLATED_PREFIXES = ("WATCHTOWER_", "WT_", "XDG_")
@@ -523,6 +523,7 @@ class LocalCCCFixture:
         xdg = self.base_dir / "xdg"
         env.update({
             "HOME": str(self.home),
+            "CCC_STATE_DIR": str(self.home / ".claude" / "command-center"),
             "PORT": str(self.port),
             "CCC_EPHEMERAL": "1",
             "CCC_SKIP_SKILL_INSTALL": "1",

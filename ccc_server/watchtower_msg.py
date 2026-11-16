@@ -1691,8 +1691,15 @@ def _inject_scoped_input(session_id, text, **options):
             state["ccc_turn_start_pending"] = True
             state["ccc_turn_start_pending_at"] = time.time()
             try:
-                started = _core._codex_app_server_request_to_transport(
-                    transport, "turn/start", turn_params, timeout=5,
+                from ccc_server import delivery
+                delivery_id = delivery.bound_id() or delivery.mint(
+                    attr=options.get("attr"), idempotency_key=options.get("idempotency_key"),
+                )
+                started = delivery.within(
+                    delivery_id, text,
+                    lambda: _core._codex_app_server_request_to_transport(
+                        transport, "turn/start", turn_params, timeout=5,
+                    ),
                 )
                 result_body = started.get("result") if isinstance(started, dict) else None
                 turn = result_body.get("turn") if isinstance(result_body, dict) else None

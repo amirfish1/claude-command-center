@@ -98,6 +98,7 @@ class TestDiagnosticLogIsolation(unittest.TestCase):
         )
         env = dict(os.environ)
         env.pop("CCC_TEST_ISOLATION", None)
+        env.pop("CCC_STATE_DIR", None)
         env["PYTHONPATH"] = (
             str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
         )

@@ -132,6 +132,7 @@ class CCCNode:
             "HOME": str(self.home),
             "PORT": str(self.port),
             "CCC_EPHEMERAL": "1",
+            "CCC_STATE_DIR": str(self.home / ".claude" / "command-center"),
             "CCC_SKIP_SKILL_INSTALL": "1",
             "CCC_TELEMETRY_DISABLED": "1",
             "CCC_CHAT_ORCHESTRATOR": "builtin",
