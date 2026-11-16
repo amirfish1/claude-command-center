@@ -101,3 +101,19 @@ def test_recent_or_renamed_session_rechecked(tmp_path, monkeypatch):
     again = _scan(reuse_rows={'s1': first[0]})
     fake._codex_rollout_path_from_row.assert_called_once()  # recent: stat check
     assert again[0]['display_name'] == 'Renamed'
+
+
+def test_unchanged_rename_not_recomputed(tmp_path, monkeypatch):
+    rollout = tmp_path / 'r.jsonl'
+    rollout.write_text('{}\n')
+    fake = _fake(rollout)
+    fake._codex_fetch_threads.return_value = [{'id': 's1', 'first_user_message': 'hi', 'updated_at': 1000}]
+    fake._load_session_name_overrides.return_value = {'s1': 'Mine'}
+    monkeypatch.setattr(codex_parse, '_core', fake)
+    first = _scan()
+    fake._codex_display_name.reset_mock()
+    _scan(reuse_rows={'s1': first[0]})
+    fake._codex_display_name.assert_not_called()
+    fake._load_session_name_overrides.return_value = {'s1': 'Other'}
+    _scan(reuse_rows={'s1': first[0]})
+    fake._codex_display_name.assert_called_once()

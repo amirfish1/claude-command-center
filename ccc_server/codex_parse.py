@@ -208,13 +208,16 @@ def find_codex_conversations(
         )):
             r2 = dict(prev)
             override = name_overrides.get(sid)
-            if override or prev.get("name_overridden"):
+            if (override or "") != (prev.get("name_override") or "") or (
+                not override and prev.get("name_overridden")
+            ):
                 r2["display_name"] = _core._codex_display_name(
                     row, override=override,
                     title=attribution_title(row), first_message=r2.get("first_message") or "",
                 )
             r2.update({
                 "codex_updated_at": db_updated,
+                "name_override": override or "",
                 "task_title": task_titles.get(sid) or "",
                 "name_overridden": bool(name_overrides.get(sid)),
                 "archived": sid in archived_set or bool(row.get("archived")),
@@ -364,6 +367,7 @@ def find_codex_conversations(
             "ai_title": codex_ai_title,
             "task_title": task_titles.get(sid) or "",
             "name_overridden": bool(name_overrides.get(sid)),
+            "name_override": name_overrides.get(sid) or "",
             "last_prompt": (tail.get("last_prompt") or "")[:200],
             "size": st.st_size,
             "rollout_mtime": st.st_mtime,
