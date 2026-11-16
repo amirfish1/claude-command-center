@@ -13,6 +13,8 @@ const pinStart = app.indexOf('    view._convEndAffordanceAttached = true;');
 const pinSetup = app.slice(pinStart, app.indexOf('\n  function ensureAllConversationEndAffordances', pinStart));
 const historyStart = app.indexOf('  function _insertLoadEarlierBanner(');
 const history = app.slice(historyStart, app.indexOf('  // Codex rollouts spend', historyStart));
+const resizeStart = app.indexOf('  function _observeConvEventSizes(');
+const resizeHelper = app.slice(resizeStart, app.indexOf('  // The .event nearest', resizeStart));
 const scrollHelper = app.slice(app.indexOf('  function scrollConversationToEnd('),
   app.indexOf('  // CCC-1299 tap-backs'));
 let browser;
@@ -82,7 +84,7 @@ async function fixture() {
     .event { height: 100px; box-sizing: border-box; padding: 16px; border-bottom: 1px solid #444; }
   </style><div class="conversations-view">${Array.from({ length: 20 }, (_, i) =>
     `<div class="event" data-jsonl-line="${i + 100}">Message ${i + 100}</div>`).join('')}</div>`);
-  await page.evaluate(({ helpers, pinSetup, scrollHelper, history }) => {
+  await page.evaluate(({ helpers, pinSetup, scrollHelper, history, resizeHelper }) => {
     window.view = document.querySelector('.conversations-view');
     window.updateConversationEndAffordance = () => {};
     window._topVisibleAnchor = v => {
@@ -92,7 +94,7 @@ async function fixture() {
     window._restoreAnchor = (v, a) => {
       if (a) v.scrollTop = v.querySelector(`[data-jsonl-line="${a.line}"]`).offsetTop - a.delta;
     };
-    window._observeConvEventSizes = () => {};
+
     window._ensureLoadEarlierStyle = () => {};
     window.pane = { conversationId: 'test', firstLine: 100 };
     window.paneByPaneId = () => pane;
@@ -108,12 +110,13 @@ async function fixture() {
       };
     });
     view.scrollTop = view.scrollHeight;
-    new Function(helpers + scrollHelper
+    new Function(helpers + scrollHelper + resizeHelper
+      + 'window._observeConvEventSizes = _observeConvEventSizes;'
       + 'window.isConversationAtBottom = isConversationAtBottom;'
       + 'window.scrollConversationToEnd = scrollConversationToEnd;'
       + 'function attach(view) {\n' + pinSetup + '\nattach(view);'
       + history + '\nwindow.addHistory = () => _insertLoadEarlierBanner(view, "test", "p1");')();
-  }, { helpers, pinSetup, scrollHelper, history });
+  }, { helpers, pinSetup, scrollHelper, history, resizeHelper });
   await page.evaluate(() => new Promise(requestAnimationFrame));
   return page;
 }
@@ -303,3 +306,53 @@ for (const scenario of ['short page', 'long page', 'saved reading position', 'co
     } finally { await page.close(); }
   });
 }
+
+for (const width of [390, 1280]) {
+  for (const change of ['late image growth', 'content shrink', 'composer growth', 'pane growth']) {
+    test(`bottom-follow survives ${change} (${width}px)`, async () => {
+      const page = await fixture();
+      try {
+        await page.setViewport({ width, height: 844 });
+        await page.evaluate(() => {
+          _observeConvEventSizes(view, []);
+          scrollConversationToEnd(view);
+        });
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        await page.evaluate(change => {
+          if (change === 'late image growth') view.lastElementChild.style.height = '450px';
+          if (change === 'content shrink') view.lastElementChild.style.height = '10px';
+          if (change === 'composer growth') view.style.height = '360px';
+          if (change === 'pane growth') view.style.height = '660px';
+        }, change);
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        const result = await page.evaluate(() => ({ pinned: view._pinnedToBottom,
+          distance: view.scrollHeight - view.clientHeight - view.scrollTop }));
+        assert.equal(result.pinned, true, 'layout change released bottom-follow');
+        assert.ok(result.distance <= 1, `layout left ${result.distance}px below the reader`);
+        // Subsequent streaming must still follow after the reflow.
+        await page.evaluate(() => view.insertAdjacentHTML('beforeend', '<div class="event">Latest reply</div>'));
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        assert.equal(await page.evaluate(() => view.scrollHeight - view.clientHeight - view.scrollTop), 0);
+      } finally { await page.close(); }
+    });
+  }
+}
+
+test('delayed row growth preserves an intentionally unpinned history reader', async () => {
+  const page = await fixture();
+  try {
+    await page.evaluate(() => _observeConvEventSizes(view, []));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const before = await page.evaluate(() => {
+      view.dispatchEvent(new WheelEvent('wheel', { deltaY: -20 }));
+      view.scrollTop = 600;
+      view.dispatchEvent(new Event('scroll'));
+      return _topVisibleAnchor(view);
+    });
+    await page.evaluate(() => { view.firstElementChild.style.height = '300px'; });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const after = await page.evaluate(() => ({ anchor: _topVisibleAnchor(view), pinned: view._pinnedToBottom }));
+    assert.deepEqual(after.anchor, before);
+    assert.equal(after.pinned, false);
+  } finally { await page.close(); }
+});

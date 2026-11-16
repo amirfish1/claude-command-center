@@ -53172,7 +53172,10 @@
         ? view._lastPinScrollTop : view.scrollTop;
       const nowTop = view.scrollTop;
       view._lastPinScrollTop = nowTop;
-      if (nowTop < prevTop) {
+      if (nowTop < prevTop && conversationDistanceFromBottom(view) > 2) {
+        // Folding content or enlarging the pane clamps scrollTop to a lower
+        // maximum. That is still the tail, not an upward reading gesture.
+        // Wheel/touch intent above already releases even a subpixel gesture.
         view._pinnedToBottom = false;
       } else if (nowTop > prevTop && conversationDistanceFromBottom(view) <= 2) {
         // Resume only at the actual end, never on a stationary scroll event
@@ -53186,6 +53189,7 @@
       // pre-resize position instead of whatever scrollTop happens to land on.
       view._lastTopAnchor = _topVisibleAnchor(view);
     }, { passive: true });
+    _observeConvEventSizes(view, []);
     // Auto-advance: any content mutation (SSE event append, streaming
     // bubble grow, re-render, etc.) re-scrolls to the bottom if the user
     // was pinned. The previous wasAtBottom-at-call-site pattern missed
@@ -64199,8 +64203,9 @@
   // input. Chrome hides this with native anchoring. We turn native anchoring
   // off for the reader (app.css) and do it ourselves on every platform: when
   // an .event wholly above the viewport changes height, shift scrollTop by
-  // the same amount. Skipped when tailing (the pin observer owns that) and
-  // when the pane itself was resized (the resize handler owns that).
+  // the same amount. While tailing, follow delayed image/font/layout changes;
+  // the mutation observer cannot see them. Reading anchors are skipped when
+  // the pane itself was resized (the resize handler owns that).
   function _observeConvEventSizes(view, mutations) {
     if (typeof ResizeObserver !== 'function') return;
     let ro = view._convEventRO;
@@ -64213,6 +64218,7 @@
         view._convEventW = w;
         const rows = [];
         for (const e of entries) {
+          if (e.target === view) continue;
           const h = (e.borderBoxSize && e.borderBoxSize[0])
             ? e.borderBoxSize[0].blockSize : e.contentRect.height;
           const prev = sizes.get(e.target);
@@ -64220,7 +64226,11 @@
           if (prev == null || h === prev) continue;
           rows.push({ el: e.target, delta: h - prev });
         }
-        if (!rows.length || widthChanged || view._pinnedToBottom) return;
+        if (view._pinnedToBottom) {
+          if (!view.classList.contains('is-presentation-mode')) scrollConversationToEnd(view);
+          return;
+        }
+        if (!rows.length || widthChanged) return;
         const vTop = view.getBoundingClientRect().top;
         const withRect = rows.map((r) => ({ r, rect: r.el.getBoundingClientRect() }))
           .sort((x, y) => x.rect.top - y.rect.top);
@@ -64235,6 +64245,7 @@
         if (shift) view.scrollTop += shift;
       });
       view._convEventRO = ro;
+      ro.observe(view);
       view.querySelectorAll('.event').forEach((n) => ro.observe(n));
     }
     for (const m of mutations) {
