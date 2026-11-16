@@ -1,3 +1,4 @@
+const respondConversationAsset = require('./conversation-assets.cjs');
 // Opt-in geometry regression: CCC_MOBILE_READER_TEST_URL=http://127.0.0.1:8091 node tests/mobile-reader-layout.browser.cjs
 // API responses are disposable; no session messages or preferences are sent.
 const assert = require('node:assert/strict');
@@ -52,6 +53,7 @@ const fixture = `
     await page.setRequestInterception(true);
     page.on('request', request => {
       const url = new URL(request.url());
+      if (respondConversationAsset(request)) return;
       if (url.pathname === '/static/app.js') return request.respond({contentType:'text/javascript', body:source.replace('  function positionConversationEndAffordance(view) {', fixture + '  function positionConversationEndAffordance(view) {')});
       if (url.pathname === '/api/headroom') return request.respond({contentType:'application/json', body:JSON.stringify({ok:true, rows:[
         {id:'claude',engine:'claude',available:true,percent_left:72},

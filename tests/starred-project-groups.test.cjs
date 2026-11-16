@@ -1,3 +1,4 @@
+const respondConversationAsset = require('./conversation-assets.cjs');
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const fs = require('node:fs');
@@ -45,6 +46,7 @@ test('Today stars keep a project together while chronological mode retains its T
     page.on('request',r=>{
       const url=new URL(r.url());
       if(r.isNavigationRequest())return r.respond({status:200,contentType:'text/html',body:fs.readFileSync(require.resolve('../static/index.html'),'utf8')});
+      if (respondConversationAsset(r)) return;
       if(url.pathname==='/static/app.js')return r.respond({status:200,contentType:'application/javascript',body:exposed});
       if(url.pathname.startsWith('/static/')&&(url.pathname.endsWith('.css')||url.pathname==='/static/sidebar-navigation.js')) {
         const file=path.join(__dirname,'..',url.pathname);

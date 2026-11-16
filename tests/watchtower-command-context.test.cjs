@@ -1,3 +1,4 @@
+const respondConversationAsset = require('./conversation-assets.cjs');
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const fs = require('node:fs');
@@ -94,6 +95,7 @@ test('real conversation renderers update existing chips when a filing result arr
       const url = new URL(request.url());
       if (request.isNavigationRequest()) return request.respond({ status: 200, contentType: 'text/html',
         body: fs.readFileSync(require.resolve('../static/index.html'), 'utf8') });
+      if (respondConversationAsset(request)) return;
       if (url.pathname === '/static/app.js') return request.respond({ status: 200, contentType: 'application/javascript', body: exposed });
       return request.respond({ status: 200, contentType: 'application/json', body: '[]' });
     });
@@ -136,6 +138,7 @@ test('standalone Claude filing groups keep chips and bounded previews until expa
       const url = new URL(request.url());
       if (request.isNavigationRequest()) return request.respond({ status: 200, contentType: 'text/html',
         body: fs.readFileSync(require.resolve('../static/index.html'), 'utf8') });
+      if (respondConversationAsset(request)) return;
       if (url.pathname === '/static/app.js') return request.respond({ status: 200, contentType: 'application/javascript', body: exposed });
       return request.respond({ status: 200, contentType: 'application/json', body: '[]' });
     });

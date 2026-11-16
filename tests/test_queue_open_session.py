@@ -24,6 +24,7 @@ class QueueOpenSessionTests(unittest.TestCase):
 
     def test_raw_session_open_keeps_the_composer_available(self):
         app = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app = (PROJECT_ROOT / "static" / "conversation-selection.js").read_text()
         start = app.index("async function selectConversation(id, paneId)")
         selection = app[
             start:

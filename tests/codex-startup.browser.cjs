@@ -1,3 +1,4 @@
+const respondConversationAsset = require('./conversation-assets.cjs');
 // Run against an isolated dashboard: CCC_TEST_URL=http://127.0.0.1:PORT node tests/codex-startup.browser.cjs
 // All API writes are intercepted. Engine timings below are deterministic delivery replays.
 const fs=require('fs'),assert=require('assert/strict'),path=require('path');
@@ -58,6 +59,7 @@ function event(text,live=false){return {type:'assistant',line:live?undefined:3,t
    await page.setRequestInterception(true);
    page.on('request',r=>{(async()=>{
     const u=new URL(r.url()),json=data=>r.respond({contentType:'application/json',body:JSON.stringify(data)});
+    if (respondConversationAsset(r)) return;
     if(u.pathname==='/static/app.js')return r.respond({contentType:'text/javascript',body:source.replace('  function _watchCodexSpawnRegistration(',injection+'  function _watchCodexSpawnRegistration(')});
     if(u.pathname==='/static/codex-live-source.js')return r.respond({contentType:'text/javascript',body:liveSource});
     if(u.pathname==='/api/spawn/codex'||(r.method()==='POST'&&u.pathname.includes('spawn')&&!u.pathname.includes('timeline'))){

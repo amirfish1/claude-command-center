@@ -1,3 +1,4 @@
+const respondConversationAsset = require('./conversation-assets.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -65,6 +66,7 @@ test('reopening a landed placeholder renders the saved conversation while it rem
     page.on('request',r=>{
       const url=new URL(r.url());
       if(r.isNavigationRequest())return r.respond({status:200,contentType:'text/html',body:fs.readFileSync(require.resolve('../static/index.html'),'utf8')});
+      if (respondConversationAsset(r)) return;
       if(url.pathname==='/static/app.js')return r.respond({status:200,contentType:'application/javascript',body:exposed});
       if(url.pathname==='/static/app.css')return r.respond({status:200,contentType:'text/css',body:fs.readFileSync(require.resolve('../static/app.css'),'utf8')});
       if(url.pathname.startsWith('/api/conversations/'))requests.push(url.pathname);

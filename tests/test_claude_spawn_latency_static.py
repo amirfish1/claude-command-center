@@ -12,7 +12,8 @@ BENCHMARK_JS = (
 
 
 def _function_source(name, window=9000):
-    source = APP_JS.read_text(encoding="utf-8")
+    owner = APP_JS.with_name("conversation-selection.js") if name == "selectConversation" else APP_JS
+    source = owner.read_text(encoding="utf-8")
     start = source.index(f"function {name}(")
     return source[start : start + window]
 

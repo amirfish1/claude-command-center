@@ -1,3 +1,4 @@
+const respondConversationAsset = require('./conversation-assets.cjs');
 // Opt-in behavior check: CCC_FROZEN_ASK_TEST_URL=http://127.0.0.1:8091 node tests/frozen-ask.browser.cjs
 // API responses are disposable; no session messages or preferences are sent.
 const assert = require('node:assert/strict');
@@ -60,6 +61,7 @@ const fixture = `
     await page.setRequestInterception(true);
     page.on('request', request => {
       const url = new URL(request.url());
+      if (respondConversationAsset(request)) return;
       if (url.pathname === '/static/app.js') return request.respond({contentType:'text/javascript', body:source.replace(anchor, fixture + anchor)});
       if (url.pathname.startsWith('/api/')) return request.respond({contentType:'application/json', body:JSON.stringify(url.pathname === '/api/sessions' ? [] : url.pathname === '/api/conversations/list' ? {conversations:[], total:0} : {})});
       return request.continue();

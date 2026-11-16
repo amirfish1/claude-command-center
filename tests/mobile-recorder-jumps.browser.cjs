@@ -1,3 +1,4 @@
+const respondConversationAsset = require('./conversation-assets.cjs');
 // Opt-in rendered geometry regression; API fixtures never send messages or record audio.
 // CCC_MOBILE_READER_TEST_URL=http://localhost:8090 node tests/mobile-recorder-jumps.browser.cjs
 const assert=require('node:assert/strict');
@@ -14,6 +15,7 @@ const {findChromePath}=require(root+'puppeteer-browser-config.js');
  await page.evaluateOnNewDocument(()=>{for(const key of ['ccc-onboarded','ccc-tour-done','ccc-engines-first-run-done'])localStorage.setItem(key,'1');localStorage.setItem('ccc-ui-mode','advanced');});
  await page.setRequestInterception(true);
  page.on('request',req=>{const url=new URL(req.url());
+ if (respondConversationAsset(req)) return;
  if(url.pathname==='/static/app.js')return req.respond({contentType:'text/javascript',body:fs.readFileSync(process.env.CONV_JUMP_SOURCE || root+'static/app.js','utf8').replace('  function positionConversationEndAffordance(view) {',`  window.__mobileRecorderLayout = () => {
  const view=getConvView(); const pane=view.closest('.conv-pane');pane.classList.remove('has-new-session-context');pane.querySelector('.conv-input-bar').classList.add('visible');document.body.classList.add('mobile-show-main');
  view.innerHTML=Array.from({length:20},()=>'<div class="event user_text"><div class="user-msg">Review the layout.</div></div><div class="event assistant"><div class="assistant-text"><p>Read the conversation and jump between turns.</p></div></div>').join('');view.scrollTop=180;view._pinnedToBottom=false;

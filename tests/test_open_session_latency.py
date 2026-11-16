@@ -107,8 +107,7 @@ def test_session_localhost_probe_starts_only_after_the_transcript_load():
     assert "resetLocalhostPill()" in set_block
     assert "pollLocalhost()" not in set_block
 
-    select_start = APP_JS.index("async function selectConversation(")
-    select_block = APP_JS[select_start:APP_JS.index("// ── Split panel input bar", select_start)]
+    select_block = (Path(__file__).resolve().parents[1] / "static" / "conversation-selection.js").read_text()
     transcript_at = select_block.index("await fetchConversationEvents(paneId)")
     localhost_at = select_block.index("pollLocalhost()", transcript_at)
     assert transcript_at < localhost_at

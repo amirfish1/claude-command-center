@@ -83,9 +83,9 @@ def test_result_cleanup_cannot_forget_that_message_text_already_streamed():
 
 def test_stream_handoff_markers_are_cleared_when_a_pane_changes_conversations():
     """The reused pane must not retain orphaned ids from an older session."""
-    source = APP_JS.read_text(encoding="utf-8")
+    source = APP_JS.with_name("conversation-selection.js").read_text(encoding="utf-8")
     start = source.index("async function selectConversation(")
-    end = source.index("\n  function updateSplitInputBar(", start)
+    end = len(source)
     select_body = source[start:end]
 
     clear_marker = "if ($view._streamedAssistantMessageIds) $view._streamedAssistantMessageIds.clear();"
@@ -134,6 +134,7 @@ def test_result_before_durable_handoff_in_real_browser():
             const page = await browser.newPage();
             await page.setRequestInterception(true);
             page.on('request', request => {
+              if (require('./tests/conversation-assets.cjs')(request)) return;
               const url = new URL(request.url());
               if (request.isNavigationRequest()) {
                 request.respond({status: 200, contentType: 'text/html', body: indexHtml});

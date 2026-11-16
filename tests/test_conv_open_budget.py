@@ -37,7 +37,8 @@ def test_switching_conversation_frees_connection_slots_before_the_tail_fetch():
     # row's stream, spawn-stream and up to seven polls in flight, so the new
     # row's tail fetch queued behind them (672 ms stall measured 2026-09-12
     # with the harness in ~/dev/scratch/ccc-loadtime, curl saw 2-42 ms).
-    source = _function("async function selectConversation(", "stopCodexLogPoller();")
+    selection = (ROOT / "static" / "conversation-selection.js").read_text()
+    source = selection[:selection.index("stopCodexLogPoller();", selection.index("async function selectConversation("))]
     prefetch = _index_of(source, "_prefetchConversationTail(id, true)")
     assert _index_of(source, "abortConvScopedRequests()") < prefetch
     assert _index_of(source, "stopConvStream(paneId)") < prefetch

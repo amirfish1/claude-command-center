@@ -1,3 +1,4 @@
+const respondConversationAsset = require('./conversation-assets.cjs');
 // Opt-in integration check: runs ten real, short Codex turns (Linux only).
 // Launch a disposable worker with CCC_STATE_DIR and CCC_WORKER_SOCKET, then
 // an ephemeral dashboard with the same environment. Pass its loopback URL as
@@ -77,6 +78,7 @@ async function coldOwner(trial){
   p.on('response',async r=>{if(new URL(r.url()).pathname==='/api/sessions/spawn-codex'){spawn=await r.json();console.log('spawn',i+1,JSON.stringify(spawn));}});
   await p.setRequestInterception(true);p.on('request',r=>{(async()=>{
    const u=new URL(r.url()),json=x=>r.respond({contentType:'application/json',body:JSON.stringify(x)});
+   if (respondConversationAsset(r)) return;
    if(u.pathname==='/static/app.js')return r.respond({contentType:'text/javascript',body:source.replace('  function _watchCodexSpawnRegistration(',injection+'  function _watchCodexSpawnRegistration(')});
    if(['/api/sessions/spawn-codex','/api/control-plane/graph','/api/codex/client/live-transcript','/api/session/spawn-timeline/mark','/api/session/spawn-timeline'].includes(u.pathname))return r.continue();
    if(/^\/api\/conversations\/[0-9a-f-]{36}$/.test(u.pathname)){canonical++;return r.continue();}
