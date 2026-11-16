@@ -1,4 +1,14 @@
-(function() {
+(function bootDashboard() {
+  // An app deep link starts a real app frame before the dashboard. Avoid
+  // competing with that frame for script/layout work until it is ready.
+  if (window.__cccDeferDashboardBoot) {
+    window.__cccDeferDashboardBoot(bootDashboard);
+    return;
+  }
+  function onDashboardDocumentReady(callback) {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', callback);
+    else queueMicrotask(callback);
+  }
   // ── Poller kill-switch harness (debug) ──────────────────────────────────
   // Every periodic timer below is wrapped with _gated(name, fn) or guarded by
   // `if (_pollerOff('name')) return;`. Flip any off live from the console:
@@ -2104,13 +2114,11 @@
     _perfPaneLog.speaker.forEach(function (e) { _perfPaneRow('speaker', e, true); });
     ['list', 'open', 'speaker'].forEach(_perfPaneSummary);
   }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { _initPollerStrip(); _initFrameMonitor(); _initPerfSection(); });
-  } else {
+  onDashboardDocumentReady(() => {
     _initPollerStrip();
     _initFrameMonitor();
     _initPerfSection();
-  }
+  });
 
   // Back to the foreground → refresh the paused background pollers once rather
   // than waiting up to a full interval for fresh data. The heavy sessions/
@@ -77746,7 +77754,7 @@
     }, 6000);
   }
 
-  document.addEventListener('DOMContentLoaded', () => {
+  onDashboardDocumentReady(() => {
     const pane = document.getElementById('statusRailOrchestrationPane');
     if (!pane) return;
     renderOrchPlaybooks();
@@ -78548,7 +78556,7 @@
   let askWarmUp = null;
 
   // Wire pill click + start polling once on first JS load.
-  document.addEventListener('DOMContentLoaded', () => {
+  onDashboardDocumentReady(() => {
     const $pill = document.getElementById('historyStatusPill');
     if ($pill) {
       $pill.addEventListener('click', () => _hiTriggerSetup());

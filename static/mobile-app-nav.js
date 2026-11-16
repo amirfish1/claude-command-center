@@ -12,7 +12,7 @@
   style.textContent = `
     #cccMobileAppFrame { position:fixed; top:calc(var(--app-vv-top, 0px) + env(safe-area-inset-top, 0px)); left:env(safe-area-inset-left, 0px); width:calc(100% - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)); height:max(0px, calc(var(--app-vh, 100dvh) - env(safe-area-inset-top, 0px) - var(--ccc-mobile-app-nav-height, 70px))); border:0; background:var(--bg,#0f1115); z-index:900; }
     #cccMobileAppFrame[hidden] { display:none; }
-    body:not(.has-mobile-bottom-nav) #cccMobileAppFrame { top:0; left:var(--ccc-rail-w, 76px); width:calc(100% - var(--ccc-rail-w, 76px)); height:100%; }
+    html:has(> body:not(.has-mobile-bottom-nav)) #cccMobileAppFrame { top:0; left:var(--ccc-rail-w, 76px); width:calc(100% - var(--ccc-rail-w, 76px)); height:100%; }
     body.ccc-mobile-app-open #pwaInstallBanner { display:none !important; }
     body.has-mobile-bottom-nav #mobileBottomNav { bottom:auto; top:calc(var(--app-vv-top, 0px) + var(--app-vh, 100dvh)); transform:translateY(-100%); padding:4px max(4px, env(safe-area-inset-right, 0px)) max(2px, env(safe-area-inset-bottom, 0px)) max(4px, env(safe-area-inset-left, 0px)); }
     body.ccc-mobile-app-open.has-mobile-bottom-nav #mobileBottomNav { display:flex !important; z-index:950; }
@@ -102,6 +102,9 @@
   if (dashboard) window.cccOpenApp = id => open(id, true);
   let restored = false;
   function restore(e) {
+    // The app frame can be ready before the surrounding dashboard boots.
+    // Keep it mounted until the core navigation functions are installed.
+    if (window.__cccDeferDashboardBoot) return;
     // Until the page's own app has opened (the app list can arrive after the
     // first try), a restore belongs to the page load; later ones are back/forward.
     const pageLoad = !restored && !(e && e.type === 'popstate');
@@ -174,6 +177,7 @@
   window.addEventListener('ccc:apps', e => { apps = e.detail; render(); });
   if (!dashboard) window.addEventListener('resize', render);
   window.addEventListener('popstate', restore);
+  window.addEventListener('ccc:dashboard-ready', restore);
   window.addEventListener('load', restore);
   if (dashboard) {
     const warmSoon = () => setTimeout(() => (window.requestIdleCallback || setTimeout)(prewarm, {timeout: 4000}), WARM_AFTER_MS);

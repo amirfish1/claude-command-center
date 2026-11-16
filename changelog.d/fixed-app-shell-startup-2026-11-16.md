@@ -1,0 +1,1 @@
+- App deep links start their content before the surrounding dashboard, and agent panes skip hidden dashboard markup while retaining the shared conversation, composer and dialogs.

@@ -30896,12 +30896,15 @@ def _stamp_static_urls(html_text):
     return _STATIC_URL_RE.sub(_sub, html_text)
 
 
-def _load_index_html(app_embed=False):
+def _load_index_html(app_embed=False, app_shell=False):
     try:
         html = _INDEX_HTML_PATH.read_text(encoding="utf-8")
         if app_embed:
             from ccc_server.app_embed import conversation_page
             html = conversation_page(html)
+        elif app_shell:
+            from ccc_server.app_embed import application_shell_page
+            html = application_shell_page(html)
         return _stamp_static_urls(html)
     except OSError as e:
         return "<h1>index.html missing</h1><pre>" + str(e) + "</pre>"
@@ -31367,7 +31370,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             app_embed = (query.get("embed") == ["app"] and
                          (query.get("ccc_popout") == ["conversation"] or
                           query.get("popout") == ["conversation"]))
-            self.send_html(_load_index_html(app_embed=app_embed))
+            app_id = query.get("ccc_app", [""])[0]
+            app_shell = bool(app_id and app_id not in ("sessions", "queues")
+                             and not query.get("ccc_popout") and not query.get("popout"))
+            self.send_html(_load_index_html(app_embed=app_embed, app_shell=app_shell))
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
         elif path == "/api/model-picker/picks":

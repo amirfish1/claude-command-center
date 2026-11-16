@@ -3,6 +3,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<script src="/static/app-shell-boot.js"></script>
 <link rel="stylesheet" href="/static/restart-transport.css">
 <script src="/static/restart-transport.js"></script>
 <!-- `interactive-widget=resizes-content` asks the browser to shrink the
@@ -75,7 +76,9 @@
      in on load — no FOIT, just a brief FOUT. -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600;700&display=swap">
+<!-- Optional fonts must not hold the parser's next script (and app startup)
+     behind an external stylesheet. The system stack already paints first. -->
+<link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@600;700&display=swap">
 <title>Command Center for Claude, Codex, Cursor, and Anti-Gravity</title>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/jobs-tab.css">
@@ -188,6 +191,7 @@
   // dashboard's background reads wait for the app (app.js startup gate).
   (function () {
     if (window.__CCC_CONVERSATION_POPOUT__ || window.self !== window.top) return;
+    if (document.getElementById('cccMobileAppFrame') || window.__cccAppFrameReady) return;
     try {
       var id = new URLSearchParams(window.location.search || '').get('ccc_app');
       if (!id || id === 'sessions' || id === 'queues') return;
