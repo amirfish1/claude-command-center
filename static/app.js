@@ -8,6 +8,46 @@
 
 
 
+
+  const { activePaneId, paneByPaneId, paneIndexByPaneId, otherPaneConvIds, getConvView, getConvInputBarForPane, syncActivePaneChrome, setActivePaneById } = window.CCCConversationPanes.createController({
+    state: {
+      get splitState() { return splitState; },
+      get currentConversation() { return currentConversation; },
+      get _sttRecording() { return _sttRecording; },
+      get _sttActivePaneId() { return _sttActivePaneId; },
+      get _sttActiveConvId() { return _sttActiveConvId; },
+      get _convPaneHost() { return _convPaneHost; },
+      get conversationsData() { return conversationsData; },
+      get archiveData() { return archiveData; },
+      get $convSessionId() { return $convSessionId; },
+      get getConvViewForPane() { return getConvViewForPane; },
+      get $conversationsView() { return $conversationsView; },
+      get convPaneElById() { return convPaneElById; },
+    },
+    helpers: {
+      get stopSpeechRecognition() { return stopSpeechRecognition; },
+      get syncConversationNavigationFocus() { return syncConversationNavigationFocus; },
+      get updateSubagentsPanel() { return updateSubagentsPanel; },
+      get updateOrchestrationPane() { return updateOrchestrationPane; },
+      get mountStatusRailForActivePane() { return mountStatusRailForActivePane; },
+      get saveSplitState() { return saveSplitState; },
+      get updatePaneHeader() { return updatePaneHeader; },
+      get setCopyableSessionId() { return setCopyableSessionId; },
+      get fetchCodexDiagnostics() { return fetchCodexDiagnostics; },
+      get _codexDiagHidePanel() { return _codexDiagHidePanel; },
+      get updateInputBar() { return updateInputBar; },
+      get updateResumeButton() { return updateResumeButton; },
+      get updateAnnounceButton() { return updateAnnounceButton; },
+      get updateJumpButton() { return updateJumpButton; },
+      get updateSplitToolbar() { return updateSplitToolbar; },
+      get scheduleTtsPrefetch() { return scheduleTtsPrefetch; },
+      get pollVercelDeploy() { return pollVercelDeploy; },
+      get resetLocalhostPill() { return resetLocalhostPill; },
+      get pollLocalhost() { return pollLocalhost; },
+      get _applyStatusRailLayout() { return _applyStatusRailLayout; },
+    },
+  });
+
   const { escapeHtml,
     _escapeHtmlChar,
     escapeAttr,
@@ -25385,41 +25425,19 @@
       _qfBootRestoreDepth--;
     }
   }
-  function activePaneId() { return splitState.panes[splitState.activeIndex].id; }
-  function paneByPaneId(pid) { return splitState.panes.find(p => p.id === pid) || null; }
-  function paneIndexByPaneId(pid) {
-    for (let i = 0; i < splitState.panes.length; i++) if (splitState.panes[i].id === pid) return i;
-    return -1;
-  }
+
+
+
   // CCC-129: conversations open in a split pane that is NOT focused, so the
   // sidebar can mark that row in a second color next to the active row.
-  function otherPaneConvIds() {
-    const ids = new Set();
-    if (!splitState || !splitState.orientation || !Array.isArray(splitState.panes) || splitState.panes.length < 2) return ids;
-    splitState.panes.forEach((p, i) => {
-      if (i !== splitState.activeIndex && p && p.conversationId) ids.add(p.conversationId);
-    });
-    return ids;
-  }
 
-  function syncActivePaneChrome(activeConvId) {
-    const activePid = activePaneId();
-    const newConvId = (arguments.length > 0 && activeConvId !== undefined) ? activeConvId : currentConversation;
-    if (typeof _sttRecording !== 'undefined' && _sttRecording) {
-      const isGc = (_sttActivePaneId === 'gc');
-      const paneChanged = (_sttActivePaneId !== activePid);
-      const convChanged = (!isGc && _sttActiveConvId !== newConvId);
-      if (paneChanged || convChanged) {
-        stopSpeechRecognition();
-      }
-    }
-    _convPaneHost().querySelectorAll('.conv-pane').forEach(el => {
-      const on = el.getAttribute('data-pane-id') === activePid;
-      if (el.classList.contains('is-active') !== on) el.classList.toggle('is-active', on);
-    });
-    const convId = arguments.length > 0 ? activeConvId : currentConversation;
+
+
+
+  // Dashboard collection focus is a host adapter. The pane controller does
+  // not import sidebar, board, or Flow controllers to focus a transcript.
+  function syncConversationNavigationFocus(convId, otherIds) {
     if ($convList) {
-      const otherIds = otherPaneConvIds();
       $convList.querySelectorAll('.conv-item').forEach(el => {
         const isActive = el.dataset.id === convId;
         el.classList.toggle('active', isActive);
@@ -25442,8 +25460,6 @@
         el.classList.toggle('active', el.dataset.id === convId);
       });
     }
-    try { updateSubagentsPanel(convId); } catch (_) { /* defensive - panel is non-critical */ }
-    try { if (typeof updateOrchestrationPane === 'function') updateOrchestrationPane(convId); } catch (_) {}
   }
 
   // Populate the status-rail Subagents panel from the active conversation's
@@ -25526,51 +25542,7 @@
     window.open('/?ccc_popout=conversation&conv=' + encodeURIComponent(conv), '_blank',
       'width=900,height=800');
   });
-  function setActivePaneById(paneId, activeConvId) {
-    const idx = paneIndexByPaneId(paneId);
-    if (idx < 0) return false;
-    const changed = splitState.activeIndex !== idx;
-    splitState.activeIndex = idx;
-    if (typeof mountStatusRailForActivePane === 'function') mountStatusRailForActivePane();
-    if (changed) saveSplitState();
-    if (arguments.length > 1) syncActivePaneChrome(activeConvId);
-    else syncActivePaneChrome();
-    if (changed) {
-      const pane = paneByPaneId(paneId);
-      const convId = pane && pane.conversationId;
-      const row = convId
-        ? ((conversationsData || []).find(x => x && x.id === convId)
-          || (Array.isArray(archiveData) ? archiveData.find(x => x && ((x.id || x.session_id) === convId)) : null))
-        : null;
-      if (convId || row) updatePaneHeader(paneId, row || { id: convId, session_id: convId });
-      // CCC-215: the rail's session-id chip and Codex diagnostics are
-      // singletons last written for whichever pane loaded most recently;
-      // repaint them for the newly focused pane.
-      const cs = pane && pane.currentSession;
-      const csId = (cs && cs.id) || '';
-      if (typeof setCopyableSessionId === 'function') {
-        setCopyableSessionId($convSessionId, csId, (row && row.jsonl_path) || '');
-      }
-      if (typeof fetchCodexDiagnostics === 'function') {
-        if (csId && cs.source === 'codex') fetchCodexDiagnostics(csId, paneId);
-        else _codexDiagHidePanel();
-      }
-      if (typeof updateInputBar === 'function') updateInputBar();
-      if (typeof updateResumeButton === 'function') updateResumeButton();
-      if (typeof updateAnnounceButton === 'function') updateAnnounceButton();
-      if (typeof updateJumpButton === 'function') updateJumpButton();
-      if (typeof updateSplitToolbar === 'function') updateSplitToolbar();
-      scheduleTtsPrefetch();
-      try { if (typeof pollVercelDeploy === 'function') pollVercelDeploy(); } catch (_) {}
-      try {
-        if (typeof resetLocalhostPill === 'function') resetLocalhostPill();
-        if (typeof pollLocalhost === 'function') pollLocalhost();
-      } catch (_) {}
-      try { if (typeof _applyStatusRailLayout === 'function') _applyStatusRailLayout(); } catch (_) {}
-      try { if (typeof window._cccApplyToolbarRailLayout === 'function') window._cccApplyToolbarRailLayout(); } catch (_) {}
-    }
-    return true;
-  }
+
 
   // Compatibility shim — read/write the active pane via the old global names.
   // DO NOT remove without auditing every reference to currentConversation,
@@ -50266,13 +50238,8 @@
 
 
 
-  function getConvView() {
-    return getConvViewForPane(activePaneId()) || $conversationsView;
-  }
-  function getConvInputBarForPane(pid) {
-    const pane = convPaneElById(pid);
-    return pane ? pane.querySelector('.conv-input-bar') : null;
-  }
+
+
 
   // The pane and popout use the same worker headline as the Workers list,
   // including before the server replaces a drain prompt with a ticket name.

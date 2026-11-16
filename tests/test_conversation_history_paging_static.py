@@ -45,7 +45,7 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         """A saved Coding session must restore while the All sidebar shows Workers."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         restore_start = app_js.index("async function restoreLastConversation()")
-        restore_js = app_js[restore_start:app_js.index("function activePaneId()", restore_start)]
+        restore_js = app_js[restore_start:app_js.index("// CCC-129: conversations open in a split pane", restore_start)]
 
         self.assertIn("conversationRowsContainId(conversationsData, pane.conversationId)", restore_js)
         self.assertIn("conversationRowsContainId(archiveData, pane.conversationId)", restore_js)

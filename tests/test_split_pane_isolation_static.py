@@ -25,12 +25,10 @@ class TestSplitPaneIsolationStatic(unittest.TestCase):
         build_start = app_js.index("function buildPaneElement(paneId)")
         build_end = app_js.index("\n  // Toggle the split layout", build_start)
         build_fn = app_js[build_start:build_end]
-        active_start = app_js.index("function setActivePaneById")
-        active_end = app_js.index("\n\n  // Compatibility shim", active_start)
-        active_fn = app_js[active_start:active_end]
+        active_fn = pathlib.Path(PROJECT_ROOT, "static", "conversation-panes.js").read_text(encoding="utf-8")
 
         self.assertIn("removeSplitPaneSingletonChrome(clone);", build_fn)
-        self.assertIn("mountStatusRailForActivePane();", active_fn)
+        self.assertIn("helpers.mountStatusRailForActivePane)();", active_fn)
 
     def test_split_clone_binds_image_paste_to_its_own_composer(self):
         """A cloned right-hand composer must retain image-paste support."""
