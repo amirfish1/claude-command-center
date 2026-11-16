@@ -90,3 +90,21 @@ def test_new_thread_overlay_strips_guardrail_before_clipping(monkeypatch):
     assert rows['launch']['display_name'] == 'Launching comparison'
     assert rows['launch']['first_message'] == ''
     assert rows['renamed']['display_name'] == 'My title'
+
+
+def test_overlay_row_carries_continuation_origin_for_ticket_inheritance(monkeypatch):
+    """CCC-1315: the overlay row must expose the origin so the idea-ticket sweep
+    attaches a continuation to its ticket before the full rebuild lands."""
+    monkeypatch.setattr(server, "_codex_fetch_threads", lambda **kw: [
+        {"id": "cont", "title": "", "updated_at": 100000},
+        {"id": "plain", "title": "", "updated_at": 100000},
+    ])
+    monkeypatch.setattr(server, "_load_conversation_lifecycle_sets", lambda: (set(), set()))
+    monkeypatch.setattr(server, "_load_session_name_overrides", lambda: {})
+    monkeypatch.setattr(server, "_auto_titled_session_ids", lambda: {})
+    monkeypatch.setattr(server, "_spawn_registry_entries_by_session", lambda **kw: {
+        "cont": {"prompt": "You are continuing a task.\n\nOrigin session id: 748085a9-6255-45ef-805f-94f992ab01df\n"},
+    })
+    rows = {r["session_id"]: r for r in server._archive_overlay_codex_sessions([], now=100100)}
+    assert rows["cont"]["continued_from_session_id"] == "748085a9-6255-45ef-805f-94f992ab01df"
+    assert rows["plain"]["continued_from_session_id"] is None

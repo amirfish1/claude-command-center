@@ -18696,6 +18696,9 @@ def _archive_overlay_codex_sessions(rows, now=None):
             "folder_label": Path(cwd).name if cwd else "Codex", "folder_path": cwd,
             "session_cwd": cwd, "slug": _encode_project_slug(cwd) if cwd else "",
             "mtime": stamp, "modified": stamp, "parent_session_id": parents.get(sid) or "",
+            # Lets the idea-ticket sweep inherit the origin's ticket now, not
+            # after the full rebuild (CCC-1315: no Features/All row for 200s+).
+            "continued_from_session_id": _continued_from_session_id_from_text(prompt) or None,
             "archived": False, "trashed": False,
         })
     return out
