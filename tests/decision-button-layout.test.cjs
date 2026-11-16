@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-test('phone decisions wrap long labels below the prompt beside the pop-out', async () => {
+test('phone decisions wrap long labels below the prompt without a pop-out', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
@@ -28,6 +28,8 @@ test('phone decisions wrap long labels below the prompt beside the pop-out', asy
             right: button.getBoundingClientRect().right, visible: !!button.getClientRects().length,
           })), viewport: innerWidth };
       });
+      assert.equal(await page.$eval('.conv-row-popout',el=>getComputedStyle(el).display), 'none', 'phone decisions omit the pop-out');
+      if (process.env.CCC_ROW_SCREENSHOT && width === 390) await page.screenshot({path:process.env.CCC_ROW_SCREENSHOT});
       assert.ok(layout.buttonsTop >= layout.promptBottom - 1, 'choices belong below the prompt');
       assert.deepEqual(layout.buttons.map(button => button.text), ['Leave the earlier session archived and keep all existing work', 'Unarchive it']);
       for (const button of layout.buttons) {
@@ -58,13 +60,16 @@ test('desktop child decisions escape the compact summary column', async () => {
       const layout = await page.evaluate(() => {
         const rect = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
         return { title: rect('.conv-title'), outcome: rect('.conv-outcome'), row: rect('.conv-main-row'),
-          buttons: [...document.querySelectorAll('.conv-quick-action')].map(b => b.getBoundingClientRect().toJSON()),
+          buttons: [...document.querySelectorAll('.conv-quick-action')].map(b => ({
+            ...b.getBoundingClientRect().toJSON(), contentWidth:b.scrollWidth, clientWidth:b.clientWidth,
+          })),
           popout: rect('.conv-row-popout') };
       });
       assert.ok(layout.outcome.top >= layout.title.bottom, 'decision belongs below the child title');
       assert.ok(layout.outcome.width >= layout.row.width - 1, 'decision uses the full child row');
       for (const button of layout.buttons) {
-        assert.ok(button.width >= 90 && button.height <= 32, 'short labels stay horizontal');
+        assert.ok(button.width > 0 && button.height <= 32 && button.contentWidth <= button.clientWidth + 1,
+          'short labels stay on one fully readable line');
         assert.ok(button.right <= layout.row.right + 1, 'choices stay inside the row');
       }
       assert.ok(layout.popout.top < layout.outcome.bottom, 'pop-out remains in the decision area');

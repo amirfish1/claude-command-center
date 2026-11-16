@@ -33819,12 +33819,16 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 }
 .conv-row-popout:hover, .conv-row-popout:focus-visible { color: var(--accent); border-color: var(--accent); }
 /* Mouse hover and keyboard focus reveal the pop-out without reflow.
-   Opacity keeps the button reachable by Tab. Touch keeps it visible. */
+   Opacity keeps the button reachable by Tab on desktop. */
 @media not all and (pointer: coarse) {
   #convList .conv-item:not(:hover):not(:focus-within) .conv-row-popout {
     opacity: 0;
     pointer-events: none;
   }
+}
+/* Session rows open in place on phones; a separate window adds no value. */
+@media (max-width: 1200px) {
+  #convList .conv-row-popout { display: none; }
 }
 #convList#convList .conv-item .conv-main-row.has-inline-step > .conv-outcome.is-inline:has(.conv-row-popout) {
   display: flex !important; align-items: flex-end; gap: 4px;

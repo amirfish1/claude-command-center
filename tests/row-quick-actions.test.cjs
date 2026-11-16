@@ -172,7 +172,7 @@ test('human row replies use composer provenance without promoting automated send
   for (const call of humanSteers) assert.match(call, /userInitiated: true/);
 });
 
-test('row pop-out works without an answer and appears on hover or keyboard focus', async () => {
+test('row pop-out supports desktop hover and keyboard focus and stays hidden on mobile', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
@@ -212,7 +212,19 @@ test('row pop-out works without an answer and appears on hover or keyboard focus
     const mobileHtml = await page.content();
     await page.emulate({viewport:{width:390,height:844,isMobile:true,hasTouch:true},userAgent:'mobile'});
     await page.setContent(mobileHtml);
-    assert.equal(await vis(), '1', 'touch devices do not require hover');
+    for (const width of [320,390,768,1200]) {
+      await page.setViewport({width,height:844,isMobile:true,hasTouch:true});
+      assert.equal(await page.$eval('.conv-row-popout', el => getComputedStyle(el).display), 'none',
+        `row pop-out is hidden at ${width}px`);
+      assert.equal(await page.$eval('.conv-row-popout', el => el.getClientRects().length), 0,
+        'hidden control takes no row space');
+      assert.equal(await page.$eval('.conv-row-popout', el => { el.focus(); return document.activeElement === el; }), false,
+        'hidden pop-out cannot receive keyboard focus');
+    }
+    await page.setViewport({width:1440,height:900,isMobile:false,hasTouch:false});
+    await page.setContent(mobileHtml);
+    await page.focus('.conv-row-popout');
+    assert.equal(await vis(), '1', 'desktop pop-out returns after resizing');
   } finally {
     await browser.close();
   }
