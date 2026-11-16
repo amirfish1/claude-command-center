@@ -5,6 +5,8 @@ import re
 from functools import lru_cache
 from html.parser import HTMLParser
 
+from .conversation_assets import SCRIPT_NAME, SCRIPTS
+
 
 # Keep the renderer, composer, speech, recovery and conversation extensions on
 # the same source as the dashboard. These modules only serve hidden panels.
@@ -46,7 +48,7 @@ class _DashboardPanels(HTMLParser):
             return
         attrs = dict(attributes)
         panel = (tag == "div" and (attrs.get("class") == "sidebar"
-                 or attrs.get("id") in ("settingsModal", "kanbanLayout")))
+                 or attrs.get("id") in ("settingsModal", "kanbanLayout", "cccLoadingOverlay")))
         self.stack.append((tag, self._source_offset() if panel else None))
 
     def handle_endtag(self, tag):
@@ -70,7 +72,7 @@ def conversation_page(html):
     panels = _DashboardPanels(html).ranges
     # A changed template must fall back to the full shared page, never remove
     # a partial tree. The composer and all its dialogs remain original markup.
-    if len(panels) == 3:
+    if len(panels) == 4:
         for start, end in sorted(panels, reverse=True):
             html = html[:start] + html[end:]
         html = html.replace('<body class="voice-call-btn-off">',
@@ -80,9 +82,12 @@ def conversation_page(html):
     # Start the bounded read and renderer download ahead of optional assets.
     html = html.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n'
                         '<script src="/static/app-embed-boot.js"></script>\n'
-                        '<link rel="preload" as="script" href="/static/conversation-core.js">', 1)
+                        f'<link rel="preload" as="script" href="/static/{SCRIPT_NAME}">', 1)
+    # The native modules stay canonical source files for both hosts. Combine
+    # their delivery so a cold app does not queue twenty separate requests.
+    html = _SCRIPT.sub(lambda match: "" if match[1] in SCRIPTS else match[0], html)
     html = html.replace('<script src="/static/app.js"></script>',
-                        '<script src="/static/conversation-entry.js"></script>')
+                        f'<script src="/static/{SCRIPT_NAME}"></script>')
     return html.replace('<body class="voice-call-btn-off">',
                         '<body class="voice-call-btn-off conversation-popout ccc-app-embed">', 1)
 
@@ -105,7 +110,7 @@ def application_page(html, app_id, agent_id=None, kit_url="/static/app-kit.js"):
     metadata = _json_element("cccAppAgent", {"app": app_id, "session_id": agent_id})
     metadata += f'<link rel="preload" as="script" href="{kit_url}">'
     if agent_id:
-        metadata += ('<link rel="preload" as="script" href="/static/conversation-core.js">'
+        metadata += (f'<link rel="preload" as="script" href="/static/{SCRIPT_NAME}">'
                      '<link rel="preload" as="style" href="/static/app.css">')
     html = re.sub(r'(["\'])/static/app-kit\.js\1',
                   lambda match: match[1] + kit_url + match[1], html)

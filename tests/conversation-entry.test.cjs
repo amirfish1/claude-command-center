@@ -10,6 +10,8 @@ const {findChromePath} = require('../puppeteer-browser-config');
 const root = path.resolve(__dirname, '..');
 const html = execFileSync('python3', ['-c',
   'from pathlib import Path; from ccc_server.app_embed import conversation_page; print(conversation_page(Path("static/index.html").read_text()))'], {cwd: root, encoding: 'utf8'});
+const bundle = execFileSync('python3', ['-c',
+  'from pathlib import Path; from ccc_server.conversation_assets import ConversationScript; import sys; sys.stdout.buffer.write(ConversationScript(Path("static")).read_bytes())'], {cwd:root,maxBuffer:8*1024*1024});
 
 test('embedded entry binds real controls before readiness and keeps drafts live', async () => {
   const server = http.createServer((request, response) => {
@@ -17,6 +19,9 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
     if (url.pathname === '/') {
       response.setHeader('Content-Type', 'text/html');
       response.end(url.search ? html : '<script>window.receipts=[];addEventListener("message",e=>receipts.push(e.data))</script><iframe src="/?ccc_popout=conversation&embed=app&conv=session-test"></iframe>');
+    } else if (url.pathname === '/static/conversation-app.js') {
+      response.setHeader('Content-Type', 'application/javascript');
+      response.end(bundle);
     } else if (url.pathname.startsWith('/static/')) {
       const file = path.join(root, url.pathname);
       if (!file.startsWith(root + '/static/') || !fs.existsSync(file)) { response.writeHead(404).end(); return; }
@@ -48,9 +53,12 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
       events:document.querySelectorAll('#conversationsView .event').length,
       disabled:document.getElementById('convInput').disabled,
       resources:performance.getEntriesByType('resource').map(item => new URL(item.name).pathname),
+      dashboardOverlay:!!document.getElementById('cccLoadingOverlay'),
     }));
     assert.equal(initial.events, 2);
     assert.equal(initial.disabled, false);
+    assert.equal(initial.dashboardOverlay, false);
+    assert.ok(initial.resources.includes('/static/conversation-app.js'));
     assert.ok(!initial.resources.includes('/static/app.js'));
     await frame.click('#convActionsBtn');
     assert.equal(await frame.$eval('#convActionsBtn', element => element.getAttribute('aria-expanded')), 'true');

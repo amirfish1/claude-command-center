@@ -288,7 +288,7 @@ test('provisional overlay render skips queued-tray and durable-send reconciliati
 });
 test('queued Steer is a distinct keyed action from the Send that created it',async()=>{
  const start=app.indexOf('  async function postInjectInput(');
- const helper=app.slice(start,app.indexOf('\n  function steeredToastText(',start)).trim();
+ const helper=app.slice(start,app.indexOf('\n  }\n',start)+4).trim();
  const page=await browser.newPage();try{
   const bodies=await page.evaluate(async helperSource=>{
    const sent=[];let seq=0;
@@ -308,7 +308,7 @@ test('queued Steer is a distinct keyed action from the Send that created it',asy
 });
 test('queued Steer names the row it replaces by delivery_id, never by text alone',async()=>{
  const start=app.indexOf('  async function postInjectInput(');
- const helper=app.slice(start,app.indexOf('\n  function steeredToastText(',start)).trim();
+ const helper=app.slice(start,app.indexOf('\n  }\n',start)+4).trim();
  const page=await browser.newPage();try{
   const bodies=await page.evaluate(async helperSource=>{
    const sent=[];

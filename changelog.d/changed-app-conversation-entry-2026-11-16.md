@@ -1,1 +1,1 @@
-App conversation panes use a dedicated entry with the dashboard’s shared renderer, composer, live state, and controls instead of loading hidden dashboard panels.
+App conversation panes use a dedicated entry with the dashboard’s shared renderer, composer, live state, and controls instead of loading hidden dashboard panels. Shared controllers arrive in one cacheable response, and the pane omits the dashboard scan overlay.

@@ -31140,8 +31140,10 @@ _adopt_ccc_module("pipeline_canvas")
 
 _INDEX_HTML_PATH = STATIC_DIR / "index.html"
 def _static_asset_url(name):
+    from ccc_server.conversation_assets import SCRIPT_NAME, ConversationScript
     try:
-        stamp = str(int((STATIC_DIR / name).stat().st_mtime))
+        stamp = (ConversationScript(STATIC_DIR).metadata()[0] if name == SCRIPT_NAME
+                 else str(int((STATIC_DIR / name).stat().st_mtime)))
     except OSError:
         stamp = __version__
     return f"/static/{name}?v={stamp}"
@@ -34546,6 +34548,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Vary", "Accept-Encoding")
             self.end_headers()
             self.wfile.write(body)
+        elif path == "/static/conversation-app.js":
+            from ccc_server.conversation_assets import ConversationScript
+            self._send_static_asset(None, "application/javascript", parsed.query,
+                                    bundle=ConversationScript(STATIC_DIR))
         elif path.startswith("/static/"):
             # Serve allow-listed assets from the static/ directory.
             # index.html is intentionally excluded (extension allowlist blocks .html).
@@ -46361,7 +46367,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         except Exception:
             return body, None
 
-    def _send_static_asset(self, resolved, ct, query=""):
+    def _send_static_asset(self, resolved, ct, query="", *, bundle=None):
         """Serve one allow-listed static file with an ETag.
 
         index.html stamps asset URLs with the file mtime (_static_asset_url),
@@ -46372,12 +46378,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         the browser's compiled-code cache for the script.
         """
         try:
-            st = resolved.stat()
+            if bundle is not None:
+                stamp, key, size = bundle.metadata()
+            else:
+                st = resolved.stat()
+                stamp, size = str(int(st.st_mtime)), st.st_size
+                key = (str(resolved), st.st_mtime_ns, st.st_size)
         except OSError as e:
             self.send_json({"error": str(e)}, 500)
             return
-        stamp = str(int(st.st_mtime))
-        etag = f'"{stamp}-{st.st_size}"'
+        etag = f'"{stamp}-{size}"'
         stamped = stamp in urllib.parse.parse_qs(query or "").get("v", [])
         cache_control = "private, max-age=31536000, immutable" if stamped else "private, no-cache"
         inm = self.headers.get("If-None-Match", "") or ""
@@ -46388,14 +46398,13 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self._send_server_timing(cache="validated")
             self.end_headers()
             return
-        key = (str(resolved), st.st_mtime_ns, st.st_size)
         accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
         cached = _STATIC_GZIP_CACHE.get(key) if accepts_gzip else None
         if cached is not None:
             body, enc = cached, "gzip"
         else:
             try:
-                body = resolved.read_bytes()
+                body = (bundle if bundle is not None else resolved).read_bytes()
             except OSError as e:
                 self.send_json({"error": str(e)}, 500)
                 return
