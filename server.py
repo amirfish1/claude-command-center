@@ -31461,7 +31461,10 @@ def _run_api_request(is_background, callback, route=None):
         cheap = _bg_route_is_cheap(route)
         c0 = None
         try:
-            if cheap:
+            # Open-pane liveness must progress even while aggregate jobs hold
+            # both slots. Keep its route lock: CPU history can classify this
+            # poll as expensive, but must not queue it behind full queue scans.
+            if route == "/api/session-status" or cheap:
                 c0 = time.thread_time()
                 return callback()
             with read_slot(_background_api_read_slots, _ACCEPT_PAUSED):

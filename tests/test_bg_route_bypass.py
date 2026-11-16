@@ -68,8 +68,9 @@ def test_unknown_or_expensive_route_waits_for_a_slot(routes, route):
         pool.shutdown()
 
 
-def test_same_route_runs_one_at_a_time(routes):
-    server._BG_ROUTE_CPU["/api/repo/list"] = 0.001
+@pytest.mark.parametrize("route", ["/api/repo/list", "/api/session-status"])
+def test_same_route_runs_one_at_a_time(routes, route):
+    server._BG_ROUTE_CPU[route] = 0.001
     lock = threading.Lock()
     active = peak = 0
 
@@ -83,7 +84,7 @@ def test_same_route_runs_one_at_a_time(routes):
             active -= 1
 
     with concurrent.futures.ThreadPoolExecutor(6) as p:
-        list(p.map(lambda _: server._run_api_request(True, read, "/api/repo/list"), range(6)))
+        list(p.map(lambda _: server._run_api_request(True, read, route), range(6)))
     assert peak == 1
 
 

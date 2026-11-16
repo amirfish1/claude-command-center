@@ -101,3 +101,24 @@ def test_polled_background_paths_are_registered_and_normalized():
         assert server._normalize_bg_route(path) == path
     assert server._normalize_bg_route(None) is None
     assert server._normalize_bg_route("") is None
+
+
+@pytest.mark.parametrize("prior_cpu", [None, 0.15])
+def test_session_status_is_not_starved_by_aggregate_reads(routes, prior_cpu):
+    if prior_cpu is not None:
+        server._BG_ROUTE_CPU["/api/session-status"] = prior_cpu
+    release = threading.Event()
+    pool, futs = _fill_slots(release)
+    readers = concurrent.futures.ThreadPoolExecutor(1)
+    try:
+        handler = _DummyHandler(
+            "/api/session-status?session_id=test-session",
+            headers={"X-CCC-Background": "1"},
+        )
+        result = readers.submit(handler.do_GET)
+        assert result.result(timeout=2) == "ok"
+    finally:
+        release.set()
+        readers.shutdown()
+        [f.result(timeout=5) for f in futs]
+        pool.shutdown()
