@@ -899,6 +899,15 @@
     var id = a.getAttribute("data-app-id");
     var from = activeIdFor(lastApps) || "";
     if (a.target === "_blank") return;
+    if (window.__cccEnsureDashboard && typeof window.cccSwitchCoreApp !== "function") {
+      e.preventDefault();
+      window.__cccEnsureDashboard().then(function () {
+        if (typeof window.cccOpenApp !== "function" || !window.cccOpenApp(id)) {
+          window.location.href = a.href;
+        }
+      });
+      return;
+    }
     var t0 = Date.now();
     if (typeof window.cccOpenApp === "function" && window.cccOpenApp(id)) {
       e.preventDefault();

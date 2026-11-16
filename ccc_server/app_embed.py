@@ -124,12 +124,9 @@ def application_page(html, app_id, agent_id=None, kit_url="/static/app-kit.js"):
 def _application_shell_template(html):
     """Transform the shared template once, rather than on each app reload."""
     def nonblocking(match):
-        ready = (";document.documentElement.classList.remove('ccc-app-starting')"
-                 if match[1] == "app.css" else "")
-        failed = f' onerror="document.documentElement.classList.remove(\'ccc-app-starting\')"' if ready else ""
         return match[0].replace('href=', 'data-ccc-href=', 1).replace(
             'rel="stylesheet"', 'rel="stylesheet" media="print" '
-            f'onload="this.media=\'all\'{ready}"{failed}', 1)
+            'onload="this.media=\'all\'"', 1)
 
     def hold_script(match):
         attributes, code = match.groups()
@@ -144,11 +141,13 @@ def _application_shell_template(html):
     html = html.replace('<html lang="en">',
                         '<html lang="en" class="ccc-app-starting">', 1)
     # The frame has its own styles. Hide only the unfinished dashboard,
-    # not the app, until the main dashboard stylesheet has arrived.
+    # not the app or standalone navigation, until dashboard controls are used.
     return html.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n'
                         '<style>html.ccc-app-starting {background:#0f1115}'
                         'html.ccc-app-starting body > :not(script):not(style)'
-                        ':not(#cccMobileAppFrame) {visibility:hidden}</style>', 1)
+                        ':not(#cccMobileAppFrame):not(.ccc-side-nav):not(.ccc-rail-resizer)'
+                        ':not(.ccc-report-flag):not(.ccc-account-wrap):not(.ccc-account-pop)'
+                        ' {visibility:hidden}</style>', 1)
 
 
 def application_shell_page(html, selected_app=None):

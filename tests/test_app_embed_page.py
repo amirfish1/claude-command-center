@@ -62,7 +62,7 @@ def test_app_shell_keeps_navigation_and_holds_surrounding_assets():
     assert [url for url in Assets(html).scripts if 'app-shell-assets.js' not in url] == Assets(SOURCE).scripts
     assert html.index('/static/app-shell-boot.js') < html.index('rel="stylesheet"')
     assert 'class="ccc-app-starting"' in html
-    assert ':not(#cccMobileAppFrame) {visibility:hidden}' in html
+    assert ':not(#cccMobileAppFrame):not(.ccc-side-nav)' in html
     for line in html.splitlines():
         if 'rel="stylesheet"' in line:
             assert 'media="print"' in line
@@ -70,8 +70,7 @@ def test_app_shell_keeps_navigation_and_holds_surrounding_assets():
             if '/static/' in line:
                 assert 'data-ccc-href=' in line
     main = next(line for line in html.splitlines() if 'href="/static/app.css"' in line)
-    assert "classList.remove('ccc-app-starting')" in main
-    assert 'onerror=' in main
+    assert "ccc-app-starting" not in main
     assert '<script type="application/ccc-dashboard" src="/static/app.js">' in html
     assert '<script src="/static/app-shell-boot.js">' in html
     assert '<script src="/static/app-shell-assets.js" defer>' in html

@@ -106,7 +106,13 @@
   function restore(e) {
     // The app frame can be ready before the surrounding dashboard boots.
     // Keep it mounted until the core navigation functions are installed.
-    if (window.__cccDeferDashboardBoot) return;
+    if (window.__cccDeferDashboardBoot) {
+      const id = new URLSearchParams(location.search).get('ccc_app');
+      if (id && !apps.some(app => app.id === id) && window.__cccEnsureDashboard) {
+        window.__cccEnsureDashboard();
+      }
+      return;
+    }
     // Until the page's own app has opened (the app list can arrive after the
     // first try), a restore belongs to the page load; later ones are back/forward.
     const pageLoad = !restored && !(e && e.type === 'popstate');
