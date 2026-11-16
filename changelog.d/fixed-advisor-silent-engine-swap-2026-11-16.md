@@ -1,0 +1,1 @@
+- Model advisor no longer re-applies its pick on every composer render: auto-selection applies once, and a pick that later becomes ineligible shows a "Use <model>" suggestion instead of silently spawning a different engine.

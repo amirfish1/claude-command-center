@@ -84502,7 +84502,7 @@
   const $convInputModelSelect = document.getElementById('convInputModelSelect');
   const $convInputEffortSelect = document.getElementById('convInputEffortSelect');
   let spawnEffortChoiceDirty = false;
-  var nsAdvisor = { data: null, error: '', loading: false, loadedAt: 0, manual: false, applying: false, editing: false, draft: null, depth: 'routine' };
+  var nsAdvisor = { data: null, error: '', loading: false, loadedAt: 0, manual: false, applying: false, editing: false, draft: null, depth: 'routine', applied: null };
   try { nsAdvisor.depth = localStorage.getItem('ccc-spawn-depth') === 'deep' ? 'deep' : 'routine'; } catch (_) {}
   // Set the moment the user explicitly picks an engine (composer <select> or
   // an nsModelPickerPills chip). Guards the one-time boot loadSpawnDefaults()
@@ -95810,6 +95810,7 @@
   function markNsAdvisorManual() {
     if (!nsAdvisor || nsAdvisor.applying || currentConversation !== '__new__') return;
     nsAdvisor.manual = true;
+    nsAdvisor.applied = null;
   }
 
   async function loadNsAdvisor(force) {
@@ -95843,8 +95844,14 @@
     return rankNsAdvisorChoices(nsAdvisor.data?.config, nsAdvisor.depth, catalog, engines, nsAdvisor.data?.headroom, Date.now());
   }
 
-  function applyNsAdvisorChoice(choice) {
+  function applyNsAdvisorChoice(choice, opts) {
     if (!choice || choice.unavailable || nsAdvisor.applying) return;
+    // Auto-applied selections are remembered in nsAdvisor.applied so a later
+    // eligibility flap cannot silently swap the engine/model the composer is
+    // showing — renderNsAdvisor then offers a "Use <best>" switch instead.
+    nsAdvisor.applied = (opts && opts.auto)
+      ? { engine: choice.engine, model: choice.model, effort: choice.effort }
+      : null;
     if (window.CCCFreeRuntime && typeof CCCFreeRuntime.setEnabled === 'function') {
       CCCFreeRuntime.setEnabled(false);
       CCCFreeRuntime.sync(choice.engine);
@@ -95879,7 +95886,11 @@
     const config = nsAdvisor.data?.config;
     const choices = nsAdvisorChoices();
     const best = choices.find(c => !c.unavailable);
-    if (config?.enabled && !nsAdvisor.manual && best) applyNsAdvisorChoice(best);
+    // Automatic selection applies once, while the composer has no remembered
+    // pick. Re-applying on every render let a transient eligibility flap
+    // silently swap the engine the user was about to spawn under; an
+    // auto-applied or manual pick only changes through the suggestion below.
+    if (config?.enabled && !nsAdvisor.manual && !nsAdvisor.applied && best) applyNsAdvisorChoice(best, { auto: true });
     const label = c => spawnEngineLabel(c.engine) + ' · ' + getModelPillLabel(c.engine, c.model, c.effort);
     const automatic = config?.enabled && !nsAdvisor.manual && !!best;
     const strip = document.getElementById('convModelPickerStrip');
@@ -95892,6 +95903,22 @@
     }
     const selected = document.getElementById('nsSelectedModel');
     const held = currentSpawnChoice();
+    // The held pick went ineligible after it was shown (quota flap, catalog
+    // refresh, engine probe). Never swap it silently — offer the current best
+    // as an explicit switch so the spawned spec is always what the UI showed.
+    let suggestHtml = '';
+    if (best && held) {
+      const heldRow = choices.find(c => c.engine === held.engine
+        && _normalizeModelId(c.model) === _normalizeModelId(held.model));
+      const heldIsBest = heldRow && heldRow.engine === best.engine
+        && _normalizeModelId(heldRow.model) === _normalizeModelId(best.model)
+        && (heldRow.effort || '') === (best.effort || '');
+      if (heldRow && heldRow.unavailable && !heldIsBest) {
+        suggestHtml = '<div class="ns-advisor-suggest" role="status">'
+          + escapeHtml(label(held) + ' is unavailable now: ' + heldRow.unavailable)
+          + ' <button type="button" data-advisor-switch>Use ' + escapeHtml(label(best)) + '</button></div>';
+      }
+    }
     const selectedLabel = window.CCCFreeRuntime?.runtimeForSpawn?.(held.engine) === 'free'
       ? 'Free · ' + spawnEngineLabel(held.engine) : label(held);
     if (selected) selected.innerHTML = '<span class="ns-selection-mode">' + (automatic ? 'Auto' : nsAdvisor.manual ? 'Custom' : 'Model')
@@ -95910,14 +95937,21 @@
           + '<small>' + escapeHtml([best.funding, ...best.notes].filter(Boolean).join(' · ')) + '</small></div>'
         : '<p role="status">No eligible model. Check availability and allowances, or choose a model.</p>')
       + '<div class="ns-advisor-actions"><button type="button" data-advisor-refresh>Refresh usage</button>'
-      + '<button type="button" data-advisor-edit>Preferences</button></div></div></details></div>';
+      + '<button type="button" data-advisor-edit>Preferences</button></div></div></details></div>'
+      + suggestHtml;
     host.querySelectorAll('[data-depth]').forEach(button => button.addEventListener('click', () => {
       nsAdvisor.depth = button.dataset.depth;
       nsAdvisor.manual = false;
+      nsAdvisor.applied = null;
       try { localStorage.setItem('ccc-spawn-depth', nsAdvisor.depth); } catch (_) {}
       renderNsAdvisor();
     }));
-    host.querySelector('[data-advisor-use]')?.addEventListener('click', () => { nsAdvisor.manual = false; renderNsAdvisor(); });
+    host.querySelector('[data-advisor-use]')?.addEventListener('click', () => { nsAdvisor.manual = false; nsAdvisor.applied = null; renderNsAdvisor(); });
+    host.querySelector('[data-advisor-switch]')?.addEventListener('click', () => {
+      const suggestion = nsAdvisorChoices().find(c => !c.unavailable);
+      if (suggestion) applyNsAdvisorChoice(suggestion);
+      renderNsAdvisor();
+    });
     host.querySelectorAll('[data-advisor-refresh]').forEach(button => button.addEventListener('click', () => loadNsAdvisor(true)));
     renderNsModelPickerPills();
     host.querySelector('[data-advisor-edit]')?.addEventListener('click', () => {

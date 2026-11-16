@@ -31685,6 +31685,11 @@ body.mobile-ask-open .mobile-bottom-nav { z-index: 950; }
 #nsComposerAdvisor .ns-advisor-result > strong { font-size: 13px; }
 #nsComposerAdvisor .ns-advisor-why[open] { flex: 1 0 100%; }
 #nsComposerAdvisor .ns-auto-restore { font-size: 11px; padding: 3px 8px; }
+#nsComposerAdvisor .ns-advisor-suggest {
+  flex: 1 0 100%; font-size: 12px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+#nsComposerAdvisor .ns-advisor-suggest button { font-size: 11px; padding: 3px 8px; }
 .ns-model-overrides { min-width: 0; width: 100%; }
 .ns-model-overrides > summary {
   display: flex; align-items: center; gap: 12px; width: fit-content; max-width: 100%;
