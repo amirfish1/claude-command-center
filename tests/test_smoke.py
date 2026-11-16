@@ -6766,27 +6766,21 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('id="convSteerBtn"', index_html)
         self.assertIn(".conv-input-bar .steer-btn", app_css)
         self.assertIn("sendToTerminal('p1', 'steer')", app_js)
-        self.assertIn("mode: injectMode", app_js)
+        self.assertIn("mode: injectMode", pathlib.Path(PROJECT_ROOT, "static", "conversation-composer.js").read_text(encoding="utf-8"))
         self.assertIn("function codexTurnSteerable()", app_js)
         # The server resolves Codex's current turn and sends normally when
         # idle; a stale client status must not disable the attempt.
         self.assertIn("(isCodex || isKimi || devinSteerable || claudeSteerable)", app_js)
         self.assertIn("function codexSteerUnavailable(data)", app_js)
         self.assertNotIn("if (injectMode === 'send' && currentSession.source === 'codex' && codexTurnSteerable())", app_js)
-        send_handler = app_js[
-            app_js.index("async function sendToTerminal"):
-            app_js.index("function insertPendingSpawnCard")
-        ]
+        send_handler = pathlib.Path(PROJECT_ROOT, "static", "conversation-composer.js").read_text(encoding="utf-8")
         self.assertNotIn("postInjectInput(sid, text, 'send', { announcedFrom })", send_handler)
 
     def test_claude_explicit_queue_is_distinct_from_ordinary_send(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(
             encoding="utf-8"
         )
-        send_handler = app_js[
-            app_js.index("async function sendToTerminal"):
-            app_js.index("function insertPendingSpawnCard")
-        ]
+        send_handler = pathlib.Path(PROJECT_ROOT, "static", "conversation-composer.js").read_text(encoding="utf-8")
 
         self.assertIn("sendToTerminal('p1', 'send_queue')", app_js)
         self.assertIn(
