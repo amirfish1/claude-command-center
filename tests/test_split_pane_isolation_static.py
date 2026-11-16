@@ -8,9 +8,9 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 class TestSplitPaneIsolationStatic(unittest.TestCase):
     def test_bottom_composer_updates_are_scoped_to_active_pane(self):
         """Split panes must not update p1's composer while showing p2's bar."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = pathlib.Path(PROJECT_ROOT, "static", "conversation-input.js").read_text(encoding="utf-8")
         fn_start = app_js.index("function updateInputBar()")
-        fn_end = app_js.index("\n  const SLASH_FALLBACK_COMMANDS", fn_start)
+        fn_end = app_js.index("\n  function composerUserEditRevision", fn_start)
         fn = app_js[fn_start:fn_end]
 
         self.assertIn("const activeInputControls = inputControlsForBar(_activeInputBar);", fn)

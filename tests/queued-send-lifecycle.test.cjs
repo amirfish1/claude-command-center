@@ -6,7 +6,8 @@ const path = require('node:path');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8')
+  + '\n' + fs.readFileSync(path.join(__dirname, '../static/conversation-events.js'), 'utf8');
 function between(start, end) {
   const first = source.indexOf(start);
   assert.ok(first >= 0, start);
@@ -21,13 +22,13 @@ const lifecycle = [
   between('  function markPendingSendQueued(', '  // State 2 of the echo lifecycle:'),
   between('  function markPendingSendDelivered(', '  // ── WT-routed send receipts'),
   between('  function removePendingSendEcho(', '  // A send the server *queued*'),
-  between('  function restorePendingSendEchoes(', '  function restoreInputAfterSendFailure('),
+  between('  function restorePendingSendEchoes(', '  // ── Submit+ (phone mode)'),
 ].join('\n');
 const reconciliation = between(
-  '        const normed = _normSend(ev.text);\n        let _reconciledExact',
+  '        const normed = state._normSend(ev.text);\n        let _reconciledExact',
   '        // Webui panes: collapse a durable user bubble');
 const renderedUserReconciliation = between(
-  '      if (_pendingSends.length) {\n        const _durableUserRows',
+  '      if (state._pendingSends.length) {\n        const _durableUserRows',
   '\n    }\n    if (!opts.provisionalOverlay) {\n      // Echoes follow new transcript content');
 const renderTail = between(
   '    // The app-server live overlay is agent-output-only.',
@@ -36,7 +37,7 @@ const steerStart = source.lastIndexOf("  document.addEventListener('click', asyn
   source.indexOf("const btn = ev.target.closest('[data-steer-queued-message]')"));
 const steerHandler = source.slice(steerStart,
   source.indexOf("  document.addEventListener('click', async (ev) => {", steerStart + 1))
-  + between('  // Steer all: one prompt', '  function setCurrentSession(');
+  + between('  // Steer all: one prompt', '  async function launchTerminal(');
 let browser;
 before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
@@ -102,7 +103,9 @@ async function fixture(run, input, realTray = false, viewport) {
     await page.setRequestInterception(true);
     page.on('request', request => request.abort());
     await page.setContent('<div class="conv-pane" data-pane-id="main"><div class="conversations-view"></div><div class="conv-input-bar"></div></div>');
+    await require('./conversation-content-fixture.cjs').install(page);
     await page.evaluate(({ lifecycle, reconciliation, renderedUserReconciliation, renderTail, steerHandler }) => {
+      window.state = window;
       window.currentConversation = 'conversation';
       window._pendingSends = [];
       window._ultraFresh = { entries: new Map() };

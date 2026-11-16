@@ -5,8 +5,10 @@ const vm = require('node:vm');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync('static/app.js', 'utf8');
-const first = app.indexOf('      if (activeSteerBtn) {');
-const composer = app.slice(first, app.indexOf('      // Compact button', first));
+const inputSource = fs.readFileSync('static/conversation-input.js', 'utf8');
+const first = inputSource.indexOf('      if (activeSteerBtn) {');
+const composer = inputSource.slice(first, inputSource.indexOf('      // Compact button', first))
+  .replace(/\bstate\./g, '').replace(/\(0, helpers\.(\w+)\)/g, '$1');
 const helperStart = app.indexOf('  function codexTurnSteerable(');
 const helper = app.slice(helperStart, app.indexOf('\n  // "Could a steer/send', helperStart));
 
@@ -48,13 +50,14 @@ test('past-message steer uses running status without rejecting writer attributio
   }
 });
 
-test('touch composer renders an enabled, clickable Steer with the shipped CSS', async () => {
+test('touch composer keeps Steer reachable through its shipped actions menu', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
-    await page.setContent('<div class="conv-pane is-webui-session"><div class="conv-input-bar visible"><button class="steer-btn" aria-label="Steer">Steer</button></div></div>');
+    await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><div class="conv-pane is-webui-session" style="width:390px;height:844px"><div class="conv-input-bar visible"><button class="steer-btn" aria-label="Steer">Steer</button><div class="conv-actions-group"><button id="convActionsBtn">+</button><div id="convActionsMenu" style="display:none"><button class="conv-actions-item" data-act="steer">Steer</button></div></div></div></div>');
     await page.addStyleTag({ content: fs.readFileSync('static/app.css', 'utf8') });
+    await page.addScriptTag({content: inputSource});
     await page.evaluate(({ composer }) => {
       Object.assign(window, {
         activeSteerBtn: document.querySelector('.steer-btn'),
@@ -64,11 +67,13 @@ test('touch composer renders an enabled, clickable Steer with the shipped CSS', 
         liveStatus: {}, devinSteerCapableNow: () => false,
       });
       (0, eval)(composer);
-      activeSteerBtn.addEventListener('click', () => { window.clicked = true; });
+      window.$convSteerBtn = activeSteerBtn;
+      CCCConversationInput.createController({state: window, helpers: {sendToTerminal: (pane, mode) => { window.clicked = {pane, mode}; }}}).initConversationActionsMenu();
     }, { composer });
     assert.equal(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), true);
-    await page.tap('.steer-btn');
-    assert.equal(await page.evaluate(() => window.clicked), true);
+    await page.tap('#convActionsBtn');
+    await page.tap('[data-act="steer"]');
+    assert.deepEqual(await page.evaluate(() => window.clicked), {pane:'p1', mode:'steer'});
   } finally {
     await browser.close();
   }

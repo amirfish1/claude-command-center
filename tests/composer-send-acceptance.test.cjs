@@ -46,7 +46,10 @@ function harness(split, options = {}) {
     bound: [], bindPendingSendDeliveryId: (pending, id) => ctx.bound.push([pending, id]),
   };
   vm.createContext(ctx);
-  vm.runInContext(fn('fetchInjectWithRetry') + '\n' + fn('composerUserEditRevision') + '\n' + fn('clearAcceptedComposerInput') + '\n' + fn('restoreInputAfterSendFailure'), ctx);
+  vm.runInContext(fn('fetchInjectWithRetry'), ctx);
+  vm.runInContext(fs.readFileSync('static/conversation-input.js', 'utf8'), ctx);
+  const inputController = ctx.CCCConversationInput.createController({ state: ctx, helpers: ctx });
+  for (const name of ['composerUserEditRevision', 'clearAcceptedComposerInput', 'restoreInputAfterSendFailure']) ctx[name] = inputController[name];
   if (split) vm.runInContext(fn('sendToSplitTerminal', 4), ctx);
   else {
     vm.runInContext(fs.readFileSync('static/conversation-composer.js', 'utf8'), ctx);

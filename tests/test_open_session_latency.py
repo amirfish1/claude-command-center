@@ -102,9 +102,10 @@ def test_idle_ship_status_slow_parts_are_not_rebuilt_every_five_seconds():
 
 
 def test_session_localhost_probe_starts_only_after_the_transcript_load():
-    set_start = APP_JS.index("function setCurrentSession(")
-    set_block = APP_JS[set_start:APP_JS.index("async function launchTerminal", set_start)]
-    assert "resetLocalhostPill()" in set_block
+    input_js = (ROOT / "static" / "conversation-input.js").read_text()
+    set_start = input_js.index("function setCurrentSession(")
+    set_block = input_js[set_start:input_js.index("function inputControlsForBar", set_start)]
+    assert "helpers.resetLocalhostPill)()" in set_block
     assert "pollLocalhost()" not in set_block
 
     select_block = (Path(__file__).resolve().parents[1] / "static" / "conversation-selection.js").read_text()

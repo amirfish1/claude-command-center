@@ -5563,6 +5563,7 @@ class TestServerImports(unittest.TestCase):
         gray rounded bar over the placeholder. Keep autosize in JS instead.
         """
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-input.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertNotIn("field-sizing: content", app_css)
@@ -5593,6 +5594,7 @@ class TestServerImports(unittest.TestCase):
         that existing setter instead of going straight back to the prototype.
         """
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-input.js").read_text(encoding="utf-8")
 
         self.assertIn("const ownDesc = Object.getOwnPropertyDescriptor(el, 'value');", app_js)
         self.assertIn("const protoDesc = Object.getOwnPropertyDescriptor(proto, 'value');", app_js)
@@ -6575,12 +6577,14 @@ class TestServerImports(unittest.TestCase):
     def test_compact_waits_for_pending_send_echoes(self):
         """Compaction must not run while a sent message is only an optimistic echo."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-input.js").read_text(encoding="utf-8")
 
         self.assertIn("function hasPendingSendEchoBeforeCompact($view)", app_js)
         self.assertIn(".event.user_text.pending, .event.user_text.send-queued, .event.user_text.send-delivered", app_js)
         self.assertIn("Wait for the pending message to land in the transcript before compacting.", app_js)
-        self.assertIn("if (compactCommand && hasPendingSendEchoBeforeCompact(", app_js)
-        self.assertIn("const pendingCompactEcho = hasPendingSendEchoBeforeCompact();", app_js)
+        composer_js = pathlib.Path(PROJECT_ROOT, "static", "conversation-composer.js").read_text()
+        self.assertIn("if (compactCommand && hasPendingSendEchoBeforeCompact(", composer_js)
+        self.assertIn("const pendingCompactEcho = (0, helpers.hasPendingSendEchoBeforeCompact)();", app_js)
         self.assertIn(": (pendingCompactEcho", app_js)
 
     def test_codex_spawn_log_hides_bare_error_marker(self):
@@ -6601,7 +6605,7 @@ class TestServerImports(unittest.TestCase):
         app_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
-        goal_js = app_js[app_js.index("function goalStatusUi(status)"):app_js.index("function updateInputBar()", app_js.index("function goalStatusUi(status)"))]
+        goal_js = app_js[app_js.index("function goalStatusUi(status)"):app_js.index("const SLASH_FALLBACK_COMMANDS", app_js.index("function goalStatusUi(status)"))]
         self.assertIn('data-role="conv-goal-strip"', app_html)
         self.assertIn("function goalStatusUi(status)", goal_js)
         self.assertIn("function renderConversationGoalStrip(paneId, row)", goal_js)
@@ -6899,6 +6903,7 @@ class TestServerImports(unittest.TestCase):
         """Injected sender attribution remains available to API callers
         without exposing a brittle manual composer field."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-input.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
 
@@ -6920,7 +6925,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("postInjectInput(sid, text, 'steer'", app_js)
         inline_handler = app_js[
             app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"):
-            app_js.index("function setCurrentSession", app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"))
+            app_js.index("async function launchTerminal", app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"))
         ]
         self.assertNotIn("postInjectInput(sid, text, 'send')", inline_handler)
         self.assertIn("syncUserMessageSteerButtons", app_js)
