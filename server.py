@@ -24119,7 +24119,7 @@ def _custom_links_config():
         })
     return links, proxies, apps
 
-def _discover_user_apps():
+def _discover_user_apps(only_id=None):
     """Scan ~/.claude/command-center/apps/*/app.json for installed apps.
 
     Discovery rather than registration: dropping a folder in is enough, no
@@ -24131,7 +24131,12 @@ def _discover_user_apps():
     /api/apps is fetched once per page load, never polled."""
     apps = []
     try:
-        entries = sorted(USER_APPS_DIR.iterdir())
+        if only_id is not None:
+            if not re.fullmatch(r"[a-z0-9_-]{1,40}", only_id):
+                return apps
+            entries = [USER_APPS_DIR / only_id]
+        else:
+            entries = sorted(USER_APPS_DIR.iterdir())
     except OSError:
         return apps
     for d in entries:
@@ -24204,12 +24209,14 @@ def _apps_focus_state(apps=None):
     return _app_share.focus_state(cfg, apps if apps is not None else _resolve_apps())
 
 
-def _resolve_apps(include_disabled=False):
+def _resolve_apps(include_disabled=False, only_id=None):
     """The ordered app list behind /api/apps and the rail.
 
     Built-ins, then manifest apps, then discovered folders. `app_order` in the
     config reorders by id; anything unlisted keeps its natural position at the
-    end. Disabled apps are dropped unless the settings page asks for them."""
+    end. Disabled apps are dropped unless the settings page asks for them.
+    A deep link can resolve only its selected app without scanning other app
+    folders; manifest overrides and enabled-state rules remain identical."""
     apps = [
         {"id": "apps", "label": "Apps", "icon": "\N{BLACK SQUARE}",
          "url": "/apps", "builtin": True},
@@ -24252,7 +24259,10 @@ def _resolve_apps(include_disabled=False):
     # An id already declared in the manifest wins: that is how a user renames,
     # re-icons, or repositions a discovered app without editing its folder.
     claimed = {a["id"] for a in apps}
-    apps.extend(a for a in _discover_user_apps() if a["id"] not in claimed)
+    if only_id is None or only_id not in claimed:
+        discovered = (_discover_user_apps() if only_id is None
+                      else _discover_user_apps(only_id=only_id))
+        apps.extend(a for a in discovered if a["id"] not in claimed)
 
     try:
         raw = json.loads(_apps_config_path().read_text())
@@ -24273,6 +24283,8 @@ def _resolve_apps(include_disabled=False):
         apps.sort(key=lambda a: rank.get(a["id"], len(rank) + 1))
     if not include_disabled:
         apps = [a for a in apps if a["enabled"]]
+    if only_id is not None:
+        apps = [a for a in apps if a["id"] == only_id]
     return apps
 
 
@@ -30939,8 +30951,8 @@ def _stamp_static_urls(html_text):
     """Add ?v=<mtime> to every /static js/css URL in the page.
 
     The stamp changes with any edit, so the stamped URL is cached for a year
-    (immutable) while a bare URL still revalidates. index.html is re-read per
-    request, so a stale script after an update is impossible.
+    (immutable) while a bare URL still revalidates. Template and asset versions
+    are checked per request so edits invalidate the server page cache.
     """
     def _sub(m):
         return f'{m.group(1)}="{_static_asset_url(m.group(2))}"'
@@ -31439,7 +31451,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             app_id = query.get("ccc_app", [""])[0]
             app_shell = bool(app_id and app_id not in ("sessions", "queues")
                              and not query.get("ccc_popout") and not query.get("popout"))
-            selected_app = (next((app for app in _resolve_apps() if app["id"] == app_id), None)
+            selected_app = (next(iter(_resolve_apps(only_id=app_id)), None)
                             if app_shell else None)
             self.send_html(_load_index_html(app_embed=app_embed, app_shell=app_shell,
                                            selected_app=selected_app))
