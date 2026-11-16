@@ -359,3 +359,24 @@ def test_threaded_http_server_increases_listen_backlog_for_reload_bursts():
     block = server_py[start:server_py.index("port = PORT", start)]
     assert "request_queue_size = 128" in block
 
+
+
+def test_app_list_is_not_parked_when_the_browser_has_no_saved_rail():
+    # A new browser painted Sessions and Queues only, then asked for the app
+    # list 23 s later, behind the optional startup reads.
+    body = _function("  function _startupApiPath", "function _startupReplaysDirect")
+    script = r"""
+const run = (search, saved) => {
+  const window = { location: { origin: 'http://localhost:8090', search } };
+  const localStorage = { getItem: key => (key === 'ccc-rail-apps-v1' ? saved : null) };
+  const _startupDeferrableBeacons = ['/api/client-log'];
+  %s
+  return [_startupCriticalApiRead('/api/apps'), _startupCriticalApiRead('/api/usage')];
+};
+console.log(JSON.stringify([run('', null), run('', '[{"id":"x"}]'), run('?ccc_app=x', '[{"id":"x"}]')]));
+""" % body
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    # No saved rail: sent at once. Saved rail: waits like other optional reads.
+    # Loading on an app: sent at once either way. Optional reads never jump.
+    assert out.stdout.strip() == "[[true,false],[false,false],[true,false]]"

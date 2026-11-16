@@ -2831,15 +2831,21 @@
   function _startupPathMatches(pathname, prefixes) {
     return prefixes.some(prefix => pathname === prefix || pathname.startsWith(prefix + '/'));
   }
+  function _railAppsSaved() {
+    // app-rail.js keeps the last good list here and paints the rail from it.
+    try { return !!localStorage.getItem('ccc-rail-apps-v1'); } catch (_) { return false; }
+  }
   function _startupCriticalApiRead(input, init) {
     if (init && init.cccPriority === 'user') return true;
     const req = _startupApiPath(input, init);
     if (!req) return true;
     if (req.method !== 'GET') return !_startupPathMatches(req.pathname, _startupDeferrableBeacons);
     if (req.pathname === '/api/sessions/live-activity') return false;
-    // The page is loading on an app (/?ccc_app=<id>): the rail's app list is
-    // what opens it when this browser has no saved copy of that list.
-    if (req.pathname === '/api/apps' && /[?&]ccc_app=/.test(window.location.search || '')) return true;
+    // The rail's app list is the navigation. A browser with no saved copy of
+    // it shows only Sessions and Queues until the answer arrives (23 s behind
+    // the optional reads, measured), and a page loading on an app
+    // (/?ccc_app=<id>) cannot open that app without it.
+    if (req.pathname === '/api/apps' && (/[?&]ccc_app=/.test(window.location.search || '') || !_railAppsSaved())) return true;
     if (req.pathname === '/api/sessions' && req.searchParams && (req.searchParams.get('peers_only') === '1' || req.searchParams.get('federated') === '1')) {
       return false;
     }
