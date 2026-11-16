@@ -29,7 +29,7 @@ for (const width of [1440, 390]) test('temporary restart pauses need no Resume c
   for (const reason of ['dashboard-restart:test', 'worker-restart:test', 'worker-compat-selfheal:test']) {
     await page.evaluate(reason => window.setWorkerStatus(reason), reason);
     assert.equal(await page.$eval('#drainPausedBanner', n => n.checkVisibility()), true);
-    assert.match(await page.$eval('#drainPausedBannerText', n => n.textContent), /Dispatch resumes automatically.*3 message/);
+    assert.match(await page.$eval('#drainPausedBannerText', n => n.textContent), /CCC is restarting\. Please wait.*messages will send automatically.*No action is needed.*3 message/);
     assert.equal(await page.$eval('#drainPausedResumeBtn', n => n.checkVisibility()), false);
   }
   await page.screenshot({path: path.join(scratch, width + '-automatic.png')});

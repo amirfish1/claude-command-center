@@ -88563,7 +88563,7 @@
     const restarting = /^(dashboard-restart|worker-restart|worker-compat-selfheal):/.test(controlPlaneDrainReason);
     if ($drainPausedBannerText) {
       $drainPausedBannerText.textContent = restarting
-        ? 'Restart in progress. Dispatch resumes automatically.' + queued
+        ? 'CCC is restarting. Please wait—your messages will send automatically when it’s ready. No action is needed.' + queued
         : 'Dispatch paused' + reason + '. New sends are queuing, not sending.' + queued;
     }
     if ($drainPausedResumeBtn) $drainPausedResumeBtn.hidden = restarting;
