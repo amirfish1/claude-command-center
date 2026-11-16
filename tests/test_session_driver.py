@@ -99,6 +99,35 @@ def test_claude_parser_caches_driver_without_additional_transcript_opens(tmp_pat
     assert len(opens) == 1
 
 
+@pytest.mark.parametrize('subagent', [False, True])
+def test_parent_only_driver_upgrade_reuses_unchanged_root_metadata(tmp_path, monkeypatch, subagent):
+    import server
+    monkeypatch.setattr(server, '_conv_meta_cache', {})
+    monkeypatch.setattr(server, '_emit_interrupts_from_meta', lambda *a: None)
+    p = tmp_path / 'parent' / 'subagents' / 'agent-review.jsonl' if subagent else tmp_path / 'owner.jsonl'
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({'type': 'user', 'timestamp': '2026-01-01T00:00:00Z',
+                            'isSidechain': subagent, 'message': {'content': 'Review changes'}}) + '\n')
+    fresh = server._extract_tail_meta(p)
+    cached = dict(fresh, driver_version=2)
+    if subagent:
+        cached.pop('driver_parent_session_id', None)
+        cached['turn_driver'] = {'kind': 'unknown', 'name': '', 'basis': 'origin',
+                                 'at': driver.epoch('2026-01-01T00:00:00Z')}
+    server._conv_meta_cache[str(p)] = cached
+    original = builtins.open
+    opens = []
+    def tracking(file, *a, **kw):
+        if str(file) == str(p):
+            opens.append(file)
+        return original(file, *a, **kw)
+    monkeypatch.setattr(builtins, 'open', tracking)
+    result = server._extract_tail_meta(p)
+    assert driver.fields(result) == driver.fields(fresh)
+    assert len(opens) == int(subagent)
+    assert (result is cached) == (not subagent)
+
+
 def test_codex_incremental_messages_preserve_last_owner_and_ignore_context(tmp_path, monkeypatch):
     import server
     monkeypatch.setattr(server, '_conv_meta_cache', {})

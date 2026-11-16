@@ -1200,10 +1200,18 @@ def _extract_tail_meta(path):
     except OSError:
         return {}
     cached = _core._conv_meta_cache.get(str(path))
+    # Driver v3 only changed native subagent attribution. Root transcripts
+    # have identical v2 metadata; reopening all of them makes an archive
+    # upgrade repeatedly exceed its worker deadline before publishing rows.
+    driver_current = cached and (
+        cached.get("driver_version") == _driver.VERSION
+        or (_driver.VERSION == 3 and cached.get("driver_version") == 2
+            and path.parent.name != "subagents")
+    )
     # Backfill turn provenance once in the existing metadata pass. Subsequent
     # unchanged files keep their persisted cache hot.
     if (cached and cached.get("cache_key") == cache_key
-            and cached.get("driver_version") == _driver.VERSION
+            and driver_current
             and ("turn_has_tools" in cached
                  or not str(cached.get("last_assistant_text") or "").lstrip().startswith("{"))
             and (cached.get("last_event_type") != "user"
