@@ -1,6 +1,7 @@
 """Archive snapshots must survive independent refresh workers publishing at once."""
 
 import json
+import io
 import multiprocessing
 from pathlib import Path
 
@@ -26,6 +27,30 @@ def snapshot(key="base", stamp=10, signature="sig-a", sid="session-a"):
 
 def read(cache_file):
     return json.loads(cache_file.read_text())
+
+
+@pytest.mark.parametrize("count", [0, 1, 63, 64, 65, 193])
+def test_batched_snapshot_preserves_json_and_bounds_row_encoding(count, monkeypatch):
+    data = snapshot()
+    rows = [{"session_id": str(i), "text": 'é\\\"\n🙂', "nested": [None, True, {}]}
+            for i in range(count)]
+    data["entries"]["base"]["conversations"] = rows
+    data["entries"]["other"] = dict(data["entries"]["base"], conversations=[])
+    expected = json.dumps(data, separators=(",", ":"))
+    real_dumps = json.dumps
+    encoded_batches = []
+
+    def bounded_dumps(value, **kwargs):
+        if isinstance(value, list):
+            encoded_batches.append(len(value))
+            assert len(value) <= 64
+        return real_dumps(value, **kwargs)
+
+    monkeypatch.setattr(archive_snapshot.json, "dumps", bounded_dumps)
+    handle = io.StringIO()
+    archive_snapshot._write_snapshot(handle, data)
+    assert handle.getvalue() == expected
+    assert sum(encoded_batches) == count
 
 
 def test_stale_worker_preserves_newer_variants_and_their_stat_maps(tmp_path):

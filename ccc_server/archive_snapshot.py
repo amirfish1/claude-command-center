@@ -106,6 +106,45 @@ def _merge(previous, incoming):
     return dict(incoming, entries=entries, signature_maps=maps)
 
 
+def _write_snapshot(handle, snapshot):
+    """Use the C encoder without encoding the entire archive under the GIL.
+
+    json.dump walks every field in Python. A single json.dumps is faster but
+    blocks other threads for the entire archive and allocates a second full
+    payload. Encode conversation arrays in small batches instead.
+    """
+    def encode(value):
+        return json.dumps(value, separators=(",", ":"))
+
+    def write_object(value, write_value):
+        handle.write("{")
+        for index, (key, item) in enumerate(value.items()):
+            if index:
+                handle.write(",")
+            handle.write(encode(key) + ":")
+            write_value(key, item)
+        handle.write("}")
+
+    def write_entry_field(key, value):
+        if key != "conversations":
+            handle.write(encode(value))
+            return
+        handle.write("[")
+        for start in range(0, len(value), 64):
+            if start:
+                handle.write(",")
+            handle.write(encode(value[start:start + 64])[1:-1])
+        handle.write("]")
+
+    def write_field(key, value):
+        if key == "entries":
+            write_object(value, lambda _, entry: write_object(entry, write_entry_field))
+        else:
+            handle.write(encode(value))
+
+    write_object(snapshot, write_field)
+
+
 def save(cache_file, snapshot, *, lock_timeout=0.5):
     """Merge and atomically publish metadata only; never read source transcripts.
 
@@ -127,7 +166,7 @@ def save(cache_file, snapshot, *, lock_timeout=0.5):
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(merged, handle, separators=(",", ":"))
+                _write_snapshot(handle, merged)
             os.replace(temporary, cache_file)
         finally:
             try:
