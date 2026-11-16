@@ -1,0 +1,1 @@
+Reuse unchanged app-shell and agent-page transforms, asset stamps, and compressed HTML across navigations. Template, asset, and app metadata edits still take effect immediately, and browser HTML caching remains disabled.

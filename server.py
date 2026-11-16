@@ -139,6 +139,7 @@ from ccc_server import cpu_accounting as _cpu_accounting
 from ccc_server import conv_reader as _conv_reader
 from ccc_server import swr_cache as _swr
 from ccc_server import memory_release as _memory_release
+from ccc_server.index_page_cache import IndexPageCache
 from ccc_server.bounded_cache import ByteBudgetCache
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
@@ -30946,19 +30947,32 @@ def _stamp_static_urls(html_text):
     return _STATIC_URL_RE.sub(_sub, html_text)
 
 
+_INDEX_PAGE_CACHE = IndexPageCache()
+_HTML_GZIP_CACHE = ByteBudgetCache(max_bytes=4 << 20, max_entries=32)
+
+
 def _load_index_html(app_embed=False, app_shell=False, selected_app=None):
-    try:
-        html = _INDEX_HTML_PATH.read_text(encoding="utf-8")
+    def transform(html):
         if app_embed:
             from ccc_server.app_embed import conversation_page
-            html = conversation_page(html)
-        elif app_shell:
+            return conversation_page(html)
+        if app_shell:
             from ccc_server.app_embed import application_shell_page
-            html = application_shell_page(html, selected_app=selected_app)
-        return _stamp_static_urls(html)
+            return application_shell_page(html, selected_app=selected_app)
+        return html
+
+    try:
+        variant = (app_embed, app_shell, __version__,
+                   json.dumps(selected_app, sort_keys=True) if app_shell else "")
+        return _INDEX_PAGE_CACHE.load(_INDEX_HTML_PATH, STATIC_DIR, variant,
+                                      transform, _stamp_static_urls)
     except OSError as e:
         return "<h1>index.html missing</h1><pre>" + str(e) + "</pre>"
 HTML_PAGE = _load_index_html()
+# Prepare the shared pane transforms before serving the first cold app. These
+# calls do no session work; they only shape the current static template.
+_load_index_html(app_embed=True)
+_load_index_html(app_shell=True)
 
 
 # Voice-focus signal: a tiny remote-focus channel. An external controller (e.g. the
@@ -31417,7 +31431,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            # Re-read on every request so edits to static/index.html are live.
+            # Check template and asset versions on every request so edits are live.
             query = urllib.parse.parse_qs(parsed.query)
             app_embed = (query.get("embed") == ["app"] and
                          (query.get("ccc_popout") == ["conversation"] or
@@ -46213,12 +46227,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         content = content.replace('<body>', '<body data-repo="">', 1)
         body = content.encode()
         ct = "text/html; charset=utf-8"
-        body, enc = self._maybe_gzip(body, ct)
+        accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
+        key = hashlib.sha256(body).digest() if accepts_gzip else None
+        cached = _HTML_GZIP_CACHE.get(key) if accepts_gzip else None
+        if cached is not None:
+            body, enc = cached, "gzip"
+        else:
+            body, enc = self._maybe_gzip(body, ct)
+            if enc:
+                _HTML_GZIP_CACHE.put(key, body, len(body))
         self.send_response(200)
         self.send_header("Content-Type", ct)
         self._send_server_timing()
-        # Never cache the single-page app. The server re-reads index.html on every
-        # request; this header stops browsers from serving a stale JS snapshot
+        # Never cache the single-page app in the browser. The server checks file
+        # versions on every request; this stops browsers serving a stale JS snapshot
         # after edits (main cause of "I clicked the button and nothing happened").
         self.send_header("Cache-Control", "no-store, must-revalidate")
         self.send_header("Content-Length", str(len(body)))
