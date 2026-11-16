@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
-const app = fs.readFileSync(process.env.CCC_TEST_APP_SOURCE || 'static/app.js', 'utf8');
+const app = fs.readFileSync(require.resolve('../static/conversation-text.js'), 'utf8') + '\n' + fs.readFileSync(process.env.CCC_TEST_APP_SOURCE || 'static/app.js', 'utf8');
 const slice = (from, to) => {
   const start = app.indexOf(from), end = app.indexOf(to, start);
   assert.ok(start >= 0 && end > start, from);

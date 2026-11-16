@@ -12,7 +12,7 @@ function extract(start, end) {
 function helpers() {
   const context = vm.createContext({});
   vm.runInContext(extract('  function isRoutineCodexCoordination(', '  function renderConversationEvents(')
-    + extract('  function codexActiveItemLabel(', '  function normalizeMarkdownLinkTarget('), context);
+    + extract('  function codexActiveItemLabel(', '  function pastedImageThumbsHtml('), context);
   return context;
 }
 test('hide routine turn observations, preserve recovery, unknown events and real messages', () => {

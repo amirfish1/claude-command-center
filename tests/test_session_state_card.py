@@ -10,34 +10,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def render_session_state(body: str, app_path: Path) -> str:
     source = app_path.read_text(encoding="utf-8")
-    start = source.index("function renderSessionStateBlock(body)")
-    end = source.index("\n  function normalizeTaskNotificationField", start)
-    # The Needs-you action helpers (CCC-1218) sit just above the renderer.
-    helpers = source.rfind("// CCC-1218:", 0, start)
-    if helpers != -1:
-        start = helpers
-    row_helpers = source.rfind("// Row actions are model-authored replies", 0, start)
-    if row_helpers != -1:
-        start = row_helpers
-    assessment_start = source.find("  function sessionCompletionDetails(")
-    assessment_end = source.index("\n  }\n", assessment_start) + 5 if assessment_start != -1 else 0
-    function_source = (source[assessment_start:assessment_end] if assessment_start != -1 else "") + source[start:end]
+    assessment_start = source.index("  function sessionCompletionDetails(")
+    assessment_end = source.index("\n  }\n", assessment_start) + 5
+    function_source = source[assessment_start:assessment_end]
+    renderer_source = (PROJECT_ROOT / "static" / "conversation-text.js").read_text()
     harness = f"""
-function escapeHtml(value) {{
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}}
-const escapeAttr = escapeHtml;
-function renderInline(value) {{
-  return escapeHtml(value).replace(/`([^`]+)`/g, '<code class="md-code">$1</code>');
-}}
-const document = {{ addEventListener() {{}} }};
+{renderer_source}
 {function_source}
-process.stdout.write(renderSessionStateBlock(process.argv[1]));
+const renderer = globalThis.CCCConversationText.createRenderer({{
+  sessionCompletionDetails, findSession: () => null, activeSessionId: () => ''
+}});
+process.stdout.write(renderer.renderSessionStateBlock(process.argv[1]));
 """
     result = subprocess.run(
         ["node", "-e", harness, body],
@@ -272,7 +255,7 @@ class TestSessionStateCard(unittest.TestCase):
             PROJECT_ROOT / "static" / "app.js",
         )
         # Words are bound with no-break spaces so the chip never reads 'Buildtriage' (CCC-382).
-        self.assertIn('>Build\u00a0triage</button>', html)
+        self.assertIn('>Build&nbsp;triage</button>', html)
         self.assertIn('data-ssb-value="Yes, build the triage routine."', html)
         self.assertNotIn('>Reply</button>', html)
 

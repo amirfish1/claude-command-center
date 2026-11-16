@@ -20,7 +20,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const puppeteer = require('puppeteer');
 
-const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../static/conversation-text.js'), 'utf8') + '\n' + fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
 
 function extract(start, end) {
   const a = source.indexOf(start);

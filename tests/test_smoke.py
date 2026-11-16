@@ -5340,6 +5340,7 @@ class TestServerImports(unittest.TestCase):
         existing conv-view MutationObserver so every render path picks
         it up for free."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-text.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         # Detection inside renderCodeBlock
         self.assertIn("(lang || '').toLowerCase() === 'mermaid'", app_js)
@@ -14828,7 +14829,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         """The transcript click handler asks /api/open to launch markdown."""
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
         self.assertIn("function _isMarkdownPath", js)
-        self.assertIn("function normalizeMarkdownLinkTarget", js)
+        self.assertIn("function normalizeMarkdownLinkTarget", pathlib.Path(PROJECT_ROOT, "static", "conversation-text.js").read_text())
         self.assertIn("payload.launch = true", js)
 
     def test_absolute_folder_path_links_are_not_web_routes(self):

@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = fs.readFileSync(require.resolve('../static/conversation-text.js'), 'utf8') + '\n' + fs.readFileSync('static/app.js', 'utf8');
 const source = app.slice(app.indexOf('  function _uxqWithMachine('), app.indexOf('  // Compact history rows', app.indexOf('  function _uxqWithMachine(')));
 function fixture(items, extra = {}) {
   const ctx = { _uxqItemsCache: { items }, _uxqItemRef: item => item.ref,
