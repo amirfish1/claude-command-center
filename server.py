@@ -46482,7 +46482,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if (not self._ccc_response_started
                     and getattr(self, "command", "") == "POST"
                     and re.fullmatch(r"/api/sessions/spawn(?:-[a-z0-9-]+)?",
-                                     self.path.split("?", 1)[0])):
+                                     self.path.split("?", 1)[0].rstrip("/"))):
                 reference = uuid.uuid4().hex[:12]
                 advice = ("Restart the CCC dashboard to reload its server modules. "
                           if isinstance(exc, ImportError) else "")
