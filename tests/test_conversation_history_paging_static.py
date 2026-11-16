@@ -13,7 +13,7 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         init_js = app_js[init_start:app_js.index("  attachAllPaneDropZones();", init_start)]
         fetch_js = app_js[
             app_js.index("async function fetchConversationEvents(paneId)"):
-            app_js.index("Object.defineProperty(window, '_firstUserMsgRendered'", app_js.index("async function fetchConversationEvents(paneId)"))
+            app_js.index("window.CCCConversationState.bindLegacyProperty(window, splitState, '_firstUserMsgRendered'", app_js.index("async function fetchConversationEvents(paneId)"))
         ]
 
         self.assertLess(
@@ -73,7 +73,7 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         """Hermes has no follow-up SSE to reconcile a stale prefetched snapshot."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
         fetch_start = app_js.index("async function fetchConversationEvents(paneId)")
-        fetch_js = app_js[fetch_start:app_js.index("Object.defineProperty(window, '_firstUserMsgRendered'", fetch_start)]
+        fetch_js = app_js[fetch_start:app_js.index("window.CCCConversationState.bindLegacyProperty(window, splitState, '_firstUserMsgRendered'", fetch_start)]
 
         self.assertIn("_prefetchSource !== 'hermes'", fetch_js)
 
@@ -86,7 +86,7 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
         ]
         fetch_js = app_js[
             app_js.index("async function fetchConversationEvents(paneId)"):
-            app_js.index("Object.defineProperty(window, '_firstUserMsgRendered'", app_js.index("async function fetchConversationEvents(paneId)"))
+            app_js.index("window.CCCConversationState.bindLegacyProperty(window, splitState, '_firstUserMsgRendered'", app_js.index("async function fetchConversationEvents(paneId)"))
         ]
 
         self.assertIn("pane.loadBeforeLine =", load_js)

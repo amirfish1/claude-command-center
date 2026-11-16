@@ -25851,28 +25851,8 @@
   // to splitState.panes[splitState.activeIndex].* so the thousands of
   // existing references compile against the active pane unchanged.
   // Only the renderer / SSE / composer entry points learn paneId.
-  function _newPaneState(id) {
-    return {
-      id: id,
-      conversationId: null,
-      lastLine: 0,
-      firstLine: 0,
-      loadBeforeLine: 0,
-      eventSource: null,
-      pendingSends: [],
-      pendingSendsByConv: {},
-      firstUserMsgRendered: false,
-      currentToolGroup: null,
-      currentToolCount: 0,
-      currentSession: { id: null, cwd: null, cwdExists: false, source: null, repoPath: null },
-    };
-  }
-  const splitState = {
-    orientation: null, // null | 'vertical' | 'horizontal'
-    panes: [_newPaneState('p1')],
-    activeIndex: 0,
-    ratio: 0.5,
-  };
+  const _newPaneState = window.CCCConversationState.createPane;
+  const splitState = window.CCCConversationState.createWorkspace();
 
   function getLastConvKey() {
     return 'ccc-last-conv:' + (popoutRepoPath() || 'all');
@@ -26222,21 +26202,9 @@
   // Compatibility shim — read/write the active pane via the old global names.
   // DO NOT remove without auditing every reference to currentConversation,
   // convLastLine, convEventSource, _pendingSends, _firstUserMsgRendered.
-  Object.defineProperty(window, 'currentConversation', {
-    configurable: true,
-    get() { return splitState.panes[splitState.activeIndex].conversationId; },
-    set(v) { splitState.panes[splitState.activeIndex].conversationId = v; },
-  });
-  Object.defineProperty(window, 'convLastLine', {
-    configurable: true,
-    get() { return splitState.panes[splitState.activeIndex].lastLine; },
-    set(v) { splitState.panes[splitState.activeIndex].lastLine = v; },
-  });
-  Object.defineProperty(window, 'convEventSource', {
-    configurable: true,
-    get() { return splitState.panes[splitState.activeIndex].eventSource; },
-    set(v) { splitState.panes[splitState.activeIndex].eventSource = v; },
-  });
+  window.CCCConversationState.bindLegacyProperty(window, splitState, 'currentConversation');
+  window.CCCConversationState.bindLegacyProperty(window, splitState, 'convLastLine');
+  window.CCCConversationState.bindLegacyProperty(window, splitState, 'convEventSource');
 
   let showArchived = false;  // false = show non-archived, true = show only archived
 
@@ -64278,11 +64246,7 @@
     }
   }
 
-  Object.defineProperty(window, '_firstUserMsgRendered', {
-    configurable: true,
-    get() { return splitState.panes[splitState.activeIndex].firstUserMsgRendered; },
-    set(v) { splitState.panes[splitState.activeIndex].firstUserMsgRendered = v; },
-  });
+  window.CCCConversationState.bindLegacyProperty(window, splitState, '_firstUserMsgRendered');
 
   // Render a read-only detail panel for backlog cards (GH issues, TODO.md
   // entries, PARKING_LOT items, native-task summaries). No session events
@@ -64652,26 +64616,10 @@
   // that haven't yet appeared in the conversation jsonl. Each entry is
   // { text, element } — we strip pending styling (or remove the div) when
   // the real user_text event lands via the render loop.
-  Object.defineProperty(window, '_pendingSends', {
-    configurable: true,
-    get() { return splitState.panes[splitState.activeIndex].pendingSends; },
-    set(v) { splitState.panes[splitState.activeIndex].pendingSends = v; },
-  });
-  Object.defineProperty(window, '_currentToolGroup', {
-    configurable: true,
-    get() { return splitState.panes[splitState.activeIndex].currentToolGroup; },
-    set(v) { splitState.panes[splitState.activeIndex].currentToolGroup = v; },
-  });
-  Object.defineProperty(window, '_currentToolCount', {
-    configurable: true,
-    get() { return splitState.panes[splitState.activeIndex].currentToolCount; },
-    set(v) { splitState.panes[splitState.activeIndex].currentToolCount = v; },
-  });
-  Object.defineProperty(window, 'currentSession', {
-    configurable: true,
-    get() { return splitState.panes[splitState.activeIndex].currentSession; },
-    set(v) { splitState.panes[splitState.activeIndex].currentSession = v; },
-  });
+  window.CCCConversationState.bindLegacyProperty(window, splitState, '_pendingSends');
+  window.CCCConversationState.bindLegacyProperty(window, splitState, '_currentToolGroup');
+  window.CCCConversationState.bindLegacyProperty(window, splitState, '_currentToolCount');
+  window.CCCConversationState.bindLegacyProperty(window, splitState, 'currentSession');
   const _normSend = (s) => eventTextString(s).replace(/\s+/g, ' ').trim();
 
   // Render a TODO.md backlog card in the conv pane. No session exists yet —
