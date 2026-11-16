@@ -46451,6 +46451,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             _inflight_end(self)
         return super().send_header(keyword, value)
 
+    def send_response(self, code, message=None):
+        self._ccc_response_started = True
+        return super().send_response(code, message)
+
     def handle_one_request(self):
         # Same disconnect-while-writing guard at the request-handler level
         # so any other endpoint (not just send_json) doesn't dump a
@@ -46460,6 +46464,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self._ccc_req_t0 = _t0
         self._ccc_req_cpu0 = _c0
         self._ccc_list_t0 = None
+        self._ccc_response_started = False
         # A keep-alive connection's final call only waits for a request that
         # never comes; clear the previous request's path so that idle wait is
         # not logged as a slow repeat of it.
@@ -46468,10 +46473,35 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             super().handle_one_request()
         except (BrokenPipeError, ConnectionResetError):
             self.close_connection = True
-        except Exception:
-            # A genuine handler crash (not a client disconnect) — count it for
-            # the health bar, then re-raise so the stdlib logs the traceback.
-            _record_server_error()
+        except Exception as exc:
+            # A launch can crash before reaching its engine-specific guard
+            # (for example, a lazy import after an on-disk upgrade). Return
+            # JSON before closing, rather than making fetch report only
+            # "Load failed". Never append a second response or retry a launch
+            # whose side effects may already have happened.
+            if (not self._ccc_response_started
+                    and getattr(self, "command", "") == "POST"
+                    and re.fullmatch(r"/api/sessions/spawn(?:-[a-z0-9-]+)?",
+                                     self.path.split("?", 1)[0])):
+                reference = uuid.uuid4().hex[:12]
+                advice = ("Restart the CCC dashboard to reload its server modules. "
+                          if isinstance(exc, ImportError) else "")
+                print(f"[spawn-crash] reference={reference} type={type(exc).__name__}",
+                      file=sys.stderr, flush=True)
+                self.close_connection = True
+                try:
+                    self.send_json({
+                        "ok": False, "code": "spawn_handler_crash", "reference": reference,
+                        "error": f"CCC launch handler crashed ({type(exc).__name__}; reference {reference}). "
+                                 + advice + "Launch outcome is unknown; check sessions before retrying. "
+                                 "Server logs contain the diagnostic details.",
+                    }, 500)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            else:
+                _record_server_error()
+            # Keep the full traceback server-side; exception text can contain
+            # credentials or private paths and must not enter the response.
             raise
         finally:
             _inflight_end(self)
