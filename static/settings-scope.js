@@ -16,6 +16,7 @@
     family('notification-permission', 'Browser notification permission', '#notifyBrowserPermBtn', 'externally-managed', 'Your browser and operating system', 'An explicit permission action can prompt this device. Saved notification choices cannot grant permission.', 'No CCC restart; browser/OS permission rules apply.', 'static/app.js:notifyBrowserPermBtn'),
     family('browser-costs', 'Subscription estimate inputs', '#settingsMonthlyClaudePlanInput,#settingsMonthlyCodexPlanInput', 'browser', 'This browser’s site storage', 'Changes local usage-cost estimates, not provider billing, plan limits or other browsers.', 'No restart.', 'static/app.js:CCC_MONTHLY_SUBSCRIPTION_PRICE_KEY; CCC_MONTHLY_CODEX_PLAN_PRICE_KEY'),
     family('voice-shortcuts', 'Call shortcut visibility', '#settingsVoiceCallBtnToggle,#settingsVoiceMobileToggle,#voiceShowMobileBtn,#simpleVoiceMobileToggle', 'browser', 'This browser’s site storage', 'Only shortcut visibility changes immediately. Header Voice access remains separate; hiding a shortcut does not end a call or disable a service.', 'No restart.', 'static/voice-setup.js:refreshAccess; static/app.js:setVoiceMobileBtnPref'),
+    family('browser-voice', 'Browser voice pilot', '#settingsBrowserVoiceToggle', 'browser', 'This browser’s site storage', 'Enables the optional browser speech pilot on this device. Enabling it can prepare a local speech model; other browsers and live calls are unchanged.', 'No restart.', 'static/browser-voice.js:ccc-browser-voice-pilot; setEnabled'),
     family('voice-default', 'Default reading voice', '#settingsTtsVoiceDefault', 'browser', 'This browser’s site storage', 'Used for reading replies without a session-specific selection in this browser. Existing session selections win. This is not the live-call voice.', 'No restart; subsequent reading uses the selection.', 'static/app.js:TTS_VOICE_DEFAULT_KEY; ttsVoiceForPane'),
     family('reader-view', 'Transcript presentation', '[data-conv-view]', 'browser', 'This browser’s transcript-view preference', 'Compact/Normal changes transcript presentation across readers in this browser, not session engine configuration or another browser.', 'No restart.', 'static/app.js:_syncConvViewSegs; setConvViewMode'),
     family('reader-background', 'Conversation background', '[data-role="conv-bg-palette"] button', 'session', 'This browser’s conversation-keyed background map', 'Remembers the selected conversation background in this browser. This is presentation only, independent of repository avatar records on the host.', 'No restart.', 'static/app.js:CONV_BG_STORAGE_KEY; conversationBgKeysForPane'),
@@ -114,10 +115,9 @@
   function ensure(group) {
     let state=groups.get(group);
     if(!state) {
-      const help=document.createElement('details');help.className='settings-scope-help';help.dataset.settingsScopeHelp='';
-      const summary=document.createElement('summary');summary.textContent='Where this applies';summary.tabIndex=0;
-      const body=document.createElement('div');help.append(summary,body);
-      const wrapper=document.createElement('div');wrapper.className='settings-scope-container';wrapper.append(help);
+      const help=document.createElement('div');help.className='settings-scope-help';help.dataset.settingsScopeHelp='';help.hidden=true;
+      const body=document.createElement('div');help.append(body);
+      const wrapper=document.createElement('div');wrapper.className='settings-scope-container';wrapper.hidden=true;wrapper.append(help);
       state={id:'settings-scope-'+(++sequence),help,body,wrapper,signature:null};groups.set(group,state);
     }
     return state;

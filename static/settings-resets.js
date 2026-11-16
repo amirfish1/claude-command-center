@@ -104,7 +104,6 @@
     host = make('section'); host.id = 'settingsOperationalResets'; host.className = 'settings-operational-resets';
     host.append(make('h3', 'Reset selected operational overrides'));
     host.append(make('p', 'Review known host defaults or one queue’s exceptions before replacing them. This does not reset credentials, services or arbitrary configuration. Browser reset remains separate above.'));
-    const where = make('section'); where.append(make('h3', 'Where this applies'), make('p', 'Owner: this CCC host, shared by its dashboard clients; or the explicitly selected queue, including manual queues. Applies to future matching launches. No restart or running-work change is performed. Host reset does not remove queue pins.')); host.append(where);
     const controls = make('div'); controls.className = 'settings-reset-actions';
     const label = make('label', 'Reset scope '); const select = make('select'); select.id = 'settingsResetScope'; select.setAttribute('aria-label', 'Reset scope'); const option = make('option', 'This CCC host'); option.value = '["machine",""]'; select.append(option); label.append(select);
     select.addEventListener('change', () => refresh()); controls.append(label, button('Refresh overrides', 'settingsResetRefresh', () => refresh(true))); host.append(controls);

@@ -1,0 +1,1 @@
+- Remove repeated “Where this applies” disclosures from settings and contextual dialogs while preserving control descriptions and reset safeguards.
