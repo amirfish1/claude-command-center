@@ -52193,13 +52193,33 @@
     if (matchMedia('(max-width: 700px)').matches) {
       let rowRight = right;
       let anyVisible = false;
-      for (const control of [btn, nextBtn, lastBtn, segBtn]) {
+      const rowControls = [btn, nextBtn, lastBtn, segBtn].filter(Boolean);
+      for (const control of rowControls) {
         if (!control) continue;
         control.style.right = rowRight + 'px';
         control.style.bottom = endBottom + 'px';
         if (control.classList.contains('visible')) {
           rowRight += (control.offsetWidth || 44) + 6;
           anyVisible = true;
+        }
+      }
+      // The global ticket recorder floats independently of this pane. Keep
+      // the whole jump row above it when their rendered bounds intersect,
+      // including a recorder restored to a user-dragged position.
+      const recorder = document.getElementById('mobileTicketRecord');
+      if (recorder && recorder.getClientRects().length) {
+        const recordRect = recorder.getBoundingClientRect();
+        const rowBottom = hostRect.bottom - endBottom;
+        const rowTop = rowBottom - (btn.offsetHeight || 44);
+        // Keep the same clearance when End hides at the bottom; shrinking
+        // the scroll padding there would move the last transcript lines.
+        const rowWidth = rowControls.reduce((width, control) => width + (control.offsetWidth || 44) + 6, -6);
+        const rowLeft = hostRect.right - right - rowWidth;
+        const rowEnd = hostRect.right - right;
+        if (recordRect.left < rowEnd + 8 && recordRect.right > rowLeft - 8
+            && recordRect.top < rowBottom + 8 && recordRect.bottom > rowTop - 8) {
+          endBottom = Math.max(endBottom, Math.ceil(hostRect.bottom - recordRect.top + 8));
+          for (const control of rowControls) control.style.bottom = endBottom + 'px';
         }
       }
       above = endBottom + step;
