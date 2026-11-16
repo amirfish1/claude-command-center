@@ -437,17 +437,24 @@ def dead_notify_alerts(wt_home=None, now=None, items_path=None):
         return []
     notices = []
     latest = {}
+    names = {}
     for m in messages:
         if not isinstance(m, dict) or not m.get("notify"):
             continue
         if m.get("status") not in ("dead", "pending", "delivered"):
             continue
         parsed = _DEAD_NOTIFY_RE.match(_strip_sender_header(str(m.get("text") or "").strip()))
-        ref = parsed.group(1) if parsed else ""
+        label = parsed.group(1) if parsed else ""
+        # Names are decoration. Group stale/current names with the original
+        # bare identity so a delivered notice supersedes an older dead one.
+        identity = re.match(r"^([A-Z0-9_]+(?:-[A-Z0-9_]+)*?-\d+)(?::.*|-.*)?$", label, re.I)
+        ref = identity.group(1).upper() if identity else label
         verb = (parsed.group(2) or "").strip() if parsed else ""
         event_ts = _iso_to_epoch(m.get("created_at"))
         notices.append((m, ref, verb, event_ts))
         if ref:
+            if event_ts >= latest.get(ref, 0):
+                names[ref] = label
             latest[ref] = max(latest.get(ref, 0), event_ts)
     groups = {}
     for m, ref, verb, event_ts in notices:
@@ -472,7 +479,7 @@ def dead_notify_alerts(wt_home=None, now=None, items_path=None):
         ref = g["ref"]
         queue = ref.rsplit("-", 1)[0] if re.match(r"^.+-\d+$", ref) else ""
         needs_input = g["verb"] in _NEEDS_INPUT_VERBS
-        title = ("Needs your input: " if needs_input else "Notice never delivered: ") + (ref or key_ref)
+        title = ("Needs your input: " if needs_input else "Notice never delivered: ") + (names.get(ref) or ref or key_ref)
         out.append({
             "id": "dead-notify:%s" % key_ref,
             "kind": "dead_notify",

@@ -192,6 +192,21 @@ class TestDeadNotifyAlerts(_Fixture):
             self.assertEqual(a["severity"], "error")
             self.assertEqual(a["title"], "Needs your input: BECKY-3532")
 
+    def test_named_notice_uses_stable_id_and_queue(self):
+        self._write_outbox([self._dead_notify("WREN-DESIGN-1574:readable-name")])
+        a = self.collect()["alerts"][0]
+        self.assertEqual(a["id"], "dead-notify:WREN-DESIGN-1574")
+        self.assertEqual(a["queue"], "WREN-DESIGN")
+        self.assertEqual(a["title"], "Needs your input: WREN-DESIGN-1574:readable-name")
+
+    def test_new_named_delivery_supersedes_bare_dead_notice(self):
+        self._write_outbox([
+            self._dead_notify("EXAMPLE-7", ts=NOW - 120),
+            self._dead_notify("EXAMPLE-7:new-name", ts=NOW - 30,
+                              msg_id="new-delivery", status="delivered"),
+        ])
+        self.assertEqual(self.collect()["total"], 0)
+
     def test_dead_notice_does_not_fade_with_the_error_freshness_window(self):
         # The ERROR-line window is 15min; a dead notice is a one-shot fact and
         # must stay pinned until acked no matter how old.
