@@ -30896,9 +30896,13 @@ def _stamp_static_urls(html_text):
     return _STATIC_URL_RE.sub(_sub, html_text)
 
 
-def _load_index_html():
+def _load_index_html(app_embed=False):
     try:
-        return _stamp_static_urls(_INDEX_HTML_PATH.read_text(encoding="utf-8"))
+        html = _INDEX_HTML_PATH.read_text(encoding="utf-8")
+        if app_embed:
+            from ccc_server.app_embed import conversation_page
+            html = conversation_page(html)
+        return _stamp_static_urls(html)
     except OSError as e:
         return "<h1>index.html missing</h1><pre>" + str(e) + "</pre>"
 HTML_PAGE = _load_index_html()
@@ -31359,7 +31363,11 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             # Re-read on every request so edits to static/index.html are live.
-            self.send_html(_load_index_html())
+            query = urllib.parse.parse_qs(parsed.query)
+            app_embed = (query.get("embed") == ["app"] and
+                         (query.get("ccc_popout") == ["conversation"] or
+                          query.get("popout") == ["conversation"]))
+            self.send_html(_load_index_html(app_embed=app_embed))
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
         elif path == "/api/model-picker/picks":

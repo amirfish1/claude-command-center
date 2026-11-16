@@ -193,6 +193,7 @@
       agent_start_ms: ready.agentStart == null ? null : Math.round(ready.agentStart),
       agent_discovery_ms: ready.discoveryAt == null ? null : Math.round(ready.discoveryAt),
       agent_remembered: ready.remembered,
+      agent_cached: !!ready.agentCached,
       agent_timing: ready.agentAt == null ? null : timingSnapshot(frameFor[agentId] && frameFor[agentId].contentWindow, agentId) };
     window.cccAppReady = out;
     window.dispatchEvent(new CustomEvent('ccc:app-fully-ready', { detail: out }));
@@ -241,7 +242,7 @@
   window.addEventListener('message', function (e) {
     var d = e.data, f = frameFor[agentId];
     if (e.origin !== location.origin || !d || d.type !== 'ccc:embed-ready' || !f || e.source !== f.contentWindow) return;
-    if (ready.agentAt == null) { ready.agentAt = performance.now(); sendReady(); }
+    if (ready.agentAt == null) { ready.agentCached = !!d.cached; ready.agentAt = performance.now(); sendReady(); }
   });
   function rememberAgent(id) {
     try { if (id) localStorage.setItem(AGENT_KEY, id); else localStorage.removeItem(AGENT_KEY); } catch (_) {}

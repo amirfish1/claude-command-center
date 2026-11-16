@@ -230,6 +230,13 @@ background, so opening it or switching back to it is instant; and a page
 opened straight on an app starts loading the app before the dashboard behind
 it. `ccc:app-shown` fires on `window` when a kept-alive page is shown again.
 
+The embedded conversation starts its transcript read while the shared
+renderer downloads. When a saved tail wins the race, the existing composer
+is usable beside a conversation marked as refreshing; the fresh response
+replaces that tail. `agent_cached` in each readiness sample distinguishes
+this saved agent view from the app content's own `cached` field. A failed
+load without a saved conversation does not announce a ready agent pane.
+
 ### Alerts outside the dashboard
 
 Routine notifications can also go to your phone. Create

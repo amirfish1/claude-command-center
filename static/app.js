@@ -428,13 +428,21 @@
   }
   setTimeout(_convDirectProbe, 1500);
   function _fetchConvJsonTimed(url, init, keepErrors) {
-    const t0 = performance.now();
+    const early = window.__cccAppEmbedTail;
+    const bootRead = early && early.url === url ? early : null;
+    if (bootRead) delete window.__cccAppEmbedTail;
+    let t0 = performance.now();
     const g = window.__cccConnectionGate;
     const gate = g ? { streams: g.openStreams, pool_active: g.active, pool_queued: g.queued, direct_active: g.directActive } : null;
     const directUrl = _convDirectUrl(url);
     let fetchedUrl = url;
     const viaDashboard = () => { fetchedUrl = url; return fetch(url, init); };
-    const first = directUrl
+    const first = bootRead
+      ? bootRead.promise.then(result => {
+        if (result && result.response.ok) { t0 = result.t0; return result; }
+        return viaDashboard();
+      })
+      : directUrl
       ? fetch(directUrl, Object.assign({}, init || {}, { credentials: 'include', mode: 'cors' })).then(r => {
           // Declined (ACP and similar), PIN, or any error: the dashboard
           // builds it, exactly as before.
@@ -446,14 +454,16 @@
           return viaDashboard();
         })
       : fetch(url, init);
-    const pending = first.then(r => {
+    const pending = first.then(result => {
+      const saved = result && result.response ? result : null;
+      const r = saved ? saved.response : result;
       if (!r.ok && !keepErrors) return null;
-      const tResp = performance.now();
+      const tResp = saved ? saved.tResp : performance.now();
       const st = r.headers.get('Server-Timing') || '';
-      return r.text().then(txt => {
-        const tBody = performance.now();
-        const d = JSON.parse(txt);
-        const tParse = performance.now();
+      return (saved ? Promise.resolve(saved.text) : r.text()).then(txt => {
+        const tBody = saved ? saved.tBody : performance.now();
+        const d = saved ? saved.data : JSON.parse(txt);
+        const tParse = saved ? saved.tParse : performance.now();
         const num = (k) => { const m = st.match(new RegExp(k + ';dur=([0-9.]+)')); return m ? Math.round(+m[1]) : null; };
         try {
           if (d && typeof d === 'object') {
@@ -26940,6 +26950,31 @@
     if (row.spawn_pid) sessionSpawnPidByConv[row.id] = row.spawn_pid;
   }
 
+  let _appEmbedReadySent = false;
+  function noteAppEmbedDrawn(id, cached) {
+    if (!APP_EMBED_MODE || id !== CONV_POPOUT_TARGET || _appEmbedReadySent) return;
+    const paneId = activePaneId();
+    const pane = paneByPaneId(paneId);
+    const input = composerInputForPane(paneId);
+    // selectConversation has restored the draft and initialized the real
+    // composer before fetching/rendering. Never report a loading/error view.
+    if (!pane || pane.conversationId !== id || !input || !currentSession.id) return;
+    _appEmbedReadySent = true;
+    let sent = false;
+    const notify = () => {
+      if (sent) return;
+      sent = true;
+      if (pane.conversationId !== id || CONV_POPOUT_TARGET !== id) return;
+      try {
+        window.parent.postMessage({ type: 'ccc:embed-ready', conv: id,
+          cached: !!cached, ms: Math.round(performance.now()) }, window.location.origin);
+      } catch (_) {}
+    };
+    requestAnimationFrame(() => setTimeout(notify, 0));
+    // The agent tab on a phone can be hidden, so it may get no frame.
+    setTimeout(notify, 250);
+  }
+
   async function bootConversationPopoutDirect() {
     if (!CONV_POPOUT_MODE || !CONV_POPOUT_TARGET) return false;
     // CCC-872: '__new__' is the not-yet-spawned "new session" composer, not a
@@ -26974,7 +27009,7 @@
         if (embedReadySent) return;
         embedReadySent = true;
         _releaseStartupApiReads();
-        if (window.parent !== window) {
+        if (window.parent !== window && !APP_EMBED_MODE) {
           try {
             window.parent.postMessage({ type: 'ccc:embed-ready', conv: CONV_POPOUT_TARGET, ms: Math.round(performance.now()) }, window.location.origin);
           } catch (_) {}
@@ -64722,6 +64757,7 @@
             }) !== false;
             if (_pvOk) {
               _markConvCachePreview($view, 'refreshing', cached.saved_at);
+              noteAppEmbedDrawn(id, true);
               _cachedPreview = { saved_at: cached.saved_at };
               if (_perfConvOpen && _perfConvOpen.id === id && _perfConvOpen.paneId === fetchPaneId
                   && !_perfConvOpen.cachedPainted) {
@@ -64747,6 +64783,7 @@
         }
       }
       data = await _netP;
+      if (!data || data.error) throw new Error((data && data.error) || 'Conversation response unavailable');
       const _perfDataAt = performance.now();
       // Tail is in hand: release the parked select-time fetches once this
       // render has painted (see _afterConvTail).
@@ -64837,6 +64874,7 @@
           const _perfRenderAt = performance.now();
           const _renderOk = renderConversationEvents(data.events, fetchPaneId, { initialLoad: _freshOpen, isTruncated: data.truncated_before }) !== false;
           if (_renderOk) convLastLine = data.last_line;
+          if (_renderOk && _freshOpen && !data.error) noteAppEmbedDrawn(id, false);
           if (_renderOk && _cacheEligible) _convCachePutSoon(id, data);
           if (_renderOk && _freshOpen && data.truncated_before && data.first_prompt) {
             _renderFirstPromptPin($view, data.first_prompt, fetchPaneId);
@@ -98552,6 +98590,7 @@
 
   // Keep existing controls/handlers intact when grouping related preferences.
   function organizeSettings() {
+    if (window.__CCC_APP_EMBED__) return;
     const rail = document.getElementById('settingsRail');
     const pane = document.getElementById('settingsPane');
     function addSection(id, title) {
