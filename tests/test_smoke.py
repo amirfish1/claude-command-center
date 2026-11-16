@@ -1515,6 +1515,7 @@ class TestServerImports(unittest.TestCase):
     def test_antigravity_turn_token_chips_show_cached_input(self):
         """Per-turn chips should expose cache reads, not only raw in/out counts."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         self.assertIn("function _formatAntigravityTokenChips(tIn, tOut, tThinking, tCached)", app_js)
         self.assertIn("if (tCached) parts.push(_formatTokensAntigravity(tCached) + ' cached')", app_js)
         self.assertIn("const chipCached = Number(ev.tokens_cached || (ev.token_usage && (ev.token_usage.cache_read_input_tokens || ev.token_usage.cached_input_tokens)) || 0);", app_js)
@@ -1524,6 +1525,7 @@ class TestServerImports(unittest.TestCase):
     def test_antigravity_turn_token_chips_call_out_uncached_input(self):
         """A partial cache read must visibly say how much input missed cache."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function _cacheMissCallout(tIn, tCached)", app_js)
         self.assertIn("CACHE MISS", app_js)
@@ -2516,12 +2518,13 @@ class TestServerImports(unittest.TestCase):
     def test_kanban_tool_groups_stay_expanded(self):
         """Kanban comments/blocks are conversation context, not routine tools."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
         self.assertIn("function toolCallCarriesConversationContext(toolCall)", app_js)
         self.assertIn("key === 'ask_user_question' || key === 'sidekick'", app_js)
         self.assertIn("|| key === 'run_subagent' || key.startsWith('kanban_');", app_js)
         self.assertIn("if (!on && toolGroupCarriesConversationContext(g)) return;", app_js)
-        self.assertIn("if (toolGroupCarriesConversationContext(_currentToolGroup))", app_js)
+        self.assertIn('if (toolGroupCarriesConversationContext(state._currentToolGroup))', app_js)
 
     def test_active_sidebar_inprogress_section_is_headerless(self):
         """The Active tab should not repeat an In Progress header/count."""
@@ -4266,6 +4269,7 @@ class TestServerImports(unittest.TestCase):
         and re-filed as "pop-out button disappeared". It reuses the delegated
         helper and is skipped inside a popout window."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('data-role="ccc-breadcrumb-popout"', app_js)
         self.assertIn('class="conv-sticky-header__popout"', app_js)
@@ -5087,6 +5091,7 @@ class TestServerImports(unittest.TestCase):
         instead of the transcript's large sticky card."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('id="mobileOriginalAsk"', index_html)
@@ -5204,11 +5209,12 @@ class TestServerImports(unittest.TestCase):
         """Tool result previews should render under the command/tool whose
         tool_use id matches, with a visible result/error label."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function toolCallForResult", app_js)
         self.assertIn("tc.dataset.toolUseId || '') === toolUseId", app_js)
         self.assertIn("data-tool-use-id=\"' + escapeAttr(toolUseId) + '\"", app_js)
-        self.assertIn("const last = toolCallForResult(_currentToolGroup, ev.tool_use_id || '');", app_js)
+        self.assertIn("const last = toolCallForResult(state._currentToolGroup, ev.tool_use_id || '');", app_js)
         self.assertIn("out.dataset.resultLabel = ", app_js)
         self.assertIn("toolResultOutputLabel(last, ", app_js)
         self.assertIn("Command result", app_js)
@@ -5219,10 +5225,11 @@ class TestServerImports(unittest.TestCase):
     def test_tool_calls_render_complete_input_disclosure(self):
         """Persisted tool payloads should load lazily behind an Input toggle."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
         self.assertIn("function renderToolInputDisclosure(block, conversationId, line)", app_js)
         self.assertIn("async function loadToolInputDisclosure(details)", app_js)
-        self.assertIn("<span>Input</span>", app_js)
+        self.assertIn("structured ? 'View structured output' : 'Input'", app_js)
         self.assertIn("/tool-input?line=", app_js)
         self.assertIn("tool_use_id=", app_js)
         self.assertIn("const inputDisclosure = renderToolInputDisclosure(b,", app_js)
@@ -5232,6 +5239,7 @@ class TestServerImports(unittest.TestCase):
     def test_recoverable_tool_failures_use_a_subdued_warning_treatment(self):
         """A failed tool call should not look like a CCC or session failure."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("⚠ Command failed", app_js)
@@ -5756,6 +5764,7 @@ class TestServerImports(unittest.TestCase):
         anchor. But first_message is server-truncated (~200 chars), so when
         the rendered event IS that message, the full event text wins (CCC-456)."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         self.assertIn("function originalAskTextForEvent(ev, paneId)", app_js)
         self.assertIn(
             "const canonical = (conv && (conv.original_ask || conv.first_message)) || '';",
@@ -6307,6 +6316,7 @@ class TestServerImports(unittest.TestCase):
         assistant answer, rather than forcing users to select rendered text
         manually from the transcript."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function agentAnswerTextBeforeResult(resultEl)", app_js)
         self.assertIn("data-copy-agent-answer", app_js)
@@ -6320,6 +6330,7 @@ class TestServerImports(unittest.TestCase):
         """Assistant message metadata should expose small read/copy actions
         beside the relative timestamp, not only on Done result rows."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function assistantMessageActionsHtml(ev)", app_js)
@@ -6360,6 +6371,7 @@ class TestServerImports(unittest.TestCase):
         """New assistant rows should reveal prose word-by-word without
         replaying old transcript loads."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function _convShouldLiveRevealNewText(opts)", app_js)
@@ -6397,6 +6409,7 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(parsed["type"], "result")
         self.assertTrue(parsed["no_agent_output"])
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("no_agent_output", app_js)
         self.assertIn("No visible response", app_js)
@@ -6462,6 +6475,7 @@ class TestServerImports(unittest.TestCase):
     def test_codex_wake_status_does_not_stack_with_generating(self):
         """Codex wake rows own their progress UI and should not stack with Generating."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
         self.assertIn(".conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown", app_js)
         self.assertIn("function clearLiveGeneratingIndicator($view)", app_js)
@@ -6526,6 +6540,7 @@ class TestServerImports(unittest.TestCase):
     def test_compact_completion_clears_optimistic_thinking(self):
         """A completed compaction should not leave the optimistic Thinking pill."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
         self.assertIn("Codex compact has completed; any optimistic Thinking pill is stale.", app_js)
         self.assertIn("clearOptimisticAgentIndicator(getConvView());", app_js)
@@ -6893,6 +6908,7 @@ class TestServerImports(unittest.TestCase):
     def test_codex_user_messages_have_inline_steer_action(self):
         """Codex user-message bubbles should be steerable in place."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml, ev)", app_js)
@@ -6931,6 +6947,8 @@ class TestServerImports(unittest.TestCase):
 
     def test_hermes_history_is_wired_in_static_ui(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-selection.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("const isHermesRow = c.source === 'hermes' || c.engine === 'hermes';", app_js)
         self.assertIn("is-hermes-session", app_js)
@@ -7236,6 +7254,7 @@ class TestServerImports(unittest.TestCase):
         note sticks forever once the _pendingSends entry is lost (the 'stuck at
         queued' annotation)."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         # The reconciliation DOM-scan must cover the non-pending echo states.
         self.assertIn(".event.user_text.send-queued", app_js)
         self.assertIn(".event.user_text.send-delivered", app_js)
@@ -14430,6 +14449,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_codex_managed_app_server_ui_label_is_present(self):
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         self.assertIn("managed app-server", app_js)
         self.assertIn("codex_app_server_event_seq", app_js)
         self.assertIn("codex_app_server_item", app_js)
@@ -14861,6 +14881,8 @@ class TestRepoContextHelpers(unittest.TestCase):
     def test_original_ask_renders_pasted_images_inline(self):
         """Pasted-image references should become images in the ask panels."""
         js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
+        js += pathlib.Path(PROJECT_ROOT, "static", "conversation-text.js").read_text(encoding="utf-8")
         self.assertIn("PASTED_IMG_MD_LINK_RE", js)
         self.assertIn("function pastedImageTag", js)
         self.assertIn("/api/pasted-image?path=", js)

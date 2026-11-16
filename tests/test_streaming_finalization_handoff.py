@@ -41,10 +41,7 @@ _HARNESS_MISSING = _browser_harness_unavailable()
 
 
 def _render_conversation_events_source():
-    source = APP_JS.read_text(encoding="utf-8")
-    start = source.index("function renderConversationEvents(")
-    end = source.index("\n  // CCC-185:", start)
-    return source[start:end]
+    return APP_JS.with_name("conversation-events.js").read_text(encoding="utf-8")
 
 
 def test_matching_stream_bubble_handoff_skips_live_word_reveal():

@@ -632,14 +632,13 @@ class TestPresentationModeStatic(unittest.TestCase):
 
     def test_durable_and_streaming_renders_refresh_the_active_deck(self):
         app_js = APP_JS.read_text(encoding="utf-8")
-        durable_start = app_js.index("function renderConversationEvents(events, paneId, opts)")
-        durable_end = app_js.index("\n  // CCC-185:", durable_start)
+        durable = APP_JS.with_name("conversation-events.js").read_text(encoding="utf-8")
         streaming_start = app_js.index(
             "function handleSpawnEvents(events, paneId, convId, streamSid)"
         )
         streaming_end = app_js.index("\n  function stopPkoodTailPoller", streaming_start)
 
-        self.assertIn("refreshPresentationForPane(paneId", app_js[durable_start:durable_end])
+        self.assertIn("refreshPresentationForPane(paneId", durable)
         self.assertIn("refreshPresentationForPane(paneId", app_js[streaming_start:streaming_end])
 
     def test_present_splits_lists_and_uses_generic_live_projection(self):

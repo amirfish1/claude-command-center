@@ -28,7 +28,7 @@ const LIVE_SOURCE_JS = fs.readFileSync(path.join(__dirname, '../static/codex-liv
 
 const appSource = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
 const helpersStart = appSource.indexOf('  // --- Provisional (live) event upsert/reconcile helpers');
-const helpersEnd = appSource.indexOf('  function renderConversationEvents(', helpersStart);
+const helpersEnd = appSource.indexOf('  // CCC-185:', helpersStart);
 assert.ok(helpersStart >= 0 && helpersEnd > helpersStart, 'provisional helper block exists before renderConversationEvents');
 const dedupeHelpersCode = appSource.slice(helpersStart, helpersEnd);
 

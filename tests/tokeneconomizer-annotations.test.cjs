@@ -40,7 +40,7 @@ test('opening annotation bypasses background queues and rejects a response for a
     },
   });
   vm.runInContext(app.slice(app.indexOf('  async function _refreshTokenEconomizerAnnotation('),
-    app.indexOf('  function renderConversationEvents(')), runtime);
+    app.indexOf('  // CCC-185:')), runtime);
   runtime._paintTokenEconomizerAnnotation = (id, report) => painted.push({ id, report });
   const first = runtime._refreshTokenEconomizerAnnotation('pane');
   assert.equal(requests[0].options.cccPriority, 'user');

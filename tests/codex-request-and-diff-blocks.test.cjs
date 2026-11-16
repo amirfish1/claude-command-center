@@ -32,7 +32,7 @@ function extract(start, end) {
 const helpersCode = [
   extract('  function escapeHtml(', '  function unescapeHtml('),
   extract('  function renderImageDescriptors(', '  function tsSpan('),
-  extract('  function _diffLinesHtml(', '  function renderConversationEvents('),
+  extract('  function _diffLinesHtml(', '  // CCC-185:'),
 ].join('\n');
 
 let browser;

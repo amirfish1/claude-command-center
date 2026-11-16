@@ -23,7 +23,7 @@ const puppeteer = require('puppeteer');
 const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
 
 const helpersStart = source.indexOf('  // --- Provisional (live) event upsert/reconcile helpers');
-const helpersEnd = source.indexOf('  function renderConversationEvents(', helpersStart);
+const helpersEnd = source.indexOf('  // CCC-185:', helpersStart);
 assert.ok(helpersStart >= 0 && helpersEnd > helpersStart, 'provisional helper block exists before renderConversationEvents');
 const helpersCode = source.slice(helpersStart, helpersEnd);
 

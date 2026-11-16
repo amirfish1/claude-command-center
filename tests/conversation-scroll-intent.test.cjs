@@ -246,13 +246,14 @@ test('a fresh open resumes following after leaving the previous conversation scr
 // place, which misses the momentary empty viewport during a history response.
 const prependStart = app.indexOf('  function _prependConversationEvents(');
 const thinkingStart = app.indexOf('  function _syncThinkingRuns(');
-const prepend = app.slice(thinkingStart, app.indexOf('  function renderConversationEvents(', thinkingStart))
+const prepend = app.slice(thinkingStart, app.indexOf('  // CCC-185:', thinkingStart))
   + '\n' + app.slice(prependStart, app.indexOf('  // ── Spawn stats', prependStart));
-const renderStart = app.indexOf('  function renderConversationEvents(');
-const bottomStart = app.indexOf('    const wasAtBottom =', renderStart);
-const renderBottom = app.slice(bottomStart, app.indexOf('\n', bottomStart));
-const decisionStart = app.indexOf('    const _newCompactCard =', renderStart);
-const renderScroll = app.slice(decisionStart, app.indexOf('    // Prepare after painting', decisionStart));
+const renderer = fs.readFileSync(require.resolve('../static/conversation-events.js'), 'utf8');
+const renderStart = renderer.indexOf('  function renderConversationEvents(');
+const bottomStart = renderer.indexOf('    const wasAtBottom =', renderStart);
+const renderBottom = renderer.slice(bottomStart, renderer.indexOf('\n', bottomStart));
+const decisionStart = renderer.indexOf('    const _newCompactCard =', renderStart);
+const renderScroll = renderer.slice(decisionStart, renderer.indexOf('    // Prepare after painting', decisionStart));
 
 for (const scenario of ['short page', 'long page', 'saved reading position', 'compact boundary']) {
   test(`history ${scenario} preserves the visible message and keeps bottom-follow off`, async () => {
@@ -268,7 +269,7 @@ for (const scenario of ['short page', 'long page', 'saved reading position', 'co
         window._convScrollByConv = scenario === 'saved reading position'
           ? { test: { top: 900, atBottom: false } } : {};
         window.renderConversationEvents = new Function('events', 'paneId', 'opts',
-          'const $view = view;\n' + renderBottom + '\n'
+          'const $view = view, state = window;\n' + renderBottom + '\n'
           + 'for (const ev of events) {\n'
           + '  const row = document.createElement("div");\n'
           + '  row.className = "event" + (ev.compact ? " compact-resume-event" : "");\n'

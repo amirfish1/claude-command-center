@@ -11,7 +11,7 @@ function extract(start, end) {
 }
 function helpers() {
   const context = vm.createContext({});
-  vm.runInContext(extract('  function isRoutineCodexCoordination(', '  function renderConversationEvents(')
+  vm.runInContext(extract('  function isRoutineCodexCoordination(', '  // CCC-185:')
     + extract('  function codexActiveItemLabel(', '  function pastedImageThumbsHtml('), context);
   return context;
 }
