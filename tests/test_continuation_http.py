@@ -9,6 +9,10 @@ matching tests/test_report_routes.py's pattern.
 """
 
 import json
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace
 import threading
 import urllib.error
 import urllib.parse
@@ -224,3 +228,33 @@ def test_continuation_envelope_keeps_author_and_actual_recipient(httpd,monkeypat
     assert stored['author']==a['author']
     assert stored['intended_recipient']['id']=='original'
     assert stored['delivered_recipient']['id']=='successor'
+
+
+@pytest.mark.parametrize("queued", [False, True])
+def test_conditional_cli_sends_twice_to_existing_successor(httpd, monkeypatch, tmp_path, queued):
+    """Real CLI HTTP round trips, with only the agent transport intercepted."""
+    loader = importlib.machinery.SourceFileLoader('ccc_conditional_send', str(Path(__file__).resolve().parents[1] / 'ccc'))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    cli = importlib.util.module_from_spec(spec)
+    loader.exec_module(cli)
+    monkeypatch.setattr(continuation, '_manual_forward_path', lambda: str(tmp_path / 'forwards.json'))
+    continuation.record_manual_forward('old', 'live')
+    monkeypatch.setattr(continuation, 'session_context', lambda _: pytest.fail('unexpected new continuation'))
+    monkeypatch.setattr(continuation._sg, '_get_connection', lambda: (_ for _ in ()).throw(RuntimeError('index unavailable')))
+    monkeypatch.setattr(server, '_sessions_state_snapshot', lambda: {'live': {'state': 'working'}})
+    monkeypatch.setattr(server, '_resolve_bridge_session_alias', lambda sid: sid)
+    monkeypatch.setattr(server, '_handoff_lease_guard', lambda sid: None)
+    monkeypatch.setattr(server, '_record_interaction', lambda sid: None)
+    delivered = []
+    def inject(sid, text, **options):
+        delivered.append((sid, text, options))
+        return {'ok': True, 'queued': queued, 'effect': 'queued' if queued else 'delivered'}
+    monkeypatch.setattr(server, '_inject_text_into_session', inject)
+    args = SimpleNamespace(new_if_large_and_stale=True, dry_run=False, json=True,
+                           queue=queued, steer=False, stop=False)
+    for text in ('first message', 'second message'):
+        # Exercise a stale decision already made before the successor was known.
+        assert cli._spawn_continue_from(f'http://127.0.0.1:{httpd.server_port}', 'old', text, args) == 0
+    assert [(sid, text) for sid, text, _ in delivered] == [('live', 'first message'), ('live', 'second message')]
+    assert all(options['mode'] == 'send' and options['force_queue'] == queued
+               for _, _, options in delivered)

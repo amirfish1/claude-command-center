@@ -44187,11 +44187,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     name=payload.get("name"),
                     task_key=payload.get("task_key") or "",
                     dedupe=bool(payload.get("dedupe")),
+                    **({"reuse_successor": True} if payload.get("reuse_successor") is True else {}),
                 )
                 if not result.get("ok"):
                     self.send_json(result, 400)
                 else:
-                    if not result.get("dry_run"):
+                    if not result.get("dry_run") and not result.get("reuse_session_id"):
                         forwarded = _attribution.relay(continuation_attr,'continuation',delivered=result.get('new_session_id'))
                         _attribution.journal(forwarded,app='ccc',event='continuation-delivered')
                         _log_activity(

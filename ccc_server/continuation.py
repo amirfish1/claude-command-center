@@ -30,6 +30,11 @@ import tempfile
 import threading
 import time
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
 from ccc_server import core as _core
 from ccc_server import lineage as _lineage
 from ccc_server import report_routes as _report_routes
@@ -44,6 +49,8 @@ DEFAULT_STALE_SECONDS = 60 * 60
 _SUPPORTED_ENGINES = ("claude", "codex", "kimi", "antigravity")
 
 MAX_MANUAL_FORWARD_HOPS = 25
+_SEND_CONTINUATION_LOCKS = tuple(threading.RLock() for _ in range(64))
+_MANUAL_FORWARD_LOCK = threading.Lock()
 
 
 def _manual_forward_path():
@@ -85,9 +92,20 @@ def record_manual_forward(old_sid, new_sid, path=None, now=None):
     continuation gets for free."""
     if not old_sid or not new_sid or old_sid == new_sid:
         return
-    state = _load_manual_forwards(path)
-    state[old_sid] = {"to": new_sid, "at": time.time() if now is None else now}
-    _save_manual_forwards(state, path)
+    path = os.fspath(path or _manual_forward_path())
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # Multiple engine/dashboard processes publish unrelated edges here.
+    # Lock the whole read/modify/replace, not just the atomic file rename.
+    with _MANUAL_FORWARD_LOCK, open(path + ".lock", "a") as lock:
+        if fcntl is not None:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            state = _load_manual_forwards(path)
+            state[old_sid] = {"to": new_sid, "at": time.time() if now is None else now}
+            _save_manual_forwards(state, path)
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def manual_forward_target(sid, path=None):
@@ -205,12 +223,26 @@ def rebind_chain_to(old_sid, new_sid):
 
 def spawn_continuation(query, prompt="", model=None, effort=None, report_to=None,
                         dry_run=False, rebind_chain=True, name=None,
-                        task_key="", dedupe=False, engine=None):
+                        task_key="", dedupe=False, engine=None, reuse_successor=False):
     """Continue a session; honor the same explicit dedupe contract as spawn.
 
     Unkeyed requests still create independent sessions. A task key denotes
     one task even after it finishes; dedupe=True matches a live raw prompt.
     """
+    if reuse_successor:
+        # Conditional sends can race each other and the transcript index.
+        # Publish a successful spawn's forward before releasing this lock;
+        # the caller delivers reuse results through the normal input route.
+        with _SEND_CONTINUATION_LOCKS[hash(query) % len(_SEND_CONTINUATION_LOCKS)]:
+            target = _latest_forward_target(query)
+            if target != query:
+                return {"ok": True, "dry_run": dry_run, "continue_from": query,
+                        "reuse_session_id": target, "latest_session_id": target}
+            return spawn_continuation(
+                query, prompt=prompt, model=model, effort=effort, report_to=report_to,
+                dry_run=dry_run, rebind_chain=rebind_chain, name=name,
+                task_key=task_key, dedupe=dedupe, engine=engine,
+            )
     ctx = session_context(query)
     if ctx is None:
         return {"ok": False, "error": f"no session found for {query!r}"}
@@ -362,6 +394,9 @@ def _spawn_continuation(query, prompt="", model=None, effort=None, report_to=Non
 
     new_sid = (spawn_result or {}).get("session_id")
     if new_sid:
+        # Do not wait for the background transcript parser to learn this
+        # edge: another send can arrive while the new process is starting.
+        record_manual_forward(ctx["latest"], new_sid)
         from ccc_server import continuation_topics
         try:
             continuation_topics.record_continuation(ctx["latest"], new_sid, title=ctx["title"])
@@ -433,6 +468,15 @@ def decide_send_path(query, large_threshold=DEFAULT_LARGE_TOKENS,
     }
 
 
+def _latest_forward_target(sid):
+    """Read committed forwards without waiting for a background index writer."""
+    try:
+        conn = _sg._get_connection()
+        return _lineage.latest_successor(conn, manual_forward_target(sid)) or sid
+    except Exception:
+        return manual_forward_target(sid)
+
+
 def forward_target(sid):
     """Delivery-time lineage forward (MEMO-FIX-lineage): once `sid` has a
     recorded continuation successor -- or a manual rebind (`ccc
@@ -446,13 +490,7 @@ def forward_target(sid):
     turn: a forward must never race a reply that is already in flight."""
     if not sid:
         return sid
-    try:
-        conn = _sg._get_connection()
-        # Background indexing owns refreshes and schema migrations. Doing
-        # either here can wait behind its writer before a send is dispatched.
-        target = _lineage.latest_successor(conn, manual_forward_target(sid))
-    except Exception:
-        target = manual_forward_target(sid)
+    target = _latest_forward_target(sid)
     if not target or target == sid:
         return sid
     try:

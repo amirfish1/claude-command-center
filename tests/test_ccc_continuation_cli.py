@@ -149,7 +149,7 @@ class ContinuationCliTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "get")
         self.assertIn("/api/sessions/continuation-decision/", calls[0][1])
         self.assertEqual(calls[1], ("post", "/api/sessions/spawn-continue-from", {
-            "continue_from": "old-sid", "prompt": "keep going",
+            "continue_from": "old-sid", "prompt": "keep going", "reuse_successor": True,
         }))
         self.assertIn("decision: new", out.getvalue())
 
@@ -178,6 +178,31 @@ class ContinuationCliTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "/api/inject-input")
         self.assertEqual(calls[0][1]["session_id"], "old-sid")
         self.assertIn("decision: normal", out.getvalue())
+
+    def test_reused_continuation_preserves_peer_sender_and_queue(self):
+        import sender_envelope as attribution
+        attr = attribution.make('old-sid', who={'kind': 'session', 'id': 'parent-sid'})
+        args = _send_args(new_if_large_and_stale=True, queue=True, json=True)
+        replies = [(200, {'ok': True, 'reuse_session_id': 'live-sid'}),
+                   (200, {'ok': True, 'effect': 'queued'})]
+        with mock.patch.object(self.ccc, '_post_json', side_effect=replies) as post, \
+             mock.patch.object(attribution, 'from_text', return_value=attr), \
+             redirect_stdout(io.StringIO()):
+            self.assertEqual(self.ccc._spawn_continue_from('http://localhost', 'old-sid', 'report', args), 0)
+        delivery = post.call_args.args[2]
+        self.assertEqual(post.call_args.args[1], '/api/inject-input')
+        self.assertEqual(delivery['session_id'], 'live-sid')
+        self.assertEqual(delivery['mode'], 'queue')
+        self.assertEqual(delivery['peer_sender_sid'], 'parent-sid')
+        self.assertEqual(delivery['idempotency_key'], attr['message_id'])
+
+    def test_reused_continuation_dry_run_does_not_deliver(self):
+        with mock.patch.object(self.ccc, '_post_json', return_value=(200, {
+            'ok': True, 'reuse_session_id': 'live-sid', 'dry_run': True,
+        })) as post, redirect_stdout(io.StringIO()):
+            self.assertEqual(self.ccc._spawn_continue_from('http://localhost', 'old-sid', 'report',
+                            _send_args(new_if_large_and_stale=True, dry_run=True)), 0)
+        self.assertEqual(post.call_count, 1)
 
     def test_send_dry_run_alone_never_sends_or_spawns(self):
         ccc = self.ccc

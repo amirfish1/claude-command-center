@@ -2233,6 +2233,8 @@ def _print_continue_from_result(result, status, args):
 
 def _spawn_continue_from(base, sid, prompt, args):
     payload = {"continue_from": sid, "prompt": prompt}
+    if getattr(args, "new_if_large_and_stale", False):
+        payload["reuse_successor"] = True
     for field in ("name", "task_key", "dedupe"):
         if getattr(args, field, None):
             payload[field] = getattr(args, field)
@@ -2249,6 +2251,41 @@ def _spawn_continue_from(base, sid, prompt, args):
     except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
         print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
         return 1
+    target = result.get("reuse_session_id") if result.get("ok") else None
+    if target:
+        if getattr(args, "dry_run", False):
+            if args.json:
+                print(json.dumps(result, indent=2))
+            else:
+                print(f"[dry-run] would send to existing continuation {target}")
+            return 0
+        import sender_envelope as attribution
+        attr = attribution.from_text(prompt)
+        sender_sid = (attr or {}).get("author", {}).get("id")
+        mode = ("queue" if args.queue else "steer" if args.steer or
+                _sent_by_agent_session(attr, sender_sid, target) else "send")
+        delivery = {"session_id": target, "text": prompt, "mode": mode}
+        if attr:
+            delivery.update(attr=attr, idempotency_key=attr["message_id"])
+            if (attr.get("author") or {}).get("kind") == "session" and sender_sid:
+                delivery["peer_sender_sid"] = sender_sid
+        if getattr(args, "stop", False):
+            delivery["stop"] = True
+        try:
+            status, result = _post_json(base, "/api/inject-input", delivery)
+        except OSError as e:
+            print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(result, indent=2))
+        elif result.get("ok"):
+            print(f"sent to {target} ({result.get('effect') or 'delivered'})")
+        elif result.get("effect") == "unknown":
+            print(f"ccc: delivery unknown: {result.get('error') or 'no confirmation'}", file=sys.stderr)
+            return 3
+        else:
+            print(f"ccc: send failed: {result.get('error') or f'HTTP {status}'}", file=sys.stderr)
+        return 0 if result.get("ok") else 1
     return _print_continue_from_result(result, status, args)
 
 

@@ -329,6 +329,59 @@ def test_rebind_chain_to_single_session_no_chain(lineage_conn):
 
 # -- forward_target -------------------------------------------------------------
 
+def test_conditional_send_reuses_successor_before_transcript_index(monkeypatch):
+    _patch_context_sources(monkeypatch, {"old": _brief_dict("old")})
+    spawned = []
+    monkeypatch.setattr(server, "spawn_session", lambda *a, **k:
+                        spawned.append(k) or {"ok": True, "session_id": "new"})
+    first = continuation.spawn_continuation("old", prompt="first", reuse_successor=True)
+    assert first["new_session_id"] == "new"
+    # Neither the brief nor the session_meta index knows the new session yet.
+    for text in ("second", "third"):
+        result = continuation.spawn_continuation("old", prompt=text, reuse_successor=True)
+        assert result["reuse_session_id"] == "new"
+    assert len(spawned) == 1
+
+
+def test_conditional_send_uses_indexed_successor_without_spawning(lineage_conn, monkeypatch):
+    _insert_session_meta(lineage_conn, "old", start_ts=1)
+    _insert_session_meta(lineage_conn, "live", start_ts=2, continuation_origin="old")
+    monkeypatch.setattr(continuation, "session_context", lambda _: pytest.fail("must not spawn"))
+    for text in ("first", "second"):
+        assert continuation.spawn_continuation("old", prompt=text, reuse_successor=True)["reuse_session_id"] == "live"
+
+
+def test_explicit_continuation_still_creates_a_new_session(monkeypatch):
+    continuation.record_manual_forward("old", "existing")
+    _patch_context_sources(monkeypatch, {"old": _brief_dict("old")})
+    monkeypatch.setattr(server, "spawn_session", lambda *a, **k: {"session_id": "explicit"})
+    assert continuation.spawn_continuation("old")["new_session_id"] == "explicit"
+
+
+def test_simultaneous_conditional_sends_create_only_one_successor(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    _patch_context_sources(monkeypatch, {"old": _brief_dict("old")})
+    monkeypatch.setattr(continuation, "_latest_forward_target", continuation.manual_forward_target)
+    entered, release = threading.Event(), threading.Event()
+    spawned = []
+    def spawn(*args, **kwargs):
+        spawned.append(kwargs)
+        entered.set()
+        assert release.wait(3)
+        return {"session_id": "new"}
+    monkeypatch.setattr(server, "spawn_session", spawn)
+    monkeypatch.setattr(continuation, "rebind_chain_to", lambda *a: [])
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(continuation.spawn_continuation, "old", prompt="first", reuse_successor=True)
+        assert entered.wait(3)
+        second = pool.submit(continuation.spawn_continuation, "old", prompt="second", reuse_successor=True)
+        release.set()
+        assert first.result()["new_session_id"] == "new"
+        assert second.result()["reuse_session_id"] == "new"
+    assert len(spawned) == 1
+
+
 def test_forward_target_no_successor_is_unchanged(lineage_conn):
     _insert_session_meta(lineage_conn, "solo", start_ts=1.0)
     assert continuation.forward_target("solo") == "solo"
