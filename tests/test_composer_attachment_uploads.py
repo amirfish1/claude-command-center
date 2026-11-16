@@ -65,9 +65,7 @@ def test_only_previewable_images_use_the_pasted_image_upload_path():
 
 def test_send_handler_refuses_to_clear_a_composer_with_uploads_in_flight():
     source = APP_JS.read_text(encoding="utf-8")
-    start = source.index("async function sendToTerminal")
-    end = source.index("function insertPendingSpawnCard", start)
-    send_handler = source[start:end]
+    send_handler = APP_JS.with_name("conversation-composer.js").read_text(encoding="utf-8")
 
     assert "if (!guardComposerSend($input)) return;" in send_handler
     assert "Waiting for attachment upload to finish." in source
@@ -110,7 +108,7 @@ def test_every_attachment_enabled_submitter_checks_the_shared_upload_guard():
         return source[start:source.index(end_marker, start)]
 
     assert "if (!guardComposerSend($input)) return;" in section(
-        "async function submitPlus", "async function sendToTerminal"
+        "async function submitPlus", "const TTS_TEXT_MAX_CHARS"
     )
     assert "if (!guardComposerSend(input)) return;" in section(
         "async function sendHumanGcPost", "function closeGroupChatReader"

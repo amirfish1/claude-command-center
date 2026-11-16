@@ -12,7 +12,7 @@ function harness(split, options = {}) {
   const inputListeners = [];
   const input = { addEventListener(type, listener) { if (type === 'input') inputListeners.push(listener); }, value: 'Submitted message', style: {}, closest() { return {}; }, focus() {}, dispatchEvent() {} };
   const button = { disabled: false };
-  const notices = [], removed = [], warnings = [], requests = [];
+  const notices = [], removed = [], warnings = [], requests = [], restoredTapbacks = [];
   let resolve;
   const response = new Promise(r => { resolve = r; });
   const noop = () => {};
@@ -28,7 +28,9 @@ function harness(split, options = {}) {
     hideSlashCommandMenu: noop, rememberComposerCommand: noop,
     appendPendingSendEcho: () => ({ id: 'echo' }), announcedInjectionPreview: text => text,
     updateInputBar: noop, _autosizeTextareaLike: noop, clearInputDraftForConversation: noop,
-    looksDormantNoProcess: () => false, durableActionId: () => 'test-action', tapbackTakePending: () => '',
+    looksDormantNoProcess: () => false, durableActionId: () => 'test-action', tapbackTakePending: () => options.tapback || '',
+    tapbackRestorePending: (...args) => restoredTapbacks.push(args),
+    _showTerminalSuspectedDialog: async () => options.terminalChoice,
     fetch: (url, init) => {
       requests.push({ url, init });
       if (requests.length === 1 || !options.retryResponse) return response;
@@ -44,9 +46,14 @@ function harness(split, options = {}) {
     bound: [], bindPendingSendDeliveryId: (pending, id) => ctx.bound.push([pending, id]),
   };
   vm.createContext(ctx);
-  vm.runInContext(fn('fetchInjectWithRetry') + '\n' + fn('composerUserEditRevision') + '\n' + fn('clearAcceptedComposerInput') + '\n' + fn('restoreInputAfterSendFailure') + '\n' + fn(split ? 'sendToSplitTerminal' : 'sendToTerminal', split ? 4 : 2), ctx);
+  vm.runInContext(fn('fetchInjectWithRetry') + '\n' + fn('composerUserEditRevision') + '\n' + fn('clearAcceptedComposerInput') + '\n' + fn('restoreInputAfterSendFailure'), ctx);
+  if (split) vm.runInContext(fn('sendToSplitTerminal', 4), ctx);
+  else {
+    vm.runInContext(fs.readFileSync('static/conversation-composer.js', 'utf8'), ctx);
+    ctx.sendToTerminal = ctx.CCCConversationComposer.createComposer({ state: ctx, helpers: ctx }).sendToTerminal;
+  }
   const send = split ? ctx.sendToSplitTerminal : ctx.sendToTerminal;
-  return { input, requests, bound: ctx.bound, edit(value) { input.value = value; inputListeners.forEach(listener => listener({ isTrusted: true })); }, switchConversation() { ctx.currentConversation = 'other'; }, button, notices, removed, warnings, send, respond(data, ok = true, status = ok ? 200 : 500) { resolve({ ok, status, json: async () => data }); } };
+  return { input, requests, restoredTapbacks, bound: ctx.bound, edit(value) { input.value = value; inputListeners.forEach(listener => listener({ isTrusted: true })); }, switchConversation() { ctx.currentConversation = 'other'; }, button, notices, removed, warnings, send, respond(data, ok = true, status = ok ? 200 : 500) { resolve({ ok, status, json: async () => data }); } };
 }
 for (const split of [false, true]) {
   const label = split ? 'split composer' : 'pane composer';
@@ -148,3 +155,30 @@ for (const split of [false, true]) {
     assert.equal(h.input.value, 'Next message');
   });
 }
+
+for (const choice of ['terminal', 'headless']) {
+  test('pane composer: a chosen ' + choice + ' retry preserves payload and delivery identity', async () => {
+    const h = harness(false, { terminalChoice: choice, tapback: 'Quoted context',
+      retryResponse: { ok: true, json: async () => ({ ok: true, via: 'acp-prompt', delivery_id: 'inject:retry' }) } });
+    const sending = h.send();
+    h.respond({ ok: true, soft_block: true, code: 'terminal_suspected' });
+    await sending;
+    assert.equal(h.requests.length, 2);
+    const original = JSON.parse(h.requests[0].init.body), retry = JSON.parse(h.requests[1].init.body);
+    assert.equal(retry['force_' + choice], true);
+    delete retry['force_' + choice];
+    assert.deepEqual(retry, original);
+    assert.equal(retry.text, 'Quoted context\nSubmitted message');
+    assert.deepEqual(h.bound, [[{ id: 'echo' }, 'inject:retry']]);
+    assert.equal(h.input.value, '');
+    assert.equal(h.button.disabled, false);
+  });
+}
+
+test('pane composer: failed delivery restores the consumed tapback context', async () => {
+  const h = harness(false, { tapback: 'Quoted context' });
+  const sending = h.send();
+  h.respond({ ok: false, error: 'Rejected' }, false);
+  await sending;
+  assert.deepEqual(h.restoredTapbacks, [['session', 'Quoted context']]);
+});

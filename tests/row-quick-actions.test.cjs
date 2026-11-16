@@ -5,7 +5,9 @@ const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
 const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
-const helpers = app.slice(app.indexOf('  // Row actions are model-authored replies'), app.indexOf('  // CCC-1218:'));
+const ssbActions = app.indexOf("button.ssb-action[data-ssb-act]");
+const helpers = app.slice(app.indexOf('  // Row actions are model-authored replies'),
+  app.lastIndexOf("  document.addEventListener(", ssbActions));
 const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');
 
 test('row action replies, stale state, failure recovery and responsive rendering', async () => {
@@ -22,6 +24,8 @@ test('row action replies, stale state, failure recovery and responsive rendering
           <div class="conv-outcome is-next is-inline"><span class="conv-outcome-step" data-label="Next">Say yes to a dashboard and worker restart.</span></div>
         </div></div>
       </div></div>`);
+    await page.addScriptTag({ path: require.resolve('../static/conversation-text.js') });
+    await page.evaluate(() => Object.assign(window, CCCConversationText.createRenderer({})));
     await page.addScriptTag({ content: `
       window.row = {session_id:'restart-session', state:'idle', last_event_type:'assistant',
         session_state:{next_step_user:'Say yes to a dashboard and worker restart.',next_action:{label:'Restart',reply:'Yes, restart the dashboard and worker.'}}};
@@ -180,6 +184,8 @@ test('row pop-out supports desktop hover and keyboard focus and stays hidden on 
     const rowHtml = id => `<div class="conv-item" data-session-id="${id}"><div class="conv-title-row"><div class="conv-main-row has-inline-step">
       <span class="conv-title">${id}</span><div class="conv-outcome is-inline"><span class="conv-outcome-step">x</span></div></div></div></div>`;
     await page.setContent(`<style>${css}</style><div id="convList" style="width:380px">${rowHtml('answered')}${rowHtml('empty')}</div>`);
+    await page.addScriptTag({ path: require.resolve('../static/conversation-text.js') });
+    await page.evaluate(() => Object.assign(window, CCCConversationText.createRenderer({})));
     await page.addScriptTag({ content: `
       window.rows = {answered:{id:'conversation-answered', session_id:'answered', repo_path:'/example/project', hasAnswer:true, session_state:{}}, empty:{session_id:'empty', hasAnswer:false, session_state:{}}};
       const _ultraFreshRow = sid => window.rows[sid];
