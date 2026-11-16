@@ -1,0 +1,1 @@
+- Keep session status polls responsive while aggregate dashboard reads occupy background slots, retaining duplicate-poll serialization and safe restart draining.

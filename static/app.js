@@ -79855,9 +79855,16 @@
     // pill code paths quiet; when a peer server is later running for one
     // of these folders, supercharging the row with live data is just a
     // matter of merging the peer's session record into this shape.
-    for (const prev of (conversationsData || [])) {
-      const sid = prev.session_id || prev.id;
-      if (sid && prev.is_live) _rememberLiveOverlay(sid, _liveOverlayFieldsFromRow(prev));
+    // Seed only before the first authoritative live snapshot. After that,
+    // an omitted session has exited; copying the previous rendered row back
+    // would resurrect its stale Working overlay on every archive render.
+    if (!_liveSessionsActivityFetchedAt) {
+      for (const prev of (conversationsData || [])) {
+        const sid = prev.session_id || prev.id;
+        if (sid && prev.is_live && !_sessionLiveOverlay.has(sid)) {
+          _rememberLiveOverlay(sid, _liveOverlayFieldsFromRow(prev));
+        }
+      }
     }
     const shaped = rows.map(c => {
       if (c.source === 'backlog') {
