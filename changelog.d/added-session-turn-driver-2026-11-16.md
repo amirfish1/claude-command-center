@@ -1,0 +1,1 @@
+- Show the recorded turn initiator and last owner input on session rows and headers, distinguishing people, peer sessions, services, and background wakes.

@@ -29,6 +29,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server import session_driver as _driver
 
 # ---------------------------------------------------------------------------
 # Gemini CLI integration
@@ -53,7 +54,7 @@ CURSOR_HOME = Path.home() / ".cursor"
 CURSOR_PROJECTS_ROOT = CURSOR_HOME / "projects"
 CURSOR_LOCAL_BIN = Path.home() / ".local" / "bin" / "cursor-agent"
 CURSOR_CONTEXT_LIMIT = 0
-_CURSOR_META_VERSION = 3
+_CURSOR_META_VERSION = 4
 CURSOR_APP_BUNDLE_CANDIDATES = (
     Path("/Applications/Cursor.app/Contents/Resources/app/bin/cursor-agent"),
     Path("/Applications/Cursor.app/Contents/Resources/cursor-agent"),
@@ -854,13 +855,14 @@ def _extract_gemini_tail_meta(path):
     except OSError:
         return {}
     cached = _core._conv_meta_cache.get(str(path))
-    if cached and cached.get("mtime") == mtime and cached.get("engine") == "gemini":
+    if cached and cached.get("mtime") == mtime and cached.get("engine") == "gemini" and cached.get("driver_version") == _driver.VERSION:
         return cached
     data = _load_gemini_chat(path)
     if not data:
         return {}
     meta = {
         "engine": "gemini",
+        "driver_version": _driver.VERSION,
         "mtime": mtime,
         "first_message": None,
         "last_prompt": None,
@@ -900,6 +902,7 @@ def _extract_gemini_tail_meta(path):
             if text:
                 meta["first_message"] = meta["first_message"] or text
                 meta["last_prompt"] = text
+                _driver.record(meta, text, ts_epoch, msg)
             meta["last_event_type"] = "user"
             continue
         if mtype != "gemini":
@@ -1207,6 +1210,7 @@ def find_gemini_conversations(
             "display_name": display_name,
             "name_overridden": bool(name_overrides.get(sid)),
             "last_prompt": (tail.get("last_prompt") or "")[:200],
+            **_driver.fields(tail),
             "size": st.st_size,
             "modified": modified,
             "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)),

@@ -3897,6 +3897,46 @@
         || live.state === 'working' || live.codex_state === 'working'
         || (live.is_live && live.sidecar_status === 'active' && live.sidecar_in_flight));
   }
+  function sessionDriverHtml(c, now = Date.now() / 1000) {
+    if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
+    const driver = c.turn_driver || {};
+    const kind = driver.kind || 'unknown';
+    let name = String(driver.name || driver.id || '').trim();
+    if (/^[0-9a-f]{8}-[0-9a-f-]{20,}$/i.test(name)) name = name.slice(0, 8);
+    const label = kind === 'human' ? 'You'
+      : kind === 'session' ? 'Session ' + (name || 'unknown')
+      : kind === 'service' ? 'Service ' + (name || 'unknown')
+      : kind === 'background' ? 'Background task' : 'Unknown';
+    const age = ts => {
+      const seconds = Math.max(0, now - Number(ts || 0));
+      return seconds < 60 ? 'just now' : seconds < 3600 ? Math.floor(seconds / 60) + 'm ago'
+        : seconds < 86400 ? Math.floor(seconds / 3600) + 'h ago' : Math.floor(seconds / 86400) + 'd ago';
+    };
+    const stamp = ts => {
+      const date = new Date(Number(ts) * 1000);
+      return Number(ts) > 0 && Number.isFinite(date.getTime()) ? date.toISOString() : 'not recorded';
+    };
+    const owner = Number(c.last_owner_input_at || 0);
+    const tip = 'Driven by ' + label + ' · ' + stamp(driver.at)
+      + '\nLast owner input: ' + stamp(owner) + '. Recorded attribution; not an authentication claim.';
+    return '<span class="conv-driver" data-role="session-driver" data-driver-session-id="' + escapeAttr(c.session_id || c.id || '') + '" data-driver-kind="' + escapeAttr(kind) + '" title="' + escapeAttr(tip) + '">'
+      + '<span class="conv-driver-label">Driven by ' + escapeHtml(label) + '</span>'
+      + (driver.at ? ' · <span class="conv-driver-age">' + escapeHtml(age(driver.at)) + '</span>' : '')
+      + (kind === 'human' ? '' : '<span class="conv-driver-owner">You · '
+        + (owner ? '<span class="conv-driver-age">' + escapeHtml(age(owner)) + '</span>' : 'no input recorded') + '</span>')
+      + '</span>';
+  }
+
+  function refreshSessionDriverHeaders(rows) {
+    const byId = new Map((Array.isArray(rows) ? rows : []).filter(c => c).map(c => [String(c.session_id || c.id || ''), c]));
+    document.querySelectorAll('.conv-pane-driver [data-role="session-driver"], #mobileConvTitle [data-role="session-driver"], #simpleConvTitle [data-role="session-driver"], #cccBreadcrumb [data-role="session-driver"]').forEach(el => {
+      const row = byId.get(el.dataset.driverSessionId);
+      if (!row) return;
+      const html = sessionDriverHtml(row);
+      if (html !== el.outerHTML) el.outerHTML = html;
+    });
+  }
+
   // One rule set for a sidebar row's status line, shared by the first paint
   // (_renderRow) and the in-place live patcher (_ultraFreshPaint), so a fix
   // to either can't drift from the other (CCC-273). opts.childLane: lanes
@@ -24143,13 +24183,14 @@
   function _simpleUpdateConvTitle(id) {
     const el = document.getElementById('simpleConvTitle');
     if (!el) return;
-    let name = '';
+    let name = '', driverHtml = '';
     try {
       const row = (conversationsData || []).find(x => x.id === id)
         || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null);
       name = String((row && (row.display_name || row.first_message || row.status_rail_title)) || '').trim();
+      driverHtml = sessionDriverHtml(row);
     } catch (_) {}
-    el.textContent = name.length > 60 ? name.slice(0, 60) + '…' : (name || 'This task');
+    el.innerHTML = '<span class="mobile-conv-name">' + escapeHtml(name.length > 60 ? name.slice(0, 60) + '…' : (name || 'This task')) + '</span>' + driverHtml;
   }
 
   // ── Technical strip: reveal tool-call logs / diffs / cost, per session ──
@@ -42000,7 +42041,7 @@
   // close-tag) so a `$1$3` replace blanks just the text for the structural
   // signature, and exec() can lift the fresh text for in-place patching. Leaf
   // spans (no nested tags), so [^<]* for the inner text is safe.
-  const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when|conv-repeat-group-rel|conv-repeat-group-ctx|conv-subagent-completed-age|cepw-age|cewf-age|conv-nya-stale-age)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
+  const _VOLATILE_TIME_RE = /(<span class="[^"]*\b(?:conv-rel|conv-ingroupchat-row-when|conv-ingroupchat-participant-when|conv-repeat-group-rel|conv-repeat-group-ctx|conv-subagent-completed-age|cepw-age|cewf-age|conv-nya-stale-age|conv-driver-age)\b[^"]*"[^>]*>)([^<]*)(<\/span>)/g;
 
   // The live activity slot (.conv-status-slot) holds the live-tool indicator
   // ("Reading file…" / "Bash command…", with an in-flight class) and the
@@ -42055,7 +42096,7 @@
       }
     };
     _patchByOrder(_VOLATILE_TIME_RE, 2,
-      'span.conv-rel, span.conv-ingroupchat-row-when, span.conv-ingroupchat-participant-when, span.conv-repeat-group-rel, span.conv-subagent-completed-age, span.cepw-age, span.cewf-age, span.conv-nya-stale-age');
+      'span.conv-rel, span.conv-ingroupchat-row-when, span.conv-ingroupchat-participant-when, span.conv-repeat-group-rel, span.conv-subagent-completed-age, span.cepw-age, span.cewf-age, span.conv-nya-stale-age, span.conv-driver-age');
     _patchByOrder(_VOLATILE_STATUS_RE, 2, 'span.conv-status-slot');
     const pctVals = [];
     let pm;
@@ -42538,6 +42579,7 @@
   });
 
   function renderConversationList(convs) {
+    refreshSessionDriverHeaders(convs);
     if (window.__cccTourActive) return; // FIRST FLIGHT tour owns the list DOM
     convs = filterGhIssues(convs);
     convs = (Array.isArray(convs) ? convs : []).filter(c => !_isOptimisticallyStartedIssueRow(c)).map(_applyLiveOverlayToRow);
@@ -44327,7 +44369,7 @@
         +     (_waEngine === 'claude' || ideaAvatarHtml ? '' : '<span class="wa-engine" title="' + escapeAttr(_waEngine) + '">' + getEngineSvg(_waEngine) + '</span>') + '</span></div>'
         // Ticket identity stays inside the avatar.
         +   '<div class="wa-line2"><span class="wa-preview" dir="auto">' + (ideaAvatarHtml ? '' : ideaTicketChipHtml(c)) + (_waPreview ? '<span class="wa-explanation-label" data-status="' + escapeAttr(_waExplanationLabel.toLowerCase()) + '">' + escapeHtml(_waExplanationLabel) + (_waExplanationLabel === '✓' ? '' : ':') + '</span> ' : '') + escapeHtml(_waPreview) + '</span>' + _waStatus + waDecisionContextHtml + '</div>'
-        + '<div class="wa-row-footer">' + sessionIdChipHtml + waParentHtml + '</div>'
+        + '<div class="wa-row-footer">' + sessionIdChipHtml + waParentHtml + sessionDriverHtml(c) + '</div>'
         + (window.CCCSessionRecaps ? window.CCCSessionRecaps.render(c, _outView) : '')
         + '</div>'
         + '</div>';
@@ -44367,6 +44409,7 @@
             // occupy a column together; display:contents makes that wrapper
             // invisible to every other view's flex layout.
             + '<span class="conv-meta-col">'
+            + sessionDriverHtml(c)
             // Flat child results have no parent row beside them. Keep the
             // same navigation visible on desktop as in the phone footer.
             + waParentHtml
@@ -51753,6 +51796,15 @@
         sidEl.innerHTML = '';
       }
     }
+    let driverEl = pane.querySelector('[data-role="pane-driver"]');
+    if (!driverEl) {
+      driverEl = document.createElement('span');
+      driverEl.dataset.role = 'pane-driver';
+      driverEl.className = 'conv-pane-driver';
+      pane.querySelector('[data-role="pane-titlebar"]')?.append(driverEl);
+    }
+    driverEl.innerHTML = opts.category === undefined ? sessionDriverHtml(fullRow) : '';
+    driverEl.hidden = !driverEl.innerHTML;
     // CCC-1172: the ellipsized title stays readable in full — hover carries
     // it in the tooltip, click/Enter toggles .is-expanded inline (delegated
     // next to the mobile-original-ask listener). role/tabindex make the
@@ -51777,7 +51829,7 @@
       const mobileTitleEl = document.getElementById('mobileConvTitle');
       if (mobileTitleEl) {
         const name = rowName;
-        mobileTitleEl.textContent = name;
+        mobileTitleEl.innerHTML = '<span class="mobile-conv-name">' + escapeHtml(name) + '</span>' + (opts.category === undefined ? sessionDriverHtml(fullRow) : '');
         mobileTitleEl.title = name;
         mobileTitleEl.hidden = !name;
       }
@@ -51827,6 +51879,7 @@
           + workerOriginBadgeHtml(row)
           + sidChip
           + spawnedByChip
+          + sessionDriverHtml(fullRow)
           + (typeof window._cccHandoffMovedChipHtml === 'function' ? window._cccHandoffMovedChipHtml(row) : '')
           + (title ? '<span class="ccc-breadcrumb-title" title="' + escapeAttr(title) + '">' + escapeHtml(title) + '</span>' : '')
           // Transport pill slot, filled by updateConvProcessIndicator below.

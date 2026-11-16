@@ -42,6 +42,7 @@ from ccc_server import antigravity_accounts as _antigravity_accounts
 from ccc_server import antigravity_ls
 from ccc_server import antigravity_stream as _antigravity_stream
 from ccc_server import core as _core
+from ccc_server import session_driver as _driver
 from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
 from ccc_server import free_runtime as _free_runtime
 from ccc_server import domestic_providers as _domestic_providers
@@ -778,7 +779,7 @@ _ANTIGRAVITY_APP_LS_TOKEN_RE = re.compile(
     r"--csrf_token\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
 )
-_ANTIGRAVITY_META_VERSION = 3
+_ANTIGRAVITY_META_VERSION = 4
 # An Antigravity transcript writes every assistant tool call / message, so if
 # the file moved within this window we treat the session as live. Antigravity
 # has no hook system that CCC could listen to (the way Claude Code does via
@@ -1748,6 +1749,7 @@ def _extract_antigravity_tail_meta(path_or_session_id):
                     if text:
                         meta["first_message"] = meta["first_message"] or text
                         meta["last_prompt"] = text
+                        _driver.record(meta, text, ts_epoch, ev)
                     meta["last_event_type"] = "user"
                     meta["pending_tool"] = None
                     meta["pending_file"] = None
@@ -2039,6 +2041,7 @@ def find_antigravity_conversations(
             "ai_title": ai_title or None,
             "name_overridden": bool(name_overrides.get(sid)),
             "last_prompt": (tail.get("last_prompt") or "")[:200],
+            **_driver.fields(tail),
             "size": st.st_size,
             "modified": modified,
             "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)),

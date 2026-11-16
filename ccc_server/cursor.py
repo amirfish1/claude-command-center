@@ -21,6 +21,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import session_driver as _driver
 
 # ---------------------------------------------------------------------------
 # Cursor Agent integration
@@ -341,6 +342,7 @@ def _extract_cursor_tail_meta(path):
                     if text:
                         meta["first_message"] = meta["first_message"] or text
                         meta["last_prompt"] = text
+                        _driver.record(meta, text, ts_epoch, ev)
                     meta["last_event_type"] = "user"
                     meta["pending_tool"] = None
                     meta["pending_file"] = None
@@ -1186,6 +1188,7 @@ def find_cursor_conversations(
             "display_name": display_name,
             "name_overridden": bool(name_overrides.get(sid)),
             "last_prompt": (tail.get("last_prompt") or "")[:200],
+            **_driver.fields(tail),
             "size": st.st_size,
             "modified": modified,
             "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)),

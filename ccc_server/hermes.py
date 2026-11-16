@@ -22,6 +22,7 @@ import threading
 import time
 
 from ccc_server import core as _core
+from ccc_server import session_driver as _driver
 from ccc_server.paths import _is_pid_alive
 from ccc_server import dbutil
 from ccc_server.sqlite_batch import fetch_rows as _sqlite_fetch_rows
@@ -1641,6 +1642,7 @@ def _hermes_message_summary(con, sid):
             if text:
                 summary["first_user"] = summary["first_user"] or text
                 summary["last_user"] = text
+                _driver.record(summary, text, ts, msg)
             summary["last_event_type"] = "user"
         elif role == "assistant":
             if text:
@@ -1961,6 +1963,7 @@ def find_hermes_conversations(
                 "ai_title": ai_title,
                 "name_overridden": bool(name_overrides.get(sid)),
                 "last_prompt": (summary.get("last_user") or "")[:200],
+                **_driver.fields(summary),
                 "size": int(summary.get("size") or 0),
                 "modified": modified,
                 "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",

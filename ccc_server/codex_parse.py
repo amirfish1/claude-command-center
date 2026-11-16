@@ -12,6 +12,7 @@ import re
 import time
 
 from ccc_server import core as _core
+from ccc_server import session_driver as _driver
 
 # rollout path -> parent thread id read from its session_meta line. The first
 # line of a rollout never changes, so one read per subagent file per process.
@@ -369,6 +370,7 @@ def find_codex_conversations(
             "name_overridden": bool(name_overrides.get(sid)),
             "name_override": name_overrides.get(sid) or "",
             "last_prompt": (tail.get("last_prompt") or "")[:200],
+            **_driver.fields(tail),
             "size": st.st_size,
             "rollout_mtime": st.st_mtime,
             "codex_updated_at": row.get("updated_at"),

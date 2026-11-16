@@ -19,6 +19,7 @@ from __future__ import annotations
 __version__ = "6.0.0"
 
 import sender_envelope as _attribution
+from ccc_server import session_driver as _driver
 import ast
 import base64
 import traceback
@@ -11829,6 +11830,7 @@ _LIVE_ACTIVITY_FIELD_KEYS = (
     "stale_tool_threshold_s",
     "acp_status",
     "working_since",
+    "turn_driver", "last_owner_input_at",
 )
 
 
@@ -15542,7 +15544,8 @@ def _conv_meta_cache_is_cold(path, stat_result=None):
     except OSError:
         return False
     cached = _conv_meta_cache.get(str(path))
-    return not (cached and cached.get("cache_key") == (st.st_mtime_ns, st.st_size))
+    return not (cached and cached.get("cache_key") == (st.st_mtime_ns, st.st_size)
+                and cached.get("driver_version") == _driver.VERSION)
 
 
 _CLAUDE_TASK_AGENT_SID_RE = re.compile(r"^agent-[0-9a-zA-Z-]+$")
@@ -15745,6 +15748,7 @@ def _claude_task_agent_row(
             tail_meta.get("last_assistant_text")
         ),
         "last_event_type": tail_meta.get("last_event_type"),
+        **_driver.fields(tail_meta),
         "pending_tool": tail_meta.get("pending_tool"),
         "pending_file": tail_meta.get("pending_file"),
         "subagent_count": tail_meta.get("subagent_count", 0),
@@ -16368,6 +16372,7 @@ def find_all_conversations(
                 # feed can't tell a paused-for-question session from a working
                 # one whose sub-agent is still running.
                 "last_event_type": tail_meta.get("last_event_type"),
+                **_driver.fields(tail_meta),
                 "pending_tool": tail_meta.get("pending_tool"),
                 "pending_file": tail_meta.get("pending_file"),
                 "subagent_in_flight_count": tail_meta.get("subagent_in_flight_count", 0),
@@ -18246,6 +18251,7 @@ _ARCHIVE_LIST_FIELDS = (
     "recently_unarchived", "verified", "pinned", "pin_rank", "all_lane_override",
     "worktree_dirty", "has_commit", "has_push", "has_edit", "tail_pr_number",
     "tail_pr_url", "pr_state", "pr_notes", "is_live", "worktree_label", "state",
+    "turn_driver", "last_owner_input_at",
     "ended_blocked", "last_event_type", "last_event_ts", "pending_tool", "pending_file",
     "pending_tool_ts", "stale_tool_call", "stale_tool_age_s",
     "stale_tool_threshold_s", "stale_tool_queued_input", "subagent_count",
@@ -26227,6 +26233,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "last_commit_pos": tail_meta.get("last_commit_pos", 0),
             "last_push_pos": tail_meta.get("last_push_pos", 0),
             "last_event_type": tail_meta.get("last_event_type"),
+            **_driver.fields(tail_meta),
             "pending_tool": tail_meta.get("pending_tool"),
             "pending_file": tail_meta.get("pending_file"),
             "last_assistant_text": tail_meta.get("last_assistant_text"),
@@ -27109,7 +27116,7 @@ def find_all_sessions(repo_path, progress=None, include_old=True):
             # routes input via /api/pkood/inject — but pull in the richer
             # signals the jsonl tail scan produced.
             for field in (
-                "first_message", "last_prompt", "branch",
+                "first_message", "last_prompt", "branch", "turn_driver", "last_owner_input_at",
                 "has_edit", "has_commit", "has_push",
                 "last_edit_pos", "last_commit_pos", "last_push_pos",
                 "last_event_type", "pending_tool", "pending_file",
@@ -47384,6 +47391,7 @@ def compute_session_detail(session_id):
         "session_id": sid,
         "last_assistant_text": tail_meta.get("last_assistant_text") or "",
         "last_event_type": tail_meta.get("last_event_type"),
+        **_driver.fields(tail_meta),
         "pending_tool": tail_meta.get("pending_tool"),
         "subagent_in_flight_count": tail_meta.get("subagent_in_flight_count", 0),
         "is_live": _archive_session_is_live(sid),

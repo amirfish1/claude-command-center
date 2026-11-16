@@ -32,6 +32,7 @@ import urllib.request
 import uuid
 
 from ccc_server import core as _core
+from ccc_server import session_driver as _driver
 from ccc_server.sqlite_batch import fetch_rows as _sqlite_fetch_rows
 
 # ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ CODEX_STATE_DB = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
 # path have been observed; newest non-empty wins.
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 13
+_CODEX_META_VERSION = 14
 _CODEX_STARTED_TURN_IDS_MAX = 64
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
 _CODEX_THREAD_REGISTRY_SCHEMA = 1
@@ -11711,6 +11712,7 @@ def _extract_codex_tail_meta(path):
                         if text:
                             meta["first_message"] = meta["first_message"] or text
                             meta["last_prompt"] = text
+                            _driver.record(meta, text, ts_epoch, ev)
                         meta["last_event_type"] = "user"
                         meta["pending_tool"] = None
                         meta["pending_file"] = None
@@ -11806,6 +11808,7 @@ def _extract_codex_tail_meta(path):
                         if text:
                             meta["first_message"] = meta["first_message"] or text
                             meta["last_prompt"] = text
+                            _driver.record(meta, text, ts_epoch, ev)
                         meta["last_event_type"] = "user"
                         meta["pending_tool"] = None
                         meta["pending_file"] = None

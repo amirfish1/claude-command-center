@@ -23,6 +23,7 @@ except ImportError:  # Windows: no cross-process lock; delta writes still apply
     _fcntl = None
 
 from ccc_server import core as _core
+from ccc_server import session_driver as _driver
 from ccc_server import test_isolation_active as _test_isolation_active
 from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
 
@@ -1199,9 +1200,10 @@ def _extract_tail_meta(path):
     except OSError:
         return {}
     cached = _core._conv_meta_cache.get(str(path))
-    # Revisit only old user tails once; keep the rest of the persisted cache
-    # hot rather than forcing every transcript to be rescanned on upgrade.
+    # Backfill turn provenance once in the existing metadata pass. Subsequent
+    # unchanged files keep their persisted cache hot.
     if (cached and cached.get("cache_key") == cache_key
+            and cached.get("driver_version") == _driver.VERSION
             and ("turn_has_tools" in cached
                  or not str(cached.get("last_assistant_text") or "").lstrip().startswith("{"))
             and (cached.get("last_event_type") != "user"
@@ -1214,6 +1216,7 @@ def _extract_tail_meta(path):
         return cached
     meta = {
         "bookkeeping_filtered": 1,
+        "driver_version": _driver.VERSION,
         "mtime": mtime,
         # last_meaningful_ts: timestamp of the most recent user/assistant/result
         # event. Administrative writes (custom-title, agent-name, etc.) don't
@@ -1348,6 +1351,7 @@ def _extract_tail_meta(path):
                     if t == "user":
                         msg = _core._safe_parse_message(ev.get("message", {}))
                         raw_text = _core._extract_text_from_content(msg.get("content", ""))
+                        _driver.record(meta, raw_text, ev.get("timestamp"), ev)
                         command_text = _core._extract_command_invocation_text(raw_text)
                         if command_text:
                             _core._apply_claude_goal_command(meta, command_text)
@@ -1408,6 +1412,8 @@ def _extract_tail_meta(path):
                         meta["turn_has_tools"] = False
                         meta["last_assistant_stop_reason"] = None
                         meta["last_prompt"] = queued.get("text") or meta["last_prompt"]
+                        _driver.record(meta, queued.get("text"), ev.get("timestamp"),
+                                       {**ev, "peer": queued.get("peer"), "origin": (ev.get("attachment") or {}).get("origin")})
                         ts = ev.get("timestamp", "")
                         if ts:
                             try:

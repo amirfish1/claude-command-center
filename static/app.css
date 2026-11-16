@@ -35568,3 +35568,16 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 .local-ci-inline-icons svg { width: 13px; height: 13px; }
 
 .local-ci-job-provider + .local-ci-name { flex: 1; min-width: 0; }
+
+/* Turn provenance is distinct from process liveness and spawn ancestry. */
+.conv-driver {display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:0 4px;max-width:100%;min-width:0;font:12px/1.4 var(--font-ui,system-ui);color:var(--text-secondary,var(--text));white-space:normal;overflow-wrap:anywhere}
+.conv-driver-label {font-weight:500}
+.conv-driver-owner {flex-basis:100%;font-weight:400}
+.conv-pane-driver {min-width:0;flex:0 1 260px}
+.conv-pane-driver[hidden] {display:none}
+.conv-meta-col>.conv-driver {margin:2px 6px}
+.wa-row-footer:has(>.conv-driver) {flex-wrap:wrap}
+.wa-row-footer>.conv-driver {flex-basis:100%}
+#mobileConvTitle>.conv-driver, #simpleConvTitle>.conv-driver {display:flex;margin-top:3px;font-size:12px;line-height:1.35;white-space:normal}
+.mobile-conv-name {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:1200px) {.conv-pane-driver {flex-basis:180px}}
