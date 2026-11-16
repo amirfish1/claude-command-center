@@ -3963,7 +3963,7 @@
       next: hasNext ? next : '',
       text: (hasNext && (shown || next)) || did || text || 'Completion assessment pending.' });
   }
-  function _ultraFreshPaint(sid) {
+  function _ultraFreshPaint(sid, opts = {}) {
     const entry = _ultraFresh.entries.get(sid);
     const base = _ultraFreshRow(sid);
     if (!entry || !base) return;
@@ -4055,8 +4055,18 @@
       }
     }
     // Live activity invalidates any pending one-tap reply immediately.
-    syncRowQuickActions(sid);
+    if (!opts.deferActions) syncRowQuickActions(sid);
     _workersPaintTicketUpdate(sid);
+  }
+  function _ultraFreshPaintBatch(ids, allRows = false) {
+    const sids = Array.from(ids);
+    try {
+      for (const sid of sids) _ultraFreshPaint(sid, { deferActions: true });
+    } finally {
+      // Overlay writes must finish before quick actions measure visibility.
+      // Reading geometry between each live row's writes forces full layouts.
+      syncRowQuickActions(allRows ? undefined : sids);
+    }
   }
   function _ultraFreshAccept(update, generation = _ultraFresh.generation) {
     const sid = String(update.session_id || '');
@@ -4196,7 +4206,7 @@
     }
     // Ordinary list snapshots may lag this stream. Restore the four text
     // overlays after a render without replacing rows or mutating list data.
-    ids.forEach(_ultraFreshPaint);
+    _ultraFreshPaintBatch(ids);
   }
   function _ultraFreshSchedule() {
     if (_ultraFresh.queued) return;
@@ -19281,8 +19291,12 @@
 
   // Row actions are model-authored replies supplied in the answer footer.
   // Rendering a chip never asks another model to interpret the answer.
+  function rowActionSelector(sid) {
+    if (Array.isArray(sid)) return sid.map(id => rowActionSelector(id)).join(',') || ':not(*)';
+    return '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
+  }
   function syncRowPopouts(sid) {
-    const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
+    const selector = rowActionSelector(sid);
     document.querySelectorAll(selector).forEach(row => {
       const base = _ultraFreshRow(row.dataset.sessionId);
       const available = !!base && !base.pending_spawn && base.source !== 'backlog' && base.source !== 'github_pr';
@@ -19908,7 +19922,7 @@
     });
   }
   function syncRowQuickActions(sid) {
-    const selector = '#convList .conv-item[data-session-id' + (sid ? '="' + CSS.escape(sid) + '"' : '') + ']';
+    const selector = rowActionSelector(sid);
     // Measure every row before the loop writes: a read after each row's write
     // forced a layout per row, ~1s of a busy open (CCC-143).
     const rows = Array.from(document.querySelectorAll(selector));
@@ -47827,8 +47841,7 @@
     // is-ready-to-close, changing row height. Painting them a frame later
     // made the FLIP below compare overlay-painted old tops with bare new
     // tops, sliding rows that never moved.
-    try { for (const sid of _ultraFresh.entries.keys()) _ultraFreshPaint(sid); } catch (_) {}
-    syncRowQuickActions();
+    try { _ultraFreshPaintBatch(_ultraFresh.entries.keys(), true); } catch (_) {}
     _updateConvTabBarHeightVar($convList);
     _mountSharedQueuePanel();
     // Jobs tab: refill the fresh host from cached data (no flicker, no fetch).
