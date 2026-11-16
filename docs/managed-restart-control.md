@@ -32,6 +32,53 @@ root operation itself. Only the accepted coordinator can release a replacement.
 Initial worker bootstrap and the first legacy transition remain separately
 gated; preparing a stopped launch is not permission to run its recovery code.
 
+## Disposable planned proof
+
+The existing one-shot authority is the trusted outer launcher. Its root user,
+two capabilities and three fixed mounts are measured separately; they are not
+reported as passing the fixture's nonroot/no-capabilities/no-host-sockets
+checks. No authority privileges or mounts are added. Successful coordinator
+results include separate `trust_base` records for both authenticated barriers,
+binding the control identity, image, actual profile and anchor bytes.
+
+`AttestationClient.fixture_bootstrap` and `fixture_restart` use a distinct
+`ccc-root-authority-fixture-v1` anchor. It has the same four base identity
+fields as other anchors, plus two independently root-controlled acceptances:
+`fixture_acceptance` and `bootstrap_acceptance`. Each names exact bytes with
+`manifest_sha256` and a nonempty `reference`. This anchor cannot authorize a
+runtime restart; runtime anchors cannot authorize fixture operations. Generic
+`release` continues to refuse managed profiles.
+
+Bootstrap takes a bounded base64 `contract`, an exact `profile` and an exact
+`identity`. Its accepted contract contains `format: 1`,
+`scope: "fixture-bootstrap"`, the complete observed `worker` launch, `profile`,
+the actual `control` artifact/profile pair and `fixture_identity`. The worker
+must still be at its guarded initial admission stop. This does not authorize
+initial runtime bootstrap or the first legacy transition.
+
+Fixture restart takes the same data fields as managed restart. Its separately
+accepted manifest has `scope: "fixture"`, `purpose: "planned-P6"`, the exact
+ordered transition and fixture identity. It requires P1 through P5 (including
+P2b and all P4 variants), their evidence and E4/E5 receipts. It must **not**
+claim P6 already passed: this operation exercises the planned P6 path. The
+complete proof validator and runtime selector still require completed P6.
+The returned execution receipt is not a completed P6 verdict.
+
+`fixture_identity` binds `private_root` (source, device, inode and UID),
+`socket` (path, device/inode and directory device/inode), the full official
+`daemon` identity and `network_namespace`. Fresh kernel observations verify
+the private directory/socket ownership and modes, socket listener ownership,
+binary/schema, daemon process lifetime, zero capabilities and separate worker
+lifetime. Workers and replacement must share that isolated native namespace,
+use the same sole private data mount and expose only their two exact private
+sockets. Binding is rechecked at both barriers and before recovery. Changed
+root, socket, daemon, namespace, acceptance or launch identity refuses.
+
+These methods neither provision an anchor nor start a native/fixture service.
+They have no dashboard shortcut. Their results explicitly carry
+`runtime_authorized: false`; actual native isolation and continuity evidence,
+operator acceptance and activation prerequisites remain necessary.
+
 The request body has `anchor_path` and `request`. The latter has exact `worker`
 and `replacement` entries in `profiles` and `identities`, the base64-encoded
 manifest bytes in `manifest`, and base64 evidence bytes keyed by digest in

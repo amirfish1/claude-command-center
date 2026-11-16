@@ -124,6 +124,25 @@ def validate(raw: bytes, *, acceptance: Mapping, expected_scope: str,
     avoiding a self-referential hash embedded in the manifest itself. Nothing
     in this API reads environment variables or treats ancestry as evidence.
     """
+    return _validate(raw, acceptance=acceptance, expected_scope=expected_scope,
+                     codex=codex, transition=transition, evidence=evidence,
+                     fixture_identity=fixture_identity, planned=False)
+
+
+def validate_fixture_plan(raw, *, acceptance, codex, transition, evidence, fixture_identity):
+    """Authorize only a disposable planned P6 run, never certify its outcome.
+
+    The separately root-accepted plan requires P1-P5 and their isolation
+    receipts. P6 cannot be evidence for its own first execution. The runtime
+    validator above still requires the complete proof set, including P6.
+    """
+    return _validate(raw, acceptance=acceptance, expected_scope='fixture',
+                     codex=codex, transition=transition, evidence=evidence,
+                     fixture_identity=fixture_identity, planned=True)
+
+
+def _validate(raw, *, acceptance, expected_scope, codex, transition, evidence,
+              fixture_identity, planned):
     manifest = _decode(raw)
     digest = hashlib.sha256(raw).hexdigest()
     _require(expected_scope in ('fixture', 'runtime'), 'unknown requested scope')
@@ -153,8 +172,12 @@ def validate(raw: bytes, *, acceptance: Mapping, expected_scope: str,
     else:
         _require('fixture_identity' not in manifest, 'fixture binding in runtime proof')
     proofs = _object(manifest.get('proofs'), 'missing proofs')
-    _require(REQUIRED_PROOFS <= proofs.keys(), 'missing mandatory native proof')
-    for name in REQUIRED_PROOFS:
+    required = REQUIRED_PROOFS - {'P6'} if planned else REQUIRED_PROOFS
+    if planned:
+        _require(manifest.get('purpose') == 'planned-P6' and 'P6' not in proofs,
+                 'fixture plan cannot claim a completed P6')
+    _require(required <= proofs.keys(), 'missing mandatory native proof')
+    for name in required:
         proof = _object(proofs[name], 'invalid proof entry')
         _require(proof.get('verdict') == 'pass', 'failed or unknown native proof')
         run_id = proof.get('run_id')
@@ -162,8 +185,9 @@ def validate(raw: bytes, *, acceptance: Mapping, expected_scope: str,
         _evidence(proof.get('evidence_sha256'), evidence)
         _isolation(proof.get('e4_sha256'), evidence, 'E4', run_id)
         _isolation(proof.get('e5_sha256'), evidence, 'E5', run_id)
-    p6 = proofs['P6']
-    _require(p6.get('transition') == measured, 'P6 did not exercise the exact ordered transition')
+    if not planned:
+        p6 = proofs['P6']
+        _require(p6.get('transition') == measured, 'P6 did not exercise the exact ordered transition')
     _require(proofs['P4b'].get('autostart_without_client') is True,
              'native queue requires a subscribed client')
     goals = proofs['P4c'].get('proven_goal_states')

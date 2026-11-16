@@ -72,8 +72,7 @@ class Coordinator:
         transition = {('old_worker' if role == 'worker' else role): {
             'artifact_sha256': fact.executed_build_sha256,
             'profile_sha256': fact.execution_profile_sha256} for role, fact in facts.items()}
-        capabilities = proof.validate(raw, acceptance=self.anchor['managed_acceptance'],
-            expected_scope='runtime', codex=native, transition=transition, evidence=evidence)
+        capabilities = self._proof(raw, evidence, native, transition)
         threads = observation.get('threads')
         _need(isinstance(threads, dict) and len(threads) <= recovery.MAX_REATTACH,
               'unknown per-thread continuity')
@@ -100,11 +99,19 @@ class Coordinator:
                       'outstanding or changed-epoch input must retain its FIFO slot')
         return capabilities
 
-    def run(self, raw, evidence):
+    def _proof(self, raw, evidence, native, transition):
+        return proof.validate(raw, acceptance=self.anchor['managed_acceptance'],
+            expected_scope='runtime', codex=native, transition=transition, evidence=evidence)
+
+    def _acceptance(self):
         _need(self.anchor.get('format') == 'ccc-root-authority-v2'
               and isinstance(self.anchor.get('managed_acceptance'), dict),
               'root has not accepted a managed runtime proof')
-        _need(self.anchor['managed_acceptance']['manifest_sha256'] == digest(raw),
+        return self.anchor['managed_acceptance']
+
+    def run(self, raw, evidence):
+        acceptance = self._acceptance()
+        _need(acceptance['manifest_sha256'] == digest(raw),
               'runtime proof differs from root acceptance')
         for profile in self.profiles.values():
             _need(profile.control_stdio and profile.entry == '/opt/ccc/ccc_worker.py'
@@ -162,7 +169,9 @@ class Coordinator:
             result = self.docker.control(replacement, dict(request, operation='resume'))
             _need(result.get('stage') == 'resumed', 'replacement remains frozen for reconciliation')
             return {'ok': True, 'manifest_sha256': digest(raw), 'transition_id': transaction,
-                    'worker': worker, 'replacement': replacement, 'restarted': True}
+                    'worker': worker, 'replacement': replacement, 'restarted': True,
+                    'trust_base': {'initial': self._trust_base(initial_facts),
+                                   'final': self._trust_base(final_facts)}}
         except BaseException:
             if initial is not None and not sealed:
                 try:
@@ -170,6 +179,12 @@ class Coordinator:
                 except Exception:
                     pass  # Unknown holds the durable drain/fence, never implies idle.
             raise
+
+    def _trust_base(self, facts):
+        """Separate evidence for the authenticated outer control, not E2."""
+        from ccc_server.execution_authority import _wire
+        return {'role': 'trusted-outer-launcher', 'control': _wire(facts['control']),
+                'anchor_sha256': digest(canonical(self.anchor))}
 
 
 def run_query(query, *, anchor, authority, docker, processes, authenticate, read_anchor):

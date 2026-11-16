@@ -442,11 +442,13 @@ else:
 
 
 @pytest.mark.parametrize('mutation', [None, 'image', 'profile', 'mount', 'executable', 'layer'])
-def test_authority_bootstrap_requires_actual_pinned_execution(monkeypatch, mutation):
+@pytest.mark.parametrize('anchor_format', ['ccc-root-authority-v1', 'ccc-root-authority-v2',
+                                         'ccc-root-authority-fixture-v1'])
+def test_authority_bootstrap_requires_actual_pinned_execution(monkeypatch, mutation, anchor_format):
     from types import SimpleNamespace
     import ccc_server.execution_authority as authority
     _, artifact, _, _, processes = fixture()
-    anchor = {'format': 'ccc-root-authority-v1', 'image_id': artifact.image_id,
+    anchor = {'format': anchor_format, 'image_id': artifact.image_id,
               'executed_build_sha256': artifact.executed_build_sha256}
     config = authority.authority_config(anchor, '/root/test-anchor.json', {})
     current = {'Id': 'e' * 64, 'Image': artifact.image_id, 'Config': config,

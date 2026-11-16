@@ -1,0 +1,1 @@
+Add separately accepted disposable worker bootstrap and planned restart proof paths, with exact private socket, daemon, namespace and execution bindings; retain the complete proof requirement for runtime restarts.
