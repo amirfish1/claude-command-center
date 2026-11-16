@@ -11475,6 +11475,24 @@ def _codex_saved_tail_resume(cached, path, st):
         return None
 
 
+def _codex_root_cache_compatible(path, cached, mtime):
+    """The v14→15 change only affects subagents; verify root headers first."""
+    if not (cached and _CODEX_META_VERSION == 15 and _driver.VERSION == 3
+            and cached.get("engine") == "codex" and cached.get("meta_version") == 14
+            and cached.get("driver_version") == 2 and cached.get("mtime") == mtime):
+        return False
+    try:
+        with open(path, "rb") as source:
+            event = json.loads(source.readline(65536))
+    except (OSError, ValueError, UnicodeError):
+        return False
+    if not isinstance(event, dict) or event.get("type") != "session_meta":
+        return False
+    payload = event.get("payload")
+    return (isinstance(payload, dict) and not payload.get("parent_thread_id")
+            and not isinstance(payload.get("source"), dict))
+
+
 def _extract_codex_tail_meta(path):
     try:
         st = path.stat()
@@ -11484,6 +11502,11 @@ def _extract_codex_tail_meta(path):
     size = st.st_size
     spath = str(path)
     cached = _core._conv_meta_cache.get(spath)
+    if _codex_root_cache_compatible(path, cached, mtime):
+        cached = dict(cached, meta_version=_CODEX_META_VERSION)
+        with _core._conv_meta_cache_lock:
+            _core._conv_meta_cache[spath] = cached
+            _core._conv_meta_cache_dirty = True
     if (
         cached
         and cached.get("mtime") == mtime
