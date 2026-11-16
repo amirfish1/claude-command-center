@@ -5935,30 +5935,23 @@
       if (ts >= newestTs) { newestTs = ts; newest = String(newSid || '').trim(); }
     }
     if (newest && newest !== s) return newest;
-    // CCC-844: the localStorage edge above only knows about continuations
-    // started from THIS browser/webview. "Continue new" was clicked from a
-    // different window/device (or the .app shell vs. the browser tab — each
-    // has its own localStorage), so the origin composer never learns it and
-    // keeps offering "Continue new" as if nothing happened. The new
-    // session's own opening prompt always embeds "Origin session id: <sid>"
-    // (see f2RetrievalPrompt) and every row's first_message is already in
-    // the corpus we have in memory, so fall back to scanning that.
-    try {
-      const marker = 'Origin session id: ' + s;
-      const rows = (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData))
-        ? conversationsData : [];
-      let bestSid = '';
-      let bestTs = -1;
+    // Shared lineage covers other browsers, shortened first messages and
+    // successors which have moved from the live list into the archive.
+    let bestSid = '';
+    let bestTs = -1;
+    const pools = [];
+    if (typeof conversationsData !== 'undefined' && Array.isArray(conversationsData)) pools.push(conversationsData);
+    if (typeof archiveData !== 'undefined' && Array.isArray(archiveData)) pools.push(archiveData);
+    for (const rows of pools) {
       for (const row of rows) {
-        const fm = row && row.first_message;
-        if (!fm || fm.indexOf(marker) === -1) continue;
-        const rid = (row.session_id || row.id || '').trim();
+        if (continuationParentId(row) !== s) continue;
+        const rid = String(row.session_id || row.id || '').trim();
         if (!rid || rid === s) continue;
-        const ts = Number(row.last_interacted || row.modified || row.mtime || 0);
+        const ts = Number(row.last_interacted || row.modified || row.mtime || 0) || 0;
         if (ts >= bestTs) { bestTs = ts; bestSid = rid; }
       }
-      if (bestSid) return bestSid;
-    } catch (_) {}
+    }
+    if (bestSid) return bestSid;
     return '';
   }
 
@@ -6325,6 +6318,13 @@
       if (gate && f2DismissedPanes.get(f2PaneKey(paneId)) === sid) gate = null;
     } catch (_) { clear(); return; }
     if (!gate) { clear(); return; }
+
+    // An archive/live refresh may temporarily remove a successor. Replace
+    // its route as well as its rail; the static-panel shortcut below must
+    // never keep a continuation button beside a cold-session warning.
+    const wasContinued = !!(bar && bar.classList.contains('is-f2-continued'));
+    if (bar) bar.classList.remove('is-f2-continued');
+    if (wasContinued) panel.innerHTML = '';
 
     const st = f2StateFor(paneId, ctx.sid, gate);
     st.ctx = ctx;
