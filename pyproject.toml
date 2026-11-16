@@ -35,7 +35,7 @@ dependencies = []
 #         bridge so editors/ACP clients can drive Claude Code sessions.
 #         Launched on its own: `python3 ccc_acp.py`.
 [project.optional-dependencies]
-acp = ["agent-client-protocol>=0.10"]
+acp = ["agent-client-protocol>=0.10; python_version >= '3.10'"]
 
 [project.urls]
 Homepage = "https://github.com/amirfish1/claude-command-center"
