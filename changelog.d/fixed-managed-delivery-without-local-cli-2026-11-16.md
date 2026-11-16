@@ -1,0 +1,2 @@
+- Authenticate managed Codex delivery through its initialized pinned daemon without requiring a local CLI; refuse untrusted or unavailable managed peers without stdio fallback.
+- Add bounded disposable restart proof preparation and orchestration with independent root acceptance, durable stop rules, raw evidence and exact cleanup.

@@ -246,6 +246,22 @@ def response_events(sequence, *, text='fixture reply', tool=None):
              + '\n\n').encode() for index, event in enumerate(events)]
 
 
+def approval_tool(request):
+    """Select a deterministic approval command from observed native tools."""
+    tools = request.get('tools')
+    if not isinstance(tools, list):
+        raise Stop('native request does not advertise approval tools')
+    by_name = {tool.get('name'): tool for tool in tools if isinstance(tool, dict)
+               and tool.get('type') == 'function' and isinstance(tool.get('name'), str)}
+    for name, field in (('shell_command', 'command'), ('exec_command', 'cmd')):
+        properties = by_name.get(name, {}).get('parameters', {}).get('properties', {})
+        if field in properties and 'sandbox_permissions' in properties:
+            return {'name': name, 'arguments': json.dumps({field: 'printf fixture',
+                'sandbox_permissions': 'require_escalated',
+                'justification': 'Disposable local approval proof'}, sort_keys=True)}
+    raise Stop('native approval command capability is unavailable')
+
+
 class Fixture(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
@@ -310,6 +326,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 phase = dict(self.server._phase)
             self.server.record('fixture_request', sequence=sequence,
                                body_sha256=hashlib.sha256(_canonical(request)).hexdigest())
+            if phase['tool'] and phase['tool']['name'] == '$approval-command':
+                phase['tool'] = approval_tool(request)
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
             self.send_header('Connection', 'close')

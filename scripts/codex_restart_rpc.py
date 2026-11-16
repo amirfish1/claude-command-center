@@ -19,7 +19,7 @@ from ccc_server.codex_managed_websocket import recv_text, send_text
 from scripts.codex_restart_fixture import Stop, _json
 
 METHODS = frozenset({'initialize', 'thread/start', 'thread/resume', 'thread/read',
-    'thread/list', 'thread/loaded/list', 'thread/turns/list', 'thread/unsubscribe',
+    'thread/list', 'thread/loaded/list', 'thread/turns/list', 'thread/items/list', 'thread/unsubscribe',
     'turn/start', 'turn/steer', 'turn/interrupt', 'thread/queue/add', 'thread/queue/list',
     'thread/queue/remove', 'thread/goal/get', 'thread/goal/set', 'thread/goal/clear'})
 

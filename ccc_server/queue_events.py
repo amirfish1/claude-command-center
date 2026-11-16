@@ -2817,9 +2817,27 @@ def resume_session_codex(
         if queued_behind_earlier is not None:
             return queued_behind_earlier
     image_paths = _core._extract_pasted_image_paths(text)
-    resolved = _core._resolve_codex_bin()
-    if not resolved["available"]:
-        return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
+    with _core._CODEX_APP_SERVER_LOCK:
+        current_transport = _core._CODEX_APP_SERVER_TRANSPORT
+        managed_delivery = (bool(os.environ.get('CCC_CODEX_APP_SERVER_SOCKET'))
+                            or getattr(current_transport, 'kind', None) == 'managed-unix')
+    if managed_delivery:
+        # A guarded worker intentionally need not contain a CLI executable.
+        # Authenticate the separately owned daemon; never turn a configured
+        # socket, unavailable peer or failed connection into stdio authority.
+        from ccc_server import codex_managed_recovery as recovery
+        try:
+            if not _core._codex_managed_app_server_enabled():
+                raise recovery.Refused('managed delivery is disabled')
+            transport = _core._ensure_codex_app_server(allow_stdio=False)
+            recovery.authenticated_delivery_transport(transport, _core._codex_managed_app_server_socket_path())
+        except (recovery.Refused, OSError, ValueError, TypeError, AttributeError) as exc:
+            return {'ok': False, 'code': 'managed_needs_reconciliation',
+                    'error': str(exc), 'fallback': 'queue', 'sent': False}
+    else:
+        resolved = _core._resolve_codex_bin()
+        if not resolved["available"]:
+            return {"ok": False, "error": resolved["reason"], "code": resolved.get("code")}
     active_resume_entry = None
     for s in list(_core._spawned_sessions):
         if s.get("engine") == "codex" and s.get("resumed_sid") == session_id:
@@ -2940,7 +2958,7 @@ def resume_session_codex(
                 ),
             }
     from ccc_server.codex_client import resume_desktop_conversation
-    desktop_result = resume_desktop_conversation(
+    desktop_result = None if managed_delivery else resume_desktop_conversation(
         session_id, text, cwd=cwd, model=model, effort=reasoning_effort,
         image_paths=image_paths, steer=steer, action_id=idempotency_key,
     )
