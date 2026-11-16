@@ -19323,6 +19323,13 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
                                     repo_only=False,
                                     resolve_pr_states=cache_options.get("resolve_pr_states", False),
                                     resolve_worktree_dirty=cache_options.get("resolve_worktree_dirty", False),
+                                    # CCC-142: reuse rows whose rollout is unchanged.
+                                    reuse_rows={
+                                        (r.get("session_id") or r.get("id")): r
+                                        for r in merged
+                                        if isinstance(r, dict) and r.get("engine") == "codex"
+                                        and r.get("source") == "codex"
+                                    },
                                 ) + find_codex_cloud_conversations(
                                     include_old=True,
                                     repo_only=False,

@@ -81,6 +81,14 @@ def _codex_subagent_parent_id(row, path):
     return parent
 
 
+def attribution_title(row):
+    import sender_envelope as attribution
+    title = _core._strip_ccc_session_state_instruction(
+        _core._strip_host_system_instruction(row.get("title")).strip()
+    ).strip()
+    return attribution.strip_header(title)
+
+
 def find_codex_conversations(
     repo_path=None,
     include_old=True,
@@ -89,7 +97,14 @@ def find_codex_conversations(
     limit=None,
     resolve_pr_states=True,
     resolve_worktree_dirty=True,
+    reuse_rows=None,
 ):
+    """`reuse_rows` (sid -> previously built row) lets the archive's
+    incremental refresh skip the per-row tail parse / git / fs work for
+    rollouts whose file is byte-for-byte unchanged (same path, size, mtime)
+    and which are not live on either side. Sidecar-derived fields are still
+    refreshed. Without it every Codex change re-derived all rows (CCC-142:
+    37-79s per refresh in the detached worker)."""
     rows = _core._codex_fetch_threads(limit=limit)
     task_titles = _core._auto_titled_session_ids()
     if repo_only:
@@ -160,6 +175,48 @@ def find_codex_conversations(
             st = path.stat()
         except OSError:
             continue
+        spawn_info = spawn_by_sid.get(sid) or {}
+        prev = (reuse_rows or {}).get(sid) if not capture else None
+        if (
+            isinstance(prev, dict)
+            and not spawn_info.get("alive")
+            and not prev.get("is_live")
+            and prev.get("jsonl_path") == str(path)
+            and prev.get("size") == st.st_size
+            and prev.get("rollout_mtime") == st.st_mtime
+        ):
+            r2 = dict(prev)
+            prev_first = r2.get("first_message") or ""
+            r2.update({
+                "display_name": _core._codex_display_name(
+                    row, override=name_overrides.get(sid),
+                    title=attribution_title(row), first_message=prev_first,
+                ),
+                "task_title": task_titles.get(sid) or "",
+                "name_overridden": bool(name_overrides.get(sid)),
+                "archived": sid in archived_set or bool(row.get("archived")),
+                "trashed": sid in trashed_set or bool(row.get("trashed")),
+                "verified": sid in verified_set,
+                "pinned_repo": False,
+                "last_interacted": last_interactions.get(sid),
+                "is_live": False,
+                "spawn_pid": spawn_info.get("pid"),
+                "parent_session_id": (
+                    codex_parent_by_child.get(sid)
+                    or codex_durable_parents.get(sid)
+                    or spawn_info.get("parent_session_id")
+                    or _codex_subagent_parent_id(row, path)
+                    or graph_parents.get(sid)
+                    or ""
+                ),
+                "model": row.get("model") or r2.get("model") or "",
+                "reasoning_effort": row.get("reasoning_effort") or "",
+                "goal": (goals_by_sid.get(sid) or {}).get("objective") or "",
+                "goal_status": (goals_by_sid.get(sid) or {}).get("status") or "",
+            })
+            if not repo_only:
+                out.append(r2)
+                continue
         tail = (_core._codex_capture_tail(sid, path) if capture else _core._extract_codex_tail_meta(path)) or {}
         cwd = tail.get("cwd") or cwd
         modified = (
@@ -286,6 +343,7 @@ def find_codex_conversations(
             "name_overridden": bool(name_overrides.get(sid)),
             "last_prompt": (tail.get("last_prompt") or "")[:200],
             "size": st.st_size,
+            "rollout_mtime": st.st_mtime,
             "modified": modified,
             "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)),
             "mtime": modified,
