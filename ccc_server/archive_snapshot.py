@@ -83,16 +83,19 @@ def _entries(snapshot):
 
 
 def upgrade_driver_metadata(snapshot, schema_version, build_id):
-    """Keep the last usable list during supported provenance rebuilds.
+    """Keep structurally valid rows across any forward row-shaping version.
 
-    No driver or owner timestamp can be inferred from an old row. Drop its
-    freshness signature so the background builder still reparses transcripts.
-    Other schema transitions retain their normal incompatibility checks.
+    Row-shaping revisions are freshness epochs, not a disk-format contract.
+    Existing fields remain useful while a detached builder adds new fields.
+    Never infer driver provenance from old rows or mark them fresh. Only
+    numeric forward revisions with the matching version build stamp qualify;
+    downgrades and unrelated/custom build IDs keep their compatibility gate.
     """
     previous_version = snapshot.get("schema_version")
-    supported = {16: (15,), 17: (15, 16)}
     if (
-        previous_version not in supported.get(schema_version, ())
+        not isinstance(previous_version, int) or isinstance(previous_version, bool)
+        or not isinstance(schema_version, int) or previous_version >= schema_version
+        or previous_version < 1
         or snapshot.get("build_id") != str(previous_version)
         or build_id != str(schema_version)
     ):

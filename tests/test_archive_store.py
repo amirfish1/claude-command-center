@@ -1,0 +1,310 @@
+"""Hot memory/cold disk parity and transactional archive publication."""
+import json
+import sqlite3
+
+import pytest
+
+from ccc_server import archive_store as store
+from tests.test_archive_snapshot import snapshot
+
+NOW = 2_000_000_000
+
+
+def data(stamp=10):
+    result = snapshot(stamp=stamp)
+    result['entries']['base']['conversations'] = [
+        {'session_id': 'old', 'mtime': NOW - 20 * 86400, 'first_message': 'history'},
+        {'session_id': 'recent', 'mtime': NOW, 'parent_session_id': 'parent'},
+        {'session_id': 'parent', 'mtime': NOW - 30 * 86400},
+        {'session_id': 'pinned', 'mtime': NOW - 30 * 86400, 'pinned': True},
+    ]
+    return result
+
+
+def test_hot_read_decodes_only_hot_bodies_and_preserves_old_parent(tmp_path, monkeypatch):
+    target = tmp_path / 'archive.json'
+    original = data()
+    assert store.save(target, original, complete=True) == 4
+    decoded = []
+    loads = json.loads
+    monkeypatch.setattr(store.json, 'loads', lambda body: decoded.append(body) or loads(body))
+    hot = store.load(target, hot=True, now=NOW)
+    rows = hot['entries']['base']['conversations']
+    assert [r['session_id'] for r in rows] == ['recent', 'parent', 'pinned']
+    assert not any('history' in body for body in decoded)
+    assert store.load(target) == original
+
+
+def test_unchanged_cold_rows_are_not_rewritten(tmp_path):
+    target = tmp_path / 'archive.json'
+    store.save(target, data(), complete=True)
+    updated = data(20)
+    updated['entries']['base']['conversations'][1]['first_message'] = 'new'
+    assert store.save(target, updated, complete=True) == 1
+    assert store.load(target) == updated
+    assert store.save(target, data(5), complete=True) == 0
+    assert store.load(target) == updated
+
+
+def test_hot_publication_cannot_delete_cold_rows_but_complete_build_can(tmp_path):
+    target = tmp_path / 'archive.json'
+    store.save(target, data(), complete=True)
+    hot = data(20)
+    hot['entries']['base']['conversations'] = hot['entries']['base']['conversations'][1:]
+    store.save(target, hot)
+    assert len(store.load(target)['entries']['base']['conversations']) == 4
+    hot['entries']['base']['cached_at'] = 30
+    store.save(target, hot, complete=True)
+    assert len(store.load(target)['entries']['base']['conversations']) == 3
+
+
+def test_row_order_updates_without_rewriting_bodies(tmp_path):
+    target = tmp_path / 'archive.json'
+    store.save(target, data(), complete=True)
+    newer = data(20)
+    newer['entries']['base']['conversations'].reverse()
+    assert store.save(target, newer, complete=True) == 0
+    assert store.load(target) == newer
+
+
+def test_missing_database_is_not_created_by_read(tmp_path):
+    target = tmp_path / 'archive.json'
+    assert store.load(target) is None
+    assert not store.database_path(target).exists()
+
+
+def test_failed_transaction_preserves_previous_rows(tmp_path):
+    target = tmp_path / 'archive.json'
+    store.save(target, data(), complete=True)
+    newer = data(20)
+    newer['entries']['base']['conversations'][0]['non_json'] = object()
+    with pytest.raises(TypeError):
+        store.save(target, newer, complete=True)
+    assert store.load(target) == data()
+
+
+def test_ancestor_cycle_terminates_and_both_implementations_agree(tmp_path):
+    target = tmp_path / 'archive.json'
+    original = data()
+    original['entries']['base']['conversations'][2]['parent_session_id'] = 'recent'
+    store.save(target, original, complete=True)
+    assert store.load(target, hot=True, now=NOW)['entries']['base']['conversations'] == store.hot_rows(original['entries']['base']['conversations'], now=NOW)
+
+
+def test_new_pin_lookup_returns_only_target_and_ancestors(tmp_path):
+    target = tmp_path / 'archive.json'
+    store.save(target, data(), complete=True)
+    rows = store.lookup(target, 'base', ['recent'])
+    assert [r['session_id'] for r in rows] == ['recent', 'parent']
+
+
+def test_newer_row_epoch_cannot_be_overwritten_by_old_builder(tmp_path):
+    target = tmp_path / 'archive.json'
+    current = data()
+    current.update(schema_version=42, build_id='42')
+    store.save(target, current, complete=True)
+    assert store.save(target, data(20), complete=True) == 0
+    assert store.load(target) == current
+
+
+def test_cold_lookup_masks_outdated_provenance(tmp_path):
+    target = tmp_path / 'archive.json'
+    current = data()
+    current['entries']['base']['conversations'][0]['turn_driver'] = {'kind': 'owner'}
+    store.save(target, current, complete=True)
+    rows = store.lookup(target, 'base', ['old'], schema_version=42)
+    assert rows[0]['turn_driver'] is None
+    assert rows[0]['last_owner_input_at'] == 0
+
+
+def test_empty_sidebar_never_waits_for_build_lock(tmp_path, monkeypatch):
+    import server
+    import threading
+    from types import SimpleNamespace
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_FILE', tmp_path / 'archive.json')
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_LOADED', True)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE', {})
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_archive_serve_refreshing', {})
+    monkeypatch.setattr(server, '_archive_refresh_load_blocked', lambda now: False)
+    monkeypatch.setattr(server, '_archive_refresh_slot_available', lambda *args: True)
+    monkeypatch.setattr(server, '_archive_refresh_mark_started', lambda *args: None)
+    started = []
+    monkeypatch.setattr(server.threading, 'Thread', lambda **kwargs: SimpleNamespace(start=lambda: started.append(kwargs)))
+    lock = threading.Lock()
+    lock.acquire()
+    monkeypatch.setattr(server, '_ARCHIVE_BUILD_GLOBAL_LOCK', lock)
+    monkeypatch.setattr(server, '_archive_compute_rows', lambda *args, **kwargs: pytest.fail('request-thread rebuild'))
+    rows, cached, version = server._archive_serve_rows_versioned('base', {}, defer_cold=True, window='1d')
+    assert rows == [] and cached and version == 0
+    assert started[0]['target'] is server._archive_serve_refresh
+    lock.release()
+
+
+@pytest.mark.parametrize("bump", [False, True])
+def test_server_keeps_only_hot_rows_but_all_history_is_available(tmp_path, monkeypatch, bump):
+    import time
+    import server
+    target = tmp_path / 'archive.json'
+    original = data(time.time())
+    original.update(schema_version=server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+                    build_id=server._ARCHIVE_RESPONSE_CACHE_BUILD_ID)
+    for row in original['entries']['base']['conversations']:
+        row['mtime'] -= NOW - time.time()
+    store.save(target, original, complete=True)
+    if bump:
+        version = server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION + 1
+        monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION', version)
+        monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_BUILD_ID', str(version))
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_FILE', target)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_LOADED', False)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE', {})
+    monkeypatch.setattr(server, '_ARCHIVE_STATMAP_BY_SIG', {})
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_archive_refresh_load_blocked', lambda now: True)
+    monkeypatch.setattr(server, '_overlay_conversation_lifecycle_flags', lambda rows: rows)
+    monkeypatch.setattr(server, '_pinned_rank_map', lambda: {})
+    monkeypatch.setattr(server._idea_tickets, 'idea_ticket_rows_map', lambda: {})
+    monkeypatch.setattr(server._session_graph, 'parent_snapshot', lambda: {})
+    monkeypatch.setattr(server, '_archive_compute_rows', lambda *a, **kw: pytest.fail('synchronous build'))
+    hot, _, _ = server._archive_serve_rows_versioned('base', {}, window='1d', defer_cold=True)
+    assert {r['session_id'] for r in hot} == {'recent', 'parent', 'pinned'}
+    assert len(server._ARCHIVE_RESPONSE_CACHE['base']['conversations']) == 3
+    full, _, _ = server._archive_serve_rows_versioned('base', {}, defer_cold=True)
+    assert {r['session_id'] for r in full} == {'old', 'recent', 'parent', 'pinned'}
+    assert len(server._archive_serve_cache['base']['rows']) == 3
+    # A pin set after publication retrieves only that cold session.
+    monkeypatch.setattr(server, '_pinned_rank_map', lambda: {'old': 0})
+    monkeypatch.setattr(server, '_apply_pinned_conversation_fields',
+                        lambda rows: [r.update(pinned=r['session_id'] == 'old') for r in rows])
+    hot, _, _ = server._archive_serve_rows_versioned('base', {}, window='1d', defer_cold=True)
+    old = next(r for r in hot if r['session_id'] == 'old')
+    assert old['pinned']
+
+
+def test_rehydration_only_visits_hot_rows(tmp_path, monkeypatch):
+    import time
+    import server
+    target = tmp_path / 'archive.json'
+    original = data()
+    rows = original['entries']['base']['conversations']
+    for row in rows:
+        row['mtime'] -= NOW - time.time()
+    store.save(target, original, complete=True)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_FILE', target)
+    visited = []
+    def rehydrate(hot):
+        visited.extend(r['session_id'] for r in hot)
+        return [dict(r, state='idle') for r in hot]
+    monkeypatch.setattr(server, '_rehydrate_archive_hot_rows', rehydrate)
+    result = server._rehydrate_archive_cached_rows(rows)
+    assert visited == ['recent', 'parent', 'pinned']
+    assert result[0] is rows[0]  # cold row is unchanged, not re-probed/copied
+    assert [r['session_id'] for r in result] == [r['session_id'] for r in rows]
+
+
+def _publish_variant(target, key, start):
+    start.wait(10)
+    incoming = data()
+    incoming['entries'] = {key: incoming['entries']['base']}
+    store.save(target, incoming, complete=True)
+
+
+def test_independent_publishers_preserve_each_variant(tmp_path):
+    import multiprocessing
+    target = tmp_path / 'archive.json'
+    store.save(target, data(), complete=True)
+    ctx = multiprocessing.get_context('spawn')
+    start = ctx.Event()
+    workers = [ctx.Process(target=_publish_variant, args=(target, key, start)) for key in ('prs', 'worktrees')]
+    try:
+        for worker in workers:
+            worker.start()
+        start.set()
+        for worker in workers:
+            worker.join(15)
+            assert worker.exitcode == 0
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+            worker.join(5)
+    assert set(store.load(target)['entries']) == {'base', 'prs', 'worktrees'}
+
+
+def test_contended_transaction_cannot_destroy_previous_snapshot(tmp_path):
+    target = tmp_path / 'archive.json'
+    store.save(target, data(), complete=True)
+    con = store._connect(target, write=True)
+    try:
+        con.execute('BEGIN IMMEDIATE')
+        with pytest.raises(sqlite3.OperationalError, match='locked'):
+            store.save(target, data(20), complete=True)
+    finally:
+        con.rollback()
+        con.close()
+    assert store.load(target) == data()
+
+
+def test_legacy_import_finishing_before_publish_still_bounds_memory(tmp_path, monkeypatch):
+    import time
+    import server
+    from types import SimpleNamespace
+    target = tmp_path / 'archive.json'
+    original = data(time.time())
+    original.update(schema_version=server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+                    build_id=server._ARCHIVE_RESPONSE_CACHE_BUILD_ID)
+    original['entries']['base']['conversations'] = [
+        {'session_id': str(i), 'mtime': time.time() - 30 * 86400} for i in range(300)
+    ]
+    target.write_text(json.dumps(original))
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_FILE', target)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE', {})
+    monkeypatch.setattr(server, '_ARCHIVE_STATMAP_BY_SIG', {})
+    monkeypatch.setattr(server.threading, 'Thread',
+                        lambda target, args, **kw: SimpleNamespace(start=lambda: target(*args)))
+    server._read_archive_response_cache_file()
+    assert server._ARCHIVE_RESPONSE_CACHE['base']['conversations'] == []
+    assert len(store.load(target)['entries']['base']['conversations']) == 300
+
+
+@pytest.mark.parametrize('endpoint', ['/api/conversations/all', '/api/conversations/list?window=1d'])
+def test_real_http_cold_archive_responds_without_a_synchronous_rebuild(tmp_path, monkeypatch, endpoint):
+    import server
+    import threading
+    import urllib.request
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_FILE', tmp_path / 'archive.json')
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_LOADED', True)
+    monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE', {})
+    monkeypatch.setattr(server, '_archive_serve_cache', {})
+    monkeypatch.setattr(server, '_archive_refresh_load_blocked', lambda now: True)
+    monkeypatch.setattr(server, '_archive_compute_rows', lambda *a, **kw: pytest.fail('request-thread rebuild'))
+    monkeypatch.setattr(server, '_archive_list_disk_candidate', lambda *a, **kw: None)
+    for name in ('_archive_overlay_codex_sessions', '_archive_overlay_acp_sessions',
+                 '_archive_overlay_devin_cli_sessions', '_archive_overlay_wt_worker_sessions',
+                 '_archive_overlay_claude_registry_sessions'):
+        monkeypatch.setattr(server, name, lambda *a, **kw: [])
+    httpd = server.http.server.ThreadingHTTPServer(('127.0.0.1', 0), server.CommandCenterHandler)
+    worker = threading.Thread(target=httpd.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with urllib.request.urlopen(f'http://127.0.0.1:{httpd.server_port}' + endpoint, timeout=5) as response:
+            result = json.load(response)
+        assert result['count'] == 0
+        assert result['conversations'] == []
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        worker.join(5)
+
+
+def test_legacy_backup_is_complete_private_and_never_replaced(tmp_path):
+    target = tmp_path / 'archive.json'
+    target.write_text(json.dumps(data()))
+    store.backup_legacy(target)
+    backup = target.with_suffix('.legacy.json')
+    assert json.loads(backup.read_text()) == data()
+    assert backup.stat().st_mode & 0o777 == 0o600
+    target.write_text('{}')
+    store.backup_legacy(target)
+    assert json.loads(backup.read_text()) == data()

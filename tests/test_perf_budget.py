@@ -325,7 +325,10 @@ def test_archive_list_source_avoids_copying_full_snapshot(monkeypatch):
         *,
         copy_rows=True,
         force_refresh=False,
+        window="all",
+        defer_cold=False,
     ):
+        assert defer_cold
         calls.append((key, options, copy_rows, force_refresh))
         return expected, True, 7
 
@@ -1500,7 +1503,8 @@ def test_conversations_all_stale_ok_uses_coalesced_serve_cache(monkeypatch):
     calls = []
     expected = [{"session_id": "sid-cached", "mtime": 1}]
 
-    def serve_rows(key, options):
+    def serve_rows(key, options, *, force_refresh=False, defer_cold=False):
+        assert defer_cold and not force_refresh
         calls.append((key, options))
         return expected, True, 0  # snap_ver 0: bypass the body cache in this test
 
@@ -3138,7 +3142,7 @@ def test_archive_rows_carry_state_stamp_cache_safe(big_projects, isolated_archiv
     row without re-running the build.
     """
     monkeypatch.setattr(server, "_ARCHIVE_SERVE_TTL", 60.0)
-    cold_rows, _ = server._archive_all_rows_cached(_ALL_OPTS)  # cold build populates the snapshot
+    cold_rows, _ = server._archive_compute_rows(_ALL_KEY, _ALL_OPTS)  # detached builder populates the snapshot
     for r in cold_rows:
         assert r.get("state") is not None, "cold build row missing state"
         assert "ended_blocked" in r, "cold build row missing ended_blocked"
@@ -3256,7 +3260,7 @@ def test_archive_incremental_refresh_reparses_only_changed_transcripts(
     monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {})
     monkeypatch.setattr(server, "_archive_sig_cache", {"ts": 0.0, "sig": None})
     monkeypatch.setattr(server, "_ARCHIVE_SIG_TTL", 0.0)  # re-walk per call in test
-    monkeypatch.setattr(server, "_save_archive_response_cache", lambda: None)
+    monkeypatch.setattr(server, "_save_archive_response_cache", lambda **kwargs: None)
     monkeypatch.setattr(server, "_save_conv_meta_cache", lambda: None)
 
     builds = []

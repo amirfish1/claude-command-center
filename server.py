@@ -16811,11 +16811,36 @@ def _load_archive_response_cache():
 def _read_archive_response_cache_file():
     from ccc_server import archive_snapshot
 
+    from ccc_server import archive_store
+    import sqlite3
+    legacy_import_done = None
     try:
-        with _ARCHIVE_RESPONSE_CACHE_FILE.open("r") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError, ValueError):
-        return
+        data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, hot=True)
+    except (OSError, ValueError, sqlite3.Error):
+        data = None
+    if data is None:
+        try:
+            with _ARCHIVE_RESPONSE_CACHE_FILE.open("r") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError, ValueError):
+            return
+        if isinstance(data, dict) and isinstance(data.get("entries"), dict):
+            try:
+                count = sum(len(entry.get("conversations") or []) for entry in data["entries"].values()
+                            if isinstance(entry, dict))
+                if count > 256:
+                    # One-time legacy import can take seconds. Keep its usable
+                    # rows available while a background owner writes the store.
+                    legacy_import_done = threading.Event()
+                    threading.Thread(target=_archive_import_legacy_store,
+                                     args=(_ARCHIVE_RESPONSE_CACHE_FILE, data, legacy_import_done),
+                                     daemon=True).start()
+                else:
+                    archive_store.backup_legacy(_ARCHIVE_RESPONSE_CACHE_FILE)
+                    archive_store.save(_ARCHIVE_RESPONSE_CACHE_FILE, data, complete=True)
+                    data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, hot=True) or data
+            except (OSError, ValueError, sqlite3.Error) as exc:
+                print(f"  [archive-cache] row-store migration deferred: {exc}")
     if not isinstance(data, dict):
         return
     data = archive_snapshot.upgrade_driver_metadata(
@@ -16866,6 +16891,9 @@ def _read_archive_response_cache_file():
         }
     if keep:
         with _ARCHIVE_RESPONSE_CACHE_LOCK:
+            if legacy_import_done is not None and legacy_import_done.is_set():
+                for entry in keep.values():
+                    entry["conversations"] = archive_store.hot_rows(entry["conversations"])
             _ARCHIVE_RESPONSE_CACHE.update(keep)
         try:
             for _entry in keep.values():
@@ -16879,12 +16907,26 @@ def _read_archive_response_cache_file():
                 _ARCHIVE_STATMAP_BY_SIG.pop(next(iter(_ARCHIVE_STATMAP_BY_SIG)))
 
 
+def _archive_import_legacy_store(cache_file, data, done):
+    from ccc_server import archive_store
+    import sqlite3
+    try:
+        archive_store.backup_legacy(cache_file)
+        archive_store.save(cache_file, data, complete=True)
+        with _ARCHIVE_RESPONSE_CACHE_LOCK:
+            done.set()
+            for entry in _ARCHIVE_RESPONSE_CACHE.values():
+                entry["conversations"] = archive_store.hot_rows(entry.get("conversations") or [])
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        print(f"  [archive-cache] row-store migration deferred: {exc}")
+
+
 _ARCHIVE_RESPONSE_CACHE_SAVE_MIN_INTERVAL_S = 30.0
 _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = 0.0
 _ARCHIVE_RESPONSE_CACHE_SAVE_LOCK = threading.Lock()
 
 
-def _save_archive_response_cache(force=False):
+def _save_archive_response_cache(force=False, *, complete=False):
     """Persist the response cache, debounced: incremental archive merges call
     this per merge and the snapshot is ~17MB, so every live session used to
     cost a ~180ms disk write on the request thread. It's a rebuildable cache
@@ -16894,13 +16936,14 @@ def _save_archive_response_cache(force=False):
     if not _ARCHIVE_RESPONSE_CACHE_SAVE_LOCK.acquire(blocking=False):
         return
     try:
-        _persist_archive_response_cache(force=force)
+        return _persist_archive_response_cache(force=force, complete=complete)
     finally:
         _ARCHIVE_RESPONSE_CACHE_SAVE_LOCK.release()
 
 
-def _persist_archive_response_cache(force=False):
-    from ccc_server import archive_snapshot
+def _persist_archive_response_cache(force=False, *, complete=False):
+    from ccc_server import archive_snapshot, archive_store
+    import sqlite3
 
     global _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT
     now = time.time()
@@ -16932,9 +16975,15 @@ def _persist_archive_response_cache(force=False):
         "signature_maps": signature_maps,
     }
     try:
+        archive_store.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot, complete=complete)
+        hot_entries = {key: dict(entry, conversations=archive_store.hot_rows(entry.get("conversations") or []))
+                       for key, entry in entries.items()}
+        snapshot = dict(snapshot, entries=hot_entries)
+        archive_store.backup_legacy(_ARCHIVE_RESPONSE_CACHE_FILE)
         if archive_snapshot.save(_ARCHIVE_RESPONSE_CACHE_FILE, snapshot):
             _ARCHIVE_RESPONSE_CACHE_LAST_SAVE_AT = time.time()
-    except OSError as e:
+            return True
+    except (OSError, ValueError, sqlite3.Error) as e:
         print(f"  [archive-cache] save failed: {e}")
 
 
@@ -16974,7 +17023,34 @@ def _archive_response_cache_put(key, conversations, signature=None):
         note_archive_build(_put_ts)  # perf_events warm/cold ledger
     except NameError:
         pass
-    _save_archive_response_cache()
+    # Persist complete builder output before dropping cold bodies from memory.
+    saved = _save_archive_response_cache(force=True, complete=True)
+    from ccc_server import archive_store
+    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+        current = _ARCHIVE_RESPONSE_CACHE.get(key)
+        if saved and current and current.get("cached_at") == _put_ts:
+            current["conversations"] = archive_store.hot_rows(rows)
+
+
+def _archive_response_cache_build_get(key):
+    """Materialize cold bodies only for a builder or explicit history read."""
+    entry = _archive_response_cache_get(key)
+    from ccc_server import archive_store, archive_snapshot
+    import sqlite3
+    try:
+        data = archive_store.load(_ARCHIVE_RESPONSE_CACHE_FILE, key=key)
+        if data:
+            data = archive_snapshot.upgrade_driver_metadata(
+                data, _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION, _ARCHIVE_RESPONSE_CACHE_BUILD_ID)
+            if (data.get("schema_version") != _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION
+                    or data.get("build_id") != _ARCHIVE_RESPONSE_CACHE_BUILD_ID):
+                return entry
+            stored = data.get("entries", {}).get(key)
+            if stored and (not entry or float(stored.get("cached_at") or 0) >= float(entry.get("cached_at") or 0)):
+                return stored
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        print(f"  [archive-cache] cold read unavailable: {exc}")
+    return entry
 
 
 def _archive_response_cache_is_stale(entry):
@@ -17674,7 +17750,7 @@ def _archive_list_warm(cache_options, window, stale_ok):
     """Build and cache the /list body the handler would build for a
     bootstrap read, without a request (see _archive_list_disk_candidate)."""
     rows, from_cache, body_ver = _archive_list_source_rows_cached(
-        cache_options, force_refresh=not stale_ok, phases={})
+        cache_options, force_refresh=not stale_ok, phases={}, window=window)
     cache_key = _archive_response_cache_key(**cache_options)
     delta = None
     if body_ver:
@@ -17781,6 +17857,11 @@ def _archive_serve_cache_store(key, rows, generation, ts=None):
     for an immediate refresh, not less.
     """
     global _archive_serve_version
+    from ccc_server import archive_store
+    if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
+        selected = archive_store.hot_rows(rows)
+        if len(selected) != len(rows):
+            rows = selected
     with _archive_serve_lock:
         if generation != _archive_serve_generation:
             return False
@@ -18516,7 +18597,7 @@ def _archive_list_rows_cached(cache_options, *, window="all", now=None):
     return _archive_list_project_rows(rows, window=window, now=now), from_cache
 
 
-def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None):
+def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phases=None, window="all"):
     """Read-only full snapshot feeding the projected sidebar list.
 
     The list response immediately projects a small 1d/7d window into fresh
@@ -18542,6 +18623,8 @@ def _archive_list_source_rows_cached(cache_options, *, force_refresh=False, phas
         cache_options,
         copy_rows=False,
         force_refresh=force_refresh,
+        window=window,
+        defer_cold=True,
     )
     _phase("serve_ms")
     codex_overlay = _archive_overlay_codex_sessions(rows)
@@ -19295,7 +19378,7 @@ def _archive_compute_rows(key, cache_options, serve_generation=None, progress_st
     lock = _archive_build_lock(key)
     with lock:
         _ph = time.perf_counter()
-        entry = _archive_response_cache_get(key)
+        entry = _archive_response_cache_build_get(key)
         phases["cache_get_ms"] = round((time.perf_counter() - _ph) * 1000.0, 1)
         _ph = time.perf_counter()
         if entry and entry.get("signature") == sig:
@@ -19518,6 +19601,8 @@ def _archive_refresh_worker_main(encoded_options, output_path):
         key = _archive_response_cache_key(**cache_options)
         _wt0 = time.perf_counter()
         rows, from_cache = _archive_compute_rows(key, cache_options)
+        from ccc_server import archive_store
+        rows = archive_store.hot_rows(rows)
         phases = dict(_ARCHIVE_COMPUTE_LAST_PHASES)
         phases["compute_ms"] = round((time.perf_counter() - _wt0) * 1000.0, 1)
         result = {
@@ -19688,6 +19773,8 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
         rows = result.get("rows")
         if not isinstance(rows, list):
             raise RuntimeError("archive refresh worker returned invalid rows")
+        from ccc_server import archive_store
+        rows = archive_store.hot_rows(rows)
         _rt2 = time.perf_counter()
         _rphase["decode_ms"] = round((_rt2 - _rt1) * 1000.0, 1)
         if _ARCHIVE_SERVE_TTL > 0:
@@ -19765,16 +19852,78 @@ def _overlay_conversation_lifecycle_flags(rows):
 
 
 def _archive_serve_rows(key, cache_options):
-    rows, from_cache, _snap_ver = _archive_serve_rows_versioned(key, cache_options)
+    rows, from_cache, _snap_ver = _archive_serve_rows_versioned(key, cache_options, defer_cold=True)
     return rows, from_cache
 
 
-def _archive_serve_rows_versioned(
+def _archive_serve_rows_versioned(key, cache_options, *, copy_rows=True, force_refresh=False,
+                                  window="all", defer_cold=False):
+    rows, cached, version = _archive_serve_hot_rows_versioned(
+        key, cache_options, copy_rows=copy_rows, force_refresh=force_refresh, defer_cold=defer_cold)
+    if window == "all":
+        from ccc_server import archive_store
+        if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
+            entry = _archive_response_cache_build_get(key)
+            if entry:
+                current = {archive_store.identity(row): row for row in rows}
+                cold = entry.get("conversations") or []
+                combined = [current.pop(archive_store.identity(row), row) for row in cold]
+                combined.extend(current.values())
+                # Full-history bodies can still replay against the hot snapshot
+                # version. A new disk publication invalidates its cached body.
+                with _archive_serve_lock:
+                    sc = _archive_serve_cache.get(key)
+                    if sc is not None and _ARCHIVE_SERVE_TTL > 0:
+                        stamp = entry.get("cached_at")
+                        if sc.get("cold_stamp") != stamp:
+                            sc["cold_stamp"] = stamp
+                            for field in ("body_raw", "body_gzip", "etag"):
+                                sc.pop(field, None)
+                        version = sc.get("ver", 0)
+                return _overlay_conversation_lifecycle_flags(combined), cached, version
+    if window != "all":
+        from ccc_server import archive_store
+        if archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
+            # Keep the existing pin/moved-ticket and topic-parent exceptions,
+            # including parents learned after the stored row was published.
+            present = {str(row.get("session_id") or row.get("id") or "") for row in rows}
+            wanted = set(_pinned_rank_map()) - present
+            tickets = _idea_tickets.idea_ticket_rows_map()
+            cutoff = _archive_list_window_cutoff(window)
+            wanted.update(sid for sid, ticket in tickets.items()
+                          if _archive_list_row_ts({"idea_ticket": ticket}) >= (cutoff or 0))
+            parents = _session_graph.parent_snapshot()
+            pending = list(present | wanted)
+            visited = set(pending)
+            for sid in pending:
+                parent = parents.get(sid)
+                if parent and parent not in visited:
+                    visited.add(parent)
+                    wanted.add(parent)
+                    pending.append(parent)
+            wanted.difference_update(present)
+            if wanted:
+                import sqlite3
+                try:
+                    extra = archive_store.lookup(_ARCHIVE_RESPONSE_CACHE_FILE, key, wanted,
+                                                 schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION)
+                    extra = [row for row in extra if str(row.get("session_id") or row.get("id") or "") not in present]
+                    if extra:
+                        _apply_pinned_conversation_fields(extra)
+                        rows = list(rows) + _overlay_conversation_lifecycle_flags(extra)
+                        version = 0
+                except (OSError, ValueError, sqlite3.Error) as exc:
+                    print(f"  [archive-cache] contextual cold read unavailable: {exc}")
+    return rows, cached, version
+
+
+def _archive_serve_hot_rows_versioned(
     key,
     cache_options,
     *,
     copy_rows=True,
     force_refresh=False,
+    defer_cold=False,
 ):
     """Archive rows for an ?all=1 request, stale-while-revalidate.
 
@@ -19802,7 +19951,7 @@ def _archive_serve_rows_versioned(
     body+etag+gzip per version), else 0.
     """
     global _archive_serve_refreshing
-    if _ARCHIVE_SERVE_TTL <= 0:
+    if _ARCHIVE_SERVE_TTL <= 0 and not defer_cold:
         rows, from_cache = _archive_compute_rows(key, cache_options)
         return rows, from_cache, 0
     now = time.time()
@@ -19882,6 +20031,17 @@ def _archive_serve_rows_versioned(
             ).start()
         returned_rows = [dict(r) for r in rows] if copy_rows else rows
         return returned_rows, True, _archive_serve_ver_for_rows(key, rows)
+    if defer_cold:
+        # A first install or missing cache must not queue HTTP threads behind
+        # the archive lock. One detached owner fills it; polls remain bounded.
+        with _archive_serve_lock:
+            spawn = not load_blocked and _archive_refresh_slot_available(key, now)
+            if spawn:
+                _archive_refresh_mark_started(key, now)
+        if spawn:
+            threading.Thread(target=_archive_serve_refresh,
+                             args=(key, cache_options, serve_generation, now), daemon=True).start()
+        return [], True, 0
     # Nothing persisted yet — build once synchronously. On a fresh install
     # this is the minutes-long first scan, so feed the archive progress
     # channel (folders → transcripts N/M → …) the loading UI polls.
@@ -19935,6 +20095,25 @@ def _spawn_is_recent(spawn_entry, now=None):
 
 
 def _rehydrate_archive_cached_rows(rows):
+    from ccc_server import archive_store
+    if not archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
+        return _rehydrate_archive_hot_rows(rows)
+    selected = archive_store.hot_rows(rows or [])
+    selected_ids = {archive_store.identity(row) for row in selected}
+    fresh = {archive_store.identity(row): row for row in _rehydrate_archive_hot_rows(selected)}
+    # Historical sessions are for recall. Preserve their parsed metadata;
+    # only hot/live rows need repeated sidecar, liveness and lineage work.
+    merged = []
+    for row in rows or []:
+        rid = archive_store.identity(row)
+        if rid in fresh:
+            merged.append(fresh[rid])
+        elif rid not in selected_ids:
+            merged.append(row)
+    return merged
+
+
+def _rehydrate_archive_hot_rows(rows):
     """Apply fast-changing state to cached archive rows before responding."""
     try:
         name_overrides = _load_session_name_overrides()
@@ -20228,7 +20407,7 @@ def _rehydrate_archive_cached_rows(rows):
 
 
 def _archive_cached_payload(key):
-    entry = _archive_response_cache_get(key)
+    entry = _archive_response_cache_build_get(key)
     if not entry:
         return None
     rows = _rehydrate_archive_cached_rows(entry.get("conversations") or [])
@@ -35481,6 +35660,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 cache_options,
                 force_refresh=not stale_ok,
                 phases=_src_phases,
+                window=window,
             )
             _lt1 = time.perf_counter()
             _payload_ms = []
@@ -35590,46 +35770,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "resolve_effective": resolve_effective,
                 "resolve_worktree_dirty": resolve_worktrees,
             }
-            if stale_ok:
-                # Dashboard tabs poll this large, all-session payload in
-                # parallel. Share the same short-lived serve snapshot and
-                # single-flight refresh used by /api/sessions?all=1; otherwise
-                # every tab independently rehydrates thousands of rows and can
-                # starve even cached requests behind sustained CPU work. The
-                # snapshot sender replays the prebuilt body for repeat polls.
-                convs, from_cache, snap_ver = _archive_serve_rows_versioned(cache_key, cache_options)
-                self._send_archive_snapshot_json(cache_key, {
-                    "conversations": convs,
-                    "count": len(convs),
-                    "cached": from_cache,
-                }, snap_ver)
-                return
-            if not background:
-                _archive_load_begin()
-            def progress_step(*args, **kwargs):
-                if not background:
-                    _archive_load_set_step(*args, **kwargs)
-            try:
-                # Signature BEFORE the build (see _archive_refresh_response_
-                # cache_async): a sig-less put disables the fast refresh paths.
-                build_sig = _archive_corpus_signature()
-                convs = _build_archive_conversations(
-                    include_prs=include_prs,
-                    resolve_pr_states=resolve_pr_states,
-                    resolve_effective=resolve_effective,
-                    resolve_worktree_dirty=resolve_worktrees,
-                    progress_step=progress_step,
-                )
-                if not background:
-                    _archive_load_complete(convs)
-                _archive_response_cache_put(cache_key, convs, signature=build_sig)
-                _save_conv_meta_cache()
-                _stamp_archive_goals(convs)  # serve-time codex goal (cache-safe)
-                self.send_json({"conversations": convs, "count": len(convs)}, etag=True)
-            except Exception as e:
-                if not background:
-                    _archive_load_fail(e)
-                raise
+            # Even an explicit freshness request schedules the detached
+            # builder; no HTTP request waits on the archive build lock.
+            convs, from_cache, snap_ver = _archive_serve_rows_versioned(
+                cache_key, cache_options, force_refresh=not stale_ok, defer_cold=True)
+            self._send_archive_snapshot_json(cache_key, {
+                "conversations": convs,
+                "count": len(convs),
+                "cached": from_cache,
+                "refreshing": bool(_archive_serve_refreshing),
+            }, snap_ver)
         elif path == "/api/issues/all":
             # Cross-repo GH issues: walk recent ∪ pinned repos in parallel,
             # run `gh issue list` per repo with a 5-min per-repo cache,

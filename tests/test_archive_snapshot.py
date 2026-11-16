@@ -175,7 +175,7 @@ def test_server_debounce_only_counts_successful_publication(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("previous_labels", [True, False])
-def test_server_rebuilds_rows_cached_before_short_action_labels(tmp_path, monkeypatch, previous_labels):
+def test_server_keeps_rows_cached_before_short_action_labels(tmp_path, monkeypatch, previous_labels):
     import server
 
     data = snapshot()
@@ -188,14 +188,15 @@ def test_server_rebuilds_rows_cached_before_short_action_labels(tmp_path, monkey
     monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {})
     server._read_archive_response_cache_file()
     if previous_labels:
-        assert server._ARCHIVE_RESPONSE_CACHE == {}
+        assert server._ARCHIVE_RESPONSE_CACHE["base"]["conversations"][0]["session_id"] == "session-a"
+        assert server._ARCHIVE_RESPONSE_CACHE["base"]["signature"] is None
         assert server._ARCHIVE_STATMAP_BY_SIG == {}
     else:
         assert server._ARCHIVE_RESPONSE_CACHE["base"]["conversations"] == [{"session_id": "session-a"}]
         assert "sig-a" in server._ARCHIVE_STATMAP_BY_SIG
 
 
-@pytest.mark.parametrize("previous_version", [15, 16])
+@pytest.mark.parametrize("previous_version", [11, 15, 16])
 def test_driver_upgrade_serves_unknown_rows_while_refresh_runs(tmp_path, monkeypatch, previous_version):
     import server
 
@@ -234,3 +235,17 @@ def test_driver_upgrade_serves_unknown_rows_while_refresh_runs(tmp_path, monkeyp
     assert server._ARCHIVE_STATMAP_BY_SIG == {}
     assert started[0]["target"] is server._archive_serve_refresh
     assert json.loads(cache_file.read_text()) == data
+
+
+def test_unlisted_forward_row_version_keeps_every_row_available():
+    data = snapshot()
+    data.update(schema_version=41, build_id="41")
+    data["entries"]["base"]["conversations"] = [
+        {"session_id": str(i), "title": "retained"} for i in range(100)
+    ]
+    upgraded = archive_snapshot.upgrade_driver_metadata(data, 42, "42")
+    assert [r["session_id"] for r in upgraded["entries"]["base"]["conversations"]] == [str(i) for i in range(100)]
+    assert upgraded["entries"]["base"]["signature"] is None
+    assert upgraded["entries"]["base"]["cached_at"] == 0
+    assert upgraded["signature_maps"] == {}
+    assert data["schema_version"] == 41
