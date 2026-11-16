@@ -10,9 +10,8 @@ function extract(start, end) {
   return source.slice(a, b);
 }
 function helpers() {
-  const context = vm.createContext({});
-  vm.runInContext(extract('  function isRoutineCodexCoordination(', '  // CCC-185:')
-    + extract('  function codexActiveItemLabel(', '  function pastedImageThumbsHtml('), context);
+  const context = require('./conversation-content-fixture.cjs').load(vm.createContext({}));
+  vm.runInContext(extract('  function codexActiveItemLabel(', '  // Thumbnails for every pasted/annotation image path'), context);
   return context;
 }
 test('hide routine turn observations, preserve recovery, unknown events and real messages', () => {

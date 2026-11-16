@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
-const start = app.indexOf('  async function _loadCompleteToolOutput(');
+const start = app.lastIndexOf("  document.addEventListener('click'", app.indexOf('    if (button) { _loadCompleteToolOutput(button); return; }'));
 const loader = app.slice(start, app.indexOf('  // Rebuild the tool grouping', start));
 
 test('expanding a tool loads its full output once and allows retry after failure', async () => {
@@ -25,6 +25,7 @@ test('expanding a tool loads its full output once and allows retry after failure
         <button data-output-url="/tool-output">Show full output</button></div></div>` });
     });
     await page.goto('http://fixture.test/');
+    await require('./conversation-content-fixture.cjs').install(page);
     await page.evaluate(code => { (0, eval)(code); }, loader);
     await page.click('.kimi-tool-head');
     await page.waitForFunction(() => document.querySelector('[data-output-url]')?.textContent === 'Retry loading full output');

@@ -1515,6 +1515,7 @@ class TestServerImports(unittest.TestCase):
     def test_antigravity_turn_token_chips_show_cached_input(self):
         """Per-turn chips should expose cache reads, not only raw in/out counts."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         self.assertIn("function _formatAntigravityTokenChips(tIn, tOut, tThinking, tCached)", app_js)
         self.assertIn("if (tCached) parts.push(_formatTokensAntigravity(tCached) + ' cached')", app_js)
@@ -1525,6 +1526,7 @@ class TestServerImports(unittest.TestCase):
     def test_antigravity_turn_token_chips_call_out_uncached_input(self):
         """A partial cache read must visibly say how much input missed cache."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function _cacheMissCallout(tIn, tCached)", app_js)
@@ -2518,6 +2520,7 @@ class TestServerImports(unittest.TestCase):
     def test_kanban_tool_groups_stay_expanded(self):
         """Kanban comments/blocks are conversation context, not routine tools."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
         self.assertIn("function toolCallCarriesConversationContext(toolCall)", app_js)
@@ -5209,6 +5212,7 @@ class TestServerImports(unittest.TestCase):
         """Tool result previews should render under the command/tool whose
         tool_use id matches, with a visible result/error label."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function toolCallForResult", app_js)
@@ -5225,6 +5229,7 @@ class TestServerImports(unittest.TestCase):
     def test_tool_calls_render_complete_input_disclosure(self):
         """Persisted tool payloads should load lazily behind an Input toggle."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
         self.assertIn("function renderToolInputDisclosure(block, conversationId, line)", app_js)
@@ -5239,6 +5244,7 @@ class TestServerImports(unittest.TestCase):
     def test_recoverable_tool_failures_use_a_subdued_warning_treatment(self):
         """A failed tool call should not look like a CCC or session failure."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -6330,6 +6336,7 @@ class TestServerImports(unittest.TestCase):
         """Assistant message metadata should expose small read/copy actions
         beside the relative timestamp, not only on Done result rows."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -6409,6 +6416,7 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(parsed["type"], "result")
         self.assertTrue(parsed["no_agent_output"])
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("no_agent_output", app_js)
@@ -6457,6 +6465,7 @@ class TestServerImports(unittest.TestCase):
     def test_live_inline_indicator_is_singleton(self):
         """A refreshed live status tick should not leave stacked Generating rows."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
 
         self.assertIn("function getSingleLiveToolInline($view)", app_js)
         self.assertIn("const nodes = Array.from($view.querySelectorAll('.conv-live-tool-inline:not(.optimistic):not(.is-wake-status):not(.wake-breakdown)'));", app_js)
@@ -6475,6 +6484,7 @@ class TestServerImports(unittest.TestCase):
     def test_codex_wake_status_does_not_stack_with_generating(self):
         """Codex wake rows own their progress UI and should not stack with Generating."""
         app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
         self.assertIn(".conv-live-tool-inline.is-wake-status, .conv-live-tool-inline.wake-breakdown", app_js)

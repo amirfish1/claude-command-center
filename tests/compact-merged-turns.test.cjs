@@ -13,6 +13,7 @@ test('merged turns fold tools and reasoning across lifecycle markers, preserving
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
+    await require('./conversation-content-fixture.cjs').install(page);
     await page.setContent(`<style>${css}</style><body class="conv-compact">
       <div class="conv-pane is-webui-session"><div class="conversations-view">
         <div class="event user_text"><div class="user-msg">Check the layout</div></div>
@@ -91,6 +92,7 @@ test('a standalone group of fifteen tools opens with one native disclosure', asy
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
+    await require('./conversation-content-fixture.cjs').install(page);
     await page.setViewport({ width: 1000, height: 800 });
     const rows = Array.from({length:15}, (_, i) => '<div class="kimi-tool" data-cc-orch="wt status">'
       + '<div class="kimi-tool-head"><span class="kimi-tool-name">Bash</span>'
@@ -125,6 +127,7 @@ test('Codex wt / CCC API tool rows get purple orchestration chips (CCC-227)', as
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
+    await require('./conversation-content-fixture.cjs').install(page);
     const rowFn = (name) => { const s = app.indexOf('  function ' + name + '('); return app.slice(s, app.indexOf('\n  }', s) + 4); };
     await page.setContent(`<style>${css}</style><body class="conv-compact">
       <div class="conv-pane is-webui-session"><div class="conversations-view">

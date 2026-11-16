@@ -16,6 +16,7 @@ test('compact live replays preserve tool groups, fold chips, and reader position
   try {
     const page = await browser.newPage();
     await page.setContent(`<style>${css}</style><body class="conv-compact"><div class="conversations-view" style="height:200px;overflow:auto"></div></body>`);
+    await require('./conversation-content-fixture.cjs').install(page);
     await page.evaluate(code => {
       (0, eval)('const _KIMI_GLYPHS = {};\n' + code
         + '\nwindow.appendAssistant = _kimiAppendAssistantEvent; window.markRuns = _ccMarkRuns;');

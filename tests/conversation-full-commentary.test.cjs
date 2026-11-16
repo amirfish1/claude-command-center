@@ -33,12 +33,10 @@ test('conversation commentary and expanded command rows wrap without clipping', 
 });
 
 test('command headers and result commentary retain the complete text', () => {
-  const commandFn = app.slice(app.indexOf('  function fullCommandSummaryLabel('), app.indexOf('  function compactShellCommandLabel('));
-  const summary = new Function('_stripCdWrapperPrefix', commandFn + '\nreturn fullCommandSummaryLabel;')(s => s);
+  const ctx = require('./conversation-content-fixture.cjs').load(require('node:vm').createContext({}));
   const command = 'command ' + 'argument '.repeat(50);
-  assert.equal(summary(command), command.trim());
-  const resultFn = app.slice(app.indexOf('  function toolCallResultSnippet('), app.indexOf('  function updateToolGroupLabel('));
-  const snippet = new Function(resultFn + '\nreturn toolCallResultSnippet;')();
+  assert.equal(ctx.fullCommandSummaryLabel(command), command.trim());
+  const snippet = ctx.toolCallResultSnippet;
   const output = 'Complete result commentary '.repeat(15) + '\nA second line.';
   assert.equal(snippet({ querySelector: () => ({ textContent: output }) }), output.split('\n')[0].trim());
 });

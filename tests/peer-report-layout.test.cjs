@@ -7,7 +7,6 @@ const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const css = fs.readFileSync(process.env.PEER_REPORT_CSS || require.resolve('../static/app.css'), 'utf8');
 const helpers = app.slice(app.indexOf('  const PEER_LABEL_RE ='), app.indexOf('  function renderImageDescriptors('));
-const split = app.slice(app.indexOf('  function splitFirstSentence('), app.indexOf('  // (+) on the Original ask'));
 
 test('peer reports keep their preview, disclosure and expanded evidence readable', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
@@ -29,12 +28,13 @@ test('peer reports keep their preview, disclosure and expanded evidence readable
             <div class="event assistant"><div class="assistant-text">I’ll check the changes and validation before marking that part complete.</div></div></div>
           </div></body></html>`);
         await page.addStyleTag({ content: css + '\nbody{display:block;margin:0;padding:12px;height:auto;overflow:auto}.conv-pane{height:auto;display:block}.conversations-view{display:block!important;overflow:visible;height:auto;zoom:' + zoom + '}' + (theme === 'light' ? '.conversations-view{background:var(--conv-bg)}' : '.conv-pane{--conv-text:var(--text);--conv-accent:var(--accent)}') });
+        await require('./conversation-content-fixture.cjs').install(page);
         await page.addScriptTag({ content: `
           const escapeHtml = s => String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
           const escapeAttr = escapeHtml; const linkifyPath = escapeHtml; const linkifyPastedImages = s => s;
           const currentConversation = ''; const currentSession = null; const sessionIdByConv = {};
           function activeConvRepoPath() { return ''; }
-          ${split}\n${helpers}
+          ${helpers}
           document.querySelector('#report').outerHTML = formatPeerMessageHtml('STATUS: SUCCEEDED\\nSUMMARY: Merged two queue review skills and their older alias into one unified review workflow, preserving the operational checks, content review, safe repairs and escalation instructions for every queue.\\nFILES: src/review.js; tests/review.test.js\\nVALIDATION: All checks passed.');
         ` });
         const measure = () => page.evaluate(() => {

@@ -27,7 +27,7 @@ class ConvViewToggleTest(unittest.TestCase):
         self.assertNotIn('data-conv-view="verbose"', mobile)
 
     def test_modes_persist(self):
-        js = _read("static/app.js")
+        js = _read("static/app.js") + _read("static/conversation-content.js")
         self.assertIn("const CONV_VIEW_MODES = ['compact', 'normal', 'verbose'];", js)
         self.assertIn("document.body.dataset.convView = mode;", js)
         self.assertIn("localStorage.setItem('ccc-conv-view', mode)", js)
@@ -35,7 +35,7 @@ class ConvViewToggleTest(unittest.TestCase):
         self.assertIn("document.body.classList.toggle('conv-compact', mode === 'compact')", js)
 
     def test_legacy_verbose_key_still_honored(self):
-        js = _read("static/app.js")
+        js = _read("static/app.js") + _read("static/conversation-content.js")
         self.assertIn("localStorage.getItem('ccc-conv-verbose') === '1' ? 'verbose' : 'normal'", js)
 
     def test_compact_keeps_commentary_readable_and_outranks_stitch_theme(self):
@@ -52,12 +52,12 @@ class ConvViewToggleTest(unittest.TestCase):
         self.assertIn("-webkit-line-clamp: 2;", rule.group(1))
 
     def test_tap_expands_in_compact(self):
-        js = _read("static/app.js")
+        js = _read("static/app.js") + _read("static/conversation-content.js")
         self.assertIn("t.closest('.assistant-text, .event.user_text, .thinking-block, .tool-call')", js)
         self.assertIn("el.classList.toggle('cc-open')", js)
 
     def test_tool_runs_fold_between_text_messages(self):
-        js = _read("static/app.js")
+        js = _read("static/app.js") + _read("static/conversation-content.js")
         css = _read("static/app.css")
         self.assertIn("function _ccMarkRuns(view)", js)
         self.assertIn("if (active.length >= 2 || (active.length && prevText)", js)
@@ -72,7 +72,7 @@ class ConvViewToggleTest(unittest.TestCase):
         self.assertIn(".cc-run-tail:not(.cc-run-open) { display: none !important; }", css)
 
     def test_run_chip_rides_on_preceding_text(self):
-        js = _read("static/app.js")
+        js = _read("static/app.js") + _read("static/conversation-content.js")
         css = _read("static/app.css")
         self.assertIn("chip.className = 'cc-run-chip';", js)
         self.assertIn("_ccChipHost(prevText).appendChild(chip);", js)
@@ -84,7 +84,7 @@ class ConvViewToggleTest(unittest.TestCase):
         self.assertNotIn(".assistant-text:not(.cc-open):not(.cc-final):not(:has(.cc-run-chip))", css)
 
     def test_turn_final_summary_keeps_card(self):
-        js = _read("static/app.js")
+        js = _read("static/app.js") + _read("static/conversation-content.js")
         css = _read("static/app.css")
         self.assertIn("if (u.el.classList.contains('user_text')) { markFinal(turnText); turnText = null; }", js)
         self.assertIn(".assistant-text.cc-final {", css)

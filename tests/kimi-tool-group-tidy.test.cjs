@@ -25,6 +25,8 @@ test('removing a provisional tool row recounts the group and keeps orch chips', 
       ${row('call_a', 'Bash', 'wt answer')}${row('exec-live', 'Bash', 'wt answer', true)}
       ${row('call_b', 'Stdin')}${row('call_c', 'Stdin')}
     </div></div>`);
+    await require('./conversation-content-fixture.cjs').install(page);
+    await page.evaluate(() => { window.CCCToolResultImagesCardHtml = _toolResultImagesCardHtml; });
     await page.evaluate(code => {
       (0, eval)('const _KIMI_GLYPHS = new Proxy({}, { get: () => "" });'
         + 'const escapeAttr = s => String(s).replace(/"/g, "&quot;");'
@@ -60,6 +62,8 @@ test('tool images share a gallery across five tools, but stop at assistant text'
   try {
     const page = await browser.newPage();
     await page.setContent('<div class="kimi-turn"></div>');
+    await require('./conversation-content-fixture.cjs').install(page);
+    await page.evaluate(() => { window.CCCToolResultImagesCardHtml = _toolResultImagesCardHtml; });
     await page.evaluate(code => {
       (0, eval)('const _KIMI_GLYPHS = new Proxy({}, { get: () => "" });'
         + 'const escapeAttr = s => String(s).replace(/"/g, "&quot;");'
@@ -120,6 +124,8 @@ test('a first render regroups each turn once, after its events are in place', as
     await page.setContent(`<div class="conversations-view"><div class="kimi-turn">
       ${row('call_a', 'Bash')}${row('call_b', 'Bash')}
     </div></div>`);
+    await require('./conversation-content-fixture.cjs').install(page);
+    await page.evaluate(() => { window.CCCToolResultImagesCardHtml = _toolResultImagesCardHtml; });
     await page.evaluate(code => {
       (0, eval)('const _KIMI_GLYPHS = new Proxy({}, { get: () => "" });'
         + 'const escapeAttr = s => String(s).replace(/"/g, "&quot;");'
@@ -148,6 +154,8 @@ test('conversation media packs on the right without image-height gaps between te
     await page.setContent('<body class="conv-compact"><div class="conv-pane is-webui-session">'
       + '<div class="conversations-view"><div class="kimi-turn"></div></div></div></body>');
     await page.addStyleTag({ content: fs.readFileSync(require.resolve('../static/app.css'), 'utf8') });
+    await require('./conversation-content-fixture.cjs').install(page);
+    await page.evaluate(() => { window.CCCToolResultImagesCardHtml = _toolResultImagesCardHtml; });
     await page.evaluate(code => {
       (0, eval)('const _KIMI_GLYPHS = new Proxy({}, { get: () => "" });'
         + 'const escapeAttr = s => String(s).replace(/"/g, "&quot;");'

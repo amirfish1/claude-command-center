@@ -15,6 +15,7 @@ class TestDebugModeStatic(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.index, cls.app, cls.css = map(read, ("index.html", "app.js", "app.css"))
+        cls.app += read("conversation-content.js")
 
     def test_preference_and_switch_are_present(self):
         self.assertIn("ccc-debug-mode", self.index)

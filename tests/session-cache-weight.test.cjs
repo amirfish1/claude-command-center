@@ -3,10 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync('static/app.js', 'utf8');
-const start = source.indexOf('  const CACHE_READ_TOKEN_WEIGHT');
-const end = source.indexOf('  // A running, cross-turn log', start);
-const ctx = vm.createContext({});
-vm.runInContext(source.slice(start, end), ctx);
+const ctx = require('./conversation-content-fixture.cjs').load(vm.createContext({}));
 test('Fable 5.1 cache reads use 2.5% in the value and explanation', () => {
   assert.equal(ctx._cacheAdjustedTurnTokens(208770, 1656, 208051, 'claude-fable-5-1'), 7576);
   assert.match(ctx._cacheAdjustedTurnTitle(208770, 1656, 208051, 'claude-fable-5-1'), /2.5%/);

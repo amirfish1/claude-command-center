@@ -24,7 +24,7 @@ function fold(rows) {
     // row has tickets, so the answer is the fixture's business.
     _uxFixesWorkerTicketsForRow: (c) => c.tickets || [],
   };
-  vm.createContext(ctx);
+  require('./conversation-content-fixture.cjs').load(vm.createContext(ctx));
   vm.runInContext(source, ctx);
   return ctx._workersUniformColumns(rows);
 }

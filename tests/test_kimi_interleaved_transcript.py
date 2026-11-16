@@ -294,6 +294,8 @@ def test_kimi_tool_row_renders_inline_output_peek():
     lines)" like the Kimi TUI, and the peek hides once the row is opened."""
     root = pathlib.Path(__file__).resolve().parent.parent
     app_js = (root / "static" / "app.js").read_text()
+    app_js += (root / "static" / "conversation-content.js").read_text()
+    app_js += (root / "static" / "conversation-events.js").read_text()
     app_css = (root / "static" / "app.css").read_text()
 
     assert "function _kimiToolPeekHtml(outputText)" in app_js

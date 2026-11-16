@@ -5,7 +5,7 @@ const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync('static/app.js', 'utf8');
 const css = fs.readFileSync('static/app.css', 'utf8');
-const source = app.slice(app.indexOf('  function renderToolInputDisclosure('), app.indexOf('  function renderEditDisclosure('));
+const source = require('./conversation-content-fixture.cjs').source;
 
 test('structured response stays readable in compact, normal and verbose transcript views', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
@@ -16,6 +16,8 @@ test('structured response stays readable in compact, normal and verbose transcri
       await page.evaluate(({source,mode}) => {
         window.requests=[];
         window.verbose = mode === 'verbose';
+        Object.defineProperty(window, 'localStorage', {configurable:true,
+          value:{getItem:key=>key==='ccc-conv-view'?mode:null}});
         window.convVerboseOn = () => verbose;
         window.toolDisplayName = value => value;
         window.escapeAttr = value => String(value).replace(/&/g,'&amp;').replace(/"/g,'&quot;');

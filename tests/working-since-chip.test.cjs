@@ -20,7 +20,7 @@ function helpers() {
   });
   vm.runInContext(
     extract('  function _optimisticAgeLabel(ms) {', '  // Shared by the 1s setInterval')
-    + extract('  function wipAgeChipHtml(', '  const SESSION_ENGINE_LABELS = {'),
+    + extract('  function wipAgeChipHtml(', '  function engineModelEffortBits('),
     context);
   return context;
 }

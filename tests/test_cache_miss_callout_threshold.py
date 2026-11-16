@@ -14,16 +14,9 @@ class TestCacheMissCalloutThreshold(unittest.TestCase):
         """Run _cacheMissCallout from app.js over (tIn, tCached) pairs."""
         node_program = textwrap.dedent(
             r"""
-            const fs = require('fs');
-            const source = fs.readFileSync('static/app.js', 'utf8');
-            const pick = (name, endMarker) => {
-              const start = source.indexOf(name);
-              const end = source.indexOf(endMarker, start);
-              if (start < 0 || end < 0) throw new Error('helper not found: ' + name);
-              return source.slice(start, end);
-            };
-            eval(pick('function _formatTokensAntigravity', 'function _formatAntigravityTokenChips'));
-            eval(pick('const CACHE_MISS_CALLOUT_MIN_SHARE', '// A running, cross-turn log of cache misses'));
+            const vm = require('node:vm');
+            const ctx = require('./tests/conversation-content-fixture.cjs').load(vm.createContext({}));
+            const _cacheMissCallout = ctx._cacheMissCallout;
             const cases = JSON.parse(process.argv[1]);
             console.log(JSON.stringify(cases.map(([tIn, tCached]) =>
               _cacheMissCallout(tIn, tCached))));

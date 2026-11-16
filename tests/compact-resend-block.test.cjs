@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync('static/app.js', 'utf8');
 const start = source.indexOf('  function _compactRunFor(sid) {');
-const end = source.indexOf('  function _compactEngineLabel(', start);
+const end = source.indexOf('  // Context size for the before/after headline.', start);
 assert.ok(start >= 0 && end > start, '_compactRunFor block present');
 
 function blocks(run) {

@@ -29,6 +29,7 @@ async function fixture() {
   await page.setViewport({width: 1100, height: 800});
   await page.setContent('<body class="status-pos-right"><div class="conv-pane" data-pane-id="left" style="height:760px"><div class="conversations-view"></div><div class="conv-input-bar visible"><textarea></textarea></div></div></body>');
   await page.addStyleTag({content: css});
+  await require('./conversation-content-fixture.cjs').install(page);
   await page.evaluate(helpers => {
     window.state = {conversationId: 'session-one'};
     window.paneByPaneId = () => state;
