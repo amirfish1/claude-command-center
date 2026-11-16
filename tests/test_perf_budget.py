@@ -200,6 +200,9 @@ def test_archive_list_projection_keeps_renderer_and_lifecycle_contract():
         {key: row[key] for key in server._ARCHIVE_LIST_FIELDS if key in row},
         # The full reply never ships; only a capped one-line preview does.
         last_assistant_preview=server._archive_list_preview(transcript),
+        turn_driver={"kind": "session", "id": "parent-1", "name": "parent-1",
+                     "basis": "subagent", "at": 0},
+        last_owner_input_at=0,
     )]
     assert payload["window"] == "1d"
     assert payload["count"] == 1
@@ -396,6 +399,7 @@ def test_archive_list_http_route_projects_cached_rows(monkeypatch, tmp_path):
         "session_id": "trashed-row", "engine": "claude", "mtime": 2_000_000,
         "archived": True, "trashed": True, "all_lane_override": "messages",
         "last_assistant_preview": "not returned",
+        "turn_driver": None, "last_owner_input_at": 0,
     }]
 
 
