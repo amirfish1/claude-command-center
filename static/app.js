@@ -75194,10 +75194,19 @@
       }
     }
     if (!opts.provisionalOverlay) {
-      for (const p of _pendingSends) {
-        if (p.element && p.element.parentNode === $view && p.element !== $view.lastElementChild) {
-          $view.appendChild(p.element);
-        }
+      // Echoes follow new transcript content but precede the live status.
+      // Appending them after Generating on every refresh made the status
+      // ticker move back below them a second later. Walk backwards so several
+      // pending sends keep their order without moving on unchanged refreshes.
+      let anchor = null;
+      for (let node = $view.lastElementChild; node && node.matches(
+          '.conv-live-tool-inline, .conv-live-tool-strip, .conv-codex-state');
+          node = node.previousElementSibling) anchor = node;
+      for (let i = _pendingSends.length - 1; i >= 0; i--) {
+        const el = _pendingSends[i].element;
+        if (!el || el.parentNode !== $view) continue;
+        if (el.nextElementSibling !== anchor) $view.insertBefore(el, anchor);
+        anchor = el;
       }
     }
     // The optimistic "Sending…" pill needs two things:

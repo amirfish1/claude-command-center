@@ -28,7 +28,7 @@ const reconciliation = between(
   '        // Webui panes: collapse a durable user bubble');
 const renderedUserReconciliation = between(
   '      if (_pendingSends.length) {\n        const _durableUserRows',
-  '\n    }\n    if (!opts.provisionalOverlay) {\n      for (const p of _pendingSends) {');
+  '\n    }\n    if (!opts.provisionalOverlay) {\n      // Echoes follow new transcript content');
 const renderTail = between(
   '    // The app-server live overlay is agent-output-only.',
   '    // Re-evaluate the end-of-session outcome banner');
@@ -40,6 +40,60 @@ const steerHandler = source.slice(steerStart,
 let browser;
 before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
+
+test('steering echoes stay above Generating across transcript refreshes and status ticks', async () => {
+  const names = ['anchorCodexStateBadge', '_reanchorToTailUnlessOnlyTransientBetween',
+    'getSingleLiveToolInline', '_wireLiveInlineExpand', 'updateLiveToolStrip'];
+  const code = names.map(name => {
+    const start = source.indexOf('  function ' + name + '(');
+    return source.slice(start, source.indexOf('\n  }', start) + 4);
+  }).join('\n');
+  const result = await fixture(code => {
+    window.liveStatusMatchesOpenConv = () => true;
+    window.liveStatus = { live: true, sidecarStatus: 'active', sidecarTs: Date.now() / 1000 };
+    window.currentSession = { id: 'session', source: 'devin-cli' };
+    window._liveStripLastKeyTs = window._liveStripLastLiveTime = 0;
+    window._liveStripShown = false;
+    window._streamingBubble = null;
+    window.codexActiveItemLabel = () => ({ label: '', detail: '' });
+    window.codexTokenUsageText = () => '';
+    window.updateLiveStripOffset = () => {};
+    (0, eval)(code);
+    const view = getConvView();
+    const first = appendPendingSendEcho('First steering message', 'session', 'main');
+    const second = appendPendingSendEcho('Second steering message', 'session', 'main');
+    for (const pending of [first, second]) {
+      pending.element.classList.add('steering-optimistic');
+      pending.element.insertAdjacentHTML('beforeend', '<div>Steering in background…</div>');
+    }
+    updateLiveToolStrip();
+    const status = view.querySelector('.conv-live-tool-inline');
+    const expected = [first.element, second.element, status];
+    const tops = expected.map(node => node.getBoundingClientRect().top);
+    const stable = () => expected.every((node, i) => view.children[i] === node
+      && node.getBoundingClientRect().top === tops[i]);
+    const observer = new MutationObserver(() => {});
+    observer.observe(view, { childList: true });
+    let stationary = true;
+    for (let i = 0; i < 20; i++) {
+      runRenderTail(view, 'main', {}, []);
+      stationary &&= stable();
+      updateLiveToolStrip();
+      stationary &&= stable();
+    }
+    const moves = observer.takeRecords().length;
+    const latest = document.createElement('div');
+    latest.className = 'event assistant'; latest.textContent = 'New agent output';
+    view.append(latest);
+    updateLiveToolStrip();
+    runRenderTail(view, 'main', {}, [{ type: 'assistant' }]);
+    const followsNewOutput = latest.nextElementSibling === first.element
+      && first.element.nextElementSibling === second.element
+      && second.element.nextElementSibling === status;
+    return { stationary, moves, followsNewOutput, label: status.querySelector('.cl-tool').textContent };
+  }, code, false, { width: 1518, height: 686 });
+  assert.deepEqual(result, { stationary: true, moves: 0, followsNewOutput: true, label: 'Generating…' });
+});
 
 async function fixture(run, input, realTray = false, viewport) {
   const page = await browser.newPage();
