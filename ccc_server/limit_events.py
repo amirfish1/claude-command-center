@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -16,6 +17,32 @@ _cache_path = None
 _dirty = False
 _LIMIT = re.compile(r"rate.?limit|usage.?limit|quota|usage_limit_exceeded|reached[^.]*limit|too many requests|429", re.I)
 _WEEKLY = re.compile(r"week(?:ly)?|seven.day|7.day", re.I)
+# Codex credits/quota-exhausted errors carry the real reset inline when the
+# rate_limits blocks are null: "purchase more credits or try again at
+# Nov 18th, 2026 6:53 PM." Empirically UTC (matches secondary.resets_at).
+_RETRY_AT = re.compile(
+    r"try again at\s+([A-Za-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\s+\d{1,2}:\d{2}\s*[AP]M)",
+    re.I)
+# Bump when detection output changes so stale cached "found" entries are
+# re-derived instead of served for their 8-day lifetime.
+_CACHE_VERSION = 2
+
+
+def _parse_retry_at(blob):
+    """Epoch of the reset time Codex prints inside the error message, or
+    None. Treated as UTC: on a credits-exhausted account the printed time
+    matched rate_limits.secondary.resets_at exactly."""
+    m = _RETRY_AT.search(blob or "")
+    if not m:
+        return None
+    text = re.sub(r"(\d)(st|nd|rd|th)", r"\1", m.group(1))
+    text = re.sub(r"\s+", " ", text.replace(".", "").replace(",", "")).strip()
+    for fmt in ("%B %d %Y %I:%M %p", "%b %d %Y %I:%M %p"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            continue
+    return None
 
 
 def signature(path):
@@ -177,6 +204,7 @@ def codex_stop(sid, path):
             found = None
             continue
         detected = _timestamp(event, path)
+        retry_reset = _parse_retry_at(blob)
         blocks = [("five_hour", limits.get("primary") or {}),
                   ("weekly", limits.get("secondary") or {})]
         exhausted = [(name, _epoch(block.get("resets_at"), detected))
@@ -189,13 +217,20 @@ def codex_stop(sid, path):
         else:
             weekly = bool(_WEEKLY.search(blob)) or any(name == "weekly" for name, _ in exhausted)
             window = "weekly" if weekly else "five_hour"
-            block = limits.get("secondary" if weekly else "primary") or {}
-            reset = _epoch(block.get("resets_at"), detected) if isinstance(block, dict) else None
+            reset = retry_reset
+            if reset is None:
+                block = limits.get("secondary" if weekly else "primary") or {}
+                reset = _epoch(block.get("resets_at"), detected) if isinstance(block, dict) else None
             if reset is None and not exhausted:
                 secondary = limits.get("secondary") or {}
                 reset = _epoch(secondary.get("resets_at"), detected) if isinstance(secondary, dict) else None
                 if reset:
                     window = "weekly"
+            # A reset more than a day out can't be the ~5h window regardless
+            # of which source produced it (inline "try again at" text has no
+            # "week" keyword, so the window regex alone mislabels it).
+            if reset is not None and reset - detected > 24 * 3600:
+                window = "weekly"
         estimated = reset is None
         found = {"engine": "codex", "detected_at": detected,
                  "resume_at": reset or detected + (7 * 86400 if window == "weekly" else 5 * 3600),
@@ -234,14 +269,14 @@ def cached_stop(engine, sid, path, detector):
             _cache = data if isinstance(data, dict) else {}
             _cache_path = cache_path
         rec = _cache.get(key) or {}
-        if rec.get("signature") == list(sig):
+        if rec.get("v") == _CACHE_VERSION and rec.get("signature") == list(sig):
             return dict(rec["found"]) if isinstance(rec.get("found"), dict) else None
         found = detector(sid, path)
         if found:
             found = dict(found)
             found["source_text_snippet"] = engine + " usage / rate limit reached"
             found["transcript_path"] = str(path)
-        _cache[key] = {"signature": list(sig), "found": found, "checked_at": time.time()}
+        _cache[key] = {"v": _CACHE_VERSION, "signature": list(sig), "found": found, "checked_at": time.time()}
         cutoff = time.time() - 8 * 86400
         _cache = {k: v for k, v in _cache.items()
                   if isinstance(v, dict) and v.get("checked_at", 0) >= cutoff}

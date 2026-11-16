@@ -812,7 +812,20 @@ def _usage_limit_scan_once(now=None):
                     _core._clear_usage_limit_resume(sid)
                 continue
             if existing and existing.get("detected_at") == found["detected_at"]:
-                continue  # same stop already recorded (incl. already fired)
+                # Same stop already recorded (incl. already fired) — but if
+                # the stored resume_at was an estimate and detection now
+                # yields a real reset (e.g. parsed from the error text),
+                # refresh it so the banner shows the true deadline.
+                if (not existing.get("fired") and not existing.get("dismissed")
+                        and existing.get("resume_at_estimated")
+                        and not found.get("resume_at_estimated")
+                        and existing.get("resume_at") != found.get("resume_at")):
+                    _core._save_usage_limit_resume_entry(
+                        sid, {**existing, **found,
+                              "resume_at": found["resume_at"],
+                              "resume_at_estimated": False,
+                              "limit_window": found.get("limit_window")})
+                continue
             _core._save_usage_limit_resume_entry(sid, found)
 
     tracked = _core._load_usage_limit_resumes()

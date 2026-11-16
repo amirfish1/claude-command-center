@@ -1,0 +1,1 @@
+- Surface the fleet limit banner when an engine account hits its usage wall: `fleet-limit` was implemented but never added to the pop-up allow-list, so stopped sessions stayed silent on the dashboard. Codex limit stops now also read the real reset time Codex prints inside the error ("try again at …") instead of guessing a 5-hour window, and stale cached estimates are re-derived.
