@@ -96,9 +96,11 @@
         const notStarted = response && response.status === 503
           && response.headers.get('X-CCC-Restarting') === '1';
         if (!read && !notStarted) {
+          // A lost response does not establish that a save failed (or even
+          // that this POST was a save). Let the feature report its own error;
+          // passive beacons and handled failures must not leave a global
+          // unsaved-change warning behind. Never replay the ambiguous write.
           failure = 'Connection interrupted. Check whether your change was saved before retrying.';
-          terminalMessage = failure;
-          render(failure);
           if (error) throw new Error(failure, { cause: error });
           return response;
         }

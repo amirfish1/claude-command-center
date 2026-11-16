@@ -55,7 +55,7 @@ test('late POST explicitly rejected before execution can retry its Request body'
   assert.deepEqual(bodies, ['save-once', 'save-once']);
 });
 
-test('ambiguous writes are never replayed, including gateway errors and network loss', async () => {
+test('ambiguous writes reach their caller without replay or a global unsaved-change banner', async () => {
   for (const failure of ['network', 502, 503, 504]) {
     let calls = 0;
     const h = harness(async () => {
@@ -67,7 +67,24 @@ test('ambiguous writes are never replayed, including gateway errors and network 
     if (failure === 'network') await assert.rejects(request, /Check whether your change was saved/);
     else assert.equal((await request).status, failure);
     assert.equal(calls, 1);
-    assert.match(h.node().textContent, /Check whether your change was saved/);
+    assert.equal(h.node(), undefined);
+  }
+});
+
+test('an uncertain write after a confirmed restart rejection clears only its retry notice', async () => {
+  for (const failure of ['network', 502]) {
+    let calls = 0;
+    const h = harness(async () => {
+      calls++;
+      if (calls === 1) return new Response('{}', {status: 503, headers: {'X-CCC-Restarting': '1'}});
+      if (failure === 'network') throw new TypeError('Failed to fetch');
+      return new Response('{}', {status: failure});
+    });
+    const request = h.fetch('/api/save', {method: 'POST', body: '{}'});
+    if (failure === 'network') await assert.rejects(request, /Check whether your change was saved/);
+    else assert.equal((await request).status, failure);
+    assert.equal(calls, 2, 'only the explicitly unstarted attempt can be replayed');
+    assert.equal(h.node().hidden, true);
   }
 });
 
@@ -123,14 +140,14 @@ test('receipt-aware endpoint helpers retain their own retries and status', async
 });
 
 
-test('unrelated success cannot erase an uncertain write warning; user can dismiss it', async () => {
+test('unrelated success cannot erase exhausted recovery; user can dismiss it', async () => {
   let calls = 0;
-  const h = harness(async () => new Response('{}', {status: calls++ ? 200 : 502}));
-  await h.fetch('/api/save', {method: 'POST', body: '{}'});
-  assert.match(h.node().textContent, /Check whether your change was saved/);
+  const h = harness(async () => new Response('{}', {status: calls++ < 2 ? 502 : 200}), {expire: true});
+  await h.fetch('/api/health');
+  assert.match(h.node().textContent, /still unavailable/);
   await h.fetch('/api/health');
   assert.equal(h.node().hidden, false);
-  assert.match(h.node().textContent, /Check whether your change was saved/);
+  assert.match(h.node().textContent, /still unavailable/);
   h.node().child.click();
   assert.equal(h.node().hidden, true);
 });
