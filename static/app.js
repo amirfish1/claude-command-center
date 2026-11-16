@@ -102910,7 +102910,7 @@
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   let folds = [];
   let progress = 0;
-  const bands = () => [sidebar.querySelector('.mobile-home-status'), sidebar.querySelector(':scope > .new-session-panel')].filter(Boolean);
+  const bands = () => [sidebar.querySelector('.mobile-home-status'), sidebar.querySelector('.worker-activity-line'), sidebar.querySelector(':scope > .new-session-panel')].filter(Boolean);
   const finishFolds = () => {
     for (const {animation, cleanup} of folds) {
       animation.cancel();

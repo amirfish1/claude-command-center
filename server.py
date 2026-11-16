@@ -31111,6 +31111,7 @@ _BACKGROUND_API_READ_PATHS = frozenset({
     "/api/watchtower/service/status",
     "/api/wt/activity-log",
     "/api/wt/workers",
+    "/api/wt/activity",
     "/api/session-status",
     "/api/decision-inbox/requests",
     "/api/takeover/observe",
@@ -32063,6 +32064,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                             "sent_at": rec.get("sent_at"),
                             "verified_at": rec.get("verified_at"),
                         }})
+        elif path == "/api/wt/activity":
+            from ccc_server.worker_activity import activity_snapshot
+            def resolve_worker_usage(worker):
+                resolver = getattr(_wt_workers, "_engine_activity", None)
+                if not callable(resolver):
+                    return None
+                evidence = resolver(worker)
+                return evidence.get("path") if evidence.get("exists") else None
+            self.send_json(activity_snapshot(
+                lambda: _wt_read_workers(include_activity=False), resolve_worker_usage))
         elif path == "/api/wt/workers":
             # Live worker list read straight from workers.json (no watchtower
             # import dependency). Each row carries queue + cloud session_id.
