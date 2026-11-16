@@ -21,3 +21,27 @@ test('assistant behavior alone is minor; actual consequences still count', () =>
   assert.equal(weight({title: 'Have the assistant refund charges?'}).reason, 'moves real money');
   assert.equal(weight({title: 'Have the assistant send customers a message?'}).reason, 'reaches customers');
 });
+
+test('publishing a source commit to a branch is not public exposure', () => {
+  const title = 'May I publish tested commit abcdef123 to next to add opt-in 15-second following for urgent project releases, without starting a production release?';
+  assert.equal(weight({title}).level, 'Minor');
+  assert.equal(weight({title: 'Publish verified commit abcdef123 to origin/main?'}).level, 'Minor');
+  assert.equal(weight({title: 'Publish commit abcdef123 to feature/release-follow?'}).level, 'Minor');
+  assert.equal(weight({title: 'Approve this source commit because a rule requires explicit permission?'}).level, 'Minor');
+});
+
+test('source-publication wording preserves actual consequential actions', () => {
+  for (const [suffix, reason] of [
+    ['and start a production release', 'changes the live product'],
+    ['and publish a public announcement', 'is public'],
+    ['and send customers a message', 'reaches customers'],
+    ['and charge $99', 'moves real money'],
+    ['and permanently erase archived records', "can't be undone"],
+  ]) {
+    assert.equal(weight({title: `Publish tested commit abcdef123 to next ${suffix}?`}).reason, reason);
+  }
+  assert.equal(weight({title: 'Publish a new website?'}).reason, 'is public');
+  assert.equal(weight({title: 'Publish commit abcdef123 to the public website?'}).reason, 'is public');
+  assert.equal(weight({title: 'Publish commit abcdef123 to customers?'}).reason, 'is public');
+  assert.equal(weight({title: 'Start a production release without starting a production release?'}).level, 'Major');
+});

@@ -13,6 +13,15 @@ supported question/inbox tool separately when appropriate. Do not manufacture
 questions or approval requests: carry out already authorized work and ask only
 when information, a consequential choice, or required approval is missing.
 
+Explain the actual reason the user is needed: the concrete consequence, material
+risk, irreversible step, missing preference, or uncertainty only they can resolve.
+"A rule requires explicit permission" is not that reason and does not make an
+approval Major. Respect an applicable approval boundary, but describe what the
+action would do and the decision the user must make; do not use the rule itself
+as the justification. If a cheap, reversible choice is already authorized, make
+and record it instead. Distinguish publishing source to a git branch from
+publishing public content or changing the running product.
+
 ## Explicitly promoted session questions
 
 Keep ordinary interactive questions in their originating conversation. When a

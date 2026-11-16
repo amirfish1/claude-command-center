@@ -1,0 +1,1 @@
+- Source commit pushes no longer appear Major merely because the question says "publish"; question guidance asks for the actual consequence or missing decision instead of citing an approval rule as its reason.
