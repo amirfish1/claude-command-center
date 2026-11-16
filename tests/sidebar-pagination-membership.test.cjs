@@ -164,3 +164,31 @@ test('a ticketed lane keeps the worker anchor and its sibling lanes pageable', (
     assert.equal(page(tab).omitted, 0);
   }
 });
+
+test('automatic checks stay in Other despite inherited tickets and family membership', () => {
+  const parent = row('parent', {idea_ticket: {ref: 'TEST-1'}});
+  const checks = [
+    row('directory-check', {session_cwd: '/tmp/te-side-check', all_lane_override: 'other'}),
+    row('qa-check', {folder_path: '/tmp/wt-model-check'}),
+    row('prompt-check', {first_message: 'You monitor an AI coding agent that is partway through ONE task.'}),
+    row('marker-check', {first_message: 'TE_SIDECALL: judge this run'}),
+  ].map(c => ({...c, parent_session_id: 'parent', idea_ticket: {ref: 'TEST-1'}}));
+  const reviewer = row('reviewer', {parent_session_id: 'parent', model: 'claude-haiku-test', lifetime_tokens: 2000000});
+  const {model, page, context} = setup([parent, ...checks, reviewer]);
+  for (const check of checks) {
+    assert.equal(model.laneFor(check), 'other');
+    assert.equal(model.parentId(check), '');
+    assert.equal(model.ticketFor(check), null);
+    for (const tab of ['alltickets', 'ideas', 'workers']) {
+      assert.equal(model.matches(check, tab, false), false, check.session_id + ' leaks into ' + tab);
+      assert.ok(!page(tab).rows.filter(r => model.matches(r, tab, false)).includes(check));
+    }
+    assert.equal(model.matches(check, 'archived', false), true);
+    assert.equal(model.matches(check, 'alltickets', true), true, 'search still finds checks');
+  }
+  assert.deepEqual(Array.from(page('archived').rows.filter(r => model.matches(r, 'archived', false)), r => r.session_id).sort(), checks.map(r => r.session_id).sort());
+  assert.ok(page('alltickets').rows.includes(reviewer), 'real reviewer remains an individual lane');
+  assert.equal(context._isOtherUtilityRow(row('ordinary', {model: 'claude-haiku-test'})), false);
+  assert.equal(context._isOtherUtilityRow(row('titled', {display_name: 'te-side-check'})), false);
+  assert.equal(context._isOtherUtilityRow(row('moved', {session_cwd: '/tmp/te-side-check', all_lane_override: 'coding'})), false);
+});

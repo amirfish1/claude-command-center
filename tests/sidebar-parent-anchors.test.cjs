@@ -10,7 +10,7 @@ function fn(name) {
 function setup() {
   const context = { continuationParentId: c => c?.continued_from_session_id || '' };
   vm.createContext(context);
-  vm.runInContext(fn('_continuationFoldMaps') + fn('sidebarRowsWithParentAnchors'), context);
+  vm.runInContext(fn('_isOtherUtilityRow') + fn('_continuationFoldMaps') + fn('sidebarRowsWithParentAnchors'), context);
   return context.sidebarRowsWithParentAnchors;
 }
 const ids = rows => Array.from(rows, c => c.session_id);
@@ -56,7 +56,7 @@ test('topic sections keep a child with its parent and preserve separate tickets'
     continuationParentId: () => '',
   };
   vm.createContext(context);
-  vm.runInContext(fn('_continuationFoldMaps') + fn('sidebarRowsWithParentAnchors')
+  vm.runInContext(fn('_isOtherUtilityRow') + fn('_continuationFoldMaps') + fn('sidebarRowsWithParentAnchors')
     + app.slice(start, end) + '\nthis.tree = _allTabTreeRowsFor;', context);
   const result = context.tree([child, separate]);
   assert.deepEqual(Array.from(result, r => [r.card.session_id, r.depth]), [['separate', 0], ['topic', 0], ['child', 1]]);
@@ -80,7 +80,13 @@ test('the tree folds an old spawning leg into its restored continuation', () => 
   const start = app.indexOf('    const _allTabTreeRowsFor =');
   const end = app.indexOf('    const _allTabById =', start);
   vm.createContext(context);
-  vm.runInContext(fn('_continuationFoldMaps') + fn('sidebarRowsWithParentAnchors')
+  vm.runInContext(fn('_isOtherUtilityRow') + fn('_continuationFoldMaps') + fn('sidebarRowsWithParentAnchors')
     + app.slice(start, end) + '\nthis.tree = _allTabTreeRowsFor;', context);
   assert.deepEqual(Array.from(context.tree([child]), r => [r.card.session_id, r.depth]), [['head', 0], ['child', 1]]);
+});
+
+test('a disposable utility in Other does not bring its work session into that list', () => {
+  const parent = {session_id: 'work'};
+  const check = {session_id: 'check', parent_session_id: 'work', session_cwd: '/tmp/te-side-check'};
+  assert.deepEqual(ids(setup()([check], [parent, check])), ['check']);
 });

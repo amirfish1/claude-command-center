@@ -1,0 +1,1 @@
+- Keep automatic loop checks and temporary review calls in Other even when they inherit a ticket or parent session; preserve ordinary reviewer lanes.

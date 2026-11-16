@@ -5677,6 +5677,7 @@
     const included = new Set(result.map(idOf));
     for (let i = 0; i < result.length; i++) {
       const row = result[i];
+      if (_isOtherUtilityRow(row)) continue;
       if (continuationParentId(row)) continue;
       const pid = String(row.parent_session_id || row.hermes_parent_session_id || '').trim();
       if (!pid) continue;
@@ -42103,6 +42104,21 @@
     'not-available',
   ]);
 
+  // Disposable checks are separate from the work they inspect. A model name
+  // alone is not evidence: ordinary reviewers can use the same small model.
+  function _isOtherUtilityRow(row) {
+    if (!row) return false;
+    const override = String(row.all_lane_override || '').trim();
+    if (override && override !== 'other') return false;
+    const cwd = String(row.session_cwd || row.folder_path || row.cwd || '').replace(/\/+$/, '');
+    const helperDir = cwd
+      ? /(?:^|\/)(?:te-side|wt-model)-[A-Za-z0-9_-]+$/.test(cwd)
+      : /-(?:te-side|wt-model)-[A-Za-z0-9_-]+$/.test(String(row.slug || ''));
+    const prompt = String(row.first_message || '').trimStart();
+    return helperDir || prompt.startsWith('You monitor an AI coding agent')
+      || /^TE_SIDECALL(?:\s|:|$)/.test(prompt);
+  }
+
   const _WT_LAUNCH_PROMPT_RE = /^(?:drain the [a-z0-9_]+(?:-[a-z0-9_]+)* watchtower queue\b|fix ticket \S+ on the \S+ watchtower queue\b|you are the planner for watchtower ticket |you are an independent (?:plan reviewer|verifier) for watchtower ticket |you are the independent post-fix assessor for the bug ticket |you are the bounded senior reviewer for )/;
   // Pagination and rendering must classify the complete session set identically.
   // Keep this model cheap: it builds membership, never row HTML.
@@ -42134,7 +42150,7 @@
       const owner = _wkTicketOwnerSid.get(facts.ticketRef) || '';
       return owner && owner !== _allTabSessionId(c) ? owner : '';
     };
-    const _allTabParentId = (c) => f2EffectiveParentSessionId(
+    const _allTabParentId = (c) => _isOtherUtilityRow(c) ? '' : f2EffectiveParentSessionId(
       _allTabSessionId(c), c && (c.parent_session_id || c.hermes_parent_session_id || continuationParentId(c) || c.continued_from_session_id)
     ) || _wkHelperParentId(c);
     const _allTabById = new Map();
@@ -42238,6 +42254,7 @@
     // Coding rows go to Other while the flag is on.
     const _ideaTicketsOn = ideaTicketsOn();
     const _ideaTicketFor = (c) => {
+      if (_isOtherUtilityRow(c)) return null;
       const seen = new Set();
       while (c) {
         const id = _allTabSessionId(c);
@@ -42258,6 +42275,7 @@
       return t.queue === 'SMALL-BUGS' ? 'smallbugs' : 'ideas';
     };
     const _allTabLaneFor = (c, seen = new Set()) => {
+      if (_isOtherUtilityRow(c)) return 'other';
       const ticketLane = _ideaTicketLane(c);
       if (ticketLane) return ticketLane;
       const override = _allTabLaneOverride(c);
@@ -42326,6 +42344,8 @@
       const cache = viewCaches.get(tab);
       if (cache.has(c)) return cache.get(c);
       if (directMatch(c, tab)) { cache.set(c, true); return true; }
+      // Family membership must not pull automatic checks back into All.
+      if (_isOtherUtilityRow(c)) return false;
       if (c.trashed || !sessionAllowed(c)) return false;
       // The rendered family also includes lanes attached to an earlier leg
       // of the topic, even when that lane has a different engine or override.
@@ -42338,6 +42358,7 @@
       return included;
     };
     const parentIds = c => {
+      if (_isOtherUtilityRow(c)) return [];
       const raw = rawSpawnParent(c);
       return [_allTabParentId(c), raw, fold.headOf(raw), continuationParentId(c)].filter(Boolean);
     };
@@ -42935,6 +42956,7 @@
     // is widened — same limitation the chip above already has.
     const _sessionChildrenById = new Map();
     _sessionProvenanceById.forEach((row) => {
+      if (_isOtherUtilityRow(row)) return;
       const pid = _sessionProvenanceParentId(row);
       // A continuation is the same conversation carried on, not a lane the
       // origin spawned — otherwise every continued session shows "1 lane".
