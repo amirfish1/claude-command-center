@@ -16719,7 +16719,8 @@ def find_all_conversations(
 # v12: Reparse session footers so cached rows retain short action labels.
 # v14: Recompute Close gates; inapplicable delivery no longer passes.
 # v16: Rebuild persisted rows to include turn-driver and owner-input metadata.
-_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 16
+# v17: Attribute native subagent prompts to their parent, not owner input.
+_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION = 17
 if test_isolation_active():
     # Same isolation as ACTIVITY_LOG_FILE: archive-build tests persist rows
     # for synthetic session ids into this shared cache (CCC-1165).
@@ -18400,6 +18401,7 @@ def _archive_list_project_row(row, *, resumes=None, parents=None):
             )
             if parent:
                 out["parent_session_id"] = parent
+        out.update(_driver.fields(out, parent_session_id=out.get("parent_session_id")))
         resume_at = usage_limit_resume_at_for_session(sid, resumes=resumes)
         if resume_at:
             out["usage_limit_resume_at"] = resume_at
@@ -20148,8 +20150,7 @@ def _rehydrate_archive_cached_rows(rows):
                 row, sid=sid,
                 markers=spawn_markers, spawn_registry_by_sid=spawn_registry_by_sid,
             )
-            if sid in drivers:
-                row.update(_driver.fields(row, sid, observed=drivers[sid]))
+            row.update(_driver.fields(row, sid, observed=drivers.get(sid, {})))
             idea_ticket = idea_tickets_by_sid.get(sid)
             if idea_ticket:
                 row["idea_ticket"] = idea_ticket

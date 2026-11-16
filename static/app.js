@@ -3897,10 +3897,11 @@
         || live.state === 'working' || live.codex_state === 'working'
         || (live.is_live && live.sidecar_status === 'active' && live.sidecar_in_flight));
   }
-  function sessionDriverHtml(c, now = Date.now() / 1000) {
+  function sessionDriverHtml(c, now = Date.now() / 1000, header = false) {
     if (!c || c.source === 'backlog' || c.source === 'github_pr' || c.backlog_type === 'github') return '';
     const driver = c.turn_driver || {};
     const kind = driver.kind || 'unknown';
+    if (!header && kind === 'unknown') return '';
     let name = String(driver.name || driver.id || '').trim();
     if (/^[0-9a-f]{8}-[0-9a-f-]{20,}$/i.test(name)) name = name.slice(0, 8);
     const label = kind === 'human' ? 'You'
@@ -3920,9 +3921,9 @@
     const tip = 'Driven by ' + label + ' · ' + stamp(driver.at)
       + '\nLast owner input: ' + stamp(owner) + '. Recorded attribution; not an authentication claim.';
     return '<span class="conv-driver" data-role="session-driver" data-driver-session-id="' + escapeAttr(c.session_id || c.id || '') + '" data-driver-kind="' + escapeAttr(kind) + '" title="' + escapeAttr(tip) + '">'
-      + '<span class="conv-driver-label">Driven by ' + escapeHtml(label) + '</span>'
+      + '<span class="conv-driver-label">' + (header ? 'Driven by ' : '') + escapeHtml(label) + '</span>'
       + (driver.at ? ' · <span class="conv-driver-age">' + escapeHtml(age(driver.at)) + '</span>' : '')
-      + (kind === 'human' ? '' : '<span class="conv-driver-owner">You · '
+      + (!header || kind === 'human' || (kind === 'session' && !owner) ? '' : '<span class="conv-driver-owner">You · '
         + (owner ? '<span class="conv-driver-age">' + escapeHtml(age(owner)) + '</span>' : 'no input recorded') + '</span>')
       + '</span>';
   }
@@ -3932,7 +3933,7 @@
     document.querySelectorAll('.conv-pane-driver [data-role="session-driver"], #mobileConvTitle [data-role="session-driver"], #simpleConvTitle [data-role="session-driver"], #cccBreadcrumb [data-role="session-driver"]').forEach(el => {
       const row = byId.get(el.dataset.driverSessionId);
       if (!row) return;
-      const html = sessionDriverHtml(row);
+      const html = sessionDriverHtml(row, undefined, true);
       if (html !== el.outerHTML) el.outerHTML = html;
     });
   }
@@ -24188,7 +24189,7 @@
       const row = (conversationsData || []).find(x => x.id === id)
         || (Array.isArray(archiveData) ? archiveData.find(x => (x.id || x.session_id) === id) : null);
       name = String((row && (row.display_name || row.first_message || row.status_rail_title)) || '').trim();
-      driverHtml = sessionDriverHtml(row);
+      driverHtml = sessionDriverHtml(row, undefined, true);
     } catch (_) {}
     el.innerHTML = '<span class="mobile-conv-name">' + escapeHtml(name.length > 60 ? name.slice(0, 60) + '…' : (name || 'This task')) + '</span>' + driverHtml;
   }
@@ -51803,7 +51804,7 @@
       driverEl.className = 'conv-pane-driver';
       pane.querySelector('[data-role="pane-titlebar"]')?.append(driverEl);
     }
-    driverEl.innerHTML = opts.category === undefined ? sessionDriverHtml(fullRow) : '';
+    driverEl.innerHTML = opts.category === undefined ? sessionDriverHtml(fullRow, undefined, true) : '';
     driverEl.hidden = !driverEl.innerHTML;
     // CCC-1172: the ellipsized title stays readable in full — hover carries
     // it in the tooltip, click/Enter toggles .is-expanded inline (delegated
@@ -51829,7 +51830,7 @@
       const mobileTitleEl = document.getElementById('mobileConvTitle');
       if (mobileTitleEl) {
         const name = rowName;
-        mobileTitleEl.innerHTML = '<span class="mobile-conv-name">' + escapeHtml(name) + '</span>' + (opts.category === undefined ? sessionDriverHtml(fullRow) : '');
+        mobileTitleEl.innerHTML = '<span class="mobile-conv-name">' + escapeHtml(name) + '</span>' + (opts.category === undefined ? sessionDriverHtml(fullRow, undefined, true) : '');
         mobileTitleEl.title = name;
         mobileTitleEl.hidden = !name;
       }
@@ -51879,7 +51880,7 @@
           + workerOriginBadgeHtml(row)
           + sidChip
           + spawnedByChip
-          + sessionDriverHtml(fullRow)
+          + sessionDriverHtml(fullRow, undefined, true)
           + (typeof window._cccHandoffMovedChipHtml === 'function' ? window._cccHandoffMovedChipHtml(row) : '')
           + (title ? '<span class="ccc-breadcrumb-title" title="' + escapeAttr(title) + '">' + escapeHtml(title) + '</span>' : '')
           // Transport pill slot, filled by updateConvProcessIndicator below.

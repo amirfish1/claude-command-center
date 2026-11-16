@@ -185,3 +185,55 @@ def test_persisted_list_bodies_advance_with_row_schema(monkeypatch, tmp_path):
     old = server._archive_list_disk_path(key, '1d')
     monkeypatch.setattr(server, '_ARCHIVE_RESPONSE_CACHE_BUILD_ID', 'next-row-schema')
     assert server._archive_list_disk_path(key, '1d') != old
+
+
+def test_sidechain_is_attributed_to_owning_session_without_owner_input(tmp_path, monkeypatch):
+    import server
+    monkeypatch.setattr(server, '_conv_meta_cache', {})
+    monkeypatch.setattr(server, '_emit_interrupts_from_meta', lambda *a: None)
+    p = tmp_path / 'parent-session' / 'subagents' / 'agent-review.jsonl'
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({'type': 'user', 'timestamp': '2026-01-01T00:00:00Z',
+                            'isSidechain': True, 'message': {'content': 'Review changes'}})+'\n')
+    meta = server._extract_tail_meta(p)
+    assert meta['turn_driver'] == {'kind': 'session', 'id': 'parent-session',
+                                   'name': 'parent-session', 'basis': 'subagent',
+                                   'at': driver.epoch('2026-01-01T00:00:00Z')}
+    assert driver.fields(meta)['last_owner_input_at'] == 0
+    assert driver.classify('Review', {'isSidechain': True}, parent_session_id='parent')['basis'] == 'subagent'
+    # An explicit author wins over the native parent context.
+    assert driver.classify('[sender: Owner (human) · msg test]\nChange it',
+                           {'isSidechain': True}, parent_session_id='parent')['kind'] == 'human'
+
+
+@pytest.mark.parametrize('engine', ['claude', 'codex', 'grok'])
+def test_persisted_subagent_row_uses_parent_without_overwriting_known_sender(engine, monkeypatch):
+    import server
+    monkeypatch.setattr(server, 'usage_limit_resume_at_for_session', lambda *a, **kw: None)
+    row = {'session_id': 'child', 'engine': engine, 'turn_driver': {'kind': 'unknown', 'at': 100},
+           'last_owner_input_at': 50}
+    out = server._archive_list_project_row(row, parents={'child': 'parent'})
+    assert out['turn_driver'] == {'kind': 'session', 'id': 'parent', 'name': 'parent',
+                                  'basis': 'subagent', 'at': 100}
+    assert out['last_owner_input_at'] == 50
+    assert row['turn_driver']['kind'] == 'unknown'
+    for kind in ['human', 'session', 'service', 'background']:
+        row['turn_driver'] = {'kind': kind, 'name': 'explicit', 'at': 200}
+        assert server._archive_list_project_row(row, parents={'child': 'parent'})['turn_driver'] == row['turn_driver']
+
+
+def test_codex_native_subagent_prompt_is_not_owner_input(tmp_path, monkeypatch):
+    import server
+    monkeypatch.setattr(server, '_conv_meta_cache', {})
+    monkeypatch.setattr(server, '_codex_tail_resume', {})
+    p = tmp_path / 'rollout.jsonl'
+    events = [
+        {'type': 'session_meta', 'payload': {'source': {'subagent': {'thread_spawn': {'parent_thread_id': 'parent'}}}}},
+        {'type': 'event_msg', 'timestamp': '2026-01-01T00:00:00Z',
+         'payload': {'type': 'user_message', 'message': 'Review the changes'}},
+    ]
+    p.write_text(''.join(json.dumps(e)+'\n' for e in events))
+    meta = server._extract_codex_tail_meta(p)
+    assert meta['turn_driver']['kind'] == 'session'
+    assert meta['turn_driver']['id'] == 'parent'
+    assert driver.fields(meta)['last_owner_input_at'] == 0

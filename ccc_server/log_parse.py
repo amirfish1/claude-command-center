@@ -1351,6 +1351,8 @@ def _extract_tail_meta(path):
                     if t == "user":
                         msg = _core._safe_parse_message(ev.get("message", {}))
                         raw_text = _core._extract_text_from_content(msg.get("content", ""))
+                        if ev.get("isSidechain") and path.parent.name == "subagents":
+                            meta["driver_parent_session_id"] = path.parent.parent.name
                         _driver.record(meta, raw_text, ev.get("timestamp"), ev)
                         command_text = _core._extract_command_invocation_text(raw_text)
                         if command_text:

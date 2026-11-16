@@ -48,7 +48,7 @@ CODEX_STATE_DB = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
 # `thread_id` (== our codex session_id). Both the legacy and the sqlite/-nested
 # path have been observed; newest non-empty wins.
 KIMI_SESSIONS_ROOT = Path.home() / ".kimi-code" / "sessions"
-_CODEX_META_VERSION = 14
+_CODEX_META_VERSION = 15
 _CODEX_STARTED_TURN_IDS_MAX = 64
 _CODEX_APP_SERVER_STATE_SCHEMA = 1
 _CODEX_THREAD_REGISTRY_SCHEMA = 1
@@ -11679,6 +11679,14 @@ def _extract_codex_tail_meta(path):
                 ev_type = ev.get("type")
                 ptype = payload.get("type")
                 if ev_type in ("session_meta", "turn_context"):
+                    if ev_type == "session_meta":
+                        source = payload.get("source")
+                        sub = source.get("subagent") if isinstance(source, dict) else None
+                        spawn = sub.get("thread_spawn") if isinstance(sub, dict) else None
+                        meta["driver_parent_session_id"] = (
+                            payload.get("parent_thread_id")
+                            or (spawn.get("parent_thread_id") if isinstance(spawn, dict) else None)
+                        )
                     meta["cwd"] = payload.get("cwd") or meta["cwd"]
                     meta["model"] = payload.get("model") or meta["model"]
                     continue

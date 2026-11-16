@@ -10,7 +10,7 @@ import re
 
 from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
 
-VERSION = 2
+VERSION = 3
 _HEADER = re.compile(r'^\[sender: (.*?) \(([^)]+)\)(?: ·|\])')
 _PEER = re.compile(r'^<cross-session-message\b[^>]*\bfrom-name=["\']([^"\']+)["\']')
 _SKIP = ('<system-reminder', '<user-prompt-submit-hook', '<local-command-',
@@ -32,7 +32,7 @@ def epoch(value):
         return 0.0
 
 
-def classify(text, event=None):
+def classify(text, event=None, *, parent_session_id=None):
     event = event or {}
     t = str(text or '').strip()
     if not t or is_compaction_bookkeeping(event) or event.get('isCompactSummary') or t.startswith(_SKIP):
@@ -85,6 +85,9 @@ def classify(text, event=None):
         return {'kind': 'service', 'name': str(event.get('wakeupSource') or 'Routine')[:160], 'basis': 'origin'}
     if event.get('isMeta') and origin not in ('peer', 'system'):
         return None
+    if parent_session_id and origin not in ('peer', 'system', 'human', 'sdk'):
+        return {'kind': 'session', 'id': str(parent_session_id),
+                'name': str(parent_session_id), 'basis': 'subagent'}
     if origin in ('peer', 'system') or event.get('isSidechain'):
         return {'kind': 'unknown', 'name': '', 'basis': 'origin'}
     return {'kind': 'human', 'name': '', 'basis': 'typed'}
@@ -93,7 +96,7 @@ def classify(text, event=None):
 def record(meta, text, timestamp, event=None):
     """Consume one user text from the owning transcript only; never descendants."""
     meta['driver_version'] = VERSION
-    driver = classify(text, event)
+    driver = classify(text, event, parent_session_id=meta.get('driver_parent_session_id'))
     ts = epoch(timestamp)
     if not driver or not math.isfinite(ts) or ts <= 0:
         return
@@ -103,7 +106,7 @@ def record(meta, text, timestamp, event=None):
         meta['turn_driver'] = {**driver, 'at': ts}
 
 
-def fields(meta, session_id=None, *, observed=None):
+def fields(meta, session_id=None, *, observed=None, parent_session_id=None):
     current = meta.get('turn_driver')
     if session_id:
         if observed is None:
@@ -114,5 +117,11 @@ def fields(meta, session_id=None, *, observed=None):
             current = {'kind': observed['sender_kind'], 'id': observed['sender'],
                        'name': observed['sender_name'], 'at': observed['at'],
                        'basis': observed.get('basis')}
+    # Persisted rows can predate family discovery. Use the child's own input
+    # time and a known parent link, never the parent's activity or owner time.
+    parent = parent_session_id or meta.get('parent_session_id') or meta.get('driver_parent_session_id')
+    if parent and (not current or current.get('kind') == 'unknown'):
+        current = {'kind': 'session', 'id': str(parent), 'name': str(parent),
+                   'basis': 'subagent', 'at': (current or {}).get('at', 0)}
     return {'turn_driver': current,
             'last_owner_input_at': meta.get('last_owner_input_at') or 0}
