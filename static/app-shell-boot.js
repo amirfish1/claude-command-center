@@ -66,6 +66,10 @@
     // moving an iframe into the body would restart its browsing context.
     (document.body || document.documentElement).appendChild(frame);
   }
+  let provided;
+  try { provided = JSON.parse(document.getElementById('cccAppStartup')?.textContent || 'null'); }
+  catch (_) {}
+  if (provided?.id === id) { window.__cccStartupApp = provided; open(provided); return; }
   let saved;
   try { saved = JSON.parse(localStorage.getItem('ccc-rail-apps-v1') || '[]'); }
   catch (_) {}

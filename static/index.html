@@ -5105,9 +5105,11 @@
         .then((rs) => rs.forEach((r) => r.unregister()))
         .catch(() => {});
     } else {
-      window.addEventListener('load', () => {
+      const registerServiceWorker = () => {
         navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
-      });
+      };
+      if (document.readyState === 'complete') registerServiceWorker();
+      else window.addEventListener('load', registerServiceWorker, { once: true });
     }
   }
 </script>

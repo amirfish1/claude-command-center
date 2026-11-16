@@ -293,10 +293,22 @@
   var SWITCH_KEY = "ccc-rail-switch";
 
   function cachedApps() {
+    var apps = null;
     try {
       var v = JSON.parse(localStorage.getItem(APPS_CACHE_KEY) || "null");
-      return (Array.isArray(v) && v.length) ? v : null;
-    } catch (e) { return null; }
+      if (Array.isArray(v) && v.length) apps = v;
+    } catch (e) {}
+    // The no-store deep-link HTML is newer than the saved catalog. Adopting
+    // its frame must not navigate it to a stale saved route or remove it
+    // while the first catalog refresh is still in flight.
+    var startup = window.__cccStartupApp;
+    if (startup) {
+      apps = apps || [];
+      var index = apps.findIndex(function (app) { return app.id === startup.id; });
+      if (index < 0) apps.push(startup);
+      else apps[index] = Object.assign({}, apps[index], startup);
+    }
+    return apps;
   }
 
   // Focus mode (docs/applications.md, "Sharing an app"): the rail shows one
@@ -1018,6 +1030,7 @@
         var ok = !!(d && Array.isArray(d.apps) && d.apps.length);
         perfEvent("rail_apps", Date.now() - t0, { ok: ok, attempt: attempt, cached: hadCache });
         if (ok) {
+          delete window.__cccStartupApp;
           rememberFocus(d.focus);
           render(d.apps);
           try { localStorage.setItem(APPS_CACHE_KEY, JSON.stringify(d.apps)); } catch (e) {}

@@ -4,14 +4,14 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../static/app-shell-boot.js'), 'utf8');
 
-function boot({search='?ccc_app=demo', saved=null, apps=[], framed=false}={}) {
+function boot({search='?ccc_app=demo', saved=null, apps=[], framed=false, provided=null}={}) {
   const frames=[], reads=[], listeners=new Map(), storage=new Map(), timers=[];
   if (saved !== null) storage.set('ccc-rail-apps-v1', JSON.stringify(saved));
   const window = {addEventListener:(key, fn)=>listeners.set(key, fn),
     removeEventListener:key=>listeners.delete(key), dispatchEvent(){}};
   window.self=window; window.top=framed ? {} : window;
   const document = {body:null, documentElement:{appendChild:frame=>frames.push(frame)},
-    getElementById:id=>frames.find(f=>f.id===id),
+    getElementById:id=>id==='cccAppStartup' && provided ? {textContent:JSON.stringify(provided)} : frames.find(f=>f.id===id),
     createElement:()=>({dataset:{},style:{},contentWindow:{},addEventListener(){}})};
   const fetch=async url=>{reads.push(url);return {ok:true,json:async()=>({apps})};};
   window.fetch=fetch;
@@ -23,6 +23,32 @@ function boot({search='?ccc_app=demo', saved=null, apps=[], framed=false}={}) {
   return {window,frames,reads,listeners,storage,timers};
 }
 const app={id:'demo',label:'Demo',nav:'/view/demo'};
+
+test('server app data starts a fresh browser without a discovery round trip',()=>{
+  const run=boot({provided:app});
+  assert.deepEqual(run.reads,[]);
+  assert.equal(run.frames[0].src,'/view/demo');
+});
+test('current server data wins over a stale saved route',()=>{
+  const run=boot({provided:app,saved:[{...app,nav:'/view/old'}]});
+  assert.equal(run.frames[0].src,'/view/demo');
+  const disabled=boot({provided:{...app,enabled:false},saved:[app]});
+  assert.equal(disabled.frames.length,0);
+});
+
+test('rail adoption retains the route from current HTML when its saved catalog is stale or unavailable',()=>{
+  const rail=fs.readFileSync(require('node:path').join(__dirname,'../static/app-rail.js'),'utf8');
+  const start=rail.indexOf('  function cachedApps()');
+  const helper=rail.slice(start,rail.indexOf('\n  }',start)+4);
+  for(const saved of [null,[{...app,nav:'/old',icon:'D'},{id:'sessions',nav:'/'}]]) {
+    const context={window:{__cccStartupApp:app},APPS_CACHE_KEY:'test',
+      localStorage:{getItem:()=>{if(saved===null)throw Error('unavailable');return JSON.stringify(saved);}}};
+    vm.runInNewContext(helper+'\nresult=cachedApps();',context);
+    const selected=context.result.find(candidate=>candidate.id===app.id);
+    assert.equal(selected.nav,app.nav);
+    if(saved) {assert.equal(selected.icon,'D');assert(context.result.some(candidate=>candidate.id==='sessions'));}
+  }
+});
 
 test('saved app starts before body/styles without another discovery read',()=>{
   const run=boot({saved:[app]});

@@ -224,11 +224,13 @@ What keeps a page inside the budget:
 
 CCC does its part: the agent pane loads a trimmed conversation view
 (`embed=app`) that skips the dashboard's sidebar, settings and status reads;
-the kit reopens the agent it showed last time instead of waiting to be told
-which one it is; the dashboard keeps the app you used last loaded in the
+the app HTML supplies its current agent so even a new browser can open the
+pane before routines discovery finishes; the dashboard keeps the app you used last loaded in the
 background, so opening it or switching back to it is instant; and a page
 opened straight on an app starts loading the app before the dashboard behind
-it. `ccc:app-shown` fires on `window` when a kept-alive page is shown again.
+it. The surrounding dashboard assets wait until the app paints, with a
+five-second fallback if it does not become ready. `ccc:app-shown` fires on
+`window` when a kept-alive page is shown again.
 
 The embedded conversation starts its transcript read while the shared
 renderer downloads. When a saved tail wins the race, the existing composer

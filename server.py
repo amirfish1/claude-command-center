@@ -30896,7 +30896,7 @@ def _stamp_static_urls(html_text):
     return _STATIC_URL_RE.sub(_sub, html_text)
 
 
-def _load_index_html(app_embed=False, app_shell=False):
+def _load_index_html(app_embed=False, app_shell=False, selected_app=None):
     try:
         html = _INDEX_HTML_PATH.read_text(encoding="utf-8")
         if app_embed:
@@ -30904,7 +30904,7 @@ def _load_index_html(app_embed=False, app_shell=False):
             html = conversation_page(html)
         elif app_shell:
             from ccc_server.app_embed import application_shell_page
-            html = application_shell_page(html)
+            html = application_shell_page(html, selected_app=selected_app)
         return _stamp_static_urls(html)
     except OSError as e:
         return "<h1>index.html missing</h1><pre>" + str(e) + "</pre>"
@@ -31373,7 +31373,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             app_id = query.get("ccc_app", [""])[0]
             app_shell = bool(app_id and app_id not in ("sessions", "queues")
                              and not query.get("ccc_popout") and not query.get("popout"))
-            self.send_html(_load_index_html(app_embed=app_embed, app_shell=app_shell))
+            selected_app = (next((app for app in _resolve_apps() if app["id"] == app_id), None)
+                            if app_shell else None)
+            self.send_html(_load_index_html(app_embed=app_embed, app_shell=app_shell,
+                                           selected_app=selected_app))
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
         elif path == "/api/model-picker/picks":
@@ -34608,7 +34611,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             for base in (USER_APPS_DIR, STATIC_DIR):
                 target = base / name / "index.html"
                 if target.is_file():
-                    self.send_html(target.read_text(encoding="utf-8"))
+                    from ccc_server.app_embed import application_page
+                    from ccc_server import app_routines
+                    folder = app_routines.app_dir(name, USER_APPS_DIR)
+                    agent_id = None
+                    if folder is not None:
+                        agent = app_routines.load_state(folder).get("agent")
+                        agent_id = (agent.get("session_id") or "") if isinstance(agent, dict) else ""
+                    self.send_html(_stamp_static_urls(application_page(
+                        target.read_text(encoding="utf-8"), app_id=name, agent_id=agent_id,
+                        kit_url=_static_asset_url("app-kit.js"))))
                     break
             else:
                 self.send_json({"error": f"not found: {path}"}, 404)
@@ -46128,6 +46140,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         body, enc = self._maybe_gzip(body, ct)
         self.send_response(200)
         self.send_header("Content-Type", ct)
+        self._send_server_timing()
         # Never cache the single-page app. The server re-reads index.html on every
         # request; this header stops browsers from serving a stale JS snapshot
         # after edits (main cause of "I clicked the button and nothing happened").

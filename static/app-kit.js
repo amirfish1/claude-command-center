@@ -111,7 +111,7 @@
   // says whether the app has one; then 'yes' or 'none'.
   var AGENT_KEY = 'ccc-app-agent:' + APP;
   var ready = { content: null, cached: false, agentAt: null, agentStart: null, discoveryAt: null,
-    remembered: false, agent: 'unknown', sent: false, hidden: document.hidden };
+    remembered: false, bootstrapped: false, agent: 'unknown', sent: false, hidden: document.hidden };
   var loadId = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
   // Keep timing attribution with the readiness sample. Never include URLs,
   // session IDs or response bodies; the embedded pane has its own time origin.
@@ -193,6 +193,7 @@
       agent_start_ms: ready.agentStart == null ? null : Math.round(ready.agentStart),
       agent_discovery_ms: ready.discoveryAt == null ? null : Math.round(ready.discoveryAt),
       agent_remembered: ready.remembered,
+      agent_bootstrapped: ready.bootstrapped,
       agent_cached: !!ready.agentCached,
       agent_timing: ready.agentAt == null ? null : timingSnapshot(frameFor[agentId] && frameFor[agentId].contentWindow, agentId) };
     window.cccAppReady = out;
@@ -557,11 +558,24 @@
     if (!content) return;
     if (!thumb) {
       buildShell(content);
-      // Open the agent this browser saw last time straight away, before the
-      // server has answered; refresh() corrects it if the app's agent changed.
+      // The no-store app HTML supplies the current id, even in a new browser.
+      // Older servers fall back to the last id this browser saw. refresh()
+      // still reconciles a replacement that happens after this page request.
       var known = '';
-      try { known = localStorage.getItem(AGENT_KEY) || ''; } catch (_) {}
-      if (/^[A-Za-z0-9_.:-]{1,200}$/.test(known)) { agentId = known; ready.remembered = true; ready.agent = 'yes'; showSession(known, 'Agent'); }
+      var provided;
+      try {
+        var info = JSON.parse(document.getElementById('cccAppAgent')?.textContent || 'null');
+        if (info?.app === APP && typeof info.session_id === 'string') provided = info.session_id;
+      } catch (_) {}
+      ready.bootstrapped = provided !== undefined;
+      if (ready.bootstrapped) known = provided;
+      else { try { known = localStorage.getItem(AGENT_KEY) || ''; } catch (_) {} }
+      if (/^[A-Za-z0-9_.:-]{1,200}$/.test(known)) {
+        agentId = known; ready.remembered = !ready.bootstrapped; ready.agent = 'yes';
+        showSession(known, 'Agent');
+      } else if (ready.bootstrapped && !known) {
+        ready.agent = 'none'; noAgent();
+      }
     } else { ready.agent = 'none'; }
     buildRoutines(content);
     refresh();
