@@ -68966,12 +68966,14 @@
   function renderToolInputDisclosure(block, conversationId, line) {
     if (!block || !block.has_input || !conversationId || !line) return '';
     const toolUseId = String(block.id || block.tool_use_id || '').trim();
-    return '<details class="tool-command-disclosure tool-input-disclosure"'
+    const structured = toolDisplayName(block.name) === 'StructuredOutput';
+    return '<details class="tool-command-disclosure tool-input-disclosure'
+      + (structured ? ' tool-structured-output' : '') + '"'
       + ' data-conversation-id="' + escapeAttr(conversationId) + '"'
       + ' data-jsonl-line="' + escapeAttr(line) + '"'
       + ' data-tool-use-id="' + escapeAttr(toolUseId) + '"'
       + (convVerboseOn() ? ' open' : '') + '>'
-      + '<summary><span>Input</span></summary>'
+      + '<summary><span>' + (structured ? 'View structured output' : 'Input') + '</span></summary>'
       + '<pre class="tool-input-payload">Loading…</pre>'
       + '</details>';
   }
@@ -68989,7 +68991,7 @@
       const url = '/api/conversations/' + encodeURIComponent(convId)
         + '/tool-input?line=' + encodeURIComponent(line)
         + '&tool_use_id=' + encodeURIComponent(toolUseId);
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await fetch(url, { cache: 'no-store', cccPriority: 'user' });
       const data = await res.json();
       if (!res.ok || !data.ok || typeof data.input !== 'string') {
         throw new Error(data.error || 'Tool input unavailable');

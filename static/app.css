@@ -32336,6 +32336,9 @@ body.conv-compact.conv-compact .conversations-view .msg-ts,
 body.conv-compact.conv-compact .conversations-view .line-num,
 body.conv-compact.conv-compact .conversations-view .assistant-message-actions,
 body.conv-compact.conv-compact .conversations-view details.tool-command-disclosure { display: none !important; }
+/* A schema response is the answer itself, carried in the tool arguments.
+   Keep it reachable when routine input disclosures are hidden. */
+body.conv-compact.conv-compact .conversations-view details.tool-command-disclosure.tool-structured-output { display: block !important; }
 body.conv-compact.conv-compact .conversations-view .event.attachment-event:not(.hook-failed) { display: none !important; }
 /* Every assistant text message keeps its speak/copy actions and timestamp
    (a long single-turn Codex run has many narration messages, none of which
