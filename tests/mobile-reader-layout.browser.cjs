@@ -171,7 +171,7 @@ const fixture = `
         assert.ok(home.line.height <= 46, 'CI, all engines and money occupy one row');
         assert.ok(home.entries.length >= 5, 'CI, three engines and money');
         for (const entry of home.entries) assert.ok(entry.top >= home.line.top && entry.bottom <= home.line.bottom, 'all status entries share the row');
-        assert.match(home.text, /GH 98%.*Self 84%/);
+        assert.match(home.text, /(?:GitHub|GH) 98%.*Self 84%/);
         await page.click('.mobile-home-status .local-ci-mobile-toggle');
         assert.equal(await page.$eval('.mobile-home-status', el => el.getBoundingClientRect().height <= 46), true, 'CI details float without growing the status line');
         await page.keyboard.press('Escape');
@@ -191,10 +191,24 @@ const fixture = `
           list.append(rows); list.scrollTop = 180;
           list.dispatchEvent(new Event('scroll'));
         });
+        const foldedTop = await page.$eval('#convListPanel', el => el.getBoundingClientRect().top);
+        assert.ok(Math.abs((await page.$eval('.sidebar-header-brand',el=>el.getBoundingClientRect().top))-home.brand.top)<1, 'full fold keeps brand pinned');
+        await page.evaluate(() => {
+          const list = document.getElementById('convList'); list.scrollTop = 48; list.dispatchEvent(new Event('scroll'));
+        });
+        const partialTop = await page.$eval('#convListPanel', el => el.getBoundingClientRect().top);
+        assert.ok(partialTop > foldedTop + 10, 'partial scroll reveals part of the full dashboard header');
+        assert.equal(await page.$eval('.mobile-home-status', el => getComputedStyle(el).display !== 'none'), true);
+        if (width === 390) await page.screenshot({path:'/tmp/ccc-mobile-home-partial-fold.png'});
+        await page.evaluate(() => {
+          const list = document.getElementById('convList'); list.scrollTop = 180; list.dispatchEvent(new Event('scroll'));
+        });
         await page.waitForFunction(() => document.body.classList.contains('mobile-home-collapsed'));
-        // The status line fades out first; it leaves the layout when the fold ends.
+        // The status line slides into the top; it leaves the layout at full scroll progress.
         await page.waitForFunction(() => getComputedStyle(document.querySelector('.mobile-home-status')).display === 'none');
         assert.equal(await page.$eval('.new-session-panel', el => getComputedStyle(el).display), 'none');
+        assert.ok(Math.abs((await page.$eval('.sidebar-header-brand',el=>el.getBoundingClientRect().top))-home.brand.top)<1, 'partial-to-full fold keeps brand pinned');
+        assert.ok(await page.$eval('.sidebar-header-brand',el=>el.querySelector('.sh-title-main').getBoundingClientRect().top>=el.getBoundingClientRect().top), 'brand title stays visible inside its row');
         assert.equal(await page.$eval('.mobile-home-new', el => el.getBoundingClientRect().width), 44);
         assert.ok(await page.$eval('.sidebar-header-brand', el => el.getBoundingClientRect().height > 0 && getComputedStyle(el).opacity !== '0'));
         assert.ok(await page.$eval('.mobile-home-new', el => {const r=el.getBoundingClientRect();return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));}), 'compact New is visible and clickable');

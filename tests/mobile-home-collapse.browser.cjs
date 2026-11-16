@@ -7,11 +7,11 @@ const path = require('node:path');
 const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
 const root = path.resolve(__dirname, '..');
-const source = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
+const source = fs.readFileSync(process.env.CCC_COLLAPSE_SOURCE || path.join(root, 'static/app.js'), 'utf8');
 const controller = source.slice(source.indexOf('(function initMobileHomeCollapse()'),
-  source.indexOf('// Preserve the desktop header', source.indexOf('(function initMobileHomeCollapse()')));
+  source.indexOf('// CI, usage and savings', source.indexOf('(function initMobileHomeCollapse()')));
 const css = fs.readFileSync(path.join(root, 'static/app.css'), 'utf8');
-const html = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/app.css"><style>
 body {display:block;padding:0} .sidebar {width:100%;height:100dvh;max-width:none;overflow:hidden}
 #convList {flex:1;min-height:0;overflow:auto} .test-row {padding:20px;border-bottom:1px solid var(--border)}
@@ -46,36 +46,54 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     for (const width of [390,320,768]) {
       await page.setViewport({width,height:844});
       await page.goto(url,{waitUntil:'load'});
-      await scroll(180);
-      assert.equal(await page.evaluate(()=>document.getAnimations().every(a=>
-        a.effect.getKeyframes().every(frame=>!('height' in frame) && !('paddingTop' in frame)))),true,'motion stays off the layout path');
+      const geometry = () => page.evaluate(() => {
+        const rect = el => el.getBoundingClientRect().toJSON();
+        return {panel:rect(document.querySelector('#convListPanel')),
+          status:rect(document.querySelector('.mobile-home-status')),
+          newPanel:rect(document.querySelector('.new-session-panel')),
+          brand:rect(document.querySelector('.sidebar-header-brand')),
+          opacity:getComputedStyle(document.querySelector('.mobile-home-status')).opacity};
+      });
+      const expanded = await geometry();
+      const trace = [];
+      // Small scrolls must already move the header, and stopping the gesture
+      // must stop the header too. A timed threshold animation fails this.
+      for (const top of [24,48,80,120,180]) {
+        await scroll(top);
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        const frame = await geometry();
+        assert.equal(await page.evaluate(()=>document.getAnimations().every(a=>
+          a.effect.getKeyframes().every(frame=>!('height' in frame) && !('paddingTop' in frame)))),true,'motion stays off the layout path');
+        assert.ok(frame.panel.top < (trace.at(-1)?.frame.panel.top ?? expanded.panel.top) - 1,
+          'each scroll step progressively hides the header');
+        assert.ok(frame.panel.bottom >= 843, 'fold fills the viewport');
+        assert.ok(Math.abs(frame.brand.top - expanded.brand.top) < 1, 'brand stays pinned');
+        if (top < 164) {
+          assert.ok(frame.status.top < expanded.status.top, 'status slides upward instead of fading');
+          assert.ok(frame.newPanel.top < expanded.newPanel.top, 'new-session controls slide upward');
+          assert.equal(frame.opacity, '1', 'controls disappear by clipping at the top');
+        }
+        trace.push({top,frame});
+        await delay(70);
+        assert.ok(Math.abs((await geometry()).panel.top-frame.panel.top)<1, 'motion pauses with the finger');
+        if (process.env.CCC_COLLAPSE_SCREENSHOTS && width === 390) {
+          await page.screenshot({path:path.join(process.env.CCC_COLLAPSE_SCREENSHOTS, `scroll-${top}.png`)});
+        }
+      }
       await settled();
       assert.equal(await page.evaluate(()=>document.body.classList.contains('mobile-home-collapsed')),true);
-      const trace = await page.evaluate(async () => {
-        const list = document.querySelector('#convList'), panel = document.querySelector('#convListPanel');
-        list.scrollTop = 0;
-        const start = performance.now(), samples = [];
-        const sample = () => {const rect=panel.getBoundingClientRect();samples.push({ms:performance.now()-start,y:rect.top,bottom:rect.bottom});};
-        sample(); list.dispatchEvent(new Event('scroll')); sample();
-        for (let i=0;i<25;i++) {await new Promise(requestAnimationFrame);sample();}
-        return samples;
-      });
-      assert.ok(Math.abs(trace[1].y-trace[0].y)<2, 'top-of-list must not jump synchronously');
-      assert.ok(trace.at(-1).y-trace[0].y>40,'header returns');
-      assert.ok(new Set(trace.map(s=>Math.round(s.y))).size>=4,'header has intermediate positions');
-      for (const sample of trace) assert.ok(sample.bottom>=843,'slide fills the viewport, including cleanup');
-      for (let i=1;i<trace.length;i++) assert.ok(trace[i].y>=trace[i-1].y-1,'reveal is monotonic');
-      traces.push({width,trace});
-      // Reversing mid-fold preserves the current position.
-      await scroll(180); await delay(55);
-      const reversal = await page.evaluate(()=>{
-        const panel=document.querySelector('#convListPanel'), list=document.querySelector('#convList');
-        const before=panel.getBoundingClientRect().top;
-        list.scrollTop=0;list.dispatchEvent(new Event('scroll'));
-        return Math.abs(panel.getBoundingClientRect().top-before);
-      });
-      assert.ok(reversal<2,'reverse starts at the interrupted height');
+      assert.equal(await page.$eval('.new-session-panel',el=>getComputedStyle(el).display),'none');
+      // Reversing the gesture retraces the same positions without jumps.
+      for (const top of [120,80,48,24,0]) {
+        await scroll(top);
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        const frame = await geometry();
+        const expected = top ? trace.find(sample=>sample.top === top).frame : expanded;
+        assert.ok(Math.abs(frame.panel.top-expected.panel.top)<1, 'reverse retraces the scroll-linked fold');
+        assert.ok(frame.panel.bottom>=843, 'reveal fills the viewport');
+      }
       await settled();
+      traces.push({width,trace});
       await scroll(180); await settled();
       assert.equal(await page.$eval('.new-session-panel',el=>el.inert),true);
       await page.click('.mobile-home-new');
@@ -106,15 +124,17 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     await settled();
     assert.equal(await page.evaluate(()=>document.body.classList.contains('mobile-home-collapsed')),false);
     await page.goto(url);
-    await scroll(180);
+    await scroll(80);
     // Changing the preference mid-transition cleans up all temporary geometry.
     await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);
+    assert.equal(await page.$$eval('.mobile-home-folding, .mobile-home-list-moving',els=>els.length),0);
     await page.goto(url);await scroll(180);
     assert.equal(await page.$$eval('.mobile-home-folding',els=>els.length),0);
     await scroll(0);
     assert.equal(await page.evaluate(()=>document.body.classList.contains('mobile-home-collapsed')),false);
     await page.emulateMediaFeatures([]);
     await scroll(180);await settled();
+    await scroll(80);
     await page.setViewport({width:1440,height:900});
     await page.waitForFunction(()=>!document.body.classList.contains('mobile-home-collapsed'));
     assert.equal(await page.$eval('.new-session-panel',el=>el.inert),false);

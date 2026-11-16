@@ -35471,10 +35471,6 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
   body.mobile-home-collapsed .mobile-home-search { font-size: 28px; }
   .mobile-home-quick:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 }
-@media (max-width: 1200px) {
-  body.mobile-home-collapsed .sidebar .sidebar-header-brand .sh-title-main { font-size: 15px; }
-  body.mobile-home-collapsed .sidebar .sidebar-header-brand .sh-app-icon { width: 24px; height: 24px; }
-}
 
 .simple-card-archive-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .simple-card-archive-btn:disabled { opacity: .45; cursor: wait; }
