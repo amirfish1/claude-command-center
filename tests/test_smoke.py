@@ -12216,7 +12216,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         self.assertTrue(result["ok"])
         turn_start = next(params for method, params in calls if method == "turn/start")
         images = [i for i in turn_start.get("input", []) if i.get("type") == "localImage"]
-        self.assertEqual([i.get("path") for i in images], [str(image)])
+        self.assertEqual([i.get("path") for i in images], [str(image.resolve())])
 
     def test_spawn_codex_attaches_command_center_pasted_images(self):
         """Pasted image paths in Codex prompts go out as localImage inputs."""
@@ -12644,7 +12644,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         popen.assert_not_called()
         turn_start = next(params for method, params in calls if method == "turn/start")
         images = [i for i in turn_start.get("input", []) if i.get("type") == "localImage"]
-        self.assertEqual([i.get("path") for i in images], [str(image)])
+        self.assertEqual([i.get("path") for i in images], [str(image.resolve())])
 
     def test_resolve_cursor_bin_honors_env(self):
         server = self.server
@@ -14191,7 +14191,10 @@ class TestRepoContextHelpers(unittest.TestCase):
     def test_codex_app_server_prefers_managed_socket(self):
         server = self.server
         from ccc_server import codex_managed_recovery as recovery
-        identity = dict(recovery.process_identity(), socket_device=1, socket_inode=2,
+        # process_identity() reads Linux /proc; use a synthetic identity so the
+        # test runs on macOS too.
+        proc_identity = {"pid": os.getpid(), "start_ticks": 1, "boot_id": "test-boot"}
+        identity = dict(proc_identity, socket_device=1, socket_inode=2,
                         directory_device=1, directory_inode=3,
                         binary_sha256=next(iter(recovery.SUPPORTED)), version='0.169.0',
                         protocol_sha256=next(iter(recovery.SUPPORTED.values()))[1])
