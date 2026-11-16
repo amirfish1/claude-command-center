@@ -148,6 +148,7 @@ def test_restart_is_recorded_only_after_drain_succeeds(monkeypatch):
     namespace = {'sys': SimpleNamespace(stdout=sys.stdout, stderr=sys.stderr, platform='linux', executable=sys.executable),
                  'threading': SimpleNamespace(Timer=ImmediateTimer),
                  'os': SimpleNamespace(execvp=lambda executable, argv: recorded.append(('exec',))),
+                 '_RESTART_OUTCOME': {},
                  '_server_launch_argv': lambda: ['server.py'],
                  '_quiesce_http_for_restart': lambda: False}
     exec(compile(ast.Module(body=[function], type_ignores=[]), '<shipped scheduler>', 'exec'), namespace)

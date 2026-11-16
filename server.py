@@ -23360,6 +23360,8 @@ _HTTPD_SERVER = None
 _ACCEPT_PAUSED = threading.Event()
 _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT_REQUESTS = {}  # id(handler) -> path; long-lived streams excluded
+_INFLIGHT_READ_SOCKETS = {}
+_RESTART_OUTCOME = {}
 
 
 def _inflight_begin(handler):
@@ -23367,12 +23369,15 @@ def _inflight_begin(handler):
         if _ACCEPT_PAUSED.is_set():
             return False
         _INFLIGHT_REQUESTS[id(handler)] = str(getattr(handler, "path", "") or "")
+        if getattr(handler, "command", "") in ("GET", "HEAD"):
+            _INFLIGHT_READ_SOCKETS[id(handler)] = getattr(handler, "connection", None)
         return True
 
 
 def _inflight_end(handler):
     with _INFLIGHT_LOCK:
         _INFLIGHT_REQUESTS.pop(id(handler), None)
+        _INFLIGHT_READ_SOCKETS.pop(id(handler), None)
 
 
 def _inflight_snapshot():
@@ -23388,6 +23393,20 @@ def _drain_inflight_requests(timeout=_RESTART_DRAIN_TIMEOUT_S, exclude=None, pol
     deadline = time.monotonic() + max(0.0, float(timeout))
     while True:
         with _INFLIGHT_LOCK:
+            # A disconnected read cannot receive a result. Accepted writes still
+            # drain even after disconnect: losing their reply does not cancel
+            # the mutation or make it safe to interrupt.
+            for key, conn in list(_INFLIGHT_READ_SOCKETS.items()):
+                if key not in _INFLIGHT_REQUESTS or conn is None:
+                    continue
+                try:
+                    readable, _, _ = select.select([conn], [], [], 0)
+                    if readable and not conn.recv(1, socket.MSG_PEEK):
+                        _INFLIGHT_REQUESTS.pop(key, None)
+                        _INFLIGHT_READ_SOCKETS.pop(key, None)
+                except (OSError, ValueError):
+                    _INFLIGHT_REQUESTS.pop(key, None)
+                    _INFLIGHT_READ_SOCKETS.pop(key, None)
             left = [p for k, p in _INFLIGHT_REQUESTS.items() if k != exclude]
         if not left or time.monotonic() >= deadline:
             return left
@@ -23472,12 +23491,12 @@ def _quiesce_http_for_stop(timeout=_RESTART_DRAIN_TIMEOUT_S):
     return left
 
 
-def _quiesce_http_for_restart(timeout=_RESTART_DRAIN_TIMEOUT_S):
-    """Drain before exec or a service-manager restart; cancel if still busy."""
+def _quiesce_http_for_restart(timeout=_RESTART_DRAIN_TIMEOUT_S, *, force=False):
+    """Drain before restart; explicit recovery may outlive stuck requests."""
     server = _HTTPD_SERVER
     if server is None:
         return True
-    if _quiesce_http_for_stop(timeout):
+    if _quiesce_http_for_stop(timeout) and not force:
         _ACCEPT_PAUSED.clear()
         print("[restart] cancelled: requests are still running", flush=True)
         return False
@@ -23541,17 +23560,21 @@ def _serve_http(server):
         server.server_close()
 
 
-def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart", protected=None):
+def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart", protected=None, force=False):
     """Arm a launchctl kickstart or os.execvp() that replaces this process with a fresh
     `python server.py` after `delay` seconds. Called AFTER the HTTP response
     is flushed so the client sees {ok:true} before the socket dies."""
+    _RESTART_OUTCOME.clear()
+    _RESTART_OUTCOME.update(state="draining", reason=reason)
+
     def _go():
         try:
             sys.stdout.flush()
             sys.stderr.flush()
         except Exception:
             pass
-        if not _quiesce_http_for_restart():
+        if not (_quiesce_http_for_restart(force=True) if force else _quiesce_http_for_restart()):
+            _RESTART_OUTCOME.update(state="cancelled", reason="requests are still running")
             if protected and protected.get("drain"):
                 resumed = _control_plane_request("drain.release", {
                     "expected": protected["drain"],
@@ -23588,6 +23611,7 @@ def _schedule_restart(delay=0.5, *, caller="internal", reason="scheduled-restart
                     "expected": protected["drain"],
                     "reason": "dashboard restart failed",
                 })
+            _RESTART_OUTCOME.update(state="failed", reason=str(exc))
             print(f"[restart] failed: {exc}", flush=True)
     t = threading.Timer(delay, _go)
     t.daemon = True
@@ -34851,6 +34875,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "pid": os.getpid(),
                 "started_at": _SERVER_START_TS,
                 "uptime_s": round(time.time() - _SERVER_START_TS),
+                "restart_outcome": dict(_RESTART_OUTCOME),
                 # Build stamp: git HEAD this process loaded at start, frozen
                 # for the process lifetime (see _compute_server_code_rev).
                 # `ccc doctor` diffs this against disk HEAD to tell "code
@@ -37823,7 +37848,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 pass
             from ccc_server import restart_audit
             _schedule_restart(caller=restart_audit.request_caller(self, _rbody), reason=path,
-                              protected=protected)
+                              protected=protected,
+                              force=not (isinstance(_rbody, dict) and _rbody.get("routine")))
             return
         if path == "/api/template-gallery/open":
             # Open the editable gallery source for the local CCC install.

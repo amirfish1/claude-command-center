@@ -1943,6 +1943,8 @@ def _wait_dashboard_back(base, before_pid, timeout=120, before_started_at=None):
             v = _get_json(base, "/api/version", timeout=5)
         except (OSError, ValueError):
             continue
+        if (v.get("restart_outcome") or {}).get("state") in ("cancelled", "failed"):
+            return v
         if before_started_at and v.get("started_at") \
                 and v.get("started_at") != before_started_at:
             return v
@@ -1956,15 +1958,20 @@ def _restart_now(base, target, wait=True, routine=False, reservation=None):
     if reservation is not None:
         _finish_restart_reservation(reservation, status)
     if status == 200 and payload.get("ok", True):
-        print(f"ccc restart: {target} restart started")
+        print(f"ccc restart: {target} restart requested")
         if target != "worker" and wait:
             b = payload.get("before") or {}
             back = _wait_dashboard_back(base, b.get("pid"), before_started_at=b.get("started_at"))
+            outcome = (back or {}).get("restart_outcome") or {}
+            if outcome.get("state") in ("cancelled", "failed"):
+                print(f"ccc restart: {outcome['state']}: {outcome.get('reason')}", file=sys.stderr)
+                return 503, {"ok": False, "error": outcome.get("reason"), "restart_outcome": outcome}
             if back:
                 _note_dashboard_back()
                 print(f"ccc restart: dashboard back (pid {back.get('pid')}, rev {back.get('code_rev') or '?'})")
             else:
-                print("ccc restart: dashboard has not answered yet; check `ccc doctor`", file=sys.stderr)
+                print("ccc restart: new dashboard generation not observed; check `ccc doctor`", file=sys.stderr)
+                return 504, {"ok": False, "error": "restart outcome unknown"}
         return 0, payload
     return status, payload
 
@@ -3481,7 +3488,7 @@ def main(argv=None):
     p.add_argument("target", nargs="?", default="all", choices=("all", "dashboard", "worker"),
                    help="all (default): worker then dashboard; dashboard; or worker only")
     p.add_argument("--now", action="store_true",
-                   help="skip the debounce window (a human asked for it now)")
+                   help="skip batching and restart after the bounded HTTP drain even if requests remain")
     p.add_argument("--run-pending", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--due", type=float, default=0, help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_restart)
