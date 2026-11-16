@@ -15183,7 +15183,13 @@ def _strip_host_system_instruction(text):
     """
     if text is None:
         return ""
-    return _HOST_SYSTEM_INSTRUCTION_RE.sub("", str(text), count=1)
+    visible = _HOST_SYSTEM_INSTRUCTION_RE.sub("", str(text), count=1)
+    # Spawn summaries and native titles may stop inside a machine wrapper.
+    # There is no visible ask to recover from that fragment; let the caller
+    # use its next title source instead of displaying the injected rules.
+    if re.match(r"^\s*<(?:system_instruction|astra-guardrail)>", visible, re.IGNORECASE):
+        return ""
+    return visible
 
 
 def _extract_user_prompt_text(ev):
@@ -18660,8 +18666,9 @@ def _archive_overlay_codex_sessions(rows, now=None):
             _strip_host_system_instruction(spawn.get("prompt") or spawn.get("command_summary") or "")
         ).strip()
         title = " ".join(str(
-            names.get(sid) or task_titles.get(sid) or row.get("title")
-            or _strip_image_markup(prompt) or spawn.get("name") or "New Codex session"
+            names.get(sid) or task_titles.get(sid)
+            or _codex_display_name(row, title=row.get("title"), first_message=prompt)
+            or spawn.get("name") or "New Codex session"
         ).split())[:200]
         out.append({
             "id": sid, "session_id": sid, "engine": "codex", "source": "codex",
@@ -20054,7 +20061,7 @@ def _rehydrate_archive_cached_rows(rows):
             # still shows it.
             if sid and not row.get("first_message"):
                 spawn = spawn_registry_by_sid.get(sid) or {}
-                prompt = str(spawn.get("prompt") or "").strip()
+                prompt = _strip_host_system_instruction(spawn.get("prompt") or "").strip()
                 if prompt:
                     if not row.get("display_name"):
                         row["display_name"] = _truncate_session_name(prompt)

@@ -68,3 +68,25 @@ def test_empty_index_title_uses_launch_context_without_faking_a_prompt(monkeypat
     assert rows["renamed"]["display_name"] == "My topic"
     assert rows["renamed"]["name_overridden"]
     assert rows["titled"]["display_name"] == "Explain CI runners"
+
+
+def test_new_thread_overlay_strips_guardrail_before_clipping(monkeypatch):
+    guard = '<astra-guardrail>\n' + 'machine instructions ' * 30 + '\n</astra-guardrail>\n\n'
+    monkeypatch.setattr(server, '_codex_fetch_threads', lambda **kw: [
+        {'id': 'full', 'title': guard + 'Compare session viewer designs', 'updated_at': 100000},
+        {'id': 'partial', 'title': guard[:200], 'updated_at': 100000},
+        {'id': 'launch', 'title': '', 'updated_at': 100000},
+        {'id': 'renamed', 'title': guard + 'Original ask', 'updated_at': 100000},
+    ])
+    monkeypatch.setattr(server, '_load_conversation_lifecycle_sets', lambda: (set(), set()))
+    monkeypatch.setattr(server, '_load_session_name_overrides', lambda: {'renamed': 'My title'})
+    monkeypatch.setattr(server, '_auto_titled_session_ids', lambda: {})
+    monkeypatch.setattr(server, '_spawn_registry_entries_by_session', lambda **kw: {
+        'launch': {'prompt': guard[:200], 'name': 'Launching comparison'},
+    })
+    rows = {r['session_id']: r for r in server._archive_overlay_codex_sessions([], now=100100)}
+    assert rows['full']['display_name'] == 'Compare session viewer designs'
+    assert rows['partial']['display_name'] == 'New Codex session'
+    assert rows['launch']['display_name'] == 'Launching comparison'
+    assert rows['launch']['first_message'] == ''
+    assert rows['renamed']['display_name'] == 'My title'
