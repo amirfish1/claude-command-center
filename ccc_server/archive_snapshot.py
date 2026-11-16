@@ -82,6 +82,28 @@ def _entries(snapshot):
     return valid
 
 
+def upgrade_driver_metadata(snapshot, schema_version, build_id):
+    """Keep the last usable list during the v15→v16 provenance rebuild.
+
+    No driver or owner timestamp can be inferred from an old row. Drop its
+    freshness signature so the background builder still reparses transcripts.
+    Other schema transitions retain their normal incompatibility checks.
+    """
+    if (schema_version, build_id) != (16, "16") or (
+        snapshot.get("schema_version"), snapshot.get("build_id")
+    ) != (15, "15"):
+        return snapshot
+    entries = {
+        key: dict(entry, cached_at=0, signature=None, conversations=[
+            dict(row, turn_driver=None, last_owner_input_at=0)
+            for row in entry["conversations"] if isinstance(row, dict)
+        ])
+        for key, entry in _entries(snapshot).items()
+    }
+    return dict(snapshot, schema_version=schema_version, build_id=build_id,
+                entries=entries, signature_maps={})
+
+
 def _merge(previous, incoming):
     if not isinstance(previous, dict) or any(
         previous.get(key) != incoming.get(key) for key in ("schema_version", "build_id")

@@ -16807,6 +16807,8 @@ def _load_archive_response_cache():
 
 
 def _read_archive_response_cache_file():
+    from ccc_server import archive_snapshot
+
     try:
         with _ARCHIVE_RESPONSE_CACHE_FILE.open("r") as f:
             data = json.load(f)
@@ -16814,6 +16816,9 @@ def _read_archive_response_cache_file():
         return
     if not isinstance(data, dict):
         return
+    data = archive_snapshot.upgrade_driver_metadata(
+        data, _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION, _ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+    )
     if data.get("schema_version") != _ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION:
         return
     if data.get("build_id") != _ARCHIVE_RESPONSE_CACHE_BUILD_ID:

@@ -1,0 +1,1 @@
+- Keep the saved conversation list available while new turn-driver metadata is rebuilt; old provenance stays explicitly unknown until it is observed.

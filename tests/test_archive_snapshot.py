@@ -193,3 +193,40 @@ def test_server_rebuilds_rows_cached_before_short_action_labels(tmp_path, monkey
     else:
         assert server._ARCHIVE_RESPONSE_CACHE["base"]["conversations"] == [{"session_id": "session-a"}]
         assert "sig-a" in server._ARCHIVE_STATMAP_BY_SIG
+
+
+def test_driver_upgrade_serves_unknown_rows_while_refresh_runs(tmp_path, monkeypatch):
+    import server
+
+    key = server._archive_response_cache_key()
+    data = snapshot(key)
+    data.update(schema_version=15, build_id="15")
+    cache_file = tmp_path / "archive.json"
+    cache_file.write_text(json.dumps(data))
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", cache_file)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_LOADED", False)
+    monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE", {})
+    monkeypatch.setattr(server, "_ARCHIVE_STATMAP_BY_SIG", {})
+    monkeypatch.setattr(server, "_archive_serve_cache", {})
+    monkeypatch.setattr(server, "_archive_refresh_load_blocked", lambda now: False)
+    monkeypatch.setattr(server, "_archive_refresh_slot_available", lambda *args: True)
+    monkeypatch.setattr(server, "_archive_refresh_mark_started", lambda *args: None)
+    monkeypatch.setattr(server, "_overlay_conversation_lifecycle_flags", lambda rows: rows)
+    started = []
+
+    class Detached:
+        def __init__(self, **kwargs):
+            started.append(kwargs)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(server.threading, "Thread", Detached)
+    monkeypatch.setattr(server, "_archive_compute_rows", lambda *args, **kwargs: pytest.fail("synchronous rebuild"))
+    rows, cached, _ = server._archive_serve_rows_versioned(key, {})
+    assert cached
+    assert rows == [{"session_id": "session-a", "turn_driver": None, "last_owner_input_at": 0}]
+    assert server._ARCHIVE_RESPONSE_CACHE[key]["signature"] is None
+    assert server._ARCHIVE_STATMAP_BY_SIG == {}
+    assert started[0]["target"] is server._archive_serve_refresh
+    assert json.loads(cache_file.read_text()) == data
