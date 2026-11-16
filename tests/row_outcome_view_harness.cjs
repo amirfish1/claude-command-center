@@ -3,7 +3,8 @@
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8')
+  + '\n' + fs.readFileSync(require.resolve('../static/conversation-text.js'), 'utf8');
 
 function fnSource(name) {
   const start = app.indexOf('  function ' + name + '(');
