@@ -239,6 +239,12 @@ replaces that tail. `agent_cached` in each readiness sample distinguishes
 this saved agent view from the app content's own `cached` field. A failed
 load without a saved conversation does not announce a ready agent pane.
 
+Readiness timing includes the shared script, stylesheet and agent bootstrap
+downloads, their encoded and decoded sizes, and their HTTP protocol. Static
+responses also provide server wall and CPU timing, so a slow transfer can be
+distinguished from work preparing an asset. These snapshots contain resource
+categories rather than URLs or session identifiers.
+
 ### Alerts outside the dashboard
 
 Routine notifications can also go to your phone. Create
