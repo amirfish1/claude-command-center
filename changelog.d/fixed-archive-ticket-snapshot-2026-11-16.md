@@ -1,0 +1,1 @@
+- Keep remote ticket title refreshes in the dashboard instead of blocking every detached archive rebuild on remote queues.

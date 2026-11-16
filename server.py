@@ -3747,6 +3747,9 @@ _WT_ITEMS_SNAPSHOT_TTL_S = 30.0
 _wt_items_memo = {"at": 0.0, "items": None}
 _wt_items_memo_lock = threading.Lock()
 _wt_items_fetch_lock = threading.Lock()
+# Detached archive processes consume the dashboard's display snapshot. Their
+# short lifetime makes every network-backed ticket cache cold again.
+_WT_DISPLAY_SNAPSHOT_ONLY = False
 
 
 def _wt_list_items_display_cached(max_age=_WT_ITEMS_SNAPSHOT_TTL_S):
@@ -3901,7 +3904,8 @@ def _apply_watchtower_worker_display_names(rows):
             sid_to_worker[sid] = w
         if wid and sid:
             worker_ids[wid] = sid
-    items = _wt_list_items_display_cached()
+    items = (_wt_list_items_snapshot_only() if _WT_DISPLAY_SNAPSHOT_ONLY
+             else _wt_list_items_display_cached())
     titles_by_sid = {}
     for it in items:
         if not isinstance(it, dict):
@@ -19454,6 +19458,8 @@ def _start_gc_freeze_thread():
 
 def _archive_refresh_worker_main(encoded_options, output_path):
     """Build one archive snapshot in a short-lived, low-priority process."""
+    global _WT_DISPLAY_SNAPSHOT_ONLY
+    _WT_DISPLAY_SNAPSHOT_ONLY = True
     try:
         # This is the __main__ dispatch for --archive-refresh-worker, which
         # exits via SystemExit before ever reaching main()'s normal startup
@@ -19583,6 +19589,9 @@ def _archive_compute_rows_detached(key, cache_options, serve_generation):
     exit instead of permanently raising the daemon's RSS. The parent only
     decodes the completed row snapshot and publishes it atomically.
     """
+    # Keep ticket titles fresh in the long-lived dashboard, without making
+    # every one-shot archive build synchronously fetch all remote queues.
+    _wt_list_items_for_requests()
     output_fd, output_name = tempfile.mkstemp(
         prefix=_ARCHIVE_REFRESH_RESULT_PREFIX, suffix=".json", dir=_archive_refresh_result_dir(),
     )
