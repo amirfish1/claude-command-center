@@ -115,7 +115,11 @@
     const opened = open(id, false, pageLoad);
     if (opened || !pageLoad) restored = true;
     // The early frame came from a saved app list: drop it if the app is gone.
-    if (!opened && frame && !active && frame.dataset.early) { frame.remove(); frame = undefined; }
+    if (!opened && frame && !active && frame.dataset.early) {
+      document.documentElement.classList.remove('ccc-mobile-app-open');
+      document.body.classList.remove('ccc-mobile-app-open');
+      frame.remove(); frame = undefined;
+    }
   }
   function prewarm() {
     if (frame || active || document.hidden || mobile()) return;

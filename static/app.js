@@ -2794,17 +2794,24 @@
   let _startupApiReleaseTimer = null;
 
   const _archiveBootstrapUrl = '/api/conversations/list?window=' + encodeURIComponent(_archiveBootstrapWindow) + '&stale_ok=1';
-  const _archiveBootstrapController = new AbortController();
-  const _archiveBootstrapTimeout = setTimeout(() => {
-    try { _archiveBootstrapController.abort(); } catch (_) {}
-  }, 45 * 1000);
-  // A single-conversation popout never draws the list, so it must not ask
-  // for it: this is the heaviest read the server has, and an app's agent pane
-  // boots one of these popouts on every open.
-  const _archiveBootstrapFetchPromise = (window.__CCC_CONVERSATION_POPOUT__
-    ? Promise.resolve(null)
-    : backgroundApiFetch(_archiveBootstrapUrl, { signal: _archiveBootstrapController.signal }).catch(() => null)
-  ).finally(() => clearTimeout(_archiveBootstrapTimeout));
+  // A popout never draws the list. A dashboard covered by an app waits
+  // until Sessions is visible, including after the app's ready message.
+  // Start the timeout with the request, not while waiting for the user.
+  const _archiveBootstrapFetchPromise = Promise.resolve().then(async () => {
+    if (window.__CCC_CONVERSATION_POPOUT__) return null;
+    await _whenDashboardUncovered();
+    const _archiveBootstrapController = new AbortController();
+    const _archiveBootstrapTimeout = setTimeout(() => {
+      try { _archiveBootstrapController.abort(); } catch (_) {}
+    }, 45 * 1000);
+    try {
+      return await backgroundApiFetch(_archiveBootstrapUrl, { signal: _archiveBootstrapController.signal });
+    } catch (_) {
+      return null;
+    } finally {
+      clearTimeout(_archiveBootstrapTimeout);
+    }
+  });
   let _archiveBootstrapConsumed = false;
 
   // Optional boot reads used to issue all at once and fill every HTTP/1.1
@@ -3095,7 +3102,9 @@
       if (!now) _dashboardUncovered();
     };
     // childList: an early frame for an app that no longer exists is removed.
-    new MutationObserver(check).observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['class'], childList: true });
+    observer.observe(document.documentElement, { childList: true });
   })();
   // Sidebar list renders must still run while #convSearch is focused —
   // otherwise the debounced filter never paints until blur/Enter (the
@@ -83581,9 +83590,10 @@
       _clientLog('[ARCHIVE-DIAG] refreshArchiveData deduped onto in-flight promise');
       return _archiveRefreshPromise;
     }
-    _startArchiveProgressPoll();
-    _clientLog('[ARCHIVE-DIAG] refreshArchiveData start window=' + (opts.window || _archiveWindow()) + ' staleOk=' + (opts.staleOk !== false && !opts.force));
     _archiveRefreshPromise = (async () => {
+      await _whenDashboardUncovered();
+      _startArchiveProgressPoll();
+      _clientLog('[ARCHIVE-DIAG] refreshArchiveData start window=' + (opts.window || _archiveWindow()) + ' staleOk=' + (opts.staleOk !== false && !opts.force));
       try {
       // While a sidebar search is active the corpus must stay at the 'all'
       // window: renderArchiveList widens to 'all' so every session is

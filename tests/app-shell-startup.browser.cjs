@@ -18,13 +18,19 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
     const apps = [{id:'sessions',label:'Sessions',url:'/'},
       {id:'queues',label:'Queues',url:'/q2.html'},
       {id:'shell-test',label:'Test app',url:'/__app_shell_test'}];
+    let removedApp=false;
     const errors=[];
+    let archiveReads=0;
     page.on('pageerror',error=>errors.push(error.stack));
     await page.setRequestInterception(true);
     page.on('request',request=>{
       const url = new URL(request.url());
+      if (url.pathname==='/api/conversations/list') {
+        if (request.frame()===page.mainFrame()) archiveReads++;
+        return request.respond({contentType:'application/json',body:'[]'});
+      }
       if (request.method()==='POST') return request.respond({contentType:'application/json',body:'{}'});
-      if (url.pathname==='/api/apps') return request.respond({contentType:'application/json',body:JSON.stringify({apps})});
+      if (url.pathname==='/api/apps') return request.respond({contentType:'application/json',body:JSON.stringify({apps:removedApp?apps.filter(app=>app.id!=='shell-test'):apps})});
       if (url.pathname==='/__app_shell_test') return request.respond({contentType:'text/html',body:'<!doctype html><h1>Test app</h1>'});
       if (url.hostname==='fonts.googleapis.com' || url.hostname==='fonts.gstatic.com') return request.abort();
       return request.continue();
@@ -57,6 +63,7 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
       }));
       assert.ok(Math.abs(geometry.frame-geometry.rail)<1,JSON.stringify(geometry));
       await appIsUncovered();
+      assert.equal(archiveReads,0,'covered dashboard must not start archive reads');
     };
     await open(); // no saved app catalog
     await open(); // saved app starts before the body exists
@@ -68,6 +75,9 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
       window.cccOpenApp('sessions');
     });
     assert.equal(await page.$eval('#cccMobileAppFrame',frame=>frame.hidden),true);
+    await page.waitForFunction(()=>document.getElementById('convList'));
+    await new Promise(resolve=>setTimeout(resolve,100));
+    assert.ok(archiveReads>0,'Sessions resumes the deferred archive read');
     assert.equal(await page.$eval('#cccLoadingOverlay',overlay=>{
       overlay.classList.remove('gone','fade-out');
       return getComputedStyle(overlay).display;
@@ -83,6 +93,19 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
       nav:document.getElementById('mobileBottomNav').getBoundingClientRect().top}));
     assert.ok(phone.frame<=phone.nav+1,JSON.stringify(phone));
     await appIsUncovered();
+    // A removed app in the saved catalog must uncover the dashboard and
+    // release the same read waiter even when its early frame is under HTML.
+    removedApp=true;
+    archiveReads=0;
+    await page.goto(base+'/?ccc_app=shell-test',{waitUntil:'domcontentloaded'});
+    await page.waitForFunction(()=>document.getElementById('cccMobileAppFrame')?.contentDocument?.querySelector('h1'));
+    await page.evaluate(()=>document.getElementById('cccMobileAppFrame').contentWindow.eval(
+      "parent.postMessage({type:'ccc:app-fully-ready'},location.origin)"));
+    await page.waitForFunction(()=>!document.documentElement.classList.contains('ccc-mobile-app-open')
+      && !document.getElementById('cccMobileAppFrame'));
+    await page.waitForFunction(()=>document.getElementById('convList'));
+    await new Promise(resolve=>setTimeout(resolve,100));
+    assert.ok(archiveReads>0,'a removed app releases archive reads');
     assert.deepEqual(errors,[]);
     console.log('PASS: fresh/saved app starts, deferred dashboard, frame adoption, draft and phone geometry');
   } finally {await browser.close();}
