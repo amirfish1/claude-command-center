@@ -46382,6 +46382,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(304)
             self.send_header("ETag", etag)
             self.send_header("Cache-Control", cache_control)
+            self._send_server_timing(cache="validated")
             self.end_headers()
             return
         key = (str(resolved), st.st_mtime_ns, st.st_size)
@@ -46406,6 +46407,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         if enc:
             self.send_header("Content-Encoding", enc)
             self.send_header("Vary", "Accept-Encoding")
+        self._send_server_timing(cache="hit" if cached is not None else "miss")
         self.end_headers()
         self.wfile.write(body)
 

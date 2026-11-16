@@ -1,1 +1,1 @@
-Reuse unchanged root-session metadata when upgrading native subagent attribution, so archive refreshes do not unnecessarily reparse the entire transcript history.
+Reuse unchanged root-session metadata when upgrading native subagent attribution, verifying Codex session headers before reusing their metadata so archive refreshes do not unnecessarily reparse the entire transcript history.

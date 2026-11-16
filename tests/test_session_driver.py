@@ -155,6 +155,43 @@ def test_codex_incremental_messages_preserve_last_owner_and_ignore_context(tmp_p
     assert server._extract_codex_tail_meta(p)['turn_driver']['kind'] == 'service'
 
 
+@pytest.mark.parametrize('context', ['root', 'native', 'direct-parent', 'unknown-header', 'older-driver'])
+def test_codex_parent_upgrade_reuses_only_verified_root_header(tmp_path, monkeypatch, context):
+    import server
+    monkeypatch.setattr(server, '_conv_meta_cache', {})
+    monkeypatch.setattr(server, '_codex_tail_resume', {})
+    p = tmp_path / 'rollout.jsonl'
+    subagent = context in ('native', 'direct-parent')
+    source = {'subagent': {'thread_spawn': {'parent_thread_id': 'parent'}}} if context == 'native' else 'cli'
+    events = [
+        {'type': 'session_meta', 'payload': {'source': source}},
+        {'type': 'response_item', 'timestamp': '2026-01-01T00:00:00Z', 'payload': {
+            'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'Review'}]}},
+    ]
+    if context == 'direct-parent':
+        events[0]['payload']['parent_thread_id'] = 'parent'
+    if context == 'unknown-header':
+        events[0]['type'] = 'unknown'
+    p.write_text(''.join(json.dumps(e) + '\n' for e in events))
+    fresh = server._extract_codex_tail_meta(p)
+    cached = dict(fresh, meta_version=14, driver_version=2)
+    if context == 'older-driver':
+        cached['driver_version'] = 1
+    cached.pop('driver_parent_session_id', None)
+    if subagent:
+        cached['turn_driver'] = {'kind': 'human', 'name': '', 'basis': 'typed',
+                                 'at': driver.epoch('2026-01-01T00:00:00Z')}
+        cached['last_owner_input_at'] = cached['turn_driver']['at']
+    server._conv_meta_cache[str(p)] = cached
+    server._codex_tail_resume.clear()
+    result = server._extract_codex_tail_meta(p)
+    assert driver.fields(result) == driver.fields(fresh)
+    assert result['meta_version'] == fresh['meta_version']
+    # A root cache is upgraded from its header; only subagents need to read
+    # messages again to undo the previous owner classification.
+    assert result['driver_version'] == (2 if context == 'root' else driver.VERSION)
+
+
 @pytest.mark.parametrize('engine', ['cursor', 'antigravity', 'gemini'])
 def test_other_cached_native_parsers_keep_driver_and_owner(engine, tmp_path, monkeypatch):
     import server

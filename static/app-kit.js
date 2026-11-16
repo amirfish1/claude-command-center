@@ -126,9 +126,12 @@
       function timing(entry) {
         var result = {};
         ['startTime', 'duration', 'requestStart', 'responseStart', 'responseEnd',
-          'domInteractive', 'domContentLoadedEventEnd', 'transferSize', 'encodedBodySize'].forEach(function (key) {
+          'domInteractive', 'domContentLoadedEventEnd', 'transferSize', 'encodedBodySize', 'decodedBodySize'].forEach(function (key) {
           if (typeof entry[key] === 'number' && Number.isFinite(entry[key])) result[key] = Math.round(entry[key]);
         });
+        if (['http/1.0', 'http/1.1', 'h2', 'h3'].indexOf(entry.nextHopProtocol) !== -1) {
+          result.protocol = entry.nextHopProtocol;
+        }
         (entry.serverTiming || []).forEach(function (item) {
           if (['app', 'cpu', 'req_wait'].indexOf(item.name) !== -1 && Number.isFinite(item.duration)) {
             if (!result.server) result.server = {};
@@ -143,6 +146,8 @@
         if (url.origin !== location.origin) return;
         var kind = url.pathname === '/static/app.js' ? 'dashboard_script'
           : url.pathname === '/static/app-kit.js' ? 'app_kit'
+          : url.pathname === '/static/app.css' ? 'dashboard_style'
+          : url.pathname === '/static/app-embed-boot.js' ? 'agent_boot'
           : url.pathname === '/api/apps/routines' ? 'routines'
           : sessionId && url.pathname === '/api/conversations/' + encodeURIComponent(sessionId) ? 'conversation' : '';
         if (!kind) return;
