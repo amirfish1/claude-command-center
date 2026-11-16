@@ -378,7 +378,43 @@ def _spawn_meta(sid):
     if isinstance(marker, dict):
         via = via or str(marker.get("spawned_via") or "")
         parent = parent or str(marker.get("parent_session_id") or "")
+        cwd = cwd or str(marker.get("cwd") or marker.get("repo_path") or "")
     return via, parent, cwd
+
+
+def _plugin_side_call(*, row=None, cwd="", jsonl=None):
+    """Recognize disposable checker sessions by provenance, never their title."""
+    row = row or {}
+    cwd = str(row.get("session_cwd") or row.get("folder_path") or row.get("cwd") or cwd)
+    if cwd:
+        return bool(re.fullmatch(r"(?:te-side|wt-model)-[A-Za-z0-9_-]+", Path(cwd).name))
+    slug = str(row.get("slug") or (Path(jsonl).parent.name if jsonl else ""))
+    if re.search(r"-(?:te-side|wt-model)-[A-Za-z0-9_-]+$", slug):
+        return True
+    # CLI side calls need not have a spawn registry entry. Claude records cwd
+    # on events; Codex records it in session_meta.payload. Keep this bounded.
+    if jsonl:
+        try:
+            with open(jsonl, encoding="utf-8") as fh:
+                for _ in range(20):
+                    line = fh.readline(65536)
+                    if not line:
+                        break
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    payload = event.get("payload") if event.get("type") == "session_meta" else {}
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    event_cwd = event.get("cwd") or (payload or {}).get("cwd")
+                    if event_cwd:
+                        return _plugin_side_call(cwd=str(event_cwd))
+        except OSError:
+            pass
+    return False
 
 
 def _first_user_text(jsonl_path):
@@ -497,6 +533,8 @@ def sweep_rows(rows):
         # Task-tool subagents ("agent-…") are helpers inside a session, not
         # sessions of their own; they don't join the ticket's log.
         if sid.startswith("agent-"):
+            continue
+        if _plugin_side_call(row=row):
             continue
         continuing = _ticketed(row.get("continued_from_session_id"))
         child = _ticketed(row.get("parent_session_id"))
@@ -645,6 +683,13 @@ def attach_or_file(sid, *, classify_fn=None, continued_from_hint="", parent_hint
         except Exception:
             continued_from = ""
     via, parent, cwd = _spawn_meta(sid)
+    if _plugin_side_call(cwd=cwd, jsonl=jsonl):
+        def _skip_side_call(d):
+            d["pending"].pop(sid, None)
+            if not (d["sessions"].get(sid) or {}).get("ref"):
+                d["sessions"][sid] = {"skip": "plugin side call", "at": int(time.time())}
+        _mutate(_skip_side_call)
+        return {"ok": True, "skipped": True, "reason": "plugin side call"}
     continued_from = continued_from or str(continued_from_hint or "")
     parent = parent or str(parent_hint or "")
 

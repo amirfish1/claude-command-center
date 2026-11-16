@@ -190,6 +190,61 @@ class IdeaTicketsTest(unittest.TestCase):
         # Known sessions never re-run the lookup on later turns.
         self.assertEqual(it.on_turn_end("w1")["reason"], "known")
 
+    def test_plugin_side_calls_never_inherit_or_comment(self):
+        self._ui_session("parent")
+        it.attach_or_file("parent", classify_fn=lambda t: "idea")
+        self.calls.clear()
+        for prefix in ("te-side", "wt-model"):
+            with self.subTest(prefix=prefix):
+                sid = prefix + "-session"
+                self.registry[sid] = {"cwd": f"/tmp/{prefix}-check",
+                                      "parent_session_id": "parent"}
+                self.transcripts[sid] = {"text": "checker", "continued_from": "parent"}
+                it.note_ui_spawn(sid, "ui")
+                result = it.attach_or_file(sid)
+                self.assertTrue(result["skipped"])
+                self.assertNotIn(sid, it.load_state()["pending"])
+                self.assertIsNone(it.ticket_for_session(sid))
+        self.assertEqual(it.ticket_for_session("parent")["sessions"], ["parent"])
+        self.assertEqual(self.calls, [])
+
+    def test_unregistered_side_call_uses_transcript_provenance(self):
+        self._ui_session("parent")
+        it.attach_or_file("parent", classify_fn=lambda t: "idea")
+        self.calls.clear()
+        for event in ({"type": "user", "cwd": "/tmp/te-side-check"},
+                      {"type": "session_meta", "payload": {"cwd": "/tmp/wt-model-check"}}):
+            with self.subTest(event=event):
+                transcript = pathlib.Path(self.tmp.name) / "checker.jsonl"
+                transcript.write_text(json.dumps(event) + "\n")
+                self.core._find_session_jsonl = lambda sid: transcript
+                self.assertTrue(it.attach_or_file("check", parent_hint="parent")["skipped"])
+                self.assertIsNone(it.ticket_for_session("check"))
+        self.assertEqual(self.calls, [])
+
+    def test_sweep_skips_side_call_rows_without_using_titles(self):
+        self._ui_session("parent")
+        it.attach_or_file("parent", classify_fn=lambda t: "idea")
+        self.calls.clear()
+        rows = [{"session_id": "check", "session_cwd": "/tmp/te-side-check"},
+                {"session_id": "old", "slug": "-tmp-wt-model-check"},
+                {"session_id": "real", "display_name": "te-side-check",
+                 "session_cwd": "/projects/app"}]
+        for row in rows:
+            row.update(parent_session_id="parent", last_event_type="result")
+        self.assertEqual(it.sweep_rows(rows), 1)
+        self.assertEqual(it.ticket_for_session("parent")["sessions"], ["parent", "real"])
+        self.assertEqual(len([c for c in self.calls if c[0] == "comment"]), 1)
+
+    def test_side_call_marker_and_encoded_transcript_directory(self):
+        marker = pathlib.Path(self.core.SPAWN_MARKERS_DIR) / "marked.json"
+        marker.write_text(json.dumps({"cwd": "/tmp/te-side-marker"}))
+        self.assertTrue(it.attach_or_file("marked", parent_hint="parent")["skipped"])
+        self.assertEqual(it.load_state()["sessions"]["marked"]["skip"], "plugin side call")
+        self.assertTrue(it._plugin_side_call(jsonl="/archive/-tmp-te-side-check/id.jsonl"))
+        self.assertFalse(it._plugin_side_call(row={"slug": "-tmp-te-side-old",
+                                                  "session_cwd": "/projects/app"}))
+
     def test_archive_latest_closes_earlier_is_silent_unarchive_reopens(self):
         self._ui_session("s1")
         it.attach_or_file("s1", classify_fn=lambda t: "idea")
