@@ -84697,10 +84697,14 @@
       if (!data.ok) throw new Error('Accounts unavailable');
       // Until the user picks one, start on the saved default account.
       const selected = select.dataset.userPicked === '1' ? select.value : (spawnDefaultsState.codex_account_id || '__current__');
-      select.replaceChildren(new Option('Codex (Primary)', '__current__'));
-      for (const account of data.accounts || []) {
-        if (!account.current) select.add(new Option('Codex (Secondary) · ' + account.label, account.id));
-      }
+      select.replaceChildren(new Option('Primary', '__current__'));
+      const secondaryAccounts = (data.accounts || []).filter(account => !account.current);
+      secondaryAccounts.forEach((account, index) => {
+        const label = secondaryAccounts.length === 1 ? 'Secondary' : (account.label || 'Secondary ' + (index + 1));
+        const option = new Option(label, account.id);
+        option.title = account.label || label;
+        select.add(option);
+      });
       if (selected && !Array.from(select.options).some(o => o.value === selected)) {
         select.add(new Option('Selected account unavailable: reconnect in Allowances', selected));
       }
@@ -95620,12 +95624,15 @@
           if (ranked && !picks[index].recent) {
             markNsAdvisorManual();
             applyNsAdvisorChoice(picks[index]);
-            const overrides = document.getElementById('nsModelOverrides');
-            if (overrides) overrides.open = false;
             renderNsAdvisor();
           } else {
             selectSpawnPick(chip.getAttribute('data-engine'), chip.getAttribute('data-model'));
             if (ranked) renderNsAdvisor();
+          }
+          const overrides = document.getElementById('nsModelOverrides');
+          if (overrides) {
+            overrides.open = true;
+            syncNsModelOverrideSelects();
           }
         });
       });

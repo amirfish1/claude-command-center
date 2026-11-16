@@ -34825,6 +34825,7 @@ body.has-settings-modal-open #cccNotifyStack { z-index: 9998; }
   .codex-account-row { grid-area: account; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
   .codex-account-row[hidden], .codex-session-account[hidden] { display: none; }
   .codex-account-row select { flex: 1; min-width: 0; max-width: 360px; padding: 5px 7px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+  #codexAccountRow select { flex: 0 1 auto; width: auto; max-width: min(16rem, 100%); }
   .codex-account-row a, .codex-session-account { color: var(--text-muted); font-size: 12px; }
   body.ccc-spawn-cwd-collapsed .conv-input-context.visible.is-new-session:has(> .codex-account-row:not([hidden])) {
     grid-template-areas: "cwd worktree" "account account";
