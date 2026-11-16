@@ -83,15 +83,19 @@ def _entries(snapshot):
 
 
 def upgrade_driver_metadata(snapshot, schema_version, build_id):
-    """Keep the last usable list during the v15→v16 provenance rebuild.
+    """Keep the last usable list during supported provenance rebuilds.
 
     No driver or owner timestamp can be inferred from an old row. Drop its
     freshness signature so the background builder still reparses transcripts.
     Other schema transitions retain their normal incompatibility checks.
     """
-    if (schema_version, build_id) != (16, "16") or (
-        snapshot.get("schema_version"), snapshot.get("build_id")
-    ) != (15, "15"):
+    previous_version = snapshot.get("schema_version")
+    supported = {16: (15,), 17: (15, 16)}
+    if (
+        previous_version not in supported.get(schema_version, ())
+        or snapshot.get("build_id") != str(previous_version)
+        or build_id != str(schema_version)
+    ):
         return snapshot
     entries = {
         key: dict(entry, cached_at=0, signature=None, conversations=[

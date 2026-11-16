@@ -195,12 +195,16 @@ def test_server_rebuilds_rows_cached_before_short_action_labels(tmp_path, monkey
         assert "sig-a" in server._ARCHIVE_STATMAP_BY_SIG
 
 
-def test_driver_upgrade_serves_unknown_rows_while_refresh_runs(tmp_path, monkeypatch):
+@pytest.mark.parametrize("previous_version", [15, 16])
+def test_driver_upgrade_serves_unknown_rows_while_refresh_runs(tmp_path, monkeypatch, previous_version):
     import server
 
     key = server._archive_response_cache_key()
     data = snapshot(key)
-    data.update(schema_version=15, build_id="15")
+    data.update(schema_version=previous_version, build_id=str(previous_version))
+    data["entries"][key]["conversations"][0].update(
+        turn_driver={"kind": "owner"}, last_owner_input_at=123,
+    )
     cache_file = tmp_path / "archive.json"
     cache_file.write_text(json.dumps(data))
     monkeypatch.setattr(server, "_ARCHIVE_RESPONSE_CACHE_FILE", cache_file)

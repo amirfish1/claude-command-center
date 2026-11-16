@@ -1,0 +1,1 @@
+- Keep phone transcript jump controls clear of the floating Hold microphone button.
