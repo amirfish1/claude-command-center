@@ -5,8 +5,11 @@ import sys
 import shutil
 import subprocess
 import time
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 server = importlib.import_module("server")
 # Functions inside ccc_server.usage_stats resolve helpers in that module's own
@@ -16,6 +19,25 @@ ROOT = Path(__file__).resolve().parent.parent
 
 SECRET_NAME = "SECRET-PROJECT-ALPHA"
 SECRET_PATH = "/Users/someone/private/client-repo"
+
+
+@pytest.fixture(autouse=True)
+def isolated_share_builder(monkeypatch):
+    # Cache tests own the background job and all its inputs. Do not scan the
+    # host's spawn markers for savings, or leave a builder in the next test.
+    previous = usage._THROUGHPUT_SHARE_JOB.get("thread")
+    if previous is not None:
+        previous.join(timeout=5)
+        assert not previous.is_alive()
+    job = {"thread": None}
+    monkeypatch.setattr(usage, "_THROUGHPUT_SHARE_CACHE", {"ts": 0.0, "payload": None})
+    monkeypatch.setattr(usage, "_THROUGHPUT_SHARE_JOB", job)
+    monkeypatch.setattr(usage, "_THROUGHPUT_SHARE_LOCK", threading.Lock())
+    monkeypatch.setattr(usage.share_savings, "free_session_ids", lambda: set())
+    yield
+    if job["thread"] is not None:
+        job["thread"].join(timeout=5)
+        assert not job["thread"].is_alive()
 
 
 def _turn(day_offset, now, tokens_in=1000, tokens_out=200, cache=800, dur=30.0, **extra):
@@ -96,7 +118,7 @@ def test_share_payload_is_cached_by_ttl(monkeypatch):
     usage._THROUGHPUT_SHARE_JOB["thread"] = None
 
     first, status = usage._throughput_share_payload(wait=5)
-    assert status == 200 and first["daily"]
+    assert status == 200 and first["daily"], {"payload": first, "calls": calls}
     assert sorted(e for e, _ in calls) == ["claude", "codex", "kimi"]
     # Discovery is bounded to the 365-day window, never "all time".
     assert all(now - 366 * 86400 < s < now - 364 * 86400 for _, s in calls)
