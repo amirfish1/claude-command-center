@@ -46640,7 +46640,8 @@ def _score_soft_block_uncached(text):
     # Question text = the last sentence/line that carries the ask, for the COO.
     question_text = ""
     for line in reversed([l.strip() for l in prose.splitlines() if l.strip()]):
-        if "?" in line or any(p in line.lower() for p in _SOFT_BLOCK_PHRASES):
+        line_low = line.lower()
+        if "?" in line or any(p in line_low for p in _SOFT_BLOCK_PHRASES):
             question_text = line
             break
     if not question_text:
