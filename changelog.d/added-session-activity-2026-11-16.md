@@ -1,0 +1,1 @@
+Add per-ticket session activity with recorded drivers, message delivery links, hourly inputs and measured tokens. Move inherited ticket lineage into the session graph through an explicit migration, and stop automatic lineage and handoff comments.

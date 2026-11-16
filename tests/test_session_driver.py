@@ -17,6 +17,7 @@ from ccc_server import session_driver as driver
     ('<cross-session-message from-name="wt:notify">\nA ticket changed', {'isMeta': True}, 'service', 'wt:notify'),
     ('[sender: unnamed (unknown) · msg test]\n[WATCHTOWER] Comment steer', {}, 'service', 'WatchTower'),
     ('[sender: schedule (service) · msg test]\nRoutine wake', {}, 'service', 'schedule'),
+    ('[sender: peer (session) · msg test]\n[WATCHTOWER] Forwarded task', {}, 'session', 'peer'),
     ('[WATCHTOWER] Take over this work', {}, 'service', 'WatchTower'),
     ('<task-notification>Task complete</task-notification>', {'isMeta': True}, 'background', 'Background task'),
     ('Scheduled check', {'wakeupSource': 'hourly'}, 'service', 'hourly'),

@@ -10,7 +10,7 @@ import re
 
 from ccc_server.transcript_bookkeeping import is_compaction_bookkeeping
 
-VERSION = 1
+VERSION = 2
 _HEADER = re.compile(r'^\[sender: (.*?) \(([^)]+)\)(?: ·|\])')
 _PEER = re.compile(r'^<cross-session-message\b[^>]*\bfrom-name=["\']([^"\']+)["\']')
 _SKIP = ('<system-reminder', '<user-prompt-submit-hook', '<local-command-',
@@ -62,12 +62,13 @@ def classify(text, event=None):
             pass
         t = t.partition('\n')[2].lstrip()
     header = _HEADER.match(t)
-    if header:
+    if header and not author:
         author = {'kind': header[2], 'name_at_send': header[1]}
         t = t.partition('\n')[2].lstrip()
     # Legacy service deliveries sometimes carry an "unknown" envelope. The
     # explicit body marker still establishes service, never human, provenance.
-    if t.lower().startswith(('[watchtower]', '[watchtower:', '[takeover]', '<<autonomous-loop')):
+    known_author = isinstance(author, dict) and author.get('kind') in ('human', 'user', 'owner', 'session', 'service')
+    if not known_author and t.lower().startswith(('[watchtower]', '[watchtower:', '[takeover]', '<<autonomous-loop')):
         return {'kind': 'service', 'name': 'WatchTower' if 'watchtower' in t[:20].lower() else 'Routine', 'basis': 'marker'}
     if t.startswith('<task-notification') or event.get('turnOrigin') == 'task_notification':
         return {'kind': 'background', 'name': 'Background task', 'basis': 'marker'}
@@ -102,6 +103,16 @@ def record(meta, text, timestamp, event=None):
         meta['turn_driver'] = {**driver, 'at': ts}
 
 
-def fields(meta):
-    return {'turn_driver': meta.get('turn_driver'),
+def fields(meta, session_id=None, *, observed=None):
+    current = meta.get('turn_driver')
+    if session_id:
+        if observed is None:
+            from ccc_server import core
+            graph = getattr(core, '_session_graph', None)
+            observed = graph.latest_activity(session_id) if graph else {}
+        if observed.get('at', 0) >= (current or {}).get('at', 0) and observed:
+            current = {'kind': observed['sender_kind'], 'id': observed['sender'],
+                       'name': observed['sender_name'], 'at': observed['at'],
+                       'basis': observed.get('basis')}
+    return {'turn_driver': current,
             'last_owner_input_at': meta.get('last_owner_input_at') or 0}

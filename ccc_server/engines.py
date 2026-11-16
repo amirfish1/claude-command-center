@@ -2041,7 +2041,7 @@ def find_antigravity_conversations(
             "ai_title": ai_title or None,
             "name_overridden": bool(name_overrides.get(sid)),
             "last_prompt": (tail.get("last_prompt") or "")[:200],
-            **_driver.fields(tail),
+            **_driver.fields(tail, sid),
             "size": st.st_size,
             "modified": modified,
             "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)),

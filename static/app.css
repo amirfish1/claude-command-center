@@ -35581,3 +35581,21 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 #mobileConvTitle>.conv-driver, #simpleConvTitle>.conv-driver {display:flex;margin-top:3px;font-size:12px;line-height:1.35;white-space:normal}
 .mobile-conv-name {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:1200px) {.conv-pane-driver {flex-basis:180px}}
+
+/* Recorded session inputs in ticket detail. */
+.uxq-session-activity summary { cursor: pointer; }
+.uxq-session-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; }
+.uxq-session-controls label { display: flex; align-items: center; gap: 8px; }
+.uxq-session-record { padding: 12px 0; border-top: 1px solid var(--border); }
+.uxq-session-record > summary { display: list-item; overflow-wrap: anywhere; }
+.uxq-session-record p { margin: 8px 0; }
+.uxq-session-record dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; font-variant-numeric: tabular-nums; }
+.uxq-session-record dd { margin: 0; }
+.uxq-session-events { overflow-x: auto; margin-top: 12px; }
+.uxq-session-events table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.uxq-session-events th, .uxq-session-events td { text-align: left; vertical-align: top; padding: 8px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.uxq-session-events caption { text-align: left; padding-bottom: 8px; }
+.uxq-session-record > summary > span + span { display: block; margin-top: 4px; }
+.uxq-session-events table { min-width: 700px; }
+.uxq-session-events th:first-child, .uxq-session-events td:first-child { white-space: nowrap; }
+.uxq-session-events th:nth-child(3), .uxq-session-events td:nth-child(3) { white-space: nowrap; text-align: right; }

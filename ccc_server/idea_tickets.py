@@ -9,16 +9,18 @@ its first reply, so the work has a handle that outlives any one session.
 - After the first reply, Jev (TypeSafe System One) labels the session an idea
   or a small bug. With no Jev key it falls back to an idea; the sidebar row
   menu moves it.
-- Continuations and child sessions inherit their origin's ticket and are
-  logged on it ("continued in X", "child Y spawned"). CCC's own lineage stays
-  the source of truth for session-to-session edges; the ticket is the idea's
-  append-only log.
+- Continuations and child sessions inherit their origin's ticket through
+  the session graph. Comments are reserved for substantive progress.
 
 State lives in ``~/.claude/command-center/idea-tickets.json``::
 
-    {"sessions": {sid: {"ref", "kind", "from", "at"} | {"skip": reason}},
-     "tickets":  {ref: {"queue", "sessions": [sid, ...], "closed": bool}},
+    {"schema": 2, "sessions": {root_sid: {"ref", "at"} | {"skip": reason}},
+     "session_state": {sid: {"at", ...}},
+     "tickets":  {ref: {"queue", "closed": bool}},
      "pending":  {sid: {"at"}}}
+
+Schema one remains readable until an explicit migration, after all graph
+writers have adopted the new schema. Migration is never a dashboard boot effect.
 
 Only sessions recorded in ``pending`` at UI spawn time (``note_ui_spawn``,
 called from the one place every spawn route tags its origin) get a NEW ticket
@@ -97,6 +99,66 @@ def _empty_state():
     return {"sessions": {}, "tickets": {}, "pending": {}}
 
 
+def _graph():
+    graph = getattr(_core, "_session_graph", None)
+    if graph is None:
+        from ccc_server.session_graph import _SessionGraph
+        graph = _SessionGraph(_state_path().parent / "session-graph.json")
+        graph.load()
+    return graph
+
+
+def _project_state(raw):
+    """Compatibility projection; only roots are stored in idea-tickets.json."""
+    if raw.get("schema") != 2:
+        return raw
+    graph = _graph()
+    graph.sync_from_disk()
+    key = (id(raw), str(graph._path), graph._disk_token, graph.parent_revision())
+    if _state_cache.get("projection_key") == key:
+        return _state_cache["projection"]
+    data = json.loads(json.dumps(raw))
+    sessions = data["sessions"]
+    links = graph.lineage_snapshot()
+    members = graph.ticket_sessions()
+    extras = data.get("session_state") or {}
+    for sid in links:
+        if sid not in members:
+            continue
+        if sid in sessions and not _auto_skip(sessions[sid]):
+            continue
+        chain, current = set(), sid
+        while current not in chain:
+            chain.add(current)
+            entry = sessions.get(current) or {}
+            if entry.get("ref"):
+                link = links[sid]
+                sessions[sid] = {**extras.get(sid, {}), "ref": entry["ref"],
+                                 "kind": link["kind"], "from": link["parent"],
+                                 "at": link.get("at") or extras.get(sid, {}).get("at") or entry.get("at", 0)}
+                break
+            if entry.get("skip") == "other":
+                break
+            current = (links.get(current) or {}).get("parent")
+            if not current:
+                break
+    for ticket in data["tickets"].values():
+        ticket["sessions"] = []
+    def order(pair):
+        sid, entry = pair
+        seen = set()
+        while sid in links and sid not in seen:
+            seen.add(sid)
+            sid = links[sid]["parent"]
+        return (entry.get("at", 0), len(seen))
+    for sid, entry in sorted(sessions.items(), key=order):
+        ticket = data["tickets"].get(entry.get("ref"))
+        if ticket is not None:
+            ticket["sessions"].append(sid)
+    _state_cache.update(projection_key=key, projection=data)
+    return data
+
+
 def load_state():
     """The state dict, cached by the file's (mtime, size)."""
     path = _state_path()
@@ -106,7 +168,7 @@ def load_state():
     except OSError:
         return _empty_state()
     if _state_cache["key"] == key and _state_cache["data"] is not None:
-        return _state_cache["data"]
+        return _project_state(_state_cache["data"])
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -118,16 +180,54 @@ def load_state():
     data.setdefault("pending", {})
     _state_cache["key"] = key
     _state_cache["data"] = data
-    return data
+    return _project_state(data)
 
 
 def _save_state(data):
+    data = json.loads(json.dumps(data))
+    if data.get("schema") == 2:
+        _compact_state(data)
     path = _state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(f".json.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
     tmp.replace(path)
     _state_cache["key"] = None
+
+
+def _compact_state(data):
+    graph = _graph()
+    extras = data.setdefault("session_state", {})
+    for sid, entry in list(data["sessions"].items()):
+        origin = entry.get("from")
+        if not entry.get("ref") or not origin:
+            continue
+        if entry.get("kind") == "continued":
+            graph.add_continuation(origin, sid, entry.get("at", 0))
+        elif graph.parent_of(sid) != origin:
+            graph.add_historical_spawn(origin, sid, entry.get("at", 0))
+        graph.note_ticket_session(sid)
+        extras[sid] = {k: v for k, v in entry.items() if k not in ("ref", "kind", "from")}
+        del data["sessions"][sid]
+    if not graph.save():
+        raise OSError("Could not persist ticket lineage to session graph")
+    for ticket in data["tickets"].values():
+        ticket.pop("sessions", None)
+
+
+def migrate_lineage(*, writers_ready=False):
+    """Explicit maintenance step, only after every graph writer is upgraded.
+
+    Old workers rewrite the whole graph, dropping fields they don't know.
+    The caller must verify their adoption before allowing this migration.
+    """
+    if not writers_ready:
+        raise ValueError("Verify all session graph writers have adopted schema two first")
+    with _file_lock():
+        backup = _state_path().with_suffix(".pre-graph.json")
+        if _state_path().exists() and not backup.exists():
+            backup.write_bytes(_state_path().read_bytes())
+        _mutate(lambda data: data.update(schema=2))
 
 
 @contextmanager
@@ -947,9 +1047,6 @@ def _attach(sid, ref, kind, origin):
     from . import takeover_bridge
     takeover_bridge.request_publish()
     _restamp_rows()
-    note = (f"Continued in session {sid} (from {origin})." if kind == "continued"
-            else f"Child session {sid} spawned by {origin}.")
-    _wt(["comment", ref, note, "--by", "system"])
     return {"ok": True, "ref": ref, "kind": kind}
 
 
@@ -1544,8 +1641,6 @@ def _legacy_handoff(sid, ref, *, auto=False):
     now = int(time.time())
     _set_handoff(ref, state="running", session=sid, auto=bool(auto), at=now,
                  nudges=0, nudged_at=0, question="")
-    _wt(["comment", ref, ("Auto-handed off" if auto else "Handed off") +
-         f" to session {sid}; CCC watches it until the ticket closes.", "--by", "system"])
     _core._log_activity("idea", "HANDOFF", f"{ref} {sid} auto={bool(auto)}")
     _restamp_rows()
     return {"ok": True, "ref": ref}

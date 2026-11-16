@@ -58855,6 +58855,77 @@
     } catch (_) {}
   }, 0);
 
+  function _uxqSessionActivityHtml(data) {
+    const count = n => Number(n || 0).toLocaleString();
+    const tokens = usage => usage ? count(Object.values(usage).reduce((a, b) => a + Number(b || 0), 0)) : 'Unobserved';
+    const who = event => event.sender_kind === 'human' ? 'You'
+      : (event.sender_name || event.sender || 'Unknown') + ' (' + event.sender_kind + ')';
+    const sessions = data.sessions || [];
+    if (!sessions.length) return '<p>No linked sessions have been recorded for this ticket.</p>';
+    return '<p>Recorded inputs and measured tokens. Times are UTC. Missing usage is shown as unobserved.</p>'
+      + (data.gaps && data.gaps.length ? '<p role="status">' + count(data.gaps.length) + ' session transcripts unavailable; their history may be incomplete.</p>' : '')
+      + sessions.map(session => {
+        const sid = session.session_id;
+        const link = (data.links || {})[sid];
+        const events = (data.events || []).filter(event => event.receiver === sid);
+        const messages = (data.messages || []).filter(event => event.receiver === sid);
+        const drivers = (session.drivers || []).map(d => escapeHtml(who({sender_kind: d.kind, sender: d.id, sender_name: d.name})) + ': ' + count(d.count)).join(' · ');
+        return '<details class="uxq-session-record"><summary><span>' + escapeHtml(sid) + '</span><span>'
+          + count(session.wakes) + ' inputs · ' + tokens(session.tokens) + ' tokens</span></summary>'
+          + (link ? '<p>' + (link.kind === 'continued' ? 'Continues ' : 'Spawned by ') + escapeHtml(link.parent) + '</p>' : '')
+          + '<p>' + (drivers || 'No recorded inputs in this period.') + '</p>'
+          + (session.unmeasured_turns ? '<p>' + count(session.unmeasured_turns) + ' inputs have no measured token usage.</p>' : '')
+          + '<details><summary>Inputs per hour (UTC)</summary><dl>'
+          + Object.entries(session.hours || {}).map(([hour, total]) => '<dt>' + escapeHtml(hour) + '</dt><dd>' + count(total) + '</dd>').join('') + '</dl></details>'
+          + '<details><summary>' + count(messages.length) + ' message delivery records</summary><ul>'
+          + messages.map(message => '<li>' + escapeHtml(new Date(message.at * 1000).toISOString()) + ' · '
+            + escapeHtml(who(message)) + ' · ' + escapeHtml(message.status) + ' · ' + escapeHtml(message.message_id) + '</li>').join('') + '</ul></details>'
+          + '<div class="uxq-session-events"><table><caption>Recorded inputs for ' + escapeHtml(sid.slice(0, 8)) + '</caption>'
+          + '<thead><tr><th scope="col">Time (UTC)</th><th scope="col">Driven by</th><th scope="col">Tokens</th><th scope="col">Message</th></tr></thead><tbody>'
+          + events.map(event => '<tr><td>' + escapeHtml(new Date(event.at * 1000).toISOString().replace('T', ' ').replace('Z', '')) + '</td><td>'
+            + escapeHtml(who(event)) + (event.sender && event.sender !== event.sender_name ? '<br>' + escapeHtml(event.sender) : '') + (event.cause === 'ticket-comment' ? '<br>Ticket comment' : '') + '</td><td title="'
+            + escapeAttr(event.tokens ? JSON.stringify(event.tokens) : 'No usage record') + '">' + tokens(event.tokens) + '</td><td>'
+            + escapeHtml(event.message_id || 'No envelope ID') + '</td></tr>').join('')
+          + '</tbody></table></div></details>';
+      }).join('');
+  }
+
+  function _uxqBindSessionActivity(modal, ref) {
+    const section = modal.querySelector('.uxq-session-activity');
+    if (!section) return;
+    const body = section.querySelector('[data-session-activity-body]');
+    const date = section.querySelector('input');
+    const refresh = section.querySelector('button');
+    let loaded = false;
+    let generation = 0;
+    async function load() {
+      const request = ++generation;
+      body.textContent = 'Loading recorded session activity…';
+      refresh.disabled = true;
+      try {
+        const query = new URLSearchParams({ref});
+        if (date.value) {
+          const after = Date.parse(date.value + 'T00:00:00Z') / 1000;
+          query.set('after', after);
+          query.set('before', after + 86400);
+        }
+        const response = await fetch('/api/idea-tickets/activity?' + query, {cccPriority: 'user'});
+        const data = await response.json();
+        if (request !== generation || !modal.isConnected) return;
+        if (!response.ok || !data.ok) throw new Error(data.error || 'Could not load session activity.');
+        body.innerHTML = _uxqSessionActivityHtml(data);
+        loaded = true;
+      } catch (error) {
+        if (request === generation) body.textContent = (error.message || 'Could not load session activity.') + ' Use Refresh to try again.';
+      } finally {
+        if (request === generation) refresh.disabled = false;
+      }
+    }
+    section.addEventListener('toggle', () => { if (section.open && !loaded) load(); });
+    date.addEventListener('change', load);
+    refresh.addEventListener('click', load);
+  }
+
   function _uxqOpenItemModal(item) {
     const existing = document.getElementById('uxqItemModal');
     if (existing) existing.remove();
@@ -59377,6 +59448,10 @@
       +     promptHtml
       +     _uxqChecksHtml(item)
       +     convSecHtml
+      +     '<details class="uxq-td-sec uxq-session-activity"><summary>Session activity</summary>'
+      +       '<div class="uxq-session-controls"><label>UTC day <input type="date" aria-label="Filter session activity by UTC day"></label>'
+      +       '<button type="button" class="ann-btn">Refresh</button></div>'
+      +       '<div data-session-activity-body aria-live="polite">Open to load recorded inputs, drivers and tokens.</div></details>'
       +     imagesHtml
       +     '<div class="uxq-td-sec"><div class="uxq-td-sec-label">Activity' + editToggleHtml + '</div>'
       +       '<div class="uxq-timeline">' + tlHtml + '</div>'
@@ -59406,6 +59481,7 @@
       + '</div>';
 
     document.body.appendChild(modal);
+    _uxqBindSessionActivity(modal, ref);
     if (window.CCCTicketProse && window.CCCTicketProse.hydrateBlocked) {
       const latestBlock = timeline.filter(ev => ev && ev.event === 'block').slice(-1)[0];
       window.CCCTicketProse.hydrateBlocked(modal,

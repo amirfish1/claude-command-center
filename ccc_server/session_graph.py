@@ -23,6 +23,7 @@ import threading
 import time
 import urllib.request
 import uuid
+from contextlib import contextmanager
 
 try:
     import fcntl
@@ -72,6 +73,14 @@ class _SessionGraph:
         self._children_of = {}
         # child_sid -> edge_meta (same objects as in _children_of values)
         self._edge_meta = {}
+        # Continuations are distinct from process ancestry. Keeping them
+        # separate preserves the lane map when a successor also has a parent.
+        self._continuations = {}
+        self._historical_spawns = {}
+        self._activity = {}
+        self._ticket_sessions = set()
+        self._latest_activity = {}
+        self._activity_revision = 0
         # parent_sid -> epoch of the last Task-tool subagent glob (throttled,
         # not a one-time gate: two subagents spawned close together can land
         # their agent-*.jsonl files at different times, so a permanent
@@ -127,6 +136,20 @@ class _SessionGraph:
             return
         if not isinstance(data, dict):
             return
+        previous_links = (len(self._continuations), len(self._historical_spawns), len(self._ticket_sessions))
+        self._continuations.update({k: v for k, v in (data.get("continuations") or {}).items()
+                                    if k not in self._continuations})
+        for key, value in (data.get("activity") or {}).items():
+            merged = self._merge_activity(self._activity.get(key), value)
+            if self._activity.get(key) != merged:
+                self._activity_revision += 1
+                self._activity[key] = merged
+        self._ticket_sessions.update(data.get("ticket_sessions") or [])
+        self._historical_spawns.update({k: v for k, v in (data.get("historical_spawns") or {}).items()
+                                       if k not in self._historical_spawns})
+        if previous_links != (len(self._continuations), len(self._historical_spawns), len(self._ticket_sessions)):
+            self._parent_revision += 1
+        self._index_latest_activity()
         for e in data.get("edges") or []:
             if not isinstance(e, dict):
                 continue
@@ -165,6 +188,13 @@ class _SessionGraph:
                 return
             if not isinstance(data, dict):
                 return
+            self._continuations = data.get("continuations") or {}
+            self._historical_spawns = data.get("historical_spawns") or {}
+            self._activity = data.get("activity") or {}
+            self._ticket_sessions = set(data.get("ticket_sessions") or [])
+            self._latest_activity = {}
+            self._activity_revision += 1
+            self._index_latest_activity()
             edges = data.get("edges")
             if not isinstance(edges, list):
                 return
@@ -206,13 +236,13 @@ class _SessionGraph:
 
     def save(self):
         """Persist the graph to disk if there are unsaved changes."""
-        with self._lock:
+        with self._lock, self._file_lock():
             # Never write a view older than the file: the other process may
             # have added edges since we loaded, and this rewrites the whole
             # document.
             self._absorb_disk_edges()
             if not self._dirty:
-                return
+                return True
             edges = []
             for child, parent in self._parent_of.items():
                 meta = self._edge_meta.get(child, {})
@@ -227,6 +257,10 @@ class _SessionGraph:
                 })
             data = {
                 "edges": edges,
+                "continuations": self._continuations,
+                "historical_spawns": self._historical_spawns,
+                "activity": self._activity,
+                "ticket_sessions": sorted(self._ticket_sessions),
                 "claude_task_enriched": dict(self._claude_task_enriched),
                 "kimi_subagents_enriched": sorted(self._kimi_subagents_enriched),
             }
@@ -236,8 +270,122 @@ class _SessionGraph:
                 os.replace(tmp, self._path)
                 self._dirty = False
                 self._disk_token = self._current_disk_token()
+                return True
             except OSError:
-                pass
+                return False
+
+    def ticket_sessions(self):
+        with self._lock:
+            self._absorb_disk_edges()
+            return set(self._ticket_sessions)
+
+    def note_ticket_session(self, sid):
+        with self._lock:
+            if sid not in self._ticket_sessions:
+                self._ticket_sessions.add(sid)
+                self._parent_revision += 1
+                self._dirty = True
+
+    @contextmanager
+    def _file_lock(self):
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._path.with_suffix(".lock").open("a") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+
+    def add_continuation(self, origin, successor, at=0):
+        """Record a successor without changing its process-parent pointer."""
+        if not origin or not successor or origin == successor:
+            return
+        with self._lock:
+            link = {"parent": str(origin), "at": at}
+            if self._continuations.get(successor) != link:
+                self._continuations[successor] = link
+                self._parent_revision += 1
+                self._dirty = True
+
+    def add_historical_spawn(self, origin, child, at=0):
+        """Import a legacy association without rewriting the existing lane map."""
+        if not origin or not child or origin == child:
+            return
+        with self._lock:
+            link = {"parent": str(origin), "at": at}
+            if self._historical_spawns.get(child) != link:
+                self._historical_spawns[child] = link
+                self._parent_revision += 1
+                self._dirty = True
+
+    def lineage_snapshot(self):
+        """Ticket inheritance links; a continuation takes precedence."""
+        with self._lock:
+            self._absorb_disk_edges()
+            links = {child: {"parent": parent, "kind": "child"}
+                     for child, parent in self._parent_of.items()}
+            links.update({child: {**link, "kind": "child"}
+                          for child, link in self._historical_spawns.items()})
+            links.update({child: {**link, "kind": "continued"}
+                          for child, link in self._continuations.items()})
+            return links
+
+    def record_activity(self, events):
+        """Idempotent observed message/wake records, including turn usage."""
+        with self._lock:
+            for event in events:
+                key = event.get("id")
+                merged = self._merge_activity(self._activity.get(key), event)
+                if key and self._activity.get(key) != merged:
+                    self._activity[key] = merged
+                    self._activity_revision += 1
+                    self._dirty = True
+            self._index_latest_activity()
+            if not self.save():
+                raise OSError("Could not persist session activity")
+
+    @staticmethod
+    def _merge_activity(previous, observed):
+        if not previous:
+            return dict(observed)
+        # A stale graph writer must not roll measured usage back to an
+        # earlier streaming snapshot when it saves an unrelated spawn.
+        newer = observed if observed.get("version", 0) >= previous.get("version", 0) else previous
+        merged = dict(newer)
+        if previous.get("tokens") is not None or observed.get("tokens") is not None:
+            left, right = previous.get("tokens") or {}, observed.get("tokens") or {}
+            merged["tokens"] = {key: max(left.get(key, 0), right.get(key, 0)) for key in left.keys() | right.keys()}
+            merged["usage_status"] = "measured"
+        return merged
+
+    def activity_snapshot(self, sessions):
+        with self._lock:
+            self._absorb_disk_edges()
+            return [dict(event) for event in self._activity.values()
+                    if event.get("receiver") in sessions]
+
+    def _index_latest_activity(self):
+        for event in self._activity.values():
+            if event.get("type") != "wake":
+                continue
+            sid = event.get("receiver")
+            if event.get("at", 0) >= self._latest_activity.get(sid, {}).get("at", 0):
+                self._latest_activity[sid] = event
+
+    def latest_activity(self, sid):
+        """Cached graph projection for sidebar badges; never read transcripts."""
+        with self._lock:
+            return dict(self._latest_activity.get(sid) or {})
+
+    def driver_snapshot(self):
+        with self._lock:
+            return dict(self._latest_activity)
+
+    def projection_revision(self):
+        with self._lock:
+            return (self._parent_revision, self._activity_revision)
 
     # -- mutation ------------------------------------------------------------
 
@@ -486,7 +634,9 @@ class _SessionGraph:
 
 
 # Module-level singleton — created at import time, populated at startup.
-_session_graph = _SessionGraph(_core.SESSION_GRAPH_FILE)
+_session_graph = _SessionGraph(getattr(_core, "SESSION_GRAPH_FILE",
+                                     Path(os.environ.get("CCC_STATE_DIR") or
+                                          Path.home() / ".claude/command-center") / "session-graph.json"))
 
 
 def _session_graph_add_edge(

@@ -17494,7 +17494,7 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
     # A new family edge changes the projection even if transcripts and
     # the archive snapshot are unchanged. Preserve replay until it does.
     from ccc_server import continuation_topics
-    body_key = (cache_key, window, bool(from_cache), snap_ver, _session_graph.parent_revision(),
+    body_key = (cache_key, window, bool(from_cache), snap_ver, _session_graph.projection_revision(),
                 continuation_topics.revision())
     raw = gzip_body = etag_val = None
 
@@ -17885,7 +17885,7 @@ def _archive_list_delta_state(key, rows, window, from_cache):
     from ccc_server import continuation_topics
     topic_revision = continuation_topics.revision()
     ctx = hashlib.sha1(json.dumps(
-        [key, window, _session_graph.parent_revision(), resumes, ideas, titles, topic_revision],
+        [key, window, _session_graph.projection_revision(), resumes, ideas, titles, topic_revision],
         sort_keys=True, separators=(",", ":"), default=str,
     ).encode()).hexdigest()[:12]
     _archive_delta_ctx_remember(ctx, key, window, resumes, ideas, titles, topic_revision)
@@ -18455,7 +18455,11 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
     # Persisted row snapshots may predate the title or this projection field.
     # One cached snapshot for the batch; never scan history to refresh names.
     titles = _archive_list_title_overlays()
+    drivers = _session_graph.driver_snapshot()
     for out in projected:
+        sid = out.get("session_id") or out.get("id")
+        if sid in drivers:
+            out.update(_driver.fields(out, sid, observed=drivers[sid]))
         out.update(titles.get(out.get("session_id") or out.get("id"), {}))
     # Resolve topic identity independently of which ancestors are loaded in
     # this response, after applying the current explicit title overrides.
@@ -19945,6 +19949,7 @@ def _rehydrate_archive_cached_rows(rows):
         idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
     except Exception:
         idea_tickets_by_sid = {}
+    drivers = _session_graph.driver_snapshot()
     # One read for the whole list, never per row (same rule as the registry).
     try:
         spawn_markers = _load_spawn_markers()
@@ -20132,6 +20137,8 @@ def _rehydrate_archive_cached_rows(rows):
                 row, sid=sid,
                 markers=spawn_markers, spawn_registry_by_sid=spawn_registry_by_sid,
             )
+            if sid in drivers:
+                row.update(_driver.fields(row, sid, observed=drivers[sid]))
             idea_ticket = idea_tickets_by_sid.get(sid)
             if idea_ticket:
                 row["idea_ticket"] = idea_ticket
@@ -26184,6 +26191,7 @@ def find_conversations(repo_path, progress=None, include_old=True, live_sids=Non
             "name_overridden": name_overridden,
             "auto_titled": sid in _auto_titled_session_ids(),
             "last_prompt": (tail_meta.get("last_prompt") or "")[:200],
+            **_driver.fields(tail_meta, sid),
             "size": stat.st_size,
             # Use last meaningful event timestamp when available; fall back to mtime.
             # This prevents admin writes (custom-title etc.) from bumping "modified".
@@ -32386,6 +32394,21 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "engines": per_engine,
                 "tts_queue": _free_runtime.tts_queue_stats(),
             })
+        elif path == "/api/idea-tickets/activity":
+            from ccc_server import session_activity
+            qs = urllib.parse.parse_qs(parsed.query)
+            ref = str(qs.get("ref", [""])[0])
+            if not re.fullmatch(r"[A-Z][A-Z0-9-]*-\d+", ref):
+                self.send_json({"ok": False, "error": "Invalid ticket ref"}, 400)
+                return
+            try:
+                after = float(qs.get("after", [0])[0])
+                before = float(qs.get("before", [0])[0])
+                if not all(math.isfinite(value) and value >= 0 for value in (after, before)) or (before and before <= after):
+                    raise ValueError("Invalid time range")
+                self.send_json(session_activity.ticket_activity(ref, after=after, before=before))
+            except ValueError:
+                self.send_json({"ok": False, "error": "Invalid time range"}, 400)
         elif path == "/api/sessions/children":
             # Lightweight lineage lookup: children of a dispatcher session,
             # straight from the on-disk spawn registry. No liveness probes,

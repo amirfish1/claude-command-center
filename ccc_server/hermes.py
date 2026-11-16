@@ -1963,7 +1963,7 @@ def find_hermes_conversations(
                 "ai_title": ai_title,
                 "name_overridden": bool(name_overrides.get(sid)),
                 "last_prompt": (summary.get("last_user") or "")[:200],
-                **_driver.fields(summary),
+                **_driver.fields(summary, sid),
                 "size": int(summary.get("size") or 0),
                 "modified": modified,
                 "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)) if modified else "",

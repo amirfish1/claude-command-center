@@ -167,7 +167,7 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(it.load_state()["sessions"]["late"]["skip"], "other")
         self.assertNotIn("late", it.load_state()["pending"])
 
-    def test_continuation_and_child_inherit_and_log(self):
+    def test_continuation_and_child_inherit_without_comments(self):
         self._ui_session("s1")
         it.attach_or_file("s1", classify_fn=lambda t: "idea")
         self.transcripts["s2"] = {"text": "You are continuing", "continued_from": "s1"}
@@ -178,8 +178,32 @@ class IdeaTicketsTest(unittest.TestCase):
         self.assertEqual(it.attach_or_file("s3")["kind"], "child")
         self.assertEqual(it.ticket_for_session("s3")["sessions"], ["s1", "s2", "s3"])
         comments = [c for c in self.calls if c[0] == "comment"]
-        self.assertEqual(len(comments), 2)
+        self.assertEqual(len(comments), 0)
         self.assertEqual(len([c for c in self.calls if c[0] == "add"]), 1)
+
+    def test_migration_stores_links_only_in_graph_and_keeps_projection(self):
+        self._ui_session("root")
+        it.attach_or_file("root", classify_fn=lambda text: "idea")
+        self.registry["child"] = {"parent_session_id": "root"}
+        self.transcripts["child"] = {"text": "helper"}
+        it.attach_or_file("child")
+        before = it.ticket_for_session("child")
+        it.migrate_lineage(writers_ready=True)
+        raw = json.loads(it._state_path().read_text())
+        self.assertNotIn("child", raw["sessions"])
+        self.assertNotIn("sessions", raw["tickets"][before["ref"]])
+        self.assertEqual(it.ticket_for_session("child"), before)
+        it._mutate(lambda data: data["sessions"]["child"].update(explicitly_archived=True))
+        self.assertTrue(it.idea_ticket_rows_map()["child"]["explicitly_archived"])
+        self.assertTrue(it._state_path().with_suffix(".pre-graph.json").exists())
+        self.assertFalse([call for call in self.calls if call[0] == "comment"])
+
+    def test_migration_requires_explicit_writer_adoption_and_preserves_legacy(self):
+        self._ui_session("root")
+        it.attach_or_file("root", classify_fn=lambda text: "idea")
+        with self.assertRaises(ValueError):
+            it.migrate_lineage()
+        self.assertNotEqual(json.loads(it._state_path().read_text()).get("schema"), 2)
 
     def test_non_ui_spawn_is_skipped(self):
         self.registry["w1"] = {"spawned_via": "cli"}
@@ -234,7 +258,7 @@ class IdeaTicketsTest(unittest.TestCase):
             row.update(parent_session_id="parent", last_event_type="result")
         self.assertEqual(it.sweep_rows(rows), 1)
         self.assertEqual(it.ticket_for_session("parent")["sessions"], ["parent", "real"])
-        self.assertEqual(len([c for c in self.calls if c[0] == "comment"]), 1)
+        self.assertEqual(len([c for c in self.calls if c[0] == "comment"]), 0)
 
     def test_side_call_marker_and_encoded_transcript_directory(self):
         marker = pathlib.Path(self.core.SPAWN_MARKERS_DIR) / "marked.json"
