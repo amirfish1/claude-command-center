@@ -16,7 +16,7 @@ function run() {
   const styles = [{dataset:{cccHref:'/static/app.css?v=123'}}];
   const document = {readyState:'complete',
     querySelectorAll: selector => selector.startsWith('link') ? styles : [
-      marker('/static/deferred.js', true), marker('/static/first.js'), marker('',false,'inline()'), marker('/static/last.js')],
+      marker('/static/deferred.js', true), marker('/static/app-rail.js?v=123',true), marker('/static/first.js'), marker('',false,'inline()'), marker('/static/last.js')],
     createElement: () => ({setAttribute(name,value) {this[name] = value;}}),
     head: {appendChild: link => downloads.push(link.href)}};
   const window = {__cccAppFrameReady:new Promise(resolve => {release=resolve;}),
@@ -31,15 +31,15 @@ test('dashboard assets wait for the app, then preserve blocking/defer execution 
   assert.equal(result.styles[0].href,undefined);
   result.release(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(result.styles[0].href,'/static/app.css?v=123');
-  assert.deepEqual(result.executed,['/static/first.js','inline()','/static/last.js','/static/deferred.js']);
-  assert.equal(result.downloads.length,3);
+  assert.deepEqual(result.executed,['/static/app-rail.js?v=123','/static/first.js','inline()','/static/last.js','/static/deferred.js']);
+  assert.equal(result.downloads.length,4);
   assert.deepEqual(result.events,['ccc:dashboard-assets-ready']);
 });
 
 test('a missing app-ready signal cannot strand the surrounding navigation',async()=>{
   const result=run();result.timers[0]();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(result.executed.length,4);
+  assert.equal(result.executed.length,5);
   result.release();await new Promise(resolve => setImmediate(resolve));
-  assert.equal(result.executed.length,4,'late readiness must not replay scripts twice');
+  assert.equal(result.executed.length,5,'late readiness must not replay scripts twice');
 });

@@ -1,6 +1,6 @@
 // The selected app gets the connection slots and main thread first.
-// Replay the existing dashboard scripts, in their original blocking/defer
-// order, after the app is painted (or the startup timeout has expired).
+// Load the standalone navigation first, then replay the dashboard scripts
+// in blocking/defer order after the app paints or startup times out.
 (function () {
   'use strict';
   async function start() {
@@ -13,15 +13,20 @@
       delete link.dataset.cccHref;
     });
     const scripts = Array.from(document.querySelectorAll('script[type="application/ccc-dashboard"]'));
-    const blocking = scripts.filter(script => !script.hasAttribute('defer'));
-    const deferred = scripts.filter(script => script.hasAttribute('defer'));
+    const navigation = scripts.filter(script => /\/app-rail\.js(?:\?|$)/.test(script.src));
+    const remaining = scripts.filter(script => !navigation.includes(script));
+    const blocking = remaining.filter(script => !script.hasAttribute('defer'));
+    const deferred = remaining.filter(script => script.hasAttribute('defer'));
     // Begin downloads together, but retain execution order and currentScript.
     scripts.filter(script => script.src).forEach(script => {
       const preload = document.createElement('link');
       preload.rel = 'preload'; preload.as = 'script'; preload.href = script.src;
+      if (navigation.includes(script)) preload.fetchPriority = 'high';
       document.head.appendChild(preload);
     });
-    for (const original of [...blocking, ...deferred]) {
+    // The rail also runs on standalone pages: it does not need app.js. Start
+    // it before the core's API burst can occupy all browser connections.
+    for (const original of [...navigation, ...blocking, ...deferred]) {
       const script = document.createElement('script');
       for (const attribute of original.attributes) {
         if (attribute.name !== 'type' && attribute.name !== 'defer') {
