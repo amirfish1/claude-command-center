@@ -29,6 +29,16 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
       if (url.hostname==='fonts.googleapis.com' || url.hostname==='fonts.gstatic.com') return request.abort();
       return request.continue();
     });
+    const appIsUncovered = async () => {
+      assert.equal(await page.evaluate(()=>{
+        // Keep the dashboard in its loading state while the app is usable.
+        const overlay=document.getElementById('cccLoadingOverlay');
+        overlay.classList.remove('gone','fade-out');
+        const frame=document.getElementById('cccMobileAppFrame');
+        const rect=frame.getBoundingClientRect();
+        return document.elementFromPoint(rect.left+rect.width/2,rect.top+rect.height/2)===frame;
+      }),true,'dashboard loading must not cover an open app');
+    };
     const open = async () => {
       await page.goto(base+'/?ccc_app=shell-test',{waitUntil:'domcontentloaded'});
       await page.waitForFunction(()=>document.getElementById('cccMobileAppFrame')?.contentDocument?.querySelector('h1'));
@@ -46,6 +56,7 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
         rail:document.querySelector('.ccc-side-nav').getBoundingClientRect().right,
       }));
       assert.ok(Math.abs(geometry.frame-geometry.rail)<1,JSON.stringify(geometry));
+      await appIsUncovered();
     };
     await open(); // no saved app catalog
     await open(); // saved app starts before the body exists
@@ -57,6 +68,11 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
       window.cccOpenApp('sessions');
     });
     assert.equal(await page.$eval('#cccMobileAppFrame',frame=>frame.hidden),true);
+    assert.equal(await page.$eval('#cccLoadingOverlay',overlay=>{
+      overlay.classList.remove('gone','fade-out');
+      return getComputedStyle(overlay).display;
+    }),'flex',
+      'returning to a still-loading dashboard restores its loading state');
     await page.evaluate(()=>window.cccOpenApp('shell-test'));
     assert.equal(await page.evaluate(()=>document===window.testDashboard
       && window.testDraft.isConnected && window.testDraft.value==='Unsent local test draft'
@@ -66,6 +82,7 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
     const phone=await page.evaluate(()=>({frame:document.getElementById('cccMobileAppFrame').getBoundingClientRect().bottom,
       nav:document.getElementById('mobileBottomNav').getBoundingClientRect().top}));
     assert.ok(phone.frame<=phone.nav+1,JSON.stringify(phone));
+    await appIsUncovered();
     assert.deepEqual(errors,[]);
     console.log('PASS: fresh/saved app starts, deferred dashboard, frame adoption, draft and phone geometry');
   } finally {await browser.close();}

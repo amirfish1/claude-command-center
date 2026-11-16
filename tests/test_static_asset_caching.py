@@ -106,3 +106,36 @@ def test_gzipped_asset_is_compressed_once_per_file_version(tmp_path, monkeypatch
     _, _, body = _get(server, "/static/x.js", {"Accept-Encoding": "gzip"})
     assert gzip_mod.decompress(body) == asset.read_bytes()
     assert len(calls) == 2
+
+
+def test_full_boot_asset_set_does_not_flush_the_shared_renderer(tmp_path, monkeypatch):
+    server = _server()
+    asset = _static_dir(server, tmp_path, monkeypatch)
+    headers = {"Accept-Encoding": "gzip"}
+    _, _, expected = _get(server, "/static/x.js", headers)
+    for i in range(64):
+        (tmp_path / f"extension-{i}.js").write_bytes(b"// " + b"y" * 4096)
+        assert _get(server, f"/static/extension-{i}.js", headers)[0] == 200
+
+    def no_read(candidate):
+        assert candidate != asset, "cached renderer was read and compressed again"
+        return original_read(candidate)
+
+    original_read = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", no_read)
+    status, hdrs, body = _get(server, "/static/x.js", headers)
+    assert status == 200 and hdrs["content-encoding"] == "gzip"
+    assert body == expected
+
+
+def test_static_cache_evicts_within_its_byte_budget(tmp_path, monkeypatch):
+    from ccc_server.bounded_cache import ByteBudgetCache
+    server = _server()
+    asset = _static_dir(server, tmp_path, monkeypatch)
+    cache = ByteBudgetCache(max_bytes=100, max_entries=256)
+    monkeypatch.setattr(server, "_STATIC_GZIP_CACHE", cache)
+    for i in range(8):
+        (tmp_path / f"extension-{i}.js").write_bytes(asset.read_bytes())
+        assert _get(server, f"/static/extension-{i}.js", {"Accept-Encoding": "gzip"})[0] == 200
+    assert 0 < cache.bytes <= 100
+    assert len(cache) < 8

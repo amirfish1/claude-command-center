@@ -211,6 +211,7 @@
       f.style.cssText = window.matchMedia('(max-width: 1200px)').matches
         ? 'position:fixed;top:0;left:0;width:100%;height:calc(100% - 70px);border:0;z-index:900;background:var(--bg,#0f1115)'
         : 'position:fixed;top:0;left:var(--ccc-rail-w,76px);width:calc(100% - var(--ccc-rail-w,76px));height:100%;border:0;z-index:900;background:var(--bg,#0f1115)';
+      document.documentElement.classList.add('ccc-mobile-app-open');
       f.src = f.dataset.appUrl;
       document.body.appendChild(f);
       window.__cccAppFrameReady = new Promise(function (resolve) {

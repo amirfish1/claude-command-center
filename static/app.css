@@ -15974,6 +15974,8 @@
   }
   .ccc-loading-overlay.fade-out { opacity: 0; pointer-events: none; }
   .ccc-loading-overlay.gone { display: none; }
+  /* The dashboard can finish loading behind an independently ready app. */
+  html.ccc-mobile-app-open #cccLoadingOverlay { display: none; }
   .ccc-loading-spinner {
     width: 36px; height: 36px;
     border: 3px solid rgba(88,166,255,0.18);

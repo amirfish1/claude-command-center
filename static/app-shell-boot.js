@@ -61,6 +61,7 @@
       finish();
     });
     frame.addEventListener('error', finish, {once:true});
+    document.documentElement.classList.add('ccc-mobile-app-open');
     frame.src = frame.dataset.appUrl;
     // The body may not exist yet. Keep this frame on its original parent:
     // moving an iframe into the body would restart its browsing context.

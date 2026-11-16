@@ -5,12 +5,12 @@ const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../static/app-shell-boot.js'), 'utf8');
 
 function boot({search='?ccc_app=demo', saved=null, apps=[], framed=false, provided=null}={}) {
-  const frames=[], reads=[], listeners=new Map(), storage=new Map(), timers=[];
+  const frames=[], reads=[], listeners=new Map(), storage=new Map(), timers=[], classes=new Set();
   if (saved !== null) storage.set('ccc-rail-apps-v1', JSON.stringify(saved));
   const window = {addEventListener:(key, fn)=>listeners.set(key, fn),
     removeEventListener:key=>listeners.delete(key), dispatchEvent(){}};
   window.self=window; window.top=framed ? {} : window;
-  const document = {body:null, documentElement:{appendChild:frame=>frames.push(frame)},
+  const document = {body:null, documentElement:{appendChild:frame=>frames.push(frame),classList:{add:name=>classes.add(name)}},
     getElementById:id=>id==='cccAppStartup' && provided ? {textContent:JSON.stringify(provided)} : frames.find(f=>f.id===id),
     createElement:()=>({dataset:{},style:{},contentWindow:{},addEventListener(){}})};
   const fetch=async url=>{reads.push(url);return {ok:true,json:async()=>({apps})};};
@@ -20,7 +20,7 @@ function boot({search='?ccc_app=demo', saved=null, apps=[], framed=false, provid
     location:{origin:'http://localhost:8090',search},matchMedia:()=>({matches:false}),
     localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},
     fetch});
-  return {window,frames,reads,listeners,storage,timers};
+  return {window,frames,reads,listeners,storage,timers,classes};
 }
 const app={id:'demo',label:'Demo',nav:'/view/demo'};
 
@@ -28,6 +28,7 @@ test('server app data starts a fresh browser without a discovery round trip',()=
   const run=boot({provided:app});
   assert.deepEqual(run.reads,[]);
   assert.equal(run.frames[0].src,'/view/demo');
+  assert.equal(run.classes.has('ccc-mobile-app-open'),true);
 });
 test('current server data wins over a stale saved route',()=>{
   const run=boot({provided:app,saved:[{...app,nav:'/view/old'}]});
@@ -78,6 +79,7 @@ test('unknown, disabled and unsafe targets do not create a frame',async()=>{
     await new Promise(resolve=>setImmediate(resolve));
     await run.window.__cccAppFrameReady;
     assert.equal(run.frames.length,0);
+    assert.equal(run.classes.has('ccc-mobile-app-open'),false);
   }
 });
 test('normal dashboards, core apps and framed pages keep their normal boot',()=>{

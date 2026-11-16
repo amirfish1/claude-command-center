@@ -56,6 +56,7 @@
     if (!active) return;
     active = '';
     if (frame) frame.hidden = true;
+    document.documentElement.classList.remove('ccc-mobile-app-open');
     document.body.classList.remove('ccc-mobile-app-open');
     if (typeof window.cccSwitchCoreApp === 'function') window.cccSwitchCoreApp(coreId, {push:false,force:true});
     mark();
@@ -93,6 +94,7 @@
     frame.title = app.label; frame.hidden = false; active = id;
     if (kept && wasParked) { try { frame.contentWindow.dispatchEvent(new Event('ccc:app-shown')); } catch (_) {} }
     try { localStorage.setItem(LAST_KEY, JSON.stringify({id, at: Date.now()})); } catch (_) {}
+    document.documentElement.classList.add('ccc-mobile-app-open');
     document.body.classList.add('ccc-mobile-app-open');
     document.title = app.label + ' · CCC';
     mark();

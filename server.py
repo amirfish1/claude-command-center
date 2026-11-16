@@ -31223,8 +31223,9 @@ def _spawn_stream_idle_sleep_s(consecutive_empty):
     return min(0.05 * (1.3 ** exponent), 0.25)
 
 
-# gzip bodies of static assets, keyed by (path, mtime_ns, size). Bounded.
-_STATIC_GZIP_CACHE = {}
+# Keep the shared renderer across a full boot's many smaller assets. An
+# all-at-once entry-cap flush repeatedly recompressed the largest scripts.
+_STATIC_GZIP_CACHE = ByteBudgetCache(max_bytes=16 << 20, max_entries=256)
 
 
 def _annotate_engine_not_installed(data, path):
@@ -46120,22 +46121,20 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Cache-Control", cache_control)
             self.end_headers()
             return
-        try:
-            body = resolved.read_bytes()
-        except OSError as e:
-            self.send_json({"error": str(e)}, 500)
-            return
         key = (str(resolved), st.st_mtime_ns, st.st_size)
-        cached = _STATIC_GZIP_CACHE.get(key)
         accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
-        if cached is not None and accepts_gzip:
+        cached = _STATIC_GZIP_CACHE.get(key) if accepts_gzip else None
+        if cached is not None:
             body, enc = cached, "gzip"
         else:
+            try:
+                body = resolved.read_bytes()
+            except OSError as e:
+                self.send_json({"error": str(e)}, 500)
+                return
             body, enc = self._maybe_gzip(body, ct)
             if enc:
-                if len(_STATIC_GZIP_CACHE) >= 32:
-                    _STATIC_GZIP_CACHE.clear()
-                _STATIC_GZIP_CACHE[key] = body
+                _STATIC_GZIP_CACHE.put(key, body, len(body))
         self.send_response(200)
         self.send_header("Content-Type", ct)
         self.send_header("Cache-Control", cache_control)
