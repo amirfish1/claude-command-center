@@ -57533,6 +57533,8 @@
     const attention = _uxqTicketAttention(item);
     if (attention && attention.blocked) return {label:attention.owner ? 'Needs you' : attention.key === 'worker' ? 'Waiting for worker' : attention.label,
       rank:attention.owner ? 1 : 3, css:attention.owner ? 'is-needs-you' : ''};
+    // Use the same scheduled-wait label as Queues rather than plain open.
+    if (attention && attention.key === 'deferred') return {label:attention.label, rank:3, css:''};
     if (_workersActiveClaim(item)) return {label:'Working', rank:0, css:'is-working'};
     const sessions = _workersTicketSessions.get(_uxqItemRef(item));
     const card = _workersLatestTicketCard(sessions);
