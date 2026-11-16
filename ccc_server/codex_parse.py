@@ -81,6 +81,14 @@ def _codex_subagent_parent_id(row, path):
     return parent
 
 
+def _codex_ts_num(v):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return float("inf")
+    return v / 1000.0 if v > 1e11 else v
+
+
 def attribution_title(row):
     import sender_envelope as attribution
     title = _core._strip_ccc_session_state_instruction(
@@ -150,6 +158,7 @@ def find_codex_conversations(
     # per-row lookups are O(1) dict hits (perf gate: no per-row DB work).
     goals_by_sid = _core._codex_goals_snapshot()
     git_top_cache = {}
+    now_s = time.time()
     out = []
     scanned = 0
     for row in rows:
@@ -167,31 +176,45 @@ def find_codex_conversations(
             elif not _core._codex_cwd_matches_repo(cwd, repo_path_obj, git_top_cache):
                 continue
         capture = row.get("_ccc_capture")
-        path = Path(capture) if capture else _core._codex_rollout_path_from_row(row)
-        if not path or not path.is_file():
-            continue
-        scanned += 1
-        try:
-            st = path.stat()
-        except OSError:
-            continue
         spawn_info = spawn_by_sid.get(sid) or {}
         prev = (reuse_rows or {}).get(sid) if not capture else None
-        if (
-            isinstance(prev, dict)
-            and not spawn_info.get("alive")
-            and not prev.get("is_live")
-            and prev.get("jsonl_path") == str(path)
+        if not (isinstance(prev, dict) and not spawn_info.get("alive") and not prev.get("is_live")):
+            prev = None
+        db_updated = row.get("updated_at")
+        # Quiet sessions (Codex's updated_at unchanged and >10 min old) are
+        # reused with no disk access at all. Recent ones get the stat check:
+        # the rollout can be written a few seconds after updated_at moves.
+        quiet = bool(
+            prev is not None and db_updated
+            and prev.get("codex_updated_at") == db_updated
+            and _codex_ts_num(db_updated) < now_s - 600
+        )
+        if quiet:
+            path = Path(prev.get("jsonl_path") or "")
+            st = None
+        else:
+            path = Path(capture) if capture else _core._codex_rollout_path_from_row(row)
+            if not path or not path.is_file():
+                continue
+            scanned += 1
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+        if prev is not None and (quiet or (
+            prev.get("jsonl_path") == str(path)
             and prev.get("size") == st.st_size
             and prev.get("rollout_mtime") == st.st_mtime
-        ):
+        )):
             r2 = dict(prev)
-            prev_first = r2.get("first_message") or ""
+            override = name_overrides.get(sid)
+            if override or prev.get("name_overridden"):
+                r2["display_name"] = _core._codex_display_name(
+                    row, override=override,
+                    title=attribution_title(row), first_message=r2.get("first_message") or "",
+                )
             r2.update({
-                "display_name": _core._codex_display_name(
-                    row, override=name_overrides.get(sid),
-                    title=attribution_title(row), first_message=prev_first,
-                ),
+                "codex_updated_at": db_updated,
                 "task_title": task_titles.get(sid) or "",
                 "name_overridden": bool(name_overrides.get(sid)),
                 "archived": sid in archived_set or bool(row.get("archived")),
@@ -344,6 +367,7 @@ def find_codex_conversations(
             "last_prompt": (tail.get("last_prompt") or "")[:200],
             "size": st.st_size,
             "rollout_mtime": st.st_mtime,
+            "codex_updated_at": row.get("updated_at"),
             "modified": modified,
             "modified_human": time.strftime("%Y-%m-%d %H:%M", time.localtime(modified)),
             "mtime": modified,

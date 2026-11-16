@@ -67,3 +67,37 @@ def test_changed_or_live_rollout_is_reparsed(tmp_path, monkeypatch):
     monkeypatch.setattr(codex_parse, '_core', live)
     _scan(reuse_rows={'s1': prev})
     live._extract_codex_tail_meta.assert_called_once()
+
+
+def test_quiet_session_reused_without_touching_disk(tmp_path, monkeypatch):
+    rollout = tmp_path / 'r.jsonl'
+    rollout.write_text('{}\n')
+    fake = _fake(rollout)
+    fake._codex_fetch_threads.return_value = [{'id': 's1', 'first_user_message': 'hello', 'updated_at': 1000}]
+    monkeypatch.setattr(codex_parse, '_core', fake)
+    first = _scan()
+    assert first[0]['codex_updated_at'] == 1000
+    fake._codex_rollout_path_from_row.reset_mock()
+    fake._extract_codex_tail_meta.reset_mock()
+    fake._codex_display_name.reset_mock()
+    again = _scan(reuse_rows={'s1': first[0]})
+    fake._codex_rollout_path_from_row.assert_not_called()
+    fake._extract_codex_tail_meta.assert_not_called()
+    fake._codex_display_name.assert_not_called()  # no rename -> keep name
+    assert again[0]['display_name'] == 'A task'
+
+
+def test_recent_or_renamed_session_rechecked(tmp_path, monkeypatch):
+    import time
+    rollout = tmp_path / 'r.jsonl'
+    rollout.write_text('{}\n')
+    fake = _fake(rollout)
+    fake._codex_fetch_threads.return_value = [{'id': 's1', 'first_user_message': 'hi', 'updated_at': int(time.time())}]
+    monkeypatch.setattr(codex_parse, '_core', fake)
+    first = _scan()
+    fake._codex_rollout_path_from_row.reset_mock()
+    fake._load_session_name_overrides.return_value = {'s1': 'Renamed'}
+    fake._codex_display_name.return_value = 'Renamed'
+    again = _scan(reuse_rows={'s1': first[0]})
+    fake._codex_rollout_path_from_row.assert_called_once()  # recent: stat check
+    assert again[0]['display_name'] == 'Renamed'
