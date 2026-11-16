@@ -38,6 +38,14 @@ ENTRYPOINT = ["/usr/local/bin/python3", "-I", "-S", "-B",
               "/opt/ccc/ccc_server/execution_authority.py"]
 
 
+class AuthorityRefused(Refused):
+    """An observed nonzero immutable authority exit, not a lost reply.
+
+    This alone proves no absence or refusal safety. Callers must inspect exact
+    targets and match a specific expected refusal from the measured image.
+    """
+
+
 def read_anchor(filename):
     """Root ownership includes all ancestors; symlinks/writeable anchors refuse."""
     filename = Path(filename).absolute()
@@ -60,10 +68,13 @@ def read_anchor(filename):
     if not ((set(value) == base and value["format"] == "ccc-root-authority-v1")
             or (set(value) == base | {"managed_acceptance"} and value["format"] == "ccc-root-authority-v2")
             or (set(value) == base | {'fixture_acceptance', 'bootstrap_acceptance'}
-                and value['format'] == fixture_format)):
+                and value['format'] == fixture_format)
+            or (set(value) == base | {'execution_acceptance'}
+                and value['format'] == 'ccc-root-authority-proof-v1')):
         raise Refused("unsupported root authority anchor")
     acceptance_fields = ('managed_acceptance',) if value['format'] == 'ccc-root-authority-v2' else (
-        ('fixture_acceptance', 'bootstrap_acceptance') if value['format'] == fixture_format else ())
+        ('fixture_acceptance', 'bootstrap_acceptance') if value['format'] == fixture_format else (
+            ('execution_acceptance',) if value['format'] == 'ccc-root-authority-proof-v1' else ()))
     for field in acceptance_fields:
         accepted = value[field]
         if (not isinstance(accepted, dict) or set(accepted) != {"manifest_sha256", "reference"}
@@ -200,7 +211,7 @@ class RootDocker:
 def authority_config(anchor, anchor_source, query):
     return {"Image": anchor["image_id"], "Entrypoint": ENTRYPOINT, "Cmd": [],
             "User": "0:0", "WorkingDir": "/opt/ccc", "Env": ["CCC_ATTESTATION_QUERY=" + canonical(query).decode()],
-            "OpenStdin": anchor['format'] in ('ccc-root-authority-v2', 'ccc-root-authority-fixture-v1'), "StdinOnce": False, "Tty": False,
+            "OpenStdin": anchor['format'] in ('ccc-root-authority-v2', 'ccc-root-authority-fixture-v1', 'ccc-root-authority-proof-v1'), "StdinOnce": False, "Tty": False,
             "HostConfig": {"ReadonlyRootfs": True, "NetworkMode": "none", "PidMode": "host",
                            "CgroupnsMode": "host",
                            "IpcMode": "none", "Runtime": "runc", "CapDrop": ["ALL"],
@@ -245,7 +256,7 @@ def authenticate_self(docker, anchor, processes):
     if (config.get("Entrypoint") != ENTRYPOINT or config.get("Cmd") not in ([], None)
             or config.get("User") != "0:0" or config.get("WorkingDir") != "/opt/ccc"):
         raise Refused("unmeasured authority entrypoint")
-    if (bool(config.get('OpenStdin')) != (anchor['format'] in ('ccc-root-authority-v2', 'ccc-root-authority-fixture-v1'))
+    if (bool(config.get('OpenStdin')) != (anchor['format'] in ('ccc-root-authority-v2', 'ccc-root-authority-fixture-v1', 'ccc-root-authority-proof-v1'))
             or config.get('Tty') or config.get('StdinOnce') or current.get('ExecIDs')):
         raise Refused('unmeasured authority input or exec session')
     if any(not env.startswith("CCC_ATTESTATION_QUERY=") for env in config.get("Env") or []):
@@ -341,7 +352,7 @@ def main():
     query = json.loads(os.environ["CCC_ATTESTATION_QUERY"])
     verifier = TrustedLaunchVerifier(docker, processes)
     operation = query.pop("operation", None)
-    if operation in ('managed_restart', 'fixture_restart', 'fixture_bootstrap'):
+    if operation in ('managed_restart', 'fixture_restart', 'fixture_bootstrap', 'proof_observe', 'proof_cleanup', 'proof_finish'):
         from ccc_server.execution_restart import run_query, MAX_PACKET
         if (set(query) != {'stdin_bytes', 'stdin_sha256'} or type(query['stdin_bytes']) is not int
                 or not 0 < query['stdin_bytes'] <= MAX_PACKET):
@@ -349,6 +360,13 @@ def main():
         raw = sys.stdin.buffer.read(query['stdin_bytes'])
         if len(raw) != query['stdin_bytes'] or digest(raw) != query['stdin_sha256']:
             raise Refused('changed or incomplete managed stdin packet')
+        if operation in ('proof_observe', 'proof_cleanup', 'proof_finish'):
+            from ccc_server.execution_proof_probe import observe, cleanup, finish
+            result = {'proof_observe': observe, 'proof_cleanup': cleanup, 'proof_finish': finish}[operation](json.loads(raw), anchor=anchor, docker=docker, processes=processes)
+            if read_anchor(ANCHOR) != anchor or authenticate_self(docker, anchor, processes) != authority:
+                raise Refused('authority changed during proof observation')
+            print(canonical({'authority': vars(authority), 'proof': result}).decode())
+            return
         if operation != 'managed_restart':
             from ccc_server import execution_fixture
             if anchor['format'] != execution_fixture.FORMAT:
@@ -407,11 +425,14 @@ class AttestationClient:
         anchor = read_anchor(self.anchor_path)
         operation = query.get('operation')
         managed = operation in ('managed_restart', 'fixture_restart', 'fixture_bootstrap')
+        proof_probe = operation in ('proof_observe', 'proof_cleanup', 'proof_finish')
         packet = None
-        if managed:
+        if managed or proof_probe:
             from ccc_server.execution_restart import MAX_PACKET
             required_format = ('ccc-root-authority-v2' if operation == 'managed_restart'
                                else 'ccc-root-authority-fixture-v1')
+            if proof_probe:
+                required_format = 'ccc-root-authority-proof-v1'
             if anchor['format'] != required_format:
                 raise Refused('root has not accepted a managed runtime proof')
             packet = canonical({key: value for key, value in query.items() if key != 'operation'})
@@ -439,14 +460,23 @@ class AttestationClient:
             # two freeze snapshots and replacement reconciliation. A short
             # single-RPC timeout must not tear down its authority midway.
             result = docker.request("POST", "/containers/" + ident + "/wait?condition=not-running",
-                                    timeout=300 if managed else 45)
+                                    timeout=300 if managed or operation in ('proof_cleanup', 'proof_finish') else 45)
             logs = docker.request("GET", "/containers/" + ident + "/logs?stdout=1&stderr=1", raw=True)
             streams = _streams(logs)
             if result.get("StatusCode") != 0:
-                raise Refused("immutable authority refused: " + streams[2].decode(errors="replace")[-600:])
+                if read_anchor(self.anchor_path) != anchor:
+                    raise Refused('authority acceptance changed during failed action; outcome unknown')
+                raise AuthorityRefused("immutable authority refused: " + streams[2].decode(errors="replace")[-600:])
             value = json.loads(streams[1])
             if read_anchor(self.anchor_path) != anchor or value["authority"]["container_id"] != ident:
                 raise Refused("authority anchor/launch mismatch")
+            if proof_probe:
+                outcome = value.get('proof')
+                if (not isinstance(outcome, dict) or outcome.get('scope') != ('proof-observation' if operation == 'proof_observe' else 'proof-cleanup')
+                        or outcome.get('runtime_authorized') is not False
+                        or outcome.get('accepted_packet_sha256') != anchor['execution_acceptance']['manifest_sha256']):
+                    raise Refused('missing authenticated proof observation')
+                return outcome
             if managed:
                 outcome = value.get('managed')
                 accepted_field = {'managed_restart': 'managed_acceptance',
@@ -489,6 +519,23 @@ class AttestationClient:
         if not isinstance(query, dict) or 'operation' in query:
             raise Refused('invalid fixture restart request')
         return self._request(dict(query, operation='fixture_restart'))
+
+    def observe_proof_harness(self, packet, container_id, *, worker=None, native=None):
+        """Read-only facts under distinct root acceptance; never release/start."""
+        import base64
+        return self._request({'operation': 'proof_observe', 'container_id': container_id,
+                              'packet': base64.b64encode(packet).decode(), 'worker': worker, 'native': native})
+
+    def cleanup_proof_workers(self, packet, container_id, roles):
+        """Exact private worker teardown; never a generic root stop endpoint."""
+        import base64
+        return self._request({'operation': 'proof_cleanup', 'container_id': container_id,
+            'packet': base64.b64encode(packet).decode(), 'roles': roles})
+
+    def finish_proof(self, packet, container_id, identity, roles):
+        import base64
+        return self._request({'operation': 'proof_finish', 'container_id': container_id,
+            'packet': base64.b64encode(packet).decode(), 'identity': identity, 'roles': roles})
 
     def fixture_bootstrap(self, query):
         """Exact root-accepted fixture admission, separate from generic release."""

@@ -160,6 +160,27 @@ def compatible_writers():
             raise Refused('managed recovery requires compatible dashboard peers')
 
 
+def authenticated_delivery_transport(transport, socket_path):
+    """Verify an initialized managed peer; socket configuration grants nothing.
+
+    This does not start a process, alter ownership, or authorize a restart.
+    before_send still checks admission and persists every durable input claim.
+    """
+    compatible_writers()
+    with _core._CODEX_APP_SERVER_LOCK:
+        if (transport is None or transport is not _core._CODEX_APP_SERVER_TRANSPORT
+                or transport.kind != 'managed-unix' or not transport.alive()
+                or not _core._CODEX_APP_SERVER_INITIALIZED
+                or getattr(transport, 'managed_recovering', True)
+                or str(getattr(transport, 'managed_socket_path', '')) != str(socket_path)):
+            raise Refused('managed delivery connection is not authenticated and ready')
+        identity = observe_peer(transport.sock, socket_path)
+        if (not _valid_daemon(identity) or identity != transport.managed_identity
+                or _sha(identity) != transport.managed_epoch):
+            raise Refused('managed delivery daemon identity changed')
+    return identity
+
+
 def _valid_daemon(identity):
     fields = {'pid', 'start_ticks', 'boot_id', 'socket_device', 'socket_inode',
               'directory_device', 'directory_inode', 'binary_sha256', 'version', 'protocol_sha256'}
