@@ -45,7 +45,7 @@ test('worker header counts receipts, groups repos, labels plan coverage and ages
     assert.match(await page.$eval('.worker-activity-line',e=>e.textContent),/Activity unavailable/);
     assert.equal(await page.$('.worker-activity-now'),null);
     await page.evaluate(async () => {window.data={sampled_at:Date.now()/1000,pending:false,workers:[]};await window.ticks[0]();});
-    assert.match(await page.$eval('.worker-activity-line',e=>e.textContent),/0 now.*0 recent.*No token usage in 5m/);
+    assert.match(await page.$eval('.worker-activity-line',e=>e.textContent),/0 now.*0 recent.*No measured usage in 5m/);
     await page.evaluate(async () => {
       window.data={sampled_at:Date.now()/1000,pending:false,workers:[{repo_path:'/example/<img src=x>',last_token_at:Date.now()/1000}]};
       await window.ticks[0]();

@@ -62,7 +62,7 @@
         ...workers.map(w => [w.queue, w.engine, w.worker_id].filter(Boolean).join(' · '))].join('\n');
       parts.push(span('worker-activity-repo', name + ' ' + workers.length + progress, title));
     }
-    if (!rows.length) parts.push(span('worker-activity-muted', 'No token usage in 5m'));
+    if (!rows.length) parts.push(span('worker-activity-muted', 'No measured usage in 5m'));
     line.replaceChildren(...parts);
     const unmeasured = (snapshot.workers || []).filter(w => !Number.isFinite(w.last_token_at)).length;
     line.title = 'Measured token receipts: now = last 60s; recent = 1–5m. Refreshed every 10s. Tool output and process uptime do not count.'
