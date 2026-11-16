@@ -15,6 +15,7 @@ from pathlib import Path
 import collections
 import copy
 import fcntl
+import functools
 import json
 import math
 import os
@@ -35,6 +36,7 @@ import threading
 import time
 import urllib.request
 import uuid
+import weakref
 
 from ccc_server import antigravity_accounts as _antigravity_accounts
 from ccc_server import antigravity_ls
@@ -44,6 +46,69 @@ from ccc_server.paths import _is_pid_alive as _paths_is_pid_alive
 from ccc_server import free_runtime as _free_runtime
 from ccc_server import domestic_providers as _domestic_providers
 from ccc_server import continuation_topics as _continuation_topics
+from ccc_server import process_identity as _process_identity
+
+_CLAUDE_DELIVERY_LOCKS = weakref.WeakValueDictionary()
+_CLAUDE_DELIVERY_LOCKS_GUARD = threading.Lock()
+
+
+def _session_delivery_lock(session_id):
+    if str(session_id).startswith("agent-"):
+        session_id = _core._claude_subagent_parent_session_id(session_id) or session_id
+    with _CLAUDE_DELIVERY_LOCKS_GUARD:
+        return _CLAUDE_DELIVERY_LOCKS.setdefault(str(session_id), threading.RLock())
+
+
+def _serialize_session_delivery(fn):
+    """Keep compare/retire/resume/write atomic across concurrent submissions."""
+    @functools.wraps(fn)
+    def serialized(session_id, *args, **kwargs):
+        with _session_delivery_lock(session_id):
+            return fn(session_id, *args, **kwargs)
+    return serialized
+
+
+def _headless_model_change_pending(entry, session_id):
+    """Compare the saved choice with launch state, never with transcript usage.
+
+    Older resumed entries did not record their model. Read their launch argv
+    once instead of assuming the newly saved override describes that process.
+    Free runtimes own their model and must keep their existing meter guards.
+    """
+    if ((entry.get("engine") or "claude") != "claude"
+            or entry.get("runtime") or _free_runtime.session_runtime(session_id)
+            or _core._free_failover_session_env(session_id) is not None):
+        return False
+    if entry.get("_model_switch_stopping"):
+        return True
+    override = _core._get_session_override(session_id) or {}
+    wanted = str(override.get("model") or "")
+    if not wanted:
+        return False
+    command = (entry.get("command") or entry.get("_model_launch_argv")
+               or getattr(entry.get("proc"), "args", None))
+    if not isinstance(command, (list, tuple)):
+        identity = _process_identity.read_launch_identity(entry.get("pid")) or {}
+        command = identity.get("argv") or []
+        if command:
+            entry["_model_launch_argv"] = command
+    def flag(name):
+        for i, arg in enumerate(command):
+            if arg == name and i + 1 < len(command):
+                return command[i + 1]
+            if isinstance(arg, str) and arg.startswith(name + "="):
+                return arg.split("=", 1)[1]
+        return ""
+    live = entry.get("model") or flag("--model")
+    normalize = lambda model: _core._short_model_alias(str(model or "")).lower()
+    if normalize(live) != normalize(wanted):
+        return True
+    effort = str(override.get("reasoning_effort") or "")
+    if effort and effort != (entry.get("reasoning_effort") or flag("--effort")):
+        return True
+    # Context is a launch flag too. A recovered entry can read it from argv.
+    live_one_m = entry.get("context_1m", "context-1m-2025-08-07" in flag("--betas"))
+    return bool(override.get("context_1m")) != bool(live_one_m)
 
 # ---------------------------------------------------------------------------
 # Installed-engines inventory (First Flight tour welcome chips).
@@ -7573,7 +7638,8 @@ def _codex_exec_resume_entry_is_stale(entry):
     return (now - mtime) >= _CODEX_EXEC_RESUME_STALE_QUIET_S
 
 
-def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, caller=None):
+def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, caller=None,
+                                     wait_for_exit=False):
     """Stop tracking a CCC-owned spawn whose stdin can no longer accept input."""
     if not isinstance(entry, dict):
         return
@@ -7628,8 +7694,23 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
                 os.kill(int(pid), signal.SIGTERM)
             except (ProcessLookupError, PermissionError, OSError, ValueError):
                 pass
+    if terminate and wait_for_exit:
+        # Model switches cannot create the next writer until the old one is
+        # gone. Keep tracking a slow/non-exiting child so retries cannot fork.
+        try:
+            if isinstance(_proc, subprocess.Popen):
+                _proc.wait(timeout=2)
+            else:
+                deadline = time.monotonic() + 2
+                poll = _proc.poll if _proc is not None else lambda: _proc_less_entry_poll(entry)
+                while poll() is None:
+                    if time.monotonic() >= deadline:
+                        return False
+                    time.sleep(0.02)
+        except (subprocess.TimeoutExpired, OSError):
+            return False
     _cleanup_finished_entry(entry)
-    if terminate and isinstance(_proc, subprocess.Popen):
+    if terminate and not wait_for_exit and isinstance(_proc, subprocess.Popen):
         threading.Thread(target=_proc.wait, daemon=True, name=f"retired-spawn-{pid}").start()
     if pid is not None:
         _core._remove_spawn_from_registry(pid)
@@ -7637,6 +7718,7 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
         _core._spawned_sessions.remove(entry)
     except ValueError:
         pass
+    return True
 
 
 def _proc_less_entry_poll(entry):
@@ -7942,6 +8024,13 @@ def inject_into_spawned(pid, text):
         if s["pid"] == pid:
             if _core._poll_spawn_entry(s) is not None:
                 return {"ok": False, "error": "process exited"}
+            sid = s.get("resumed_sid") or s.get("session_id")
+            if sid and (s.get("engine") or "claude") == "claude":
+                with _session_delivery_lock(sid):
+                    if _core._headless_model_change_pending(s, sid):
+                        return _core._inject_text_into_session(sid, text)
+                    ok = _core._write_stream_json_user_message(s, text)
+                    return {"ok": ok, "pid": pid}
             ok = _core._write_stream_json_user_message(s, text)
             return {"ok": ok, "pid": pid}
     return {"ok": False, "error": "unknown pid (not spawned by this server)"}
@@ -8625,6 +8714,7 @@ def _start_headless_staleness_watcher() -> None:
     ).start()
 
 
+@_serialize_session_delivery
 def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, runtime="", extra_env=None):
     """Resume a dormant session headlessly (`claude --resume`) and send text.
 
@@ -8686,6 +8776,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
             failover_env = None
     preset_override = _core._get_session_override(session_id) or {}
     preset_model = _domestic_providers.session_model(session_id, preset_override)
+    validated_preset = None
     if not runtime and not extra_env and not failover_env:
         preset_error = _domestic_providers.request_error(
             "claude", preset_model, remote=bool(os.environ.get("CCC_SSH_HOST")),
@@ -8708,10 +8799,33 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
                     "this session already has a live process on a different "
                     "runtime — let it finish or start a new session",
                 )
-            if not runtime and (str(preset_model).startswith("byok/") or str(s.get("model") or "").startswith("byok/")):
-                if preset_model != s.get("model"):
-                    return {"ok": False, "code": "preset_live_model_changed",
-                            "error": "This session is still running with a different model. Start a new session to use your new choice."}
+            if not runtime and _core._headless_model_change_pending(s, session_id):
+                with s.setdefault("_input_write_lock", threading.Lock()):
+                    legacy_starting = (
+                        _valid_input_command_uuids(s) is None
+                        and s.get("prompt")
+                        and _headless_log_result_count(s) == 0
+                    )
+                    if (legacy_starting or _headless_turn_in_progress(s)
+                            or _core._spawn_entry_active_tool_child(s)):
+                        return {"ok": False, "code": "claude_model_switch_pending",
+                                "pid": s.get("pid"),
+                                "error": "Model change waits for the current turn to finish."}
+                    try:
+                        validated_preset = _domestic_providers.resolve_spawn(
+                            preset_model, s.get("cwd") or cwd,
+                        )
+                    except _domestic_providers.DomesticProviderError as error:
+                        return error.as_payload()
+                    s["_model_switch_stopping"] = True
+                    if not _core._retire_unresponsive_spawn_entry(
+                        s, terminate=True, reason="model-switch",
+                        caller="next-message", wait_for_exit=True,
+                    ):
+                        return {"ok": False, "code": "claude_model_switch_pending",
+                                "pid": s.get("pid"),
+                                "error": "Waiting for the previous model process to exit."}
+                break
             ok = _core._write_stream_json_user_message(s, text)
             if ok:
                 _se = _core._resume_entry_started_epoch(s)
@@ -8755,7 +8869,7 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
             return e.as_payload()
     cwd = ctx["cwd"]
     try:
-        paid_preset = (None if runtime or extra_env else
+        paid_preset = (None if runtime or extra_env else validated_preset or
                        _domestic_providers.resolve_spawn(preset_model, cwd))
     except _domestic_providers.DomesticProviderError as error:
         return error.as_payload()
@@ -8910,7 +9024,10 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         "cwd": cwd,
         "repo_path": ctx["repo_path"],
         "runtime": runtime,
-        "model": preset_model if paid_preset else "",
+        "model": preset_model if not runtime and not extra_env else "",
+        "command": list(cmd),
+        "context_1m": bool(override.get("context_1m")) if not runtime and not extra_env else False,
+        "reasoning_effort": str(override.get("reasoning_effort") or "") if not runtime and not extra_env else "",
         "auto_compact_k": resume_auto_compact_k,
     }
     ok = _core._write_stream_json_user_message(entry, text, timeout=30)
@@ -8945,7 +9062,8 @@ def resume_session_headless(session_id, text, cwd=None, idempotency_key=None, ru
         session_id=session_id,
         repo_path=ctx["repo_path"],
         runtime=runtime,
-        model=preset_model if paid_preset else "",
+        model=entry["model"],
+        reasoning_effort=entry["reasoning_effort"],
         input_result_target=entry.get("input_result_target"),
         input_accepted_at=entry.get("input_accepted_at"),
         input_command_uuids=entry.get("input_command_uuids"),

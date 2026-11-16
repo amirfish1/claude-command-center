@@ -249,14 +249,15 @@ def test_cold_resume_without_key_refuses_before_launch(monkeypatch, tmp_path):
     assert result["code"] == "preset_key_missing"
 
 
-def test_live_process_cannot_silently_change_paid_provider(monkeypatch):
+def test_busy_process_cannot_silently_change_paid_provider(monkeypatch):
     monkeypatch.setattr(server, "_control_plane_engine_call", lambda *args, **kwargs: None)
     monkeypatch.setattr(server, "_claude_subagent_parent_session_id", lambda sid: None)
     monkeypatch.setattr(server, "_get_session_override", lambda sid: {"model": MODEL})
     monkeypatch.setattr(server, "_spawned_sessions", [{"session_id": "test-session-XXXX", "model": "byok/kimi-cn/kimi-k3"}])
     monkeypatch.setattr(server, "_poll_spawn_entry", lambda entry: None)
+    monkeypatch.setattr(server, "_spawn_entry_active_tool_child", lambda entry: {"pid": 123})
     result = server.resume_session_headless("test-session-XXXX", "Say hello.")
-    assert result["code"] == "preset_live_model_changed"
+    assert result["code"] == "claude_model_switch_pending"
 
 
 def test_spawned_preset_session_keeps_preset_on_cold_resume(monkeypatch, tmp_path):

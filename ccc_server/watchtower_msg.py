@@ -33,6 +33,7 @@ import uuid
 from ccc_server import core as _core
 from ccc_server import test_isolation_active as _test_isolation_active
 from ccc_server import liveness as _liveness
+from ccc_server.engines import _serialize_session_delivery
 
 # ---------------------------------------------------------------------------
 # Stage 2 of the WatchTower messaging handover (docs/messaging-design.md in
@@ -1886,6 +1887,19 @@ def _inject_text_into_session(session_id, text, **kwargs):
     return result
 
 
+def _deliver_pending_claude_model(session_id, text, status, from_queue=False):
+    """Intercept every warm delivery, including Steer, before old-model input."""
+    if not from_queue and _core._terminal_input_queue_has_pending(session_id):
+        return _core._queue_terminal_input(session_id, text, status)
+    result = _core.resume_session_headless(session_id, text)
+    if result.get("code") == "claude_model_switch_pending" and not from_queue:
+        queued = _core._queue_terminal_input(session_id, text, status)
+        queued["model_change_pending"] = True
+        return queued
+    return result
+
+
+@_serialize_session_delivery
 def _inject_text_into_session_router(
     session_id,
     text,
@@ -2067,6 +2081,20 @@ def _inject_text_into_session_router(
             f"text=\"{_core._activity_log_preview(text)}\"",
         )
         return _blocked
+    # A saved headless model choice takes precedence over every warm transport
+    # (including peer delivery and interrupt/steer). The resume path checks a
+    # fresh turn boundary and waits for process exit before its first write.
+    if not has_tty:
+        pending_spawn = probe.spawn()
+        if pending_spawn is not None and _core._headless_model_change_pending(pending_spawn, session_id):
+            if (not force_headless and not _from_terminal_queue and not force_terminal
+                    and _core._session_has_live_terminal(session_id, exclude_pid=pending_spawn.get("pid"))):
+                return {"ok": False, "soft_block": True, "code": "terminal_suspected",
+                        "session_id": session_id,
+                        "message": "CCC detected a terminal running on this session. Choose where to send your message."}
+            return _deliver_pending_claude_model(
+                session_id, text, status, _from_terminal_queue,
+            )
     # Native Claude peer socket for agent-to-agent relays. Sits AFTER the
     # worker hand-off above and ahead of every legacy transport below: a
     # headless target that just handed off already sent once (the worker's
@@ -2773,8 +2801,9 @@ def _maybe_queue_on_invalid_cwd(session_id, text, status, result):
 def _set_session_model(session_id, model, context_1m, reasoning_effort=None, effort_only=False):
     """Apply a model+context choice to a session.
 
-    Live Claude (TTY or spawned) gets a real `/model <alias>[1m]` slash
-    command injected into the running process. Codex, Gemini, Cursor,
+    Live Claude TTYs get a real `/model <alias>[1m]` slash command.
+    Headless Claude records the choice and swaps processes on the next safe
+    submitted message. Codex, Gemini, Cursor,
     Antigravity, and dormant Claude have no runtime-switch mechanism, so the choice is persisted
     to the session-overrides sidecar and applied on the next resume.
 
@@ -2927,32 +2956,21 @@ def _set_session_model(session_id, model, context_1m, reasoning_effort=None, eff
 
 
 def _set_session_model_headless_local(session_id, model, context_1m, reasoning_effort, effort_only):
-    """In-band model switch for a CCC-owned headless Claude spawn.
+    """Record a pending switch without disturbing the current process.
 
     Runs wherever the spawn entry actually lives (see _interrupt_claude_headless_local
     for the same routing shape). CCC-54 follow-up: a headless `claude -p` does
     NOT process slash commands — writing "/model X[1m]" over the stream-json
     FIFO just makes it answer "/model isn't available in this environment".
     A headless model is fixed at spawn via `--model`, so switching means
-    respawning. The override is already persisted by the caller; this only
-    retires the current headless (now if idle, deferred to idle if busy,
-    approval-gated per _retire_idle_headless_for_session) so the next turn
-    does a fresh `--resume` on the new model.
+    respawning. The override is already persisted by the caller. Delivery
+    owns the swap: picking a model alone must never retire an idle process,
+    schedule retirement of a busy turn, or open an interrupt approval card.
     """
     spawn = _core._find_live_spawn_entry_for_session(session_id)
     if spawn is None or (spawn.get("engine") or "claude") != "claude":
         return {"ok": False, "code": "no_spawn"}
-    retired = _core._retire_idle_headless_for_session(
-        session_id, reason="model-switch", defer_if_busy=True,
-        require_approval=True)
-    result = {"ok": True, "via": "respawn-on-next-turn"}
-    if retired.get("retired"):
-        result["retired_headless_pid"] = retired.get("pid")
-    elif retired.get("deferred"):
-        result["headless_retire_deferred"] = True
-    elif retired.get("reason") == "pending_approval":
-        result["headless_retire_ask_id"] = retired.get("ask_id")
-    return result
+    return {"ok": True, "applied": "queued", "via": "model-on-next-message"}
 
 
 def _interrupt_claude_headless_local(session_id):
@@ -4098,71 +4116,72 @@ def ask_session_and_wait(session_id, text, timeout_ms=30000, cwd=None, peer_send
     if status.get("live") and status.get("tty"):
         return _core.ask_session_via_live_tail(session_id, text, timeout_ms, status, peer_sender_sid=peer_sender_sid)
 
-    # Resume-headless path (original behaviour). Reuse an existing live
-    # resume if we already have one (same path resume_session_headless takes).
-    entry = None
-    expected_command_uuid = None
-    for s in _core._spawned_sessions:
-        if (
-            (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
-            and _core._poll_spawn_entry(s) is None
-        ):
-            entry = s
-            break
-
-    if entry is None:
-        # Stage 2 WatchTower messaging handover: this is the same "would
-        # spawn a fresh claude --resume" decision point
-        # _try_wt_send_for_headless_delivery guards on the fire-and-forget
-        # side. `engine` narrowed to codex/gemini/antigravity above, but
-        # cursor/hermes/kilo sessions can still reach this branch — gate
-        # explicitly on "claude" rather than assume by elimination.
-        if engine == "claude":
-            wt_result = _core._try_wt_ask_for_headless_delivery(session_id, text, timeout_ms)
-            if wt_result is not None:
-                return wt_result
-        # No live subprocess — spawn one. resume_session_headless writes
-        # the user message itself and appends the entry to _spawned_sessions.
-        spawn_result = _core.resume_session_headless(session_id, text, cwd=cwd)
-        if not spawn_result.get("ok"):
-            spawn_result.setdefault("source", "resume-headless")
-            return spawn_result
-        # The brand new entry is the last one matching this sid.
-        for s in reversed(_core._spawned_sessions):
-            if s.get("resumed_sid") == session_id or s.get("session_id") == session_id:
+    with _core._session_delivery_lock(session_id):
+        # Resume-headless path (original behaviour). Reuse an existing live
+        # resume if we already have one (same path resume_session_headless takes).
+        entry = None
+        expected_command_uuid = None
+        for s in _core._spawned_sessions:
+            if (
+                (s.get("resumed_sid") == session_id or s.get("session_id") == session_id)
+                and _core._poll_spawn_entry(s) is None
+            ):
                 entry = s
                 break
-        if entry is None:
-            return {
-                "ok": False,
-                "error": "spawned subprocess but lost track of it",
-                "source": "resume-headless",
-            }
-        # Fresh spawn — start scanning from byte 0 since the only output
-        # in this log will be from this ask.
-        start_offset = 0
-    else:
-        # Live subprocess — record where the log is *now* before writing
-        # so we don't pick up a previous turn's result event.
-        try:
-            start_offset = os.path.getsize(entry["log"])
-        except OSError:
+
+        if entry is None or _core._headless_model_change_pending(entry, session_id):
+            # Stage 2 WatchTower messaging handover: this is the same "would
+            # spawn a fresh claude --resume" decision point
+            # _try_wt_send_for_headless_delivery guards on the fire-and-forget
+            # side. `engine` narrowed to codex/gemini/antigravity above, but
+            # cursor/hermes/kilo sessions can still reach this branch — gate
+            # explicitly on "claude" rather than assume by elimination.
+            if engine == "claude" and entry is None:
+                wt_result = _core._try_wt_ask_for_headless_delivery(session_id, text, timeout_ms)
+                if wt_result is not None:
+                    return wt_result
+            # No live subprocess — spawn one. resume_session_headless writes
+            # the user message itself and appends the entry to _spawned_sessions.
+            spawn_result = _core.resume_session_headless(session_id, text, cwd=cwd)
+            if not spawn_result.get("ok"):
+                spawn_result.setdefault("source", "resume-headless")
+                return spawn_result
+            # The brand new entry is the last one matching this sid.
+            for s in reversed(_core._spawned_sessions):
+                if s.get("resumed_sid") == session_id or s.get("session_id") == session_id:
+                    entry = s
+                    break
+            if entry is None:
+                return {
+                    "ok": False,
+                    "error": "spawned subprocess but lost track of it",
+                    "source": "resume-headless",
+                }
+            # Fresh spawn — start scanning from byte 0 since the only output
+            # in this log will be from this ask.
             start_offset = 0
-        prior_command_uuids = set(_core._valid_input_command_uuids(entry) or [])
-        ok = _core._write_stream_json_user_message(entry, text)
-        if not ok:
-            return {
-                "ok": False,
-                "error": "failed to write user message (broken pipe?)",
-                "source": "resume-headless",
-            }
-        written_command_uuids = _core._valid_input_command_uuids(entry) or []
-        new_command_uuids = [
-            value for value in written_command_uuids
-            if value not in prior_command_uuids
-        ]
-        if len(new_command_uuids) == 1:
-            expected_command_uuid = new_command_uuids[0]
+        else:
+            # Live subprocess — record where the log is *now* before writing
+            # so we don't pick up a previous turn's result event.
+            try:
+                start_offset = os.path.getsize(entry["log"])
+            except OSError:
+                start_offset = 0
+            prior_command_uuids = set(_core._valid_input_command_uuids(entry) or [])
+            ok = _core._write_stream_json_user_message(entry, text)
+            if not ok:
+                return {
+                    "ok": False,
+                    "error": "failed to write user message (broken pipe?)",
+                    "source": "resume-headless",
+                }
+            written_command_uuids = _core._valid_input_command_uuids(entry) or []
+            new_command_uuids = [
+                value for value in written_command_uuids
+                if value not in prior_command_uuids
+            ]
+            if len(new_command_uuids) == 1:
+                expected_command_uuid = new_command_uuids[0]
 
     log_path = entry["log"]
     proc = entry["proc"]

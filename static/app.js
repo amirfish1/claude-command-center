@@ -67315,8 +67315,8 @@
         + (currentReasoningEffort
           ? '\nReasoning effort: ' + currentReasoningEffort
           : (showsEffort ? '\nReasoning effort: engine default (CCC has not set one)' : ''))
-        + (queued ? '\n(Switch to ' + (ovr && ovr.model || '') + ' is queued - applies on the session\'s next CCC-resumed ask)' : '')
-        + (queuedEffort ? '\n(Switch to effort ' + queuedEffort + ' is queued - applies on the session\'s next CCC-resumed ask)' : '')
+        + (queued ? '\n' + (ovr && ovr.model || '') + ' applies on your next message, after the current turn finishes.' : '')
+        + (queuedEffort ? '\nEffort ' + queuedEffort + ' applies on your next message, after the current turn finishes.' : '')
         + (engine === 'hermes' ? '' : '\n\nClick to change model');
       // CCC-823: the pill's visible label is now JUST the model short name
       // (plus 1M / pending-switch badges where relevant) — reasoning effort
@@ -67329,7 +67329,7 @@
         : (queuedEffort ? formatModelEffort('', queuedEffort, { style: 'verbose' }) : '');
       const modelInner = escapeHtml(shortModel)
         + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
-        + (pendingText ? ' <span class="wp-model-pending">→ ' + escapeHtml(pendingText) + '</span>' : '')
+        + (pendingText ? ' <span class="wp-model-pending">→ ' + escapeHtml(pendingText) + ' next message</span>' : '')
         + ' <span class="wp-model-chevron">&#x25be;</span>';
       if (engine === 'hermes') {
         modelPill = ' <span class="wp-model-pill is-static" title="' + escapeHtml(modelTip) + '">'
@@ -68336,7 +68336,7 @@
           applied: data.applied || 'queued',
         };
         renderSessionUsageIntoStrip(_mpPid);
-        setStatus(data.applied === 'live' ? 'Switched live ✓' : 'Queued for next ask', 'ok');
+        setStatus(data.applied === 'live' ? 'Switched live ✓' : 'Applies on your next message', 'ok');
         setTimeout(closeModelPicker, 800);
       } catch (err) {
         setStatus('Network error', 'err');
