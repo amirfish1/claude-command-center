@@ -1,7 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'), vm=require('node:vm');
-const app=fs.readFileSync('static/app.js','utf8');
+const app=require('./legacy-dashboard-source.cjs');
 const start=app.indexOf('  async function _ticketQueueNames()');
 const source=app.slice(start,app.indexOf('  // Shared by every ticket-add',start));
 test('cold ticket picker uses configuration, never slow worker health',async()=>{

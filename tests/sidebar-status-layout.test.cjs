@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf(`      return '<div class="conv-item'`);
 const endMarker = `          : '');`;
 assert.ok(start >= 0);

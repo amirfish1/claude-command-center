@@ -2,7 +2,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const helpers = app.slice(app.indexOf('  async function _enqueueQueueTicket('), app.indexOf('  // CCC-163: the panel'));
 const handlers = app.slice(app.indexOf('  async function _addQueueTicket('), app.indexOf('  {\n    const $newTicketBtn'));
 function fixture(fetch) {

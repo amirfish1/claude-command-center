@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const {webcrypto} = require('node:crypto');
-const source = fs.readFileSync('static/app.js', 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 
 function harness() {
   const leases = [], timers = new Map(), events = {};

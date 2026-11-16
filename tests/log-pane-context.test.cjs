@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
-const app = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 
 function section(start, end) {
   const a = app.indexOf(start), b = app.indexOf(end, a);

@@ -6,8 +6,8 @@ const path = require('node:path');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8')
-  + '\n' + fs.readFileSync(path.join(__dirname, '../static/conversation-events.js'), 'utf8');
+const { source, functions } = require('./conversation-source.cjs');
+
 function between(start, end) {
   const first = source.indexOf(start);
   assert.ok(first >= 0, start);
@@ -15,15 +15,7 @@ function between(start, end) {
   assert.ok(last > first, end);
   return source.slice(first, last);
 }
-const lifecycle = [
-  between('  function queuedSteerSource(', '  function syncUserMessageSteerButtons('),
-  between('  function takeQueuedSendAcknowledgement(', '  // Queued sends are actionable steer candidates'),
-  between('  function syncPendingSendsMapForConv(', '  function removePendingSendEcho('),
-  between('  function markPendingSendQueued(', '  // State 2 of the echo lifecycle:'),
-  between('  function markPendingSendDelivered(', '  // ── WT-routed send receipts'),
-  between('  function removePendingSendEcho(', '  // A send the server *queued*'),
-  between('  function restorePendingSendEchoes(', '  // ── Submit+ (phone mode)'),
-].join('\n');
+const lifecycle = functions(['queuedSteerSource', 'sessionSupportsQueuedSteer', 'queuedSteerBlockedReason', 'takeQueuedSendAcknowledgement', 'syncPendingSendsMapForConv', 'bindPendingSendDeliveryId', 'readyQueuedSteerRows', 'appendPendingSendEcho', 'markPendingSendQueued', 'markPendingSendDelivered', 'removePendingSendEcho', 'restorePendingSendEchoes']);
 const reconciliation = between(
   '        const normed = state._normSend(ev.text);\n        let _reconciledExact',
   '        // Webui panes: collapse a durable user bubble');
@@ -33,11 +25,8 @@ const renderedUserReconciliation = between(
 const renderTail = between(
   '    // The app-server live overlay is agent-output-only.',
   '    // Re-evaluate the end-of-session outcome banner');
-const steerStart = source.lastIndexOf("  document.addEventListener('click', async (ev) => {",
-  source.indexOf("const btn = ev.target.closest('[data-steer-queued-message]')"));
-const steerHandler = source.slice(steerStart,
-  source.indexOf("  document.addEventListener('click', async (ev) => {", steerStart + 1))
-  + between('  // Steer all: one prompt', '  async function launchTerminal(');
+const steerHandler = functions(['installConversationInteraction37', 'installConversationInteraction39'])
+  + '\ninstallConversationInteraction37(); installConversationInteraction39();';
 let browser;
 before(async () => { browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] }); });
 after(async () => { if (browser) await browser.close(); });
@@ -161,6 +150,7 @@ async function fixture(run, input, realTray = false, viewport) {
         tray.append(row);
         return row;
       };
+      window.sharedState = window.hostServices = window.helpers = window.state = window;
       (0, eval)(lifecycle);
       const reconcileEvent = new Function('ev', 'paneId', '$view', 'div', reconciliation);
       window.reconcileUserEvent = (ev, paneId, view) => {
@@ -195,7 +185,7 @@ async function fixture(run, input, realTray = false, viewport) {
       window.getConvInputBarForPane = () => document.querySelector('.conv-input-bar');
       window.isPendingSendEchoElement = el => el.matches('.pending, .send-queued, .send-delivered');
       (0, eval)(helpers);
-    }, between('  function queuedSteerCardCount(', '  // ── Conversation presentation modes'));
+    }, "window._steerInFlightTexts = new Map(); window._queuedSteerErrors = new Map();\n" + functions(['queuedSteerCardCount', 'trayConversationView', 'steerTextKeys', 'markSteerInFlight', 'clearSteerInFlight', 'steerIsInFlight', 'queuedSteerErrorKey', 'setQueuedSteerError', 'clearQueuedSteerError', 'applyQueuedSteerError', 'beginOptimisticSteerMove', 'settleSteeredServerCard', 'revertOptimisticSteerMove', 'syncQueuedSteerAllControl', 'takeQueuedSendAcknowledgement', 'queuedFromSessionRow', 'queuedFromDescription', 'syncQueuedFromLabel', 'syncQueuedSteerTray']));
     const result = await page.evaluate(run, input);
     if (process.env.STEER_SCREENSHOT && viewport) {
       await page.addStyleTag({ content: fs.readFileSync('static/app.css', 'utf8')

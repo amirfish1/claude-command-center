@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const ssbActions = app.indexOf("button.ssb-action[data-ssb-act]");
 const helpers = app.slice(app.indexOf('  // Row actions are model-authored replies'),
   app.lastIndexOf("  document.addEventListener(", ssbActions));
@@ -242,7 +242,7 @@ test('decision chips share their line with the row pop-out (CCC-281)', () => {
   assert.ok(rule, 'decision slot rule exists');
   assert.doesNotMatch(rule[1], /flex:\s*1 1 100%/, 'a full-width chip slot pushes the pop-out to its own line');
   assert.match(rule[1], /min-width:\s*0/);
-  const app = fs.readFileSync('static/app.js', 'utf8');
+  const app = require('./legacy-dashboard-source.cjs');
   const slotInserts = app.match(/host\.insertBefore\(slot, host\.querySelector\(':scope > \[data-role="popout-row-session"\]'\)\)/g) || [];
   assert.equal(slotInserts.length, 2, 'chip slots go before an existing pop-out');
 });

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 
 require('../static/conversation-text.js');
 const renderer = globalThis.CCCConversationText.createRenderer({ findSession: () => null });
@@ -22,7 +22,7 @@ test('ordinary hyphenated text does not become a WatchTower ticket link', () => 
 
 test('WatchTower ticket links resolve to the corresponding queue page', () => {
   const start = app.indexOf('  function watchtowerTicketUrl(');
-  const end = app.indexOf('\n  document.addEventListener(', start);
+  const end = app.indexOf('\n  }\n', start) + 4;
   assert.ok(start >= 0 && end > start, 'WatchTower ticket URL helper found');
   const ticketUrl = new Function(app.slice(start, end) + '; return watchtowerTicketUrl;')();
   assert.equal(ticketUrl('OPS-1148', 'http://127.0.0.1:8787/'), 'http://127.0.0.1:8787/q/OPS#OPS-1148');

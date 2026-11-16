@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const css = fs.readFileSync('static/app.css', 'utf8');
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 
 test('conversation commentary and expanded command rows wrap without clipping', async () => {
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });

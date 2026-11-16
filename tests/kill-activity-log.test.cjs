@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 
 function presentationFor(event) {
   const start = app.indexOf('  // Readable activity log:');

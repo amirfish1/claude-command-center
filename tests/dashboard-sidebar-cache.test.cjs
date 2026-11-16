@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const cache = app.slice(app.indexOf('  const ARCHIVE_SIDEBAR_CACHE_KEY'),
   app.indexOf('  // Dedupe concurrent /api/conversations/list'));
 assert.ok(cache.length > 100);

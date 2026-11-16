@@ -17,7 +17,7 @@ test('legacy decision prose becomes Decide with derived option chips', () => {
   assert.ok(!/^answer/i.test(info.text), info.text);
   const helpers = require('node:vm');
   const fs = require('node:fs');
-  const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+  const app = require('./legacy-dashboard-source.cjs');
   const start = app.indexOf('  function decisionQuickActions(');
   const end = app.indexOf('\n  }\n', start);
   const derive = helpers.runInNewContext(app.slice(start, end + 4) + '\ndecisionQuickActions;');
@@ -65,7 +65,7 @@ test('pending agent work replaces a completed milestone without asking the user'
 
 
 test('explicit category questions get literal reply chips without inventing actions', () => {
-  const app = require('node:fs').readFileSync(require.resolve('../static/app.js'), 'utf8');
+  const app = require('./legacy-dashboard-source.cjs');
   const start = app.indexOf('  function decisionQuickActions(');
   const end = app.indexOf('\n  }\n', start);
   const derive = require('node:vm').runInNewContext(app.slice(start, end + 4) + '\ndecisionQuickActions;');
@@ -102,7 +102,7 @@ test('an event-triggered agent step reads Waiting, not Waiting for agent', () =>
 
 
 test('raw footer preserves all comma-qualified decision chips and their exact replies', () => {
-  const app = require('node:fs').readFileSync(require.resolve('../static/app.js'), 'utf8');
+  const app = require('./legacy-dashboard-source.cjs');
   const names = ['sessionQuickAction', '_ultraFreshParseState'];
   const source = names.map(name => {
     const start = app.indexOf('  function ' + name + '(');

@@ -2,19 +2,20 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const rows = [{ id: 'pinned', pinned: true, display_name: 'Release notes', modified: 1 },
   { id: 'plain', display_name: 'Search indexing', modified: 100 }];
 const identity = v => v;
 function localSearch(q) {
-  const start = source.indexOf('  function filterConversations(q) {');
-  const end = source.indexOf('\n  }\n', start) + 4;
-  return vm.runInNewContext(source.slice(start, end) + '\nfilterConversations(query);', {
+  const fn = require('./conversation-source.cjs').functionSource('filterConversations');
+  const context = {
     query: q, conversationsData: rows, _bridgeSearchNeedle: () => '', _uuidSearchNeedle: () => null, recencyCutoffSec: () => 50,
     _archivedBacklogIds: new Set(), currentConversation: '', showRecentOnly: true, window: {},
     rowMatchesEffortQuery: () => false, _prioritizeNameMatches: identity,
     _prioritizeSessionIdMatches: identity, applyConvSort: identity, _decorateWithHistoryMatches: identity,
-  });
+  };
+  context.sharedState = context.hostServices = context;
+  return vm.runInNewContext(fn + '\nfilterConversations(query);', context);
 }
 function archiveSearch(q) {
   const start = source.indexOf('    let rows = q ? byFolder.filter(c =>');

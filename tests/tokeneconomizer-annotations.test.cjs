@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const scan = app.slice(app.indexOf('  const _CC_ORCH_RES = ['), app.indexOf('  function _ccOrchLabels('));
 const render = app.slice(app.indexOf('  function _tokenEconomizerAnnotationHtml('),
   app.indexOf('  function _paintTokenEconomizerAnnotation('));

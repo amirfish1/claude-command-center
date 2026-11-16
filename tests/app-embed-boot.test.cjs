@@ -5,8 +5,8 @@ const vm = require('node:vm');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const boot = fs.readFileSync(path.join(root, 'static/app-embed-boot.js'), 'utf8');
-const app = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
-const timedRead = app.slice(app.indexOf('  function _fetchConvJsonTimed('), app.indexOf('  // CCC-343: 1 while'));
+const {functionSource} = require('./conversation-source.cjs');
+const timedRead = functionSource('_fetchConvJsonTimed');
 
 function harness(search = '?ccc_popout=conversation&embed=app&conv=session-1') {
   let now = 10;
@@ -22,6 +22,7 @@ function harness(search = '?ccc_popout=conversation&embed=app&conv=session-1') {
     _convDirectUrl: () => null, _convResourceTiming: () => ({}),
     requestAnimationFrame: fn => frames.push(fn), setTimeout: fn => timers.push(fn),
   });
+  context.sharedState = context.hostServices = context;
   return {window, context, requests, messages, frames, timers};
 }
 
@@ -64,7 +65,8 @@ test('readiness requires the actual selected composer and sends only one painted
     activePaneId: () => 'p1', paneByPaneId: () => ({conversationId: 'session-1'}),
     composerInputForPane: () => null, currentSession: {id: 'session-1'},
   });
-  const source = app.slice(app.indexOf('  let _appEmbedReadySent ='), app.indexOf('  async function bootConversationPopoutDirect('));
+  const source = functionSource('noteAppEmbedDrawn');
+  h.context._appEmbedReadySent = false;
   vm.runInContext(source, h.context);
   vm.runInContext('noteAppEmbedDrawn("session-1", true)', h.context);
   assert.equal(h.frames.length, 0, 'no readiness before composer initialization');

@@ -150,7 +150,7 @@ test('index.html ships the shell assets and the Settings entry point', () => {
 });
 
 test('app.js defers the engines first-run to claimFirstRun', () => {
-  const app = fs.readFileSync(APP_JS, 'utf8');
+  const app = require('./legacy-dashboard-source.cjs');
   assert.ok(app.includes('cccOnboarding.claimFirstRun'), 'handoff hook missing');
 });
 

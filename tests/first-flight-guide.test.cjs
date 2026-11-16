@@ -252,7 +252,7 @@ test('fixture DOM uses the dashboard real control ids', () => {
 });
 
 test('Settings replay and auto-start guards stay on the shipped start path', () => {
-  const app = fs.readFileSync(APP_JS, 'utf8');
+  const app = require('./legacy-dashboard-source.cjs');
   const takeIdx = app.indexOf('takeTourBtn');
   assert.ok(takeIdx !== -1, 'takeTourBtn wiring missing');
   assert.match(app.slice(takeIdx, takeIdx + 500), /loadFirstFlightTour\(true\)/);

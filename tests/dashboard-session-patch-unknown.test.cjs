@@ -5,7 +5,7 @@ const vm = require('node:vm');
 
 // Slice _applyDashboardSessionPatch (plus the unknown-id bookkeeping declared
 // right above it) out of app.js and run it against stubs, no browser needed.
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf('  // Session patches for ids the archive list never contains');
 const end = app.indexOf('  function scheduleDashboardInvalidation(resource, id) {');
 assert.ok(start > 0 && end > start, 'could not slice _applyDashboardSessionPatch out of app.js');

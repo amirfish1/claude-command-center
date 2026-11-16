@@ -12,7 +12,7 @@ const readline = require('node:readline');
 const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
 const root = path.resolve(__dirname, '..');
-const app = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const html = fs.readFileSync(path.join(root, 'static/index.html'), 'utf8');
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-inheritance-'));
 function between(start, end) {

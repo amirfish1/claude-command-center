@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf('  const _resolvedPlaceholderTargets = new Map();');
 const end = app.indexOf('  function rebindCurrentSelectionToRealCard(real) {');
 assert.ok(start > 0 && end > start, 'resolvePlaceholderPanes source range');

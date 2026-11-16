@@ -109,11 +109,9 @@ test('a stalled app releases dashboard initialization and reads at the bound',as
 });
 
 test('late document hooks run after closure constants initialize',async()=>{
-  const appSource=fs.readFileSync(require('node:path').join(__dirname,'../static/app.js'),'utf8');
-  const start=appSource.indexOf('  function onDashboardDocumentReady(');
-  const helper=appSource.slice(start,appSource.indexOf('\n  }',start)+4);
+  const helper=fs.readFileSync(require.resolve('../static/conversation-views.js'),'utf8') + '\nconst {onDashboardDocumentReady}=window.CCCConversationViews.createController({state:{},helpers:{}});';
   const output=[];
   vm.runInNewContext(helper+'\nonDashboardDocumentReady(()=>output.push(later)); const later=42;',
-    {document:{readyState:'complete'},queueMicrotask,output});
+    {window:{},document:{readyState:'complete'},queueMicrotask,output});
   assert.deepEqual(output,[]);await Promise.resolve();assert.deepEqual(output,[42]);
 });

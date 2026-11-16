@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 function load(rows) {
   const start = source.indexOf('  function isGenericHandoffTitle(');
   const end = source.indexOf('  // One row per continuation chain.', start);

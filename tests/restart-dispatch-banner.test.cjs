@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const html = fs.readFileSync('static/index.html', 'utf8');
 const renderer = app.slice(app.indexOf('  function renderDrainPausedBanner()'), app.indexOf('  async function refreshControlPlaneStatus()'));
 const markup = html.slice(html.indexOf('  <div id="drainPausedBanner"'), html.indexOf('  <!-- PWA install banner'));

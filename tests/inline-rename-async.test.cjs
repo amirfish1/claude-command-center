@@ -5,7 +5,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
-const app = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf('  function startInlineRename(item) {');
 const end = app.indexOf('\n  // Return the active conversation view element', start);
 assert(start >= 0 && end > start, 'inline session rename implementation is present');

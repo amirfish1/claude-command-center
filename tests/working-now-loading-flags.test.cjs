@@ -6,7 +6,7 @@ const {test} = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
-const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 
 function itemsHarness(fetchImpl) {
   const ctx = vm.createContext({

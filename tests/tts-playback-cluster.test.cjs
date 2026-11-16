@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
-const source = fs.readFileSync('static/app.js', 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const extract = (name, next) => source.slice(source.indexOf('  function ' + name + '('), source.indexOf('  function ' + next + '('));
 let browser;
 before(async () => {browser = await puppeteer.launch({headless: true, executablePath: findChromePath(), args: ['--no-sandbox']});});

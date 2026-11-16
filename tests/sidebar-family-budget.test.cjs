@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf('  function _sidebarBudgetIdeaLane(');
 const end = app.indexOf('  // What an empty list says', start);
 

@@ -6,7 +6,7 @@ const path = require('node:path');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const start = source.indexOf('  const _queuedSteerErrors = new Map();');
 const end = source.indexOf('  function beginOptimisticSteerMove(', start);
 assert.ok(start >= 0 && end > start, 'queued steer error helpers not found');

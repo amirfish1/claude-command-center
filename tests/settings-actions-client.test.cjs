@@ -12,7 +12,7 @@ const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
 const ROOT = path.resolve(__dirname, '..');
 const HTML = fs.readFileSync(path.join(ROOT, 'static/index.html'), 'utf8');
-const APP = fs.readFileSync(path.join(ROOT, 'static/app.js'), 'utf8');
+const APP = require('./legacy-dashboard-source.cjs');
 const MODULE = fs.readFileSync(path.join(ROOT, 'static/settings-actions.js'));
 const CSS = fs.readFileSync(path.join(ROOT, 'static/app.css'));
 function between(source, start, end) {

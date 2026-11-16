@@ -14,7 +14,7 @@ test('app.css contains .event.attachment and hook-attachment styles', () => {
 });
 
 test('app.js handles attachment event rendering', () => {
-  const js = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+  const js = require('./legacy-dashboard-source.cjs');
   assert.ok(js.includes("ev.type === 'attachment'"), 'should handle ev.type === attachment');
   assert.ok(js.includes('hook-attachment-details'), 'should create hook-attachment-details');
   assert.ok(js.includes('hook-attachment-summary'), 'should create hook-attachment-summary');

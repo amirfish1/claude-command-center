@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf('  let _queueListMirror = ');
 const code = app.slice(start, app.indexOf('  async function _fetchUxqItems(', start));
 

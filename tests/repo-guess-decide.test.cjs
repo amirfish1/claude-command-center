@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const start = source.indexOf('  function repoGuessDecide(');
 const end = source.indexOf('  // end repoGuessDecide', start);
 assert.ok(start > 0 && end > start, 'repoGuessDecide found');

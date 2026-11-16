@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync('static/app.js', 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 // CCC-144: a clip still being prepared at bg priority when the read needs it
 // is asked for again at fg, so a cold click is not queued behind other prepares.
 function harness(entry) {

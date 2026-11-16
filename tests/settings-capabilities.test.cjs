@@ -3,7 +3,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {spawn}=require('node:child_process'),{once}=require('node:events'),readline=require('node:readline');
 const puppeteer=require('../require-puppeteer.js'),{findChromePath}=require('../puppeteer-browser-config.js');
 const root=path.resolve(__dirname,'..'),scratch=fs.mkdtempSync(path.join(os.tmpdir(),'settings-capabilities-'));
-const app=fs.readFileSync(path.join(root,'static/app.js'),'utf8'),html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
+const app=require('./legacy-dashboard-source.cjs'),html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
 function between(a,b){const i=app.indexOf(a),j=app.indexOf(b,i+a.length);assert(i>=0&&j>i,a);return app.slice(i,j);}
 const grouping=between('  function organizeSettings() {','  function isSettingsFormField(').split('  organizeSettings();')[0]+'  organizeSettings();';
 const active=between('  function setActiveSettingsRailSection(','  function ensureSettingsRowCrumb(');

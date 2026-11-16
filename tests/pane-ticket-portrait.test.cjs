@@ -19,7 +19,6 @@ const exposed = app.replace(marker, `
       conversationsData=[row];
       updatePaneHeader(activePaneId(),row,opts);
       document.querySelector('.conv-pane').classList.add('has-last-user-message');
-      _uxqOpenItemDetail = ref => {window.openedTicket=ref;};
     }
   };
 ` + marker);
@@ -27,7 +26,10 @@ const exposed = app.replace(marker, `
 test('reader ticket identity stays visible and repo portraits are sharp with an offline fallback', async () => {
   const browser = await puppeteer.launch({executablePath:findChromePath(),args:['--no-sandbox']});
   try {
+    const openedTickets = [];
     const page = await browser.newPage();
+    page.on('pageerror', error => console.error(error.stack));
+    page.setDefaultTimeout(8000);
     await page.setViewport({width:1440,height:900});
     await page.evaluateOnNewDocument(() => localStorage.setItem('ccc-conv-list-collapsed','0'));
     await page.setRequestInterception(true);
@@ -40,6 +42,10 @@ test('reader ticket identity stays visible and repo portraits are sharp with an 
       if (url.pathname.startsWith('/static/') && url.pathname.endsWith('.css')) {
         const file = require('node:path').join(__dirname,'..',url.pathname);
         if (fs.existsSync(file)) return r.respond({status:200,contentType:'text/css',body:fs.readFileSync(file,'utf8')});
+      }
+      if (url.pathname === '/api/ux-fixes/item') {
+        openedTickets.push(url.searchParams.get('ref'));
+        return r.respond({status:200,contentType:'application/json',body:'{"ok":false}'});
       }
       if (url.pathname === '/api/conversations/session-one') return r.respond({status:200,contentType:'application/json',body:JSON.stringify({engine:'codex',last_line:2,events:[{type:'user_text',line:1,text:'Check the current task'},{type:'assistant',line:2,blocks:[{kind:'text',text:'This task is being investigated.'}]}]})});
       if (url.pathname === '/api/repo/avatar') return r.respond({status:200,contentType:'image/svg+xml',
@@ -67,8 +73,11 @@ test('reader ticket identity stays visible and repo portraits are sharp with an 
       assert.deepEqual(state,{label:'EXAMPLE-42',visible:true,hit:true,filter:'none',opacity:'1',fit:'contain',titleAfter:true,engine:true});
     }
     await page.focus(chip);
+    const keyboardRead = page.waitForRequest(request => new URL(request.url()).pathname === '/api/ux-fixes/item');
     await page.keyboard.press('Enter');
-    assert.equal(await page.evaluate(() => openedTicket), 'EXAMPLE-42');
+    await keyboardRead;
+    assert.equal(openedTickets.at(-1), 'EXAMPLE-42');
+    await page.evaluate(() => document.querySelector('#uxqItemModal')?.remove());
     await page.evaluate(() => headerTest.seed('EXAMPLE-43',{name_overridden:true,display_name:'My worker'}));
     assert.equal(await page.$eval(chip,el=>el.textContent),'EXAMPLE-43','current claim must update without a new session');
     assert.equal(await page.$eval('[data-role="pane-title"]',el=>el.textContent),'My worker');
@@ -87,7 +96,9 @@ test('reader ticket identity stays visible and repo portraits are sharp with an 
     await page.setViewport({width:390,height:850,isMobile:true,hasTouch:true});
     await page.evaluate(() => {document.body.classList.add('conversation-popout');headerTest.seed();});
     assert.equal(await page.$eval(chip,el=>{const r=el.getBoundingClientRect();return el.checkVisibility()&&r.width>=44&&r.height>=44&&r.left>=0&&r.right<=innerWidth;}),true);
+    const touchRead = page.waitForRequest(request => new URL(request.url()).pathname === '/api/ux-fixes/item');
     await page.click(chip);
-    assert.equal(await page.evaluate(() => openedTicket),'EXAMPLE-42');
+    await touchRead;
+    assert.equal(openedTickets.at(-1),'EXAMPLE-42');
   } finally {await browser.close();}
 });

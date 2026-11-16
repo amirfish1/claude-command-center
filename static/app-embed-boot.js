@@ -1,5 +1,5 @@
 // Start the one transcript read while the shared renderer is downloading.
-// Nothing is painted or declared ready here: app.js owns the real controls.
+// Nothing is painted or declared ready here: the shared conversation entry owns the real controls.
 (function () {
   'use strict';
   const params = new URLSearchParams(location.search);

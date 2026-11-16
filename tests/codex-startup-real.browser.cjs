@@ -24,7 +24,7 @@ assert.ok(base,'Set CCC_TEST_URL to an isolated dashboard using that worker');
 assert.equal(new URL(base).hostname,'127.0.0.1');
 const discovery=path.join(process.env.HOME,'.claude','command-center','port.txt');
 if(fs.existsSync(discovery))assert.notEqual(base.replace(/\/$/,''),fs.readFileSync(discovery,'utf8').trim().replace(/\/$/,''),'Do not run against the managed dashboard');
-const source=fs.readFileSync(path.join(root,'static/app.js'),'utf8');
+const source=fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const model=process.env.CCC_STARTUP_MODEL||'gpt-6.1-sol';
 const prompt='This is a UI latency check. Reply with exactly: Startup check complete. Do not call any tools.';
 const injection=`window.__smoke={start(){_startupApiReadsReleased=true;
@@ -79,7 +79,7 @@ async function coldOwner(trial){
   await p.setRequestInterception(true);p.on('request',r=>{(async()=>{
    const u=new URL(r.url()),json=x=>r.respond({contentType:'application/json',body:JSON.stringify(x)});
    if (respondConversationAsset(r)) return;
-   if(u.pathname==='/static/app.js')return r.respond({contentType:'text/javascript',body:source.replace('  function _watchCodexSpawnRegistration(',injection+'  function _watchCodexSpawnRegistration(')});
+   if(u.pathname==='/static/app.js')return r.respond({contentType:'text/javascript',body:source.replace('  // Shared conversation-core.js: _watchCodexSpawnRegistration.',injection+'  // Shared conversation-core.js: _watchCodexSpawnRegistration.')});
    if(['/api/sessions/spawn-codex','/api/control-plane/graph','/api/codex/client/live-transcript','/api/session/spawn-timeline/mark','/api/session/spawn-timeline'].includes(u.pathname))return r.continue();
    if(/^\/api\/conversations\/[0-9a-f-]{36}$/.test(u.pathname)){canonical++;return r.continue();}
    if(u.pathname==='/api/conversations/list'){

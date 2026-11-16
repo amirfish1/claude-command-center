@@ -5,7 +5,7 @@ const http = require('node:http');
 const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
 
-const app = fs.readFileSync(process.env.CCC_CI_SOURCE || require.resolve('../static/app.js'), 'utf8');
+const app = (process.env.CCC_CI_SOURCE ? fs.readFileSync(process.env.CCC_CI_SOURCE, 'utf8') : require('./legacy-dashboard-source.cjs'));
 const start = app.indexOf('(function initLocalCiProgress()');
 const progress = app.slice(start, app.indexOf('\n})();', start) + 6);
 const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');

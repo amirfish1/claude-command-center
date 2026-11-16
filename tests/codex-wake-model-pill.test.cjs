@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
-const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const start = source.indexOf('  function syncCodexWakeUsage(');
 const end = source.indexOf('  function _sessionUsagePaneIsVisible(', start);
 

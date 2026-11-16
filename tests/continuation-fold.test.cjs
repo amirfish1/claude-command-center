@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const html = fs.readFileSync('static/index.html', 'utf8');
 const css = fs.readFileSync('static/app.css', 'utf8');
 

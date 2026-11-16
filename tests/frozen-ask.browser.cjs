@@ -8,7 +8,7 @@ const {findChromePath} = require('../puppeteer-browser-config.js');
 const base = process.env.CCC_FROZEN_ASK_TEST_URL;
 if (!base) throw new Error('Set CCC_FROZEN_ASK_TEST_URL to a running dashboard');
 const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
-const anchor = '  function positionConversationEndAffordance(view) {';
+const anchor = '  // Shared conversation-core.js: positionConversationEndAffordance.';
 const fixture = `
   window.__frozenAskFill = (withUser) => {
     const view = getConvView();

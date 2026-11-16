@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf('  function _mergeArchiveListDelta(');
 const src = app.slice(start, app.indexOf('  // Generous: cold-cache scans', start));
 assert.ok(start > 0 && src.length > 100);

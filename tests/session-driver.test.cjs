@@ -1,6 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const source=fs.readFileSync(require.resolve('../static/app.js'),'utf8');
+const source=require('./legacy-dashboard-source.cjs');
 const start=source.indexOf('  function sessionDriverHtml('),end=source.indexOf('  function refreshSessionDriverHeaders(',start);
 const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const render=vm.runInNewContext(source.slice(start,end)+'\nsessionDriverHtml;', {escapeHtml:escape,escapeAttr:escape,Date});

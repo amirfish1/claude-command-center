@@ -20,7 +20,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const puppeteer = require('puppeteer');
 
-const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 
 const helpersStart = source.indexOf('  // --- Provisional (live) event upsert/reconcile helpers');
 const helpersEnd = source.indexOf('  // CCC-185:', helpersStart);

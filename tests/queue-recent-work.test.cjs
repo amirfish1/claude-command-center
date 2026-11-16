@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 function recentWork(items) {
   const start = app.indexOf('  function _uxqWithMachine(');
   assert.notEqual(start, -1, 'recent work selector exists');

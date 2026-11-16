@@ -13,7 +13,7 @@ const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
 const root=path.resolve(__dirname,'..'),scratch=fs.mkdtempSync(path.join(os.tmpdir(),'launch-preview-'));
 const html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
-const app=fs.readFileSync(path.join(root,'static/app.js'),'utf8');
+const app=require('./legacy-dashboard-source.cjs');
 function between(a,b){const i=app.indexOf(a),j=app.indexOf(b,i+a.length);assert(i>=0&&j>i,a);return app.slice(i,j);}
 const queueRefresh=between('  async function refreshSettingsQueues()',"  document.getElementById('settingsUsageRefresh')");
 const settingsJSON=between('  async function settingsJSON(', '  async function refreshSettingsUsage()');

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const helpers = app.slice(app.indexOf('  const ASK_HISTORY_KEY'), app.indexOf('  // Mirrors assistantMessageActionsHtml'));
 let browser;
 test.before(async () => { browser = await puppeteer.launch({executablePath: findChromePath(), args: ['--no-sandbox']}); });

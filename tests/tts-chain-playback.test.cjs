@@ -8,7 +8,7 @@ const { test, before, after } = require('node:test');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const start = source.indexOf('  function _ttsSpeakChunkNeural(');
 const player = source.slice(start, source.indexOf('  // One-time iOS-Safari', start));
 const wordAt = source.slice(source.indexOf('  function _ttsWordAtProgress('), source.indexOf('  // Continuous read (CCC-144)'));

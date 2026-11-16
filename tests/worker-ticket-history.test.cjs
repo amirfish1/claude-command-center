@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const source = app.slice(app.indexOf('  function _uxFixesIdentityKey('), app.indexOf('  function _uxFixesQueueProgressForRow('));
 const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
 function harness() {

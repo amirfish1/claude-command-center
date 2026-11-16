@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf("  document.addEventListener('visibilitychange', _resumeForegroundPollers);");
 const end = app.indexOf('\n  });', start) + '\n  });'.length;
 assert.ok(start >= 0 && end > start);

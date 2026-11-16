@@ -6,7 +6,7 @@ const vm = require('node:vm');
 // Slice the background read pool + startup gate out of app.js and drive it
 // with a stub fetch. Boot-time beacons and composer catalogs must wait for
 // the archive rows; the archive list, config and mutations must not.
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf('  const BACKGROUND_API_READ_LIMIT = 4;');
 const end = app.indexOf('  // Pause periodic sidebar/poller work');
 assert.ok(start > 0 && end > start, 'could not slice the startup gate out of app.js');

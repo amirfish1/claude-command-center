@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const { loadRowOutcomeView } = require('./row_outcome_view_harness.cjs');
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const fn = name => {
   const start = app.indexOf('  function ' + name + '(');
   return app.slice(start, app.indexOf('\n  }\n', start) + 4);

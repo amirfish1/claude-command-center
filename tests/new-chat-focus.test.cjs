@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const app = fs.readFileSync(process.env.CCC_APP_SOURCE || path.join(__dirname, '../static/app.js'), 'utf8');
+const app = (process.env.CCC_APP_SOURCE ? fs.readFileSync(process.env.CCC_APP_SOURCE, 'utf8') : require('./legacy-dashboard-source.cjs'));
 
 function fn(name, async = false) {
   const from = app.indexOf('  ' + (async ? 'async ' : '') + 'function ' + name + '(');

@@ -62,7 +62,7 @@ class _DashboardPanels(HTMLParser):
 
 @lru_cache(maxsize=2)
 def conversation_page(html):
-    """Preserve shared markup and controls, without booting hidden panels."""
+    """Compose shared markup and controllers without the dashboard entry."""
     def keep(match):
         return "" if match[1].startswith(_PANEL_ASSETS) else match[0]
 
@@ -80,7 +80,9 @@ def conversation_page(html):
     # Start the bounded read and renderer download ahead of optional assets.
     html = html.replace('<meta charset="utf-8">', '<meta charset="utf-8">\n'
                         '<script src="/static/app-embed-boot.js"></script>\n'
-                        '<link rel="preload" as="script" href="/static/app.js">', 1)
+                        '<link rel="preload" as="script" href="/static/conversation-core.js">', 1)
+    html = html.replace('<script src="/static/app.js"></script>',
+                        '<script src="/static/conversation-entry.js"></script>')
     return html.replace('<body class="voice-call-btn-off">',
                         '<body class="voice-call-btn-off conversation-popout ccc-app-embed">', 1)
 
@@ -103,7 +105,7 @@ def application_page(html, app_id, agent_id=None, kit_url="/static/app-kit.js"):
     metadata = _json_element("cccAppAgent", {"app": app_id, "session_id": agent_id})
     metadata += f'<link rel="preload" as="script" href="{kit_url}">'
     if agent_id:
-        metadata += ('<link rel="preload" as="script" href="/static/app.js">'
+        metadata += ('<link rel="preload" as="script" href="/static/conversation-core.js">'
                      '<link rel="preload" as="style" href="/static/app.css">')
     html = re.sub(r'(["\'])/static/app-kit\.js\1',
                   lambda match: match[1] + kit_url + match[1], html)

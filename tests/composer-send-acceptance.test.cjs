@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const app = fs.readFileSync(process.env.CCC_APP_SOURCE || 'static/app.js', 'utf8');
+const app = (process.env.CCC_APP_SOURCE ? fs.readFileSync(process.env.CCC_APP_SOURCE, 'utf8') : require('./legacy-dashboard-source.cjs'));
 function fn(name, indent = 2) {
   const start = app.indexOf('function ' + name + '(');
   assert.ok(start >= 0);
@@ -46,7 +46,8 @@ function harness(split, options = {}) {
     bound: [], bindPendingSendDeliveryId: (pending, id) => ctx.bound.push([pending, id]),
   };
   vm.createContext(ctx);
-  vm.runInContext(fn('fetchInjectWithRetry'), ctx);
+  vm.runInContext(fs.readFileSync('static/conversation-core.js', 'utf8'), ctx);
+  ctx.fetchInjectWithRetry = ctx.CCCConversationCore.createController({ state: ctx, helpers: ctx }).fetchInjectWithRetry;
   vm.runInContext(fs.readFileSync('static/conversation-input.js', 'utf8'), ctx);
   const inputController = ctx.CCCConversationInput.createController({ state: ctx, helpers: ctx });
   for (const name of ['composerUserEditRevision', 'clearAcceptedComposerInput', 'restoreInputAfterSendFailure']) ctx[name] = inputController[name];

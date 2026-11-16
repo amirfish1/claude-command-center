@@ -4,7 +4,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {spawn}=require('node:child_process'),{once}=require('node:events'),readline=require('node:readline');
 const puppeteer=require('../require-puppeteer.js'),{findChromePath}=require('../puppeteer-browser-config.js');
 const root=path.resolve(__dirname,'..'),scratch=fs.mkdtempSync(path.join(os.tmpdir(),'routing-policy-'));
-const app=fs.readFileSync(path.join(root,'static/app.js'),'utf8'),html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
+const app=require('./legacy-dashboard-source.cjs'),html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
 const between=(a,b)=>{const start=app.indexOf(a),end=app.indexOf(b,start+a.length);assert(start>=0&&end>start,a);return app.slice(start,end);};
 const controls=between('  const $spawnDefaultsEngine =','  // Routing chains are staged');
 const persist=between('  async function persistSpawnDefaults(','  const $runOnboardingBtn =');

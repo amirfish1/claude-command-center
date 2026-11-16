@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');
 const positions = app.slice(app.indexOf('  const VOICE_BUTTON_POSITION_KEY'), app.indexOf('  async function voicePollStatus()'));
 const prefs = app.slice(app.indexOf('  const VOICE_MOBILE_BTN_STORAGE_KEY'), app.indexOf('  function applyTheme('));

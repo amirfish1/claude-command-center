@@ -5,7 +5,7 @@ const path = require('node:path');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const helpersStart = source.indexOf('  function _kimiNormBlockText(');
 const helpersEnd = source.indexOf('  function _kimiMoonHtml(', helpersStart);
 assert.ok(helpersStart >= 0 && helpersEnd > helpersStart,

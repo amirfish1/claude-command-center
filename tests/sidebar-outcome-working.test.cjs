@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { loadRowOutcomeView } = require('./row_outcome_view_harness.cjs');
 
-const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const start = source.indexOf('      // Outcome line (GOAL-1)');
 const end = source.indexOf('      const _outcomeInline =', start);
 assert.ok(start >= 0 && end > start);

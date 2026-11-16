@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const helper = app.slice(app.indexOf('  function peerReportImagesHtml('), app.indexOf('  function renderImageDescriptors('));
 const context = vm.createContext({ URLSearchParams });
 vm.runInContext(`

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 
-const app = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf("    const _ideaTicketRows = (lane, bucket = 'active') => {");
 const end = app.indexOf('    const _allTabIdeaConvs =', start);
 assert.ok(start >= 0 && end > start);

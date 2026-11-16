@@ -5,10 +5,11 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
+const unitSource = require('./legacy-dashboard-source.cjs');
 const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 function fn(name) {
-  const start = app.indexOf('  function ' + name + '(');
-  return app.slice(start, app.indexOf('\n  }\n', start) + 5);
+  const start = unitSource.indexOf('  function ' + name + '(');
+  return unitSource.slice(start, unitSource.indexOf('\n  }\n', start) + 5);
 }
 const sid = '11111111-2222-4333-8444-555555555555';
 const flush = () => new Promise(resolve => setImmediate(resolve));

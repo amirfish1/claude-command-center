@@ -4,7 +4,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),http=require('node:http');
 const puppeteer=require('../require-puppeteer.js'),{findChromePath}=require('../puppeteer-browser-config.js');
 const root=path.resolve(__dirname,'..'),scratch=fs.mkdtempSync(path.join(os.tmpdir(),'settings-scope-'));
-const app=fs.readFileSync(path.join(root,'static/app.js'),'utf8'),html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
+const app=require('./legacy-dashboard-source.cjs'),html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
 function between(a,b){const start=app.indexOf(a),end=app.indexOf(b,start+a.length);assert(start>=0&&end>start,a);return app.slice(start,end);}
 const grouping=between('  function organizeSettings() {','  organizeSettings();')+'  organizeSettings();';
 const search=between('  function ensureSettingsRowCrumb(','  function clearSettingsSearch(');

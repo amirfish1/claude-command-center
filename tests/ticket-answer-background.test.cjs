@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
-const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');
 const helpers = source.slice(source.indexOf('  const _uxqAnswerPending ='), source.indexOf('  function _uxqOpenItemModal(item)'));
 const toast = source.slice(source.indexOf('  function showOpToast('), source.indexOf('  // Prepare a report locally;', source.indexOf('  function showOpToast(')));

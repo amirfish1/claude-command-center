@@ -6,7 +6,8 @@ const vm = require('node:vm');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
-const scan = app.slice(app.indexOf('  const _CC_ORCH_RES = ['), app.indexOf('  function _ccOrchLabels('));
+const unitSource = require('./legacy-dashboard-source.cjs');
+const scan = unitSource.slice(unitSource.indexOf('  const _CC_ORCH_RES = ['), unitSource.indexOf('  // Shared conversation-content.js: _ccOrchLabels.'));
 const context = vm.createContext({});
 vm.runInContext(scan, context);
 const labels = command => Array.from(context._ccOrchScan(command));
@@ -45,9 +46,9 @@ test('rendered folded chips show returned and explicit refs on desktop and phone
   const browser = await puppeteer.launch({ executablePath: findChromePath(), args: ['--no-sandbox'] });
   try {
     const page = await browser.newPage();
-    const compact = app.slice(app.indexOf('  function _ccUnitsOf('), app.indexOf('  // CCC-454: transcript view segmented control'));
-    const rows = app.slice(app.indexOf('  function _kimiToolRowHtml('), app.indexOf('  // Thinking block (kimi-web'));
-    const regroup = app.slice(app.indexOf('  function _kimiFlushRegroups('), app.indexOf('  // kimi-web parity (messagesToTurns flushGroup)'));
+    const compact = unitSource.slice(unitSource.indexOf('  // Shared conversation-annotations.js: _ccUnitsOf.'), unitSource.indexOf('  // CCC-454: transcript view segmented control'));
+    const rows = unitSource.slice(unitSource.indexOf('  // Shared conversation-core.js: _kimiToolRowHtml.'), unitSource.indexOf('  // Thinking block (kimi-web'));
+    const regroup = unitSource.slice(unitSource.indexOf('  // Shared conversation-core.js: _kimiFlushRegroups.'), unitSource.indexOf('  // kimi-web parity (messagesToTurns flushGroup)'));
     const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');
     for (const width of [1100, 390]) {
       await page.setViewport({ width, height: 700 });

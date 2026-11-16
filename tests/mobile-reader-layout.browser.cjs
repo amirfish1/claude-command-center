@@ -54,7 +54,7 @@ const fixture = `
     page.on('request', request => {
       const url = new URL(request.url());
       if (respondConversationAsset(request)) return;
-      if (url.pathname === '/static/app.js') return request.respond({contentType:'text/javascript', body:source.replace('  function positionConversationEndAffordance(view) {', fixture + '  function positionConversationEndAffordance(view) {')});
+      if (url.pathname === '/static/app.js') return request.respond({contentType:'text/javascript', body:source.replace('  // Shared conversation-core.js: positionConversationEndAffordance.', fixture + '  // Shared conversation-core.js: positionConversationEndAffordance.')});
       if (url.pathname === '/api/headroom') return request.respond({contentType:'application/json', body:JSON.stringify({ok:true, rows:[
         {id:'claude',engine:'claude',available:true,percent_left:72},
         {id:'codex',engine:'codex',available:true,percent_left:61},

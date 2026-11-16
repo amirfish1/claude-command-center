@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const QA = require('../static/queue-attention.js');
-const app = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const navSource = fs.readFileSync(path.join(__dirname, '../static/sidebar-navigation.js'), 'utf8');
 const slice = (start, end) => {
   const from = app.indexOf(start), to = app.indexOf(end, from);

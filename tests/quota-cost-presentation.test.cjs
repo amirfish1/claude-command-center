@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const source = fs.readFileSync('static/app.js', 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const start = source.indexOf('  // RAIL_QUOTA_COST_START');
 const end = source.indexOf('  // RAIL_QUOTA_COST_END', start);
 const ctx = vm.createContext({});

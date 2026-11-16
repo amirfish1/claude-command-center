@@ -3,7 +3,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),http=require('node:http');
 const puppeteer=require('../require-puppeteer.js'),{findChromePath}=require('../puppeteer-browser-config.js');
 const root=path.resolve(__dirname,'..'),scratch=fs.mkdtempSync(path.join(os.tmpdir(),'settings-network-transactions-'));
-const app=fs.readFileSync(path.join(root,'static/app.js'),'utf8'),html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
+const app=require('./legacy-dashboard-source.cjs'),html=fs.readFileSync(path.join(root,'static/index.html'),'utf8');
 const start=app.indexOf("  const $networkBtn = document.getElementById('networkAccessBtn');"),end=app.indexOf('  // Federation "Nodes & peers" modal',start);
 assert(start>0&&end>start);
 const source=app.slice(start,end),encoded=JSON.stringify(html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'')).replace(/</g,'\\u003c');

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const shared = app.slice(app.indexOf('  function _replayRunId('),
   app.indexOf('  function _gcReplayReceiptsHtml('));
 const live = app.slice(app.indexOf('  function _convShouldLiveRevealNewText('),

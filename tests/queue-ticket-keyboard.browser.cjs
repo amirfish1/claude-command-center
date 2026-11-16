@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
-const app = fs.readFileSync(process.env.TICKET_APP_JS || 'static/app.js', 'utf8');
+const app = (process.env.TICKET_APP_JS ? fs.readFileSync(process.env.TICKET_APP_JS, 'utf8') : require('./legacy-dashboard-source.cjs'));
 const css = fs.readFileSync(process.env.TICKET_APP_CSS || 'static/app.css', 'utf8');
 const start = app.indexOf('  function openQueueTicketComposer(opts)');
 assert.ok(start > 0);

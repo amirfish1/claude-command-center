@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');
+const src = require('./legacy-dashboard-source.cjs');
 function extract(name) {
   const start = src.indexOf('  function ' + name + '(');
   assert.ok(start >= 0, name + ' not found');

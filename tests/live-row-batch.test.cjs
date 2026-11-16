@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const { test, before, after } = require('node:test');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 function source(name) {
   const start = app.indexOf('  function ' + name + '(');
   assert(start >= 0);

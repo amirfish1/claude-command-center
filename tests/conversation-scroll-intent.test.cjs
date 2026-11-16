@@ -6,7 +6,7 @@ const { findChromePath } = require('../puppeteer-browser-config.js');
 
 const app = process.env.CCC_SCROLL_APP_SOURCE
   ? fs.readFileSync(process.env.CCC_SCROLL_APP_SOURCE, 'utf8')
-  : fs.readFileSync('static/app.js', 'utf8');
+  : require('./legacy-dashboard-source.cjs');
 const helpers = app.slice(app.indexOf('  const CONV_BOTTOM_TOLERANCE'),
   app.indexOf('  // CCC-131: per-conversation'));
 const pinStart = app.indexOf('    view._convEndAffordanceAttached = true;');
@@ -96,6 +96,10 @@ async function fixture() {
     };
 
     window._ensureLoadEarlierStyle = () => {};
+    window._ultraFreshFeed = () => {};
+        window._refreshTokenEconomizerAnnotation = () => {};
+        window._viewIsWebUiPane = () => false;
+        window._kimiRegroupTools = () => {};
     window.pane = { conversationId: 'test', firstLine: 100 };
     window.paneByPaneId = () => pane;
     window._contNextParentForPane = () => '';
@@ -246,8 +250,8 @@ test('a fresh open resumes following after leaving the previous conversation scr
 // place, which misses the momentary empty viewport during a history response.
 const prependStart = app.indexOf('  function _prependConversationEvents(');
 const thinkingStart = app.indexOf('  function _syncThinkingRuns(');
-const prepend = app.slice(thinkingStart, app.indexOf('  // CCC-185:', thinkingStart))
-  + '\n' + app.slice(prependStart, app.indexOf('  // ── Spawn stats', prependStart));
+const declaration = start => app.slice(start, app.indexOf('\n  }\n', start) + 4);
+const prepend = declaration(thinkingStart) + '\n' + declaration(prependStart);
 const renderer = fs.readFileSync(require.resolve('../static/conversation-events.js'), 'utf8');
 const renderStart = renderer.indexOf('  function renderConversationEvents(');
 const bottomStart = renderer.indexOf('    const wasAtBottom =', renderStart);
@@ -260,6 +264,10 @@ for (const scenario of ['short page', 'long page', 'saved reading position', 'co
     const page = await fixture();
     try {
       const result = await page.evaluate(async ({ prepend, renderBottom, renderScroll, scenario }) => {
+        window._ultraFreshFeed = () => {};
+        window._refreshTokenEconomizerAnnotation = () => {};
+        window._viewIsWebUiPane = () => false;
+        window._kimiRegroupTools = () => {};
         window.getConvViewForPane = () => view;
         window._currentToolGroup = null;
         window._currentToolCount = 0;

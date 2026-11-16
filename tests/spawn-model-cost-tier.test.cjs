@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');
+const src = require('./legacy-dashboard-source.cjs');
 const grab = (start, end) => { const i = src.indexOf(start); return src.slice(i, src.indexOf(end, i)); };
 const code = grab('  function _normalizeModelId', '  function _knownModelForEngine')
   + grab('  function sessionCostTier', '  function sessionIsActivelyWorking')

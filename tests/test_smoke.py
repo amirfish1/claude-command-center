@@ -8,6 +8,7 @@ import inspect
 import ast
 import fcntl
 import gc
+from tests.conversation_source import conversation_source, conversation_function, conversation_handler
 import json
 import multiprocessing
 import os
@@ -267,7 +268,7 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
     def test_monthly_claude_plan_setting_is_available(self):
         """The subscription estimate has a discoverable settings control."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn('id="settingsMonthlyClaudePlanInput"', index_html)
         self.assertIn("ccc-monthly-claude-plan-usd", app_js)
@@ -275,7 +276,7 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
 
     def test_turn_completion_glows_the_matching_conversation_row(self):
         """A completion cue must identify the same sidebar row as its sound."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function _cccGlowCompletedConversation(sessionId)", app_js)
@@ -285,7 +286,7 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
 
     def test_activity_log_colours_outcomes_and_explains_safety_blocks(self):
         """Activity entries distinguish success, failure, and safe fallbacks."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("BEAT: 'is-good'", app_js)
@@ -311,7 +312,7 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
     def test_pane_header_shows_session_name_without_latest_ask(self):
         """CCC-172: the header is the session name; no latest-ask line or repo label."""
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn(".conv-pane-last-user-message { display: none !important; }", app_css)
         header_js = app_js[app_js.index("function updatePaneHeader("):app_js.index("titleEl.textContent = headerTitle;")]
@@ -337,7 +338,7 @@ class TestWebuiPaneRegressionGuards(unittest.TestCase):
     def test_pane_header_secondary_actions_use_overflow_menu(self):
         """Split-pane chrome stays compact without losing recording controls."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         pane_header = index_html[index_html.index('data-role="pane-actions"'):index_html.index('data-role="pane-close"')]
 
         self.assertIn('data-role="pane-more"', pane_header)
@@ -537,7 +538,7 @@ class TestServerImports(unittest.TestCase):
         self.assertGreaterEqual(server._ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION, 6)
 
     def test_sidebar_rows_render_session_provenance(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _sessionProvenanceChipHtml = (c, suppressSpawnChip) => {", app_js)
@@ -700,7 +701,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("def resume_session_devin(", engines_py)
         self.assertIn('"/api/sessions/spawn-devin/availability"', server_py)
 
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("function isSpawnLogPlaceholderSource(", app_js)
         self.assertIn("source === 'devin'", app_js)
         self.assertIn("source === 'devin-cli'", app_js)
@@ -1288,7 +1289,7 @@ class TestServerImports(unittest.TestCase):
                 self.assertIn(("codex_five_hour", "unscheduled"), {(e["window"], e["kind"]) for e in events})
                 self.assertIn(("codex_weekly", "scheduled"), {(e["window"], e["kind"]) for e in events})
                 self.assertIn("codex", pathlib.Path(PROJECT_ROOT, "static", "throughput.html").read_text(encoding="utf-8"))
-                self.assertIn("'<div class=\"pu-header\">Codex</div>'", pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8"))
+                self.assertIn("'<div class=\"pu-header\">Codex</div>'", conversation_source())
                 self.assertIn("/api/usage/current", pathlib.Path(PROJECT_ROOT, "README.md").read_text(encoding="utf-8"))
             finally:
                 server.CODEX_SESSIONS_ROOT = old_root
@@ -1435,7 +1436,7 @@ class TestServerImports(unittest.TestCase):
         # away from the index-sweeping forms that clobber sibling sessions.
         self.assertIn("--only", server.TIER_A_COMMIT_NUDGE)
         self.assertIn("git add -A", server.TIER_A_COMMIT_NUDGE)
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('data-role="ship-push-all"', app_js)
         self.assertIn("/api/repo/ship", app_js)
@@ -1514,7 +1515,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_antigravity_turn_token_chips_show_cached_input(self):
         """Per-turn chips should expose cache reads, not only raw in/out counts."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         self.assertIn("function _formatAntigravityTokenChips(tIn, tOut, tThinking, tCached)", app_js)
@@ -1525,7 +1526,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_antigravity_turn_token_chips_call_out_uncached_input(self):
         """A partial cache read must visibly say how much input missed cache."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -1581,7 +1582,7 @@ class TestServerImports(unittest.TestCase):
         self.assertFalse(kwargs.get("shell", False))
 
     def test_system_health_ui_marks_shared_gui_apps_non_reapable(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         apps = app_js[app_js.index("// GUI app-server engines"):app_js.index("// Claude sessions")]
         self.assertIn("Shared GUI app process; non-reapable", apps)
         self.assertIn("_shEsc(a.name || a.app_name || a.id)", apps)
@@ -1591,7 +1592,7 @@ class TestServerImports(unittest.TestCase):
     def test_system_processes_tab_and_endpoints(self):
         """Processes tab in System status dialog audits killness scores and wires /api/system/processes."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('id="sysTabBtnProcesses"', index_html)
@@ -1619,7 +1620,7 @@ class TestServerImports(unittest.TestCase):
         """Conversation search calls the recall-session endpoint (CCC's own
         in-process scan, no third-party dependency) and labels its sidebar
         hits without turning the field into doc search."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("const params = new URLSearchParams({ q, limit: '50', since: '90d' });", app_js)
         self.assertFalse(
@@ -1714,7 +1715,7 @@ class TestServerImports(unittest.TestCase):
     def test_conversation_search_shows_clear_searching_state(self):
         """Async conversation search should loudly say when it is searching."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('id="convSearchStatus"', index_html)
@@ -1774,7 +1775,7 @@ class TestServerImports(unittest.TestCase):
     def test_car_mode_is_available_from_settings_not_the_session_toolbar(self):
         """Car Mode belongs in Settings rather than the everyday session controls."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertNotIn('id="sidebarCarModeBtn"', index_html)
         self.assertIn('id="carModeMenuBtn"', index_html)
@@ -1788,7 +1789,7 @@ class TestServerImports(unittest.TestCase):
         folder field, not a competing project picker (CCC-190).
         """
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('placeholder="Pick or type a folder path"', index_html)
@@ -1807,7 +1808,7 @@ class TestServerImports(unittest.TestCase):
     def test_new_session_stage_demotes_center_card_and_expands_composer(self):
         """New-session mode should make the bottom composer primary and keep
         center content as quiet onboarding, not a competing start form."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("class=\"ns-stage ns-stage-quiet\"", app_js)
@@ -1821,11 +1822,10 @@ class TestServerImports(unittest.TestCase):
 
     def test_new_session_default_object_assignment_is_wired(self):
         """Every new session should be assigned to a generic durable object."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         spawn_start = app_js.index("async function spawnFromInlineInput(body) {")
-        spawn_end = app_js.index("\n  // ── Appearance picker", spawn_start)
-        spawn_block = app_js[spawn_start:spawn_end]
+        spawn_block = conversation_function('spawnFromInlineInput')
         draft_start = app_js.index("async function playFlowDraftSession(id) {")
         draft_end = app_js.index("\n  function flowDraftParentLabel", draft_start)
         draft_block = app_js[draft_start:draft_end]
@@ -1849,7 +1849,7 @@ class TestServerImports(unittest.TestCase):
     def test_new_session_object_picker_is_hidden_but_assignment_state_remains(self):
         """The duplicate inline OBJECT picker is hidden, while the existing
         post-spawn assignment plumbing remains available to other flows."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const NEW_SESSION_OBJECT_BY_CWD_KEY = 'ccc-new-session-object-by-cwd';", app_js)
@@ -1875,7 +1875,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_inprogress_header_has_object_shortcut(self):
         """The row-list header should expose + object before by-objects mode."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('data-role="ip-add-object"', app_js)
@@ -1888,7 +1888,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_inprogress_add_object_creates_inline_rename_draft(self):
         """+ object should render a draft row and edit it inline, not prompt first."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         start = app_js.index('// "+ object" (CCC-92): create an empty Flow object inline.')
         end = app_js.index('$convList.querySelectorAll(\'[data-role="elevate-to-object"]\')', start)
         handler = app_js[start:end]
@@ -1908,7 +1908,7 @@ class TestServerImports(unittest.TestCase):
         (non-separate-tabs) layout, Coding/Workers follow it directly, with
         the leftover Other (née All) tab last. In the legacy separate-tabs
         layout, Issues/Queues follow Active, with Other last."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         tab_block = app_js[app_js.index("const _tabDefs = "):app_js.index("const _tabBarHtml", app_js.index("const _tabDefs = "))]
 
         self.assertIn("const _otherTabDef = ['archived', 'Other', _otherTabCount];", app_js)
@@ -1932,7 +1932,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_sidebar_all_tab_contains_active_and_archived_sessions(self):
         """The All tab should replay every session, not only archived rows."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const _allTabConvs = ", app_js)
         # All shows active and archived rows in its main flow. Only rows with
@@ -1967,7 +1967,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_archived_sessions_have_visible_restore_action(self):
         """Archived session rows should have an explicit restore path back to Active."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('conv-archive-btn is-restore', app_js)
@@ -1985,7 +1985,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_sidebar_tab_is_initialized_before_rows_use_it(self):
         """Archive rendering must not hit the sidebar-tab temporal dead zone."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         sidebar_tab = app_js.index("const _sidebarTab = (() => {")
         archive_action = app_js.index("const _lifecycleContext0 = opts.lifecycleContext")
@@ -1993,7 +1993,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_all_tab_archive_action_uses_explicit_button_intent(self):
         """Archive transitions must not be inferred from stale cache or DOM state."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const nextArchived = btn.dataset.archived === 'true';", app_js)
         self.assertIn('data-role="archive" data-archived="true"', app_js)
@@ -2006,7 +2006,7 @@ class TestServerImports(unittest.TestCase):
         classifier, so plain WhatsApp/router conversations and cross-repo
         chats do not bury agentic Hermes work under one combined tab. The
         leftover Other tab keeps Hermes messages + group chats together."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const _isHermesWorkerRow = (c) => _isHermesAllRow(c)", app_js)
         # A chat that merely called tools is not a worker: only a profile counts.
@@ -2039,7 +2039,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("/api/conversations/all-lane", app_js)
 
     def test_all_view_nests_subagents_and_inherits_parent_lane(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         all_view = app_js[
             app_js.index("let _archivedHtml = '';"):
@@ -2070,7 +2070,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-archived-list .conv-item.is-current-child-row", app_css)
 
     def test_subagent_clusters_collapse_active_rows_and_chip_completed_children(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const SUBAGENT_CLUSTERS_EXPANDED_KEY = 'ccc-subagent-clusters-expanded';", app_js)
@@ -2103,7 +2103,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("flex: 0 0 auto;", toggle_css)
 
     def test_blocked_subagents_stay_with_visible_active_parent_clusters(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         action_partition = app_js[
             app_js.index("const _nowSec = Math.floor(Date.now() / 1000);"):
             app_js.index("const _byRecencyDesc", app_js.index("const _nowSec = Math.floor(Date.now() / 1000);"))
@@ -2124,7 +2124,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_ready_to_merge_only_uses_known_repo_rows(self):
         """Cross-repo Ready to merge should not surface PRs from unknown repos."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("function rowBelongsToKnownRepo(row)", app_js)
         self.assertIn("return known.some(root => repo === root || repo.startsWith(root + '/'));", app_js)
@@ -2161,7 +2161,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_sort_prioritizes_objects_before_repos(self):
         """Manual rank must not let repos jump above objects in by-objects mode."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         object_tier_pos = app_js.index("const aObj = a[0].indexOf('object:') === 0 ? 0 : 1;")
         rank_pos = app_js.index("const aRank = Number.isFinite(_objOrder[a[0]]) ? _objOrder[a[0]] : Infinity;")
 
@@ -2172,7 +2172,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_can_archive_custom_object_groups(self):
         """Archived custom objects leave the active by-objects conversation view."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function archiveFlowCustomObject(id)", app_js)
@@ -2186,7 +2186,7 @@ class TestServerImports(unittest.TestCase):
     def test_by_objects_can_elevate_session_to_own_object(self):
         """By-objects rows should have a one-click way to make a session its
         own custom object, named from the session row."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function elevateConversationToOwnObject(convId)", app_js)
@@ -2200,7 +2200,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_sidebar_selected_rows_drag_together_to_objects(self):
         """Dragging a selected sidebar row should carry every selected row."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("function selectedConversationDragIds(leadId)", app_js)
         self.assertIn("function toggleConversationRowSelection(item)", app_js)
@@ -2215,7 +2215,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_object_group_body_accepts_session_drops(self):
         """Dropping below an object header should still add sessions to it."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('data-object-drop-zone="', app_js)
@@ -2228,7 +2228,7 @@ class TestServerImports(unittest.TestCase):
     def test_by_object_session_rows_can_be_reordered_within_group(self):
         """Dropping a session row on another row inside an object should rank
         that object's sessions on screen without using global archive order."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const OBJECT_SESSION_ORDER_KEY = 'ccc-object-session-order';", app_js)
         self.assertIn("function sortedObjectCardsForRender(parentNode, cards)", app_js)
@@ -2240,7 +2240,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_nested_object_group_suppresses_empty_hint(self):
         """A parent object with child objects is not empty even without sessions."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const hasChildObjects = !!((_childrenOf.get(nodeId) || []).length);", app_js)
         self.assertIn("!hasChildObjects", app_js)
@@ -2248,7 +2248,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_assign_object_picker_renders_object_hierarchy(self):
         """The object assignment dialog should show nested objects as a tree."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function flowAssignableObjectTree()", app_js)
@@ -2265,14 +2265,14 @@ class TestServerImports(unittest.TestCase):
 
     def test_search_hides_empty_custom_object_groups(self):
         """Searching conversations should not show every empty object group."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const _ipSearchActive = !!(document.getElementById('convSearch')?.value || '').trim();", app_js)
         self.assertIn("const _objectHasVisibleDrafts = (node) =>", app_js)
         self.assertIn("if (_ipSearchActive && !_byObject.has(node) && !_objectHasVisibleDrafts(node)) continue;", app_js)
 
     def test_archive_search_flag_is_scoped_for_all_render_branches(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         renderer = app_js[
             app_js.index("function renderConversationList(convs) {"):
             app_js.index("async function setArchiveMode()")
@@ -2298,7 +2298,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_custom_object_rename_uses_pencil_save_cancel(self):
         """Custom object header names should rename through explicit controls."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('data-role="object-title"', app_js)
@@ -2328,7 +2328,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_object_rename_input_keeps_space_key(self):
         """Space in object rename input should not bubble to the header toggle."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         fn_start = app_js.index("function startInlineObjectRename")
         fn_body = app_js[fn_start:app_js.index("function rankNewObjectFirst", fn_start)]
@@ -2343,7 +2343,7 @@ class TestServerImports(unittest.TestCase):
     def test_by_object_headers_have_named_collapse_control(self):
         """Object groups should expose a visible, accessible collapse/expand
         control on each object header."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('data-role="folder-group-collapse"', app_js)
@@ -2354,7 +2354,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_object_title_click_expands_collapsed_group(self):
         """Clicking a collapsed object title should expand the object group."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const hitObjectTitle = ev.target.closest('[data-role=\"object-title\"]');", app_js)
         self.assertIn("if (opensInspector && hitObjectTitle && group && group.classList.contains('collapsed'))", app_js)
@@ -2362,7 +2362,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_top_level_object_headers_are_uppercase(self):
         """Top-level custom object titles should render in uppercase."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('data-object-depth="', app_js)
@@ -2415,7 +2415,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_object_nested_titles_use_sibling_ordinals(self):
         """Nested object numbering should reflect sibling order under a parent."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function numberedObjectTitleHtml(title, ordinal = 0)", app_js)
@@ -2432,7 +2432,7 @@ class TestServerImports(unittest.TestCase):
     def test_chip_color_toggle_has_hierarchy_level_mode(self):
         """Chip colors should cycle through per-item, per-level, and muted modes."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("else if (m === 'level') document.body.classList.add('chips-level');", index_html)
@@ -2447,7 +2447,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_header_has_expand_collapse_all(self):
         """By-objects expand/collapse all should hide sessions but keep sub-objects visible."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _ipObjectsExpandAll = _shouldGroupByObjects", app_js)
@@ -2469,7 +2469,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_object_triangle_collapse_rerenders_subtree(self):
         """Object header chevrons should collapse nested object subtrees immediately."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const objNodeForToggle = hdr.getAttribute('data-object-drop') || '';", app_js)
@@ -2487,7 +2487,7 @@ class TestServerImports(unittest.TestCase):
         width), which used to leave scrollTop untouched and visually jump the
         reader. It should restore against the last-known top-visible message
         instead (CCC-440)."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("view._lastTopAnchor = _topVisibleAnchor(view);", app_js)
         self.assertIn("if (view._pinnedToBottom) scrollConversationToEnd(view);", app_js)
@@ -2496,7 +2496,7 @@ class TestServerImports(unittest.TestCase):
     def test_object_task_draft_survives_sidebar_refresh(self):
         """Typing in an object task should persist before periodic list refresh
         replaces the row DOM."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("let flowDraftFocusSelection = null;", app_js)
         self.assertIn("const _focusDraftIdBefore = (_activeDraftInputBefore && _activeDraftInputBefore.classList.contains('conv-draft-input'))", app_js)
@@ -2508,7 +2508,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_sidebar_has_no_manual_done_section(self):
         """The Active sidebar tab should not render the old manual Done bucket."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertNotIn("conv-done-section", app_js)
@@ -2519,7 +2519,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_kanban_tool_groups_stay_expanded(self):
         """Kanban comments/blocks are conversation context, not routine tools."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
@@ -2531,7 +2531,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_active_sidebar_inprogress_section_is_headerless(self):
         """The Active tab should not repeat an In Progress header/count."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _ipToolbarHtml = _ipTools", app_js)
@@ -2546,7 +2546,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_object_header_plus_creates_child_object(self):
         """By-object + should create a child object, not a draft task."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const objectAddObject = (section === 'inprogress' && archiveObjectId)", app_js)
@@ -2569,7 +2569,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_draft_rows_are_draggable_between_objects(self):
         """Draft task rows should move through the same object drop path."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("let _draggedFlowNode = '';", app_js)
@@ -2586,7 +2586,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_repo_groups_can_nest_under_objects(self):
         """Dragging a repo group onto an object should make it a child group."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("dragged.indexOf('object:') !== 0 && dragged.indexOf('repo:') !== 0", app_js)
         self.assertIn("const _treeParentOf = (nodeId) => {", app_js)
@@ -2596,7 +2596,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_project_tree_has_own_scroll_region(self):
         """The project tree should scroll separately from current sessions."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _projectTreeScrollHtml = (_projectTreeHtml || _looseHtml)", app_js)
@@ -2635,7 +2635,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_current_sessions_splitter_is_resizable(self):
         """A horizontal splitter should resize Current sessions vs Project tree."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _CURRENT_SESSIONS_PANEL_H_KEY = 'ccc-current-sessions-panel-h';", app_js)
@@ -2662,7 +2662,7 @@ class TestServerImports(unittest.TestCase):
         """The Triggered Workers section is its own bottom region in By objects,
         driven PURELY by WatchTower server data (drain-on queues + live workers)
         with NO Flow-object / localStorage dependency."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         # The legacy Evergreen flow-object detection is retained ONLY to keep a
@@ -2719,7 +2719,7 @@ class TestServerImports(unittest.TestCase):
     def test_evergreen_agent_rows_keep_status_context_visible(self):
         """Evergreen agents need their queue count, goal, WIP/idle state, and
         last-run timestamp visible at rest."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _isEvergreenAgentGroup = _evergreenObjectNodes.has(nodeId);", app_js)
@@ -2777,7 +2777,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_current_sessions_exclude_evergreen_agents(self):
         """Evergreen agents belong only in their own bottom region at rest."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const _evergreenSessionIds = new Set();", app_js)
         # When a worker resolves to a loaded session card, its id is collected so
@@ -2797,7 +2797,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_current_sessions_respect_inprogress_window_filter(self):
         """Current sessions should use the same 8h/1d/7d/All window as by-objects."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn(
             "const _currentSessionsWindowS = _ipWindow === '7d' ? 7 * 24 * 3600\n"
@@ -2818,7 +2818,7 @@ class TestServerImports(unittest.TestCase):
     def test_by_objects_split_mode_only_applies_to_active_tab(self):
         """All/Issues/Merge must keep normal sidebar scrolling even when the
         saved Active grouping is by objects."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const _ipGrouping = _hasFolderChips ? 'objects' : 'time';", app_js)
         inprogress_toolbar_js = app_js[
@@ -2838,7 +2838,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_splitter_can_hide_current_sessions(self):
         """Dragging the splitter to the top should be allowed to hide Current sessions."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const _CURRENT_SESSIONS_ROW_H = 20;", app_js)
         self.assertIn("const _CURRENT_SESSIONS_LABEL_H = 18;", app_js)
@@ -2866,7 +2866,7 @@ class TestServerImports(unittest.TestCase):
         removed in 30eba5f1 — current-session rows surface detail through the
         hover-brief flyout instead. Pin the absence of the old handler so a
         reintroduced tooltip can't double up on the row title."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertNotIn("hideTip();", app_js)
@@ -2876,7 +2876,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_split_scrolls_survive_refresh_rebuilds(self):
         """Polling rebuilds should not snap either by-objects split pane to top."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         current_snapshot_pos = app_js.index("const _currentSessionsScrollBefore = _objectsSplitActive")
         snapshot_pos = app_js.index("const _projectTreeScrollBefore = _objectsSplitActive")
@@ -2897,7 +2897,7 @@ class TestServerImports(unittest.TestCase):
     def test_by_objects_search_results_show_row_previews(self):
         """Search results in by-objects mode should keep snippets/previews
         visible instead of inheriting the compact Current sessions row diet."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _currentSessionsScrollClass = 'conv-current-sessions-scroll'", app_js)
@@ -2941,7 +2941,7 @@ class TestServerImports(unittest.TestCase):
     def test_by_objects_current_sessions_nest_parented_sessions(self):
         """Current sessions should show parented child sessions directly under
         their visible parent, indented."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("parent_session_id: c.parent_session_id || ''", app_js)
@@ -2967,7 +2967,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_current_sessions_keep_ended_spawned_children_with_visible_parents(self):
         """Completed children should become chips only inside a visible cluster."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertTrue(
             "const _currentSessionIsEndedSpawnChild = (c) => {" in app_js,
@@ -3012,7 +3012,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_current_sessions_can_group_by_object(self):
         """The Current sessions band should have its own by-object toggle."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const _currentSessionsMode = (() => {", app_js)
@@ -3027,7 +3027,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_by_objects_current_session_object_groups_accept_session_drops(self):
         """Current-session object groups should reuse the object drop path."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('data-current-object-group="\' + escapeAttr(group.key) + \'" data-object-drop-zone="\' + escapeAttr(group.key) + \'"', app_js)
@@ -3038,7 +3038,7 @@ class TestServerImports(unittest.TestCase):
     def test_sidebar_left_model_icon_uses_reserved_title_gutter(self):
         """Left-side model icons should center across expanded rows while the
         title and preview rows reserve the same left gutter."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         row_start = app_js.index("+ '<div class=\"conv-main-row")
@@ -3071,7 +3071,7 @@ class TestServerImports(unittest.TestCase):
     def test_by_objects_draft_rows_align_with_sessions_and_show_play(self):
         """Draft rows should start where real sessions start, with an always
         visible play action immediately after the draft text."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function flowDraftTitleCh(value)", app_js)
@@ -3123,7 +3123,7 @@ class TestServerImports(unittest.TestCase):
     def test_sidebar_outcome_line_reads_as_bright_done_brief(self):
         """A session DID summary should read as a bright, aligned brief and
         skip the next-step line in the sidebar."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn(".conv-item .conv-outcome {\n"
@@ -3175,7 +3175,7 @@ class TestServerImports(unittest.TestCase):
     def test_sidebar_rows_have_summary_details_toggle(self):
         """Session rows with session_state should expose an expand/collapse
         affordance for the detailed summary block."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function sessionSummaryStorageKey(sid)", app_js)
@@ -3187,7 +3187,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_sidebar_summary_toggle_lives_in_row_actions(self):
         """Summary details should not render as a stray left-edge chevron."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const summaryActionBtn = _hasSummaryDetails", app_js)
@@ -3198,7 +3198,7 @@ class TestServerImports(unittest.TestCase):
     def test_details_off_hides_git_state_chips_and_expands_search_snippets(self):
         """Compact Details-off rows should hide non-live git/PR chips and
         search rows should show a larger snippet preview."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function compactRowsOn()", app_js)
@@ -3216,7 +3216,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_sidebar_row_metadata_reveals_on_active_row(self):
         """Repo/source/branch metadata should not crowd resting rows."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertNotIn("const folderChipHtml =", app_js)
@@ -3271,7 +3271,7 @@ class TestServerImports(unittest.TestCase):
     def test_sidebar_hover_metadata_has_copyable_session_id_chip(self):
         """Active-row metadata should include a compact copyable session id
         chip with an inline copied confirmation."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function sidebarSessionIdChipHtml(c)", app_js)
@@ -3288,7 +3288,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_sidebar_hover_metadata_shows_object_membership_chip(self):
         """Hovered current-session rows should name their Flow object."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function flowObjectForConversation(c)", app_js)
@@ -3305,7 +3305,7 @@ class TestServerImports(unittest.TestCase):
     def test_sidebar_add_to_object_is_not_in_rows_or_status_rail(self):
         """The duplicate per-row and RHS-rail object controls are both gone;
         object assignment remains available through the Flow workspace."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
 
         # Per-row empty "+" chip is dropped.
@@ -3320,7 +3320,7 @@ class TestServerImports(unittest.TestCase):
     def test_sidebar_titles_strip_leading_pasted_image_paths(self):
         """Current-session rows should show the human task, not the leading
         pasted-image file path that can be captured in display_name."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("function capitalizeSessionTitleStart(title)", app_js)
         self.assertIn("function sidebarRowDisplayTitle(rawTitle)", app_js)
@@ -3333,7 +3333,7 @@ class TestServerImports(unittest.TestCase):
     def test_current_session_rows_use_plain_title_chrome(self):
         """The by-objects current-session strip should not add extra title
         marker glyphs in front of compact row names."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const quietTitleChrome = !!opts.quietTitleChrome;", app_js)
         self.assertNotIn("titleSource === 'ai' && !quietTitleChrome", app_js)
@@ -3344,7 +3344,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_repo_pin_marker_is_not_duplicate_pin_glyph(self):
         """Repo override rows should use a distinct repo chip, not a second pin."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn(">repo</button>", app_js)
@@ -3569,7 +3569,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_spawn_defaults_worker_model_reuses_the_model_picker(self):
         html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
 
         self.assertIn('id="spawnDefaultsWorkerModel"', html)
         self.assertIn('id="spawnDefaultsWorkerOtherModel"', html)
@@ -4100,7 +4100,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("swe-2", curated)
 
     def test_static_model_picker_uses_server_catalog_and_codex_allowlist(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        app_js = conversation_source()
 
         self.assertIn("fetch('/api/engines/models'", app_js)
         self.assertIn("{ id: 'opus-5'", app_js)
@@ -4120,7 +4120,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("mp-entitlement free", app_js)
 
     def test_engine_settings_exposes_automatic_updates(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        app_js = conversation_source()
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
 
@@ -4271,7 +4271,7 @@ class TestServerImports(unittest.TestCase):
         toolbar/breadcrumb (hidden in right-rail mode) — both homes were tried
         and re-filed as "pop-out button disappeared". It reuses the delegated
         helper and is skipped inside a popout window."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('data-role="ccc-breadcrumb-popout"', app_js)
@@ -4292,7 +4292,7 @@ class TestServerImports(unittest.TestCase):
     def test_collapsed_conversation_popout_has_labeled_side_panel_restore(self):
         """A popout must not strand its right rail behind an icon-only edge
         affordance: its labeled control delegates to the existing restorer."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         self.assertIn('id="popoutSidePanelBtn"', index_html)
@@ -4305,7 +4305,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('body.popout-rail-forced .conv-pane.has-status-rail', app_css)
 
     def test_global_breadcrumb_streaming_status_stays_compact(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const headLabel = streaming ? (stale ? 'stream-json ⚠' : 'stream-json')", app_js)
@@ -4318,7 +4318,7 @@ class TestServerImports(unittest.TestCase):
         concrete repo derives it from the OPEN conversation. The
         terminal panel must resolve its repo via activeConvRepoPath
         and refresh when the open conversation changes — no picker."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         # The picker machinery must not come back.
         for gone in ("cccOpenRepoPicker", "repoPickerModal", "sbRepoPicker",
@@ -4370,7 +4370,7 @@ class TestServerImports(unittest.TestCase):
         )
 
     def test_annotation_notes_render_screenshots(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("ann-note-shot", app_js)
         self.assertIn("/api/local-image?path=", app_js)
         self.assertIn("data-ann-open-session", app_js)
@@ -4399,7 +4399,7 @@ class TestServerImports(unittest.TestCase):
     def test_annotation_page_screenshot_starts_before_editor_opens(self):
         """Page annotation screenshots should represent the selected page
         before the note/Queue dialog exists."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("function annBeginPreEditorScreenshotCapture()", app_js)
         self.assertIn("function annResolvePreEditorScreenshot()", app_js)
@@ -4414,15 +4414,16 @@ class TestServerImports(unittest.TestCase):
             pointer_body.index("await annotationState.preEditorScreenshotPromise;"),
             pointer_body.index("annShowEditor();"),
         )
-        persist_start = app_js.index("const persistAnnotation = async (busyLabel) => {")
-        persist_body = app_js[persist_start:app_js.index("const save = async () => {", persist_start)]
+        editor_source = conversation_function("annShowEditor")
+        persist_start = editor_source.index("const persistAnnotation = async (busyLabel) => {")
+        persist_body = editor_source[persist_start:editor_source.index("const save = async () => {", persist_start)]
         self.assertIn("const screenshotB64 = await annResolvePreEditorScreenshot();", persist_body)
         self.assertNotIn("annCaptureDomRegionB64(contextRect, captureElement)", persist_body)
         self.assertNotIn("annotationState.overlay.classList.add('ann-capturing')", persist_body)
 
     def test_annotation_empty_pre_editor_capture_uses_capability_gated_native_fallback(self):
         """A failed DOM/tab pre-capture falls back only when native screenshots exist."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         build_start = app_js.index("function annBuildPayload(note, screenshotB64)")
         build_body = app_js[build_start:app_js.index("function annStop()", build_start)]
@@ -4441,7 +4442,7 @@ class TestServerImports(unittest.TestCase):
     def test_annotation_editor_previews_pre_dialog_screenshot(self):
         """The annotation editor should show the screenshot that was captured
         before the dialog appeared."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("ann-editor-shot-preview", app_js)
@@ -4453,7 +4454,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_annotation_ux_preview_accepts_pasted_images(self):
         """The editable UX-queue preview should share composer image paste."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         preview_start = app_js.index("function annShowUxFixesPreview(ann, onSubmit)")
         preview_body = app_js[preview_start:app_js.index("async function annOpenUxFixesQueue", preview_start)]
@@ -4462,7 +4463,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".ann-editor, .ann-screen-dialog, .ann-ux-preview-card", app_js)
 
     def test_ux_fixes_queue_progress_badge_is_rendered_from_queue_api(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn("/api/queue/list", app_js)
@@ -4534,7 +4535,7 @@ class TestServerImports(unittest.TestCase):
         self.assertEqual(row["state"], "backlog")
 
     def test_queue_panel_has_run_action_for_unrunnable_github_issues(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn("watchtower_runnable", app_js)
         self.assertIn("fq-run", app_js)
@@ -4545,13 +4546,13 @@ class TestServerImports(unittest.TestCase):
     def test_dashboard_pollers_skip_overlapping_async_ticks(self):
         """Periodic dashboard pollers must not start a second async fetch while
         the previous tick is still in flight."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("const _pollerInflight = {};", app_js)
         self.assertIn("if (_pollerInflight[name]) return _pollerInflight[name];", app_js)
         self.assertIn("delete _pollerInflight[name];", app_js)
 
     def test_queue_health_strip_keeps_configured_never_active_queues(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         strip = app_js[
             app_js.index("async function _renderQueueHealthStrip"):
             app_js.index("const proj = scopeProject !== undefined ? _uxqProjectKey(scopeProject) : _uxqWorkerProject();", app_js.index("async function _renderQueueHealthStrip"))
@@ -4560,16 +4561,15 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (!configured && (la == null || la > _ACTIVE_WINDOW_S)) return;", strip)
 
     def test_project_worker_progress_prefers_latest_project_fix(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         fn_start = app_js.index("function _uxFixesQueueProgressForRow(c)")
-        fn_end = app_js.index("function _uxFixesQueueProgressHtml(c)", fn_start)
-        fn_body = app_js[fn_start:fn_end]
+        fn_body = conversation_function('_uxFixesQueueProgressForRow')
         project_done_pos = fn_body.index("const projectLastFix = uxFixesQueueMeta.lastFixByProject || new Map();")
         session_done_pos = fn_body.index("const lastFix = uxFixesQueueMeta.lastFixBySession || new Map();")
         self.assertLess(project_done_pos, session_done_pos)
 
     def test_queue_panel_falls_back_from_empty_repo_project_scope(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("function _uxqResolvePanelProject(items, requestedProject)", app_js)
         self.assertIn("const fallback = _uxqDominantOpenProject(items);", app_js)
         self.assertIn("const proj = _uxqResolvePanelProject(items, requestedProject);", app_js)
@@ -4577,14 +4577,14 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("const scoped = _uxqLastResolvedProject || _uxqWorkerProject();", app_js)
 
     def test_queue_scope_normalizes_cc_alias_to_ccc(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         key_start = app_js.index("function _uxqProjectKey(value)")
-        key_body = app_js[key_start:app_js.index("// True when item project", key_start)]
+        key_body = conversation_function('_uxqProjectKey')
         self.assertIn("const _UXQ_PROJECT_ALIASES = { CC: 'CCC' };", app_js)
         self.assertIn("return _UXQ_PROJECT_ALIASES[key] || key;", key_body)
 
     def test_queue_scope_key_survives_missing_open_row(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         key_start = app_js.index("function _uxqScopeKey()")
         key_body = app_js[key_start:app_js.index("function _uxqLoadScopeMap()", key_start)]
         self.assertIn("const rowKey = r && (r.id || r.session_id);", key_body)
@@ -4595,12 +4595,12 @@ class TestServerImports(unittest.TestCase):
     def test_explicit_queue_scope_survives_automatic_conversation_restore(self):
         """A Queue scope picked by the user must not follow a restored session ID,
         and must not leak into an unrelated session for a different repo (CCC-788)."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         key_start = app_js.index("function _uxqSelectedScopeKey()")
         key_body = app_js[key_start:app_js.index("function _uxqLoadScopeMap", key_start)]
         get_start = app_js.index("function _uxqGetScopeOverride()")
-        get_body = app_js[get_start:app_js.index("function _uxqSetScopeOverride", get_start)]
-        set_body = app_js[app_js.index("function _uxqSetScopeOverride"):app_js.index("// Status filter", app_js.index("function _uxqSetScopeOverride"))]
+        get_body = conversation_function('_uxqGetScopeOverride')
+        set_body = conversation_function('_uxqSetScopeOverride')
 
         self.assertIn("const _UXQ_SELECTED_SCOPE_LS = 'ccc-uxq-selected-scope';", app_js)
         # Pinned per repo (stable across a session-id restore), not globally
@@ -4615,7 +4615,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_scope_switch_repaints_from_completed_caches(self):
         """Scope changes keep responsive caches, with feedback until rows repaint."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         items_fetch = app_js[
@@ -4653,7 +4653,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".fq-scope-busy", app_css)
 
     def test_ux_fixes_worker_ids_with_numeric_suffix_are_plausible(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         fn_start = app_js.index("function _uxFixesPlausibleSessionId(value)")
         fn_end = app_js.index("function _uxFixesRowIdentityKeys(c)", fn_start)
         fn_body = app_js[fn_start:fn_end]
@@ -4661,7 +4661,7 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("^[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)*-\\d+$", fn_body)
 
     def test_sidebar_refresh_defers_while_dragging(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("function deferSidebarRenderIfDragging", app_js)
         self.assertIn(".flow-node.dragging", app_js)
         self.assertIn(".flow-board.is-zooming", app_js)
@@ -4672,7 +4672,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("if (deferSidebarRenderIfDragging()) return;", app_js)
 
     def test_flow_new_session_drafts_wait_for_play(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("ccc-flow-draft-sessions", app_js)
         self.assertIn("function createFlowDraftSession", app_js)
@@ -4722,7 +4722,7 @@ class TestServerImports(unittest.TestCase):
     def test_flow_work_item_inspector_wired(self):
         """Repo/object Flow nodes open a Markdown-backed work-item inspector,
         and work-item cards use automatic accents plus parsed Flow fields."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
         self.assertIn("FLOW_STATE_DIR", server_py)
@@ -4750,7 +4750,7 @@ class TestServerImports(unittest.TestCase):
     def test_by_objects_draft_task_opens_flow_details(self):
         """Draft task rows in By objects open the same details pane as Flow
         nodes, including clicks that land on the inline task input."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function flowDraftInspectorPayload(draftId)", app_js)
@@ -4774,7 +4774,7 @@ class TestServerImports(unittest.TestCase):
     def test_by_objects_uses_server_draft_parent_fallback(self):
         """API-created draft sessions with only parent_node_id should still
         appear under their object in By objects."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("function flowDraftParentNode(draft)", app_js)
         self.assertIn("const serverDraftParent = sd.parent_node_id || '';", app_js)
@@ -4784,7 +4784,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_object_reconcile_only_deletes_tombstoned_drafts(self):
         """Open tabs must not delete server-created drafts they have not seen."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const FLOW_DRAFT_DELETED_KEY = 'ccc-flow-draft-deleted-ids';", app_js)
         self.assertIn("function rememberDeletedFlowDraftSession(id)", app_js)
@@ -4798,7 +4798,7 @@ class TestServerImports(unittest.TestCase):
     def test_flow_object_refresh_reads_parent_map_sessions(self):
         """Refreshing an object inspector should rebuild auto sections from
         Flow's source-of-truth parent map, not only from rendered DOM nodes."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("function flowInspectorNodeDescendantIds(rootNodeId)", app_js)
         self.assertIn("const descendantIds = flowInspectorNodeDescendantIds(nodeId);", app_js)
@@ -4862,7 +4862,7 @@ class TestServerImports(unittest.TestCase):
         must use the same threshold so isMobile() and the slide-in
         overlay agree."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("matchMedia('(max-width: 1200px)')", app_js)
         # CSS for the back-button visibility + main-overlay must match.
@@ -4875,7 +4875,7 @@ class TestServerImports(unittest.TestCase):
     def test_non_programmer_mobile_mode_matches_mobile_breakpoint(self):
         """The simplified mobile chrome must activate anywhere the app is in
         single-column mobile layout, including tablets and phone landscape."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
 
@@ -4892,7 +4892,7 @@ class TestServerImports(unittest.TestCase):
         Workers / Queues (sidebar list) / Ask. The in-list
         tab bar is hidden; Simple mode still has Home/Tasks/Helpers/More."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         q2_html = pathlib.Path(PROJECT_ROOT, "static", "q2.html").read_text(encoding="utf-8")
         q2_css = pathlib.Path(PROJECT_ROOT, "static", "q2.css").read_text(encoding="utf-8")
@@ -4924,7 +4924,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("overflow-x: clip;", app_css)
         self.assertIn("overscroll-behavior-x: none;", app_css)
         self.assertIn("touch-action: pan-y;", app_css)
-        self.assertIn("listEl.scrollLeft = 0", pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8"))
+        self.assertIn("listEl.scrollLeft = 0", conversation_source())
         self.assertIn('id="q2MobileBottomNav"', q2_html)
         self.assertIn('href="/q2.html"', q2_html)
         self.assertIn(".q2-mobile-bottom-nav", q2_css)
@@ -4938,7 +4938,7 @@ class TestServerImports(unittest.TestCase):
         load re-parses every transcript. The dashboard hosts q2 in
         #cccCoreAppFrame; the rail intercepts those two ids only."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         rail = pathlib.Path(PROJECT_ROOT, "static", "app-rail.js").read_text(encoding="utf-8")
         q2_html = pathlib.Path(PROJECT_ROOT, "static", "q2.html").read_text(encoding="utf-8")
@@ -4959,8 +4959,8 @@ class TestServerImports(unittest.TestCase):
         list (that hid the Sessions/Queues nav). Boot restore still loads
         the pane; only the overlay is skipped. Simple Home uses the same
         depth counter."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn("const _isBootRestore = typeof _qfBootRestoreDepth !== 'undefined'", app_js)
+        app_js = conversation_source()
+        self.assertIn("const _isBootRestore = typeof state._qfBootRestoreDepth !== 'undefined'", app_js)
         self.assertIn("if (!_isBootRestore) mobileShowForCurrentMode();", app_js)
         self.assertNotIn("_isBootRestoreInSimpleMode", app_js)
 
@@ -4971,7 +4971,7 @@ class TestServerImports(unittest.TestCase):
         unreachable. All its visibility rules must also be gated on
         ccc-mobile-redesign so a stored simple-mode pref never blanks the
         desktop dashboard."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         simple_css = pathlib.Path(PROJECT_ROOT, "static", "simple.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
 
@@ -4997,7 +4997,7 @@ class TestServerImports(unittest.TestCase):
         depth-3 full-screen surfaces (history/search, automations + detail,
         settings) exist in the sidebar layer with their CSS gates. The
         What's New modal must be suppressed in Simple mode."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         simple_css = pathlib.Path(PROJECT_ROOT, "static", "simple.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
 
@@ -5024,7 +5024,7 @@ class TestServerImports(unittest.TestCase):
     def test_mobile_back_button_stays_in_stable_toolbar(self):
         """Dynamic task-tab rendering must never own the only mobile exit."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         toolbar_pos = index_html.index('<div class="toolbar" id="convToolbar">')
@@ -5045,7 +5045,7 @@ class TestServerImports(unittest.TestCase):
         `accept` or `capture` attribute on it silently breaks that: `capture`
         forces the camera, and a narrow `accept` blocks PDFs/logs entirely."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         # The picker exists and is wired to a visible button.
@@ -5072,7 +5072,7 @@ class TestServerImports(unittest.TestCase):
         """The fixed conversation pane must remain inside the viewport after
         iOS pans and shrinks it for the software keyboard, and its composer
         must not trigger iOS focus zoom even when pointer detection is wrong."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn(
@@ -5093,7 +5093,7 @@ class TestServerImports(unittest.TestCase):
         """Phones show one compact original-ask row in the stable toolbar
         instead of the transcript's large sticky card."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -5106,7 +5106,7 @@ class TestServerImports(unittest.TestCase):
     def test_mobile_reload_fab_is_not_rendered(self):
         """Mobile should not render the old floating page-reload button."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertNotIn('id="mobileReloadBtn"', index_html)
@@ -5121,7 +5121,7 @@ class TestServerImports(unittest.TestCase):
         existing group-chat reader, and dropping a session node onto
         a group-chat node calls addSessionToGroupChat — same outcome
         as dragging a conv-list row onto a chat row in the sidebar."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('data-flow-action="add-group-chat"', app_js)
         self.assertIn("createEmptyGroupChat()", app_js)
@@ -5143,7 +5143,7 @@ class TestServerImports(unittest.TestCase):
         on the right side. Toggling writes ccc-flow-popout-reader to
         localStorage; the body class flow-popout-reader splits the
         viewport into flow-left + conv-pane-right via CSS."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('data-flow-action="toggle-reader"', app_js)
         self.assertIn("flowPopoutReaderEnabled", app_js)
@@ -5154,7 +5154,7 @@ class TestServerImports(unittest.TestCase):
         """Sidebar search is for sessions/issues. Active and archived
         group-chat rows are navigation chrome, so they should not appear
         in In progress or Archived while a query is active."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("const _hideGroupChatsForSearch = !!_qActive;", app_js)
         self.assertIn(
             "const _visibleGroupChats = _hideGroupChatsForSearch ? [] : (_gcActiveChats || []).filter(chat => {",
@@ -5168,7 +5168,7 @@ class TestServerImports(unittest.TestCase):
     def test_group_chats_respect_inprogress_window_filter(self):
         """Group chats should disappear from Active rows under 1d/7d just like
         sessions, while still contributing to the hidden-count footer."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const _groupChatWindowTs = (chat) => {", app_js)
         self.assertIn("const _visibleGroupChats = _hideGroupChatsForSearch ? [] : (_gcActiveChats || []).filter(chat => {", app_js)
@@ -5184,7 +5184,7 @@ class TestServerImports(unittest.TestCase):
         itself). Click → openFlowPopout → window.open with ccc_popout=flow.
         Body class + popout-only mode routing send the popped-out tab
         straight into the Flow view without polluting main-window storage."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         # Boot flag + body class.
         self.assertIn("FLOW_POPOUT_MODE", app_js)
@@ -5211,7 +5211,7 @@ class TestServerImports(unittest.TestCase):
     def test_tool_results_attach_to_matching_tool_call(self):
         """Tool result previews should render under the command/tool whose
         tool_use id matches, with a visible result/error label."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -5228,7 +5228,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_tool_calls_render_complete_input_disclosure(self):
         """Persisted tool payloads should load lazily behind an Input toggle."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
@@ -5243,7 +5243,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_recoverable_tool_failures_use_a_subdued_warning_treatment(self):
         """A failed tool call should not look like a CCC or session failure."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -5262,7 +5262,7 @@ class TestServerImports(unittest.TestCase):
         greedy-resolve overlaps by pushing the less-displaced chain by
         the minimum right/down amount. Untouched chains seed from the
         legacy bin-pack cursor."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         # New R10 rule documented in the algorithm comment block.
         self.assertIn("R10. INCREMENTAL", app_js)
         # Per-cluster anchoring — every cluster (root AND nested) starts
@@ -5285,7 +5285,7 @@ class TestServerImports(unittest.TestCase):
     def test_flow_record_mode_and_organize_plus_wired(self):
         """Flow has a Record mode that stores before/after layout examples
         and an Organize+ button that replays the best matching example."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("FLOW_ORGANIZE_PLUS_KEY = 'ccc-flow-organize-plus-examples'", app_js)
         self.assertIn("function flowSnapshotNodePositions", app_js)
@@ -5305,7 +5305,7 @@ class TestServerImports(unittest.TestCase):
         text). Either case trips shouldPauseSidebarRender, which would
         suppress the post-commit render and leave the title stuck in
         edit mode."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         # The rename commit's renderSidebar call must pass force:true.
         self.assertIn(
             "renderSidebar(filterConversations($convSearch.value), { force: true });",
@@ -5324,7 +5324,7 @@ class TestServerImports(unittest.TestCase):
         draggable from one parent to another. Each edge renders as a
         <g class="flow-edge"> containing a wide transparent hit path
         plus a thin visible line."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         # Edge selection state + DOM contract.
         self.assertIn("_selectedFlowEdgeChildId", app_js)
@@ -5353,7 +5353,7 @@ class TestServerImports(unittest.TestCase):
         block with rendered SVG on first appearance. Hooked into the
         existing conv-view MutationObserver so every render path picks
         it up for free."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-text.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         # Detection inside renderCodeBlock
@@ -5379,7 +5379,7 @@ class TestServerImports(unittest.TestCase):
         change cancels + re-speaks from the current word boundary so
         the new rate kicks in within ~180ms instead of waiting for
         the next turn."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         # Markup
@@ -5399,11 +5399,8 @@ class TestServerImports(unittest.TestCase):
     def test_tts_last_message_skips_queued_user_echoes(self):
         """The main Speak button should not read optimistic queued user sends
         instead of the latest agent reply."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        last_msg = app_js[
-            app_js.index("function lastMessageTtsData(paneId)"):
-            app_js.index("  // TTS playback rate", app_js.index("function lastMessageTtsData(paneId)"))
-        ]
+        app_js = conversation_source()
+        last_msg = conversation_function('lastMessageTtsData')
 
         self.assertIn("function isPendingSendEchoElement(el)", app_js)
         self.assertIn("el.classList.contains('send-queued')", app_js)
@@ -5418,11 +5415,8 @@ class TestServerImports(unittest.TestCase):
         deleted in 011d8fad — Codex replies now render through the shared
         transcript renderer as `.stream-bubble` / `.event.assistant`, so the
         speaker's selector list must cover those."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        last_msg = app_js[
-            app_js.index("function lastMessageTtsData(paneId)"):
-            app_js.index("  // TTS playback rate", app_js.index("function lastMessageTtsData(paneId)"))
-        ]
+        app_js = conversation_source()
+        last_msg = conversation_function('lastMessageTtsData')
 
         self.assertIn(".stream-bubble", last_msg)
         self.assertIn(".event.assistant:not(.tool-only)", last_msg)
@@ -5456,7 +5450,7 @@ class TestServerImports(unittest.TestCase):
         disk — `cd` fails, `&&` blocks the resume. Falls back to the
         session's repoPath, and drops the `cd` entirely if no fallback
         is known."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         # Fallback to currentSession.repoPath is the documented escape.
         self.assertIn("currentSession.repoPath", app_js)
         # No-cd path returns the bare resumeCmd.
@@ -5533,7 +5527,7 @@ class TestServerImports(unittest.TestCase):
         UI's 1200px narrow breakpoint. Otherwise the native shell blocks
         the existing single-column layout before CSS/JS can activate it."""
         macapp = pathlib.Path(PROJECT_ROOT, "scripts", "macapp", "main.swift").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("matchMedia('(max-width: 1200px)')", app_js)
         self.assertIn("let CCC_MAIN_MIN_WIDTH: CGFloat = 420", macapp)
         self.assertIn("let CCC_MAIN_MIN_HEIGHT: CGFloat = 600", macapp)
@@ -5551,7 +5545,7 @@ class TestServerImports(unittest.TestCase):
         sidebar row immediately. markSessionSending/clearSessionSending
         therefore pass {force: true} to renderSidebar, and renderSidebar
         skips the periodic-pause guard when force is set."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("renderSidebar(filterConversations($convSearch.value), { force: true });", app_js)
         self.assertIn("function renderSidebar(convs, opts)", app_js)
         self.assertIn("if (!(opts && opts.force) && !pendingSpawns.size && shouldPauseSidebarRender()) { _sidebarRenderPendingWhilePaused = true; return; }", app_js)
@@ -5562,7 +5556,7 @@ class TestServerImports(unittest.TestCase):
         WebKit can claim support but paint the native textarea internals as a
         gray rounded bar over the placeholder. Keep autosize in JS instead.
         """
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-input.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -5593,7 +5587,7 @@ class TestServerImports(unittest.TestCase):
         clears shrink a previously tall prompt. The paste-image hook must wrap
         that existing setter instead of going straight back to the prototype.
         """
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-input.js").read_text(encoding="utf-8")
 
         self.assertIn("const ownDesc = Object.getOwnPropertyDescriptor(el, 'value');", app_js)
@@ -5602,7 +5596,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_composer_file_drop_uses_managed_attachments(self):
         """Finder/browser drops must persist files before inserting a path token."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
 
         self.assertIn("function attachFileDrop(el)", app_js)
@@ -5636,7 +5630,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_empty_composer_arrow_up_recalls_last_command(self):
         """ArrowUp in an empty composer should recall the last sent command."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const COMPOSER_HISTORY_KEY = 'ccc-composer-history';", app_js)
         self.assertIn("function rememberComposerCommand(text)", app_js)
@@ -5652,7 +5646,7 @@ class TestServerImports(unittest.TestCase):
         /compact. Click -> confirm -> run the engine-aware compact helper. The
         row-click handler must EXCLUDE the badge so clicking it doesn't
         also open the conversation."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('data-role="conv-pct-compact"', app_js)
         self.assertIn("conv-pct-badge is-actionable", app_js)
@@ -5672,11 +5666,11 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".conv-pct-badge.is-actionable", app_css)
 
     def test_codex_slash_commands_are_wired_as_codex_commands(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("const CODEX_SLASH_FALLBACK_COMMANDS = [", app_js)
         self.assertIn("{ name: '/compact', description: 'Summarize the visible conversation to free tokens' }", app_js)
         self.assertIn("if (source === 'codex') return CODEX_SLASH_FALLBACK_COMMANDS;", app_js)
-        self.assertIn("compactCommand && isCompactionCapableSource(currentSession.source)", app_js)
+        self.assertIn("compactCommand && isCompactionCapableSource(state.currentSession.source)", app_js)
         self.assertNotIn("Codex sessions do not use Claude slash commands", app_js)
         self.assertIn("const failurePrefix = compactCommand ? '/compact failed'", app_js)
 
@@ -5685,14 +5679,14 @@ class TestServerImports(unittest.TestCase):
         (fetched per-session), so the composer must not fall back to Claude's
         command list for them -- that would show commands like /context that
         don't exist for those engines."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("if (source === 'kimi' || source === 'grok') return [];", app_js)
         self.assertIn("(engine === 'claude' || engine === 'codex')", app_js)
 
     def test_slash_command_picker_selects_on_press(self):
         """Mouse/touch selection must commit on press, before focus refreshes
         or document-level click handlers can interfere with the popup."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("function selectSlashCommandMenuItemFromEvent(ev)", app_js)
         self.assertIn("target && target.closest ? target : (target && target.parentElement)", app_js)
         self.assertIn("el.closest('.slash-command-item')", app_js)
@@ -5710,7 +5704,7 @@ class TestServerImports(unittest.TestCase):
         """Touch rows should open from the real pointer tap, not a later
         synthetic click, and scrolling the list should not run per-row
         touchmove/touchstart handlers."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function wireMobileConversationRowTaps()", app_js)
@@ -5743,7 +5737,7 @@ class TestServerImports(unittest.TestCase):
         lives where the user is reading. Guarded by class names so a
         future refactor that accidentally reintroduces the modal trips
         this test."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         # Inline card class + data-role must exist in JS and CSS.
         self.assertIn('ccc-inline-question', app_js)
@@ -5771,7 +5765,7 @@ class TestServerImports(unittest.TestCase):
         be first in that batch; the canonical row first_message is the stable
         anchor. But first_message is server-truncated (~200 chars), so when
         the rendered event IS that message, the full event text wins (CCC-456)."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         self.assertIn("function originalAskTextForEvent(ev, paneId)", app_js)
         self.assertIn(
@@ -5790,7 +5784,7 @@ class TestServerImports(unittest.TestCase):
         as its own tab (CCC-1228: it was hard to find docked in Metadata),
         keeps activity in Metadata, and Queue as its own utility pane."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn('<div class="status-rail-title" id="statusRailTitle">Session Utilities</div>', index_html)
         self.assertIn('data-rail-tab="orchestration"', index_html)
@@ -5860,8 +5854,9 @@ class TestServerImports(unittest.TestCase):
         omits ended sessions, so the lane map needs to treat an old absent row
         as landed after the first successful feed refresh.
         """
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        self.assertIn("let _liveSessionsActivityFetchedAt = 0;", app_js)
+        app_js = conversation_source()
+        self.assertIn("let _liveSessionsActivityFetchedAt = conversationInitializers._liveSessionsActivityFetchedAt();", app_js)
+        self.assertIn("const _liveSessionsActivityFetchedAt = 0;", app_js)
         self.assertIn("_liveSessionsActivityFetchedAt = Date.now();", app_js)
         self.assertIn("function orchLiveActivityForLane(row, born)", app_js)
         self.assertIn("if (Object.prototype.hasOwnProperty.call(sessions, sid)) return sessions[sid];", app_js)
@@ -5870,14 +5865,14 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_first_board_is_removed(self):
         """The retired Queue-first board must not remain reachable in the app."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertNotIn("Q-FIRST (W88)", app_js)
         self.assertNotIn("ccc_mode=queues", app_js)
 
     def test_right_rail_hides_conversation_top_chrome(self):
         """Right-rail mode should not leave old top chrome above the
         conversation pane."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         toolbar_empty_css = app_css[
@@ -5901,7 +5896,7 @@ class TestServerImports(unittest.TestCase):
         """The desktop rail is not manually toggled and yields to the top
         layout whenever the responsive mobile breakpoint is active."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertNotIn('id="statusPosToggle"', index_html)
@@ -5937,7 +5932,7 @@ class TestServerImports(unittest.TestCase):
     def test_queue_rows_open_item_detail_modal(self):
         """Queue row clicks should show the ticket payload/screenshot instead
         of trying to jump to a brittle transcript reference."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function _uxqOpenItemModal(item)", app_js)
@@ -5955,7 +5950,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_all_history_renders_a_bounded_page_at_scale(self):
         """All-history filtering may scan every ticket, but DOM work stays bounded."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         render_js = app_js[
             app_js.index("function _renderQueuePanel"):
@@ -5971,16 +5966,13 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("const queueRowsHtml = rows.map(it =>", render_js)
         self.assertIn("data-uxq-history-page=", render_js)
         self.assertIn("_uxqHistoryPage += direction;", app_js)
-        scope_setter = app_js[
-            app_js.index("function _uxqSetScopeOverride"):
-            app_js.index("const _UXQ_FILTER_LS", app_js.index("function _uxqSetScopeOverride"))
-        ]
+        scope_setter = conversation_function('_uxqSetScopeOverride')
         self.assertIn("_uxqResetHistoryPage();", scope_setter)
         self.assertIn(".fq-history-pager", app_css)
 
     def test_queue_state_badges_explain_stuck(self):
         """Queue health badges should answer what each compact state means."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("STUCK means this queue has open claimable work assigned to a worker/session", app_js)
         self.assertIn("Stuck means this auto-drain queue has claimable open tickets", app_js)
         self.assertIn('" aria-label="\' + escapeAttr(badgeTip)', app_js)
@@ -5988,7 +5980,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_drain_toggle_reports_parked_and_failed_updates(self):
         """Turning on drain must explain why zero-claimable queues stay idle."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         toggle_js = app_js[
             app_js.index("const toggleDrain = async (ev) =>"):
@@ -6024,7 +6016,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_drain_toggle_keeps_optimistic_state_through_refresh(self):
         """A stale health repaint must not erase a confirmed drain transition."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         # The pendingDrain/optimistic-state logic lives in _uxqQueueControlsHtml,
         # shared between the full health-strip row and the compact single-queue
         # status strip (CCC-789 follow-up) so both surfaces agree on in-flight state.
@@ -6058,11 +6050,8 @@ class TestServerImports(unittest.TestCase):
         """Ticket detail should come from WT timeline, not CCC's old private
         progress_notes/answers reconstruction."""
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        modal_js = app_js[
-            app_js.index("function _uxqOpenItemModal(item)"):
-            app_js.index("function _renderQueuePanel", app_js.index("function _uxqOpenItemModal(item)"))
-        ]
+        app_js = conversation_source()
+        modal_js = conversation_function('_uxqOpenItemModal')
 
         self.assertIn('if path == "/api/ux-fixes/item":', server_py)
         self.assertIn('"timeline"', server_py)
@@ -6078,11 +6067,8 @@ class TestServerImports(unittest.TestCase):
     def test_blocked_queue_detail_says_the_agent_needs_input(self):
         """A blocked ticket's live activity line must clearly ask the human
         for input, rather than ambiguously saying it is waiting for an answer."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
-        modal_js = app_js[
-            app_js.index("function _uxqOpenItemModal(item)"):
-            app_js.index("function _renderQueuePanel", app_js.index("function _uxqOpenItemModal(item)"))
-        ]
+        app_js = conversation_source()
+        modal_js = conversation_function('_uxqOpenItemModal')
 
         self.assertIn(": 'Agent needs your input')", modal_js)
         self.assertIn("'Open';", modal_js)
@@ -6133,7 +6119,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_header_can_toggle_wrapped_titles(self):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn('id="queueWrapToggle"', index_html)
@@ -6153,7 +6139,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_add_uses_large_composer(self):
         """Adding a queue item should use a multiline composer, not prompt()."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function openQueueTicketComposer(opts)", app_js)
@@ -6173,7 +6159,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_panel_add_shows_queue_picker_and_honors_pick(self):
         """CCC-163: the panel "+" must show which queue it files into and use the user's pick."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         add_start = app_js.index("async function _addQueueTicket()")
         add_body = app_js[add_start:app_js.index("async function _newGlobalTicket()", add_start)]
         self.assertIn("queues: names, defaultQueue: scoped", add_body)
@@ -6186,7 +6172,7 @@ class TestServerImports(unittest.TestCase):
     def test_queue_header_add_opens_queue_manager_not_ticket_composer(self):
         """The header plus creates a queue; the lower add row creates tickets."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn('id="filesQueueCreate"', index_html)
         self.assertIn('title="Create a new queue"', index_html)
@@ -6206,7 +6192,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_add_renders_a_pending_row_until_watchtower_confirms_it(self):
         """A submitted add stays visible as a spinner row until the canonical item arrives."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         add_start = app_js.index("async function _addQueueTicket()")
         add_body = app_js[add_start:]
 
@@ -6219,7 +6205,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_add_clears_obscuring_state_and_reveals_the_new_ticket(self):
         """A successful Add must leave its canonical row visible in its own queue."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("function _uxqPrepareNewTicketView(item, fallbackProject)", app_js)
         helper_start = app_js.index("function _uxqPrepareNewTicketView(item, fallbackProject)")
         helper_end = app_js.index("async function _addQueueTicket()", helper_start)
@@ -6238,7 +6224,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queue_manager_can_create_and_revise_full_watchtower_config(self):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertNotIn('id="filesQueueConfigure"', index_html)
@@ -6257,7 +6243,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_toolbar_controls_move_to_settings_and_metadata_rail(self):
         """Right-rail mode should empty the crowded conversation topbar."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("_moveToHome('todayToggleBtn',    $settingsSlot);", app_js)
@@ -6273,7 +6259,7 @@ class TestServerImports(unittest.TestCase):
     def test_rail_breadcrumb_hides_repeated_session_title(self):
         """The status rail already mirrors the session title in its header, so
         the moved breadcrumb should not repeat that same title."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("const railTitle = row && row.status_rail_title || title || category || 'Session';", app_js)
@@ -6286,14 +6272,14 @@ class TestServerImports(unittest.TestCase):
         ])
 
     def test_files_sidebar_sorts_by_recent_mentions(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("function _ffcRecencyLine(row)", app_js)
         self.assertIn("allFiles.sort((a, b) => _ffcRecencyLine(b) - _ffcRecencyLine(a));", app_js)
 
     def test_markdown_file_viewer_temporarily_widens_right_rail(self):
         """Opening a Markdown preview should widen the right rail and closing
         it should restore the previous rail width."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("const FILE_VIEWER_RAIL_EXPAND_FACTOR = 2.5;", app_js)
         self.assertIn("let fileViewerPreviousRailWidth = null;", app_js)
@@ -6308,7 +6294,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_status_rail_resizer_supports_tablet_pointer_drag(self):
         """The right-rail divider must resize under touch/pen as well as mouse."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("$statusRailResizer.addEventListener('pointerdown'", app_js)
@@ -6323,7 +6309,7 @@ class TestServerImports(unittest.TestCase):
         """Successful Done rows expose a small copy affordance for the last
         assistant answer, rather than forcing users to select rendered text
         manually from the transcript."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function agentAnswerTextBeforeResult(resultEl)", app_js)
@@ -6337,7 +6323,7 @@ class TestServerImports(unittest.TestCase):
     def test_assistant_events_have_read_and_copy_actions_next_to_timestamp(self):
         """Assistant message metadata should expose small read/copy actions
         beside the relative timestamp, not only on Done result rows."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -6379,7 +6365,7 @@ class TestServerImports(unittest.TestCase):
     def test_new_assistant_text_reveals_word_by_word(self):
         """New assistant rows should reveal prose word-by-word without
         replaying old transcript loads."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
@@ -6417,7 +6403,7 @@ class TestServerImports(unittest.TestCase):
         }, 13)
         self.assertEqual(parsed["type"], "result")
         self.assertTrue(parsed["no_agent_output"])
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -6446,7 +6432,7 @@ class TestServerImports(unittest.TestCase):
     def test_stale_optimistic_thinking_settles_when_no_process_exists(self):
         """The optimistic Thinking pill should not tick forever after the
         status poll proves there is no live/headless/terminal process."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function settleStaleOptimisticAgentIndicator($view)", app_js)
@@ -6459,14 +6445,14 @@ class TestServerImports(unittest.TestCase):
 
     def test_idle_process_pill_explains_that_the_session_can_resume(self):
         """A dormant session remains usable even when no worker is attached."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("(waking ? 'waking…' : 'idle')", app_js)
         self.assertIn("You can still send a message; CCC will resume the session.", app_js)
 
     def test_live_inline_indicator_is_singleton(self):
         """A refreshed live status tick should not leave stacked Generating rows."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
 
         self.assertIn("function getSingleLiveToolInline($view)", app_js)
@@ -6485,7 +6471,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_codex_wake_status_does_not_stack_with_generating(self):
         """Codex wake rows own their progress UI and should not stack with Generating."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
@@ -6498,7 +6484,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_codex_wake_breakdown_starts_during_dormant_send(self):
         """Dormant Codex sends should expose wake progress before inject-input returns."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
 
@@ -6512,7 +6498,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_codex_wake_progress_is_quiet_until_it_stalls(self):
         """A normal Codex wake should not render an alarming diagnostic stack."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function _wakeStageQuietLabel", app_js)
@@ -6551,7 +6537,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_compact_completion_clears_optimistic_thinking(self):
         """A completed compaction should not leave the optimistic Thinking pill."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
         self.assertIn("Codex compact has completed; any optimistic Thinking pill is stale.", app_js)
@@ -6562,12 +6548,9 @@ class TestServerImports(unittest.TestCase):
 
     def test_compact_request_has_a_hard_timeout(self):
         """A stalled compact request must release the UI so the user can retry."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
-        compact_post = app_js[
-            app_js.index("async function postCompactSession(sessionId, terminalApp)"):
-            app_js.index("// Engines whose /compact", app_js.index("async function postCompactSession(sessionId, terminalApp)"))
-        ]
+        compact_post = conversation_function('postCompactSession')
         self.assertIn("const COMPACT_REQUEST_TIMEOUT_MS = 6 * 60 * 1000;", compact_post)
         self.assertIn("const controller = typeof AbortController === 'function' ? new AbortController() : null;", compact_post)
         self.assertIn("setTimeout(() => controller.abort(), COMPACT_REQUEST_TIMEOUT_MS)", compact_post)
@@ -6576,7 +6559,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_compact_waits_for_pending_send_echoes(self):
         """Compaction must not run while a sent message is only an optimistic echo."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-input.js").read_text(encoding="utf-8")
 
         self.assertIn("function hasPendingSendEchoBeforeCompact($view)", app_js)
@@ -6590,7 +6573,7 @@ class TestServerImports(unittest.TestCase):
     def test_codex_spawn_log_hides_bare_error_marker(self):
         """A lone Codex CLI [error] marker should not open the log with a
         scary blank error section before any real output exists."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn("text === '[error]'", app_js)
         self.assertIn("A bare [error] marker carries no actionable stderr content", app_js)
@@ -6603,9 +6586,9 @@ class TestServerImports(unittest.TestCase):
         paused/blocked goals must read differently from ordinary active goals
         in both the composer strip and conversation rows."""
         app_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
-        goal_js = app_js[app_js.index("function goalStatusUi(status)"):app_js.index("const SLASH_FALLBACK_COMMANDS", app_js.index("function goalStatusUi(status)"))]
+        goal_js = app_js
         self.assertIn('data-role="conv-goal-strip"', app_html)
         self.assertIn("function goalStatusUi(status)", goal_js)
         self.assertIn("function renderConversationGoalStrip(paneId, row)", goal_js)
@@ -6640,7 +6623,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_dormant_codex_goal_send_does_not_wait_for_transcript_echo(self):
         """The direct goal-store path does not create a user_message event."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         branch = app_js[
             app_js.index("renderConvWakeOutcome(getConvViewForPane"):
             app_js.index("} else if (data.queued && data.cwd_missing)", app_js.index("renderConvWakeOutcome(getConvViewForPane"))
@@ -6733,7 +6716,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn('"goal_status": tail_meta.get("goal_status") or "",', server_py)
 
     def test_live_question_indicator_renders_prompt_and_options(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function liveQuestionDetailHtml", app_js)
         self.assertIn("liveStatus.questionText", app_js)
@@ -6759,7 +6742,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("cl-question-option-desc", app_css)
 
     def test_live_refresh_has_active_group_chat_pill(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text(encoding="utf-8")
@@ -6774,7 +6757,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn("orchestrator_last_trigger_at", group_chat_py)
 
     def test_codex_steer_button_is_distinct_from_send(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         self.assertIn('id="convSteerBtn"', index_html)
@@ -6791,9 +6774,7 @@ class TestServerImports(unittest.TestCase):
         self.assertNotIn("postInjectInput(sid, text, 'send', { announcedFrom })", send_handler)
 
     def test_claude_explicit_queue_is_distinct_from_ordinary_send(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(
-            encoding="utf-8"
-        )
+        app_js = conversation_source()
         send_handler = pathlib.Path(PROJECT_ROOT, "static", "conversation-composer.js").read_text(encoding="utf-8")
 
         self.assertIn("sendToTerminal('p1', 'send_queue')", app_js)
@@ -6814,7 +6795,7 @@ class TestServerImports(unittest.TestCase):
         # ccc_server/watchtower_msg.py — both extracted from server.py.
         engines_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "engines.py").read_text(encoding="utf-8")
         wt_msg_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "watchtower_msg.py").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("def _write_stream_json_interrupt(", engines_py)
         self.assertIn('"type": "control_request"', engines_py)
         self.assertIn('"subtype": "interrupt"', engines_py)
@@ -6902,7 +6883,7 @@ class TestServerImports(unittest.TestCase):
     def test_announced_sender_is_api_only(self):
         """Injected sender attribution remains available to API callers
         without exposing a brittle manual composer field."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-input.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
@@ -6916,17 +6897,14 @@ class TestServerImports(unittest.TestCase):
 
     def test_codex_user_messages_have_inline_steer_action(self):
         """Codex user-message bubbles should be steerable in place."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         self.assertIn("function userMessageSteerHtml(text, notification, compactCardHtml, ev)", app_js)
         self.assertIn('data-steer-user-message', app_js)
         self.assertIn("postInjectInput(sid, text, 'steer'", app_js)
-        inline_handler = app_js[
-            app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"):
-            app_js.index("async function launchTerminal", app_js.index("const btn = ev.target.closest('[data-steer-user-message]')"))
-        ]
+        inline_handler = conversation_handler("const btn = ev.target.closest('[data-steer-user-message]')")
         self.assertNotIn("postInjectInput(sid, text, 'send')", inline_handler)
         self.assertIn("syncUserMessageSteerButtons", app_js)
         self.assertIn('hidden disabled aria-hidden="true"', app_js)
@@ -6939,7 +6917,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".user-message-steer", app_css)
 
     def test_cursor_engine_is_wired_in_static_ui(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
         self.assertIn('<option value="cursor">cursor</option>', index_html)
@@ -6955,7 +6933,7 @@ class TestServerImports(unittest.TestCase):
         self.assertIn(".event.system.send-failure", app_css)
 
     def test_hermes_history_is_wired_in_static_ui(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-selection.js").read_text(encoding="utf-8")
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
@@ -7087,7 +7065,7 @@ class TestServerImports(unittest.TestCase):
         metadata so `cli`, `whatsapp`, `cron`, and `hermes` all surface the
         right rows. Isolate the filterConversations() body so a stray match
         elsewhere in app.js can't satisfy the assertion."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         start = app_js.index("function filterConversations(q) {")
         # The function ends at the closing of its returned/sorted block; grab a
         # generous slice and stop at the next top-level function declaration.
@@ -7104,7 +7082,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_visible_search_results_keep_session_name_matches_first(self):
         """The final sidebar render must not let UUID ranking bury a title hit."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         start = app_js.index("function renderConversationList(convs) {")
         body = app_js[start:start + 900]
         self.assertIn("convs = _prioritizeNameMatches(", body)
@@ -7115,7 +7093,7 @@ class TestServerImports(unittest.TestCase):
         search separate from filterConversations. It must also match Hermes
         platform/model metadata so `cli`/`whatsapp`/`cron` surface Hermes rows
         in the default (all-repos) view, not just single-repo mode."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         start = app_js.index("function renderArchiveList(filter, opts) {")
         body = app_js[start:start + 8000]
         for field in ("c.source_platform", "c.hermes_source", "c.model", "c.engine"):
@@ -7127,7 +7105,7 @@ class TestServerImports(unittest.TestCase):
         window, archive window) the same way pinned rows are. Otherwise old
         Hermes conversations silently vanish from the default view even though
         the API returns them."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         # All three window filters use the hermes exemption clause.
         self.assertIn(
             "row.pinned || row.source === 'hermes' || row.engine === 'hermes'",
@@ -7262,7 +7240,7 @@ class TestServerImports(unittest.TestCase):
         echo states) by text match when the real event lands — otherwise the
         note sticks forever once the _pendingSends entry is lost (the 'stuck at
         queued' annotation)."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         # The reconciliation DOM-scan must cover the non-pending echo states.
         self.assertIn(".event.user_text.send-queued", app_js)
@@ -7271,7 +7249,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queued_send_echo_renders_steer_before_cancel_immediately(self):
         """The first queued paint must not wait for tray synchronization."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         branch = app_js[
             app_js.index("function markPendingSendQueued"):
@@ -7288,7 +7266,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_queued_steer_candidates_stay_above_the_composer(self):
         """Queued input is a steer candidate, not history that later events bury."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function syncQueuedSteerTray", app_js)
         self.assertIn("queued-steer-tray", app_js)
@@ -7360,7 +7338,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_codex_app_queued_send_marks_pending_echo_queued(self):
         """Codex app-server queue ACKs must not leave the optimistic echo pending."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         branch = app_js[
             app_js.index("if (data.via === 'codex-app-queued') {"):
             app_js.index("} else if (data.queued && data.cwd_missing)", app_js.index("if (data.via === 'codex-app-queued') {"))
@@ -7377,7 +7355,7 @@ class TestServerImports(unittest.TestCase):
         rollout dedupe replaced it and no Thinking indicator ever showed
         during Codex's multi-second time-to-first-token.
         """
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         branch = app_js[
             app_js.index("} else if (data.via === 'codex-app-turn') {"):
             app_js.index("} else if (data.via === 'cursor-resume') {", app_js.index("} else if (data.via === 'codex-app-turn') {"))
@@ -7388,7 +7366,7 @@ class TestServerImports(unittest.TestCase):
         """A Claude pending-spawn placeholder that never materializes must not
         vanish silently. It should turn into a visible failed/not-acknowledged
         card with retry/dismiss actions."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("function markPendingSpawnNotAcknowledged", app_js)
         self.assertIn("Spawn was not acknowledged within 30s", app_js)
         # CCC-462: the fixed 30s timer was replaced by a registration watch
@@ -7405,14 +7383,14 @@ class TestServerImports(unittest.TestCase):
 
     def test_spawn_adoption_accepts_spawn_id_without_pid(self):
         """App-server Codex spawns use synthetic spawn ids rather than OS pids."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id)", app_js)
         self.assertIn("const realSpawnId = data.spawn_id || data.pid;", app_js)
         self.assertIn("insertPendingSpawnCard(data.spawn_id || data.pid, subject", app_js)
 
     def test_codex_spawn_placeholder_matches_returned_session_id(self):
         """A real app-server row must replace its optimistic card without a duplicate flash."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("placeholder.expected_session_id = sessionId || ''", app_js)
         self.assertIn("placeholder.fast_path && placeholder.expected_session_id", app_js)
         self.assertIn("String(row.session_id) === String(placeholder.expected_session_id)", app_js)
@@ -14457,7 +14435,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         conflict_check.assert_not_called()
 
     def test_codex_managed_app_server_ui_label_is_present(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         self.assertIn("managed app-server", app_js)
         self.assertIn("codex_app_server_event_seq", app_js)
@@ -14856,14 +14834,14 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_markdown_path_links_request_external_open(self):
         """The transcript click handler asks /api/open to launch markdown."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         self.assertIn("function _isMarkdownPath", js)
         self.assertIn("function normalizeMarkdownLinkTarget", pathlib.Path(PROJECT_ROOT, "static", "conversation-text.js").read_text())
         self.assertIn("payload.launch = true", js)
 
     def test_absolute_folder_path_links_are_not_web_routes(self):
         """Extensionless /Users/... folders should still go through /api/open."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         self.assertIn("function _isAbsoluteFilesystemPath", js)
         self.assertIn(
             "Users|Volumes|Applications|Library|System|private|tmp|var|etc|opt|usr|bin|sbin|home",
@@ -14873,7 +14851,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_inline_code_skips_placeholder_and_api_path_links(self):
         """Auto-linking should avoid shortened paths and internal API mentions."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         self.assertIn("function _shouldLinkifyInlineCodePath", js)
         self.assertIn("function _isPlaceholderPathToken", js)
         self.assertIn("function _isInternalApiPathToken", js)
@@ -14881,7 +14859,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_archive_progress_does_not_replace_search_empty_state(self):
         """Background archive refresh must not clobber no-match search results."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         self.assertIn(".archive-loading-placeholder, .archive-loading-stages", js)
         self.assertIn("archive-empty-state archive-loading-placeholder", js)
         self.assertIn("No conversations match your filter.", js)
@@ -14889,7 +14867,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_original_ask_renders_pasted_images_inline(self):
         """Pasted-image references should become images in the ask panels."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
         js += pathlib.Path(PROJECT_ROOT, "static", "conversation-text.js").read_text(encoding="utf-8")
         self.assertIn("PASTED_IMG_MD_LINK_RE", js)
@@ -14900,21 +14878,21 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_markdown_attached_above_reference_is_not_rendered_as_a_url(self):
         """UI-only image references must not leave a broken image icon."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         self.assertIn("function isUnavailableMarkdownImageTarget", js)
         self.assertIn("Image attachment unavailable in this transcript", js)
         self.assertIn("if (isUnavailableMarkdownImageTarget(target))", js)
 
     def test_codex_inline_visual_reference_renders_as_a_file_link(self):
         """Codex visual markers should be useful links, not raw transcript syntax."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         self.assertIn("CODEX_INLINE_VIS_RE", js)
         self.assertIn("Visual: ", js)
         self.assertIn("linkifyPath(filename)", js)
 
     def test_archive_search_refresh_preserves_scroll(self):
         """Periodic archive refreshes should not snap active search results."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         self.assertIn("let _lastArchiveRenderFilter = null;", js)
         self.assertIn("function _captureArchiveListScroll", js)
         self.assertIn("function _restoreArchiveListScroll", js)
@@ -14927,7 +14905,7 @@ class TestRepoContextHelpers(unittest.TestCase):
         so the restore path needs an explicit render generation instead of
         treating equal scroll positions as proof that nothing changed.
         """
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         self.assertIn("let _convListRenderVersion = 0;", js)
         self.assertIn("renderVersion: _convListRenderVersion", js)
         self.assertIn("_convListRenderVersion++;", js)
@@ -15727,7 +15705,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_group_chat_reader_restores_composer_for_new_session(self):
         """New session must clear group-chat reader chrome before showing composer."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         self.assertIn("function stopGroupChatReader", js)
         self.assertIn("stopGroupChatReader({ rerenderSidebar: true });", js)
         self.assertIn("function enterNewSessionMode()", js)
@@ -15735,7 +15713,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_group_chat_reader_has_tts_and_conversation_typography(self):
         """Group-chat reader should expose TTS and reuse assistant markdown styling."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         self.assertIn("function renderGroupChatMarkdown", js)
         self.assertIn("gc-message-body assistant-text", js)
@@ -15746,7 +15724,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_group_chat_reader_labels_messages_and_last_pings(self):
         """Group-chat messages and participant cards expose stable L-number links."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         self.assertIn('class="gc-message-number"', js)
         self.assertIn("lastPinged[short]", js)
@@ -16075,7 +16053,7 @@ class TestRepoContextHelpers(unittest.TestCase):
 
     def test_codex_unknown_writer_defers_steer_to_native_rpc(self):
         """Client writer attribution must not overrule the native turn check."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         helper = js.split("function codexTurnSteerable() {", 1)[1].split("\n  }", 1)[0]
         self.assertIn("currentSession.source !== 'codex'", helper)
         self.assertIn("liveStatus.codexState === 'working'", helper)
@@ -16189,7 +16167,7 @@ class TestModelPicker(unittest.TestCase):
 
     def test_latest_claude_models_are_marked_as_one_m_context_in_model_picker(self):
         """Anthropic's latest Fable, Opus, and Sonnet models support 1M."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
 
         self.assertIn("function claudeModelSupportsOneM(model)", js)
         self.assertIn("return n === 'opus-4-8' || n === 'opus-4-7';", js)
@@ -16233,7 +16211,7 @@ class TestModelPicker(unittest.TestCase):
             sys.modules.pop(mod, None)
         import server
         src = pathlib.Path(server.__file__).read_text()
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         self.assertIn("/api/conversations/[^/]+/files", src)
         self.assertIn("class=\"conv-pin-btn", js)
@@ -16547,14 +16525,14 @@ class TestModelPicker(unittest.TestCase):
         self.assertEqual(usage["model"], "claude-opus-4-7")
 
     def test_context_footer_renders_calc_and_slash_context_values(self):
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         self.assertIn("Calculated estimate:", js)
         self.assertIn("Latest /context output:", js)
         self.assertIn("'calc'", js)
         self.assertIn("' · /ctx '", js)
 
     def test_codex_model_picker_marks_current_reasoning_effort(self):
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         # Live-first: the pill states the effort the session is RUNNING, and a
         # queued effort-only switch renders as its own "→" chip rather than
         # masquerading as current.
@@ -16573,7 +16551,7 @@ class TestModelPicker(unittest.TestCase):
     def test_model_pill_always_states_effort_on_effort_capable_engines(self):
         """Engine + model + effort is one triple; a blank effort segment reads
         as "no effort" when the session is really on the engine default."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text()
         server_py = pathlib.Path(PROJECT_ROOT, "server.py").read_text()
 
@@ -16589,7 +16567,7 @@ class TestModelPicker(unittest.TestCase):
 
     def test_new_codex_session_composer_sends_selected_reasoning_effort(self):
         """New Codex sessions need an effort picker alongside their model picker."""
-        js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text()
+        js = conversation_source()
         html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text()
         engines_py = pathlib.Path(PROJECT_ROOT, "ccc_server", "engines.py").read_text()
 
@@ -16598,7 +16576,8 @@ class TestModelPicker(unittest.TestCase):
         self.assertIn("const $convInputEffortSelect", js)
         self.assertIn("reasoning_effort: spawnDefaultsState.reasoning_effort", js)
         self.assertIn("spawnDefaultsState.reasoning_effort = $spawnDefaultsEffort.value", js)
-        self.assertIn("let spawnEffortChoiceDirty = false;", js)
+        self.assertIn("let spawnEffortChoiceDirty = conversationInitializers.spawnEffortChoiceDirty();", js)
+        self.assertIn("const spawnEffortChoiceDirty = false;", js)
         self.assertIn("spawnEffortChoiceDirty = true;", js)
         self.assertIn("spawnEffortChoiceDirty = false;\n    syncSpawnEngineDependentUi();", js)
         # The effort now flows through buildSpawnBody, which owns the whole
@@ -16643,7 +16622,7 @@ class TestModelPicker(unittest.TestCase):
         codex_parse = pathlib.Path(
             PROJECT_ROOT, "ccc_server", "codex_parse.py"
         ).read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
 
         self.assertIn('status_rail_title = title if title and title != first_message else display_name', codex_parse)
         self.assertIn("const railTitle = row && row.status_rail_title || title || category || 'Session';", app_js)
@@ -17203,7 +17182,7 @@ class TestGroupChatSidecarHelpers(unittest.TestCase):
             self.assertEqual(sidecar.get("name_map", {}).get(sid), "My Awesome Agent")
 
     def test_group_chat_reader_poller_primes_redesign_state(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("_gcReaderSessionIds = data.session_ids || [];", app_js)
         self.assertIn("_gcReaderNameMap = data.name_map || {};", app_js)
         self.assertIn("buildAgentFallbackNames(data.content, _gcReaderSessionIds);", app_js)
@@ -17211,13 +17190,13 @@ class TestGroupChatSidecarHelpers(unittest.TestCase):
         self.assertIn("updateGcInfoBar(data);", app_js)
 
     def test_group_chat_reader_uses_numbered_agent_fallbacks(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertNotIn("return 'Agent-' + shortSid;", app_js)
         self.assertIn("looksLikeShortHash", app_js)
         self.assertIn("_gcAgentFallbackNames[key] = 'Agent-' +", app_js)
 
     def test_group_chat_reader_panel_controls_keep_chat_ref(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn('data-gc-enable data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}"', app_js)
         self.assertIn('data-gc-stop data-gc-path="${escapeAttr(chatPath)}" data-gc-id="${escapeAttr(chatId)}"', app_js)
 
@@ -19357,7 +19336,7 @@ class TestCodexStateWiring(unittest.TestCase):
     def test_static_renders_codex_state(self):
         import pathlib
         root = pathlib.Path(__file__).resolve().parent.parent
-        js = (root / "static" / "app.js").read_text()
+        js = conversation_source()
         css = (root / "static" / "app.css").read_text()
         self.assertIn("codex_state", js)
         self.assertIn("'codex_state', 'codex_fresh', 'codex_state_reason',", js)
@@ -19376,7 +19355,7 @@ class TestCodexStateWiring(unittest.TestCase):
     def test_outcome_banner_offers_codex_wakeup(self):
         import pathlib
         root = pathlib.Path(__file__).resolve().parent.parent
-        js = (root / "static" / "app.js").read_text()
+        js = conversation_source()
         css = (root / "static" / "app.css").read_text()
 
         self.assertIn("async function wakeCodexSession(sessionId, feedbackEl, opts)", js)
@@ -20767,7 +20746,7 @@ class TestAcpKimiEngine(unittest.TestCase):
         self.assertIn('result = _core._acp_prompt(', watchtower_msg_py)
         self.assertIn('result.get("code") == "busy"', watchtower_msg_py)
         self.assertIn('return _core._queue_terminal_input(session_id, text, {"status": "running"})', watchtower_msg_py)
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = conversation_source()
         self.assertIn("if (engine === 'kimi') return '/api/sessions/spawn-kimi';", app_js)
 
     def test_kimi_original_ask_uses_first_wire_prompt(self):
@@ -21315,7 +21294,7 @@ def test_wt_receipt_route_and_staged_send_feedback():
     assert '[wt_bin, "receipts", "get", rid]' in server_py
     assert '"skip_wt": bool(payload.get("skip_wt"))' in server_py
     assert "**inject_options" in server_py
-    app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+    app_js = conversation_source()
     assert "function beginWtReceiptTracking(" in app_js
     assert "'/api/wt/receipt/'" in app_js
     assert "skip_wt: true" in app_js

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const constants = app.slice(app.indexOf('  const F2_LAUNCH_ENGINES ='), app.indexOf('  // Fallback ladder only.'));
 const helpers = app.slice(app.indexOf('  function f2AllLaunchEngines('), app.indexOf('  // One alternative, one pill.'));
 

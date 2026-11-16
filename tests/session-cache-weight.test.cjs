@@ -2,7 +2,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync('static/app.js', 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const ctx = require('./conversation-content-fixture.cjs').load(vm.createContext({}));
 test('Fable 5.1 cache reads use 2.5% in the value and explanation', () => {
   assert.equal(ctx._cacheAdjustedTurnTokens(208770, 1656, 208051, 'claude-fable-5-1'), 7576);

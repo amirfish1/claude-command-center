@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const puppeteer = require('puppeteer');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const css = fs.readFileSync('static/app.css', 'utf8');
 
 function slice(from, to) {

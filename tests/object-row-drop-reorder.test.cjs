@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 
 // CCC-1135: Active-mode object groups nest rows inside
 // [data-role=current-object-group-rows]; reading group.children found no rows,

@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const src = fs.readFileSync(require('node:path').join(__dirname, '../static/app.js'), 'utf8');
+const src = require('./legacy-dashboard-source.cjs');
 const m = src.match(/function workerStateBucket\(c\) \{[\s\S]*?\n  \}\n/);
 assert.ok(m, 'workerStateBucket not found');
 function make(overlay) {

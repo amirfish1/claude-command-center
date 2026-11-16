@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { loadRowOutcomeView } = require('./row_outcome_view_harness.cjs');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf('  const _ATTN_NONE_RE =');
 const end = app.indexOf('  // The server derives readiness', start);
 const sessionAttentionStep = vm.runInNewContext(app.slice(start, end)

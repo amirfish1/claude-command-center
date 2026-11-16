@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const helpers = ['_archiveWindowTsSec', '_archiveWindowRowTs'].map(name => {
   const start = source.indexOf('  function ' + name + '(');
   return source.slice(start, source.indexOf('\n  }\n', start) + 4);

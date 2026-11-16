@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 // Exercise the renderer's actual post-append scroll decision with browser
 // layout, including the result event that completes an assistant turn.
 const start = app.indexOf('    const _newCompactCard = $view.querySelector(');

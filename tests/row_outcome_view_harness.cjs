@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8')
+const app = require('./legacy-dashboard-source.cjs')
   + '\n' + fs.readFileSync(require.resolve('../static/conversation-text.js'), 'utf8');
 
 function fnSource(name) {

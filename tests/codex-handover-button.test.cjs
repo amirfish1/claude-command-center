@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 function setup(responses) {
-  const source = fs.readFileSync('static/app.js', 'utf8');
+  const source = require('./legacy-dashboard-source.cjs');
   const start = source.indexOf('  // Desktop handover controls');
   const end = source.indexOf('  function updateAnnounceButton()', start);
   assert.ok(start >= 0 && end > start, 'handover controls exist');

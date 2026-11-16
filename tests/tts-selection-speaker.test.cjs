@@ -4,10 +4,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync('static/app.js', 'utf8');
-const start = source.indexOf('  // A conversation selection the current read did not start from.');
-const end = source.indexOf('  async function readLastMessageAloud(paneId) {', start);
-assert.ok(start >= 0 && end > start, 'selection helpers present');
+const source = require('./conversation-source.cjs').functions(['_ttsFreshSelection', '_ttsReadSelectionIfAny']);
 
 function load(state) {
   const ctx = vm.createContext(Object.assign({
@@ -17,7 +14,9 @@ function load(state) {
   }, state));
   ctx.selectedConversationTtsData = () => (ctx.sel ? {text: ctx.sel, mapping: []} : null);
   ctx.readLastMessageAloud = (paneId) => ctx.calls.push(paneId);
-  vm.runInContext(source.slice(start, end), ctx);
+  ctx.sharedState = ctx.hostServices = ctx.state = ctx;
+  ctx.helpers = ctx;
+  vm.runInContext(source, ctx);
   return ctx;
 }
 

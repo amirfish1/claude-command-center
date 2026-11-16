@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.lastIndexOf("  document.addEventListener('click'", app.indexOf('    if (button) { _loadCompleteToolOutput(button); return; }'));
 const loader = app.slice(start, app.indexOf('  // Rebuild the tool grouping', start));
 

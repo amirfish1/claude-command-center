@@ -26,7 +26,7 @@ const puppeteer = require('puppeteer');
 
 const LIVE_SOURCE_JS = fs.readFileSync(path.join(__dirname, '../static/codex-live-source.js'), 'utf8');
 
-const appSource = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const appSource = require('./legacy-dashboard-source.cjs');
 const helpersStart = appSource.indexOf('  // --- Provisional (live) event upsert/reconcile helpers');
 const helpersEnd = appSource.indexOf('  // CCC-185:', helpersStart);
 assert.ok(helpersStart >= 0 && helpersEnd > helpersStart, 'provisional helper block exists before renderConversationEvents');

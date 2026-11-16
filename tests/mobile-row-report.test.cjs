@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
-const app = fs.readFileSync(process.env.ROW_REPORT_APP || require.resolve('../static/app.js'), 'utf8');
+const app = (process.env.ROW_REPORT_APP ? fs.readFileSync(process.env.ROW_REPORT_APP, 'utf8') : require('./legacy-dashboard-source.cjs'));
 const css = fs.readFileSync(process.env.ROW_REPORT_CSS || require.resolve('../static/app.css'), 'utf8');
 const taps = app.slice(app.indexOf('  const CONVERSATION_ROW_ACTION_SELECTOR ='),
   app.indexOf('  function wireConversationListScrollPause('));

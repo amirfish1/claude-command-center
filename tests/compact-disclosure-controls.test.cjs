@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const compact = app.slice(app.indexOf('  function _ccUnitsOf('),
   app.indexOf('  // CCC-454: transcript view segmented control'));
 const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');

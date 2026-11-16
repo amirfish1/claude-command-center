@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 
 const html = fs.readFileSync(require.resolve('../static/index.html'), 'utf8');
-const js = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const js = require('./legacy-dashboard-source.cjs');
 const menuStart = html.indexOf('id="convSimpleActionsMenu"');
 const menu = html.slice(menuStart, html.indexOf('<div class="conv-overflow-wrap">', menuStart));
 

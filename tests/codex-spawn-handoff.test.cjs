@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync('static/app.js', 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 function fn(name) {
   const start = source.indexOf('  function ' + name + '(');
   const end = source.indexOf('\n  }\n', start) + 5;

@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '../static/app.js'), 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 const start = source.indexOf('  const SPAWN_CWD_KEY = ');
 const end = source.indexOf('  function spawnCwdOptionForPath(', start);
 assert.ok(start > 0 && end > start, 'spawn cwd picker block found');

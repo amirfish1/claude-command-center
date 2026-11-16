@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const helpers = app.slice(app.indexOf('  const _rowDecisionReplies ='), app.indexOf('  // "Answer [Q12:slug]'));
 
 test('decision context loads the full root reply once and escapes content as text', async () => {

@@ -6,7 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const root = path.resolve(__dirname, '..');
-const appJs = fs.readFileSync(path.join(root, 'static/app.js'), 'utf8');
+const appJs = require('./legacy-dashboard-source.cjs');
 const appCss = fs.readFileSync(path.join(root, 'static/app.css'), 'utf8');
 
 test('session cost details use an explicit disclosure control', () => {

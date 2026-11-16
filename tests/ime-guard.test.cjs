@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 // 1. static/app.js
-const appJs = fs.readFileSync(path.join(__dirname, '..', 'static', 'app.js'), 'utf8');
+const appJs = require('./legacy-dashboard-source.cjs');
 
 // Helper definition
 assert(appJs.includes('function isImeKey(ev) { return !!(ev && (ev.isComposing || ev.keyCode === 229)); }'), 'isImeKey helper defined');

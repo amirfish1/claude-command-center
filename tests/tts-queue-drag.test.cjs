@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const slice = app.slice(app.indexOf("  const TTS_QUEUE_POS_KEY"), app.indexOf('  function _ttsRenderDebugQueue('));
 
 test('TTS queue inspector drags by mouse and touch, taps still toggle', async () => {

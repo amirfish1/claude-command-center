@@ -2,7 +2,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync('static/app.js', 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 
 test('choosing Codex loads account options without waiting for background startup reads', async () => {
   const start = source.indexOf('  function syncCodexAccountUi(');

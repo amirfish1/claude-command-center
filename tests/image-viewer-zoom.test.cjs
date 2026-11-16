@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');
 const lightbox = app.slice(app.indexOf('  let _imgLightbox = null;'), app.indexOf('  // Inline-code paths in conversation messages'));
 const coreNavigation = app.slice(app.indexOf('  function cccSwitchCoreApp(id, opts)'), app.indexOf('  // ── Simple-mode slim header'));

@@ -1,6 +1,6 @@
 const test=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
 const QA=require('../static/queue-attention.js');
-const source=fs.readFileSync('static/app.js','utf8');
+const source=require('./legacy-dashboard-source.cjs');
 const start=source.indexOf('  function _uxqTicketAttention(it) {');
 const end=source.indexOf('  function _uxqWaitingOn(it)',start);
 function project(item, health) {

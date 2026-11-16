@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const start = app.indexOf('  async function _setOpenSessionLifecycle(');
 const code = app.slice(start, app.indexOf('  // Show only the lifecycle/queue items', start));
 

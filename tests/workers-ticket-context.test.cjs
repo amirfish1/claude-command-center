@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const QA = require('../static/queue-attention.js');
-const app = fs.readFileSync(require.resolve('../static/conversation-text.js'), 'utf8') + '\n' + fs.readFileSync('static/app.js', 'utf8');
+const app = fs.readFileSync(require.resolve('../static/conversation-text.js'), 'utf8') + '\n' + require('./legacy-dashboard-source.cjs');
 const slice = (start,end) => app.slice(app.indexOf(start), app.indexOf(end,app.indexOf(start)));
 function setup(extra = {}) {
   const ctx = {window:{QueueAttention:QA}, _workersTicketSessions:new Map(),

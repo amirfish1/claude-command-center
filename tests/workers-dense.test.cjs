@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const puppeteer = require('puppeteer');
 
 const css = fs.readFileSync('static/app.css', 'utf8');
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 
 // A worker row carries a title plus the second-line chrome Dense drops.
 const row = (i) => `<div class="conv-item">

@@ -5,7 +5,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const puppeteer=require('../require-puppeteer.js');
 const {findChromePath}=require('../puppeteer-browser-config.js');
-const app=fs.readFileSync(require.resolve('../static/app.js'),'utf8');
+const app=fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
 const sid='11111111-2222-4333-8444-555555555555';
 const marker='\n})();\n\n/* === Hero: Fleet Pulse === */';
 assert.ok(app.includes(marker));

@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
-const app = fs.readFileSync(require.resolve('../static/app.js'), 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const css = fs.readFileSync(require.resolve('../static/app.css'), 'utf8');
 const helpers = app.slice(app.indexOf('  function anchorCodexStateBadge('),
   app.indexOf('  function _reanchorToTailUnlessOnlyTransientBetween('))

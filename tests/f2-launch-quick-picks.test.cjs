@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const puppeteer = require('../require-puppeteer.js');
 const { findChromePath } = require('../puppeteer-browser-config.js');
 
-const app = fs.readFileSync('static/app.js', 'utf8');
+const app = require('./legacy-dashboard-source.cjs');
 const sourceStart = app.indexOf('  function f2AllLaunchEngines(');
 const sourceEnd = app.indexOf('\n  // CCC-823:', sourceStart);
 const pickerSource = app.slice(sourceStart, sourceEnd);

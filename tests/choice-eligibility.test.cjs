@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path'),http=require('node:http'),os=require('node:os');
 const puppeteer=require('../require-puppeteer.js'),{findChromePath}=require('../puppeteer-browser-config.js');
-const root=path.resolve(__dirname,'..'),read=name=>fs.readFileSync(path.join(root,name),'utf8'),app=read('static/app.js');
+const root=path.resolve(__dirname,'..'),read=name=>fs.readFileSync(path.join(root,name),'utf8'),app=require('./legacy-dashboard-source.cjs');
 const between=(a,b)=>{const start=app.indexOf(a),end=app.indexOf(b,start+a.length);assert(start>=0&&end>start,a);return app.slice(start,end);};
 const sandbox={window:{}};vm.runInNewContext(read('static/choice-eligibility.js'),sandbox);const projection=sandbox.window.cccChoiceEligibility;
 const now=Date.now(),catalog={claude:[{id:'sonnet',label:'Sonnet',supports_reasoning:true,supports_vision:true},{id:'retired',available:false,availability_reason:'Removed from catalog'},{id:'blocked',policy_blocked:true}],codex:[{id:'codex-model',label:'Codex model'}]},snapshot={generated_at:new Date(now).toISOString(),engines:{claude:{cli_present:true,auth_present:true},codex:{cli_present:true,auth_present:null}}};

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync('static/app.js', 'utf8');
+const source = require('./legacy-dashboard-source.cjs');
 // CCC-144 Q577: a cold free-voice read starts on the built-in voice for its
 // first clip while the free voice makes clip 1 at fg, then hands over.
 function harness({continuous = false, pref = ''} = {}) {
