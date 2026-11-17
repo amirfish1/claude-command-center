@@ -44,6 +44,9 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           const render = blocks => h.renderConversationEvents([{type:'assistant',line:++line,blocks}], paneId, {initialLoad:true});
           const thought = text => ({kind:'thinking',text});
           render([thought('First thought')]);
+          // Normal view folds the entire work sequence. Reveal its history
+          // before exercising the individual thought disclosure beneath it.
+          if (!compact) view.querySelector('.activity-run-toggle').click();
           const slot = view.querySelector('.thinking-run'), heading = slot.querySelector('button');
           const before = heading.getBoundingClientRect().top, height = slot.getBoundingClientRect().height;
           render([thought('Earlier paragraph\n\nNewest thought ' + 'with details '.repeat(80))]);
@@ -84,7 +87,11 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
           fullVisible:true,expansionRetained:true,boundaryCount:3,originalsRetained:true,idempotent:true,overflow:false,
           joinedPage:true,turnBoundary:true},
         JSON.stringify({width,merged,compact}));
-        await page.evaluate(() => document.querySelector('.thinking-run > button').scrollIntoView({block:'center'}));
+        await page.evaluate(() => {
+          const activity = document.querySelector('.activity-run-toggle[aria-expanded="false"]');
+          if (!document.body.classList.contains('conv-compact')) activity?.click();
+          document.querySelector('.thinking-run > button').scrollIntoView({block:'center'});
+        });
         await page.waitForFunction(() => {
           const button = document.querySelector('.thinking-run > button'), rect = button.getBoundingClientRect();
           return rect.width > 0 && rect.top >= 0 && rect.bottom <= innerHeight
@@ -96,6 +103,81 @@ test('real renderers replace consecutive thoughts in a steady slot, then preserv
         await page.keyboard.press('Space');
         assert.equal(await page.$eval('.thinking-run > button', el => el.getAttribute('aria-expanded')), 'false');
         if (process.env.CCC_THINKING_SCREENSHOTS) await page.screenshot({path:process.env.CCC_THINKING_SCREENSHOTS + '/thinking-' + width + '-' + merged + '-' + compact + '.png'});
+      }
+    }
+    // Replay the reported alternating thought/command sequence through the
+    // shipped renderer. Geometry is measured on the visible disclosure.
+    for (const width of [1280, 390]) {
+      await page.setViewport({width, height:850});
+      await page.evaluate(() => window.cccMobileNav.show());
+      await page.waitForFunction(() => !document.querySelector('.main').getAnimations().some(a => a.playState === 'running'));
+      for (const merged of [false, true, 'codex']) {
+        const result = await page.evaluate(({merged}) => {
+          const h = window.thinkingTest, paneId = h.activePaneId(), view = h.getConvViewForPane(paneId);
+          const pane = view.closest('.conv-pane');
+          pane.classList.toggle('is-webui-session', !!merged);
+          pane.classList.toggle('is-codex-session', merged === 'codex');
+          document.body.classList.remove('conv-compact');
+          view.replaceChildren();
+          let line = 980000;
+          const render = blocks => h.renderConversationEvents([{type:'assistant',line:++line,blocks}],paneId,{initialLoad:true});
+          render([{kind:'thinking',text:'Investigating the playback rate.'}]);
+          const slot = view.querySelector('.activity-run'), heading = slot.querySelector('button');
+          const top = heading.getBoundingClientRect().top, height = slot.getBoundingClientRect().height;
+          const stable = () => slot === view.querySelector('.activity-run') && heading.checkVisibility()
+            && Math.abs(top - heading.getBoundingClientRect().top) < 1
+            && Math.abs(height - slot.getBoundingClientRect().height) < 1;
+          render([{kind:'tool_use',name:'Bash',id:'activity-first',detail:'Read the worklet',command:'cat worklet.js'}]);
+          const firstStable = stable();
+          render([{kind:'tool_use',name:'Bash',id:'activity-second',detail:'Check how rate is used ' + 'and its tests '.repeat(60),command:'rg rate worklet.js'}]);
+          const longStable = stable();
+          const newestCommand = slot.querySelector('.activity-run-preview').textContent.startsWith('Check how rate is used');
+          render([{kind:'thinking',text:'Now implement pitch-preserving speed.'}]);
+          const thoughtStable = stable();
+          const latestThought = slot.querySelector('.activity-run-preview').textContent === 'Now implement pitch-preserving speed.';
+          const collapsedSources = [...view.querySelectorAll('.activity-run-source')].every(el=>!el.checkVisibility());
+          heading.click();
+          const historyVisible = [...view.querySelectorAll('.activity-run-source')].every(el=>el.checkVisibility());
+          const commandsRetained = view.textContent.includes('Read the worklet') && view.textContent.includes('Check how rate is used');
+          heading.click();
+          const html = view.innerHTML;
+          h._syncThinkingRuns(view);
+          const idempotent = html === view.innerHTML;
+          render([{kind:'text',text:'Playback speed is fixed.'}]);
+          render([{kind:'tool_use',name:'Bash',id:'activity-after-reply',detail:'Run the tests'}]);
+          const replyBoundary = view.querySelectorAll('.activity-run').length === 2;
+          render([{kind:'tool_use',name:'AskUserQuestion',id:'activity-question',detail:'Which voice do you prefer?'}]);
+          const question = [...view.querySelectorAll('.tool-call, .kimi-tool')].find(el=>el.textContent.includes('Which voice'));
+          const questionVisible = !!question?.checkVisibility();
+          render([{kind:'thinking',text:'Waiting for the preference.'}]);
+          const lastSlot = [...view.querySelectorAll('.activity-run')].pop();
+          const questionBoundary = !!(question.compareDocumentPosition(lastSlot) & Node.DOCUMENT_POSITION_FOLLOWING);
+          render([{kind:'tool_use',name:'Bash',id:'activity-failure',detail:'Run failing check',tool_status:'failed'}]);
+          render([{kind:'thinking',text:'Investigating the failed check.'}]);
+          const failurePreserved = lastSlot.classList.contains('has-error')
+            && lastSlot.querySelector('.activity-run-preview').textContent.startsWith('Failed: ');
+          const overflow = view.scrollWidth > view.clientWidth + 1;
+          document.body.dataset.convView = 'verbose';
+          const verbosePreserved = [...view.querySelectorAll('.activity-run')].every(el=>!el.checkVisibility())
+            && [...view.querySelectorAll('.activity-run-source')].every(el=>el.checkVisibility());
+          document.body.dataset.convView = 'normal';
+          return {firstStable,longStable,newestCommand,thoughtStable,latestThought,collapsedSources,historyVisible,
+            commandsRetained,idempotent,replyBoundary,questionVisible,questionBoundary,failurePreserved,verbosePreserved,overflow};
+        },{merged});
+        assert.deepEqual(result,{firstStable:true,longStable:true,newestCommand:true,thoughtStable:true,latestThought:true,
+          collapsedSources:true,historyVisible:true,commandsRetained:true,idempotent:true,replyBoundary:true,
+          questionVisible:true,questionBoundary:true,failurePreserved:true,verbosePreserved:true,overflow:false},JSON.stringify({width,merged}));
+        await page.focus('.activity-run-toggle');
+        await page.keyboard.press('Enter');
+        assert.equal(await page.$eval('.activity-run-toggle',el=>el.getAttribute('aria-expanded')),'true');
+        await page.keyboard.press('Space');
+        assert.equal(await page.$eval('.activity-run-toggle',el=>el.getAttribute('aria-expanded')),'false');
+        assert.equal(await page.$eval('.activity-run-toggle',el=>{
+          const r=el.getBoundingClientRect();
+          return r.left>=0 && r.top>=0 && r.right<=innerWidth && r.bottom<=innerHeight
+            && el.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2));
+        }),true,'the heading is visible and reachable in the actual viewport');
+        if (process.env.CCC_THINKING_SCREENSHOTS) await page.screenshot({path:process.env.CCC_THINKING_SCREENSHOTS + '/activity-' + width + '-' + merged + '.png'});
       }
     }
   } finally { await browser.close(); }

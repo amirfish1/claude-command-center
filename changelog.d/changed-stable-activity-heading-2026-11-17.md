@@ -1,0 +1,1 @@
+Normal transcript view keeps one stable Working heading while the latest thought or command description updates below it. Expand it to inspect the full history; questions and approvals remain visible.

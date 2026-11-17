@@ -892,7 +892,7 @@
     const key = normalizedToolKey(toolCallName(toolCall));
     // sidekick/run_subagent handoffs are conversation context — the row is
     // where the lead's work visibly leaves for the worker lane.
-    return key === 'ask_user_question' || key === 'sidekick'
+    return key === 'ask_user_question' || key === 'askuserquestion' || key === 'sidekick'
       || key === 'run_subagent' || key.startsWith('kanban_');
   }
 
@@ -1859,6 +1859,78 @@
     return !!view.querySelector('.event.result[data-jsonl-line][data-turn-id="' + esc + '"]');
   }
 
+  // Keep the transcript sources in place for reconciliation, paging and tool
+  // result routing. Only their collapsed presentation is replaced by a slot.
+  function _syncActivityRuns(view) {
+    const stale = new Set(view.querySelectorAll('.activity-run'));
+    const sources = new Set(view.querySelectorAll('.activity-run-source'));
+    let members = [];
+    const flush = () => {
+      if (!members.length) return;
+      const first = members[0];
+      let slot = first.previousElementSibling;
+      if (!slot?.classList.contains('activity-run')) {
+        slot = document.createElement('div');
+        slot.className = 'activity-run';
+        slot.innerHTML = '<button type="button" class="activity-run-toggle" aria-expanded="false">Working</button>'
+          + '<div class="activity-run-preview" dir="auto"></div>';
+        slot.querySelector('button').addEventListener('click', () => {
+          const open = slot.classList.toggle('is-expanded');
+          slot.querySelector('button').setAttribute('aria-expanded', String(open));
+          for (const member of slot._activityMembers) member.classList.toggle('activity-run-open', open);
+        });
+        first.before(slot);
+      }
+      stale.delete(slot);
+      slot._activityMembers = members;
+      for (const member of members) {
+        sources.delete(member);
+        member.classList.add('activity-run-source');
+        member.classList.toggle('activity-run-open', slot.classList.contains('is-expanded'));
+      }
+      const latest = members[members.length - 1];
+      const calls = latest.matches('.tool-call, .kimi-tool') ? [latest] : Array.from(latest.querySelectorAll('.tool-call, .kimi-tool'));
+      const lastCall = calls[calls.length - 1];
+      const detail = latest.matches('.thinking-run') ? latest.querySelector('.thinking-run-preview')
+        : (lastCall || latest).querySelector('.tool-detail, .kimi-tool-arg, .tcg-label, .kimi-tg-label');
+      const preview = slot.querySelector('.activity-run-preview');
+      const failed = members.some(member => member.matches('.tool-call-fail, .kimi-tool.err')
+        || member.querySelector('.tool-call-fail, .kimi-tool-status.error'));
+      const value = (failed ? 'Failed: ' : '') + (detail?.textContent || latest.textContent || '').trim();
+      if (preview.textContent !== value) preview.textContent = value;
+      slot.classList.toggle('has-error', failed);
+      const title = failed ? 'Tool failed — show activity history' : 'Show activity history';
+      if (slot.querySelector('button').title !== title) slot.querySelector('button').title = title;
+      members = [];
+    };
+    const visit = (el) => {
+      if (el.matches('.activity-run, .thinking-run-source, .line-num, .msg-ts, .actor-chip, .event-model-meta, .event-token-chips, .assistant-message-actions, .kimi-marker, .kimi-answer-meta')) return;
+      // Questions, approvals, handoffs and returned images must remain visible.
+      const needsAttention = el.matches('.ccc-video-cleared')
+        || el.querySelector('.acp-needs-approval, .tool-result-images, .tool-inline-image, .codex-subagent')
+        || Array.from(el.querySelectorAll('.kimi-tool-name')).some(node => /^(?:Question|AskUserQuestion|sidekick|run_subagent)$/.test(node.dataset.toolName || node.textContent.trim()))
+        || Array.from(el.querySelectorAll('.tool-call')).some(toolCallCarriesConversationContext);
+      if (needsAttention && el.matches('.tool-call-group, .kimi-tool-group')) {
+        el.classList.remove('collapsed');
+        el.querySelector(':scope > .kimi-tool-group-head')?.setAttribute('aria-expanded', 'true');
+      }
+      if (!needsAttention && el.matches('.thinking-run, .tool-call-group, .tool-call, .kimi-tool-group, .kimi-tool')) {
+        members.push(el);
+      } else {
+        flush();
+      }
+    };
+    for (const event of Array.from(view.children)) {
+      if (event.matches('.activity-run, .conv-codex-state, .conv-live-tool-inline, .conv-live-tool-strip')) continue;
+      if (event.matches('.event.assistant, .kimi-turn') && !event.classList.contains('ccc-video-cleared')) {
+        for (const child of Array.from(event.children)) visit(child);
+      } else visit(event);
+    }
+    flush();
+    for (const source of sources) source.classList.remove('activity-run-source', 'activity-run-open');
+    for (const slot of stale) slot.remove();
+  }
+
   function _syncThinkingRuns(view) {
     const stale = new Set(view.querySelectorAll('.thinking-run'));
     const chrome = '.line-num, .msg-ts, .actor-chip, .event-model-meta, .event-token-chips, .assistant-message-actions';
@@ -1891,7 +1963,7 @@
       run._latestThinkingSource = source;
     };
     for (const event of view.children) {
-      if (event.matches('.conv-codex-state, .conv-live-tool-inline, .conv-live-tool-strip')) continue;
+      if (event.matches('.activity-run, .conv-codex-state, .conv-live-tool-inline, .conv-live-tool-strip')) continue;
       if (!event.matches('.event.assistant, .kimi-turn') || event.classList.contains('ccc-video-cleared')) {
         run = null;
         continue;
@@ -1899,7 +1971,7 @@
       let thoughtsOnly = true;
       let hasThought = false;
       for (const block of Array.from(event.children)) {
-        if (block.matches('.thinking-run, .kimi-marker, .kimi-answer-meta, ' + chrome)) continue;
+        if (block.matches('.activity-run, .thinking-run, .kimi-marker, .kimi-answer-meta, ' + chrome)) continue;
         if (block.matches('.thinking-block:not(.thinking-block-silent), .kimi-thinking')) {
           visit(block);
           hasThought = true;
@@ -1926,6 +1998,7 @@
       const teaser = slot.querySelector('.thinking-run-preview');
       if (teaser.textContent !== preview) teaser.textContent = preview;
     }
+    _syncActivityRuns(view);
   }
 
   function _ccOrchResultLabels(labels, output) {
