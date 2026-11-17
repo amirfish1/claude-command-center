@@ -104,6 +104,7 @@ def _connect(cache_file, *, write=False):
             );
             CREATE INDEX IF NOT EXISTS rows_activity ON rows(variant, activity);
             CREATE INDEX IF NOT EXISTS rows_sid ON rows(variant, sid);
+            CREATE INDEX IF NOT EXISTS rows_position ON rows(variant, position);
             CREATE TABLE IF NOT EXISTS session_inventory (
                 variant TEXT NOT NULL, identity TEXT NOT NULL,
                 digest TEXT NOT NULL, body TEXT NOT NULL,
@@ -239,6 +240,38 @@ def load_inventory(cache_file, key, *, schema_version, build_id=None,
         positions = {rid: cached[1][rid] for rid in (*identities, *skip_identities) if rid in cached[1]}
         return {'cached_at': metadata[0], 'identities': tuple(identities),
                 'positions': positions, 'conversations': rows}
+    finally:
+        con.close()
+
+
+def load_head(cache_file, key, limit, *, schema_version, build_id, deleted_codex=()):
+    """Decode only a capped query's first eligible canonical history rows.
+
+    The public sessions API applies its limit after lifecycle deletion, in
+    stored order. Filtering those deletions in the same read transaction keeps
+    the cap exact without deserializing unrelated historical bodies.
+    """
+    if not database_path(cache_file).exists():
+        return None
+    con = _connect(cache_file)
+    try:
+        con.execute('BEGIN')
+        metadata = con.execute('SELECT cached_at,metadata FROM variants WHERE key=?', (key,)).fetchone()
+        if not metadata:
+            return None
+        meta = json.loads(metadata[1])
+        if meta.get('schema_version') != schema_version or meta.get('build_id') != build_id:
+            return None
+        sql = 'SELECT body FROM rows WHERE variant=?'
+        params = [key]
+        if deleted_codex:
+            sql += ''' AND (sid NOT IN (SELECT value FROM json_each(?))
+                       OR COALESCE(json_extract(body,'$.engine'),'')!='codex')'''
+            params.append(json.dumps(sorted(deleted_codex)))
+        sql += ' ORDER BY position LIMIT ?'
+        params.append(limit)
+        bodies = con.execute(sql, params).fetchall()
+        return {'cached_at': metadata[0], 'conversations': [json.loads(body) for body, in bodies]}
     finally:
         con.close()
 

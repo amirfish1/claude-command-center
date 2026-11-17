@@ -18364,6 +18364,43 @@ def _archive_inventory_rows_cached(cache_options, *, limit=None, activity_key=No
         and str(row.get('session_id') or row.get('id') or '') in deleted)], cached
 
 
+def _archive_session_query_rows_cached(cache_options, qs):
+    """Push an existing simple cap into the canonical cold history read."""
+    if any((qs.get(name) or [''])[0] for name in ('since', 'state', 'engine')):
+        return _archive_all_rows_cached(cache_options)
+    try:
+        limit = int((qs.get('limit') or [''])[0])
+    except (ValueError, TypeError):
+        return _archive_all_rows_cached(cache_options)
+    if not 0 <= limit <= 1000:
+        return _archive_all_rows_cached(cache_options)
+    if limit == 0:
+        return [], True
+    from ccc_server import archive_store
+    import sqlite3
+    key = _archive_response_cache_key(**cache_options)
+    try:
+        deleted = _codex_deleted_thread_ids()
+        stored = archive_store.load_head(
+            _ARCHIVE_RESPONSE_CACHE_FILE, key, limit,
+            schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+            build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID, deleted_codex=deleted)
+    except (OSError, ValueError, sqlite3.Error):
+        stored = None
+    if stored is None:
+        return _archive_all_rows_cached(cache_options)
+    rows, cached, _ = _archive_serve_hot_rows_versioned(key, cache_options, defer_cold=True)
+    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+        hot_stamp = (_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get('cached_at', 0)
+    if float(hot_stamp or 0) > float(stored.get('cached_at') or 0):
+        return _overlay_conversation_lifecycle_flags(rows)[:limit], cached
+    current = {archive_store.identity(row): row for row in rows}
+    combined = [current.pop(archive_store.identity(row), row) for row in stored['conversations']]
+    if len(combined) < limit:
+        combined.extend(current.values())
+    return _overlay_conversation_lifecycle_flags(combined)[:limit], cached
+
+
 # Sidebar rows are shaped from this projection in static/app.js. Keep this
 # allowlist explicit: /api/conversations/all remains the compatibility payload,
 # while /list must not serialize transcripts, parser/debug state, or JSONL paths.
@@ -33239,12 +33276,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if qs.get("all", ["0"])[0] in ("1", "true"):
                 engine_filter = (qs.get("engine", [""])[0] or "").strip().lower()
                 compact = qs.get("compact", ["0"])[0] in ("1", "true")
-                rows, _from_cache = _archive_all_rows_cached({
+                rows, _from_cache = _archive_session_query_rows_cached({
                     "include_prs": qs.get("include_prs", ["0"])[0] in ("1", "true"),
                     "resolve_pr_states": qs.get("resolve_prs", ["0"])[0] in ("1", "true"),
                     "resolve_effective": qs.get("resolve_effective", ["0"])[0] in ("1", "true"),
                     "resolve_worktree_dirty": qs.get("resolve_worktrees", ["0"])[0] in ("1", "true"),
-                })
+                }, qs)
                 spawned = _archive_spawned_coalesced()
                 if engine_filter:
                     rows = [r for r in rows if (r.get("engine") or r.get("source") or "").lower() == engine_filter]
