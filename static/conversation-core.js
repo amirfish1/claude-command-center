@@ -18026,7 +18026,7 @@
     const pickerReasoningEffort = ovrReasoningEffort || liveReasoningEffort;
     const showsEffort = engineSupportsEffort(engine);
     // Chip names the queued target unless the pill itself already does
-    // (no live model yet → the override IS the pill text, chip says "next").
+    // (no live model yet → the override IS the pill text).
     const shortOvrModel = ovr
       ? String(ovr.model || '').replace(/^claude-/, '').replace(/\[1m\]/i, '').trim()
       : '';
@@ -18066,13 +18066,13 @@
       // no longer renders in the label itself. It still surfaces via
       // modelTip's "Reasoning effort: ..." line above, and the full effort
       // ladder still lives inside the picker this pill opens.
-      const pendingModelText = queued ? ((liveModel && shortOvrModel) ? shortOvrModel : 'next') : '';
+      const pendingModelText = queued && liveModel ? shortOvrModel : '';
       const pendingText = pendingModelText
         ? (0, sharedState.formatModelEffort)(pendingModelText, queuedEffort)
         : (queuedEffort ? (0, sharedState.formatModelEffort)('', queuedEffort, { style: 'verbose' }) : '');
       const modelInner = (0, sharedState.escapeHtml)(shortModel)
         + (isOneM ? ' <span class="wp-model-1m">1M</span>' : '')
-        + (pendingText ? ' <span class="wp-model-pending">→ ' + (0, sharedState.escapeHtml)(pendingText) + ' next message</span>' : '')
+        + (queued || queuedEffort ? ' <span class="wp-model-pending">→ ' + (pendingText ? (0, sharedState.escapeHtml)(pendingText) + ' ' : '') + 'next message</span>' : '')
         + ' <span class="wp-model-chevron">&#x25be;</span>';
       if (engine === 'hermes') {
         modelPill = ' <span class="wp-model-pill is-static" title="' + (0, sharedState.escapeHtml)(modelTip) + '">'

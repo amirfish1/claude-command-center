@@ -111,6 +111,56 @@ def _headless_model_change_pending(entry, session_id):
     live_one_m = entry.get("context_1m", "context-1m-2025-08-07" in flag("--betas"))
     return bool(override.get("context_1m")) != bool(live_one_m)
 
+
+@_serialize_session_delivery
+def _retire_limited_model_for_session(session_id):
+    """Honor a queued picker choice at a completed exhaustion boundary.
+
+    This only retires the old process. The next explicit input launches the
+    selected model; a limit error must never manufacture another model turn.
+    """
+    entry = _core._find_live_spawn_entry_for_session(session_id)
+    if entry is None or not _core._headless_model_change_pending(entry, session_id):
+        if entry is not None:
+            entry.pop("_model_switch_after_limit", None)
+        return False
+    with entry.setdefault("_input_write_lock", threading.Lock()):
+        if (_headless_turn_in_progress(entry)
+                or _core._spawn_entry_active_tool_child(entry)):
+            return False
+        log = entry.get("log")
+        if not log:
+            return False
+        # Read the spawn's own bounded output, not an unrelated writer's
+        # transcript. Lifecycle trailers can follow the completed result.
+        result = None
+        for line in reversed(_core._tail_read_lines(Path(log))):
+            try:
+                event = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(event, dict) and event.get("type") == "result":
+                result = event
+                break
+        if not result or not result.get("is_error"):
+            return False
+        error = json.dumps([result.get("result"), result.get("errors")])
+        if not (_core._USAGE_LIMIT_EXHAUSTED_RE.search(error)
+                or re.search(r"hit your[^.\n]*limit", error, re.I)):
+            return False
+        override = _core._get_session_override(session_id) or {}
+        try:
+            _domestic_providers.resolve_spawn(
+                _domestic_providers.session_model(session_id, override), entry.get("cwd"),
+            )
+        except _domestic_providers.DomesticProviderError:
+            return False  # keep the process until the selected preset is usable
+        entry["_model_switch_stopping"] = True
+        return _core._retire_unresponsive_spawn_entry(
+            entry, terminate=True, reason="model-switch",
+            caller="usage-limit", wait_for_exit=True,
+        )
+
 # ---------------------------------------------------------------------------
 # Installed-engines inventory (First Flight tour welcome chips).
 #
@@ -7669,7 +7719,7 @@ def _retire_unresponsive_spawn_entry(entry, *, terminate=False, reason=None, cal
     # "cleaned up an idle/dead one".
     mid_turn = alive and bool(_core._spawn_entry_active_tool_child(entry))
     _core._resume_ledger_append(
-        "retire", sid=entry.get("resumed_sid"), pid=pid,
+        "retire", sid=entry.get("resumed_sid") or entry.get("session_id"), pid=pid,
         terminate=bool(terminate), reason=reason or "unspecified", alive=alive,
         caller=caller or "", age_s=age_s, mid_turn=mid_turn,
     )
@@ -8698,6 +8748,10 @@ def _start_headless_staleness_watcher() -> None:
                 try:
                     if _core._poll_spawn_entry(entry) is not None:
                         continue  # already exited
+                    if entry.get("_model_switch_after_limit"):
+                        sid = _spawn_entry_session_id(entry)
+                        if sid and _core._retire_limited_model_for_session(sid):
+                            continue
                     if not entry.get("retire_when_idle"):
                         continue
                     if _core._spawn_entry_active_tool_child(entry):
