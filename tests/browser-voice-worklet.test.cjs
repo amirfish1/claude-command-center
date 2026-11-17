@@ -75,3 +75,46 @@ test('underruns retain count, longest gap and total lost audio-clock time', () =
   assert.ok(event.totalUnderrunMs >= event.maxGapMs);
   assert.ok(event.totalUnderrunMs < 400);
 });
+
+function playSine(rate, hz = 200, seconds = 0.9) {
+  const h = harness(rate);
+  const n = Math.round(24000 * seconds);
+  const pcm = new Float32Array(n);
+  for (let i = 0; i < n; i++) pcm[i] = 0.5 * Math.sin(2 * Math.PI * hz * i / 24000);
+  h.p.receive({type: 'pcm', pcm});
+  h.p.receive({type: 'end', samples: n});
+  const out = [];
+  for (let i = 0; i < 2000; i++) {
+    const [block] = h.tick();
+    out.push(...block.samples);
+    if (!block.running) break;
+  }
+  return {h, out, n};
+}
+
+test('speed changes keep pitch: a 200 Hz tone stays 200 Hz and only duration scales', () => {
+  for (const rate of [0.75, 1.5, 2]) {
+    const {h, out, n} = playSine(rate);
+    assert.equal(h.events.some(e => e.type === 'ended'), true, `rate ${rate} ends`);
+    // Measure pitch in the steady middle of the output via zero crossings.
+    const mid = out.slice(Math.floor(out.length * 0.25), Math.floor(out.length * 0.75));
+    let crossings = 0;
+    for (let i = 1; i < mid.length; i++) if ((mid[i - 1] < 0) !== (mid[i] < 0)) crossings++;
+    const hz = crossings / 2 / (mid.length / 48000);
+    assert.ok(Math.abs(hz - 200) < 8, `rate ${rate}: measured ${hz.toFixed(1)} Hz`);
+    const expected = n / 24000 / rate, actual = out.length / 48000;
+    assert.ok(Math.abs(actual - expected) < 0.1, `rate ${rate}: ${actual.toFixed(3)}s vs ${expected.toFixed(3)}s`);
+    assert.equal(h.p.consumed, n, 'every source sample is consumed and credited');
+    assert.equal(h.credits.reduce((s, x) => s + x, 0) + h.p.credit, h.p.consumed);
+  }
+});
+
+test('stretched playback handles empty and short final audio', () => {
+  for (const size of [0, 100]) {
+    const h = harness(1.5);
+    h.p.receive({type: 'pcm', pcm: new Float32Array(size)});
+    h.p.receive({type: 'end', samples: size});
+    assert.equal(h.tick(20).some(b => !b.running), true);
+    assert.equal(h.events.some(e => e.type === 'ended'), true);
+  }
+});
