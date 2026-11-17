@@ -57,7 +57,7 @@ class TestFederatedSessionsSort(unittest.TestCase):
              "timestamp": "2020-01-01T00:00:00Z"},
             {"session_id": "newest", "mtime": 9500.0},
         ]
-        with mock.patch.object(fleet._core, "_archive_all_rows_cached",
+        with mock.patch.object(fleet._core, "_archive_inventory_rows_cached",
                                return_value=(rows, True)), \
              mock.patch.object(fleet, "_federation_lease_owners", return_value={}), \
              mock.patch.object(fleet.federation, "load_repo_map", return_value={}):

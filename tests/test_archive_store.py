@@ -308,3 +308,55 @@ def test_legacy_backup_is_complete_private_and_never_replaced(tmp_path):
     target.write_text('{}')
     store.backup_legacy(target)
     assert json.loads(backup.read_text()) == data()
+
+
+def test_inventory_publication_is_small_current_and_complete(tmp_path):
+    target = tmp_path / 'archive.json'
+    original = data()
+    original['entries']['base']['conversations'][0].update(
+        first_message='x' * 500, parser_detail={'large': 'private body' * 1000},
+        model={'nested': [1]})
+    store.save(target, original, complete=True)
+    version = original['schema_version']
+    projected = store.load_inventory(target, 'base', schema_version=version)
+    assert projected['conversations'] == [store.inventory_row(r) for r in original['entries']['base']['conversations']]
+    assert len(projected['conversations'][0]['first_message']) == 160
+    assert 'parser_detail' not in projected['conversations'][0]
+    projected['conversations'][0]['display_name'] = 'caller mutation'
+    projected['conversations'][0]['model']['nested'].append(2)
+    assert 'display_name' not in store.load_inventory(target, 'base', schema_version=version)['conversations'][0]
+    assert store.load_inventory(target, 'base', schema_version=version)['conversations'][0]['model'] == {'nested': [1]}
+    assert store.load_inventory(target, 'base', schema_version=version + 1) is None
+    newer = data(20)
+    newer['entries']['base']['conversations'][0]['display_name'] = 'New title'
+    store.save(target, newer, complete=True)
+    assert store.load_inventory(target, 'base', schema_version=version)['conversations'][0]['display_name'] == 'New title'
+    store.save(target, original, complete=True)
+    assert store.load_inventory(target, 'base', schema_version=version)['cached_at'] == 20
+    hot = data(30)
+    hot['entries']['base']['conversations'] = hot['entries']['base']['conversations'][1:]
+    store.save(target, hot)
+    assert len(store.load_inventory(target, 'base', schema_version=version)['conversations']) == 4
+    hot['entries']['base']['cached_at'] = 40
+    store.save(target, hot, complete=True)
+    assert len(store.load_inventory(target, 'base', schema_version=version)['conversations']) == 3
+
+
+def test_inventory_old_or_incomplete_store_requires_compatibility_read(tmp_path):
+    target = tmp_path / 'archive.json'
+    original = data()
+    store.save(target, original, complete=True)
+    version = original['schema_version']
+    con = sqlite3.connect(store.database_path(target))
+    try:
+        con.execute("UPDATE session_inventory SET digest='outdated' WHERE identity=(SELECT identity FROM session_inventory LIMIT 1)")
+        con.commit()
+        assert store.load_inventory(target, 'base', schema_version=version) is None
+        con.execute('DROP TABLE session_inventory')
+        con.commit()
+        assert store.load_inventory(target, 'base', schema_version=version) is None
+    finally:
+        con.close()
+    original['entries']['base']['cached_at'] += 1
+    assert store.save(target, original, complete=True) == 0
+    assert len(store.load_inventory(target, 'base', schema_version=version)['conversations']) == 4

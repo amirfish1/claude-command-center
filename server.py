@@ -18325,6 +18325,45 @@ def _archive_all_rows_cached(cache_options):
     return _archive_serve_rows(key, cache_options)
 
 
+def _archive_inventory_rows_cached(cache_options, *, limit=None, activity_key=None):
+    """Merge the current hot snapshot with compact persisted peer fields."""
+    from ccc_server import archive_store
+    import sqlite3
+    key = _archive_response_cache_key(**cache_options)
+    if not archive_store.database_path(_ARCHIVE_RESPONSE_CACHE_FILE).exists():
+        return _archive_all_rows_cached(cache_options)
+    rows, cached, _ = _archive_serve_hot_rows_versioned(key, cache_options, defer_cold=True)
+    current = {archive_store.identity(row): row for row in rows}
+    try:
+        deleted = _codex_deleted_thread_ids()
+    except Exception:
+        deleted = set()
+    try:
+        stored = archive_store.load_inventory(
+            _ARCHIVE_RESPONSE_CACHE_FILE, key,
+            schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+            build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID,
+            limit=limit, activity_key=activity_key,
+            skip_identities=current, deleted_codex=deleted)
+    except (OSError, ValueError, sqlite3.Error):
+        stored = None
+    if stored is None:
+        return _archive_all_rows_cached(cache_options)
+    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+        hot_stamp = (_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get('cached_at', 0)
+    if float(hot_stamp or 0) > float(stored.get('cached_at') or 0):
+        return [row for row in rows if not (
+            row.get('engine') == 'codex'
+            and str(row.get('session_id') or row.get('id') or '') in deleted)], cached
+    combined = list(zip(stored['identities'], stored['conversations'])) + list(current.items())
+    # Preserve the full-history stable tie order after the peer's activity
+    # sort, including hot replacements at their original cold positions.
+    combined.sort(key=lambda pair: stored['positions'].get(pair[0], float('inf')))
+    return [row for _, row in combined if not (
+        row.get('engine') == 'codex'
+        and str(row.get('session_id') or row.get('id') or '') in deleted)], cached
+
+
 # Sidebar rows are shaped from this projection in static/app.js. Keep this
 # allowlist explicit: /api/conversations/all remains the compatibility payload,
 # while /list must not serialize transcripts, parser/debug state, or JSONL paths.

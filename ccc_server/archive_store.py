@@ -16,7 +16,27 @@ import shutil
 import tempfile
 import time
 
+from .bounded_cache import ByteBudgetCache
+
 HOT_SECONDS = 7 * 86400
+
+# The peer inventory never consumes transcript/parser detail. Publish its
+# projection in the same transaction as each canonical row, so polling peers
+# does not repeatedly decode the complete historical payload.
+INVENTORY_FIELDS = (
+    'id', 'session_id', 'engine', 'source', 'jsonl_path', 'mtime', 'timestamp',
+    'session_cwd', 'cwd', 'effective_branch', 'branch', 'is_live', 'model',
+    'parent_session_id', 'claude_auth_failed', 'display_name', 'first_message',
+)
+INVENTORY_VERSION = '1:'
+_INVENTORY_CACHE = ByteBudgetCache(max_bytes=64 << 20, max_entries=2)
+
+
+def inventory_row(row):
+    result = {name: row[name] for name in INVENTORY_FIELDS if name in row}
+    if isinstance(result.get('first_message'), str):
+        result['first_message'] = result['first_message'][:160]
+    return result
 
 
 def activity(row):
@@ -84,6 +104,11 @@ def _connect(cache_file, *, write=False):
             );
             CREATE INDEX IF NOT EXISTS rows_activity ON rows(variant, activity);
             CREATE INDEX IF NOT EXISTS rows_sid ON rows(variant, sid);
+            CREATE TABLE IF NOT EXISTS session_inventory (
+                variant TEXT NOT NULL, identity TEXT NOT NULL,
+                digest TEXT NOT NULL, body TEXT NOT NULL,
+                PRIMARY KEY (variant, identity)
+            );
         ''')
         return con
     # Read-only connections never create an empty store that hides the JSON
@@ -112,6 +137,8 @@ def save(cache_file, snapshot, *, complete=False):
                 continue
             existing = {rid: (digest, position) for rid, digest, position in con.execute(
                 'SELECT identity,digest,position FROM rows WHERE variant=?', (key,))}
+            inventory = {rid: digest for rid, digest in con.execute(
+                'SELECT identity,digest FROM session_inventory WHERE variant=?', (key,))}
             seen = set()
             for index, row in enumerate(entry.get('conversations') or []):
                 if not isinstance(row, dict):
@@ -120,6 +147,11 @@ def save(cache_file, snapshot, *, complete=False):
                 seen.add(rid)
                 body = json.dumps(row, separators=(',', ':'), sort_keys=True)
                 digest = hashlib.sha256(body.encode()).hexdigest()
+                inventory_digest = INVENTORY_VERSION + digest
+                if inventory.get(rid) != inventory_digest:
+                    projected = json.dumps(inventory_row(row), separators=(',', ':'), sort_keys=True)
+                    con.execute('INSERT OR REPLACE INTO session_inventory VALUES(?,?,?,?)',
+                                (key, rid, inventory_digest, projected))
                 if existing.get(rid, (None,))[0] == digest:
                     if existing[rid][1] != index:
                         con.execute('UPDATE rows SET position=? WHERE variant=? AND identity=?', (index, key, rid))
@@ -133,6 +165,8 @@ def save(cache_file, snapshot, *, complete=False):
             if complete:
                 con.executemany('DELETE FROM rows WHERE variant=? AND identity=?',
                                 ((key, rid) for rid in existing.keys() - seen))
+                con.executemany('DELETE FROM session_inventory WHERE variant=? AND identity=?',
+                                ((key, rid) for rid in inventory.keys() - seen))
             metadata = {k: v for k, v in snapshot.items() if k != 'entries'}
             metadata['entry'] = {k: v for k, v in entry.items() if k != 'conversations'}
             con.execute('INSERT OR REPLACE INTO variants VALUES(?,?,?)',
@@ -144,6 +178,69 @@ def save(cache_file, snapshot, *, complete=False):
     finally:
         con.close()
     return changed
+
+
+def load_inventory(cache_file, key, *, schema_version, build_id=None,
+                   limit=None, activity_key=None, skip_identities=(), deleted_codex=()):
+    """A complete, transactionally current peer projection, or None.
+
+    Older stores and partial upgrades use the compatibility history path until
+    a normal archive publication has filled every projection. A digest check
+    prevents a stale projection from masquerading as the canonical row.
+    """
+    if not database_path(cache_file).exists():
+        return None
+    con = _connect(cache_file)
+    try:
+        con.execute('BEGIN')
+        metadata = con.execute('SELECT cached_at,metadata FROM variants WHERE key=?', (key,)).fetchone()
+        if not metadata:
+            return None
+        meta = json.loads(metadata[1])
+        if (meta.get('schema_version') != schema_version
+                or meta.get('build_id') != (str(schema_version) if build_id is None else build_id)):
+            return None
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE name='session_inventory'").fetchone():
+            return None
+        stat = database_path(cache_file).stat()
+        cache_key = (str(database_path(cache_file)), stat.st_dev, stat.st_ino,
+                     key, metadata[0], schema_version, build_id, INVENTORY_VERSION, activity_key)
+        cached = _INVENTORY_CACHE.get(cache_key)
+        if cached is None:
+            missing = con.execute('''SELECT 1 FROM rows r LEFT JOIN session_inventory i
+                ON i.variant=r.variant AND i.identity=r.identity
+                WHERE r.variant=? AND (i.digest IS NULL OR i.digest!=?||r.digest) LIMIT 1''',
+                                  (key, INVENTORY_VERSION)).fetchone()
+            if missing:
+                return None
+            bodies = con.execute('''SELECT i.identity,i.body FROM rows r JOIN session_inventory i
+            ON i.variant=r.variant AND i.identity=r.identity
+            WHERE r.variant=? ORDER BY r.position''', (key,)).fetchall()
+            decoded = [(rid, json.loads(body)) for rid, body in bodies]
+            positions = {rid: index for index, (rid, _) in enumerate(decoded)}
+            if activity_key is not None:
+                decoded.sort(key=lambda item: activity_key(item[1]), reverse=True)
+            cached = (tuple(decoded), positions)
+            _INVENTORY_CACHE.put(cache_key, cached,
+                                 sum(len(rid) + len(body) for rid, body in bodies) * 4)
+        # Callers may enrich rows; no mutable cache member escapes. Ordinary
+        # inventory fields are scalar, but preserve unusual nested model data.
+        import copy
+        identities, rows = [], []
+        for identity, row in cached[0]:
+            if identity in skip_identities or (row.get('engine') == 'codex'
+                    and str(row.get('session_id') or row.get('id') or '') in deleted_codex):
+                continue
+            identities.append(identity)
+            rows.append({name: copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+                         for name, value in row.items()})
+            if limit is not None and len(rows) >= limit:
+                break
+        positions = {rid: cached[1][rid] for rid in (*identities, *skip_identities) if rid in cached[1]}
+        return {'cached_at': metadata[0], 'identities': tuple(identities),
+                'positions': positions, 'conversations': rows}
+    finally:
+        con.close()
 
 
 def load(cache_file, *, hot=False, key=None, now=None):

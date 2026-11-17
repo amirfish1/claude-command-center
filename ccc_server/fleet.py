@@ -114,14 +114,14 @@ def _federation_row_activity(row):
 
 def _federation_sessions_inventory(limit=200):
     """Compact cross-repo session inventory for a peer aggregator. Served from
-    the same response cache as /api/sessions?all=1 — no extra O(all) work."""
+    the same hot snapshot and a compact, transactionally current cold projection."""
     me = federation.node_id()
-    rows, _from_cache = _core._archive_all_rows_cached({
+    rows, _from_cache = _core._archive_inventory_rows_cached({
         "include_prs": False,
         "resolve_pr_states": False,
         "resolve_effective": False,
         "resolve_worktree_dirty": False,
-    })
+    }, limit=max(1, min(int(limit or 200), 1000)), activity_key=_federation_row_activity)
     leases = _federation_lease_owners()
     # Reverse repo map (path -> stable identity) so every row carries the
     # cross-machine repository identity, not just this node's local path.
