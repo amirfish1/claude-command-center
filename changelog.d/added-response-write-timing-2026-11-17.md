@@ -1,0 +1,1 @@
+- Opt in to response-write timing with a random hexadecimal `X-CCC-Timing` request ID. The matching header and timestamp-only log distinguish backend writes from later delivery delays without recording request content.

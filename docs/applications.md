@@ -414,6 +414,21 @@ Then iframe `/proxy/mytool/<path>` from your app's `index.html`. The proxy
 forwards to `127.0.0.1:9137` and rewrites root-relative URLs so the embedded
 dashboard stays inside the prefix.
 
+## Diagnosing response delivery
+
+For a single diagnostic request, send `X-CCC-Timing` with a random 16–32
+character lowercase hexadecimal ID. CCC echoes the ID and adds an `emit`
+epoch timestamp to `Server-Timing`. Its `[response-timing]` JSON log records
+that ID, the header-write start/completion, write duration, and handler
+completion. It records no URL, headers, body, or client identity. Requests
+without a valid measurement ID produce no measurement log.
+
+Compare these phases with the browser's network timing to separate handler
+work, backend writes, and later delivery. Handler completion is not proof of
+client receipt; calibrate clock differences before comparing different
+machines. This diagnostic needs no packet capture or transport configuration
+change.
+
 ## Notes
 
 - The rail hides below 700px wide — phones and the installed PWA get the full
