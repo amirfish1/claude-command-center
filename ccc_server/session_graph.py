@@ -2664,35 +2664,37 @@ def _auto_titled_session_ids():
     Read once per list build and membership-tested per row -- never a stat()
     per row (see CLAUDE.md "Performance gates").
     """
-    try:
-        st = _core.SIDECAR_STATE_DIR.stat()
-        key = (st.st_mtime, st.st_size)
-    except OSError:
-        return {}
+    # Coalesce a directory change across simultaneous archive/family polls.
+    # Releasing the lock before reading lets every caller rescan every marker
+    # at once, multiplying file I/O and GIL handoffs during sidebar startup.
     with _auto_titled_lock:
+        try:
+            st = _core.SIDECAR_STATE_DIR.stat()
+            key = (st.st_mtime, st.st_size)
+        except OSError:
+            return {}
         if _auto_titled_cache["key"] == key:
             return _auto_titled_cache["data"]
-    try:
-        data = {}
-        for n in os.listdir(_core.SIDECAR_STATE_DIR):
-            if not n.endswith("_autotitled"):
-                continue
-            sid = n[: -len("_autotitled")]
-            title = ""
-            try:
-                blob = json.loads((_core.SIDECAR_STATE_DIR / n).read_text() or "{}")
-            except (OSError, ValueError):
-                blob = None
-            # Legacy markers hold a bare timestamp, not an object.
-            if isinstance(blob, dict):
-                title = str(blob.get("title") or "")
-            data[sid] = title
-    except OSError:
-        return {}
-    with _auto_titled_lock:
+        try:
+            data = {}
+            for n in os.listdir(_core.SIDECAR_STATE_DIR):
+                if not n.endswith("_autotitled"):
+                    continue
+                sid = n[: -len("_autotitled")]
+                title = ""
+                try:
+                    blob = json.loads((_core.SIDECAR_STATE_DIR / n).read_text() or "{}")
+                except (OSError, ValueError):
+                    blob = None
+                # Legacy markers hold a bare timestamp, not an object.
+                if isinstance(blob, dict):
+                    title = str(blob.get("title") or "")
+                data[sid] = title
+        except OSError:
+            return {}
         _auto_titled_cache["key"] = key
         _auto_titled_cache["data"] = data
-    return data
+        return data
 
 
 def _auto_title_enabled():
