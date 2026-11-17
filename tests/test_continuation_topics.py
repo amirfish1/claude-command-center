@@ -187,7 +187,14 @@ def test_metadata_cache_is_scanned_at_most_once_per_batch(store, monkeypatch):
     assert all(item['continuation_topic_title'] == 'TOPIC' for item in rows)
     selects = [query for query in queries if query.startswith('SELECT ')]
     # Indexed point or batched-PK lookups only, never a table scan.
-    assert all(' WHERE sid=' in query or ' WHERE sid IN (' in query for query in selects)
+    assert all(' WHERE sid=' in query or ' WHERE sid IN (' in query
+               or 'FROM wanted w LEFT JOIN continuation_topics t ON t.sid=w.sid' in query
+               for query in selects)
+    for query in selects:
+        if 'FROM wanted w LEFT JOIN' in query:
+            plan = [item[3] for item in store.execute('EXPLAIN QUERY PLAN ' + query)]
+            assert any('SEARCH t USING INDEX' in step for step in plan)
+            assert any('SEARCH m USING INDEX' in step for step in plan)
     # CCC-142: a steady-state load prefetches rows in chunks instead of
     # issuing 2-3 point queries per row.
     queries.clear()
@@ -419,7 +426,7 @@ def test_connection_skips_ddl_and_cached_attach_topics_invalidates_on_mutations(
     assert [item['continuation_topic_title'] for item in chain_rows] == ['RENAMED TOPIC', 'RENAMED TOPIC']
 
 
-def test_topic_prefetch_has_one_python_result_per_table_chunk(store):
+def test_topic_prefetch_has_one_python_result_per_chunk(store):
     sids = [f'session-{i}' for i in range(1200)]
     store.executemany('INSERT INTO session_meta VALUES (?,?)', [(sid, '') for sid in sids])
     topics._connection(store)
@@ -433,4 +440,20 @@ def test_topic_prefetch_has_one_python_result_per_table_chunk(store):
     batch = topics._Batch(store, [row(sid, 'Standalone') for sid in sids], {})
     assert len(batch.records) == 1200
     assert len(batch.indexed_origins) == 1200
-    assert len(callbacks) == 6  # two indexed tables, three <=500-ID chunks
+    assert len(callbacks) == 3  # both indexed tables, three <=500-ID chunks
+
+
+def test_topic_prefetch_preserves_sparse_and_missing_index_rows(store):
+    topics._connection(store)
+    store.execute('INSERT INTO continuation_topics VALUES (?,?,?,?,?)',
+                  ('child', 'root', 'root', 'TOPIC', 0))
+    store.execute('INSERT INTO session_meta VALUES (?,?)', ('index-only', 'root'))
+    batch = topics._Batch(store, [row(sid) for sid in ('child', 'index-only', 'absent')], {})
+    assert batch.records == {'child': ('root', 'root', 'TOPIC', 0),
+                             'index-only': ('', '', '', 0), 'absent': ('', '', '', 0)}
+    assert batch.indexed_origins == {'child': '', 'index-only': 'root', 'absent': ''}
+    store.execute('DROP TABLE session_meta')
+    batch = topics._Batch(store, [row('child'), row('absent')], {})
+    assert batch.records['child'] == ('root', 'root', 'TOPIC', 0)
+    assert batch.records['absent'] == ('', '', '', 0)
+    assert batch.indexed_origins == {'child': '', 'absent': ''}

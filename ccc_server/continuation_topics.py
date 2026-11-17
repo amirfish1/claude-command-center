@@ -193,30 +193,34 @@ class _Batch:
         self._prefetch(list(self.rows))
 
     def _prefetch(self, sids, chunk=500):
-        # One chunked IN query per table instead of 2-3 point SELECTs per row:
-        # each SQLite call releases the GIL, and thousands of them convoy
-        # behind busy threads right after a restart (CCC-142).
+        # Read both indexed inputs in one bounded result. Separate reads of
+        # the same IDs double the SQLite/GIL handoffs on a busy dashboard.
+        # Start from the requested IDs so missing topic/index rows retain
+        # the same defaults as established standalone sessions.
         for i in range(0, len(sids), chunk):
             part = sids[i:i + chunk]
-            marks = ','.join('?' * len(part))
-            found = {r[0]: r[1:] for r in _sqlite_fetch_rows(
-                self.conn,
-                'SELECT sid, origin, root_sid, topic_title, user_named '
-                f'FROM continuation_topics WHERE sid IN ({marks})', part,
-                ('sid', 'origin', 'root_sid', 'topic_title', 'user_named'))}
-            for sid in part:
-                self.records.setdefault(sid, found.get(sid, ('', '', '', 0)))
+            wanted = 'WITH wanted(sid) AS (VALUES ' + ','.join('(?)' for _ in part) + ') '
+            topic_sql = '''SELECT w.sid AS sid, coalesce(t.origin, '') AS origin,
+                coalesce(t.root_sid, '') AS root_sid,
+                coalesce(t.topic_title, '') AS topic_title,
+                CASE WHEN t.sid IS NULL THEN 0 ELSE t.user_named END AS user_named,
+                {indexed} AS continuation_origin
+                FROM wanted w LEFT JOIN continuation_topics t ON t.sid=w.sid'''
+            columns = ('sid', 'origin', 'root_sid', 'topic_title', 'user_named',
+                       'continuation_origin')
             try:
-                origins = dict(_sqlite_fetch_rows(
+                found = _sqlite_fetch_rows(
                     self.conn,
-                    f'SELECT sid, continuation_origin FROM session_meta WHERE sid IN ({marks})', part,
-                    ('sid', 'continuation_origin')))
+                    wanted + topic_sql.format(indexed="coalesce(m.continuation_origin, '')")
+                    + ' LEFT JOIN session_meta m ON m.sid=w.sid', part, columns)
             except sqlite3.OperationalError as exc:
                 if str(exc) != 'no such table: session_meta':
                     raise
-                origins = {}
-            for sid in part:
-                self.indexed_origins.setdefault(sid, origins.get(sid) or '')
+                found = _sqlite_fetch_rows(
+                    self.conn, wanted + topic_sql.format(indexed="''"), part, columns)
+            for sid, origin, root, title, named, indexed in found:
+                self.records.setdefault(sid, (origin, root, title, named))
+                self.indexed_origins.setdefault(sid, indexed)
 
     def record(self, sid):
         if sid not in self.records:
