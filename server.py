@@ -2015,7 +2015,7 @@ def _watchtower_service_status(*, probe_api=True, include_queues=False):
 def _watchtower_queue_rollup():
     """Queue depth summary for the WatchTower row, from the coalesced payload."""
     try:
-        payload = build_ux_fixes_health_payload()
+        payload = build_ux_fixes_health_payload(cached_only=True)
     except Exception:
         payload = {}
     queues = payload.get("queues") if isinstance(payload, dict) else None

@@ -4676,39 +4676,16 @@ def _system_services_worker_entry():
     }
 
 
-# claim-id -> {"ref", "title"} for in-progress tickets, memoised by the
-# WatchTower store file's (path, mtime_ns, size). list_items() re-reads and
-# JSON-decodes every queue row (3,208 rows, ~0.19s CPU under the GIL, measured
-# 2026-09-12) and this ran on every /api/system/services rebuild, i.e. every
-# 3s while any tab was open, landing in front of archive list requests.
-# WatchTower bumps the DB mtime on every save even in WAL mode, so the stat
-# key is a sound change signal (same pattern as the queue-events replay cache).
+# Display-only ticket names share the request cache; never merge remote
+# queues or decode the full queue database on the service-status path.
 _WT_CLAIM_MAP_CACHE = {}
 
 
-def _wt_store_stat_key():
-    q = _core._q
-    getter = getattr(q, "store_path", None) or getattr(q, "_resolve_store_path", None)
-    if getter is None:
-        return None
-    try:
-        path = Path(getter())
-        st = path.stat()
-    except Exception:
-        return None
-    return (str(path), st.st_mtime_ns, st.st_size)
-
-
 def _wt_claim_map():
-    key = _wt_store_stat_key()
-    if key is not None:
-        hit = _WT_CLAIM_MAP_CACHE.get("entry")
-        if hit is not None and hit[0] == key:
-            return hit[1]
-    try:
-        items = _core._q.list_items() or []
-    except Exception:
-        items = []
+    items = _core._wt_list_items_for_requests()
+    hit = _WT_CLAIM_MAP_CACHE.get("entry")
+    if hit is not None and hit[0] is items:
+        return hit[1]
     claim_to_item = {}
     for item in items:
         if not isinstance(item, dict) or item.get("status") != "in_progress":
@@ -4718,8 +4695,7 @@ def _wt_claim_map():
             val = item.get(k)
             if val:
                 claim_to_item[str(val)] = slim
-    if key is not None:
-        _WT_CLAIM_MAP_CACHE["entry"] = (key, claim_to_item)
+    _WT_CLAIM_MAP_CACHE["entry"] = (items, claim_to_item)
     return claim_to_item
 
 

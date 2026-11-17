@@ -61,7 +61,7 @@ def test_queue_rollup_passes_through_released_count_without_counting_it_live(
 ):
     monkeypatch.setattr(
         server, "build_ux_fixes_health_payload",
-        lambda: {"queues": [], "wt_workers": [_workers()[0]],
+        lambda **kwargs: {"queues": [], "wt_workers": [_workers()[0]],
                   "wt_workers_released_count": 1},
     )
 

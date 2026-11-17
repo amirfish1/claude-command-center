@@ -1763,7 +1763,7 @@ def _ux_fixes_health_refresh():
             _ux_fixes_health_refreshing = False
 
 
-def build_ux_fixes_health_payload(force=False):
+def build_ux_fixes_health_payload(force=False, *, cached_only=False):
     """Coalesced payload for /api/ux-fixes/health.
 
     The dashboard, detail rail, and foreground refocus paths can all ask for
@@ -1771,6 +1771,7 @@ def build_ux_fixes_health_payload(force=False):
     recent worker logs, so concurrent polls must share one fresh snapshot
     instead of each request rebuilding it in its own HTTP thread.
 
+    cached_only also returns immediately on cold start, scheduling a refresh.
     Stale-while-revalidate: past the TTL, callers get the last snapshot
     immediately and ONE background thread rebuilds — no request thread ever
     waits on a WatchTower/gh issue-list merge again.
@@ -1778,17 +1779,22 @@ def build_ux_fixes_health_payload(force=False):
     global _ux_fixes_health_refreshing
     snap = _core._ux_fixes_health_snapshot
     now = time.time()
-    if not force and snap["data"] is not None:
-        if now - snap["ts"] < _core._UX_FIXES_HEALTH_TTL:
+    if not force and (cached_only or snap["data"] is not None):
+        if snap["data"] is not None and now - snap["ts"] < _core._UX_FIXES_HEALTH_TTL:
             return copy.deepcopy(snap["data"])
-        with _ux_fixes_health_snapshot_lock:
-            if not _ux_fixes_health_refreshing:
-                _ux_fixes_health_refreshing = True
-                threading.Thread(
-                    target=_ux_fixes_health_refresh,
-                    daemon=True, name="uxq-health-refresh",
-                ).start()
-        return copy.deepcopy(snap["data"])
+        # A normal cold build can hold this lock across a remote queue read.
+        # Service status must also stay responsive while that build is running.
+        if _ux_fixes_health_snapshot_lock.acquire(blocking=not cached_only):
+            try:
+                if not _ux_fixes_health_refreshing:
+                    _ux_fixes_health_refreshing = True
+                    threading.Thread(
+                        target=_ux_fixes_health_refresh,
+                        daemon=True, name="uxq-health-refresh",
+                    ).start()
+            finally:
+                _ux_fixes_health_snapshot_lock.release()
+        return copy.deepcopy(snap["data"]) if snap["data"] is not None else {}
     with _ux_fixes_health_snapshot_lock:
         now = time.time()
         if not force and snap["data"] is not None and now - snap["ts"] < _core._UX_FIXES_HEALTH_TTL:
