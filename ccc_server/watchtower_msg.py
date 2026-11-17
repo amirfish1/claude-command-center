@@ -2971,12 +2971,16 @@ def _set_session_model_headless_local(session_id, model, context_1m, reasoning_e
     FIFO just makes it answer "/model isn't available in this environment".
     A headless model is fixed at spawn via `--model`, so switching means
     respawning. The override is already persisted by the caller. Delivery
-    owns the swap: picking a model alone must never retire an idle process,
-    schedule retirement of a busy turn, or open an interrupt approval card.
+    owns the swap. A completed usage-limit failure can retire the exhausted
+    process immediately; an ordinary idle process or active turn stays alive.
     """
     spawn = _core._find_live_spawn_entry_for_session(session_id)
     if spawn is None or (spawn.get("engine") or "claude") != "claude":
         return {"ok": False, "code": "no_spawn"}
+    if _core._headless_model_change_pending(spawn, session_id):
+        spawn["_model_switch_after_limit"] = True
+        _core._ensure_headless_staleness_watcher_started()
+        _core._retire_limited_model_for_session(session_id)
     return {"ok": True, "applied": "queued", "via": "model-on-next-message"}
 
 

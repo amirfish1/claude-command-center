@@ -1,0 +1,1 @@
+Retire an exhausted headless Claude process when a different model is queued, preserving active turns and applying the choice on the next submitted message. Fix the duplicate “next” in the pending model label.

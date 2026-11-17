@@ -33,7 +33,7 @@ def delivery(monkeypatch, tmp_path):
     cli.write_text('''#!/usr/bin/env python3
 import json, os, pathlib, sys, time
 args = sys.argv
-model = args[args.index('--model') + 1]
+model = args[args.index('--model') + 1] if '--model' in args else 'claude-fable-5-2'
 sid = args[args.index('--resume') + 1]
 root = pathlib.Path.cwd()
 if model == 'claude-sonnet-5-5' and (root / 'old-pid').exists():
@@ -50,10 +50,13 @@ for line in sys.stdin:
     with (root / 'transcript.jsonl').open('a') as f:
         f.write(json.dumps(row) + '\\n')
     print(json.dumps({'type': 'assistant', 'message': {'content': text}}), flush=True)
-    if text == 'hold':
+    if text in ('hold', 'limit-hold'):
         while not (root / 'finish').exists():
             time.sleep(.01)
-    print(json.dumps({'type': 'result', 'result': model, 'user_message_uuid': event['uuid']}), flush=True)
+    limited = text in ('limit', 'limit-hold')
+    print(json.dumps({'type': 'result', 'is_error': limited or text == 'error',
+                      'result': "You've hit your Fable limit" if limited else model,
+                      'user_message_uuid': event['uuid']}), flush=True)
     print(json.dumps({'type': 'command_lifecycle', 'state': 'completed', 'command_uuid': event['uuid']}), flush=True)
 ''')
     cli.chmod(0o755)
@@ -77,6 +80,7 @@ for line in sys.stdin:
                  "_resume_ledger_append", "_log_activity", "_record_kill_event"):
         monkeypatch.setattr(server, name, mock.Mock())
     monkeypatch.setattr(server, "_spawn_entry_active_tool_child", lambda entry: None)
+    monkeypatch.setattr(server, "_ensure_headless_staleness_watcher_started", mock.Mock())
     monkeypatch.setattr(server, "find_session_cwd", lambda sid: str(tmp_path))
     monkeypatch.setattr(server, "session_live_status", lambda *a: {"live": False, "tty": None})
     monkeypatch.setattr(server, "_detect_session_engine", lambda sid: "claude")
@@ -92,7 +96,9 @@ for line in sys.stdin:
     def start(model="claude-fable-5-2", legacy=False):
         log = tmp_path / f"old-{len(children)}.log"
         fh = log.open('w')
-        cmd = [str(cli), '--resume', SID, '--model', model]
+        cmd = [str(cli), '--resume', SID]
+        if model:
+            cmd += ['--model', model]
         proc = subprocess.Popen(cmd, cwd=tmp_path, stdin=subprocess.PIPE, stdout=fh, start_new_session=True)
         children.append(proc)
         entry = {"pid": proc.pid, "proc": proc, "log": str(log), "log_fh": fh,
@@ -212,6 +218,77 @@ def test_same_normalized_model_reuses_process(delivery):
     assert result['ok'] and result['reused'] and result['pid'] == old['pid']
     eventually(lambda: len(rows()) == 1)
     assert entries == [old]
+
+
+def test_recovered_default_launch_without_model_flag_switches_before_fifo_write(delivery):
+    start, entries, _, rows, _ = delivery
+    old = start(model='', legacy=True)
+    old['session_id'] = old.pop('resumed_sid')
+    old['proc'] = server._ReattachedProc(old['pid'])
+    result = server._inject_text_into_session_router(SID, 'hi', force_headless=True)
+    assert result['ok'] and old['proc'].poll() is not None
+    eventually(lambda: len(rows()) == 1)
+    assert rows()[0]['model'] == 'claude-sonnet-5-5'
+    assert rows()[0]['sid'] == SID
+    assert len(entries) == 1
+    retire = next(c for c in server._resume_ledger_append.call_args_list if c.args == ('retire',))
+    assert retire.kwargs['sid'] == SID and retire.kwargs['reason'] == 'model-switch'
+
+
+@pytest.mark.parametrize('busy', [False, True])
+def test_queued_choice_retires_only_after_limit_boundary_and_never_auto_sends(delivery, busy):
+    start, entries, override, rows, root = delivery
+    old = start()
+    assert server._write_stream_json_user_message(old, 'limit-hold' if busy else 'limit')
+    eventually(lambda: len(rows()) == 1)
+    if not busy:
+        eventually(lambda: not server._headless_turn_in_progress(old))
+    picked = server._set_session_model_headless_local(SID, override['model'], False, '', False)
+    assert picked['ok'] and picked['applied'] == 'queued'
+    if busy:
+        assert old['proc'].poll() is None
+        assert old['_model_switch_after_limit']
+        assert not server._retire_limited_model_for_session(SID)
+        (root / 'finish').touch()
+        eventually(lambda: not server._headless_turn_in_progress(old))
+        assert server._retire_limited_model_for_session(SID)
+    assert old['proc'].poll() is not None and not entries
+    assert len(rows()) == 1  # exhaustion never generates a retry/continue
+    assert server._resume_ledger_append.call_args.kwargs['reason'] == 'model-switch'
+    result = server.resume_session_headless(SID, 'hi')
+    assert result['ok']
+    eventually(lambda: len(rows()) == 2)
+    assert rows()[1]['model'] == 'claude-sonnet-5-5'
+
+
+@pytest.mark.parametrize('text', ['done', 'error'])
+def test_non_limit_result_does_not_retire_on_pick(delivery, text):
+    start, entries, override, rows, _ = delivery
+    old = start()
+    assert server._write_stream_json_user_message(old, text)
+    eventually(lambda: len(rows()) == 1 and not server._headless_turn_in_progress(old))
+    server._set_session_model_headless_local(SID, override['model'], False, '', False)
+    assert entries == [old] and old['proc'].poll() is None
+    assert not server._retire_limited_model_for_session(SID)
+
+
+@pytest.mark.parametrize('guard', ['same-model', 'active-tool', 'invalid-preset'])
+def test_exhaustion_retirement_preserves_model_runtime_guards(delivery, monkeypatch, guard):
+    start, entries, override, rows, _ = delivery
+    old = start()
+    assert server._write_stream_json_user_message(old, 'limit')
+    eventually(lambda: len(rows()) == 1 and not server._headless_turn_in_progress(old))
+    if guard == 'same-model':
+        override['model'] = old['model']
+    elif guard == 'active-tool':
+        monkeypatch.setattr(server, '_spawn_entry_active_tool_child', lambda e: {'pid': 123})
+    else:
+        def unavailable(*a):
+            raise domestic_providers.DomesticProviderError('Missing test key', 'preset_key_missing')
+        monkeypatch.setattr(domestic_providers, 'resolve_spawn', unavailable)
+    server._set_session_model_headless_local(SID, override['model'], False, '', False)
+    assert not server._retire_limited_model_for_session(SID)
+    assert entries == [old] and old['proc'].poll() is None and len(rows()) == 1
 
 
 def test_legacy_startup_with_no_output_is_not_an_idle_boundary(delivery):
