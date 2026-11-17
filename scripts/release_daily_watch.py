@@ -90,7 +90,9 @@ def collect(args):
     start = timestamp(unit.get("ExecMainStartTimestamp"))
     end = timestamp(unit.get("ExecMainExitTimestamp"))
     logs = {}
-    if start and end and start > args.since and start <= end:
+    if (start and end and start > args.since and start <= end
+            and unit.get("Result") == "success" and unit.get("ExecMainStatus") == "0"
+            and unit.get("ActiveState") not in ("active", "activating", "deactivating")):
         # The publisher has a three-hour service bound; avoid unbounded log scans.
         if end - start > timedelta(days=1):
             return result("pending", "Unit duration exceeds the bounded release log window")

@@ -1,6 +1,7 @@
 """Publication and natural service receipts must agree; fixtures never run a publisher."""
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 spec = importlib.util.spec_from_file_location("release_daily_watch", Path(__file__).resolve().parents[1] / "scripts/release_daily_watch.py")
 watch = importlib.util.module_from_spec(spec)
@@ -18,7 +19,7 @@ def inputs():
     return unit, timer, receipt, logs
 
 
-def test_only_fresh_completed_failures_are_regressions():
+def test_only_fresh_completed_failures_are_regressions(tmp_path, monkeypatch):
     unit, timer, _, logs = inputs()
     unit.update(Result="exit-code", ExecMainStatus="1")
     since = watch.timestamp("2026-11-17T09:50:00Z")
@@ -30,6 +31,11 @@ def test_only_fresh_completed_failures_are_regressions():
         candidate = {**unit, **changes}
         report = watch.evaluate(candidate, timer, since, logs, no_publication)
         assert report["status"] == "pending" and report["real_data"] is False
+    # A damaged log must not hide an independently proven fresh unit failure.
+    (tmp_path / "2026-11-18.log").mkdir()
+    monkeypatch.setattr(watch, "properties", lambda name: timer if name.endswith(".timer") else unit)
+    args = SimpleNamespace(unit="daily.service", since=since, log_dir=tmp_path)
+    assert watch.collect(args)["status"] == "fail"
 
 
 def test_pass_requires_timer_unit_log_and_published_containing_release():
