@@ -18519,6 +18519,42 @@ def _archive_list_preview(text, limit=140):
     return preview
 
 
+_ARCHIVE_LIST_ROW_TEMPLATES = ByteBudgetCache(
+    _cache_budget_bytes("CCC_LIST_ROW_CACHE_MB", 128), 30000)
+
+
+def _archive_list_row_template(row):
+    """Reuse scalar projection work while copying current containers per call.
+
+    Published snapshots reuse unchanged row dictionaries. A shallow source
+    guard also catches scalar edits made in place by lifecycle overlays.
+    Containers deliberately stay out of the template: their contents may
+    change in place, and callers must always receive isolated copies.
+    """
+    hit = _ARCHIVE_LIST_ROW_TEMPLATES.get(id(row))
+    if hit is not None and hit[0] == row:
+        return hit[1], hit[2]
+    scalars, containers = {}, []
+    for key in _ARCHIVE_LIST_FIELDS:
+        if key not in row:
+            continue
+        value = row[key]
+        if isinstance(value, (dict, list)):
+            containers.append(key)
+        else:
+            scalars[key] = value
+    # The sidebar ships a short preview rather than the full reply body.
+    preview = _archive_list_preview(row.get("last_assistant_text"))
+    if preview:
+        scalars["last_assistant_preview"] = preview
+    source = dict(row)
+    # Estimate retained JSON metadata with room for Python containers. Only
+    # misses serialize; warm rows never walk nested parser metadata again.
+    weight = 4 * len(json.dumps(source, default=str).encode()) + 2 * sys.getsizeof(source)
+    _ARCHIVE_LIST_ROW_TEMPLATES.put(id(row), (source, scalars, containers), weight)
+    return scalars, containers
+
+
 def _archive_list_project_row(row, *, resumes=None, parents=None):
     """Project one row for the sidebar list. Bulk callers pass `resumes` /
     `parents` snapshots so the per-row work is dict lookups, not a stat() or
@@ -18531,8 +18567,10 @@ def _archive_list_project_row(row, *, resumes=None, parents=None):
     # CCC-142: a dict comprehension plus a C-level copy of flat containers
     # (cost_breakdown_usd sits on nearly every row) cut this ~1.5x; deepcopy
     # runs only for the rare container that nests another container.
-    out = {key: row[key] for key in _ARCHIVE_LIST_FIELDS if key in row}
-    for key, v in out.items():
+    scalars, containers = _archive_list_row_template(row)
+    out = dict(scalars)
+    for key in containers:
+        v = row[key]
         t = type(v)
         if t is dict:
             out[key] = (copy.deepcopy(v) if any(type(x) in (dict, list) for x in v.values())
@@ -18542,11 +18580,6 @@ def _archive_list_project_row(row, *, resumes=None, parents=None):
                         else list(v))
         elif isinstance(v, (dict, list)):
             out[key] = copy.deepcopy(v)
-    # Chat-list preview line (phone sidebar). The full reply text is too big
-    # to ship for every row; a short derived preview is not.
-    preview = _archive_list_preview(row.get("last_assistant_text"))
-    if preview:
-        out["last_assistant_preview"] = preview
     # CCC-863: cheap in-memory lookup (no file I/O) -- surfaces the live
     # countdown for a session parked on a usage-limit auto-resume.
     sid = row.get("session_id") or row.get("id")
