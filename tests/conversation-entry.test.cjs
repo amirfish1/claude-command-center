@@ -15,6 +15,7 @@ const bundle = execFileSync('python3', ['-c',
 
 test('embedded entry binds real controls before readiness and keeps drafts live', async () => {
   const injections = [];
+  let failConversationRead = false;
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname === '/api/inject-input') {
@@ -39,6 +40,10 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
       response.setHeader('Content-Type', file.endsWith('.js') ? 'application/javascript' : 'text/css');
       response.end(fs.readFileSync(file));
     } else {
+      if (failConversationRead && url.pathname.startsWith('/api/conversations/session-test')) {
+        response.writeHead(500,{'Content-Type':'application/json'});
+        response.end(JSON.stringify({error:'Fixture transcript unavailable'})); return;
+      }
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify(url.pathname === '/api/conversations/session-test'
         ? {events:[{type:'user',text:'A test request',line:1},{type:'assistant',text:'A test response',line:2}],last_line:2}
@@ -138,6 +143,22 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
     await frame.$eval('#convMicBtn',button=>button.click());
     assert.equal(await frame.$eval('#convMicBtn',button=>button.getAttribute('aria-pressed')),'false');
     assert.deepEqual(errors, []);
+    // A new browser has no saved tail: a failed read must stay an error,
+    // never send the parent the usable-conversation readiness message.
+    failConversationRead = true;
+    const context = await browser.createBrowserContext();
+    try {
+      const failed = await context.newPage();
+      await failed.setRequestInterception(true);
+      failed.on('request',request => new URL(request.url()).origin===base
+        ? request.continue() : request.respond({status:200,body:'{}'}));
+      await failed.goto(base,{waitUntil:'domcontentloaded'});
+      const agent = failed.frames().find(item=>item.url().includes('embed=app'));
+      await agent.waitForFunction(()=>document.getElementById('conversationsView').textContent.includes('Failed to load conversation'));
+      // Cover both the paint callback and the hidden-frame timer fallback.
+      await agent.evaluate(()=>new Promise(resolve=>setTimeout(resolve,300)));
+      assert.equal(await failed.evaluate(()=>window.receipts.some(item=>item.type==='ccc:embed-ready')),false);
+    } finally { await context.close(); }
   } finally {
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));
