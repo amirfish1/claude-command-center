@@ -80,7 +80,7 @@
           return state[name](...args);
         } catch (error) {
           state.showOpToast('Could not load conversation details. Try again.', 'error');
-          throw error;
+          return null;
         }
       };
     }

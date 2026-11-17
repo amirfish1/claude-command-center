@@ -159,17 +159,16 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
     // This is the actual delegated transcript ticket control. Two clicks share
     // one module fetch and the modal uses the same current conversation state.
     failDetailsRead = true;
-    assert.equal(await frame.evaluate(async()=>{
-      try {await cccConversation._uxqOpenItemDetail('TEST-1');return false;}
-      catch (_) {return document.body.textContent.includes('Could not load conversation details. Try again.');}
-    }),true,'a failed module read is visible and retryable');
-    failDetailsRead = false;
     await frame.evaluate(()=>{
       const ticket=document.createElement('button');
       ticket.className='conv-pane-ticket';ticket.dataset.workerTicket='TEST-1';
       document.getElementById('conversationsView').appendChild(ticket);
-      ticket.click();ticket.click();
+      ticket.click();
     });
+    await frame.waitForFunction(()=>document.body.textContent.includes('Could not load conversation details. Try again.'));
+    assert.equal(await frame.evaluate(()=>!!document.getElementById('uxqItemModal')),false);
+    failDetailsRead = false;
+    await frame.$eval('.conv-pane-ticket[data-worker-ticket="TEST-1"]',ticket=>{ticket.click();ticket.click();});
     await frame.waitForFunction(()=>document.getElementById('uxqItemModal')?.textContent.includes('A complete ticket'));
     assert.equal(detailsRequests,2);
     assert.equal(await frame.$eval('#convInput',input=>input.value),'Keep this live draft');
