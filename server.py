@@ -17570,7 +17570,8 @@ _ARCHIVE_LIST_BODY_LOCK = threading.Lock()
 _ARCHIVE_LIST_BODY_BUILD_LOCKS = {}  # body key -> Lock; single-flight body builds
 
 
-def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload, snap_ver):
+def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload, snap_ver,
+                                    diagnostics=None):
     """(raw, gzip, etag) for a /list body: replayed from the body cache when
     the version matches, else built once per key (single-flight)."""
     # The version is part of the key (not just the equality check) so two
@@ -17582,6 +17583,11 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
     from ccc_server import continuation_topics
     body_key = (cache_key, window, bool(from_cache), snap_ver, _session_graph.projection_revision(),
                 continuation_topics.revision())
+    if diagnostics is not None:
+        diagnostics.update(version=snap_ver, graph=body_key[-2], topics=body_key[-1],
+                           entries=len(_ARCHIVE_LIST_BODY_CACHE),
+                           bytes=_ARCHIVE_LIST_BODY_CACHE.bytes,
+                           budget_bytes=_ARCHIVE_LIST_BODY_CACHE.max_bytes)
     raw = gzip_body = etag_val = None
 
     def _cached_body():
@@ -17604,6 +17610,10 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
             build_lock.acquire()
             raw, gzip_body, etag_val = _cached_body()
     try:
+        if diagnostics is not None:
+            diagnostics["hit"] = raw is not None
+            diagnostics["reason"] = ("hit" if raw is not None else
+                                     "version-miss" if snap_ver else "unversioned")
         if raw is None:
             raw = json.dumps(build_payload()).encode()
             etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
@@ -35960,6 +35970,7 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             _lt1 = time.perf_counter()
             _payload_ms = []
             _payload_phases = {}
+            _body_cache_diag = {}
             _delta_cpu0 = time.thread_time()
             # CCC-142: ?since=<delta_token> asks for only the rows that changed
             # after the client's last body. Anything the token can't vouch for
@@ -36021,6 +36032,7 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                 _status = self._send_archive_list_json(
                     list_cache_key, window, from_cache, _timed_payload,
                     (body_ver, _delta["ctx"]) if _delta is not None else body_ver,
+                    diagnostics=_body_cache_diag,
                 )
             _lt2 = time.perf_counter()
             record_diag("list_server", (_lt2 - _lt0) * 1000.0, {
@@ -36032,6 +36044,7 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                 "send_ms": round((_lt2 - _lt1) * 1000.0, 1),
                 "cpu_ms": round((time.thread_time() - _lc0) * 1000.0, 1),
                 "body_hit": not _payload_ms,
+                "body_cache": _body_cache_diag,
                 "delta": _status == "delta",
                 "since": _since_diag,
                 "from_cache": bool(from_cache),
@@ -46818,7 +46831,8 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _send_archive_list_json(self, cache_key, window, from_cache, build_payload, snap_ver):
+    def _send_archive_list_json(self, cache_key, window, from_cache, build_payload, snap_ver,
+                                diagnostics=None):
         """send_json for /api/conversations/list: same etag/304/gzip
         semantics, but the serialized body + sha1 etag + gzip copy are built
         once per (cache key, window, snapshot version) and replayed for every
@@ -46829,7 +46843,7 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
         hash) when in-memory ACP/Devin overlay rows were appended; 0 disables
         the body cache and falls back to a fresh build."""
         raw, gzip_body, etag_val = _archive_list_body_get_or_build(
-            cache_key, window, from_cache, build_payload, snap_ver)
+            cache_key, window, from_cache, build_payload, snap_ver, diagnostics=diagnostics)
         return self._send_archive_list_body(raw, gzip_body, etag_val)
 
     def _send_archive_list_body(self, raw, gzip_body, etag_val, extra_headers=()):

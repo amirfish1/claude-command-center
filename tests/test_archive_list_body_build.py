@@ -71,6 +71,11 @@ def test_concurrent_polls_of_one_snapshot_build_the_body_once(monkeypatch, tmp_p
     assert len(etags) == 4 and len(set(etags)) == 1
     assert len(builds) == 1
     assert len(diagnostics) == 4
+    cache_diagnostics = [d['body_cache'] for d in diagnostics]
+    assert sum(d['hit'] for d in cache_diagnostics) == 3
+    assert sorted(d['reason'] for d in cache_diagnostics) == ['hit', 'hit', 'hit', 'version-miss']
+    assert all(d['version'] == 11 and d['budget_bytes'] == 1 << 26
+               for d in cache_diagnostics)
     projected = [d['projection'] for d in diagnostics if d['projection']]
     assert len(projected) == 1
     assert set(projected[0]) == {'inputs', 'window', 'rows', 'titles_drivers', 'topics', 'tickets'}
@@ -78,6 +83,42 @@ def test_concurrent_polls_of_one_snapshot_build_the_body_once(monkeypatch, tmp_p
         for phase in [detail['delta_state'], *detail['projection'].values()]:
             assert set(phase) == {'wall_ms', 'cpu_ms'}
             assert phase['wall_ms'] >= 0 and phase['cpu_ms'] >= 0
+
+
+def test_body_cache_diagnostics_track_actual_key_and_unversioned_bypass(monkeypatch, tmp_path):
+    server = importlib.import_module('server')
+    from ccc_server import continuation_topics
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_DISK_DIR', tmp_path)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_BODY_CACHE', server.ByteBudgetCache(1 << 20, 8))
+    graph = [1, 2]
+    monkeypatch.setattr(server._session_graph, 'projection_revision', lambda: tuple(graph))
+    monkeypatch.setattr(continuation_topics, 'revision', lambda: 3)
+    builds = []
+
+    def payload():
+        builds.append(True)
+        return {'conversations': [{'session_id': 'private-session', 'first_message': 'private-prompt'}]}
+
+    def read(version):
+        detail = {}
+        result = server._archive_list_body_get_or_build('key', '7d', True, payload,
+                                                       version, diagnostics=detail)
+        assert 'private' not in json.dumps(detail)
+        return result, detail
+
+    first, miss = read((7, 'overlay-hash'))
+    again, hit = read((7, 'overlay-hash'))
+    assert first == again and len(builds) == 1
+    assert miss['version'] == (7, 'overlay-hash') and miss['graph'] == (1, 2)
+    assert miss['topics'] == 3 and miss['reason'] == 'version-miss'
+    assert hit['hit'] and hit['bytes'] > 0 and hit['entries'] == 1
+    graph[1] += 1
+    _, changed = read((7, 'overlay-hash'))
+    assert not changed['hit'] and changed['graph'] == (1, 3) and len(builds) == 2
+    for _ in range(2):
+        _, unversioned = read(0)
+        assert not unversioned['hit'] and unversioned['reason'] == 'unversioned'
+    assert len(builds) == 4
 
 
 def test_projection_diagnostics_do_not_change_the_payload():

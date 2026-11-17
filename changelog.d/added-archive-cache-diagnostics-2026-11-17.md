@@ -1,0 +1,1 @@
+Archive-list performance diagnostics now record cache-key revisions and memory usage so rebuilds can be traced to changing inputs, unversioned snapshots or eviction without recording conversation content.

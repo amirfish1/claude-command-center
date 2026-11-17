@@ -438,6 +438,13 @@ client receipt; calibrate clock differences before comparing different
 machines. This diagnostic needs no packet capture or transport configuration
 change.
 
+Archive `list_server` diagnostics include a `body_cache` object on full memory
+responses: the snapshot/overlay/context version, graph and topic revisions,
+cache entry count, retained bytes and byte budget, plus the actual replay result.
+Compare consecutive misses to distinguish changing inputs from an unversioned
+snapshot or eviction. These fields contain counters and hashes, not row content.
+Disk replays and delta responses skip this memory-body lookup.
+
 ## Notes
 
 - The rail hides below 700px wide — phones and the installed PWA get the full
