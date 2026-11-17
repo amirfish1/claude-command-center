@@ -4126,7 +4126,7 @@
     _ensureSysHealthModal();
     const shortcut = document.getElementById('cccSystemPill');
     const opener = shortcut?.closest('.ccc-account-pop') ? document.querySelector('.ccc-account') : shortcut;
-    sysOpenModal(opener, 'health');
+    sysOpenModal(opener);
   }
   let _sysHealthPollPromise = null;
   function _pollSystemHealth() {
@@ -52849,7 +52849,7 @@
     }
   }
 
-  function sysOpenModal(opener, defaultTab) {
+  function sysOpenModal(opener, defaultTab = 'status') {
     if (!$sysModal) return;
     // Remember the opener explicitly rather than trusting activeElement: a
     // click on a <button> focuses it in a real browser but not when the click
@@ -52861,7 +52861,7 @@
     if ($sysChip) $sysChip.setAttribute('aria-expanded', 'true');
     _sysLastRollupLevel = '';
 
-    sysSelectTab(defaultTab || 'health');
+    sysSelectTab(defaultTab);
 
     // The worker pill inside the worker row is painted by the control-plane
     // poller, which ticks every 20s. Re-read on open so it is never stale.
