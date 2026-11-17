@@ -3800,7 +3800,7 @@ def _wt_list_items_refresh(max_age):
         return snapshot_items
     try:
         from ccc_server.wt_snapshot import fetch
-        items = fetch(_q)
+        items = fetch(_q, snapshot_path=_WT_ITEMS_SNAPSHOT_FILE)
     except Exception:
         # Fall back to whatever we last saw, however old — a failed `gh` must
         # not blank out every worker row's title.
@@ -3809,16 +3809,6 @@ def _wt_list_items_refresh(max_age):
     with _wt_items_memo_lock:
         _wt_items_memo["at"] = time.time()
         _wt_items_memo["items"] = items
-    try:
-        _WT_ITEMS_SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _WT_ITEMS_SNAPSHOT_FILE.with_suffix(".json.tmp")
-        with tmp.open("w") as f:
-            # Serialize once with the C encoder; streaming dump walks large
-            # ticket histories in Python on every snapshot refresh.
-            f.write(json.dumps({"items": items}))
-        tmp.replace(_WT_ITEMS_SNAPSHOT_FILE)
-    except (OSError, TypeError, ValueError):
-        pass
     return items
 
 

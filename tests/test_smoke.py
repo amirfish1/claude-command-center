@@ -1062,6 +1062,8 @@ class TestServerImports(unittest.TestCase):
 
         def fake_list_items(*a, **k):
             calls.append(1)
+            from ccc_server.wt_snapshot import _persist
+            _persist(items, k["snapshot_path"])
             return items
 
         with tempfile.TemporaryDirectory() as tmp:
