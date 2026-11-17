@@ -44,6 +44,28 @@ def test_resume_without_readable_log_still_discovered():
         assert antigravity.live_cli_session_ids() == {SID}
 
 
+def test_unrelated_prompts_do_not_enter_shared_command_token_cache(monkeypatch):
+    command = 'codex exec -- ' + ('unrelated-prompt ' * 2000)
+    monkeypatch.setattr(server, '_scan_engine_processes', lambda: [
+        ('123', 'pts/1', 'codex', command),
+        ('124', 'pts/2', 'bash', f'bash -c "agy --conversation {OTHER}"'),
+    ])
+    monkeypatch.setattr(server, '_command_tokens', lambda command: pytest.fail(
+        'unrelated process reached full command parsing'))
+    monkeypatch.setattr(antigravity, '_cli_process_logs', lambda pid: pytest.fail(
+        'unrelated process reached log discovery'))
+    assert antigravity.live_cli_session_ids() == set()
+
+
+def test_quoted_executable_and_malformed_prompt_keep_resume_fallback(monkeypatch):
+    monkeypatch.setattr(server, '_scan_engine_processes', lambda: [
+        ('123', 'pts/1', 'unknown', f'"/opt/Example Tools/agy" --conversation {SID}'),
+        ('124', 'pts/2', 'agy', f'agy --conversation {OTHER} "unfinished'),
+    ])
+    monkeypatch.setattr(antigravity, '_cli_process_logs', lambda pid: set())
+    assert antigravity.live_cli_session_ids() == {SID, OTHER}
+
+
 @pytest.mark.skipif(not Path('/proc').is_dir(), reason='Linux procfs check')
 def test_linux_open_log_discovery(tmp_path):
     logs = tmp_path / 'log'

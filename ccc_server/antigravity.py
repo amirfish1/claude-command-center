@@ -15,6 +15,7 @@ from ccc_server.kilo import (
 )
 import sqlite3
 import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -61,8 +62,16 @@ def live_cli_session_ids():
     """
     sids = set()
     for pid, _tty, comm, command in _core._scan_engine_processes():
-        words = _core._command_tokens(command)
-        executable = words[0].rsplit('/', 1)[-1] if words else ''
+        # Only argv[0] identifies the executable. Parsing unrelated agents'
+        # prompts here evicts the shared token cache on every process scan.
+        lexer = shlex.shlex(command, posix=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ''
+        try:
+            first = lexer.get_token() or ''
+        except ValueError:
+            first = command.split(None, 1)[0] if command.strip() else ''
+        executable = first.rsplit('/', 1)[-1]
         if not ({comm.rsplit('/', 1)[-1], executable} & {'agy', 'antigravity'}):
             continue
         owned = set()
@@ -73,6 +82,7 @@ def live_cli_session_ids():
         if owned:
             sids.update(owned)
             continue
+        words = _core._command_tokens(command)
         for word in words:
             if (_core._SESSION_UUID_RE.fullmatch(word)
                     and _core._command_targets_engine_session(command, word, 'antigravity')):
