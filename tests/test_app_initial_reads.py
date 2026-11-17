@@ -102,6 +102,7 @@ def test_full_application_builder_uses_inline_adapter_and_current_payload(app,mo
 
 def test_data_read_byte_bound_preserves_normal_api_and_exact_limit(app):
     base,folder=app
+    configure(folder)
     text=json.dumps({'value':'café','updated':1},ensure_ascii=False)
     (folder/'data'/'choice.json').write_text(text)
     canonical=app_data.read('demo','choice',base)
