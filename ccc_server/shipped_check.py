@@ -8,15 +8,29 @@ to the prompt and a machine-readable field on the spawn response -- the
 spawn itself is never delayed past SHIPPED_CHECK_TIMEOUT_S and never
 blocked.
 
+Queue-drain workers use WatchTower claim-time related-work lookup instead.
 Disable with CCC_DISABLE_SHIPPED_CHECK=1.
 """
 from __future__ import annotations
 
 import os
+import re
 import threading
 
 SHIPPED_CHECK_TIMEOUT_S = 1.5
 SHIPPED_CHECK_CONFIDENCE_MIN = 0.8
+
+
+def is_queue_worker_spawn(prompt: str) -> bool:
+    """Recognize the drain instruction, even when a spawn has a custom name.
+
+    A worker's queue is known at spawn, but its actual task is chosen at claim
+    time. Role labels and mentions of WatchTower alone are not drain jobs.
+    """
+    return bool(re.match(
+        r"drain the [a-z0-9_-]+ watchtower queue\b",
+        (prompt or "").strip(), re.IGNORECASE,
+    ))
 
 
 def _shipped_check_disabled() -> bool:

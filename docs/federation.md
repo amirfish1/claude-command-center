@@ -169,7 +169,11 @@ caller that resumes by bare `session_id` never gets a peer's session. Every
 merged row carries `node_id`, `node_name`, `ref` and `local`; the response
 adds `nodes[]` (per-node status and latency), `peers_unreachable` and
 `partial` (brief: `node_status`, since its `nodes` key is the lineage map).
-The pre-spawn shipped check never fans out.
+The pre-spawn shipped check never fans out. It checks concrete session goals;
+queue-drain worker spawns skip it because their task is not known yet.
+WatchTower supplies related-work candidates when a worker claims a ticket.
+Use `wt related REF` to inspect ticket and commit candidates, then verify the
+actual fix and deployment before treating a match as shipped.
 
 ## Attribution
 

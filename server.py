@@ -41563,11 +41563,14 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     # MEMO-FIX-6: pre-spawn "already shipped?" check. WARN-only
                     # -- capped at 1.5s inside check_shipped_for_spawn, never
                     # delays or blocks the spawn. goal is the session name if
-                    # given, else the prompt's first line.
+                    # given, else the prompt's first line. Queue drain workers
+                    # discover related work for their actual ticket at claim time.
                     from ccc_server import shipped_check as _shipped_check
                     goal_text = name or (prompt.splitlines()[0][:200] if prompt else "")
+                    shipped_info = None
                     try:
-                        shipped_info = _shipped_check.check_shipped_for_spawn(goal_text)
+                        if not _shipped_check.is_queue_worker_spawn(prompt):
+                            shipped_info = _shipped_check.check_shipped_for_spawn(goal_text)
                     except Exception:
                         shipped_info = None
                     if shipped_info:
