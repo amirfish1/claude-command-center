@@ -31243,7 +31243,11 @@ def _stamp_static_urls(html_text):
     """
     def _sub(m):
         return f'{m.group(1)}="{_static_asset_url(m.group(2))}"'
-    return _STATIC_URL_RE.sub(_sub, html_text)
+    stamped = _STATIC_URL_RE.sub(_sub, html_text)
+    if 'data-ccc-inline-bootstrap' in stamped:
+        from ccc_server.app_bootstrap import inline
+        stamped = inline(stamped, STATIC_DIR)
+    return stamped
 
 
 _INDEX_PAGE_CACHE = IndexPageCache()
@@ -31254,10 +31258,12 @@ def _load_index_html(app_embed=False, app_shell=False, selected_app=None):
     def transform(html):
         if app_embed:
             from ccc_server.app_embed import conversation_page
-            return conversation_page(html)
+            from ccc_server.app_bootstrap import mark
+            return mark(conversation_page(html), 'app-embed-boot.js')
         if app_shell:
             from ccc_server.app_embed import application_shell_page
-            return application_shell_page(html, selected_app=selected_app)
+            from ccc_server.app_bootstrap import mark
+            return mark(application_shell_page(html, selected_app=selected_app), 'app-shell-boot.js')
         return html
 
     try:

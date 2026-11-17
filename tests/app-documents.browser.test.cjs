@@ -70,6 +70,8 @@ test('first response boots both canonical documents with URLs, controls and relo
     await page.waitForFunction(()=>document.getElementById('cccMobileAppFrame')?.contentWindow?.cccAppReady,{timeout:20000});
     const app=page.frames().find(frame=>frame.url().includes('/view/document-test'));
     const agent=page.frames().find(frame=>frame.url().includes('embed=app'));
+    assert.ok(!requests.some(url=>/\/static\/app-(?:shell|embed)-boot\.js/.test(url)),
+      'both canonical startup bridges arrive with their owning document');
     assert.ok(app&&agent,'both canonical frame URLs remain observable');
     assert.equal(page.url(),base+'/?ccc_app=document-test');
     assert.equal(requests.filter(url=>url.startsWith('/view/')||url.includes('embed=app')).length,0,'no sequential child HTML requests');
