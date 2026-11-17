@@ -46,10 +46,13 @@ def _get(server, path, headers=None):
 
 
 def _static_dir(server, tmp_path, monkeypatch):
+    from ccc_server.static_encoding_cache import StaticEncodingCache
     asset = tmp_path / "x.js"
     asset.write_bytes(b"// " + b"x" * 4096)
     monkeypatch.setattr(server, "STATIC_DIR", Path(tmp_path))
     server._STATIC_GZIP_CACHE.clear()
+    monkeypatch.setattr(server, "_STATIC_ENCODING_DISK_CACHE",
+                        StaticEncodingCache(tmp_path / "encoded"))
     return asset
 
 

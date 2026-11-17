@@ -216,6 +216,11 @@ For responses with `Server-Timing`, `app` measures handler wall time and
 travel and the socket backlog before acceptance; later keep-alive requests
 omit it so idle connection time is never counted as dispatch delay.
 
+Compressed static assets also have a disposable disk cache (32 MiB, at most
+128 entries) in the dashboard state directory. Restarts can reuse unchanged
+scripts and styles without recompression. Source metadata changes and corrupt
+entries cause a rebuild; unavailable storage falls back to normal encoding.
+
 - **Read it.** `ccc app speed` prints loads, typical, slow (p95) and worst
   times per app for the last 24 hours against the budget (`ccc app speed <id>`
   for one app, `--hours N` for a longer window, `--check` to exit 2 when any

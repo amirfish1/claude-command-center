@@ -141,6 +141,7 @@ from ccc_server import swr_cache as _swr
 from ccc_server import memory_release as _memory_release
 from ccc_server.index_page_cache import IndexPageCache
 from ccc_server.bounded_cache import ByteBudgetCache
+from ccc_server.static_encoding_cache import StaticEncodingCache
 _cpu_accounting.install_thread_exit_accounting()
 from ccc_server import idea_tickets as _idea_tickets
 from ccc_server import headroom as _headroom
@@ -31716,6 +31717,7 @@ def _spawn_stream_idle_sleep_s(consecutive_empty):
 # Keep the shared renderer across a full boot's many smaller assets. An
 # all-at-once entry-cap flush repeatedly recompressed the largest scripts.
 _STATIC_GZIP_CACHE = ByteBudgetCache(max_bytes=16 << 20, max_entries=256)
+_STATIC_ENCODING_DISK_CACHE = StaticEncodingCache(COMMAND_CENTER_STATE_DIR / "static-encoding")
 
 
 def _annotate_engine_not_installed(data, path):
@@ -46606,7 +46608,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             else:
                 st = resolved.stat()
                 stamp, size = str(int(st.st_mtime)), st.st_size
-                key = (str(resolved), st.st_mtime_ns, st.st_size)
+                key = (str(resolved), st.st_mtime_ns, st.st_ctime_ns, st.st_size)
         except OSError as e:
             self.send_json({"error": str(e)}, 500)
             return
@@ -46632,6 +46634,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # budget but never reuses a different wire representation.
             encoding_key = key if candidate == "gzip" else (key, candidate)
             cached = _STATIC_GZIP_CACHE.get(encoding_key)
+            if cached is None:
+                cached = _STATIC_ENCODING_DISK_CACHE.get(encoding_key)
+                if cached is not None:
+                    _STATIC_GZIP_CACHE.put(encoding_key, cached, len(cached))
             if cached is not None:
                 body, enc = cached, candidate
                 break
@@ -46645,6 +46651,7 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             if compressed is not None:
                 body, enc = compressed, candidate
                 _STATIC_GZIP_CACHE.put(encoding_key, body, len(body))
+                _STATIC_ENCODING_DISK_CACHE.put(encoding_key, body)
                 break
         if body is None:
             try:
