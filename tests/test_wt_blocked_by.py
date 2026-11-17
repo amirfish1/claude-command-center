@@ -42,7 +42,7 @@ ITEMS = [
     _t("CCC-13", blocked_by=["CCC-4"]),
     _t("CCC-14", blocked_by=["CCC-2", "CCC-1"]),
     _t("CCC-15", blocked_by=["CCC-5"]),
-    _t("CCC-16", blocked_by=["CCC-404"]),                          # missing: ignored
+    _t("CCC-16", blocked_by=["CCC-404"]),                          # missing: waits for authoritative evidence
 ]
 
 EXPECTED = {
@@ -52,7 +52,7 @@ EXPECTED = {
     "CCC-13": ["CCC-4"],
     "CCC-14": ["CCC-1"],
     "CCC-15": ["CCC-5"],
-    "CCC-16": [],
+    "CCC-16": ["CCC-404"],
 }
 
 
@@ -66,8 +66,9 @@ class WaitingOnTest(unittest.TestCase):
 
     def test_cross_queue_blocker_resolved_from_extra(self):
         it = _t("OTHER-1", blocked_by=["CCC-1"], project="OTHER")
-        self.assertEqual(with_waiting_on([it])[0]["waiting_on"], [])
+        self.assertEqual(with_waiting_on([it])[0]["waiting_on"], ["CCC-1"])
         self.assertEqual(with_waiting_on([it], extra=ITEMS)[0]["waiting_on"], ["CCC-1"])
+        self.assertEqual(with_waiting_on([it], extra=[_t("CCC-1", "closed")])[0]["waiting_on"], [])
 
     def test_escalated_stuck_blocker_answered_by_a_human_counts_as_satisfied(self):
         it = _t("CCC-20", blocked_by=["CCC-3"], blocker_escalated=["CCC-3"])
@@ -113,9 +114,9 @@ class QueueHealthTest(unittest.TestCase):
                                return_value={"CCC": {"auto_drain": True, "claim_types": []}}):
             row = [r for r in compute_queues_health(health=health, wt_workers=[], items=ITEMS)
                    if r["queue"] == "CCC"][0]
-        # Claimable: CCC-1, CCC-11, CCC-16. Blocked: CCC-10, 12, 13, 14, 15.
-        self.assertEqual(row["claimable"], 3)
-        self.assertEqual(row["blocked"], 5)
+        # Claimable: CCC-1, CCC-11. Missing blockers still block CCC-16.
+        self.assertEqual(row["claimable"], 2)
+        self.assertEqual(row["blocked"], 6)
 
 
 class FrontendWiringTest(unittest.TestCase):

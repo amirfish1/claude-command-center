@@ -8,6 +8,7 @@ import inspect
 import ast
 import fcntl
 import gc
+from tests.dashboard_source import dashboard_source
 from tests.conversation_source import conversation_source, conversation_function, conversation_handler
 import json
 import multiprocessing
@@ -7383,7 +7384,7 @@ class TestServerImports(unittest.TestCase):
 
     def test_spawn_adoption_accepts_spawn_id_without_pid(self):
         """App-server Codex spawns use synthetic spawn ids rather than OS pids."""
-        app_js = conversation_source()
+        app_js = dashboard_source()
         self.assertIn("adoptPendingSpawnPid(tempPid, data.spawn_id || data.pid, data.log, data.session_id)", app_js)
         self.assertIn("const realSpawnId = data.spawn_id || data.pid;", app_js)
         self.assertIn("insertPendingSpawnCard(data.spawn_id || data.pid, subject", app_js)
@@ -20063,8 +20064,20 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
             os.mkfifo(fifo, 0o600)
             reader_fd = os.open(str(fifo), os.O_RDONLY | os.O_NONBLOCK)
             try:
-                gc.collect()  # drop unclosed fds left by earlier tests
-                before = len(os.listdir("/dev/fd"))
+                identity = fifo.stat()
+
+                def fifo_descriptors():
+                    found = set()
+                    for name in os.listdir("/dev/fd"):
+                        try:
+                            info = os.fstat(int(name))
+                        except OSError:
+                            continue  # An unrelated background descriptor closed.
+                        if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino):
+                            found.add(int(name))
+                    return found
+
+                before = fifo_descriptors()
                 for _ in range(5):
                     self.assertTrue(
                         self.server._write_fifo_line_once(str(fifo), "hello")
@@ -20073,13 +20086,13 @@ class TestWtWorkerFifoFastPath(unittest.TestCase):
                         os.read(reader_fd, 65536)  # drain so the pipe never fills
                     except BlockingIOError:
                         pass
-                gc.collect()
-                after = len(os.listdir("/dev/fd"))
+                after = fifo_descriptors()
             finally:
                 os.close(reader_fd)
-        # A leak grows the count by one per call (5 here); allow GC noise
-        # of a couple of fds from background threads of earlier tests.
-        self.assertLessEqual(after, before + 2)
+        # Inspect this unique FIFO only: background sockets must not change
+        # the result, and even one leaked writer must fail the assertion.
+        self.assertEqual(before, {reader_fd})
+        self.assertEqual(after, before)
 
     # ---- wired into _inject_text_into_session's fork-guard branch -----
 
