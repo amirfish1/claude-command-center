@@ -32443,7 +32443,11 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                 if not cached_only:
                     try:
                         item = _q.get(ref)
-                    except Exception:
+                    except Exception as e:
+                        # Log it: a silently failing live read left the whole
+                        # board on a frozen memo for hours (OPS-1736).
+                        print(f"  [uxq] live get({ref}) failed: {type(e).__name__}: {e}",
+                              file=sys.stderr, flush=True)
                         item = None
                 if not item:
                     item = next(
@@ -32452,6 +32456,9 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                         None,
                     )
                     stale = item is not None and not cached_only
+                    if stale:
+                        print(f"  [uxq] live get({ref}) missed a listed ticket",
+                              file=sys.stderr, flush=True)
                 if not item:
                     self.send_json({"ok": False, "error": _uxq_not_found_error(ref)}, 404)
                     return
