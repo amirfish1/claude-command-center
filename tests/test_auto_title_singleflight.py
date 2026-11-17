@@ -52,3 +52,35 @@ def test_concurrent_cold_reads_scan_once_and_refresh_after_marker_change(tmp_pat
     graph._auto_title_record('session', 'Second')
     assert graph._auto_titled_session_ids()['session'] == 'Second'
     assert len(scans) == 2
+
+
+def test_unrelated_sidecar_changes_reuse_titles_but_refresh_changed_markers(tmp_path, monkeypatch):
+    marker = tmp_path / 'session_autotitled'
+    marker.write_text('{"title":"First"}')
+    (tmp_path / 'removed_autotitled').write_text('123')
+    monkeypatch.setattr(graph._core, 'SIDECAR_STATE_DIR', tmp_path)
+    monkeypatch.setattr(graph, '_auto_titled_cache', {'key': None, 'data': {}})
+    original_read = Path.read_text
+    reads = []
+
+    def read_text(filename, *args, **kwargs):
+        if filename.parent == tmp_path:
+            reads.append(filename.name)
+        return original_read(filename, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'read_text', read_text)
+    assert graph._auto_titled_session_ids() == {'session': 'First', 'removed': ''}
+    reads.clear()
+    (tmp_path / 'unrelated_status').write_text('working')
+    assert graph._auto_titled_session_ids() == {'session': 'First', 'removed': ''}
+    assert reads == []
+
+    # An atomic replacement must refresh even when its length is unchanged.
+    replacement = tmp_path / 'replacement'
+    replacement.write_text('{"title":"Other"}')
+    replacement.replace(marker)
+    (tmp_path / 'removed_autotitled').unlink()
+    (tmp_path / 'new_autotitled').write_text('{"title":"New"}')
+    assert graph._auto_titled_session_ids() == {'session': 'Other', 'new': 'New'}
+    assert sorted(reads) == ['new_autotitled', 'session_autotitled']
+    assert set(graph._auto_titled_cache['markers']) == {'session_autotitled', 'new_autotitled'}
