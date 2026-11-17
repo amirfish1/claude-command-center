@@ -46483,30 +46483,48 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(304)
             self.send_header("ETag", etag)
             self.send_header("Cache-Control", cache_control)
+            self.send_header("Vary", "Accept-Encoding")
             self._send_server_timing(cache="validated")
             self.end_headers()
             return
-        accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
-        cached = _STATIC_GZIP_CACHE.get(key) if accepts_gzip else None
-        if cached is not None:
-            body, enc = cached, "gzip"
-        else:
+        from ccc_server.static_encoding import accepted_encodings, brotli
+        enc = cached = body = None
+        base_ct = (ct or "").split(";", 1)[0].strip().lower()
+        encodings = (accepted_encodings(self.headers.get("Accept-Encoding", ""))
+                     if size >= self._GZIP_MIN_BYTES and base_ct in self._GZIPPABLE_TYPES else ())
+        for candidate in encodings:
+            # Preserve the existing gzip cache key; Brotli shares its byte
+            # budget but never reuses a different wire representation.
+            encoding_key = key if candidate == "gzip" else (key, candidate)
+            cached = _STATIC_GZIP_CACHE.get(encoding_key)
+            if cached is not None:
+                body, enc = cached, candidate
+                break
+            if body is None:
+                try:
+                    body = (bundle if bundle is not None else resolved).read_bytes()
+                except OSError as e:
+                    self.send_json({"error": str(e)}, 500)
+                    return
+            compressed = brotli(body) if candidate == "br" else gzip.compress(body, compresslevel=5)
+            if compressed is not None:
+                body, enc = compressed, candidate
+                _STATIC_GZIP_CACHE.put(encoding_key, body, len(body))
+                break
+        if body is None:
             try:
                 body = (bundle if bundle is not None else resolved).read_bytes()
             except OSError as e:
                 self.send_json({"error": str(e)}, 500)
                 return
-            body, enc = self._maybe_gzip(body, ct)
-            if enc:
-                _STATIC_GZIP_CACHE.put(key, body, len(body))
         self.send_response(200)
         self.send_header("Content-Type", ct)
         self.send_header("Cache-Control", cache_control)
         self.send_header("ETag", etag)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Vary", "Accept-Encoding")
         if enc:
             self.send_header("Content-Encoding", enc)
-            self.send_header("Vary", "Accept-Encoding")
         self._send_server_timing(cache="hit" if cached is not None else "miss")
         self.end_headers()
         self.wfile.write(body)
