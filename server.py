@@ -18993,7 +18993,9 @@ def _archive_list_body_ver(key, rows, extra):
     in the request thread). The overlay list is only a handful of rows, so
     serializing just those and folding a content hash into the version
     restores body replay without serving stale overlay bytes: any overlay
-    row content change changes the version.
+    row content change changes the version. Cold pin/topic rows appended by
+    the window lookup have the same contract as engine overlays: include
+    their actual returned content, even though they are not in `extra`.
     """
     with _archive_serve_lock:
         sc = _archive_serve_cache.get(key)
@@ -19003,12 +19005,15 @@ def _archive_list_body_ver(key, rows, extra):
         ver = sc.get("ver", 0)
         if rows is base:
             return ver
-        if not extra or len(rows) != len(base) + len(extra):
+        if len(rows) < len(base) + len(extra or []):
             return 0
         if any(a is not b for a, b in zip(rows, base)):
             return 0
+        appended = rows[len(base):]
+        if not appended:
+            return ver
         sig = hashlib.sha1(
-            json.dumps(extra, sort_keys=True, separators=(",", ":"), default=str).encode()
+            json.dumps(appended, sort_keys=True, separators=(",", ":"), default=str).encode()
         ).hexdigest()
         return (ver, sig)
 
