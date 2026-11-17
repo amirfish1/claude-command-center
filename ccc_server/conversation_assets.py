@@ -18,7 +18,7 @@ SCRIPTS = tuple("conversation-" + name + ".js" for name in (
 # are the dashboard files themselves, never generated or forked implementations.
 EXTENSIONS = (
     "claude-reauth.js", "ticket-prose.js", "block-params.js", "fx.js",
-    "free-router.js", "free-runtime.js", "notify.js", "local-speech.js",
+    "free-router.js", "free-runtime.js", "notify.js",
     "browser-voice.js", "choice-eligibility.js", "session-recaps.js",
     "queue-ticket-submit.js",
 )

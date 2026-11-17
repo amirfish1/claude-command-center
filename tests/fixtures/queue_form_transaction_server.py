@@ -3,6 +3,10 @@ import json
 import sys
 from pathlib import Path
 import server
+from ccc_server.static_encoding import _encoder
+
+# Discover the asset encoder during setup, before process-free UI assertions.
+_encoder()
 from ccc_server import settings_transactions
 from types import SimpleNamespace
 

@@ -314,10 +314,8 @@
     '/api/codex/stuck-summary': { ok: true, stuck: [], count: 0 },
     '/api/free-failover/fleet': { ok: true, walls: [], engines: [] },
     '/api/free-failover/status': { ok: true, active: false },
-    '/api/free-runtime/tts-voices': { ok: true, voices: [] },
     '/api/group-chats/archived': { ok: true, chats: [] },
     '/api/issues/all': { ok: true, issues: [] },
-    '/api/local-speech/status': { ok: true, available: false },
     '/api/queue/import-doc': { ok: true, docs: [] },
     '/api/restart-recovery': { ok: true, active: false, items: [] },
     '/api/settings/changes': { ok: true, changes: [] },
@@ -347,7 +345,7 @@
 
   const INSTALL_NOTE = 'That needs a real machine behind it. Install CCC to do this with your own agents.';
   const SILENT_POSTS = new Set(['/api/client-log', '/api/perf-event', '/api/objects/import', '/api/assistant/warm',
-    '/api/free-runtime/tts-log', '/api/free-runtime/tts']);
+    ]);
 
   function snapshot() { return sessions.map(r => JSON.parse(JSON.stringify(r.s))); }
   function attention() {
@@ -453,6 +451,12 @@
     try { u = new URL(url, location.href); } catch (_) { return realFetch(input, init); }
     if (u.origin !== location.origin || !u.pathname.includes('/api/')) return realFetch(input, init);
     const path = u.pathname.slice(u.pathname.indexOf('/api/'));
+    // The offline demo has no model-download server. Keep device speech
+    // available without starting the real browser voice installation flow.
+    if (path === '/api/browser-voice/status' || path === '/api/browser-voice/install') {
+      return new Response(JSON.stringify({ error: 'Install CCC to use browser voice.' }), {
+        status: 404, headers: { 'content-type': 'application/json' } });
+    }
     // Transport wrappers can pass a Request with the JSON body already inside
     // it. Apply init overrides before reading either form of fetch input.
     const request = new Request(input instanceof Request ? input : u, init);

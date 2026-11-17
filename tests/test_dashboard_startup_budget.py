@@ -350,8 +350,6 @@ def test_startup_critical_read_defers_federated_and_live_activity_session_polls(
     assert "req.searchParams.get('peers_only') === '1'" in critical
     assert "req.searchParams.get('federated') === '1'" in critical
 
-    local_speech = (ROOT / "static" / "local-speech.js").read_text(encoding="utf-8")
-    assert "if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', check);" in local_speech
 
 
 def test_threaded_http_server_increases_listen_backlog_for_reload_bursts():

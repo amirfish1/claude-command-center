@@ -34,6 +34,7 @@ body { margin-top: var(--try-demo-h) !important; }
 [data-conv-tab="decisions2"] { display: none !important; }
 
 .ccc-side-nav { top: var(--try-demo-h) !important; }
+#convListRestoreBtn { top: calc(var(--try-demo-h) + 12px); }
 
 @media (max-width: 720px) {
   #tryDemoRibbon { gap: 8px; padding: 0 8px; font-size: 12px; }

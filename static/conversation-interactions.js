@@ -1097,22 +1097,7 @@ document.addEventListener('click', async (ev) => {
   });
   }
 
-  function installConversationInteraction35() {
-document.addEventListener('pointerover', (ev) => {
-    const btn = ev.target.closest && ev.target.closest('[data-read-assistant-message], [data-read-agent-answer]');
-    if (!btn || sharedState._ttsActive || sharedState._ttsPaused) return;
-    clearTimeout(sharedState._ttsHoverTimer);
-    sharedState._ttsHoverBtn = btn;
-    sharedState._ttsHoverTimer = setTimeout(() => {
-      try {
-        const data = (0, sharedState._ttsSpeakButtonData)(btn);
-        const pane = btn.closest('.conv-pane');
-        const paneId = (pane && pane.getAttribute('data-pane-id')) || (0, sharedState.activePaneId)();
-        if (data && data.text.trim()) (0, sharedState._ttsPrefetchHead)(data.text, paneId, true, btn);
-      } catch (_) {}
-    }, 200);
-  });
-  }
+
 
   function installConversationInteraction36() {
 document.addEventListener('click', (ev) => {
@@ -1696,13 +1681,9 @@ window.addEventListener('ccc:browser-voice', event => {
   });
   }
 
-  function installConversationInteraction46() {
-window.addEventListener('pagehide', sharedState._ttsPriorityStop);
-  }
 
-  function installConversationInteraction47() {
-try { sharedState._ttsCacheDebug = localStorage.getItem('ccc-tts-cache-debug') === '1'; } catch (_) {}
-  }
+
+
 
   function installConversationInteraction48() {
 try { sharedState._ttsEnabled = localStorage.getItem('ccc-tts-enabled') !== '0'; } catch (_) {}
@@ -1716,88 +1697,33 @@ window.__cccSetTtsEnabled = sharedState._ttsSetEnabled;
 window.__cccIsTtsEnabled = () => sharedState._ttsEnabled;
   }
 
-  function installConversationInteraction51() {
-window.__cccUpdateTtsDiagnostics = sharedState._ttsUpdateDiagnosticsQueue;
-  }
 
-  function installConversationInteraction52() {
-document.addEventListener('scroll', () => { if (sharedState._ttsCacheDebug) (0, sharedState._ttsScheduleCacheDebug)(); }, true);
-  }
 
-  function installConversationInteraction53() {
-window.addEventListener('resize', () => { if (sharedState._ttsCacheDebug) (0, sharedState._ttsScheduleCacheDebug)(); });
-  }
 
-  function installConversationInteraction54() {
-window.visualViewport?.addEventListener('resize', () => { if (sharedState._ttsCacheDebug) (0, sharedState._ttsScheduleCacheDebug)(); });
-  }
 
-  function installConversationInteraction55() {
-document.getElementById('settingsTtsCacheDebugToggle')?.addEventListener('click', () => (0, sharedState._ttsSetCacheDebug)(!sharedState._ttsCacheDebug));
-  }
+
+
+
+
+
 
   function installConversationInteraction56() {
-document.getElementById('settingsTtsEnabledToggle')?.addEventListener('click', () => (0, sharedState._ttsSetEnabled)(!sharedState._ttsEnabled, { persistServer: true }));
+document.getElementById('settingsTtsEnabledToggle')?.addEventListener('click', () => (0, sharedState._ttsSetEnabled)(!sharedState._ttsEnabled));
   }
 
-  function installConversationInteraction57() {
-(0, sharedState._ttsSetCacheDebug)(sharedState._ttsCacheDebug);
-  }
+
 
   function installConversationInteraction58() {
 (0, sharedState._ttsSyncEnabledControls)();
   }
 
-  function installConversationInteraction59() {
-(0, sharedState._ttsUpdateDiagnosticsQueue)();
-  }
 
-  function _ttsSyncScreenVisibility(settleMs) {
-    const onScreen = (0, sharedState._ttsIsPaneOnScreen)((0, sharedState.activePaneId)());
-    if (!onScreen) {
-      if (sharedState._ttsLastScreenVisible !== false || sharedState._ttsPrefetchTimer != null) (0, sharedState._ttsCancelOffscreenPrefetch)();
-      sharedState._ttsLastScreenVisible = false;
-      if (settleMs) {
-        clearTimeout(sharedState._ttsScreenSyncTimer);
-        sharedState._ttsScreenSyncTimer = setTimeout(() => { sharedState._ttsScreenSyncTimer = null; _ttsSyncScreenVisibility(0); }, settleMs);
-      }
-      return;
-    }
-    const becameVisible = sharedState._ttsLastScreenVisible === false;
-    sharedState._ttsLastScreenVisible = true;
-    clearTimeout(sharedState._ttsScreenSyncTimer);
-    sharedState._ttsScreenSyncTimer = null;
-    if (becameVisible) {
-      try { (0, sharedState.scheduleTtsPrefetch)(); } catch (_) {}
-    }
-  }
 
-  function installConversationInteraction60() {
-document.addEventListener('visibilitychange', () => {
-    try { _ttsSyncScreenVisibility(document.hidden ? 0 : 240); } catch (_) {}
-  });
-  }
 
-  function installConversationInteraction61() {
-if (typeof MutationObserver !== 'undefined' && document.body) {
-    let _ttsBodySyncQueued = false;
-    const _queueTtsScreenSync = () => {
-      if (_ttsBodySyncQueued) return;
-      _ttsBodySyncQueued = true;
-      queueMicrotask(() => {
-        _ttsBodySyncQueued = false;
-        try { _ttsSyncScreenVisibility(240); } catch (_) {}
-      });
-    };
-    const _ttsScreenObserver = new MutationObserver(_queueTtsScreenSync);
-    _ttsScreenObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-    const _ttsSettingsModalEl = document.getElementById('settingsModal');
-    if (_ttsSettingsModalEl) {
-      _ttsScreenObserver.observe(_ttsSettingsModalEl, { attributes: true, attributeFilter: ['class', 'hidden'] });
-    }
-    window.addEventListener('resize', _queueTtsScreenSync);
-  }
-  }
+
+
+
+
 
   function installConversationInteraction62() {
 window.addEventListener('pagehide', () => { try { (0, sharedState._ttsPerfFlush)(sharedState._ttsPerfState); } catch (_) {} });
@@ -3952,7 +3878,7 @@ document.addEventListener('keydown', (ev) => {
     installConversationInteraction32();
     installConversationInteraction33();
     installConversationInteraction34();
-    installConversationInteraction35();
+    ;
     installConversationInteraction36();
     installConversationInteraction37();
     installConversationInteraction38();
@@ -3963,22 +3889,22 @@ document.addEventListener('keydown', (ev) => {
     installConversationInteraction43();
     installConversationInteraction44();
     installConversationInteraction45();
-    installConversationInteraction46();
-    installConversationInteraction47();
+    ;
+    ;
     installConversationInteraction48();
     installConversationInteraction49();
     installConversationInteraction50();
-    installConversationInteraction51();
-    installConversationInteraction52();
-    installConversationInteraction53();
-    installConversationInteraction54();
-    installConversationInteraction55();
+    ;
+    ;
+    ;
+    ;
+    ;
     installConversationInteraction56();
-    installConversationInteraction57();
+    ;
     installConversationInteraction58();
-    installConversationInteraction59();
-    installConversationInteraction60();
-    installConversationInteraction61();
+    ;
+    ;
+    ;
     installConversationInteraction62();
     installConversationInteraction63();
     installConversationInteraction64();
@@ -4002,7 +3928,7 @@ document.addEventListener('keydown', (ev) => {
     installConversationInteraction82();
   }
 
-    return { bindConversationInteractions, installConversationInteraction1, installConversationInteraction2, installConversationInteraction3, installConversationInteraction4, installConversationInteraction5, installConversationInteraction6, installConversationInteraction7, installConversationInteraction8, installConversationInteraction9, installConversationInteraction10, installConversationInteraction11, installConversationInteraction12, installConversationInteraction13, installConversationInteraction14, installConversationInteraction15, installConversationInteraction16, installConversationInteraction17, installConversationInteraction18, installConversationInteraction19, installConversationInteraction20, installConversationInteraction21, installConversationInteraction22, installConversationInteraction23, installConversationInteraction24, installConversationInteraction25, installConversationInteraction26, installConversationInteraction27, installConversationInteraction28, installConversationInteraction29, installConversationInteraction30, installConversationInteraction31, installConversationInteraction32, installConversationInteraction33, installConversationInteraction34, installConversationInteraction35, installConversationInteraction36, installConversationInteraction37, installConversationInteraction38, installConversationInteraction39, installConversationInteraction40, installConversationInteraction41, installConversationInteraction42, installConversationInteraction43, installConversationInteraction44, installConversationInteraction45, installConversationInteraction46, installConversationInteraction47, installConversationInteraction48, installConversationInteraction49, installConversationInteraction50, installConversationInteraction51, installConversationInteraction52, installConversationInteraction53, installConversationInteraction54, installConversationInteraction55, installConversationInteraction56, installConversationInteraction57, installConversationInteraction58, installConversationInteraction59, installConversationInteraction60, installConversationInteraction61, installConversationInteraction62, installConversationInteraction63, installConversationInteraction64, installConversationInteraction65, installConversationInteraction66, installConversationInteraction67, installConversationInteraction68, installConversationInteraction69, installConversationInteraction70, installConversationInteraction71, installConversationInteraction72, installConversationInteraction73, installConversationInteraction74, installConversationInteraction75, installConversationInteraction76, installConversationInteraction77, installConversationInteraction78, installConversationInteraction79, installConversationInteraction80, installConversationInteraction81, installConversationInteraction82, f2ManualOpen, _pollInterruptAsks, startConvReplay, handOverToCodexDesktop, _renderConvOverflowMenu, handleLiveQuestionActionClick, _codexRequestResultForDecision, _handleUxQueueNudge, handleBreadcrumbSpawnedByClick, handleSidebarSessionIdCopyClick, agentAnswerTextBeforeResult, trayConversationView, readyQueuedSteerRows, markSteerInFlight, clearQueuedSteerError, clearSteerInFlight, revertOptimisticSteerMove, setQueuedSteerError, settleSteeredServerCard, steeredToastText, subagentRelayToastText, sendConversationGoalAction, _selectionSingleEventInfo, _hideAnnotateTrigger, _showAnnotateTrigger, _deleteAnnotation, _ttsSyncScreenVisibility, openConversationPopout, rowDecisionReportSnapshot, captureRowDecisionScreenshot, openRowDecisionReportEditor, followRowReportReceipt, ccPostJson, closeReadyConversation, restartServerRun, _pathLinkSessionContext, tagBlocksForRtl, _renderMermaidBlocks, watchtowerTicketUrl, stepMediaLightbox, _isWebRoutePath, _bareMediaBaseDir, handleOpenUnavailable, _advanceConvReplayToNextMeaningful, _convReplayLoadTypedTurns, openHandoffModal, focusLiveQuestionComposer, submitLiveQuestionAnswer, _nudgeFixerBySid, steerTextKeys, conversationGoalActionCommand, _closestAnnotatableEvent, _openAnnotatePopover, _saveAnnotationsForSession, conversationPopoutUrl, repoPathForConversationPopout, popoutPositionFeature, tryOpenNativeMacPopout, annEstimateScreenRect, annCaptureDomRegionB64, _setOpenSessionLifecycle, closeSettingsModal, sysCloseModal, restartServerShowOverlay, restartServerSetPort, restartWaitForGeneration, _bidiMajorityDir, _loadMermaid, _lightboxGallery, _isAbsoluteFilesystemPath, openFolderViewer, handoffSetError, handoffLoadPeers, _closeAnnotatePopover, _saveAnnotation, _annotatePopoverOutsideHandler, annContextElement, annInlineCloneStyles, setOptimisticOverride, archivePayloadForRow, returnToConversationList, _showArchivedUndoToast, finishEnginesFirstRun, sysCancelDashArm, _sysTrapTab, _ffvSize, fedEsc, fedShortId, _annotationComposerText, _annotationExcerpt, withRepoPath, endTailscaleStep, maybeStartFirstFlight, sysRowSay, sysSay, sysApplyRestartLocks, _sysFocusables, _etsStop, loadFirstFlightTour, _sysServiceMap, sysPaintRestartButton, sysRestartBlockReason };
+    return { bindConversationInteractions, installConversationInteraction1, installConversationInteraction2, installConversationInteraction3, installConversationInteraction4, installConversationInteraction5, installConversationInteraction6, installConversationInteraction7, installConversationInteraction8, installConversationInteraction9, installConversationInteraction10, installConversationInteraction11, installConversationInteraction12, installConversationInteraction13, installConversationInteraction14, installConversationInteraction15, installConversationInteraction16, installConversationInteraction17, installConversationInteraction18, installConversationInteraction19, installConversationInteraction20, installConversationInteraction21, installConversationInteraction22, installConversationInteraction23, installConversationInteraction24, installConversationInteraction25, installConversationInteraction26, installConversationInteraction27, installConversationInteraction28, installConversationInteraction29, installConversationInteraction30, installConversationInteraction31, installConversationInteraction32, installConversationInteraction33, installConversationInteraction34, installConversationInteraction36, installConversationInteraction37, installConversationInteraction38, installConversationInteraction39, installConversationInteraction40, installConversationInteraction41, installConversationInteraction42, installConversationInteraction43, installConversationInteraction44, installConversationInteraction45, installConversationInteraction48, installConversationInteraction49, installConversationInteraction50, installConversationInteraction56, installConversationInteraction58, installConversationInteraction62, installConversationInteraction63, installConversationInteraction64, installConversationInteraction65, installConversationInteraction66, installConversationInteraction67, installConversationInteraction68, installConversationInteraction69, installConversationInteraction70, installConversationInteraction71, installConversationInteraction72, installConversationInteraction73, installConversationInteraction74, installConversationInteraction75, installConversationInteraction76, installConversationInteraction77, installConversationInteraction78, installConversationInteraction79, installConversationInteraction80, installConversationInteraction81, installConversationInteraction82, f2ManualOpen, _pollInterruptAsks, startConvReplay, handOverToCodexDesktop, _renderConvOverflowMenu, handleLiveQuestionActionClick, _codexRequestResultForDecision, _handleUxQueueNudge, handleBreadcrumbSpawnedByClick, handleSidebarSessionIdCopyClick, agentAnswerTextBeforeResult, trayConversationView, readyQueuedSteerRows, markSteerInFlight, clearQueuedSteerError, clearSteerInFlight, revertOptimisticSteerMove, setQueuedSteerError, settleSteeredServerCard, steeredToastText, subagentRelayToastText, sendConversationGoalAction, _selectionSingleEventInfo, _hideAnnotateTrigger, _showAnnotateTrigger, _deleteAnnotation, openConversationPopout, rowDecisionReportSnapshot, captureRowDecisionScreenshot, openRowDecisionReportEditor, followRowReportReceipt, ccPostJson, closeReadyConversation, restartServerRun, _pathLinkSessionContext, tagBlocksForRtl, _renderMermaidBlocks, watchtowerTicketUrl, stepMediaLightbox, _isWebRoutePath, _bareMediaBaseDir, handleOpenUnavailable, _advanceConvReplayToNextMeaningful, _convReplayLoadTypedTurns, openHandoffModal, focusLiveQuestionComposer, submitLiveQuestionAnswer, _nudgeFixerBySid, steerTextKeys, conversationGoalActionCommand, _closestAnnotatableEvent, _openAnnotatePopover, _saveAnnotationsForSession, conversationPopoutUrl, repoPathForConversationPopout, popoutPositionFeature, tryOpenNativeMacPopout, annEstimateScreenRect, annCaptureDomRegionB64, _setOpenSessionLifecycle, closeSettingsModal, sysCloseModal, restartServerShowOverlay, restartServerSetPort, restartWaitForGeneration, _bidiMajorityDir, _loadMermaid, _lightboxGallery, _isAbsoluteFilesystemPath, openFolderViewer, handoffSetError, handoffLoadPeers, _closeAnnotatePopover, _saveAnnotation, _annotatePopoverOutsideHandler, annContextElement, annInlineCloneStyles, setOptimisticOverride, archivePayloadForRow, returnToConversationList, _showArchivedUndoToast, finishEnginesFirstRun, sysCancelDashArm, _sysTrapTab, _ffvSize, fedEsc, fedShortId, _annotationComposerText, _annotationExcerpt, withRepoPath, endTailscaleStep, maybeStartFirstFlight, sysRowSay, sysSay, sysApplyRestartLocks, _sysFocusables, _etsStop, loadFirstFlightTour, _sysServiceMap, sysPaintRestartButton, sysRestartBlockReason };
   }
   root.CCCConversationInteractions = Object.freeze({ createController });
 })(typeof window === 'undefined' ? globalThis : window);

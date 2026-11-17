@@ -97,6 +97,33 @@
     "  place-items: center; padding: 0; margin-top: 2px;",
     "}",
     ".ccc-side-nav .add:hover { border-color: #5ac8fa; color: #5ac8fa; }",
+    /* Focus mode: the rail is locked to one app. The lock button sits at the
+       bottom of the rail, away from the app icon, so nobody leaves by accident. */
+    ".ccc-side-nav .focus-toggle {",
+    "  display: flex; flex-direction: column; align-items: center; gap: 3px;",
+    "  width: calc(var(--ccc-rail-w, " + RAIL_DEFAULT + "px) - 12px); flex-shrink: 0;",
+    "  padding: 7px 3px; border: 0; border-radius: 7px; background: none;",
+    "  color: #5f6772; cursor: pointer; font: inherit; font-size: 9px;",
+    "  text-transform: uppercase; letter-spacing: 0.2px; line-height: 1.2;",
+    "}",
+    ".ccc-side-nav .focus-toggle .icon { font-size: 15px; }",
+    ".ccc-side-nav .focus-toggle:hover { background: #1a1d23; color: #ccc; }",
+    ".ccc-side-nav.focused { padding-bottom: 12px; }",
+    ".ccc-side-nav.focused .focus-toggle { margin-top: auto; }",
+    "html.ccc-focus :is(.ccc-account-wrap, .ccc-account-pop, .ccc-report-flag) { display: none; }",
+    /* Guided setup for the GitHub issue auto-fix flow (static/issue-flow.js). */
+    ".ccc-side-nav .autofix {",
+    "  display: flex; flex-direction: column; align-items: center; gap: 3px;",
+    "  width: calc(var(--ccc-rail-w, " + RAIL_DEFAULT + "px) - 12px);",
+    "  flex-shrink: 0; margin: 2px 0; padding: 7px 2px 6px; border-radius: 8px;",
+    "  cursor: pointer; border: 1px solid transparent; background: none;",
+    "  color: #888; font: 9px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;",
+    "  text-transform: uppercase; letter-spacing: 0.2px; white-space: nowrap;",
+    "  overflow: hidden; transition: background .12s, color .12s, border-color .12s;",
+    "}",
+    ".ccc-side-nav .autofix svg { width: 17px; height: 17px; display: block; }",
+    ".ccc-side-nav .autofix:hover { background: #1a1d23; color: #ccc; }",
+    ".ccc-side-nav .autofix:focus-visible { outline: 2px solid #5ac8fa; outline-offset: 2px; }",
     /* Applications popup: keeps you on the page you were already on. */
     ".ccc-apps-scrim {",
     "  position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 4000;",
@@ -219,12 +246,23 @@
     ".ccc-account-pop .acc-btn.danger { color: #f0a29b; }",
     ".ccc-account-pop .acc-btn.danger:hover { border-color: #8c3f39; }",
     ".ccc-account-pop .acc-btn:disabled { opacity: .55; cursor: default; }",
+    ".ccc-account-pop .acc-dashboard-tools { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }",
+    ".ccc-account-pop .acc-dashboard-tools[hidden] { display: none; }",
+    ".ccc-account-pop .sidebar-footer-tool {",
+    "  justify-content: flex-start; width: 100%; box-sizing: border-box; min-height: 34px; padding: 7px 10px;",
+    "  border: 1px solid #333a44; border-radius: 7px; background: #1c2027; color: #cfd4db; font-size: 12px;",
+    "}",
+    ".ccc-account-pop .sidebar-footer-tool:hover { background: #23272e; color: #e6e9ee; }",
+    "@media (min-width: 1201px) {",
+    "  html:not(.ccc-focus) body.ccc-rail-settings #settingsBtn { display: none; }",
+    "}",
     /* Morning's own wrappers hug the old nav; keep them off the rail. */
     ".mv-wrap, .mk-wrap { padding-left: 20px !important; }",
-    /* Phones and the PWA have no room for the gutter. */
+    /* The dashboard owns mobile bottom navigation in both UI modes. */
     "@media (max-width: 700px) {",
-    "  .ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag, .ccc-account-wrap, .ccc-account-pop { display: none; }",
-    "  body { padding-left: 0; }",
+    "  .ccc-side-nav { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }",
+    "  body.has-mobile-bottom-nav :is(.ccc-side-nav, .ccc-rail-resizer, .ccc-report-flag, .ccc-account-wrap, .ccc-account-pop) { display: none; }",
+    "  body.has-mobile-bottom-nav { padding-left: 0; }",
     "}"
   ].join("\n");
   document.head.appendChild(style);
@@ -255,10 +293,64 @@
   var SWITCH_KEY = "ccc-rail-switch";
 
   function cachedApps() {
+    var apps = null;
     try {
       var v = JSON.parse(localStorage.getItem(APPS_CACHE_KEY) || "null");
-      return (Array.isArray(v) && v.length) ? v : null;
-    } catch (e) { return null; }
+      if (Array.isArray(v) && v.length) apps = v;
+    } catch (e) {}
+    // The no-store deep-link HTML is newer than the saved catalog. Adopting
+    // its frame must not navigate it to a stale saved route or remove it
+    // while the first catalog refresh is still in flight.
+    var startup = window.__cccStartupApp;
+    if (startup) {
+      apps = apps || [];
+      var index = apps.findIndex(function (app) { return app.id === startup.id; });
+      if (index < 0) apps.push(startup);
+      else apps[index] = Object.assign({}, apps[index], startup);
+    }
+    return apps;
+  }
+
+  // Focus mode (docs/applications.md, "Sharing an app"): the rail shows one
+  // app and a way back to everything. Cached like the app list so a locked
+  // rail never flashes the full one while /api/apps is in flight.
+  var FOCUS_CACHE_KEY = "ccc-rail-focus-v1";
+  var lastFocus = null;
+  try { lastFocus = JSON.parse(localStorage.getItem(FOCUS_CACHE_KEY) || "null"); } catch (e) {}
+
+  function rememberFocus(focus) {
+    lastFocus = (focus && typeof focus === "object") ? focus : null;
+    try { localStorage.setItem(FOCUS_CACHE_KEY, JSON.stringify(lastFocus)); } catch (e) {}
+  }
+
+  function setFocus(appId) {
+    return fetch("/api/apps/focus", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app: appId })
+    })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(function (d) {
+        if (!d || !d.ok) return false;
+        rememberFocus(d.focus);
+        render(lastApps);
+        return true;
+      });
+  }
+
+  function focusToggle(icon, label, title, onClick) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "focus-toggle";
+    b.title = title;
+    var i = document.createElement("span");
+    i.className = "icon";
+    i.textContent = icon;
+    b.appendChild(i);
+    b.appendChild(document.createTextNode(label));
+    b.onclick = onClick;
+    return b;
   }
 
   // Fire-and-forget latency sample into the local perf sink (the same
@@ -330,6 +422,26 @@
   flagBtn.appendChild(document.createTextNode("Report"));
   flag.appendChild(flagBtn);
 
+  // "Auto-fix": the guided setup that turns GitHub issues from a product
+  // into agent work. The wizard itself is static/issue-flow.js, which only
+  // the dashboard and the Queues board load; every other page hands off to
+  // the dashboard with ?issue-flow=1.
+  var autofix = document.createElement("button");
+  autofix.type = "button";
+  autofix.className = "autofix";
+  autofix.title = "Auto-fix issues from production: your product opens a GitHub issue, an agent fixes it";
+  autofix.setAttribute("aria-label", "Set up auto-fix for GitHub issues");
+  autofix.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+    + '<path d="M13.4 2.5 4.6 13.3a.6.6 0 0 0 .5 1h5.3l-1 6.9a.4.4 0 0 0 .7.3l8.8-10.8a.6.6 0 0 0-.5-1h-5.3l1-6.9a.4.4 0 0 0-.7-.3Z"/></svg>';
+  autofix.appendChild(document.createTextNode("Auto-fix"));
+  autofix.addEventListener("click", function () {
+    if (window.cccIssueFlow && typeof window.cccIssueFlow.open === "function") {
+      window.cccIssueFlow.open();
+      return;
+    }
+    window.location.href = "/?issue-flow=1";
+  });
+
   function hintReport(why) {
     flag.classList.add("hint");
     flagBtn.title = why + " Report a problem?";
@@ -351,6 +463,7 @@
    * shown as grey/amber and described honestly, never faked green. */
   var ACCOUNT_CACHE_KEY = "ccc-rail-account-v1";
   var ACCOUNT_POLL_MS = 30000;
+  var desktopSettings = window.matchMedia("(min-width: 1201px)");
   var NETWORK_HANDOFF_PARAM = "open_network";
   // Static icon for the signed-out avatar; identity text never goes through
   // innerHTML — the paired letter is written with textContent like the rest.
@@ -416,6 +529,19 @@
   popErr.style.display = "none";
   var popActions = document.createElement("div");
   popActions.className = "acc-actions";
+  var popSettings = document.createElement("button");
+  popSettings.type = "button";
+  popSettings.className = "acc-btn";
+  popSettings.textContent = "Settings";
+  popSettings.setAttribute("data-rail-settings", "");
+  popSettings.addEventListener("click", function () {
+    closePop(false);
+    accountBtn.focus();
+    var settings = document.getElementById("settingsBtn");
+    if (settings) settings.click();
+    else window.location.href = "/?ccc_settings=preferences";
+  });
+  popActions.appendChild(popSettings);
   // Stable action buttons: repaints update label/class/handler instead of
   // rebuilding nodes, so a focused button keeps focus across refreshes.
   var popPrimary = document.createElement("button");
@@ -430,6 +556,41 @@
   pop.appendChild(popMachine);
   pop.appendChild(popErr);
   pop.appendChild(popActions);
+
+  // Move the existing nodes so their handlers and usage badge stay intact.
+  // Smaller layouts keep their footer because the account menu can be hidden.
+  var dashboardTools = null;
+  var dashboardNodes = [];
+  var dashboardMenu = document.createElement('nav');
+  dashboardMenu.className = 'acc-dashboard-tools';
+  dashboardMenu.setAttribute('aria-label', 'Workspace dashboards');
+  dashboardMenu.hidden = true;
+  popActions.insertBefore(dashboardMenu, popPrimary);
+  dashboardMenu.addEventListener('click', function (e) {
+    if (e.target.closest('a,button')) closePop(false);
+  }, true);
+  function placeDashboardTools(event) {
+    var tools = (event && event.detail) || dashboardTools || document.querySelector('.sidebar-footer-tools');
+    if (!tools) return;
+    if (tools !== dashboardTools) {
+      dashboardTools = tools;
+      dashboardNodes = ['cccProductivityPill', 'cccSystemPill', 'cccThroughputPill'].map(function (id) {
+        var node = document.getElementById(id);
+        if (!node || !tools.contains(node)) return null;
+        var anchor = document.createComment('dashboard shortcut');
+        tools.insertBefore(anchor, node);
+        return {node: node, anchor: anchor};
+      }).filter(Boolean);
+    }
+    dashboardMenu.hidden = !desktopSettings.matches;
+    dashboardNodes.forEach(function (entry) {
+      if (desktopSettings.matches) dashboardMenu.appendChild(entry.node);
+      else tools.insertBefore(entry.node, entry.anchor.nextSibling);
+    });
+  }
+  window.addEventListener('ccc:dashboard-tools-ready', placeDashboardTools);
+  desktopSettings.addEventListener('change', placeDashboardTools);
+  placeDashboardTools();
 
   var lastStatus = cachedStatus();
   var statusFresh = false;
@@ -501,9 +662,33 @@
     var st = cccAccountState(lastStatus, statusFresh, lastFetchErr);
     accDot.className = "ccc-account-dot " + st.dot;
     setGlyph(accGlyph, st.letter);
-    accountBtn.title = "Account: " + st.sub;
+    syncSettingsEntry(st.sub);
     if (popOpen) renderPop();
   }
+
+  function syncSettingsEntry(status) {
+    var desktop = desktopSettings.matches;
+    var settings = document.getElementById("settingsBtn");
+    document.body.classList.toggle("ccc-rail-settings", desktop);
+    popSettings.hidden = !desktop;
+    accLabel.textContent = desktop ? "Settings" : "Account";
+    accountBtn.title = (desktop ? "Settings and account: " : "Account: ") + status;
+    accountBtn.setAttribute("aria-label", desktop ? "Settings and account" : "Account");
+    pop.setAttribute("aria-label", desktop ? "Settings and account" : "Account");
+    if (settings) {
+      if (desktop) {
+        settings.removeAttribute("data-tour");
+        accountBtn.setAttribute("data-tour", "settings");
+      } else {
+        settings.setAttribute("data-tour", "settings");
+        accountBtn.removeAttribute("data-tour");
+      }
+    }
+  }
+  desktopSettings.addEventListener("change", function () {
+    paintAccount();
+    if (popOpen && popSettings.hidden && document.activeElement === popSettings) popPrimary.focus();
+  });
 
   function shortId(id) {
     id = String(id || "");
@@ -658,7 +843,7 @@
     document.addEventListener("pointerdown", onDocPointer, true);
     document.addEventListener("keydown", onPopKey, true);
     fetchStatus();
-    var first = pop.querySelector(".acc-btn");
+    var first = pop.querySelector(".acc-btn:not([hidden])");
     if (first) first.focus();
   }
 
@@ -714,6 +899,15 @@
     var id = a.getAttribute("data-app-id");
     var from = activeIdFor(lastApps) || "";
     if (a.target === "_blank") return;
+    if (window.__cccEnsureDashboard && typeof window.cccSwitchCoreApp !== "function") {
+      e.preventDefault();
+      window.__cccEnsureDashboard().then(function () {
+        if (typeof window.cccOpenApp !== "function" || !window.cccOpenApp(id)) {
+          window.location.href = a.href;
+        }
+      });
+      return;
+    }
     var t0 = Date.now();
     if (typeof window.cccOpenApp === "function" && window.cccOpenApp(id)) {
       e.preventDefault();
@@ -750,10 +944,21 @@
 
   function render(apps) {
     lastApps = apps;
+    // Locked to one app: that app is the whole list, for this rail and for
+    // anything that mirrors it (the mobile nav). A focus id that is not in
+    // the list (stale cache, removed app) never strands the user.
+    var all = apps;
+    var focusId = lastFocus && lastFocus.app;
+    var only = focusId ? all.filter(function (a) { return a.id === focusId; }) : [];
+    var focused = only.length === 1;
+    if (focused) apps = only;
+    nav.classList.toggle("focused", focused);
+    document.documentElement.classList.toggle("ccc-focus", focused);
     window.cccRailApps = apps;
     window.dispatchEvent(new CustomEvent("ccc:apps", { detail: apps }));
     var activeId = activeIdFor(apps);
     nav.textContent = "";
+    var autofixPlaced = false;
     for (var i = 0; i < apps.length; i++) {
       var app = apps[i];
       var a = document.createElement("a");
@@ -779,7 +984,18 @@
       a.appendChild(icon);
       a.appendChild(document.createTextNode(app.label));
       nav.appendChild(a);
+      // Auto-fix sets up a queue, so it sits right under Queues: near the
+      // top, where a long app list cannot push it below the fold.
+      if (app.id === "queues") { nav.appendChild(autofix); autofixPlaced = true; }
     }
+    if (focused) {
+      nav.appendChild(focusToggle("\uD83D\uDD13", "More", "Show the rest of Claude Command Center", function () {
+        if (confirm("Show the rest of Claude Command Center?\n\nYou can come back to just " +
+            only[0].label + " with the lock button in this bar.")) setFocus("");
+      }));
+      return;
+    }
+    if (!autofixPlaced) nav.appendChild(autofix);
     // Adding an app is a rail action, so the affordance belongs in the rail
     // rather than buried in dashboard settings. It opens a popup instead of
     // navigating: you should not lose the session you were reading.
@@ -791,6 +1007,16 @@
     add.textContent = "+";
     add.onclick = openApps;
     nav.appendChild(add);
+    // After an unlock, one click goes back to the single-app view.
+    var homeId = lastFocus && lastFocus.home;
+    var home = homeId ? all.filter(function (a) { return a.id === homeId; })[0] : null;
+    if (home) {
+      nav.appendChild(focusToggle("\uD83D\uDD12", "Just " + home.label, "Show only " + home.label, function () {
+        setFocus(home.id).then(function (ok) {
+          if (ok && activeIdFor(all) !== home.id) location.href = home.nav || home.url;
+        });
+      }));
+    }
     // The report flag centres itself in whatever space is left between the
     // app list and the rail's bottom padding — around the middle on short
     // pages, in the scroll flow on long ones. The account avatar is not a
@@ -813,6 +1039,8 @@
         var ok = !!(d && Array.isArray(d.apps) && d.apps.length);
         perfEvent("rail_apps", Date.now() - t0, { ok: ok, attempt: attempt, cached: hadCache });
         if (ok) {
+          delete window.__cccStartupApp;
+          rememberFocus(d.focus);
           render(d.apps);
           try { localStorage.setItem(APPS_CACHE_KEY, JSON.stringify(d.apps)); } catch (e) {}
         } else if (attempt < RETRY_MS.length) {

@@ -1,19 +1,18 @@
 .queue-policy-composer .fq-config-section[hidden],
 .queue-policy-composer .fq-config-field[hidden] { display: none !important; }
 .queue-policy-composer .upd-actions { flex-wrap: wrap; }
+.queue-policy-composer .upd-actions .queue-policy-other { margin-right: auto; }
 .queue-policy-composer .fq-config-dialog { overflow-wrap: anywhere; }
-.queue-policy-composer .queue-policy-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.queue-policy-composer .queue-policy-source { margin: 6px 0; }
-.queue-policy-composer .queue-policy-preview { border: 1px solid var(--border, #555); padding: 12px; border-radius: 8px; }
-.queue-policy-composer .queue-policy-status { min-height: 2.5em; }
-.queue-policy-composer .settings-launch-fields dd { margin-left: 0; }
+/* Keep this dialog to the essentials: scope notes, eligibility evidence and
+   per-field help live in Settings, not in the quick per-queue editor. */
+.queue-policy-composer .settings-scope-container,
+.queue-policy-composer details.choice-eligibility,
+.queue-policy-composer .fq-config-field > .fq-config-help { display: none !important; }
+.queue-policy-composer .queue-policy-saved { margin-bottom: 14px; }
+.queue-policy-composer .queue-policy-now { font-size: 1.15em; font-weight: 600; margin: 2px 0 4px; }
+.queue-policy-composer .queue-policy-more { margin-top: 10px; }
+.queue-policy-composer .queue-policy-more > summary { cursor: pointer; color: var(--text-dim, #888); }
+.queue-policy-composer .queue-policy-more .fq-config-grid { margin-top: 8px; }
+.queue-policy-composer .queue-policy-status { min-height: 1.5em; }
+.queue-policy-composer .queue-policy-status:empty { display: none; }
 .queue-policy-composer select, .queue-policy-composer input { max-width: 100%; min-width: 0; }
-@media (max-width: 600px) {
-  .queue-policy-composer .fq-config-grid { grid-template-columns: minmax(0, 1fr); }
-  .queue-policy-composer .settings-launch-fields { grid-template-columns: minmax(0, 1fr); }
-  .queue-policy-composer .upd-actions > button { flex: 1 1 40%; white-space: normal; }
-}
-@media (min-width: 601px) {
-  .queue-policy-composer .settings-launch-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-  .queue-policy-composer .settings-launch-fields > div { display: block; min-width: 0; }
-}

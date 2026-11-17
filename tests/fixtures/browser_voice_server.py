@@ -36,7 +36,7 @@ class Handler(SimpleHTTPRequestHandler):
             browser_voice.handle(self, "GET")
         elif self.path == "/":
             body = b'''<!doctype html><meta charset="utf-8"><title>Browser voice test</title>
-              <button id="settingsBrowserVoiceToggle" role="switch" aria-checked="false">Browser voice pilot</button>
+              <button id="settingsBrowserVoiceToggle" role="switch" aria-checked="false">Browser voice</button>
               <p id="settingsBrowserVoiceStatus" role="status"></p>
               <script src="/static/browser-voice.js"></script>'''
             self.send_response(200)

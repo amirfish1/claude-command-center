@@ -175,3 +175,8 @@ are denied after bootstrap. Login helpers are trusted executable code, not a
 sandbox; review their source and use disposable accounts. See
 [UX lab authentication](docs/uxlab.md#authenticated-plans) for the helper contract,
 artifact redaction limits and the temporary local MCP socket.
+
+Read-aloud uses the browser voice for English and the device voice as fallback.
+Version 7 removes the server speech-generation (`/api/free-runtime/tts*`) and
+offline voice installation (`/api/local-speech/*`) endpoints. Dictation and
+live conversation APIs are unchanged.

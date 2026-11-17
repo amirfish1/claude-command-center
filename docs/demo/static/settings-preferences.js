@@ -296,10 +296,10 @@
     panel.innerHTML = `
       <h2 class="settings-section-eyebrow">Preferences</h2>
       <p class="settings-section-note"><strong>This browser.</strong> Review, transfer or reset the supported preferences below. Server settings, credentials and session data are excluded.</p>
-      <div class="ccc-prefs-actions"><button type="button" class="settings-action-btn" data-pref-action="refresh">Refresh</button><button type="button" class="settings-action-btn" data-pref-action="export" disabled>Export profile</button><button type="button" class="settings-action-btn" data-pref-action="reset" disabled>Preview reset</button><button type="button" class="settings-action-btn" data-pref-action="undo" disabled>Preview latest undo</button></div>
+      <div class="settings-row ccc-prefs-row"><div class="settings-row-main"><div class="settings-row-label">Preferences</div></div><div class="ccc-prefs-actions settings-row-control"><button type="button" class="settings-action-btn" data-pref-action="export" disabled>Export</button><button type="button" class="settings-action-btn" data-pref-action="pick">Import</button><button type="button" class="settings-action-btn" data-pref-action="refresh">Refresh</button><button type="button" class="settings-action-btn" data-pref-action="reset" disabled>Preview reset</button><button type="button" class="settings-action-btn" data-pref-action="undo" disabled>Preview latest undo</button></div></div>
       <p data-pref-status role="status" aria-live="polite"></p>
       <div data-pref-changed></div>
-      <details><summary>Supported preferences</summary><p data-pref-supported></p></details>
+      <section><h4>Supported preferences</h4><p data-pref-supported></p></section>
       <div class="ccc-prefs-import settings-row"><div class="settings-row-main"><label for="settingsPreferencesProfile">Browser preference profile (JSON)</label><p id="settingsPreferencesProfileHelp">Import merges supplied preferences. Reset clears all supported saved overrides. Applying an import, reset or undo saves the changes and reloads the dashboard.</p><textarea id="settingsPreferencesProfile" rows="6" spellcheck="false" aria-describedby="settingsPreferencesProfileHelp" placeholder='{"format":"ccc-preferences","version":1,"values":{"theme":"light"}}'></textarea><label for="settingsPreferencesFile">Choose a JSON profile</label><input id="settingsPreferencesFile" type="file" accept="application/json,.json"><button type="button" class="settings-action-btn" data-pref-action="import" disabled>Preview import</button></div></div>
       <div data-pref-preview tabindex="-1" aria-label="Preference change preview" hidden></div>
       <p data-pref-history></p>`;
@@ -325,14 +325,14 @@
     panel.addEventListener('click', event => {
       const button = event.target.closest('[data-pref-action]');
       if (!button || button.disabled) return;
-      const actions = {refresh, export: exportProfile, import: importProfile, reset: () => makePreview('reset', {}), undo, apply, cancel: clearPreview};
+      const actions = {refresh, export: exportProfile, pick: () => { const file = panel.querySelector('#settingsPreferencesFile'); file.value = ''; file.click(); }, import: importProfile, reset: () => makePreview('reset', {}), undo, apply, cancel: clearPreview};
       protect(actions[button.dataset.prefAction]);
     });
     panel.querySelector('#settingsPreferencesFile').addEventListener('change', event => protect(async () => {
       clearPreview(); const file = event.target.files[0]; if (!file) return;
       if (file.size > MAX_BYTES) message('Profile is too large (maximum 64 KB).');
       panel.querySelector('#settingsPreferencesProfile').value = await file.text();
-      status('Profile loaded. Select Preview import to validate and review it.');
+      importProfile();
     }));
     panel.querySelector('#settingsPreferencesProfile').addEventListener('input', clearPreview);
     tab.addEventListener('click', () => protect(() => { if (specs) render(); }));

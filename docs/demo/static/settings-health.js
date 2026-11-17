@@ -1,83 +1,51 @@
-/* Evidence-first health checks in the existing System dialog. No probes or
- * mutations: repair actions navigate to canonical editors and diagnostics. */
+/* Configuration observations belong in Settings > System. This module reads
+ * saved policy and existing caches only; it never probes providers or writes. */
 (() => {
   'use strict';
-  let api, root, busy=false, snapshot=null, expires=0, returnId='', expiryTimer;
+  let api, root, busy=false, snapshot=null, expires=0, failed=false, expiryTimer;
   const get=id=>document.getElementById(id);
   const make=(tag,text)=>{const n=document.createElement(tag);if(text)n.textContent=text;return n;};
-  const states={issue:'Needs attention',unchecked:'Unchecked',stale:'Stale',unavailable:'Unavailable',observed:'Observed'};
-  function render() {
-    const list=get('settingsHealthChecks'), focus=list.contains(document.activeElement)?document.activeElement.id:'', detailsOpen=list.querySelector('details')?.open;list.replaceChildren();
-    if(!snapshot)return;
-    const stale=Date.now()>expires;
-    const ordered=[...snapshot.checks].sort((a,b)=>(a.state==='issue'?0:1)-(b.state==='issue'?0:1));
-    const other=make('details'), summary=make('summary','Other evidence · unchecked, stale or observed');other.open=!!detailsOpen;other.append(summary);const otherList=make('ul');other.append(otherList);
-    if(stale||!ordered.some(row=>row.state==='issue'))list.append(make('li',stale?'The displayed evidence expired. Refresh to read available observations.':'No confirmed issues in the available observations. Unchecked evidence below does not establish readiness.'));
-    for(const row of ordered){
-      const item=make('li');item.dataset.healthCheck=row.id;
-      const content=make('div'),title=make('strong',row.label),state=stale?'stale':row.state;
-      content.append(title,make('span',states[state]),make('p',stale?'This displayed snapshot expired. Refresh evidence; no new probes run.':row.message));
-      if(row.age_seconds!==null)content.append(make('small','Observation age at refresh: '+row.age_seconds+' seconds.'));
-      const label=row.repair.startsWith('engine')?'Open engine setup':row.repair==='policy'?'Review launch policy':row.repair==='connections'?'Manage connections':'Open service diagnostics';
-      const button=make('button',label);button.type='button';button.className='settings-action-btn';button.dataset.healthRepair=row.repair;button.id='health-repair-'+row.id;
-      item.append(content,button);(state==='issue'?list:otherList).append(item);
-    }
-    if(otherList.children.length){const wrapper=make('li');wrapper.className='settings-health-other';wrapper.append(other);list.append(wrapper);}
-    if(focus&&document.activeElement===document.body){const target=get(focus);target?.closest('details')?.setAttribute('open','');target?.focus({preventScroll:true});}
+  const states=new Set(['issue','unchecked','stale','unavailable','observed']);
+  function render(){
+    const host=get('settingsHealthInline');if(!host)return;
+    const focus=host.contains(document.activeElement)?document.activeElement.id:'';
+    const fresh=snapshot&&Date.now()<=expires;
+    const issues=fresh?snapshot.checks.filter(row=>row.state==='issue'):[];
+    const head=make('div');head.className='settings-row';
+    const main=make('div');main.className='settings-row-main';main.append(Object.assign(make('div','Health checks'),{className:'settings-row-label'}));
+    const label=busy?'Checking…':failed?'Unavailable':!snapshot?'Not checked':!fresh?'Stale':issues.length?issues.length+(issues.length===1?' issue':' issues'):'No confirmed issues';
+    const state=make('span',label);state.id='settingsHealthStatus';state.setAttribute('role','status');state.className='settings-health-inline-state';state.dataset.state=issues.length?'issue':fresh&&!failed?'ok':'unknown';
+    const refreshButton=make('button','Refresh checks');refreshButton.id='settingsHealthRefresh';refreshButton.type='button';refreshButton.className='settings-action-btn';refreshButton.disabled=busy;
+    const control=make('div');control.className='settings-row-control';control.append(state,refreshButton);head.append(main,control);
+    const rows=issues.map(row=>{
+      const item=make('div');item.className='settings-row settings-health-inline-issue';item.dataset.healthInline=row.id;
+      const body=make('div');body.className='settings-row-main';body.append(Object.assign(make('div',row.label),{className:'settings-row-label'}),Object.assign(make('div',row.message),{className:'settings-row-desc'}));item.append(body);
+      const target=row.repair.startsWith('engine')?'engines':row.repair==='policy'?'defaults':row.repair==='connections'?'vault':row.repair==='capabilities'?'capabilities':'';
+      if(target){const fix=make('button','Fix');fix.type='button';fix.id='health-fix-'+row.id;fix.className='settings-action-btn';fix.dataset.healthInlineFix=target;const c=make('div');c.className='settings-row-control';c.append(fix);item.append(c);}
+      return item;
+    });
+    host.replaceChildren(head,...rows);
+    if(focus&&document.activeElement===document.body)(get(focus)||get('settingsHealthRefresh'))?.focus({preventScroll:true});
   }
   async function refresh(){
-    if(busy)return;const initiated=document.activeElement===get('settingsHealthRefresh');busy=true;get('settingsHealthRefresh').disabled=true;
-    get('settingsHealthStatus').textContent='Reading saved policy and existing observations…';
+    if(busy||!root)return;const initiated=document.activeElement===get('settingsHealthRefresh');busy=true;render();
     try{
       const r=await fetch('/api/settings/health',{cache:'no-store'});if(!r.ok)throw Error();
       const data=await r.json();
-      if(!Array.isArray(data.checks)||!data.checks.length||data.checks.some(row=>!row||typeof row.id!=='string'||typeof row.label!=='string'||typeof row.message!=='string'||!states[row.state]||typeof row.repair!=='string'||!(/^(engines|engine:[a-z]+|services|policy|connections|capabilities)$/).test(row.repair)))throw Error();
-      snapshot=data;expires=Date.now()+30000;clearTimeout(expiryTimer);expiryTimer=setTimeout(render,30001);render();
-      get('settingsHealthStatus').textContent='This CCC host · Saved policy and cached observations only. Refresh does not test providers, start processes or change configuration.';
-    }catch(_){
-      if(snapshot){expires=0;render();}else get('settingsHealthChecks').replaceChildren();
-      get('settingsHealthStatus').textContent='Health evidence unavailable. Retry refresh; no healthy result can be inferred. Existing diagnostics and setup remain available.';
-    }finally{busy=false;get('settingsHealthRefresh').disabled=false;if(initiated&&document.activeElement===document.body)get('settingsHealthRefresh').focus();}
-  }
-  function back(){
-    get('settingsHealthReturn').hidden=true;api.closeSettings();api.openHealth();
-    (get(returnId)||get('settingsHealthRefresh'))?.focus();returnId='';
-  }
-  function repair(button){
-    const target=button.dataset.healthRepair;
-    if(target==='services'){api.services(button.closest('[data-health-check]')?.dataset.healthCheck);return;}
-    returnId=button.id;api.closeSystem();
-    api.navigate(target.startsWith('engine')?'engines':target==='policy'?'defaults':target==='capabilities'?'capabilities':'vault');
-    if(target.startsWith('engine:'))window.cccEngineConnection?.open(target.slice(7));
-    if(target==='policy')window.cccRoutingPolicy?.open('defaults');
-    get('settingsHealthReturn').hidden=false;
-    // Native editor hooks own their focus; the return action never saves.
+      if(!Array.isArray(data.checks)||!data.checks.length||data.checks.some(row=>!row||typeof row.id!=='string'||typeof row.label!=='string'||typeof row.message!=='string'||!states.has(row.state)||typeof row.repair!=='string'||!(/^(engines|engine:[a-z]+|services|policy|connections|capabilities)$/).test(row.repair)))throw Error();
+      snapshot=data;expires=Date.now()+30000;failed=false;clearTimeout(expiryTimer);expiryTimer=setTimeout(render,30001);
+    }catch(_){expires=0;failed=true;}
+    finally{busy=false;render();if(initiated&&document.activeElement===document.body&&get('settingsHealthRefresh')?.getClientRects().length)get('settingsHealthRefresh').focus();}
   }
   function mount(integration){
-    if(root||!get('sysTabContentHealth')||!get('settingsModal'))return;
-    api=integration;root=make('section');root.id='settingsHealth';root.setAttribute('aria-label','Actionable health checks');
-    const h=make('h2','Health checks'),note=make('p');note.id='settingsHealthStatus';note.setAttribute('role','status');
-    const refreshButton=make('button','Refresh evidence');refreshButton.id='settingsHealthRefresh';refreshButton.type='button';refreshButton.className='settings-action-btn';
-    const list=make('ul');list.id='settingsHealthChecks';
-    root.append(h,note,refreshButton,list);
-    const links=make('div');links.className='settings-health-links';
-    for(const [label,target]of [['Engine setup','engines'],['Vault','connections'],['Launch policy','policy'],['Optional capabilities','capabilities'],['Service diagnostics (runs status checks)','services']]){
-      const button=make('button',label);button.type='button';button.className='settings-action-btn';button.dataset.healthRepair=target;button.id='health-open-'+target;links.append(button);
-    }root.append(links);
-    const destination=get('sysTabContentHealth');destination.prepend(root);
-    const details=make('details'),summary=make('summary','Resource diagnostics');details.append(summary);
-    const load=make('button','Load resource snapshot (inspects processes)');load.type='button';load.className='settings-action-btn';details.append(load,get('sysHealthBody'));destination.append(details);
-    get('sysHealthBody').textContent='Not loaded. This optional diagnostic inspects local resources and processes.';
-    load.addEventListener('click',async()=>{const initiated=document.activeElement===load;load.disabled=true;try{await api.resources();}finally{load.disabled=false;if(initiated&&document.activeElement===document.body)load.focus();}});
-    root.addEventListener('click',e=>{const b=e.target.closest('[data-health-repair]');if(b)repair(b);});refreshButton.addEventListener('click',refresh);
-    const returnButton=make('button','Back to health checks');returnButton.id='settingsHealthReturn';returnButton.type='button';returnButton.className='settings-action-btn';returnButton.hidden=true;
-    get('settingsModal').querySelector('.settings-modal').prepend(returnButton);returnButton.addEventListener('click',back);
-    const maintenance=get('settingsSection-maintenance');if(maintenance){const b=make('button','Open health checks');b.type='button';b.id='settingsHealthOpen';b.className='settings-action-btn';const row=make('div');row.className='settings-row';row.dataset.keywords='health checks doctor repair installation routes diagnostics';row.append(b);maintenance.prepend(row);b.addEventListener('click',()=>{api.closeSettings();api.openHealth();get('settingsHealthRefresh').focus();});}
-    new MutationObserver(()=>{if(get('settingsModal').hidden){returnButton.hidden=true;}}).observe(get('settingsModal'),{attributes:true,attributeFilter:['hidden']});
-    get('sysTabBtnHealth').textContent='Health checks';get('sysTabBtnStatus').textContent='Services';
-    // Clock expiry changes only presentation, never polls or probes.
+    const maintenance=get('settingsSection-maintenance'),modal=get('settingsModal');if(root||!maintenance||!modal)return;
+    api=integration;root=make('section');root.id='settingsHealth';root.setAttribute('aria-label','Configuration health checks');root.dataset.keywords='health checks doctor repair installation routes diagnostics';
+    const inline=make('div');inline.id='settingsHealthInline';root.append(inline);maintenance.prepend(root);render();
+    root.addEventListener('click',e=>{const fix=e.target.closest('[data-health-inline-fix]');if(fix)api.navigate(fix.dataset.healthInlineFix);else if(e.target.closest('#settingsHealthRefresh'))refresh();});
+    const onOpen=()=>{if(maintenance.classList.contains('is-active-section')&&!modal.hidden&&(!snapshot||Date.now()>expires))refresh();};
+    new MutationObserver(onOpen).observe(maintenance,{attributes:true,attributeFilter:['class']});
+    new MutationObserver(onOpen).observe(modal,{attributes:true,attributeFilter:['hidden']});
     document.addEventListener('visibilitychange',()=>{if(!document.hidden&&snapshot&&Date.now()>expires)render();});
-    const observe=new MutationObserver(()=>{if(get('sysModal').classList.contains('open')&&snapshot&&Date.now()>expires)render();});observe.observe(get('sysModal'),{attributes:true,attributeFilter:['class']});
   }
   window.cccSettingsHealth=Object.freeze({mount,refresh});
 })();

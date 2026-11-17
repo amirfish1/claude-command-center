@@ -1,4 +1,4 @@
-// Optional Phonon 31M pilot. Inference and flow control never run on the page.
+// Phonon 31M browser voice. Inference and flow control never run on the page.
 let model, voice, rate, frameSize, manifest;
 let current = null, queue = Promise.resolve();
 const cacheName = 'ccc-browser-voice-v1';

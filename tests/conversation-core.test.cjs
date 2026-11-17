@@ -48,12 +48,3 @@ test('persisted voice preferences use the shared limits and fallback',()=>{
  h.storage.set('ccc-tts-rate','1.1');assert.equal(preferences._readPersistedTtsRate(),1.1);
  h.storage.set('ccc-tts-rate','99');assert.equal(preferences._readPersistedTtsRate(),1.25);
 });
-
-test('voice playback state and shared pause flags stay in distinct cells',()=>{
- const h=fixture({document:{querySelectorAll:()=>[]}});
- Object.assign(h.state,{_ttsPaused:false,_ttsDirectBtn:null,debugModeEnabled:()=>false});
- const playback={paneId:'left'};
- h.core._ttsPlayBlocked(playback);
- assert.equal(h.state._ttsPaused,true);
- assert.equal(playback._ttsPaused,undefined);
-});

@@ -1,0 +1,37 @@
+.ccc-restart-transport-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: fixed;
+  inset-inline-end: max(16px, env(safe-area-inset-right));
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  z-index: 10000;
+  box-sizing: border-box;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 12px 16px;
+  border: 1px solid var(--border, #484f58);
+  border-radius: 8px;
+  background: var(--surface, #161b22);
+  color: var(--text, #e6edf3);
+  font: 14px/1.5 var(--font, system-ui, sans-serif);
+  overflow-wrap: anywhere;
+}
+.ccc-restart-transport-status[hidden] { display: none; }
+
+.ccc-restart-transport-status button {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.ccc-restart-transport-status button:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}

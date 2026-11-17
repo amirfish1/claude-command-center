@@ -10,6 +10,9 @@
 <link rel="stylesheet" href="demo/demo.css">
 <script src="demo/tour.js" defer></script>
 
+<script src="static/app-shell-boot.js"></script>
+<link rel="stylesheet" href="static/restart-transport.css">
+<script src="static/restart-transport.js"></script>
 <!-- `interactive-widget=resizes-content` asks the browser to shrink the
      layout viewport when the on-screen keyboard opens, so the bottom
      composer rides above it (Chrome Android honours this). iOS Safari /
@@ -78,11 +81,14 @@
      Inter. Preconnect lets the font fetch start in parallel with app.css.
      `display=swap` means the system font paints first, then Inter swaps
      in on load — no FOIT, just a brief FOUT. -->
+<!-- Optional fonts must not hold the parser's next script (and app startup)
+     behind an external stylesheet. The system stack already paints first. -->
 <title>Try Claude Command Center in your browser (demo, invented data)</title>
 <link rel="stylesheet" href="static/app.css">
 <link rel="stylesheet" href="static/jobs-tab.css">
 <link rel="stylesheet" href="static/savings.css">
 <link rel="stylesheet" href="static/headroom-bars.css">
+<link rel="stylesheet" href="static/sidebar-narrow.css">
 <!-- Simple-mode CSS lives in its own file (extracted from app.css) so that
      file's diff against upstream stays small — see simple.css's own header
      comment. Loaded unconditionally; it's inert (never matches) outside
@@ -93,6 +99,9 @@
 <link rel="stylesheet" href="static/ticket-prose.css">
 <!-- Sound + motion kit (window.cccFx): confetti canvas + shimmer/glow/pop helpers. -->
 <link rel="stylesheet" href="static/fx.css">
+<!-- GitHub issue auto-fix wizard (window.cccIssueFlow). Scoped under
+     .iflow-*; inert until the wizard opens. -->
+<link rel="stylesheet" href="static/issue-flow.css">
 <!-- Moment Zero onboarding shell: always-dark cinematic overlay. Scoped
      under #cccMomentZero; inert unless the overlay opens. -->
 <link rel="stylesheet" href="static/onboarding/onboarding.css">
@@ -127,6 +136,10 @@
     const params = new URLSearchParams(window.location.search || '');
     window.__CCC_CONVERSATION_POPOUT__ = params.get('ccc_popout') === 'conversation'
       || params.get('popout') === 'conversation';
+    // An app's agent pane (static/app-kit.js): the conversation only, so
+    // boot work for panels it never shows is skipped.
+    window.__CCC_APP_EMBED__ = window.__CCC_CONVERSATION_POPOUT__ && window.parent !== window
+      && params.get('embed') === 'app';
     if (window.__CCC_CONVERSATION_POPOUT__) return;
     // One request for both consumers below; the boot already competes
     // with the archive list for the browser's six connection slots.
@@ -175,6 +188,46 @@
 <link rel="stylesheet" href="static/settings-task-search.css">
 </head>
 <body class="voice-call-btn-off">
+<script>
+  // A page load on an open app (/?ccc_app=<id>): start the app's frame now,
+  // from the rail's saved app list, so it loads beside the dashboard's own
+  // boot instead of after it. mobile-app-nav.js adopts the frame, and the
+  // dashboard's background reads wait for the app (app.js startup gate).
+  (function () {
+    if (window.__CCC_CONVERSATION_POPOUT__ || window.self !== window.top) return;
+    if (document.getElementById('cccMobileAppFrame') || window.__cccAppFrameReady) return;
+    try {
+      var id = new URLSearchParams(window.location.search || '').get('ccc_app');
+      if (!id || id === 'sessions' || id === 'queues') return;
+      var apps = JSON.parse(localStorage.getItem('ccc-rail-apps-v1') || '[]') || [];
+      var app = null;
+      for (var i = 0; i < apps.length; i++) if (apps[i] && apps[i].id === id) app = apps[i];
+      if (!app || app.enabled === false) return;
+      var u = new URL(app.nav || app.url, window.location.origin);
+      if (u.origin !== window.location.origin || u.pathname === '/') return;
+      var f = document.createElement('iframe');
+      f.id = 'cccMobileAppFrame';
+      f.title = app.label || id;
+      f.dataset.appUrl = u.pathname + u.search + u.hash;
+      f.dataset.early = '1';
+      f.dataset.waitFrom = '0';  // the wait began with this page's request
+      // Stand-in geometry until mobile-app-nav.js brings the real rules.
+      f.style.cssText = window.matchMedia('(max-width: 1200px)').matches
+        ? 'position:fixed;top:0;left:0;width:100%;height:calc(100% - 70px);border:0;z-index:900;background:var(--bg,#0f1115)'
+        : 'position:fixed;top:0;left:var(--ccc-rail-w,76px);width:calc(100% - var(--ccc-rail-w,76px));height:100%;border:0;z-index:900;background:var(--bg,#0f1115)';
+      document.documentElement.classList.add('ccc-mobile-app-open');
+      f.src = f.dataset.appUrl;
+      document.body.appendChild(f);
+      window.__cccAppFrameReady = new Promise(function (resolve) {
+        window.addEventListener('message', function (e) {
+          if (e.origin === window.location.origin && e.source === f.contentWindow
+              && e.data && e.data.type === 'ccc:app-fully-ready') resolve();
+        });
+        f.addEventListener('error', resolve);
+      });
+    } catch (_) {}
+  })();
+</script>
   <!-- Shared mobile bottom nav. Same element for Simple and Advanced:
        Simple (data-nav-chrome="simple") drives Home/Tasks/Helpers/More;
        Advanced (data-nav-chrome="advanced") is ☰ (All / Other / Jobs /
@@ -296,12 +349,12 @@
        server-side instead of dispatching, which otherwise reads as every
        session being silently "busy" (observed 2026-08-06: a leaked
        worker-restart drain parked 31 messages for 4 hours with no signal).
-       Rides the 20s control-plane poll; Resume lifts the drain and replays
-       the queue, Details opens Settings > Maintenance. -->
+       Rides the 20s control-plane poll. Restart pauses clear automatically;
+       Resume is offered for other pauses. Details opens System status. -->
   <div id="drainPausedBanner" class="drain-paused-banner" hidden role="alert" aria-live="assertive">
     <span class="drain-paused-banner__icon" aria-hidden="true">&#9208;</span>
     <span class="drain-paused-banner__text" id="drainPausedBannerText"></span>
-    <button type="button" class="drain-paused-banner__resume" id="drainPausedResumeBtn" title="Lift the drain; queued messages dispatch immediately">Resume dispatch</button>
+    <button type="button" class="drain-paused-banner__resume" id="drainPausedResumeBtn" hidden title="Lift the drain; queued messages dispatch immediately">Resume dispatch</button>
     <button type="button" class="drain-paused-banner__details" id="drainPausedDetailsBtn" title="Open System status">Details</button>
   </div>
   <!-- PWA install banner (tab-mode only). Hidden by default; surfaced after
@@ -536,11 +589,11 @@
         } catch (_) {}
         // Conversation-list collapse (CCC-132). Desktop only — on mobile the
         // list IS the screen, so never hide it there. Restored before paint to
-        // avoid a flash. Persisted as `ccc-conv-list-collapsed` ('1').
+        // avoid a flash. Start collapsed unless the user saved an open list.
         try {
           const _isMobileViewport2 = (typeof window.matchMedia === 'function')
             && window.matchMedia('(max-width: 950px)').matches;
-          if (!_isMobileViewport2 && localStorage.getItem('ccc-conv-list-collapsed') === '1') {
+          if (!_isMobileViewport2 && localStorage.getItem('ccc-conv-list-collapsed') !== '0') {
             document.body.classList.add('conv-list-collapsed');
           }
         } catch (_) {}
@@ -570,8 +623,10 @@
        per-session cards above stay as the fallback for older servers. -->
   <script src="static/fleet-failover.js" defer></script>
   <script src="static/headroom-bars.js" defer></script>
+  <script src="static/sidebar-narrow.js" defer></script>
 
   <div class="sidebar" data-tour="lhs">
+    <div id="localCiMobileList" data-local-ci-host class="local-ci-progress local-ci-mobile" aria-label="CI runs and Vercel deployment progress" hidden></div>
     <!-- Simple-mode slim header (body.ccc-mobile-redesign.ccc-simple-mode
          only). One clean bar — brand left, search + "+" right — replacing
          the two stacked dashboard headers (brand/version/WatchTower/meta
@@ -803,7 +858,7 @@
       <div class="sidebar-header-brand">
       <div class="sh-title-row">
           <img class="sh-app-icon" src="static/icon.svg" alt="" aria-hidden="true">
-          <a class="sh-title-link" href="https://github.com/amirfish1/claude-command-center" target="_blank" rel="noopener" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity - open the README on GitHub"><span class="sh-title-main">Claude Command Center</span></a>
+          <span class="sh-title-link" title="Command Center for Claude, Codex, Cursor, and Anti-Gravity"><span class="sh-title-main">Claude Command Center</span></span>
           <span class="sh-version" id="cccVersionLabel" title="Installed Command Center version"></span>
           <!-- Share sits next to the brand (Bullet-style paper plane) rather
                than buried in the "..." menu: it is a one-click invite, not an
@@ -821,6 +876,7 @@
             </svg>
           </a>
         </div>
+        <div id="localCiProgress" data-local-ci-host class="local-ci-progress" aria-label="CI runs and Vercel deployment progress" hidden></div>
         <!-- One rollup chip for every service CCC runs. It replaced two
              separate header badges (WatchTower + Worker) whose signals fought
              for the same 20px of sidebar; both still live inside #sysModal,
@@ -886,6 +942,7 @@
              flip the palette via CSS so no chip needs to re-render. -->
         <button id="chipsColorToggle" class="sh-btn" title="Toggle folder chip color mode" aria-label="Toggle folder chip color mode"><span aria-hidden="true" id="chipsColorIcon">&#9899;</span></button>
       </div>
+      <div id="headroomBars" class="headroom-bars" role="group" aria-label="Plan usage left" hidden></div>
     </div>
 
     <div class="new-session-panel">
@@ -909,7 +966,6 @@
           <datalist id="convSearchHistoryList"></datalist>
           <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
         </div>
-        <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
         <!-- Real dropdown, not a row-reveal. The buttons it drives still live
              in #sidebarHeaderActions / #newSessionSecondaryRow (kept collapsed)
              so every existing id and click handler stays untouched; each item
@@ -917,11 +973,18 @@
         <div class="sh-more-wrap">
           <button type="button" id="sidebarMoreBtn" data-qtag-badge class="sh-btn sh-more-btn" data-tour="watchtower" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false">&#8942;</button>
           <div class="sh-more-menu" id="sidebarMoreMenu" role="menu" aria-label="More actions" hidden>
-            <button type="button" class="sh-more-item" role="menuitem" data-proxy="qtagPill" data-qtag-menu hidden>Open questions</button>
+            <button type="button" class="sh-more-item" role="menuitem" data-qtag-menu hidden>Decisions</button>
             <!-- Phones: a live mirror of the session list's ⋮ (grouping, density,
                  time window, engines, other machines), filled on open by
                  app.js; clicks forward to the originals. -->
             <div class="sh-more-filters" id="sidebarMoreFilters" hidden></div>
+            <!-- Ticket view: the Workers tab lists every ticket, so the All /
+                 Features / Small bugs tabs go away. Shown only while idea
+                 tickets are on (app.js). -->
+            <button type="button" class="sh-more-item sh-more-switch" id="ticketViewToggle" role="menuitemcheckbox" aria-checked="false" title="Show Features and Small bugs tickets in the Workers tab instead of their own tabs" hidden>
+              <span>Ticket view</span>
+              <span class="settings-toggle" aria-hidden="true"><span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span></span>
+            </button>
             <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="historyBtn">Search history…</button>
             <div class="sh-more-divider sh-more-desktop-only" role="separator"></div>
             <button type="button" class="sh-more-item sh-more-desktop-only" role="menuitem" data-proxy="sidebarNewGroupChatBtn">New group chat</button>
@@ -958,6 +1021,11 @@
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarGroupChatLiveBtn" title="Open the standalone group chat live view" aria-label="Group chat live view"><span aria-hidden="true">&#9654;</span></button>
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarManageGroupChatsBtn" title="Manage existing group chats - pause / unpause orchestration" aria-label="Manage group chats">&#8801;</button>
       </div>
+      <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
+    </div>
+    <div id="sidebarReadPause" class="sidebar-read-pause" hidden>
+      <span role="status">Updates paused while reading</span>
+      <button type="button" aria-label="Refresh sessions while reading">Refresh</button>
     </div>
     <div id="convSearchStatus" class="conv-search-status" data-role="conv-search-status" hidden aria-live="polite">SEARCHING...</div>
     <div id="gcManageModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="gcManageTitle" hidden>
@@ -1016,9 +1084,8 @@
     <div class="sidebar-global-actions" id="sidebarGlobalActions" data-role="global-actions"></div>
 
     <!-- Bottom-mounted settings strip, Claude-Desktop-style -->
-    <details class="session-usage-drawer">
-      <summary>Usage &amp; diagnostics</summary>
-      <div id="headroomBars" class="headroom-bars" role="group" aria-label="Plan usage left" hidden></div>
+    <details class="session-usage-drawer" data-debug-hide>
+      <summary>Diagnostics</summary>
     </details>
     <div class="sidebar-footer">
       <!-- Active group-chat coordinations pill. Lives bottom-left so it's
@@ -1045,6 +1112,7 @@
   <div class="sidebar-resizer" id="sidebarResizer" title="Drag to resize"></div>
   <button type="button" id="convListRestoreBtn" class="conv-list-restore" title="Show conversation list" aria-label="Show conversation list">&raquo;</button>
   <div class="main">
+    <div id="localCiMobileReader" data-local-ci-host class="local-ci-progress local-ci-mobile" aria-label="CI runs and Vercel deployment progress" hidden></div>
     <!-- Star-on-GitHub nudge. Shown by app.js only once the dashboard has
          been opened on three distinct days. "Star" and "Don't ask
          again" hide it forever; "Maybe later" snoozes it for 14 days.
@@ -1280,6 +1348,7 @@
                  by the popout's dedicated poll (_popoutProcPills), which has no
                  rail; empty spans are display:none. -->
             <span class="conv-pane-proc ccc-breadcrumb-proc" data-role="pane-proc"></span>
+            <button type="button" class="conv-pane-ticket" data-role="pane-ticket" hidden></button>
             <!-- CCC-213: the short session id rides after the name only
                  while both fit; the wrapper wraps it onto a clipped 2nd line. -->
             <span class="conv-pane-title-wrap">
@@ -1392,7 +1461,22 @@
           <span class="conv-presentation-zero-cost" data-role="presentation-cost" title="Present is local; Mode 3 asks the working agent to author slides">0 extra tokens</span>
         </div>
         <div class="conversations-view" id="conversationsView">
-          <div class="empty-state" style="height:auto;padding:40px;">Pick a session on the left, or press New session to start one</div>
+          <section class="ccc-start-view" id="cccStartView" aria-labelledby="cccStartTitle">
+            <h1 id="cccStartTitle">What would you like to set up?</h1>
+            <p class="ccc-start-intro">Choose where to start. You can come back to the other options later.</p>
+            <div class="iflow-starter">
+              <span class="iflow-starter-text"><strong>Work with agents on your machine</strong><span>See all your sessions in one place. Connect an engine if you haven’t set one up yet.</span></span>
+              <button type="button" class="iflow-starter-btn" data-start-action="agents">Open All</button>
+            </div>
+            <div class="iflow-starter" id="iflowStarter">
+              <span class="iflow-starter-text"><strong>Auto-fix issues from production</strong><span>Your product opens a GitHub issue. An agent fixes it and closes it.</span></span>
+              <button type="button" class="iflow-starter-btn" data-issue-flow-open>Set it up</button>
+            </div>
+            <div class="iflow-starter">
+              <span class="iflow-starter-text"><strong>Use CCC from your phone</strong><span>Set up private access to this machine so you can check in while you’re away.</span></span>
+              <button type="button" class="iflow-starter-btn" data-start-action="phone">Set up access</button>
+            </div>
+          </section>
         </div>
         <!-- CCC-1033: last-write timestamp for the open conversation, centered
              below the transcript. Populated + ticked by _updateLastWrittenLine()
@@ -1407,14 +1491,8 @@
         <div class="simple-usage-line" id="simpleUsageLine" role="status" aria-live="polite"></div>
         <div class="conv-input-context" id="convInputContext" data-role="input-context">
           <span class="wp-row" data-workspace></span>
-          <span id="codexAccountRow" class="codex-account-row" hidden>
-            <label for="codexAccountSelect">Account</label>
-            <select id="codexAccountSelect" aria-label="Codex account for new session" title="This account stays attached to the new session and its replies">
-              <option value="__current__">Codex (Primary) · current account</option>
-            </select>
-            <a href="/view/allowances" target="_blank" rel="noopener">Allowances</a>
-          </span>
           <span id="codexSessionAccount" class="codex-session-account" hidden></span>
+          <span id="antigravitySessionAccount" class="codex-session-account" hidden></span>
           <span id="newSessionObjectContext" class="new-session-object-context" aria-label="Object for new session"></span>
           <span id="spawnCwdQuickChips" class="spawn-cwd-quick-chips" aria-label="Recent folder shortcuts"></span>
           <!-- New-session-only cwd picker. Visibility controlled by
@@ -1754,11 +1832,27 @@
           <section class="ns-advisor" id="nsComposerAdvisor" aria-label="Session thinking" hidden></section>
           <details class="ns-model-overrides" id="nsModelOverrides">
             <summary><span id="nsSelectedModel" aria-live="polite"></span><span class="ns-model-change">Change</span></summary>
-            <!-- CCC-255: while open, the composer's engine/model/effort selects move here, above the ranked chips. -->
-            <div class="ns-model-override-selects" id="nsModelOverrideSelects"></div>
             <div class="conv-model-picker-inner">
               <span class="conv-model-picker-label">Model</span>
               <div class="conv-model-picker-chips" id="nsModelPickerPills"></div>
+            </div>
+            <!-- Detailed engine/model/effort choices follow the ranked shortcuts. -->
+            <div class="ns-model-override-selects" id="nsModelOverrideSelects"></div>
+            <div class="ns-model-account-options">
+                <span id="codexAccountRow" class="codex-account-row" hidden>
+                  <label for="codexAccountSelect">Codex account</label>
+                  <select id="codexAccountSelect" aria-label="Codex account for new session" title="This account stays attached to the new session and its replies">
+                    <option value="__current__">Primary</option>
+                  </select>
+                  <a href="/view/allowances" target="_blank" rel="noopener">Allowances</a>
+                </span>
+                <span id="antigravityAccountRow" class="codex-account-row" hidden>
+                  <label for="antigravityAccountSelect">Antigravity account</label>
+                  <select id="antigravityAccountSelect" aria-label="Antigravity account for new session" title="This account stays attached to the new session and its replies">
+                    <option value="primary">Antigravity (Primary) · Google Cloud</option>
+                    <option value="secondary">Antigravity (Secondary) · Google OAuth</option>
+                  </select>
+                </span>
             </div>
           </details>
         </div>
@@ -1793,6 +1887,8 @@
               </button>
               <div class="conv-actions-menu" id="convActionsMenu" role="menu" aria-label="More actions" style="display:none;">
                 <button type="button" class="conv-actions-item" data-act="esc" role="menuitem" hidden>Esc - stop the current reply</button>
+                <button type="button" class="conv-actions-item" data-act="compact" role="menuitem" hidden>Compact conversation</button>
+                <button type="button" class="conv-actions-item" data-act="steer" role="menuitem" hidden>Steer the running turn</button>
                 <button type="button" class="conv-actions-item" data-act="attach" role="menuitem">Attach file or photo</button>
                 <button type="button" class="conv-actions-item" data-act="continue" role="menuitem">Continue in new session</button>
               </div>
@@ -1956,9 +2052,7 @@
             </div>
           </div>
         </div>
-        <!-- Footer hint row beneath the input card — tty label on the left,
-             keyboard-shortcut hint on the right. Kept out of the input row
-             itself so the row stays uncluttered. -->
+        <!-- Optional process status beneath the input card. -->
         <div class="conv-input-hint" id="convInputHint">
           <!-- Codex app-server state (managed / CCC / exec). Mirrors the top
                breadcrumb proc pill so the indicator stays visible on the
@@ -1968,7 +2062,6 @@
             <span class="dot"></span>
             <span class="codex-appsrv-label" id="convCodexAppSrvLabel">exec</span>
           </span>
-          <span class="conv-input-kbd"><kbd>⏎</kbd> send &nbsp;·&nbsp; <kbd>⇧⏎</kbd> newline</span>
         </div>
       </div>
     </div>
@@ -2034,7 +2127,7 @@
         </button>
       </div>
       <div class="conv-panel-view" id="convPanelView">
-        <div class="empty-state">Select a session from the board</div>
+        <div class="empty-state">Select a session from the list</div>
       </div>
       <div class="conv-panel-input" id="convPanelInput">
         <div class="cpi-wrap">
@@ -2300,6 +2393,7 @@
 
       <!-- Tab Content: Health -->
       <div id="sysTabContentHealth" style="display: none;">
+        <button type="button" class="settings-action-btn" id="sysHealthRefreshBtn">Refresh</button>
         <div class="sh-body" id="sysHealthBody" style="padding: 0; display: flex; flex-direction: column; gap: 16px;">
           <div style="opacity:.6">Loading…</div>
         </div>
@@ -2367,7 +2461,7 @@
     <div class="upd-backdrop" id="onboardingBackdrop"></div>
     <div class="onb-dialog">
       <button type="button" class="whats-new-close" id="onboardingCloseBtn" title="Skip onboarding" aria-label="Skip onboarding">&times;</button>
-      
+
       <div class="onb-steps-container">
         <!-- Step 1: Welcome -->
         <div class="onb-step onb-step-active" id="onbStepWelcome">
@@ -2375,7 +2469,7 @@
           <div class="onb-welcome-icon">🚀</div>
           <h2 class="onb-title" id="onboardingTitle">Welcome to Claude Command Center</h2>
           <p class="onb-desc">
-            A unified agentic workflow cockpit. CCC connects to the terminal agents you already use, providing a high-performance visual cockpit for running tasks, viewing logs, managing subagents, and deploying code.
+            CCC puts coding agents on call for your product. It connects to the terminal agents you already use, messages you when one needs a real decision, and shows every session and transcript when you want detail.
           </p>
           <div class="onb-features-grid">
             <div class="onb-feature-card">
@@ -2388,8 +2482,8 @@
             <div class="onb-feature-card">
               <span class="onb-feat-icon">🎯</span>
               <div>
-                <h4>First-Class Dashboard</h4>
-                <p>Track active commands, stream logs, and manage agent focus states in real time.</p>
+                <h4>The Session View</h4>
+                <p>See every agent, what it is doing and its transcript, whenever you want detail.</p>
               </div>
             </div>
           </div>
@@ -2401,11 +2495,11 @@
           <p class="onb-desc">
             Command Center runs sessions by driving your local CLI agents. Let's see which ones you have installed and signed in.
           </p>
-          
+
           <div class="onb-cli-list" id="onbCliList">
             <div class="onb-cli-loading">Scanning local environment...</div>
           </div>
-          
+
           <div class="onb-cli-footer-note">
             💡 <em>Need to sign up or install? Use the setup links or Log in button above, then click "Re-detect status".</em>
           </div>
@@ -2418,7 +2512,7 @@
           <p class="onb-desc">
             Ready to test? Select a CLI engine and a starter prompt to kick off a headless session in this workspace!
           </p>
-          
+
           <div class="onb-form-group">
             <label for="onbEngineSelect">Select Engine</label>
             <select id="onbEngineSelect" class="onb-select">
@@ -2428,7 +2522,7 @@
               ⚠️ None of the engines are currently logged in. Please install and login to your chosen CLI to run sessions.
             </div>
           </div>
-          
+
           <div class="onb-form-group" style="margin-top: 10px;">
             <label>Choose a Starter Prompt</label>
             <div class="onb-prompts-grid" id="onbPromptsGrid">
@@ -2701,6 +2795,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="12" cy="19" r="2.3"/><path d="M8 6.6h8M9.3 8.3 11 16.7M14.7 8.3 13 16.7"/></svg>
             <span>Fleet &amp; Network</span>
           </button>
+          <button type="button" class="settings-rail-item" id="settingsRailTab-ci-runners" data-section-target="ci-runners" role="tab" aria-selected="false" aria-controls="settingsSection-ci-runners"><span>CI runners</span></button>
           <button type="button" class="settings-rail-item" id="settingsRailTab-tools" data-section-target="tools" role="tab" aria-selected="false" aria-controls="settingsSection-tools">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="7" cy="18" r="2"/></svg>
             <span>Tools</span>
@@ -2797,22 +2892,6 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="tts speaker voice speech cache debug highlight ready">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Speaker cache debug</div>
-                <div class="settings-row-desc">Show colored lines beside conversation rows for this browser’s audio cache:
-                  <span class="tts-cache-debug-sent">amber = sent to TTS</span>,
-                  <span class="tts-cache-debug-ready">green = audio ready</span>, purple = cancelled before sending.
-                  Expand the TTS queue to see browser waiting positions.
-                  Requests already sent finish and stay cached. Markers disappear when clips are evicted or fail. Mixed states appear side by side on the same row.
-                  Prepared audio may still exist in the server’s disk cache after the browser releases it.</div>
-              </div>
-              <div class="settings-row-control">
-                <button type="button" class="settings-toggle" id="settingsTtsCacheDebugToggle" role="switch" aria-checked="false" aria-label="Speaker cache debug">
-                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
-                </button>
-              </div>
-            </div>
 
             <div class="settings-row" data-keywords="debug diagnostics activity stats traffic fleet pulse interrupt">
               <div class="settings-row-main">
@@ -2870,25 +2949,32 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="voice speak tts read aloud deepgram kokoro">
+
+            <div class="settings-row" data-keywords="voice speak tts read aloud phonon browser english">
               <div class="settings-row-main">
-                <div class="settings-row-label">Default Speak voice</div>
-                <div class="settings-row-desc">Voice for reading replies aloud. Each session can override it from the right rail. A $ marks a voice that costs money.</div>
+                <div class="settings-row-label">Browser voice</div>
+                <div class="settings-row-desc">Phonon reads English aloud on this device by default. Downloads about 65 MB once. Uses your current voice while loading or if playback fails.</div>
+                <div class="settings-row-desc" id="settingsBrowserVoiceStatus" role="status">Preparing browser voice…</div>
               </div>
               <div class="settings-row-control">
-                <select id="settingsTtsVoiceDefault" class="bug-input" style="width:auto;" aria-label="Default Speak voice"></select>
+                <button type="button" class="settings-toggle" id="settingsBrowserVoiceToggle" role="switch" aria-checked="true" aria-label="Browser voice">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="voice speak offline kokoro install repair">
+            <div class="settings-row" data-keywords="tts speaker voice speech off disable stop">
               <div class="settings-row-main">
-                <div class="settings-row-label">Better offline voice</div>
-                <div class="settings-row-desc" id="localSpeechStatus" role="status" aria-live="polite">Optional download (~330 MB). Output availability has not been checked.</div>
+                <div class="settings-row-label">Text-to-speech</div>
+                <div class="settings-row-desc">Enable read-aloud in this browser. Turn off to stop playback and release the browser voice.</div>
               </div>
               <div class="settings-row-control">
-                <button type="button" id="localSpeechInstall" class="bug-input">Install better offline voice (~330 MB)</button>
+                <button type="button" class="settings-toggle is-on" id="settingsTtsEnabledToggle" role="switch" aria-checked="true" aria-label="Text-to-speech">
+                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
+                </button>
               </div>
             </div>
+
 
             <div class="settings-row" data-keywords="github issues show hide gh view conversation list">
               <div class="settings-row-main">
@@ -3018,7 +3104,7 @@
 
             <div class="settings-row" data-keywords="browser system permission alerts banner allow enable">
               <div class="settings-row-main">
-                <div class="settings-row-label">Browser notifications</div>
+                <div class="settings-row-label">Desktop alerts</div>
                 <div class="settings-row-desc">Show alerts even when this tab is in the background. <span id="notifyBrowserPermStatus" class="settings-row-desc">Checking…</span></div>
               </div>
               <div class="settings-row-control">
@@ -3135,6 +3221,16 @@
                     </div>
                   </div>
 
+                  <div class="settings-row" id="spawnDefaultsAntigravityAccountField" hidden data-keywords="antigravity account primary secondary cloud oauth session">
+                    <div class="settings-row-main">
+                      <label class="settings-row-label" for="spawnDefaultsAntigravityAccount">Antigravity account</label>
+                      <div class="settings-row-desc">Stays attached to the session and its replies.</div>
+                    </div>
+                    <div class="settings-row-control"><select id="spawnDefaultsAntigravityAccount" class="bug-input">
+                      <option value="primary">Primary · Google Cloud</option>
+                      <option value="secondary">Secondary · Google OAuth</option>
+                    </select></div>
+                  </div>
                   <div class="settings-row" data-keywords="spawn defaults model new session">
                     <div class="settings-row-main">
                       <div class="settings-row-label">Model</div>
@@ -3199,6 +3295,7 @@
                         <option value="">WatchTower default</option>
                         <option value="claude">Claude</option>
                         <option value="codex">Codex</option>
+                        <option value="antigravity">Antigravity</option>
                         <option value="kimi">Kimi</option>
                         <option value="devin">Devin</option>
                         <option value="grok">Grok</option>
@@ -3206,6 +3303,16 @@
                     </div>
                   </div>
 
+                  <div class="settings-row" id="spawnDefaultsWorkerAntigravityAccountField" hidden data-keywords="antigravity account primary secondary cloud oauth worker">
+                    <div class="settings-row-main">
+                      <label class="settings-row-label" for="spawnDefaultsWorkerAntigravityAccount">Antigravity account</label>
+                      <div class="settings-row-desc">Used for new Antigravity queue workers. Running workers keep their account.</div>
+                    </div>
+                    <div class="settings-row-control"><select id="spawnDefaultsWorkerAntigravityAccount" class="bug-input">
+                      <option value="primary">Primary · Google Cloud</option>
+                      <option value="secondary">Secondary · Google OAuth</option>
+                    </select></div>
+                  </div>
                   <div class="settings-row" id="spawnDefaultsWorkerModelField" data-keywords="worker model watchtower spawn defaults">
                     <div class="settings-row-main">
                       <div class="settings-row-label">Model</div>
@@ -3284,7 +3391,7 @@
                 <div class="settings-row-label" id="vaultFormTitle">Add a secret</div>
                 <div class="settings-row-desc" id="vaultFormHint">Values are write-only: once saved, CCC shows only that a value is saved and when, never the value.</div>
                 <div class="vault-form">
-                  <input type="text" id="vaultNameInput" class="settings-text-input" placeholder="Name, e.g. stripe-live" autocomplete="off" spellcheck="false" aria-label="Name">
+                  <input type="text" id="vaultNameInput" class="settings-text-input" placeholder="Name" autocomplete="off" spellcheck="false" aria-label="Name">
                   <select id="vaultKindSelect" class="settings-select" aria-label="Kind">
                     <option value="api_key">API key</option>
                     <option value="token">Token</option>
@@ -3384,7 +3491,7 @@
                 <div class="settings-row-desc">Open this dashboard on your phone over Tailscale: one-click setup, QR code, and a round-trip test.</div>
               </div>
               <div class="settings-row-control">
-                <button type="button" class="settings-action-btn" id="phoneAccessBtn">Set up…</button>
+                <div id="phoneAccessSetup"></div>
               </div>
             </div>
 
@@ -3547,6 +3654,25 @@
                 <button type="button" class="settings-action-btn" id="watchtowerServiceActionBtn" disabled>Start</button>
               </div>
             </div>
+          </section>
+
+          <section class="settings-section" id="settingsSection-ci-runners" data-section-id="ci-runners" role="tabpanel" aria-labelledby="settingsRailTab-ci-runners">
+            <h2>CI runners</h2>
+            <div class="settings-row" data-keywords="github actions ci runners self hosted setup repository configure install progress agent session">
+              <div class="settings-row-main">
+                <div class="settings-row-label">GitHub Actions runner</div>
+                <p class="settings-row-desc">Your default new-session agent installs and connects a runner for the selected project.</p>
+                <div id="ciRunnerLaunchStatus" role="status" aria-live="polite"></div>
+              </div>
+              <div class="settings-row-control"><button id="ciRunnerStart" class="settings-action-btn" type="button">Set up a runner</button></div>
+            </div>
+            <details class="ci-runner-diagnostics">
+              <summary>Runner status</summary>
+              <div class="settings-row" data-keywords="github ci runner check diagnostics installed authenticated idle listening status">
+                <div class="settings-row-main"><div id="ciRunnerSetupStatus" role="status" aria-live="polite">Check GitHub access and runners on this machine.</div></div>
+                <div class="settings-row-control"><button type="button" id="ciRunnerCheck" class="settings-action-btn">Refresh status</button></div>
+              </div>
+            </details>
           </section>
 
           <section class="settings-section" id="settingsSection-help" data-section-id="help" role="tabpanel" aria-labelledby="settingsRailTab-help">
@@ -3815,8 +3941,7 @@
         <div id="carModeDegradeNotice" class="car-mode-degrade">
           <strong>If a key is missing</strong> - Car Mode degrades instead of breaking:
           <ul style="margin:6px 0 0 18px;padding:0;">
-            <li>Local voice not installed → run <code>scripts/install_local_speech.sh</code>
-              once. Browser dictation and read-aloud have separate requirements; their availability is not tested here.</li>
+            <li>Browser dictation and read-aloud have separate requirements; their availability is not tested here.</li>
             <li>No Anthropic key → Car Mode can't start; it tells you what's needed
               instead of erroring.</li>
           </ul>
@@ -3914,8 +4039,14 @@
         <button type="button" id="voiceMuteBtn" class="voice-panel-btn" title="Mute/unmute the voice's audio" aria-label="Mute" aria-pressed="false">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5Z"></path><path d="M15.5 8.5a5 5 0 0 1 0 7"></path></svg>
         </button>
+        <button type="button" id="voiceMicBtn" class="voice-panel-btn" title="Mute/unmute your microphone" aria-label="Mute microphone" aria-pressed="false">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v3"></path></svg>
+        </button>
         <button type="button" id="voicePanelStopBtn" class="voice-panel-btn voice-panel-stop" title="End the voice session" aria-label="Stop voice">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"></rect></svg>
+        </button>
+        <button type="button" id="voicePanelCollapseBtn" class="voice-panel-btn" title="Collapse to a small bar" aria-label="Collapse voice panel" aria-expanded="true">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
         </button>
         <button type="button" id="voicePanelHideBtn" class="voice-panel-btn" title="Hide panel (session keeps running)" aria-label="Hide voice panel">&times;</button>
       </span>
@@ -3924,6 +4055,10 @@
     <div id="voiceActions" class="voice-actions"></div>
     <div id="voiceTranscript" class="voice-transcript" aria-live="polite"></div>
     <div class="voice-panel-foot">
+      <form id="voiceTextForm" class="voice-text-form" hidden>
+        <input type="text" id="voiceTextInput" class="bug-input" maxlength="4000" autocomplete="off" placeholder="Type instead" aria-label="Type a message">
+        <button type="submit" class="upd-btn" aria-label="Send typed message">Send</button>
+      </form>
       <button type="button" id="voiceTalkBtn" class="upd-btn voice-call-btn" aria-label="Call voice agent">
         <svg class="voice-call-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.96.36 1.9.69 2.79a2 2 0 0 1-.45 2.11L8.09 9.89a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.89.33 1.83.57 2.79.69A2 2 0 0 1 22 16.92Z"></path></svg>
         <span id="voiceTalkLabel">CALL</span>
@@ -4116,6 +4251,7 @@
 <script src="static/q2-worker-idle.js"></script>
 <script src="static/wt-log-bursts.js"></script>
 <script src="static/ticket-prose.js"></script>
+<script src="static/block-params.js"></script>
 <script src="static/fx.js"></script>
 <script src="static/free-router.js"></script>
 <!-- Moment Zero must load before app.js so window.cccOnboarding.claimFirstRun
@@ -4125,7 +4261,7 @@
 <script src="static/free-runtime.js"></script>
 <script src="static/notify.js"></script>
 <script src="static/router-detected.js" defer></script>
-<script src="static/local-speech.js"></script>
+<script src="static/browser-voice.js"></script>
 <script src="static/settings-actions.js"></script>
 <script src="static/settings-context.js"></script>
 <script src="static/settings-launch-preview.js"></script>
@@ -4146,7 +4282,33 @@
 <script src="static/settings-task-search.js"></script>
 <link rel="stylesheet" href="static/session-recaps.css">
 <script src="static/session-recaps.js"></script>
+<script src="static/queue-ticket-submit.js"></script>
+<script src="static/conversation-details.js"></script>
+<script src="static/conversation-issues.js"></script>
+<script src="static/conversation-state.js"></script>
+<script src="static/conversation-text.js"></script>
+<script src="static/conversation-selection.js"></script>
+<script src="static/conversation-events.js"></script>
+<script src="static/conversation-composer.js"></script>
+<script src="static/conversation-transport.js"></script>
+<script src="static/conversation-content.js"></script>
+<script src="static/conversation-panes.js"></script>
+<script src="static/conversation-input.js"></script>
+<script src="static/conversation-core.js"></script>
+<script src="static/conversation-defaults.js"></script>
+<script src="static/conversation-preferences.js"></script>
+<script src="static/conversation-bootstrap.js"></script>
+<script src="static/conversation-annotations.js"></script>
+<script src="static/conversation-chrome.js"></script>
+<script src="static/conversation-controls.js"></script>
+<script src="static/conversation-interactions.js"></script>
+<script src="static/conversation-services.js"></script>
+<script src="static/conversation-views.js"></script>
+<script src="static/conversation-host.js"></script>
 <script src="static/app.js"></script>
+<script src="static/worker-activity.js" defer></script>
+<script src="static/mobile-ticket-record.js"></script>
+<script src="static/settings-ci-runners.js"></script>
 <script src="static/settings-preferences.js"></script>
 <script src="static/free-settings.js" defer></script>
 <script src="static/leftover.js" defer></script>
@@ -4157,6 +4319,7 @@
 <script src="static/jobs-tab.js"></script>
 <script src="static/decision-tab.js"></script>
 <script src="static/first-task.js" defer></script>
+<script src="static/issue-flow.js" defer></script>
 <script src="static/star-ask.js"></script>
 <script src="static/question-tags.js" defer></script>
 
@@ -4938,9 +5101,11 @@
         .then((rs) => rs.forEach((r) => r.unregister()))
         .catch(() => {});
     } else {
-      window.addEventListener('load', () => {
+      const registerServiceWorker = () => {
         navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
-      });
+      };
+      if (document.readyState === 'complete') registerServiceWorker();
+      else window.addEventListener('load', registerServiceWorker, { once: true });
     }
   }
 </script>
@@ -5310,6 +5475,8 @@
   </button>
 </div>
 <script src="static/credential-broker.js" defer></script>
+<script src="static/oncall.js" defer></script>
+<script src="static/oncall-home.js" defer></script>
 <script src="static/share-run.js" defer></script>
 </body>
 </html>

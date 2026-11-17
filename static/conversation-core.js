@@ -6082,7 +6082,6 @@
 
   function setTtsButtonsState(active, failed, paneId) {
     sharedState._ttsActive = !!active;
-    if (!active) _ttsPriorityStop();
     sharedState._ttsActivePaneId = active ? (paneId || sharedState._ttsActivePaneId || (0, sharedState.activePaneId)()) : null;
     ttsButtons().forEach(btn => {
       const pressed = !!active && ttsButtonPaneId(btn) === sharedState._ttsActivePaneId;
@@ -6419,94 +6418,25 @@
   }
 
   function _ttsEnginePause() {
-    _ttsPriorityStop();
     sharedState._ttsBrowserPlayback?.pause();
-    if (sharedState._ttsNeural && sharedState._ttsNeural.audio) { try { sharedState._ttsNeural.audio.pause(); } catch (_) {} }
-    if (window.speechSynthesis) window.speechSynthesis.pause();
+    window.speechSynthesis?.pause();
   }
 
   function _ttsEngineResume() {
     sharedState._ttsBrowserPlayback?.resume();
-    if (sharedState._ttsNeural && sharedState._ttsNeural.audio) {
-      const player = sharedState._ttsNeural;
-      try {
-        player.audio.play().catch(error => {
-          if (sharedState._ttsNeural !== player) return;
-          _ttsLog('ERROR', 'resume rejected: ' + (error?.name || 'unknown'));
-          sharedState._ttsPaused = true;
-          if (sharedState._ttsDirectBtn) _setTtsDirectBtnState(sharedState._ttsDirectBtn, 'paused');
-          ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === sharedState._ttsActivePaneId) btn.classList.add('paused'); });
-        });
-      } catch (_) {}
-    }
-    if (window.speechSynthesis) window.speechSynthesis.resume();
+    window.speechSynthesis?.resume();
   }
 
   function _ttsEngineCancel() {
-    _ttsPriorityStop();
     _ttsSetStreaming(false);
-    sharedState._ttsNeuralToken += 1;
+    sharedState._ttsPlaybackToken += 1;
     sharedState._ttsBrowserPlayback?.cancel();
     sharedState._ttsBrowserPlayback = null;
-    if (sharedState._ttsNeural && sharedState._ttsNeural.audio) {
-      sharedState._ttsNeural.stopHighlight?.();
-      try { sharedState._ttsNeural.audio.pause(); URL.revokeObjectURL(sharedState._ttsNeural.audio.src); } catch (_) {}
-      // A continuous read also stops its server stream and download.
-      try { sharedState._ttsNeural.cancel?.(); } catch (_) {}
-    }
-    sharedState._ttsNeural = null;
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-  }
-
-  function _ttsPrioritySend(playing) {
-    try {
-      fetch('/api/free-runtime/tts-playback', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client: sharedState._ttsPriorityClient, seq: ++sharedState._ttsPrioritySeq, playing }),
-        keepalive: true, cccRetryHandled: true, cccPriority: 'user',
-      }).catch(() => {});
-    } catch (_) {}
-  }
-
-  function _ttsPriorityStop() {
-    if (!sharedState._ttsPriorityStarted) return;
-    sharedState._ttsPriorityStarted = false;
-    clearInterval(sharedState._ttsPriorityTimer);
-    sharedState._ttsPriorityTimer = null;
-    _ttsPrioritySend(false);
-  }
-
-  function _ttsPriorityPlaying() {
-    if (sharedState._ttsPriorityStarted) return;
-    sharedState._ttsPriorityStarted = true;
-    _ttsPrioritySend(true);
-    sharedState._ttsPriorityTimer = setInterval(() => {
-      if (!sharedState._ttsActive || sharedState._ttsPaused) { _ttsPriorityStop(); return; }
-      _ttsPrioritySend(true);
-    }, 5000);
+    window.speechSynthesis?.cancel();
   }
 
   function _ttsLog(verb, detail) {
-    const line = new Date().toISOString().slice(11, 23) + ' ' + verb + ' ' + detail;
-    (window.__cccTtsLog = window.__cccTtsLog || []).push(line);
-    if (window.__cccTtsLog.length > 40) window.__cccTtsLog.shift();
-    try { console.info('[tts] ' + line); } catch (_) {}
-    if (verb === 'SKIP') return;
-    try {
-      fetch('/api/free-runtime/tts-log', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ verb, detail }), keepalive: true,
-      }).catch(() => {});
-    } catch (_) {}
-  }
-
-  function _ttsCool(ms, status) {
-    sharedState._ttsNeuralCooldownUntil = Date.now() + ms;
-    sharedState._ttsNeuralCooldownWhy = 'HTTP ' + status;
-    _ttsLog('COOLDOWN', Math.round(ms / 1000) + 's after ' + sharedState._ttsNeuralCooldownWhy);
-    // Re-arm once the cooldown ends: nothing else re-triggers the prefetch, so
-    // an open, idle session would otherwise never fill its speaker cache.
-    setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, ms + 500);
+    try { console.info('[tts] ' + verb + ' ' + detail); } catch (_) {}
   }
 
   function _ttsIsHebrew(text) {
@@ -6516,1125 +6446,44 @@
     return he > 0 && he >= other;
   }
 
-  function _ttsDebugJob(text, status, owner) {
-    const job = { text, status, owner };
-    sharedState._ttsDebugJobs.push(job);
-    while (sharedState._ttsDebugJobs.length > 120) {
-      const i = sharedState._ttsDebugJobs.findIndex(j => !['queued', 'processing'].includes(j.status));
-      if (i < 0) break;
-      sharedState._ttsDebugJobs.splice(i, 1);
-    }
-    _ttsScheduleCacheDebug();
-    return job;
-  }
-
-  function _ttsSelectPrefetchTarget(owner, text) {
-    if (sharedState._ttsPrefetchTargets.get(owner) === text) return;
-    sharedState._ttsPrefetchTargets.set(owner, text);
-    sharedState._ttsChainTokens[owner || ''] = (sharedState._ttsChainTokens[owner || ''] || 0) + 1;
-    for (const job of sharedState._ttsDebugJobs) {
-      if (job.owner === owner && job.status === 'queued') job.status = 'cancelled';
-    }
-    _ttsScheduleCacheDebug();
-  }
-
-  function _ttsClampDebugQueue(panel, left, top) {
-    if (!panel || !panel.isConnected) return;
-    let pos = left == null ? null : { left, top };
-    if (!pos) { try { pos = JSON.parse(localStorage.getItem(sharedState.TTS_QUEUE_POS_KEY) || 'null'); } catch (_) {} }
-    if (!pos || !Number.isFinite(pos.left) || !Number.isFinite(pos.top)) return;
-    const r = panel.getBoundingClientRect();
-    const head = panel.querySelector('summary')?.getBoundingClientRect().height || 32;
-    const x = Math.max(0, Math.min(pos.left, innerWidth - Math.min(r.width || 120, innerWidth)));
-    const y = Math.max(0, Math.min(pos.top, innerHeight - head));
-    panel.style.left = x + 'px';
-    panel.style.top = y + 'px';
-    return { left: x, top: y };
-  }
-
-  function _ttsMakeDebugQueueDraggable(panel, handle) {
-    let drag = null;
-    let suppressClick = false;
-    let holdTimer = null;
-    const clearHold = () => { clearTimeout(holdTimer); holdTimer = null; };
-    const offerHide = () => {
-      clearHold();
-      if (drag) drag.held = true;
-      suppressClick = true;
-      if (window.confirm('Hide the TTS debug panel and cache markers? You can show them again in Settings.')) {
-        _ttsSetCacheDebug(false);
-      }
-    };
-    handle.title = 'Drag to move; hold to hide';
-    handle.addEventListener('contextmenu', ev => {
-      ev.preventDefault();
-      if (!drag?.held) offerHide();
-    });
-    handle.addEventListener('keydown', ev => {
-      if (ev.key === 'ContextMenu' || (ev.shiftKey && ev.key === 'F10')) {
-        ev.preventDefault();
-        offerHide();
-      }
-    });
-    // Move/up listen on window while a drag is live: a fast pointer outruns
-    // the header, and pointer capture is not reliable on every browser.
-    const move = ev => {
-      if (!drag || ev.pointerId !== drag.id || drag.held) return;
-      if (!drag.moved) {
-        if (Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) < 5) return;
-        clearHold();
-        drag.moved = true;
-        panel.classList.add('is-dragging');
-      }
-      ev.preventDefault();
-      drag.pos = _ttsClampDebugQueue(panel, ev.clientX - drag.dx, ev.clientY - drag.dy);
-    };
-    const end = ev => {
-      if (!drag || ev.pointerId !== drag.id) return;
-      clearHold();
-      removeEventListener('pointermove', move);
-      removeEventListener('pointerup', end);
-      removeEventListener('pointercancel', end);
-      if (drag.moved || drag.held) {
-        suppressClick = true;
-        setTimeout(() => { suppressClick = false; }, 0);
-        panel.classList.remove('is-dragging');
-        if (drag.pos) { try { localStorage.setItem(sharedState.TTS_QUEUE_POS_KEY, JSON.stringify(drag.pos)); } catch (_) {} }
-      }
-      drag = null;
-    };
-    handle.addEventListener('pointerdown', ev => {
-      if (ev.button !== 0 || ev.isPrimary === false) return;
-      clearHold();
-      suppressClick = false;
-      const r = panel.getBoundingClientRect();
-      drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, dx: ev.clientX - r.left, dy: ev.clientY - r.top, moved: false, held: false };
-      holdTimer = setTimeout(offerHide, 600);
-      addEventListener('pointermove', move, { passive: false });
-      addEventListener('pointerup', end);
-      addEventListener('pointercancel', end);
-    });
-    addEventListener('blur', () => {
-      if (drag) end({ pointerId: drag.id });
-      clearHold();
-    });
-    // A drag or hold must not also toggle the panel.
-    handle.addEventListener('click', ev => {
-      if (suppressClick) { suppressClick = false; ev.preventDefault(); }
-    });
-    addEventListener('resize', () => _ttsClampDebugQueue(panel));
-  }
-
-  function _ttsRenderDebugQueue() {
-    let panel = document.getElementById('ttsCacheDebugQueue');
-    if (!sharedState._ttsCacheDebug) { panel?.remove(); return; }
-    if (!panel) {
-      panel = document.createElement('details');
-      panel.id = 'ttsCacheDebugQueue';
-      const summary = document.createElement('summary');
-      summary.textContent = 'TTS queue';
-      const positions = document.createElement('div');
-      positions.className = 'tts-queue-positions';
-      const log = document.createElement('div');
-      log.className = 'tts-queue-log';
-      panel.append(summary, positions, log);
-      panel.addEventListener('toggle', () => {
-        if (panel.open) log.scrollTop = log.scrollHeight;
-        else _ttsScheduleCacheDebug();
-        _ttsClampDebugQueue(panel);
-      });
-      _ttsMakeDebugQueueDraggable(panel, summary);
-      document.body.appendChild(panel);
-      _ttsClampDebugQueue(panel);
-    }
-    const waiting = sharedState._ttsDebugJobs.filter(j => j.status === 'queued');
-    const processing = sharedState._ttsDebugJobs.filter(j => j.status === 'processing');
-    const title = 'TTS: ' + processing.length + ' sent · ' + waiting.length + ' waiting';
-    if (panel.firstChild.textContent !== title) panel.firstChild.textContent = title;
-    // Idle and collapsed, the box only covers the header controls; show it
-    // while TTS requests are in flight or once the user has expanded it.
-    panel.hidden = !panel.open && !waiting.length && !processing.length;
-    const positions = panel.querySelector('.tts-queue-positions');
-    const queueText = waiting.length
-      ? 'Browser waiting: ' + waiting.map((_, i) => '#' + (i + 1) + (i === 0 ? ' next' : '')).join(' · ') + '.'
-      : 'No browser requests waiting.';
-    const queueHint = ' Sent requests: engine position unavailable.';
-    if (positions.textContent !== queueText + queueHint) positions.textContent = queueText + queueHint;
-    const recent = new Set(sharedState._ttsDebugJobs.filter(j => !['queued', 'processing'].includes(j.status)).slice(-8));
-    // Keep creation order, so newly queued/sent chunks appear at the bottom.
-    const jobs = sharedState._ttsDebugJobs.filter(j => ['queued', 'processing'].includes(j.status) || recent.has(j));
-    const labels = jobs.map(j => ({ status: j.status, label:
-      (j.status === 'queued' ? '#' + (waiting.indexOf(j) + 1) + ' waiting'
-        : j.status === 'processing' ? 'Sent · engine position unknown'
-        : j.status === 'cancelled' ? 'Cancelled · newer priority (not sent)'
-        : j.status === 'deferred' ? 'Deferred · playback/cooldown' : j.status)
-      + ': ' + j.text.slice(0, 90) }));
-    const signature = JSON.stringify(labels);
-    if (panel._signature === signature) return;
-    panel._signature = signature;
-    const list = panel.lastChild;
-    list.replaceChildren();
-    const legend = document.createElement('p');
-    legend.textContent = 'Amber: sent · Green: ready · Purple: cancelled before sending. Numbers are browser queue positions.';
-    list.appendChild(legend);
-    for (const item of labels) {
-      const row = document.createElement('div');
-      row.dataset.status = item.status;
-      row.textContent = item.label;
-      list.appendChild(row);
-    }
-    list.scrollTop = list.scrollHeight;
-  }
-
-  function _ttsRefreshCacheDebug() {
-    sharedState._ttsCacheDebugFrame = null;
-    _ttsRenderDebugQueue();
-    // Clear paint left by the earlier background-highlighting implementation.
-    for (const name of ['tts-cache-sent', 'tts-cache-ready', 'tts-cache-cancelled']) window.CSS?.highlights?.delete(name);
-    let layer = document.getElementById('ttsCacheDebugLines');
-    if (!sharedState._ttsCacheDebug) { layer?.remove(); sharedState._ttsCacheDebugResizeObserver?.disconnect(); return; }
-    if (!layer) {
-      layer = document.createElement('div');
-      layer.id = 'ttsCacheDebugLines';
-      layer.setAttribute('aria-hidden', 'true');
-      document.body.appendChild(layer);
-    }
-    const marks = [];
-    // Group text exactly as the per-turn reader does, including inline markup
-    // and synthetic paragraph separators. Sanitizing preserves these offsets.
-    const latestJobs = new Map(sharedState._ttsDebugJobs.map(j => [j.text, j]));
-    const clips = new Map(Array.from(latestJobs.values()).filter(j => j.status === 'cancelled').map(j => [j.text, { cancelled: true }]));
-    for (const [text, entry] of sharedState._ttsHeadCache) clips.set(text, entry);
-    if (sharedState._ttsChunkState && sharedState._ttsChunkState.debugCache) {
-      for (const [text, entry] of sharedState._ttsChunkState.debugCache) clips.set(text, entry);
-    }
-    const paintedElements = new Set();
-    document.querySelectorAll('.conv-pane .event, .conv-pane .stream-bubble, .conv-pane .assistant-text, .gc-reader .event, .gc-reader .assistant-text').forEach(el => {
-      if (el.matches('.assistant-text') && el.closest('.event, .stream-bubble')) return;
-      const elements = el.matches('.assistant-text') ? _ttsPlaybackElements(el)
-        : el.matches('.stream-bubble') ? [el.querySelector('.stream-bubble-blocks')].filter(Boolean)
-        : el.matches('.assistant') ? _ttsPlaybackElements(el)
-        : el.matches('.user_text:not(.pending)') ? [el.querySelector('.user-msg')].filter(Boolean) : [];
-      if (!elements.length || paintedElements.has(elements[0])) return;
-      elements.forEach(element => paintedElements.add(element));
-      const view = el.closest('.conversations-view, .gc-reader');
-      if (typeof ResizeObserver !== 'undefined') {
-        sharedState._ttsCacheDebugResizeObserver = sharedState._ttsCacheDebugResizeObserver || new ResizeObserver(_ttsScheduleCacheDebug);
-        sharedState._ttsCacheDebugResizeObserver.observe(view || el);
-      }
-      const viewport = view ? view.getBoundingClientRect() : { top: 0, bottom: innerHeight, left: 0, right: innerWidth };
-      const clip = { top: Math.max(0, viewport.top), bottom: Math.min(innerHeight, viewport.bottom),
-        left: Math.max(0, viewport.left), right: Math.min(innerWidth, viewport.right) };
-      const left = Math.max(clip.left + 1, Math.min(...elements.map(e => e.getBoundingClientRect().left)) - 12);
-      const rows = [];
-      const data = buildTtsDataFromElements(elements);
-      const clean = _sanitizeTtsText(data.text, true);
-      // Range rects ignore overflow clipping: a long pinned ask in the sticky
-      // header (a fixed-height scroll box) reports every hidden line, which
-      // then painted a stray column down the conversation (CCC-203). Clip
-      // each text node to its scrolling/clipping ancestors.
-      const clipFor = new Map();
-      const nodeClip = (node) => {
-        const parent = node.parentElement;
-        if (clipFor.has(parent)) return clipFor.get(parent);
-        let c = { ...clip };
-        for (let a = parent; a && a !== view && a !== document.body; a = a.parentElement) {
-          const cs = getComputedStyle(a);
-          if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
-          const r = a.getBoundingClientRect();
-          c = { top: Math.max(c.top, r.top), bottom: Math.min(c.bottom, r.bottom),
-            left: Math.max(c.left, r.left), right: Math.min(c.right, r.right) };
-        }
-        clipFor.set(parent, c);
-        return c;
-      };
-      for (const [text, entry] of clips) {
-        let from = 0, start;
-        while ((start = clean.indexOf(text, from)) !== -1) {
-          const end = start + text.length;
-          // Measure only spoken text nodes, leaving excluded footers unmarked.
-          for (const m of data.mapping) {
-            const a = Math.max(start, m.start), b = Math.min(end, m.end);
-            if (a >= b) continue;
-            const range = new Range();
-            range.setStart(m.node, m.nodeOffsetStart + a - m.start);
-            range.setEnd(m.node, m.nodeOffsetStart + b - m.start);
-            const state = entry.cancelled ? 'cancelled' : entry.debugReady ? 'ready' : 'sent';
-            const nc = nodeClip(m.node);
-            for (const rect of range.getClientRects()) {
-              if (!rect.width || !rect.height || rect.bottom <= nc.top || rect.top >= nc.bottom
-                  || rect.right <= nc.left || rect.left >= nc.right) continue;
-              const top = Math.max(rect.top, nc.top), bottom = Math.min(rect.bottom, nc.bottom);
-              // Inline markup and chunk boundaries can yield several rects on
-              // one rendered row. Merge them, keeping every state on that row.
-              const row = rows.find(r => Math.min(r.bottom, bottom) - Math.max(r.top, top)
-                >= Math.min(r.bottom - r.top, bottom - top) * 0.5);
-              if (row) {
-                row.top = Math.min(row.top, top); row.bottom = Math.max(row.bottom, bottom);
-                row.states.add(state);
-              } else rows.push({ top, bottom, states: new Set([state]) });
-            }
-          }
-          from = end;
-        }
-      }
-      for (const row of rows) {
-        const states = ['ready', 'sent', 'cancelled'].filter(state => row.states.has(state));
-        states.forEach((state, i) => marks.push({ state, left: left + i * 4,
-          top: row.top + 1, height: Math.max(1, row.bottom - row.top - 2) }));
-      }
-    });
-    const signature = JSON.stringify(marks);
-    if (layer._signature === signature) return;
-    layer._signature = signature;
-    layer.replaceChildren(...marks.map(mark => {
-      const line = document.createElement('i');
-      line.dataset.ttsState = mark.state;
-      line.style.cssText = 'left:' + mark.left + 'px;top:' + mark.top + 'px;height:' + mark.height + 'px';
-      return line;
-    }));
-  }
-
-  function _ttsTextCacheCoverage(clean) {
-    const head = _ttsHeadChunk(clean, 0);
-    if (!head) return { fraction: 0, sentFraction: 0, cancelledFraction: 0, pending: false };
-    const end = head.start + head.text.length;
-    const chunks = [head].concat(_ttsRestChunks(clean.slice(end), end));
-    let ready = 0, sent = 0, cancelled = 0, total = 0, pending = false;
-    const latestJobs = new Map(sharedState._ttsDebugJobs.map(j => [j.text, j]));
-    for (const c of chunks) {
-      total += c.text.length;
-      const entry = sharedState._ttsHeadCache.get(c.text);
-      const active = sharedState._ttsChunkState?.debugCache?.get(c.text);
-      if (entry || active) sent += c.text.length;
-      else if (sharedState._ttsCacheDebug && latestJobs.get(c.text)?.status === 'cancelled') cancelled += c.text.length;
-      if (entry?.debugReady || active?.debugReady) ready += c.text.length;
-      else if (entry || active) pending = true;
-    }
-    return { fraction: total ? ready / total : 0, sentFraction: total ? sent / total : 0, cancelledFraction: total ? cancelled / total : 0, pending };
-  }
-
-  function _ttsRefreshCacheCoverage() {
-    const targets = new Set(document.querySelectorAll('.conv-pane [data-tts-head]'));
-    document.querySelectorAll('.conv-scroll-speak-btn').forEach(f => { if (f._speakTarget) targets.add(f._speakTarget); });
-    if (sharedState._ttsDirectBtn) targets.add(sharedState._ttsDirectBtn);
-    targets.forEach(btn => {
-      const data = _ttsSpeakButtonData(btn);
-      const clean = _sanitizeTtsText(data?.text || '', true);
-      const { fraction, sentFraction, cancelledFraction, pending } = _ttsTextCacheCoverage(clean);
-      if (fraction || pending || cancelledFraction) {
-        btn.dataset.ttsCache = fraction >= 1 ? 'ready' : 'partial';
-        btn.style.setProperty('--tts-cache-f', String(fraction));
-        btn.style.setProperty('--tts-cache-sent-f', String(sentFraction));
-        btn.style.setProperty('--tts-cache-cancelled-f', String(sentFraction + cancelledFraction));
-      } else {
-        delete btn.dataset.ttsCache;
-        btn.style.removeProperty('--tts-cache-f');
-        btn.style.removeProperty('--tts-cache-sent-f');
-        btn.style.removeProperty('--tts-cache-cancelled-f');
-      }
-    });
-    document.querySelectorAll('.conv-scroll-speak-btn').forEach(_syncSpeakFloatCache);
-  }
-
   function _ttsSyncEnabledControls() {
-    const enabled = typeof sharedState._ttsEnabled === 'undefined' ? true : !!sharedState._ttsEnabled;
-    if (typeof document !== 'undefined' && document.documentElement && document.documentElement.classList) {
-      document.documentElement.classList.toggle('ccc-tts-disabled', !enabled);
-    }
-    const diagBtn = typeof document !== 'undefined' && document.getElementById ? document.getElementById('cccPerfTtsToggleBtn') : null;
-    if (diagBtn) {
-      diagBtn.textContent = enabled ? 'Turn off' : 'Turn on';
-      diagBtn.title = enabled
-        ? 'Turn off TTS completely (stops active speech, prepare-ahead, and the local voice process)'
-        : 'Re-enable TTS synthesis';
-    }
-    const settingsBtn = typeof document !== 'undefined' && document.getElementById ? document.getElementById('settingsTtsEnabledToggle') : null;
-    if (settingsBtn) {
-      settingsBtn.setAttribute('aria-checked', String(enabled));
-      if (settingsBtn.classList) settingsBtn.classList.toggle('is-on', enabled);
+    const enabled = sharedState._ttsEnabled !== false;
+    document.documentElement?.classList.toggle('ccc-tts-disabled', !enabled);
+    const button = document.getElementById('settingsTtsEnabledToggle');
+    if (button) {
+      button.setAttribute('aria-checked', String(enabled));
+      button.classList.toggle('is-on', enabled);
     }
   }
 
-  function _ttsSetEnabled(enabled, opts) {
-    const next = !!enabled;
-    const persistServer = !opts || opts.persistServer !== false;
-    const changed = sharedState._ttsEnabled !== next;
-    sharedState._ttsEnabled = next;
-    try { localStorage.setItem('ccc-tts-enabled', next ? '1' : '0'); } catch (_) {}
-    if (!next) {
+  function _ttsSetEnabled(enabled) {
+    sharedState._ttsEnabled = !!enabled;
+    try { localStorage.setItem('ccc-tts-enabled', enabled ? '1' : '0'); } catch (_) {}
+    if (!enabled) {
+      stopTextToSpeech();
       window.cccBrowserVoice?.suspend();
-      for (const ctrl of Array.from(sharedState._ttsInFlightAborts)) {
-        try { ctrl.abort(); } catch (_) {}
-      }
-      sharedState._ttsInFlightAborts.clear();
-      try { if (typeof _ttsCancelOffscreenPrefetch === 'function') _ttsCancelOffscreenPrefetch(); } catch (_) {}
-      for (let i = 0; i < sharedState._ttsDebugJobs.length; i++) {
-        const st = sharedState._ttsDebugJobs[i] && sharedState._ttsDebugJobs[i].status;
-        if (st === 'queued' || st === 'processing') sharedState._ttsDebugJobs[i].status = 'cancelled';
-      }
-      sharedState._ttsServerQueueSnap.at = 0;
-      sharedState._ttsServerQueueSnap.extraInFlight = 0;
-      sharedState._ttsServerQueueSnap.sessionWaiting = 0;
-      sharedState._ttsServerQueueSnap.active = 0;
-      try { if (typeof stopTextToSpeech === 'function') stopTextToSpeech(); } catch (_) {}
     }
     _ttsSyncEnabledControls();
-    if (next) window.cccBrowserVoice?.warm();
-    _ttsUpdateDiagnosticsQueue();
-    if (persistServer && typeof fetch === 'function') {
-      sharedState._ttsTogglePending = true;
-      fetch('/api/free-runtime/tts-enabled', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: next }),
-      })
-        .then(r => (r && r.ok ? r.json() : null))
-        .then(d => {
-          sharedState._ttsTogglePending = false;
-          if (d && d.tts) _ttsUpdateDiagnosticsQueue(d.tts);
-          try { if (typeof window.__cccPollBgRuns === 'function') window.__cccPollBgRuns(); } catch (_) {}
-          if (next) {
-            try { if (typeof scheduleTtsPrefetch === 'function') scheduleTtsPrefetch(); } catch (_) {}
-          }
-        })
-        .catch(() => { sharedState._ttsTogglePending = false; });
-    } else if (next && changed) {
-      try { if (typeof scheduleTtsPrefetch === 'function') scheduleTtsPrefetch(); } catch (_) {}
-    }
-    return next;
-  }
-
-  function _ttsUpdateDiagnosticsQueue(serverTts) {
-    if (serverTts && typeof serverTts === 'object' && typeof serverTts.enabled === 'boolean' && !sharedState._ttsTogglePending) {
-      if (serverTts.enabled !== sharedState._ttsEnabled) {
-        _ttsSetEnabled(serverTts.enabled, { persistServer: false });
-      }
-    }
-    const enabled = typeof sharedState._ttsEnabled === 'undefined' ? true : !!sharedState._ttsEnabled;
-    let browserWaiting = 0, browserSent = 0;
-    if (enabled) {
-      for (let i = 0; i < sharedState._ttsDebugJobs.length; i++) {
-        const st = sharedState._ttsDebugJobs[i] && sharedState._ttsDebugJobs[i].status;
-        if (st === 'queued') browserWaiting++;
-        else if (st === 'processing') browserSent++;
-      }
-    }
-    const now = Date.now();
-    if (serverTts && typeof serverTts === 'object') {
-      const srvInFlight = enabled ? Math.max(0, Number(serverTts.in_flight) || 0) : 0;
-      sharedState._ttsServerQueueSnap.at = now;
-      sharedState._ttsServerQueueSnap.extraInFlight = enabled ? Math.max(0, srvInFlight - browserSent) : 0;
-      sharedState._ttsServerQueueSnap.sessionWaiting = enabled ? Math.max(0, Number(serverTts.session_waiting) || 0) : 0;
-      sharedState._ttsServerQueueSnap.active = enabled ? Math.max(0, Number(serverTts.active) || 0) : 0;
-      sharedState._ttsServerQueueSnap.fg = enabled ? Math.max(0, Number(serverTts.fg) || 0) : 0;
-      sharedState._ttsServerQueueSnap.bg = enabled ? Math.max(0, Number(serverTts.bg) || 0) : 0;
-    }
-    const fresh = enabled && sharedState._ttsServerQueueSnap.at > 0 && (now - sharedState._ttsServerQueueSnap.at) < 60000;
-    const extraInFlight = fresh ? sharedState._ttsServerQueueSnap.extraInFlight : 0;
-    const sessionWaiting = fresh ? sharedState._ttsServerQueueSnap.sessionWaiting : 0;
-    const inFlight = enabled ? browserSent + extraInFlight : 0;
-    const synthesizing = inFlight > 0
-      ? Math.min(inFlight, Math.max(1, fresh && sharedState._ttsServerQueueSnap.active > 1 ? sharedState._ttsServerQueueSnap.active : 1))
-      : 0;
-    const serverWaiting = Math.max(0, inFlight - synthesizing) + sessionWaiting;
-    const waiting = enabled ? browserWaiting + serverWaiting : 0;
-    const queued = enabled ? synthesizing + waiting : 0;
-    _ttsSyncEnabledControls();
-    const el = document.getElementById('cccPerfTtsQueue');
-    if (el) {
-      const textEl = document.getElementById('cccPerfTtsQueueText') || el;
-      const nextText = !enabled
-        ? 'tts: off'
-        : queued > 0
-          ? 'tts queue: ' + queued + ' queued (' + synthesizing + ' active · ' + waiting + ' waiting)'
-          : 'tts queue: 0 queued';
-      if (textEl.textContent !== nextText) textEl.textContent = nextText;
-      el.style.color = !enabled ? 'var(--text-muted, #8b949e)' : queued > 0 ? 'var(--accent, #58a6ff)' : '';
-      el.style.opacity = queued > 0 || !enabled ? '1' : '.85';
-      const nextTitle = !enabled
-        ? 'Text-to-speech is completely disabled on this host (local voice server stopped)'
-        : 'Live TTS synthesis queue · ' + browserSent + ' sent + ' + browserWaiting + ' waiting in this tab'
-          + (extraInFlight || sessionWaiting ? ' · +' + (extraInFlight + sessionWaiting) + ' on server from other tabs/sessions' : '');
-      if (el.title !== nextTitle) el.title = nextTitle;
-    }
-    const summary = document.querySelector('.session-usage-drawer > summary');
-    if (summary) {
-      let badge = document.getElementById('cccDiagTtsSummary');
-      if (!enabled || queued > 0) {
-        if (!badge) {
-          badge = document.createElement('span');
-          badge.id = 'cccDiagTtsSummary';
-          summary.appendChild(badge);
-        }
-        badge.style.cssText = !enabled
-          ? 'color:var(--text-muted,#8b949e);font-weight:600;'
-          : 'color:var(--accent,#58a6ff);font-weight:600;';
-        const badgeText = !enabled ? ' · TTS off' : ' · TTS: ' + queued + ' queued';
-        if (badge.textContent !== badgeText) badge.textContent = badgeText;
-      } else if (badge && badge.textContent !== '') {
-        badge.textContent = '';
-      }
-    }
-    return { enabled, queued, synthesizing, waiting, browserSent, browserWaiting, serverWaiting };
-  }
-
-  function _ttsScheduleCacheDebug() {
-    _ttsUpdateDiagnosticsQueue();
-    if (sharedState._ttsCacheDebugFrame == null) sharedState._ttsCacheDebugFrame = requestAnimationFrame(() => {
-      _ttsRefreshCacheCoverage();
-      _ttsRefreshCacheDebug();
-    });
-  }
-
-  function _ttsWatchCacheEntry(text, entry) {
-    _ttsScheduleCacheDebug();
-    entry.p.then(got => got.done).then(() => {
-      if (sharedState._ttsHeadCache.get(text) !== entry) return;
-      entry.debugReady = true;
-      _ttsScheduleCacheDebug();
-    }).catch(() => { _ttsScheduleCacheDebug(); });
-  }
-
-  function _ttsSetCacheDebug(enabled) {
-    sharedState._ttsCacheDebug = !!enabled;
-    try { localStorage.setItem('ccc-tts-cache-debug', enabled ? '1' : '0'); } catch (_) {}
-    const btn = document.getElementById('settingsTtsCacheDebugToggle');
-    if (btn) {
-      btn.setAttribute('aria-checked', String(sharedState._ttsCacheDebug));
-      btn.classList.toggle('is-on', sharedState._ttsCacheDebug);
-    }
-    if (sharedState._ttsCacheDebugObserver) sharedState._ttsCacheDebugObserver.disconnect();
-    if (sharedState._ttsCacheDebug) {
-      sharedState._ttsCacheDebugObserver = sharedState._ttsCacheDebugObserver || new MutationObserver(_ttsScheduleCacheDebug);
-      sharedState._ttsCacheDebugObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
-    }
-    _ttsRefreshCacheCoverage();
-    _ttsRefreshCacheDebug();
-  }
-
-  function _ttsHeadChunk(text, baseOffset) {
-    return _chunkTtsText(text, sharedState._TTS_HEAD_CHARS, baseOffset)[0] || null;
-  }
-
-  function _ttsRestChunks(rest, offset) {
-    const second = _chunkTtsText(rest, sharedState._TTS_SECOND_CHARS, offset)[0];
-    if (!second) return [];
-    const used = second.start - offset + second.text.length;
-    return [second].concat(_chunkTtsText(rest.slice(used), 400, offset + used));
+    if (enabled) window.cccBrowserVoice?.warm();
+    return !!enabled;
   }
 
   function _ttsSetPlay() {
     const total = (sharedState._ttsBoundUtteranceText || '').length;
     if (!total) return;
-    const st = sharedState._ttsChunkState;
     const play = Math.max(0, Math.min(1, (sharedState._ttsLastCharIndex || 0) / total));
-    const cached = Math.max(play, Math.min(1, ((st && st.cachedTo) || 0) / total));
-    ttsButtons().forEach((btn) => {
-      if (!btn.classList.contains('speaking')) return;
+    ttsButtons().filter(btn => btn.classList.contains('speaking')).forEach(btn => {
       btn.style.setProperty('--tts-play', play.toFixed(3));
-      btn.style.setProperty('--tts-cache-f', cached.toFixed(3));
     });
-    // The floating speaker draws the same two fills around its ring.
-    document.querySelectorAll('.conv-scroll-speak-btn').forEach((f) => {
-      if (sharedState._ttsDirectBtn && f._speakTarget !== sharedState._ttsDirectBtn) return;
-      f.style.setProperty('--tts-play', play.toFixed(3));
-      f.style.setProperty('--tts-cache-f', cached.toFixed(3));
+    document.querySelectorAll('.conv-scroll-speak-btn').forEach(btn => {
+      if (!sharedState._ttsDirectBtn || btn._speakTarget === sharedState._ttsDirectBtn)
+        btn.style.setProperty('--tts-play', play.toFixed(3));
     });
-  }
-
-  function _syncSpeakFloatCache(f) {
-    const t = f._speakTarget;
-    const st = t && t.isConnected ? t.dataset.ttsCache : '';
-    if (st) {
-      f.dataset.ttsCache = st;
-      f.style.setProperty('--tts-ring-f', t.style.getPropertyValue('--tts-cache-f') || '0');
-      f.style.setProperty('--tts-ring-sent-f', t.style.getPropertyValue('--tts-cache-sent-f') || '0');
-      f.style.setProperty('--tts-ring-cancelled-f', t.style.getPropertyValue('--tts-cache-cancelled-f') || '0');
-    } else {
-      delete f.dataset.ttsCache;
-      f.style.removeProperty('--tts-ring-f');
-      f.style.removeProperty('--tts-ring-sent-f');
-      f.style.removeProperty('--tts-ring-cancelled-f');
-    }
-  }
-
-  function _ttsMarkCache(paneId, headText, st, f) {
-    if (headText) sharedState._ttsCacheState.set(headText, { st, f });
-    const apply = (btn) => {
-      if ((sharedState._ttsActive || sharedState._ttsPaused) && btn.classList.contains('speaking')) return;
-      if (st) { btn.dataset.ttsCache = st; btn.style.setProperty('--tts-cache-f', String(f == null ? 1 : f)); }
-      else { delete btn.dataset.ttsCache; btn.style.removeProperty('--tts-cache-f'); }
-    };
-    ttsButtons().forEach((btn) => {
-      if (paneId && ttsButtonPaneId(btn) !== paneId) return;
-      apply(btn);
-    });
-    // Attribute asynchronous completion to the answer that requested it,
-    // even if the user has since scrolled or hovered somewhere else.
-    document.querySelectorAll('[data-tts-head]').forEach((btn) => {
-      if (headText && btn.dataset.ttsHead === headText) apply(btn);
-    });
-    if (paneId !== '__quiet' && !(paneId || '').startsWith('__viewport:')) {
-      document.querySelectorAll('.conv-pane').forEach((pane) => {
-        if (paneId && pane.dataset.paneId !== paneId) return;
-        const btns = pane.querySelectorAll('[data-read-assistant-message]');
-        const last = btns[btns.length - 1];
-        if (last) {
-          if (headText) last.dataset.ttsHead = headText;
-          apply(last);
-        }
-      });
-    }
-    _ttsRefreshCacheCoverage();
-  }
-
-  function _ttsIsViewOnScreen(view) {
-    if (document.hidden) return false;
-    const cl = document.body && document.body.classList;
-    if (cl) {
-      for (const c of sharedState._TTS_OFFSCREEN_BODY_CLASSES) if (cl.contains(c)) return false;
-      if (typeof isMobile === 'function' && isMobile()
-          && !cl.contains('conversation-popout') && !cl.contains('groupchat-popout')) {
-        if (cl.contains('kanban-split')) { if (!cl.contains('mobile-conv-open')) return false; }
-        else if (!cl.contains('mobile-show-main')) return false;
-      }
-    }
-    if (!view || view.isConnected === false || view.hidden) return false;
-    if (typeof view.getBoundingClientRect !== 'function') return true;
-    if (typeof getComputedStyle === 'function') {
-      const cs = getComputedStyle(view);
-      if (cs && (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0)) return false;
-    }
-    const vr = view.getBoundingClientRect();
-    if (!vr || vr.width < 16 || vr.height < 16) return false;
-    const vw = typeof innerWidth === 'number' && innerWidth > 0 ? innerWidth : (document.documentElement?.clientWidth || 0);
-    const vh = typeof innerHeight === 'number' && innerHeight > 0 ? innerHeight : (document.documentElement?.clientHeight || 0);
-    if (vw > 0 && vh > 0) {
-      const left = Math.max(0, vr.left), right = Math.min(vw, vr.right);
-      const top = Math.max(0, vr.top), bottom = Math.min(vh, vr.bottom);
-      if (right - left < 16 || bottom - top < 16) return false;
-      if (typeof document.elementFromPoint === 'function' && typeof view.contains === 'function') {
-        const host = (view.closest && (view.closest('.conv-pane') || view.closest('.conv-panel') || view.closest('.gc-reader'))) || view;
-        const cx = (left + right) / 2;
-        let checked = 0, unoccluded = 0;
-        for (const f of [0.25, 0.5, 0.75]) {
-          const hit = document.elementFromPoint(cx, top + (bottom - top) * f);
-          if (!hit) continue;
-          checked++;
-          if (host === hit || host.contains(hit) || (hit.contains && hit.contains(host))) unoccluded++;
-        }
-        if (checked > 0 && unoccluded === 0) return false;
-      }
-    }
-    return true;
-  }
-
-  function _ttsIsPaneOnScreen(paneId, view) {
-    if (document.hidden) return false;
-    const cl = document.body && document.body.classList;
-    if (cl) {
-      for (const c of sharedState._TTS_OFFSCREEN_BODY_CLASSES) if (cl.contains(c)) return false;
-    }
-    const pid = paneId || (typeof sharedState.activePaneId === 'function' ? (0, sharedState.activePaneId)() : '');
-    if (!pid) return false;
-    if (typeof sharedState.paneByPaneId === 'function'
-        && !(cl && (cl.contains('conversation-popout') || cl.contains('groupchat-popout')))) {
-      const pane = (0, sharedState.paneByPaneId)(pid);
-      if (pane && !pane.conversationId) return false;
-    }
-    const v = view
-      || (typeof sharedState.getConvViewForPane === 'function' ? (0, sharedState.getConvViewForPane)(pid) : null)
-      || (typeof document.querySelectorAll === 'function'
-        ? Array.from(document.querySelectorAll('.conv-pane')).find(p => p.dataset && p.dataset.paneId === pid)?.querySelector?.('.conversations-view')
-        : null);
-    return _ttsIsViewOnScreen(v);
-  }
-
-  function _ttsIsDataInView(data, view) {
-    if (!view || typeof view.getBoundingClientRect !== 'function' || !data || !Array.isArray(data.mapping) || !data.mapping.length) return true;
-    const vr = view.getBoundingClientRect();
-    if (!vr || vr.height <= 0) return false;
-    let measured = false;
-    for (const m of data.mapping) {
-      const el = m && m.node && (m.node.nodeType === 1 ? m.node : m.node.parentElement);
-      const boxEl = (el && el.closest && el.closest('.stream-bubble, .event, .assistant-text')) || el;
-      if (!boxEl || typeof boxEl.getBoundingClientRect !== 'function') continue;
-      const r = boxEl.getBoundingClientRect();
-      if (!r || (!r.height && !r.width)) continue;
-      measured = true;
-      if (r.bottom > vr.top && r.top < vr.bottom) return true;
-    }
-    return !measured;
-  }
-
-  function _ttsCancelOffscreenPrefetch() {
-    clearTimeout(sharedState._ttsPrefetchTimer);
-    sharedState._ttsPrefetchTimer = null;
-    sharedState._ttsPrefetchTarget = null;
-    if (typeof document.querySelectorAll === 'function') {
-      document.querySelectorAll('.conversations-view').forEach(v => {
-        if (v._ttsViewportPrefetch && v._ttsViewportPrefetch.timer) clearTimeout(v._ttsViewportPrefetch.timer);
-        v._ttsViewportPrefetch = null;
-      });
-    }
-    for (const key of Object.keys(sharedState._ttsChainTokens)) sharedState._ttsChainTokens[key] = (sharedState._ttsChainTokens[key] || 0) + 1;
-    let changed = false;
-    for (const job of sharedState._ttsDebugJobs) {
-      if (job.status === 'queued') { job.status = 'cancelled'; changed = true; }
-    }
-    if (changed) _ttsScheduleCacheDebug();
-  }
-
-  function _ttsPrefetchHead(rawText, paneId, quiet, sourceBtn) {
-    if (typeof sharedState._ttsEnabled !== 'undefined' && !sharedState._ttsEnabled) return;
-    if (window.cccBrowserVoice?.ready) return;
-    const mk = quiet === 'viewport' ? '__viewport:' + paneId : quiet ? '__quiet' : paneId;
-    if (Date.now() < sharedState._ttsNeuralCooldownUntil) { _ttsLog('SKIP', 'prefetch: cooldown, ' + Math.round((sharedState._ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + sharedState._ttsNeuralCooldownWhy + ')'); return; }
-    if (document.hidden) { _ttsLog('SKIP', 'prefetch: tab hidden'); return; }
-    const hoverSurface = quiet === true && sourceBtn
-      ? ((sourceBtn.closest && sourceBtn.closest('.conversations-view, .gc-reader')) || sourceBtn)
-      : null;
-    const onScreen = hoverSurface
-      ? (typeof _ttsIsViewOnScreen !== 'function' || _ttsIsViewOnScreen(hoverSurface))
-      : (typeof _ttsIsPaneOnScreen !== 'function' || _ttsIsPaneOnScreen(paneId, sourceBtn?.closest?.('.conversations-view')));
-    if (!onScreen) { _ttsLog('SKIP', 'prefetch: session off screen'); return; }
-    const clean = _sanitizeTtsText(rawText, true);
-    if (_ttsIsHebrew(clean)) { _ttsLog('SKIP', 'prefetch: Hebrew text uses the Mac voice'); return; }
-    const head = clean.trim() ? _ttsHeadChunk(clean, 0) : null;
-    if (!head) return;
-    if ((sharedState._ttsActive || sharedState._ttsPaused) && mk === paneId && !_ttsReadingOther(head.text)) return;
-    _ttsSelectPrefetchTarget(mk, head.text);
-    if (sourceBtn) sourceBtn.dataset.ttsHead = head.text;
-    if (sharedState._ttsHeadCache.has(head.text)) {
-      const c = sharedState._ttsCacheState.get(head.text);
-      _ttsMarkCache(mk, head.text, c ? c.st : null, c ? c.f : 0);
-      // A newer prefetch in the same pane may have abandoned this message's
-      // chain half-way; without a restart its speaker stays amber forever.
-      const hit = sharedState._ttsHeadCache.get(head.text);
-      if (hit && hit.got && !sharedState._ttsChainRunning.has(head.text) && !(c && c.st === 'ready')) {
-        _ttsStartChain(clean, head, hit.got, mk);
-      }
-      return;
-    }
-    _ttsMarkCache(mk, head.text, 'partial', 0);
-    const entry = { ready: false, got: null, bg: true };
-    const t0 = Date.now();
-    _ttsLog('PREFETCH', head.text.length + ' chars: ' + JSON.stringify(head.text.slice(0, 40)));
-    entry.p = _ttsFetchNeural(head.text, paneId ? ttsVoiceForPane(paneId) : '', 'bg').then((got) => {
-      entry.got = got; entry.voice = got.voice;
-      got.done.then(() => { entry.ready = true; }).catch(() => {
-        if (sharedState._ttsHeadCache.get(head.text) === entry) sharedState._ttsHeadCache.delete(head.text);
-      });
-      _ttsMarkCache(mk, head.text, 'partial', 0.1);
-      Promise.resolve(got.done).then(() => {
-        _ttsLog('READY', got.voice + ' in ' + (Date.now() - t0) + 'ms');
-        _ttsStartChain(clean, head, got, mk);
-      }).catch(() => {});
-      return got;
-    });
-    entry.p.catch((status) => {
-      sharedState._ttsHeadCache.delete(head.text);
-      _ttsScheduleCacheDebug();
-      _ttsCool((0, sharedState._ttsCoolMs)(status), status);
-    });
-    sharedState._ttsHeadCache.set(head.text, entry);
-    _ttsWatchCacheEntry(head.text, entry);
-    _ttsEvictCache();
-  }
-
-  function _ttsEvictCache() {
-    while (sharedState._ttsHeadCache.size > 24) {
-      const oldest = sharedState._ttsHeadCache.keys().next().value;
-      const old = sharedState._ttsHeadCache.get(oldest);
-      if (old && old.got && old.got.url) URL.revokeObjectURL(old.got.url);
-      sharedState._ttsHeadCache.delete(oldest);
-      _ttsScheduleCacheDebug();
-    }
-  }
-
-  function _ttsReadingOther(headText) {
-    return !!sharedState._ttsChunkState && !(sharedState._ttsBoundUtteranceText || '').includes(headText);
-  }
-
-  function _ttsPrefetchClipCount(mk) {
-    if (mk === '__quiet' || sharedState._ttsActive || sharedState._ttsPaused) return sharedState._TTS_PREFETCH_CLIPS_QUIET;
-    return sharedState._TTS_PREFETCH_CLIPS;
-  }
-
-  function _ttsStartChain(clean, head, got, mk) {
-    if (sharedState._ttsPrefetchTargets.get(mk) !== head.text) return;
-    const end = head.start + head.text.length;
-    const planned = got.voice && got.voice !== 'MeloTTS'
-      ? _ttsRestChunks(clean.slice(end), end).slice(0, _ttsPrefetchClipCount(mk)) : [];
-    const jobs = planned.map(c => {
-      const entry = sharedState._ttsHeadCache.get(c.text);
-      const status = entry ? (entry.debugReady ? 'ready' : 'processing') : 'queued';
-      // A shared in-flight cache entry represents one request, even when
-      // multiple preparation chains reuse it.
-      const existing = entry && Array.from(sharedState._ttsDebugJobs).reverse().find(j => j.text === c.text && j.status === status);
-      return existing || _ttsDebugJob(c.text, status, mk);
-    });
-    const token = sharedState._ttsChainTokens[mk || ''] = (sharedState._ttsChainTokens[mk || ''] || 0) + 1;
-    sharedState._ttsChainRunning.add(head.text);
-    // One message's clips at a time, serialized so background prefetch never
-    // saturates CPU cores.
-    sharedState._ttsChainQueue = sharedState._ttsChainQueue
-      .then(() => _ttsPrefetchRest(clean, head, got, token, mk, jobs))
-      .catch(() => {})
-      .then(() => {
-        sharedState._ttsChainRunning.delete(head.text);
-        // The user can return while this superseded chain is still draining
-        // its sent request. Retry the visible target once that request settles.
-        if (sharedState._ttsPrefetchTargets.get(mk) === head.text && token !== sharedState._ttsChainTokens[mk || '']) {
-          setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, 0);
-        }
-      });
-  }
-
-  async function _ttsPrefetchRest(clean, head, headGot, token, paneId, jobs) {
-    if (!headGot.voice || headGot.voice === 'MeloTTS') return;
-    await headGot.done;
-    const end = head.start + head.text.length;
-    const rest = _ttsRestChunks(clean.slice(end), end).slice(0, _ttsPrefetchClipCount(paneId));
-    const duringRead = !!paneId && paneId !== '__quiet' && !paneId.startsWith('__viewport:');
-    const realPaneId = !paneId ? ''
-      : paneId.startsWith('__viewport:') ? paneId.slice(11)
-      : paneId === '__quiet' ? (sharedState._ttsHoverBtn?.closest?.('.conv-pane')?.dataset?.paneId || (0, sharedState.activePaneId)())
-      : paneId;
-    const onScreen = () => {
-      if (typeof sharedState._ttsEnabled !== 'undefined' && !sharedState._ttsEnabled) return false;
-      if (document.hidden) return false;
-      if (paneId === '__quiet' && sharedState._ttsHoverBtn) {
-        return typeof _ttsIsViewOnScreen !== 'function'
-          || _ttsIsViewOnScreen((sharedState._ttsHoverBtn.closest && sharedState._ttsHoverBtn.closest('.conversations-view, .gc-reader')) || sharedState._ttsHoverBtn);
-      }
-      return typeof _ttsIsPaneOnScreen !== 'function'
-        || (!!realPaneId && realPaneId === (0, sharedState.activePaneId)() && _ttsIsPaneOnScreen(realPaneId));
-    };
-    const live = () => token === sharedState._ttsChainTokens[paneId || ''] && onScreen() && Date.now() >= sharedState._ttsNeuralCooldownUntil
-      && (!(sharedState._ttsActive || sharedState._ttsPaused) || (duringRead && _ttsReadingOther(head.text)));
-    const entries = [];
-    const settle = async (i) => {   // clip i fully made; the bar moves past it
-      const got = await entries[i].p;
-      await got.done;
-      jobs[i].status = 'ready';
-      _ttsScheduleCacheDebug();
-      if (token === sharedState._ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'partial', (i + 2) / (rest.length + 1));
-    };
-    try {
-      for (let i = 0; i < rest.length; i++) {
-        if (i >= sharedState._TTS_PREFETCH_WIDTH) await settle(i - sharedState._TTS_PREFETCH_WIDTH);
-        if (!live()) {
-          const superseded = token !== sharedState._ttsChainTokens[paneId || ''];
-          const hidden = !onScreen();
-          for (const job of jobs) if (job.status === 'queued') job.status = (superseded || hidden) ? 'cancelled' : 'deferred';
-          _ttsScheduleCacheDebug();
-          // Paused by a read or the cooldown while still on screen, not
-          // superseded or off screen: nothing else would restart this message.
-          if (!superseded && !hidden) setTimeout(() => { try { scheduleTtsPrefetch(); } catch (_) {} }, 20000);
-          return;
-        }
-        const c = rest[i];
-        let entry = sharedState._ttsHeadCache.get(c.text);
-        if (!entry) {
-          entry = { ready: false, got: null, voice: headGot.voice, bg: true };
-          entry.p = _ttsFetchNeural(c.text, headGot.voice, 'bg', jobs[i]).then((got) => {
-            entry.got = got;
-            got.done.then(() => { entry.ready = true; }).catch(() => {
-              if (sharedState._ttsHeadCache.get(c.text) === entry) sharedState._ttsHeadCache.delete(c.text);
-            });
-            return got;
-          });
-          entry.p.catch(() => { if (sharedState._ttsHeadCache.get(c.text) === entry) sharedState._ttsHeadCache.delete(c.text); });
-          sharedState._ttsHeadCache.set(c.text, entry);
-          _ttsWatchCacheEntry(c.text, entry);
-          _ttsEvictCache();
-        }
-        if (jobs[i].status === 'queued') jobs[i].status = entry.debugReady ? 'ready' : 'processing';
-        _ttsScheduleCacheDebug();
-        entries.push(entry);
-      }
-      for (let i = Math.max(0, rest.length - sharedState._TTS_PREFETCH_WIDTH); i < rest.length; i++) await settle(i);
-    } catch (_) {
-      for (const job of jobs) if (job.status === 'queued') job.status = 'deferred';
-      _ttsScheduleCacheDebug();
-      return;
-    }
-    if (token === sharedState._ttsChainTokens[paneId || '']) _ttsMarkCache(paneId, head.text, 'ready', 1);
-    _ttsLog('READY', 'all ' + (rest.length + 1) + ' clips');
-  }
-
-  function scheduleTtsViewportPrefetch(view, btn) {
-    if (typeof sharedState._ttsEnabled !== 'undefined' && !sharedState._ttsEnabled) return;
-    const pane = view && view.closest('.conv-pane');
-    const viewOnScreen = typeof _ttsIsViewOnScreen === 'function' ? _ttsIsViewOnScreen(view) : !document.hidden;
-    const eligible = pane && pane.dataset.paneId === (0, sharedState.activePaneId)()
-      && viewOnScreen && !(0, sharedState.isConversationAtBottom)(view) && btn;
-    const data = eligible && _ttsSpeakButtonData(btn);
-    const text = data && data.text || '';
-    const previous = view._ttsViewportPrefetch;
-    if (previous && previous.btn === btn && previous.text === text) return;
-    if (previous) clearTimeout(previous.timer);
-    const pending = view._ttsViewportPrefetch = { btn, text, timer: null };
-    if (!text.trim()) return;
-    clearTimeout(sharedState._ttsPrefetchTimer);
-    sharedState._ttsPrefetchTimer = null;
-    pending.timer = setTimeout(() => {
-      pending.timer = null;
-      const stillOnScreen = typeof _ttsIsViewOnScreen === 'function' ? _ttsIsViewOnScreen(view) : !document.hidden;
-      if (!btn.isConnected || view._convSpeakButton?._speakTarget !== btn
-          || pane.dataset.paneId !== (0, sharedState.activePaneId)() || !stillOnScreen) {
-        view._ttsViewportPrefetch = null;
-        return;
-      }
-      if (sharedState._ttsActive || sharedState._ttsPaused) {
-        // Retry after playback instead of losing this queued visible answer.
-        view._ttsViewportPrefetch = null;
-        pending.timer = setTimeout(() => {
-          if (view._ttsViewportPrefetch !== pending) return;
-          view._ttsViewportPrefetch = null;
-          scheduleTtsViewportPrefetch(view, btn);
-        }, 1000);
-        view._ttsViewportPrefetch = pending;
-        return;
-      }
-      _ttsLog('QUEUE', 'viewport: ' + JSON.stringify(text.slice(0, 60)));
-      _ttsPrefetchHead(text, pane.dataset.paneId, 'viewport', btn);
-    }, 200);
-  }
-
-  function scheduleTtsPrefetch() {
-    if (typeof sharedState._ttsEnabled !== 'undefined' && !sharedState._ttsEnabled) {
-      clearTimeout(sharedState._ttsPrefetchTimer);
-      sharedState._ttsPrefetchTimer = null;
-      return;
-    }
-    const paneId = (0, sharedState.activePaneId)();
-    const view = (typeof sharedState.getConvViewForPane === 'function' && paneId ? (0, sharedState.getConvViewForPane)(paneId) : null)
-      || Array.from(document.querySelectorAll('.conv-pane')).find(p => p.dataset.paneId === paneId)?.querySelector('.conversations-view');
-    if (typeof _ttsIsPaneOnScreen === 'function' && !_ttsIsPaneOnScreen(paneId, view)) {
-      clearTimeout(sharedState._ttsPrefetchTimer);
-      sharedState._ttsPrefetchTimer = null;
-      return;
-    }
-    if (view && typeof sharedState.isConversationAtBottom === 'function' && !(0, sharedState.isConversationAtBottom)(view)) {
-      clearTimeout(sharedState._ttsPrefetchTimer);
-      sharedState._ttsPrefetchTimer = null;
-      const target = view._convSpeakButton?._speakTarget;
-      if (target) {
-        if (view._ttsViewportPrefetch?.timer == null) view._ttsViewportPrefetch = null;
-        scheduleTtsViewportPrefetch(view, target);
-      }
-      return;
-    }
-    const data = paneId && lastMessageTtsData(paneId);
-    if (typeof _ttsIsDataInView === 'function' && !_ttsIsDataInView(data, view)) {
-      clearTimeout(sharedState._ttsPrefetchTimer);
-      sharedState._ttsPrefetchTimer = null;
-      return;
-    }
-    const text = data && data.text || '';
-    // Live snapshots repeat every ~900ms. Only changed text resets the quiet
-    // period; identical snapshots must not postpone preparation indefinitely.
-    if (sharedState._ttsPrefetchTimer != null && sharedState._ttsPrefetchTarget
-        && sharedState._ttsPrefetchTarget.paneId === paneId && sharedState._ttsPrefetchTarget.text === text) return;
-    clearTimeout(sharedState._ttsPrefetchTimer);
-    sharedState._ttsPrefetchTarget = { paneId, text };
-    sharedState._ttsPrefetchTimer = setTimeout(() => {
-      sharedState._ttsPrefetchTimer = null;
-      try {
-        if (document.hidden) return;
-        // Prefetch only the focused on-screen pane; off-screen sessions wait
-        // until shown so background activity never burns synthesis CPU.
-        const paneId = (0, sharedState.activePaneId)();
-        if (!paneId) return;
-        const currentView = (typeof sharedState.getConvViewForPane === 'function' ? (0, sharedState.getConvViewForPane)(paneId) : null)
-          || Array.from(document.querySelectorAll('.conv-pane')).find(p => p.dataset.paneId === paneId)?.querySelector('.conversations-view');
-        if (typeof _ttsIsPaneOnScreen === 'function' && !_ttsIsPaneOnScreen(paneId, currentView)) return;
-        const data = lastMessageTtsData(paneId);
-        if (typeof _ttsIsDataInView === 'function' && !_ttsIsDataInView(data, currentView)) return;
-        if (data && data.text && data.text.trim()) _ttsPrefetchHead(data.text, paneId);
-        else { _ttsMarkCache(paneId, null, null); _ttsLog('SKIP', 'prefetch: no last message text in pane ' + paneId); }
-      } catch (_) {}
-    }, 2500);
   }
 
   function _ttsShowVoice(name) {
     ttsButtons().concat(sharedState._ttsDirectBtn ? [sharedState._ttsDirectBtn] : []).forEach(btn => {
       if (name) btn.dataset.ttsVoice = name; else delete btn.dataset.ttsVoice;
-    });
-  }
-
-  function _ttsNeuralUsable(state) {
-    return Date.now() >= sharedState._ttsNeuralCooldownUntil
-      && state.neuralOk !== false;
-  }
-
-  function _ttsStreamUrl(res, onDone) {
-    const ms = new MediaSource();
-    const url = URL.createObjectURL(ms);
-    const queue = [];
-    let finished = false, sb = null;
-    const pump = () => {
-      if (!sb || sb.updating) return;
-      if (queue.length) { try { sb.appendBuffer(queue.shift()); } catch (_) {} return; }
-      if (finished && ms.readyState === 'open') { try { ms.endOfStream(); } catch (_) {} }
-    };
-    ms.addEventListener('sourceopen', () => {
-      sb = ms.addSourceBuffer('audio/mpeg');
-      sb.addEventListener('updateend', pump);
-      pump();
-    }, { once: true });
-    const reader = res.body.getReader();
-    (async () => {
-      try {
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          queue.push(value);
-          pump();
-        }
-      } catch (_) {}
-      finished = true;
-      pump();
-      if (onDone) onDone();
-    })();
-    return url;
-  }
-
-  function _ttsStreamClip(res, done, onDone, onError) {
-    const chunks = [], listeners = new Set();
-    let finished = false, failed = null;
-    const clip = { blob: null, done, createUrl: () => {
-      if (clip.blob) return URL.createObjectURL(clip.blob);
-      return _ttsStreamUrl(new Response(clip.body()));
-    }, body: () => {
-      let listener;
-      return new ReadableStream({
-        start(controller) {
-          for (const chunk of chunks) controller.enqueue(chunk);
-          if (failed) { controller.error(failed); return; }
-          if (finished) { controller.close(); return; }
-          listener = controller;
-          listeners.add(controller);
-        },
-        cancel() { listeners.delete(listener); },
-      });
-    } };
-    (async () => {
-      try {
-        const reader = res.body.getReader();
-        for (;;) {
-          const { value, done: ended } = await reader.read();
-          if (ended) break;
-          chunks.push(value);
-          for (const listener of listeners) listener.enqueue(value);
-        }
-        clip.blob = new Blob(chunks, { type: 'audio/mpeg' });
-        chunks.length = 0;
-        finished = true;
-        for (const listener of listeners) listener.close();
-        listeners.clear();
-        onDone();
-      } catch (error) {
-        failed = error;
-        chunks.length = 0;
-        for (const listener of listeners) listener.error(error);
-        listeners.clear();
-        onError(error);
-      }
-    })();
-    return clip;
-  }
-
-  function _ttsFetchNeural(text, voice, prio, debugJob, signal) {
-    if (typeof sharedState._ttsEnabled !== 'undefined' && !sharedState._ttsEnabled) {
-      if (debugJob) { debugJob.status = 'cancelled'; _ttsScheduleCacheDebug(); }
-      return Promise.reject(503);
-    }
-    const job = debugJob || _ttsDebugJob(text, 'processing', null);
-    job.status = 'processing';
-    _ttsScheduleCacheDebug();
-    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
-    if (ctrl && typeof sharedState._ttsInFlightAborts !== 'undefined') {
-      sharedState._ttsInFlightAborts.add(ctrl);
-      if (signal && typeof signal.addEventListener === 'function') {
-        if (signal.aborted) ctrl.abort();
-        else signal.addEventListener('abort', () => ctrl.abort(), { once: true });
-      }
-    }
-    const effSignal = ctrl ? ctrl.signal : signal;
-    const releaseAbort = () => {
-      if (ctrl && typeof sharedState._ttsInFlightAborts !== 'undefined') sharedState._ttsInFlightAborts.delete(ctrl);
-    };
-    voice = voice || ttsVoiceForPane((0, sharedState.activePaneId)());
-    let onDone, onError;
-    const done = new Promise((resolve, reject) => { onDone = resolve; onError = reject; });
-    // A failed generation is observed even if no one has clicked its cache entry.
-    done.catch(() => {});
-    const t0 = performance.now();
-    // Perf pane "speaker cache" column: one row per clip read, saying
-    // whether the server replayed it from its clip cache or made it now.
-    const perfRow = (res) => {
-      const cache = res.headers.get('X-CCC-Cache') || '?';
-      const first = Math.round(performance.now() - t0);
-      done.then(() => {
-        const ms = Math.round(performance.now() - t0);
-        try {
-          if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
-            at: Date.now(),
-            text: (prio === 'bg' ? 'bg ' : 'fg ') + (cache === 'hit' ? 'HIT ' : cache === 'miss' ? 'miss ' : '')
-              + String(text || '').length + 'c ' + (ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms'),
-            // Background prepare-ahead is invisible to the listener; a read
-            // that had to generate (or fetch for >3s) is the anomaly.
-            anomaly: prio !== 'bg' && (cache !== 'hit' || ms > 3000),
-            title: 'speaker clip ' + (prio === 'bg' ? 'prepared ahead' : 'for the read') + ' · cache ' + cache
-              + ' · first bytes ' + first + 'ms · whole clip ' + ms + 'ms\n' + String(text || '').slice(0, 120),
-          });
-        } catch (_) {}
-      }).catch(() => {});
-    };
-    return fetch('/api/free-runtime/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // Always the streamed mp3: a browser without MediaSource reads it as one
-      // blob, and the server keeps the finished clip for a continuous read.
-      body: JSON.stringify({ text, voice: voice || '', stream: true, prio: prio === 'bg' ? 'bg' : 'fg' }),
-      signal: effSignal,
-    }).then(async (res) => {
-      if (!res.ok) {
-        if (res.status === 503) {
-          try {
-            const errJson = await res.clone().json();
-            if (errJson && errJson.disabled && typeof _ttsSetEnabled === 'function') {
-              _ttsSetEnabled(false, { persistServer: false });
-            }
-          } catch (_) {}
-        }
-        throw res.status;
-      }
-      const v = res.headers.get('X-CCC-Voice') || '';
-      const model = res.headers.get('X-CCC-Model') || '';
-      perfRow(res);
-      done.then(() => { releaseAbort(); job.status = 'ready'; _ttsScheduleCacheDebug(); }).catch(() => {
-        releaseAbort();
-        if (job.status !== 'cancelled') job.status = 'failed';
-        _ttsScheduleCacheDebug();
-      });
-      if ((0, sharedState._ttsCanStream)() && res.headers.get('X-CCC-Stream') === '1') {
-        return Object.assign(_ttsStreamClip(res, done, onDone, onError), { voice: v, model });
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      onDone();
-      return { url, blob, voice: v, model, done: Promise.resolve() };
-    }, () => { throw 0; }).catch(error => {
-      releaseAbort();
-      onError(error);
-      if (job.status !== 'cancelled') job.status = 'failed';
-      _ttsScheduleCacheDebug();
-      throw error;
     });
   }
 
@@ -7652,754 +6501,6 @@
       else hi = mid - 1;
     }
     return words[lo];
-  }
-
-  function _ttsContinuousOk(state) {
-    let pref = '';
-    try { pref = localStorage.getItem('ccc-tts-continuous') || ''; } catch (_) {}
-    if (pref === '0' || state.noContinuous || state.neuralOk === false) return false;
-    if (state.geminiVoice && !state.geminiVoice.startsWith('Kokoro')) return false;
-    return pref === '1' || !(0, sharedState._ttsCanStream)();
-  }
-
-  function _ttsSpeakContinuous(state) {
-    const token = ++sharedState._ttsNeuralToken;
-    sharedState._ttsUtterance = { neural: true };
-    const stale = () => token !== sharedState._ttsNeuralToken || sharedState._ttsChunkState !== state;
-    const from = state.index;
-    const clips = state.chunks.slice(from);
-    const hit = sharedState._ttsHeadCache.get(clips[0].text);
-    const voice = state.geminiVoice || (hit && hit.voice && hit.voice.startsWith('Kokoro') ? hit.voice : '')
-      || ttsVoiceForPane(state.paneId) || '';
-    // A seek target inside the first clip restarts at that clip's start.
-    state.seekTarget = null;
-    if (state.perf) state.perf.mode = 'continuous';
-    let sid = '', audio = null, wordFrame = null, lastWord = -1, pollTimer = null;
-    const info = { marks: [0], done: false, failed: null, seconds: 0 };
-    const cancelSession = (id) => {
-      if (id) fetch('/api/free-runtime/tts-session/' + id + '/cancel', { method: 'POST' }).catch(() => {});
-    };
-    const stopHighlight = () => {
-      if (wordFrame != null) cancelAnimationFrame(wordFrame);
-      wordFrame = null;
-    };
-    const release = () => {
-      stopHighlight();
-      if (pollTimer) clearTimeout(pollTimer);
-      pollTimer = null;
-      if (!info.done) cancelSession(sid);
-    };
-    // Per-clip playback from the clip being heard (session refused, a clip
-    // failed, or the stream broke off early).
-    const toClips = (why) => {
-      if (stale()) return;
-      _ttsLog('CONT', 'per-clip from clip ' + state.index + ': ' + why);
-      release();
-      sharedState._ttsNeuralToken += 1;
-      try { audio && audio.pause(); } catch (_) {}
-      sharedState._ttsNeural = null;
-      sharedState._ttsUtterance = null;
-      _ttsSetStreaming(false);
-      state.noContinuous = true;
-      _ttsSpeakNextChunk();
-    };
-    const pollMarks = () => {
-      pollTimer = null;
-      if (stale() || !sid) return Promise.resolve();
-      return fetch('/api/free-runtime/tts-session/' + sid + '/marks', { cache: 'no-store' })
-        .then(r => r.ok ? r.json() : null).then((j) => {
-          if (!j || stale()) return;
-          Object.assign(info, { marks: j.marks && j.marks.length ? j.marks : [0], done: !!j.done, failed: j.failed, cancelled: !!j.cancelled, seconds: j.seconds || 0 });
-          if (j.voice && j.voice.startsWith('Kokoro')) state.geminiVoice = j.voice;
-          const made = info.done && info.failed == null && !info.cancelled ? info.marks.length : info.marks.length - 1;
-          if (made > 0) {
-            const c = clips[Math.min(made, clips.length) - 1];
-            state.cachedTo = Math.max(state.cachedTo || 0, c.start + c.text.length);
-            _ttsSetPlay();
-          }
-          if (info.done) _ttsSetStreaming(false);
-          else pollTimer = setTimeout(pollMarks, 1000);
-        }).catch(() => { if (!stale()) pollTimer = setTimeout(pollMarks, 2000); });
-    };
-    // Stream time -> (clip, time inside it, its length or NaN while being made).
-    const clipAt = (t) => {
-      const m = info.marks;
-      let j = 0;
-      while (j + 1 < m.length && m[j + 1] <= t) j += 1;
-      const end = j + 1 < m.length ? m[j + 1] : info.done && info.failed == null && !info.cancelled ? info.seconds : NaN;
-      return { j: Math.min(j, clips.length - 1), local: Math.max(0, t - m[j]), dur: end - m[j] };
-    };
-    const updateWord = () => {
-      if (stale() || !audio) return;
-      const at = clipAt(audio.currentTime);
-      const chunk = clips[at.j];
-      state.index = from + at.j;
-      const word = _ttsWordAtProgress(chunk.text, at.local, at.dur);
-      if (!word || chunk.start + word.start === lastWord) return;
-      lastWord = chunk.start + word.start;
-      sharedState._ttsLastCharIndex = lastWord;
-      _ttsSetPlay();
-      highlightTtsWord(sharedState._ttsLastCharIndex, word.length);
-      updateTtsCaption(sharedState._ttsLastCharIndex, word.length, sharedState._ttsBoundUtteranceText);
-    };
-    const trackWord = () => {
-      wordFrame = null;
-      if (stale() || !audio || audio.paused || audio.ended) return;
-      updateWord();
-      wordFrame = requestAnimationFrame(trackWord);
-    };
-    const start = () => {
-      audio = sharedState._ttsAudio || (sharedState._ttsAudio = new Audio());
-      audio.onended = audio.onerror = audio.onplay = audio.ontimeupdate = null;
-      audio.onplaying = audio.onwaiting = audio.onpause = null;
-      audio.onprogress = audio.onloadedmetadata = audio.ondurationchange = audio.oncanplay = null;
-      audio.src = '/api/free-runtime/tts-session/' + sid;
-      audio.playbackRate = sharedState._ttsRate;
-      _ttsSetStreaming(true);
-      pollMarks();
-      const player = { audio, token, stopHighlight, continuous: true };
-      player.cancel = () => {
-        release();
-        try { audio.removeAttribute('src'); audio.load(); } catch (_) {}
-      };
-      // Seek inside audio already made; anything else restarts the stream at
-      // the target's clip (made clips replay from the server's clip cache).
-      player.seek = (target) => {
-        const k = clips.findIndex(c => target < c.start + c.text.length);
-        if (k >= 0 && k < info.marks.length) {
-          const c = clips[k];
-          const at = clipAt(info.marks[k]);
-          const frac = (target - c.start) / Math.max(1, c.text.length);
-          const t = info.marks[k] + (Number.isFinite(at.dur) ? frac * at.dur : (target - c.start) / 15);
-          for (let i = 0; i < audio.seekable.length; i++) {
-            if (audio.seekable.start(i) <= t && audio.seekable.end(i) >= t) {
-              audio.currentTime = t;
-              sharedState._ttsLastCharIndex = target;
-              return;
-            }
-          }
-        }
-        _ttsEngineCancel();
-        sharedState._ttsUtterance = null;
-        state.index = from + Math.max(0, k);
-        _ttsSpeakNextChunk();
-      };
-      sharedState._ttsNeural = player;
-      audio.ontimeupdate = () => { if (!audio.paused && !audio.ended) updateWord(); };
-      audio.onpause = () => {
-        stopHighlight();
-        if (!stale() && !audio.ended) _ttsPriorityStop();
-      };
-      audio.onplay = () => {
-        if (stale()) return;
-        setTtsButtonsState(true, false, state.paneId);
-        setTtsButtonsBusy(false);
-        const label = 'Pause reading (free voice: ' + (state.geminiVoice || voice || 'Kokoro') + ')';
-        ttsButtons().forEach(btn => {
-          if (ttsButtonPaneId(btn) === sharedState._ttsActivePaneId) { btn.classList.remove('paused'); btn.title = label; }
-        });
-        _ttsShowVoice((state.geminiVoice || voice || 'Kokoro') + ' · continuous');
-      };
-      let waitFrom = 0;
-      audio.onplaying = () => {
-        if (stale()) return;
-        _ttsPriorityPlaying();
-        const now = Date.now();
-        stopHighlight();
-        trackWord();
-        _ttsPerfStart(state, { engine: 'neural', voice: state.geminiVoice || voice, lagMs: _ttsEventLagMs(audio) });
-        if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms (continuous)'); state.t0 = 0; }
-        if (waitFrom) {
-          _ttsPerfSilence(state, now - waitFrom, 'stall');
-          _ttsLog('STALL', (now - waitFrom) + 'ms in continuous read at ' + audio.currentTime.toFixed(1) + 's, rate ' + sharedState._ttsRate);
-          waitFrom = 0;
-        }
-      };
-      audio.onwaiting = () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); };
-      audio.onended = () => {
-        if (stale()) return;
-        // Whole stream heard, a clip failed, or the connection broke off.
-        pollMarks().then(() => {
-          if (stale()) return;
-          if (!info.done || info.failed != null || info.cancelled) {
-            state.index = from + (info.failed != null ? info.failed : clipAt(audio.currentTime).j);
-            toClips(info.failed != null ? 'clip ' + info.failed + ' failed' : 'stream ended early');
-            return;
-          }
-          release();
-          clearTtsHighlight();
-          clearTtsCaption();
-          _ttsSetStreaming(false);
-          _ttsLog('ENDED', 'continuous read, ' + clips.length + ' clips');
-          sharedState._ttsNeural = null;
-          sharedState._ttsUtterance = null;
-          state.index = state.chunks.length;
-          _ttsSpeakNextChunk();
-        });
-      };
-      audio.onerror = () => {
-        if (stale()) return;
-        _ttsLog('ERROR', 'continuous media error ' + (audio.error?.code || 'unknown'));
-        state.index = from + clipAt(audio.currentTime || 0).j;
-        toClips('media error');
-      };
-      if (sharedState._ttsPaused) { audio.load?.(); return; }
-      const ourSrc = audio.src;
-      let retried = false;
-      const playStream = () => audio.play().catch((error) => {
-        if (stale()) return;
-        _ttsLog('ERROR', 'continuous play rejected: ' + (error?.name || 'unknown')
-          + ' (same src ' + (audio.src === ourSrc) + ', ready ' + audio.readyState
-          + ', net ' + audio.networkState + ', paused ' + audio.paused + (retried ? ', retry' : '') + ')');
-        // AbortError = the pending play was interrupted (a load or pause on
-        // the shared element, or Safari restarting a slow stream). Falling
-        // back to per-clip re-made clip 0 cold, 7 s of silence (CCC-144);
-        // the stream is still ours, so retry once when it can play.
-        if (error?.name === 'AbortError' && !retried && audio.src === ourSrc) {
-          retried = true;
-          let fired = false;
-          const again = () => { if (fired || stale()) return; fired = true; playStream(); };
-          audio.addEventListener('canplay', again, { once: true });
-          setTimeout(again, 1500);
-          return;
-        }
-        if (error?.name === 'NotAllowedError') {
-          sharedState._ttsPaused = true;
-          setTtsButtonsBusy(false);
-          if (sharedState._ttsDirectBtn) _setTtsDirectBtnState(sharedState._ttsDirectBtn, 'paused');
-          ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === state.paneId) btn.classList.add('paused'); });
-          showOpToast('Tap the speaker to resume audio.', 'info');
-          return;
-        }
-        toClips('play rejected');
-      });
-      playStream();
-    };
-    const sessionT0 = performance.now();
-    fetch('/api/free-runtime/tts-session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ texts: clips.map(c => c.text), voice }),
-    }).then(r => r.ok ? r.json() : Promise.reject(r.status)).then((j) => {
-      if (stale()) { cancelSession(j && j.id); return; }
-      sid = j.id;
-      if (state.perf) state.perf.sessionMs = Math.round(performance.now() - sessionT0);
-      _ttsLog('CONT', 'stream ' + clips.length + ' clips from clip ' + from + (hit ? ' (head prepared)' : ''));
-      start();
-    }).catch((status) => toClips('session ' + status));
-  }
-
-  function _ttsSpeakChunkNeural(state, chunk) {
-    if (_ttsContinuousOk(state)) { _ttsSpeakContinuous(state); return; }
-    if (_ttsChainOk(state)) { _ttsSpeakChain(state); return; }
-    const token = ++sharedState._ttsNeuralToken;
-    sharedState._ttsUtterance = { neural: true };   // keeps the "is a read active" checks true
-    const stale = () => token !== sharedState._ttsNeuralToken || sharedState._ttsChunkState !== state;
-    const fallBack = (cooldownMs) => {
-      if (stale()) return;
-      _ttsSetStreaming(false);
-      // A failed body can reject completion and raise a media error. Settle
-      // this player once, so the two signals cannot start overlapping reads.
-      sharedState._ttsNeuralToken += 1;
-      sharedState._ttsNeural?.stopHighlight?.();
-      try { sharedState._ttsNeural?.audio.pause(); } catch (_) {}
-      sharedState._ttsNeural = null;
-      if (cooldownMs) _ttsCool(cooldownMs, 'playback-fail');
-      state.neuralOk = false;
-      sharedState._ttsUtterance = null;
-      _ttsSpeakNextChunk();
-    };
-    const ensure = (i) => _ttsEnsureClip(state, i);
-    const idx = state.index;
-    ensure(idx);
-    state.prefetch[idx].then((got) => {
-      if (stale()) { if (!got.blob && got.url) URL.revokeObjectURL(got.url); return; }
-      delete state.prefetch[idx];
-      // Start the next clip the moment this one is fully generated, not at
-      // onplay. One at a time: the local voice server shares the CPU, so two
-      // clips made at once both finish late and playback stalls.
-      got.done.then(() => { if (!stale()) ensure(idx + 1); }).catch(() => {});
-      if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
-      // Give each playback its own URL; revoking it must not invalidate the cache.
-      const playUrl = got.createUrl ? got.createUrl() : got.blob ? URL.createObjectURL(got.blob) : got.url;
-      // Safari authorizes playback per element. A new Audio for every clip
-      // can leave an already prepared continuation blocked after the first.
-      const audio = sharedState._ttsAudio || (sharedState._ttsAudio = new Audio());
-      audio.onended = audio.onerror = audio.onplay = audio.ontimeupdate = null;
-      audio.onplaying = audio.onwaiting = audio.onpause = null;
-      audio.onprogress = audio.onloadedmetadata = audio.ondurationchange = audio.oncanplay = null;
-      audio.src = playUrl;
-      audio.playbackRate = sharedState._ttsRate;
-      let wordFrame = null, lastWord = -1, complete = !!got.blob;
-      const words = Array.from(chunk.text.matchAll(/\S+/g), m => ({ start: m.index, length: m[0].length }));
-      _ttsSetStreaming(!complete);
-      got.done.then(() => {
-        complete = true;
-        if (!stale()) _ttsSetStreaming(false);
-      }).catch(() => {
-        if (!stale()) audio.onerror?.();
-      });
-      const stopHighlight = () => {
-        if (wordFrame != null) cancelAnimationFrame(wordFrame);
-        wordFrame = null;
-      };
-      const updateWord = () => {
-        if (stale()) return;
-        // A growing stream's duration is only its buffered portion. Use the
-        // clock estimate until generation finishes, then the full duration.
-        const word = _ttsWordAtProgress(chunk.text, audio.currentTime, complete ? audio.duration : NaN, words);
-        if (!word || word.start === lastWord) return;
-        lastWord = word.start;
-        sharedState._ttsLastCharIndex = chunk.start + word.start;
-        _ttsSetPlay();
-        highlightTtsWord(sharedState._ttsLastCharIndex, word.length);
-        updateTtsCaption(sharedState._ttsLastCharIndex, word.length, sharedState._ttsBoundUtteranceText);
-      };
-      const trackWord = () => {
-        wordFrame = null;
-        if (stale() || audio.paused || audio.ended) return;
-        updateWord();
-        wordFrame = requestAnimationFrame(trackWord);
-      };
-      const player = { audio, token, stopHighlight, waitingForSeek: false };
-      const applySeek = () => {
-        if (stale() || state.seekTarget == null) return true;
-        const local = Math.max(0, state.seekTarget - chunk.start);
-        // Full clips use their duration; growing MP3s have no final duration.
-        // The streaming estimate matches word highlighting until timestamps
-        // are available. Never seek beyond bytes the browser has buffered.
-        const time = complete && Number.isFinite(audio.duration)
-          ? local / Math.max(1, chunk.text.length) * audio.duration : local / 15;
-        let buffered = false;
-        for (let i = 0; i < audio.seekable.length; i++) {
-          if (audio.seekable.start(i) <= time && audio.seekable.end(i) >= time) buffered = true;
-        }
-        if (!buffered) return false;
-        audio.currentTime = time;
-        sharedState._ttsLastCharIndex = state.seekTarget;
-        state.seekTarget = null;
-        if (player.waitingForSeek && !sharedState._ttsPaused) {
-          player.waitingForSeek = false;
-          audio.play().catch(() => {});
-        }
-        return true;
-      };
-      player.seek = target => {
-        state.seekTarget = target;
-        player.waitingForSeek = !sharedState._ttsPaused;
-        audio.pause();
-        applySeek();
-      };
-      sharedState._ttsNeural = player;
-      audio.onprogress = audio.onloadedmetadata = audio.ondurationchange = audio.oncanplay = () => { applySeek(); };
-      audio.ontimeupdate = () => { if (applySeek() && !audio.paused && !audio.ended) updateWord(); };
-      audio.onpause = () => {
-        stopHighlight();
-        if (!stale() && !audio.ended) _ttsPriorityStop();
-      };
-      const label = 'Pause reading (free voice: ' + got.voice + ')';
-      audio.onplay = () => {
-        if (stale()) return;
-        if (!applySeek()) {
-          player.waitingForSeek = true;
-          audio.pause();
-          return;
-        }
-        setTtsButtonsState(true, false, state.paneId);
-        setTtsButtonsBusy(false);
-        ttsButtons().forEach(btn => {
-          if (ttsButtonPaneId(btn) === sharedState._ttsActivePaneId) { btn.classList.remove('paused'); btn.title = label; }
-        });
-        _ttsShowVoice(got.voice + (got.model ? ' · ' + got.model : ''));
-      };
-      audio.onended = () => {
-        if (stale()) return;
-        stopHighlight();
-        clearTtsHighlight();
-        clearTtsCaption();
-        _ttsSetStreaming(false);
-        _ttsLog('ENDED', 'clip ' + idx);
-        URL.revokeObjectURL(playUrl);
-        state.debugCache.delete(chunk.text);
-        _ttsScheduleCacheDebug();
-        if (stale()) return;
-        sharedState._ttsNeural = null;
-        sharedState._ttsUtterance = null;
-        state.index += 1;
-        state.gapFrom = Date.now();
-        if (state.perf) state.perf.gapT0 = performance.now();
-        _ttsSpeakNextChunk();
-      };
-      // Where reads wait: time to first sound, gaps between clips, and stalls
-      // inside a clip (the stream ran dry), so slow reads can be measured.
-      let waitFrom = 0;
-      audio.onplaying = () => {
-        if (stale() || state.seekTarget != null) return;
-        _ttsPriorityPlaying();
-        const now = Date.now();
-        stopHighlight();
-        trackWord();
-        _ttsLog('PLAY', 'clip ' + idx + ' (' + chunk.text.length + ' chars)');
-        const lagMs = _ttsEventLagMs(audio);
-        _ttsPerfStart(state, { engine: 'neural', voice: got.voice, lagMs });
-        if (state.perf && state.perf.gapT0) { _ttsPerfSilence(state, Math.max(0, performance.now() - state.perf.gapT0 - lagMs), 'gap'); state.perf.gapT0 = 0; }
-        if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms'); state.t0 = 0; }
-        else if (state.gapFrom) { const g = now - state.gapFrom; if (g > 300) _ttsLog('GAP', g + 'ms before clip ' + idx + ' (' + chunk.text.length + ' chars)'); }
-        state.gapFrom = 0;
-        if (waitFrom) { _ttsPerfSilence(state, now - waitFrom, 'stall'); _ttsLog('STALL', (now - waitFrom) + 'ms in clip ' + idx + ' at ' + audio.currentTime.toFixed(1) + 's, rate ' + sharedState._ttsRate); waitFrom = 0; }
-      };
-      audio.onwaiting = () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); };
-      const releaseDebug = () => { state.debugCache.delete(chunk.text); _ttsScheduleCacheDebug(); };
-      audio.onerror = () => {
-        if (stale()) return;
-        stopHighlight();
-        clearTtsHighlight();
-        clearTtsCaption();
-        _ttsLog('ERROR', 'clip ' + idx + ' media error ' + (audio.error?.code || 'unknown'));
-        URL.revokeObjectURL(playUrl); releaseDebug(); fallBack(sharedState._TTS_FAIL_COOL_MS);
-      };
-      if (sharedState._ttsPaused) { audio.load?.(); return; }
-      audio.play().catch((error) => {
-        if (stale()) return;
-        _ttsLog('ERROR', 'clip ' + idx + ' play rejected: ' + (error?.name || 'unknown'));
-        if (error?.name === 'NotAllowedError') { _ttsPlayBlocked(state); return; }
-        stopHighlight();
-        clearTtsHighlight();
-        clearTtsCaption();
-        releaseDebug(); fallBack(0);
-      });
-    }, (status) => { if (!stale()) fallBack((0, sharedState._ttsCoolMs)(status)); });
-  }
-
-  function _ttsEnsureClip(state, i) {
-    state.prefetch = state.prefetch || {};
-    const c = state.chunks[i];
-    if (!c || state.prefetch[i]) return;
-    const hit = sharedState._ttsHeadCache.get(c.text);
-    let p;
-    if (hit && (!state.geminiVoice || hit.voice === state.geminiVoice)) {
-      // Prepare-ahead makes clips at bg priority, behind every other
-      // message being prepared. A clip the listener now waits on is asked
-      // for again at fg; the voice server shares made pieces, so the bg
-      // request does not repeat the work (CCC-144: cold clicks waited 5-12s
-      // on a bg head).
-      p = !hit.bg || hit.ready ? hit.p : hit.p.then((got) => {
-        if (hit.ready) return got;
-        try { return _ttsFetchNeural(c.text, got.voice, 'fg', null, state.abort?.signal).catch(() => got); } catch (_) { return got; }
-      });
-      // Prepared blobs remain reusable after playback, seeks and rate changes.
-      try {
-        if (window.__cccPerfRow) window.__cccPerfRow('speaker', {
-          at: Date.now(),
-          text: 'clip ' + i + ' PREPARED ' + (hit.ready ? 'ready' : 'making'),
-          anomaly: !hit.ready,
-          title: 'speaker clip ' + i + ' reused from the prepare-ahead cache (' + (hit.ready ? 'fully made' : 'still generating') + ' at click)',
-        });
-      } catch (_) {}
-    } else {
-      p = _ttsFetchNeural(c.text, state.geminiVoice, 'fg', null, state.abort?.signal);
-      p.catch(() => {});
-    }
-    state.prefetch[i] = p;
-    // Keep the paint through the handoff from prepare-ahead to playback,
-    // and include clips generated during a read, until they are released.
-    state.debugCache = state.debugCache || new Map();
-    const debugEntry = { debugReady: !!(hit && p === hit.p && hit.debugReady) };
-    state.debugCache.set(c.text, debugEntry);
-    _ttsScheduleCacheDebug();
-    p.then(g => g.done).then(() => {
-      debugEntry.debugReady = true;
-      _ttsScheduleCacheDebug();
-    }).catch(() => {
-      state.debugCache.delete(c.text);
-      _ttsScheduleCacheDebug();
-    });
-    // Once this clip is fully made, the bar's cached end moves past it.
-    p.then((g) => g.done).then(() => {
-      if (sharedState._ttsChunkState !== state) return;
-      state.cachedTo = Math.max(state.cachedTo || 0, c.start + c.text.length);
-      _ttsSetPlay();
-    }).catch(() => {});
-  }
-
-  function _ttsPlayBlocked(state) {
-    sharedState._ttsPaused = true;
-    setTtsButtonsBusy(false);
-    if (sharedState._ttsDirectBtn) _setTtsDirectBtnState(sharedState._ttsDirectBtn, 'paused');
-    ttsButtons().forEach(btn => { if (ttsButtonPaneId(btn) === state.paneId) btn.classList.add('paused'); });
-    showOpToast('Tap the speaker to resume audio.', 'info');
-  }
-
-  function _ttsChainOk(state) {
-    let pref = '';
-    try { pref = localStorage.getItem('ccc-tts-chain') || ''; } catch (_) {}
-    // A seek into a clip needs that clip's exact position: the per-clip player
-    // lands it, and the chain resumes from the next clip.
-    return pref !== '0' && !sharedState._ttsChainBroken && !state.noChain && state.seekTarget == null
-      && state.chunks.length - state.index > 1 && (0, sharedState._ttsCanStream)();
-  }
-
-  function _ttsSpeakChain(state) {
-    const token = ++sharedState._ttsNeuralToken;
-    sharedState._ttsUtterance = { neural: true };
-    const stale = () => token !== sharedState._ttsNeuralToken || sharedState._ttsChunkState !== state;
-    const from = state.index;
-    const clips = state.chunks.slice(from);
-    if (state.perf) state.perf.mode = 'chain';
-    const source = new MediaSource();
-    const url = URL.createObjectURL(source);
-    const marks = [0];   // stream second where each clip starts
-    let buffer = null, failedAt = null, model = '', wordFrame = null, lastWord = -1, heard = -1, openTimer = null;
-    const stopHighlight = () => {
-      if (wordFrame != null) cancelAnimationFrame(wordFrame);
-      wordFrame = null;
-    };
-    const release = () => {
-      stopHighlight();
-      clearTimeout(openTimer);
-      URL.revokeObjectURL(url);
-    };
-    const audio = sharedState._ttsAudio || (sharedState._ttsAudio = new Audio());
-    // Where a first sound's wait goes, for the first playing event's sample.
-    const mark = (name) => {
-      const p = state.perf;
-      if (p && !p.started) (p.split = p.split || {})[name] = Math.round(performance.now() - p.t0);
-    };
-    // Per-clip playback from the clip being heard.
-    const toClips = (why, broken) => {
-      if (stale()) return;
-      _ttsLog('CHAIN', 'per-clip from clip ' + state.index + ': ' + why);
-      if (broken) sharedState._ttsChainBroken = true;
-      if (state.perf) state.perf.mode = 'chain-fallback';
-      sharedState._ttsNeuralToken += 1;
-      release();
-      try { audio.pause(); } catch (_) {}
-      sharedState._ttsNeural = null;
-      sharedState._ttsUtterance = null;
-      _ttsSetStreaming(false);
-      state.noChain = true;
-      _ttsSpeakNextChunk();
-    };
-    const bufferedEnd = () => {
-      const b = buffer && buffer.buffered;
-      return b && b.length ? b.end(b.length - 1) : 0;
-    };
-    const append = (data) => new Promise((resolve, reject) => {
-      const settle = (fn) => () => {
-        buffer.removeEventListener('updateend', onEnd);
-        buffer.removeEventListener('error', onError);
-        fn();
-      };
-      const onEnd = settle(resolve);
-      const onError = settle(() => reject(new Error('append failed')));
-      buffer.addEventListener('updateend', onEnd);
-      buffer.addEventListener('error', onError);
-      try { buffer.appendBuffer(data); } catch (error) { onError(); }
-    });
-    const feedClip = async (got) => {
-      if (got.blob) { await append(await got.blob.arrayBuffer()); return; }
-      const reader = got.body().getReader();
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) return;
-        if (stale()) { reader.cancel().catch(() => {}); return; }
-        await append(value);
-      }
-    };
-    const feed = async () => {
-      for (let j = 0; j < clips.length; j++) {
-        while (!stale() && bufferedEnd() - audio.currentTime > sharedState._TTS_CHAIN_AHEAD_S) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-        if (stale()) return;
-        _ttsEnsureClip(state, from + j);
-        try {
-          const got = await state.prefetch[from + j];
-          if (stale()) return;
-          delete state.prefetch[from + j];
-          // Only a streamed clip is known to be mp3 this stream can carry.
-          if (!got.body) throw new Error('not a stream');
-          if (!state.geminiVoice && got.voice && got.voice !== 'MeloTTS') state.geminiVoice = got.voice;
-          if (got.model) model = got.model;
-          mark('clip_ms');
-          await feedClip(got);
-          mark('fed_ms');
-        } catch (_) {
-          if (stale()) return;
-          delete state.prefetch[from + j];
-          failedAt = j;
-          break;
-        }
-        if (stale()) return;
-        marks.push(bufferedEnd());
-      }
-      _ttsSetStreaming(false);
-      // Nothing to hear: go straight to the per-clip path. Otherwise it takes
-      // over at `ended`, after the audio already made.
-      if (failedAt === 0) { toClips('clip ' + from + ' unavailable'); return; }
-      try { source.endOfStream(); } catch (_) {}
-    };
-    // Stream time -> (clip, time inside it, its length or NaN while being made).
-    const clipAt = (t) => {
-      let j = 0;
-      while (j + 1 < marks.length && marks[j + 1] <= t) j += 1;
-      j = Math.min(j, clips.length - 1);
-      return { j, local: Math.max(0, t - marks[j]), dur: j + 1 < marks.length ? marks[j + 1] - marks[j] : NaN };
-    };
-    const updateWord = () => {
-      if (stale()) return;
-      const at = clipAt(audio.currentTime);
-      const chunk = clips[at.j];
-      if (at.j !== heard) {
-        if (heard >= 0) state.debugCache?.delete(clips[heard].text);
-        heard = at.j;
-        state.index = from + at.j;
-        _ttsScheduleCacheDebug();
-        _ttsLog('PLAY', 'clip ' + state.index + ' (' + chunk.text.length + ' chars, chained)');
-      }
-      const word = _ttsWordAtProgress(chunk.text, at.local, at.dur);
-      if (!word || chunk.start + word.start === lastWord) return;
-      lastWord = chunk.start + word.start;
-      sharedState._ttsLastCharIndex = lastWord;
-      _ttsSetPlay();
-      highlightTtsWord(sharedState._ttsLastCharIndex, word.length);
-      updateTtsCaption(sharedState._ttsLastCharIndex, word.length, sharedState._ttsBoundUtteranceText);
-    };
-    const trackWord = () => {
-      wordFrame = null;
-      if (stale() || audio.paused || audio.ended) return;
-      updateWord();
-      wordFrame = requestAnimationFrame(trackWord);
-    };
-    source.addEventListener('sourceopen', () => {
-      clearTimeout(openTimer);
-      if (stale()) return;
-      mark('open_ms');
-      try {
-        buffer = source.addSourceBuffer('audio/mpeg');
-        buffer.mode = 'sequence';   // each clip's timestamps follow the last
-      } catch (_) { toClips('no source buffer', true); return; }
-      feed();
-    }, { once: true });
-    audio.onended = audio.onerror = audio.onplay = audio.ontimeupdate = null;
-    audio.onplaying = audio.onwaiting = audio.onpause = null;
-    audio.onprogress = audio.onloadedmetadata = audio.ondurationchange = audio.oncanplay = null;
-    audio.src = url;
-    audio.playbackRate = sharedState._ttsRate;
-    openTimer = setTimeout(() => { if (!buffer) toClips('source never opened', true); }, 4000);
-    _ttsSetStreaming(true);
-    const player = { audio, token, stopHighlight, chain: true };
-    player.cancel = () => {
-      release();
-      try { audio.removeAttribute('src'); audio.load(); } catch (_) {}
-    };
-    // Seek inside audio already made; otherwise restart at the target's clip.
-    player.seek = (target) => {
-      const k = clips.findIndex(c => target < c.start + c.text.length);
-      if (k >= 0 && k < marks.length) {
-        const c = clips[k], into = target - c.start;
-        // A clip still arriving has no length yet: use the speech-rate estimate.
-        const t = marks[k] + (k + 1 < marks.length
-          ? into / Math.max(1, c.text.length) * (marks[k + 1] - marks[k]) : into / 15);
-        if (t < bufferedEnd()) {
-          audio.currentTime = t;
-          sharedState._ttsLastCharIndex = target;
-          return;
-        }
-      }
-      if (!(state.prefetch && state.prefetch[from + Math.max(0, k)]) && _ttsRestartWithBrowserVoice()) return;
-      _ttsEngineCancel();
-      sharedState._ttsUtterance = null;
-      state.index = from + Math.max(0, k);
-      state.seekTarget = k >= 0 && target > clips[k].start ? target : null;
-      _ttsSpeakNextChunk();
-    };
-    sharedState._ttsNeural = player;
-    audio.ontimeupdate = () => { if (!audio.paused && !audio.ended) updateWord(); };
-    audio.onpause = () => {
-      stopHighlight();
-      if (!stale() && !audio.ended) _ttsPriorityStop();
-    };
-    audio.onplay = () => {
-      if (stale()) return;
-      setTtsButtonsState(true, false, state.paneId);
-      setTtsButtonsBusy(false);
-      const voice = state.geminiVoice || 'Kokoro';
-      ttsButtons().forEach(btn => {
-        if (ttsButtonPaneId(btn) === sharedState._ttsActivePaneId) {
-          btn.classList.remove('paused');
-          btn.title = 'Pause reading (free voice: ' + voice + ')';
-        }
-      });
-      _ttsShowVoice(voice + (model ? ' · ' + model : ''));
-    };
-    let waitFrom = 0;
-    audio.onplaying = () => {
-      if (stale()) return;
-      _ttsPriorityPlaying();
-      const now = Date.now();
-      stopHighlight();
-      trackWord();
-      const lagMs = _ttsEventLagMs(audio);
-      if (!waitFrom) {
-        _ttsPerfStart(state, { engine: 'neural', voice: state.geminiVoice, lagMs });
-        if (state.perf && state.perf.gapT0) {
-          _ttsPerfSilence(state, Math.max(0, performance.now() - state.perf.gapT0 - lagMs), 'gap');
-          state.perf.gapT0 = 0;
-        }
-        if (state.t0) { _ttsLog('FIRST', 'sound after ' + (now - state.t0) + 'ms (chained)'); state.t0 = 0; }
-        state.gapFrom = 0;
-        return;
-      }
-      _ttsPerfSilence(state, now - waitFrom, 'stall');
-      _ttsLog('STALL', (now - waitFrom) + 'ms in chained read at ' + audio.currentTime.toFixed(1) + 's, rate ' + sharedState._ttsRate);
-      waitFrom = 0;
-    };
-    audio.onwaiting = () => { if (!stale() && audio.currentTime > 0) waitFrom = Date.now(); };
-    audio.onended = () => {
-      if (stale()) return;
-      if (failedAt != null) {
-        state.index = from + failedAt;
-        toClips('clip ' + state.index + ' failed');
-        return;
-      }
-      release();
-      clearTtsHighlight();
-      clearTtsCaption();
-      _ttsSetStreaming(false);
-      _ttsLog('ENDED', 'chained read, ' + clips.length + ' clips');
-      sharedState._ttsNeural = null;
-      sharedState._ttsUtterance = null;
-      state.index = state.chunks.length;
-      _ttsSpeakNextChunk();
-    };
-    audio.onerror = () => {
-      if (stale()) return;
-      _ttsLog('ERROR', 'chained media error ' + (audio.error?.code || 'unknown'));
-      state.index = from + clipAt(audio.currentTime || 0).j;
-      toClips('media error', true);
-    };
-    if (sharedState._ttsPaused) return;
-    let retried = false;
-    const playStream = () => audio.play().catch((error) => {
-      if (stale()) return;
-      _ttsLog('ERROR', 'chained play rejected: ' + (error?.name || 'unknown'));
-      if (error?.name === 'NotAllowedError') { _ttsPlayBlocked(state); return; }
-      // AbortError = a pause or load interrupted the pending play. The stream
-      // is still ours, and leaving it cost a 13 s silence (CCC-144).
-      if (error?.name === 'AbortError' && !retried) {
-        retried = true;
-        if (sharedState._ttsPaused) return;   // the listener paused; resuming plays it
-        let fired = false;
-        const again = () => { if (fired || stale() || sharedState._ttsPaused) return; fired = true; playStream(); };
-        audio.addEventListener('canplay', again, { once: true });
-        setTimeout(again, 1500);
-        return;
-      }
-      toClips('play rejected');
-    });
-    playStream();
-    mark('play_ms');
   }
 
   function _primeTtsEngine() {
@@ -8434,10 +6535,8 @@
     _ttsShowVoice('');
     _ttsPerfFlush(sharedState._ttsChunkState);
     sharedState._ttsChunkState = null;
-    _ttsScheduleCacheDebug();
-    if (window.speechSynthesis) {
-      _ttsEngineCancel();
-    }
+
+    _ttsEngineCancel();
     sharedState._ttsUtterance = null;
     sharedState._ttsTextMapping = [];
     sharedState._ttsLastCharIndex = 0;
@@ -8598,18 +6697,13 @@
     const seen = performance.now();
     const end = Math.max(p.t0, seen - (how.lagMs || 0));
     _perfEvent('tts_start', _perfActiveElapsed(p.t0, end), { detail: {
-      engine: how.engine, voice: how.voice || '', cache: p.cache, head: p.head,
+      engine: how.engine, voice: how.voice || '',
       chars: p.chars, clips: p.clips, target: p.target, rate: sharedState._ttsRate,
       wall_ms: Math.round(end - p.t0), mode: p.mode || 'clips', cue: !!p.cue,
-      bridge: !!p.bridge, event_lag_ms: Math.round(seen - end),
+      event_lag_ms: Math.round(seen - end),
       longtask_ms: _perfLongTaskMs(p.t0, seen), client: _ttsClientTag(),
       session_ms: p.sessionMs, split: p.split,
     } });
-  }
-
-  function _ttsEventLagMs(audio) {
-    const lag = (Number(audio.currentTime) || 0) / Math.max(0.1, Number(audio.playbackRate) || 1) * 1000;
-    return lag > 0 ? lag : 0;
   }
 
   function _ttsClientTag() {
@@ -8620,12 +6714,7 @@
     return /Safari\//.test(ua) ? 'safari' : 'webkit-app';
   }
 
-  function _ttsPerfSilence(state, ms, kind) {
-    const p = state && state.perf;
-    if (!p || !(ms >= 0)) return;
-    if (kind === 'gap') { p.gaps += 1; p.maxGap = Math.max(p.maxGap, ms); }
-    else { p.stalls += 1; p.maxStall = Math.max(p.maxStall, ms); }
-  }
+
 
   function _ttsPerfFlush(state) {
     const p = state && state.perf;
@@ -8633,139 +6722,45 @@
     p.flushed = true;
     // A single-stream read has no clip gaps: a smooth multi-clip one still
     // reports its 0 ms, or the gate would only ever see the stalled reads.
-    const smoothStream = p.started && (p.mode === 'browser'
-      || ((p.mode === 'continuous' || p.mode === 'chain') && p.clips > 1));
+    const smoothStream = p.started && p.mode === 'browser';
     if (!p.gaps && !p.stalls && !smoothStream) return;
     _perfEvent('tts_gap', Math.max(p.maxGap, p.maxStall), { detail: {
       max_gap_ms: Math.round(p.maxGap), gaps: p.gaps,
       max_stall_ms: Math.round(p.maxStall), stalls: p.stalls,
-      voice: state.geminiVoice || '', cache: p.cache, chars: p.chars,
+      voice: state.voice || '', chars: p.chars,
       clips: p.clips, played: state.index, target: p.target, rate: sharedState._ttsRate,
-      mode: p.mode || 'clips', bridge: !!p.bridge, client: _ttsClientTag(),
+      mode: p.mode || 'device', client: _ttsClientTag(),
     } });
   }
 
-  function _ttsStartChunkedSpeech(text, paneId, baseOffset, pauseOnStart) {
-    let chunks = _chunkTtsText(text, sharedState.TTS_CHUNK_MAX_CHARS, baseOffset);
+  function _ttsStartChunkedSpeech(text, paneId, baseOffset, pauseOnStart, deviceOnly) {
+    const hebrew = _ttsIsHebrew(text);
+    const browserVoice = !deviceOnly && !hebrew
+      && !/[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u.test(text)
+      && !!window.cccBrowserVoice?.ready;
+    const chunks = browserVoice ? [{ text, start: Number(baseOffset) || 0 }]
+      : _chunkTtsText(text, sharedState.TTS_CHUNK_MAX_CHARS, baseOffset);
     if (!chunks.length) return false;
-    const _ttsPrev = sharedState._ttsChunkState || sharedState._ttsPerfState;
-    const _ttsPerfHead = _ttsHeadChunk(text, baseOffset);
-    const _ttsPerfEntry = _ttsPerfHead && sharedState._ttsHeadCache.get(_ttsPerfHead.text);
-    const _ttsPerfCs = _ttsPerfHead && sharedState._ttsCacheState.get(_ttsPerfHead.text);
-    // Free voice whenever it isn't cooling down. A prepared first chunk starts
-    // instantly; otherwise it is fetched now (a 160-char head takes ~1-2 s).
-    // The Mac voice is only the fallback when that fetch or playback fails.
-    const _ttsHebrew = _ttsIsHebrew(text);
-    const browserVoice = !_ttsHebrew && !/[^\p{Script=Latin}\p{Script=Common}\p{Script=Inherited}]/u.test(text)
-      && (!sharedState._ttsKeepVoice || sharedState._ttsKeepVoice.startsWith('Browser:')) && !!window.cccBrowserVoice?.ready;
-    const _ttsHeadReady = !_ttsHebrew && Date.now() >= sharedState._ttsNeuralCooldownUntil;
-    {
-      const h = _ttsHeadChunk(text, baseOffset);
-      const e = h && sharedState._ttsHeadCache.get(h.text);
-      let why = '';
-      if (_ttsHebrew) why = 'Hebrew: the free voice has none';
-      else if (Date.now() < sharedState._ttsNeuralCooldownUntil) why = 'free voice cooling down, ' + Math.round((sharedState._ttsNeuralCooldownUntil - Date.now()) / 1000) + 's left (' + sharedState._ttsNeuralCooldownWhy + ')';
-      sharedState._ttsStartWhy = why;
-      _ttsLog('START', browserVoice ? 'browser voice, resident Phonon 31M' : why ? 'MAC VOICE: ' + why
-        : 'free voice, ' + (e && e.ready ? 'chunk ready' : e ? 'chunk still generating' : 'fetching first chunk now'));
-    }
-    if (!browserVoice && Date.now() >= sharedState._ttsNeuralCooldownUntil && _ttsHeadReady) {
-      // Free voice: generation time scales with length (about 10 s for a
-      // 1,600-char chunk), so start with a short sentence-sized chunk, then ~400-char
-      // chunks (about 6 s each to make, longer than they take to play).
-      const head = _chunkTtsText(text, sharedState._TTS_HEAD_CHARS, baseOffset)[0];
-      const used = head ? (head.start - (Number(baseOffset) || 0)) + head.text.length : 0;
-      if (head && used < text.length) {
-        chunks = [head].concat(_ttsRestChunks(text.slice(used), (Number(baseOffset) || 0) + used));
-      }
-    }
-    const _ttsFresh = !(Number(baseOffset) > 0) && !pauseOnStart && !sharedState._ttsKeepVoice;
-    let perf = null, macBridge = false;
-    if (!_ttsFresh && _ttsPrev && _ttsPrev.perf && !_ttsPrev.perf.flushed) {
-      perf = _ttsPrev.perf;   // a restart continues the same read
+    const previous = sharedState._ttsChunkState || sharedState._ttsPerfState;
+    let perf = null;
+    if ((Number(baseOffset) > 0 || pauseOnStart) && previous?.perf && !previous.perf.flushed) {
+      perf = previous.perf;
     } else {
-      if (_ttsPrev) _ttsPerfFlush(_ttsPrev);
-      if (_ttsFresh && !_ttsHebrew) {
-        perf = {
-          t0: performance.now(), started: false, flushed: false,
-          cache: _ttsPerfCs && _ttsPerfCs.st === 'ready' ? 'ready' : _ttsPerfEntry ? 'partial' : 'none',
-          head: _ttsPerfEntry ? (_ttsPerfEntry.ready ? 'ready' : 'generating') : 'none',
-          chars: text.length, clips: chunks.length, target: sharedState._ttsPerfTarget || 'other',
-          gaps: 0, maxGap: 0, stalls: 0, maxStall: 0, gapT0: 0,
-          cue: false,
-        };
-        // Cold click on the free voice: the built-in voice reads the first
-        // sentence at once while the free voice makes the next clip (owner,
-        // CCC-144 Q577). Kokoro needs ~2.6 s (p50) for a first sound on this
-        // host, so it can never start a cold read instantly. iPhone
-        // (continuous stream) keeps the tick: its <audio> needs the click.
-        if (!browserVoice && perf.head !== 'ready' && _ttsHeadReady) {
-          if (_ttsMacBridgeOk(chunks)) perf.bridge = macBridge = true;
-          else {
-            perf.cue = true;
-            try { _cccPlaySpeakerCue(); } catch (_) {}
-          }
-        }
-      }
-    }
-    if (!browserVoice && sharedState._ttsForceBridge && !macBridge && _ttsHeadReady && _ttsMacBridgeOk([0, 1])) macBridge = true;
-    if (browserVoice) {
-      // Rust streams sentence boundaries inside this one read. Never wait for
-      // a page callback to start the next sentence after a main-thread stall.
-      chunks = [{ text, start: Number(baseOffset) || 0 }];
-      if (perf) Object.assign(perf, { mode: 'browser', cache: 'browser-resident', head: 'resident', clips: 1 });
+      if (previous) _ttsPerfFlush(previous);
+      perf = { t0: performance.now(), started: false, flushed: false,
+        chars: text.length, clips: chunks.length, target: sharedState._ttsPerfTarget || 'other',
+        gaps: 0, maxGap: 0, stalls: 0, maxStall: 0, gapT0: 0,
+        mode: browserVoice ? 'browser' : 'device' };
     }
     sharedState._ttsPerfTarget = '';
-    // A new read frees the voice server: the old read's unfinished foreground
-    // clips would otherwise keep generating and starve this one (CCC-144). A
-    // restart (rate step, skip) keeps them, it needs the same clips.
-    if (_ttsFresh || !sharedState._ttsFgAbort) {
-      try { sharedState._ttsFgAbort?.abort(); } catch (_) {}
-      sharedState._ttsFgAbort = new AbortController();
-    }
     sharedState._ttsChunkState = {
-      chunks,
-      neuralOk: _ttsHeadReady,
-      hebrew: _ttsHebrew,
-      geminiVoice: sharedState._ttsKeepVoice,
-      index: 0,
+      chunks, hebrew, browserVoice, deviceOnly: !!deviceOnly, voice: '', index: 0,
       paneId: paneId || sharedState._ttsActivePaneId || (0, sharedState.activePaneId)(),
-      pauseOnStart: !!pauseOnStart,
-      t0: Date.now(),
-      perf,
-      macBridge,
-      browserVoice,
-      abort: sharedState._ttsFgAbort,
+      pauseOnStart: !!pauseOnStart, t0: Date.now(), perf,
     };
-    sharedState._ttsPerfState = perf ? sharedState._ttsChunkState : null;
+    sharedState._ttsPerfState = sharedState._ttsChunkState;
     _ttsSpeakNextChunk();
     return true;
-  }
-
-  function _ttsMacBridgeOk(chunks) {
-    let pref = '';
-    try { pref = localStorage.getItem('ccc-tts-mac-bridge') || ''; } catch (_) {}
-    if (pref === '0' || !window.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined') return false;
-    if (!chunks || chunks.length < 2) return false;
-    return !_ttsContinuousOk({ neuralOk: true, geminiVoice: sharedState._ttsKeepVoice });
-  }
-
-  function _ttsMacBridgeKick(state) {
-    const c = state.chunks[1];
-    state.prefetch = state.prefetch || {};
-    state.debugCache = state.debugCache || new Map();
-    if (!c || state.prefetch[1]) return;
-    // Prepare-ahead already chose this message's voice. Another one here would
-    // leave its clips unused and make this clip from nothing.
-    const prepared = sharedState._ttsHeadCache.get(state.chunks[0].text);
-    const voice = state.geminiVoice || (prepared && prepared.voice)
-      || (state.paneId ? ttsVoiceForPane(state.paneId) : '');
-    const hit = sharedState._ttsHeadCache.get(c.text);
-    let p;
-    if (hit && hit.ready && (!voice || hit.voice === voice)) p = hit.p;
-    else p = _ttsFetchNeural(c.text, voice, 'fg', null, state.abort?.signal);
-    p.catch(() => {});
-    state.prefetch[1] = p;
   }
 
   function _ttsSpeakNextChunk() {
@@ -8776,10 +6771,12 @@
     }
 
     const chunk = state.chunks[state.index];
+    if (!state.browserVoice && (!window.speechSynthesis || typeof SpeechSynthesisUtterance === 'undefined')) {
+      stopTextToSpeech();
+      showOpToast('Your device voice is unavailable.', 'error');
+      return;
+    }
     if (state.browserVoice) { _ttsSpeakBrowser(state, chunk); return; }
-    const bridging = !!(state.macBridge && state.index === 0);
-    if (!bridging && _ttsNeuralUsable(state)) { _ttsSpeakChunkNeural(state, chunk); return; }
-    if (bridging) _ttsMacBridgeKick(state);
     const utterance = new SpeechSynthesisUtterance(chunk.text);
     utterance.rate = sharedState._ttsRate;
     if (state.hebrew) utterance.lang = 'he-IL';
@@ -8788,10 +6785,8 @@
     utterance.onstart = () => {
       if (sharedState._ttsUtterance !== utterance || sharedState._ttsChunkState !== state) return;
       _ttsPerfStart(state, { engine: 'mac', voice: 'Mac voice' });
-      if (bridging) _ttsLog('BRIDGE', 'Mac voice reads clip 0 while the free voice makes clip 1');
       setTtsButtonsState(true, false, state.paneId);
       _ttsShowVoice('Mac voice');
-      if (sharedState._ttsStartWhy) ttsButtons().concat(sharedState._ttsDirectBtn ? [sharedState._ttsDirectBtn] : []).forEach(btn => { btn.title = 'Mac voice: ' + sharedState._ttsStartWhy; });
       setTtsButtonsBusy(false);
       ttsButtons().forEach(btn => {
         if (ttsButtonPaneId(btn) === sharedState._ttsActivePaneId) {
@@ -8823,11 +6818,6 @@
       if (sharedState._ttsUtterance !== utterance || sharedState._ttsChunkState !== state) return;
       state.index += 1;
       sharedState._ttsUtterance = null;
-      if (bridging) {
-        // Silence from here to the free voice's first sound counts as a gap.
-        state.gapFrom = Date.now();
-        if (state.perf) state.perf.gapT0 = performance.now();
-      }
       if (skipped) {
         showOpToast('Skipped one speech segment; continuing.', 'info');
       }
@@ -8842,8 +6832,8 @@
   }
 
   function _ttsSpeakBrowser(state, chunk) {
-    const token = ++sharedState._ttsNeuralToken;
-    const stale = () => token !== sharedState._ttsNeuralToken || sharedState._ttsChunkState !== state;
+    const token = ++sharedState._ttsPlaybackToken;
+    const stale = () => token !== sharedState._ttsPlaybackToken || sharedState._ttsChunkState !== state;
     sharedState._ttsUtterance = { browser: true };
     const words = Array.from(chunk.text.matchAll(/\S+/g), m => ({ start: m.index, length: m[0].length }));
     const fallback = error => {
@@ -8853,18 +6843,17 @@
       sharedState._ttsUtterance = null;
       _ttsSetStreaming(false);
       const offset = Math.max(chunk.start, sharedState._ttsLastCharIndex || 0);
-      // Re-enter the existing splitter, rather than sending an entire long
-      // browser read to the server as one oversized neural clip.
-      _ttsStartChunkedSpeech(sharedState._ttsBoundUtteranceText.slice(offset), state.paneId, offset, sharedState._ttsPaused);
+      // Continue from the current word using the device voice, without retrying the failed engine.
+      _ttsStartChunkedSpeech(sharedState._ttsBoundUtteranceText.slice(offset), state.paneId, offset, sharedState._ttsPaused, true);
     };
     const browserPick = state.paneId ? ttsBrowserVoiceForPane(state.paneId) : null;
     const playback = window.cccBrowserVoice?.start(chunk.text, {
       rate: sharedState._ttsRate, paused: !!state.pauseOnStart, voice: browserPick ? browserPick.id : '',
       onstart(data) {
         if (stale()) return;
-        state.geminiVoice = 'Browser: Phonon' + (browserPick ? ' · ' + browserPick.label : '');
-        _ttsPerfStart(state, { engine: 'browser', voice: state.geminiVoice, lagMs: data.lagMs });
-        _ttsShowVoice(state.geminiVoice);
+        state.voice = 'Browser: Phonon' + (browserPick ? ' · ' + browserPick.label : '');
+        _ttsPerfStart(state, { engine: 'browser', voice: state.voice, lagMs: data.lagMs });
+        _ttsShowVoice(state.voice);
         _ttsSetStreaming(true);
         setTtsButtonsBusy(false);
         setTtsButtonsState(true, sharedState._ttsPaused, state.paneId);
@@ -8923,12 +6912,11 @@
   async function readLastMessageAloud(paneId) {
     if (typeof sharedState._ttsEnabled !== 'undefined' && !sharedState._ttsEnabled) {
       if (typeof showOpToast === 'function') {
-        showOpToast('Text-to-speech is turned off (re-enable in Diagnostics or Settings).', 'info');
+        showOpToast('Read-aloud is turned off (re-enable in Settings).', 'info');
       }
       return;
     }
-    if (window.cccLocalSpeech) window.cccLocalSpeech.offer();
-    if (!window.speechSynthesis) {
+    if (!window.speechSynthesis && !window.cccBrowserVoice?.ready) {
       showOpToast('Your browser does not support text-to-speech.', 'error');
       return;
     }
@@ -8941,7 +6929,7 @@
     const _freshSel = (sharedState._ttsActive || sharedState._ttsPaused) ? _ttsFreshSelection(paneId || (0, sharedState.activePaneId)()) : null;
     if (_freshSel) {
       sharedState._ttsChunkState = null;
-      _ttsScheduleCacheDebug();
+
       try { _ttsEngineCancel(); } catch (_) {}
       clearTtsHighlight();
       sharedState._ttsActive = false;
@@ -9103,44 +7091,17 @@
     });
   }
 
-  function _restartTtsAtCurrentPosition(voice) {
-    // Only meaningful while playback is active. Cancel the in-flight
-    // chunk queue and re-speak from the most recent word boundary with the
-    // new rate, or in `voice` when a voice switch asked for one.
+  function _restartTtsAtCurrentPosition() {
     if (!sharedState._ttsBoundUtteranceText) return false;
     const offset = sharedState._ttsLastCharIndex || 0;
     const rest = sharedState._ttsBoundUtteranceText.slice(offset);
     if (!rest.trim()) return false;
     const wasPaused = sharedState._ttsPaused;
-    // The old voice's unfinished clips can't be used: stop them competing with
-    // the new voice's first clip (1-2 s stalls while trying voices, CCC-144).
-    if (voice !== undefined) {
-      try { sharedState._ttsFgAbort?.abort(); } catch (_) {}
-      sharedState._ttsFgAbort = null;
-    }
-    sharedState._ttsKeepVoice = voice !== undefined ? voice
-      : ((sharedState._ttsChunkState && sharedState._ttsChunkState.geminiVoice) || '');
+    const deviceOnly = sharedState._ttsChunkState?.deviceOnly;
     sharedState._ttsChunkState = null;
-    _ttsScheduleCacheDebug();
-    try { _ttsEngineCancel(); } catch (_) {}
-    // Keep _ttsBoundUtteranceText pointing at the full text so subsequent
-    // changes continue to use global offsets for captions/highlights.
-    _ttsStartChunkedSpeech(
-      rest,
-      sharedState._ttsActivePaneId || (0, sharedState.activePaneId)(),
-      offset,
-      wasPaused,
-    );
-    sharedState._ttsKeepVoice = '';
-    return true;
-  }
-
-  function _ttsSwitchVoice(paneId, voice) {
-    setTtsVoiceForPane(paneId, voice);
-    document.querySelectorAll('.conv-pane').forEach(renderTtsVoiceStepper);
-    if (!sharedState._ttsActive && !sharedState._ttsPaused) return false;
-    if (sharedState._ttsActivePaneId && paneId && sharedState._ttsActivePaneId !== paneId) return false;
-    return _restartTtsAtCurrentPosition(voice);
+    _ttsEngineCancel();
+    return _ttsStartChunkedSpeech(rest,
+      sharedState._ttsActivePaneId || (0, sharedState.activePaneId)(), offset, wasPaused, deviceOnly);
   }
 
   function _ttsCycleVoice(step) {
@@ -9154,14 +7115,7 @@
       _ttsSwitchBrowserVoice(paneId, next.id);
       return next;
     }
-    const free = sharedState._ttsVoiceOptions.filter(o => !o.paid);
-    if (!free.length) return null;
-    const playing = (sharedState._ttsChunkState && sharedState._ttsChunkState.geminiVoice) || ttsVoiceForPane(paneId);
-    const i = free.findIndex(o => o.id === playing);
-    const from = i < 0 ? (step > 0 ? -1 : 0) : i;
-    const next = free[(from + step + free.length * 2) % free.length];
-    _ttsSwitchVoice(paneId, next.id);
-    return next;
+    return null;
   }
 
   function _ttsJumpToNextSentence() {
@@ -9187,38 +7141,7 @@
       return;
     }
     sharedState._ttsLastCharIndex = target;
-    if (_ttsSeekNeuralTo(sharedState._ttsLastCharIndex)) return;
     _restartTtsAtCurrentPosition();
-  }
-
-  function _ttsRestartWithBrowserVoice() {
-    if (!_ttsMacBridgeOk([0, 1])) return false;
-    sharedState._ttsForceBridge = true;
-    const ok = _restartTtsAtCurrentPosition();
-    sharedState._ttsForceBridge = false;
-    return ok;
-  }
-
-  function _ttsSeekNeuralTo(target) {
-    const st = sharedState._ttsChunkState;
-    if (!st || st.neuralOk === false) return false;
-    const k = st.chunks.findIndex(c => target < c.start + c.text.length);
-    if (k < st.index || k < 0) return false;
-    if ((k === st.index || sharedState._ttsNeural?.chain) && sharedState._ttsNeural?.audio) {
-      sharedState._ttsNeural.seek(target);
-      return true;
-    }
-    // Target clip not made yet: read from the browser voice until the free
-    // voice catches up instead of going silent (CCC-389).
-    if (!(st.prefetch && st.prefetch[k]) && _ttsRestartWithBrowserVoice()) return true;
-    // Keep state.prefetch and the original clip text: re-chunking at the
-    // sentence boundary loses the prepared clip and creates a cold request.
-    _ttsEngineCancel();
-    sharedState._ttsUtterance = null;
-    st.index = k;
-    st.seekTarget = target > st.chunks[k].start ? target : null;
-    _ttsSpeakNextChunk();
-    return true;
   }
 
   function _refreshTtsRateBtns() {
@@ -9235,11 +7158,8 @@
     _syncTtsRateUi();
     _refreshTtsRateBtns();
     if (sharedState._ttsRateRestartTimer) clearTimeout(sharedState._ttsRateRestartTimer);
-    // A neural clip just changes speed in place: no restart, same voice.
-    if (sharedState._ttsNeural && sharedState._ttsNeural.audio) sharedState._ttsNeural.audio.playbackRate = sharedState._ttsRate;
     sharedState._ttsRateRestartTimer = setTimeout(() => {
       sharedState._ttsRateRestartTimer = null;
-      if (sharedState._ttsNeural && sharedState._ttsNeural.audio) return;
       if (sharedState._ttsActive || sharedState._ttsPaused) _restartTtsAtCurrentPosition();
     }, 120);
   }
@@ -13306,7 +11226,7 @@
           // Transcript size lives in the pane titlebar (.conv-pane-size) already;
           // duplicating it here just crowded the narrow breadcrumb and forced the
           // category/title to ellipsize to uselessness ("cod…", "C…"). (CCC-280)
-          ;
+
         breadcrumbEl.hidden = false;
         updateConvProcessIndicator();
         // Mirror the active session's name into the status-rail head, replacing
@@ -13712,7 +11632,7 @@
       ev.stopPropagation();
       const next = _ttsCycleVoice(ev.shiftKey ? -1 : 1);
       if (!next) return;
-      voiceName.textContent = String(next.label || next.id).replace(/^Kokoro:\s*/, '').replace(/\s*\(fp\d+\)$/, '');
+      voiceName.textContent = String(next.label || next.id);
       voiceName.hidden = false;
       clearTimeout(voiceNameTimer);
       voiceNameTimer = setTimeout(() => { voiceName.hidden = true; }, 2500);
@@ -13876,10 +11796,10 @@
       speakBtn.classList.toggle('speaking', readingTarget && sharedState._ttsActive && !sharedState._ttsPaused);
       speakBtn.classList.toggle('paused', readingTarget && sharedState._ttsPaused);
       _syncSpeakFloatPlayback(speakBtn);
-      scheduleTtsViewportPrefetch(view, speakBtn._speakTarget);
-      _ttsScheduleCacheDebug();
+
+
       const showSpeak = !!speakBtn._speakTarget;
-      _syncSpeakFloatCache(speakBtn);
+
       speakBtn.classList.toggle('visible', showSpeak);
       speakBtn.setAttribute('aria-hidden', showSpeak ? 'false' : 'true');
       speakBtn.tabIndex = showSpeak ? 0 : -1;
@@ -25228,35 +23148,7 @@
     applyConversationBackgroundToPane(pid, storedConversationBgForPane(pid), { persist: false });
   }
 
-  function _ttsVoiceMap() {
-    try {
-      const m = JSON.parse(localStorage.getItem(sharedState.TTS_VOICE_BY_SESSION_KEY) || '{}');
-      return m && typeof m === 'object' && !Array.isArray(m) ? m : {};
-    } catch (_) { return {}; }
-  }
-
-  function ttsVoiceDefault() {
-    try { return localStorage.getItem(sharedState.TTS_VOICE_DEFAULT_KEY) || ''; } catch (_) { return ''; }
-  }
-
-  function ttsVoiceForPane(paneId) {
-    const key = conversationBgKeysForPane(paneId)[0];
-    const own = key ? _ttsVoiceMap()[key] : '';
-    const v = own === undefined ? '' : own;   // '' = random, still an explicit pick
-    const pick = key && own !== undefined ? v : ttsVoiceDefault();
-    return sharedState._ttsVoiceOptions.some(o => o.id === pick) ? pick : '';
-  }
-
-  function setTtsVoiceForPane(paneId, voice) {
-    const key = conversationBgKeysForPane(paneId)[0];
-    if (!key) return;
-    const m = _ttsVoiceMap();
-    m[key] = voice;
-    try { localStorage.setItem(sharedState.TTS_VOICE_BY_SESSION_KEY, JSON.stringify(m)); } catch (_) {}
-  }
-
-  // Browser voice pilot speakers are stored apart from server voices, so a server
-  // fallback never receives a browser-only voice id.
+  // Browser speakers are selected per conversation on this device.
   function _ttsBrowserVoices() {
     const bv = window.cccBrowserVoice;
     return bv && bv.ready && Array.isArray(bv.voices) ? bv.voices : [];
@@ -25310,27 +23202,8 @@
       }));
       return;
     }
-    const ids = [''].concat(sharedState._ttsVoiceOptions.map(o => o.id));
-    host.hidden = sharedState._ttsVoiceOptions.length === 0;
-    const cur = ttsVoiceForPane(paneId);
-    const opt = sharedState._ttsVoiceOptions.find(o => o.id === cur);
-    host.innerHTML = '<button type="button" data-step="-1" aria-label="Previous voice">&lt;</button>'
-      + '<span class="rail-voice-name"></span>'
-      + '<button type="button" data-step="1" aria-label="Next voice">&gt;</button>';
-    const name = host.querySelector('.rail-voice-name');
-    name.textContent = opt ? opt.label : 'Random voice';
-    if (opt && opt.paid) {
-      const m = document.createElement('span');
-      m.className = 'rail-voice-paid';
-      m.textContent = '$';
-      m.title = 'This voice costs money';
-      name.appendChild(m);
-    }
-    host.querySelectorAll('button').forEach(btn => btn.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      const i = ids.indexOf(cur) + Number(btn.getAttribute('data-step'));
-      _ttsSwitchVoice(paneId, ids[(i + ids.length) % ids.length]);
-    }));
+    host.hidden = true;
+    host.replaceChildren();
   }
 
   function ideaTicketsOn() {
@@ -25340,7 +23213,7 @@
   function ff(name) {
     try { return !!(window.__CCC_FLAGS__ || {})[name]; } catch (_) { return false; }
   }
-    return { stopSpeechRecognition, mountStatusRailForActivePane, saveSplitState, updatePaneHeader, setCopyableSessionId, fetchCodexDiagnostics, _codexDiagHidePanel, updateResumeButton, updateAnnounceButton, updateJumpButton, updateSplitToolbar, scheduleTtsPrefetch, resetLocalhostPill, _applyStatusRailLayout, sendEscToTerminal, compactCurrentSession, syncAllPaneHasFlags, convScopeSignal, updateConvOverflowButton, startLiveStatusPolling, rowRepoPath, popoutRepoPath, isImeKey, syncConversationArchiveButton, liveStatusMatchesOpenConv, antigravityCanSend, renderConversationGoalStrip, f2RenderComposer, getSpawnCwd, activeConvRepoPath, spawnCwdLabel, _pathLeaf, getSpawnEngine, antigravityInputPlaceholder, _relayedQuestionInlineEl, devinSteerCapableNow, isCompactionCapableSource, hasPendingSendEchoBeforeCompact, _compactRunBlocksResend, modelOptionsForSpawnEngine, engineSupportsEffort, effortLevelsForEngine, renderEffortOptions, newSessionPaneId, positionConversationEndAffordance, getInputContextSlot, renderSessionWorkspaceIntoSticky, renderSessionUsageIntoStrip, syncInputContextVisibility, composerUploadIsPending, showOpToast, sidebarRowDisplayTitle, shortSessionId, sessionCompletionDetails, fetchSessionUsage, resolvedSpawnConversationId, isSpawnLogPlaceholderSource, loadCodexLog, stopCodexLogPoller, _pollerOff, _pollerTick, renderPendingSpawnConversation, _contEnsureSegments, _contNextParentForPane, convTailLines, convFirstOpenLines, _takePrefetchedConversationTail, _convCacheEligible, _convCacheGet, _fetchConvJsonTimed, _markConvCachePreview, noteAppEmbedDrawn, _perfEvent, _perfActiveElapsed, _flushAfterConvTailAfterPaint, _contSegmentTitle, _contSegmentConfig, _prependConversationEvents, _convCachePutSoon, _renderFirstPromptPin, _convOpenPhases, _convOpenAfterPaint, _insertLoadEarlierBanner, _scheduleConvOpenBackfill, restorePendingSendEchoes, optimisticPromptForSession, spawnStatsMark, markSpawnAssistantPaint, markClaudeFirstVisibleOutput, _closeWtLogPanel, refreshConversationBackgroundForPane, syncPaneLastUserMessage, abortConvScopedRequests, _prefetchConversationTail, stopSpawnStream, startSpawnStream, syncPendingSendsMapForConv, rememberRecentConv, getLastConvKey, _compactRunActive, discardCompactRun, rememberConvScroll, closeStatusRailFileViewer, _updateLastWrittenLine, updateTtsFloatingControl, syncMobileOriginalAsk, _afterConvTail, scheduleSessionMetadataFetches, exitConvReplayMode, stopPkoodTailPoller, loadPkoodTail, _gated, _ultraFreshFeed, resetTtsOnNewTurn, _kimiRegroupTools, _removeStaleProvisionalsForTurn, _isOriginalAskText, convRowForPane, originalAskTextForEvent, renderImageDescriptors, breadcrumbSpawnedByChipHtml, _dynAskSchedule, _updateStickyAskSlots, renderSessionTimelineIntoSticky, repoPathForIssueNumber, clearSessionSending, completeCompactRun, _compactRunAnchorTo, userMessageSteerHtml, formatPeerMessageHtml, _convPaneSeedTaskInfo, _kimiToolRowHtml, _imageGenerationBlockHtml, _kimiAppendAssistantEvent, attachPresentationArtifactToAssistant, _compactRunAdoptDevinSummary, _recordCacheMissLog, _convPaneMarkTaskCompleted, stampCurrentToolGroup, _convLiveRevealNewText, _kimiFlushRegroups, _convPaneSyncJsonlTaskTabs, updateLiveToolStrip, updateCodexStateBadge, clearOptimisticAgentIndicator, _compactRunClaimSummary, _compactRunMount, _compactRunAdoptBoundary, syncQueuedSteerTray, takeQueuedSendAcknowledgement, updateSessionOutcomeBanner, updateConversationEndAffordance, scrollConversationToEnd, _firePhoneModeReadIfDone, _ensureFirstUserPinned, _syncLiveQuestionDuplicateHide, syncUserMessageSteerButtons, _convReplaySweepNewItems, hideSlashCommandMenu, stopTextToSpeech, applyOptimisticConversationGoalAction, beginCompactRun, appendPendingSendEcho, markSessionSending, looksDormantNoProcess, startCodexWakeBreakdown, durableActionId, isClaudeSource, markPendingSendQueued, tapbackTakePending, fetchInjectWithRetry, tapbackRestorePending, _showTerminalSuspectedDialog, removePendingSendEcho, bindPendingSendDeliveryId, renderConvWakeOutcome, markPendingSendDelivered, refreshLiveStatus, scheduleFireAndWatchRefresh, applyClearSuccession, beginWtReceiptTracking, compactResponseIsComplete, adoptCompactRunResult, markCompactRunWorking, scheduleCompactUsageRefresh, handleCompactTimeout, formatInjectFailure, _isCompactTimeoutReason, failCompactRun, isCursorUsageLimitFailure, appendSendFailureNotice, renderInlineWakeError, isTouchPrimary, updateMicButtonsState, mountStatusRailForPaneId, getSplitStateKey, paneCategoryForRow, paneTitleForRow, continuationBackstopTitle, rowRawTitle, workerTitleForPane, workerRowFacts, _waAvatarHtml, paneEngineIconHtml, sourceLabelForPane, sessionDriverHtml, sidebarSessionIdChipHtml, workerOriginBadgeHtml, updateConvProcessIndicator, _renderRailSpawnedVia, openActivityLogModal, formatSize, railSessionIdLabel, paneIdForSessionId, _codexDiagStop, _codexDiagPaneIsCodex, _codexDiagMetadataTabActive, renderCodexDiagnostics, cancelCodexDesktopHandover, activeConvSession, jumpButtonsForActiveTab, allJumpButtons, launchButtonsForActiveTab, launchWrapsForActiveTab, allLaunchWraps, allLaunchButtons, renderLaunchChoiceMenu, launchTerminal, _ttsIsPaneOnScreen, scheduleTtsViewportPrefetch, lastMessageTtsData, _ttsIsDataInView, _ttsPrefetchHead, _ttsMarkCache, _ttsLog, isMobile, beginCompactProgress, postRunCompactForSession, _compactToastNeeded, compactRequestSuccessMessage, touchSessionOptimistically, offerManualCompact, syncPaneHasFlags, _convOverflowHasActions, _closeConvOverflow, refreshLiveSessionsActivity, refreshMsgTimestamps, _isAbsoluteLocalPath, _openConversationRow, sessionReadyToClose, _applyLiveOverlayToRow, sessionIsOptimisticallySending, syncSessionStateCloseActions, goalStatusUi, conversationGoalActionButtonsHtml, f2RailEl, f2PanelEl, f2InputEl, f2PaneKey, f2ContinuedIntoSessionId, f2ResumeGate, f2ManualGate, f2StateFor, f2ComposerText, f2FmtTokens, f2FmtAge, f2RoutesHtml, f2FitSheet, normalizeSpawnCwdPath, findSpawnCwdRepo, normalizeSpawnDefaultEngine, _compactRunFor, _normalizeModelId, _modelAllowedForEngine, latestModelsOnly, _engineSupportsCustomModel, _speakBtnSavedPos, _syncSpeakerTools, scheduleInputContextFit, claudeModelSupportsOneM, spawnEngineLabel, _getCtxLimitOverride, ff, _contextRingSvg, cycleAutoHandoverModeForPane, openPlanUsagePopover, openModelPicker, _rowSubscriptionCostUsd, _rowBadgeShowsCost, _formatRowCostUsd, bugErrorAction, stripLeadingPathOrUrl, capitalizeSessionTitleStart, stripSessionIdPrefix, _isComposerFocused, _sessionUsagePaneIsVisible, sessionUsageRefreshDecision, _renderRailTokens, markFireAndWatchSpawnFailed, renderAntigravityLogHtml, renderGeminiLogHtml, renderCursorLogHtml, renderCodexLogHtml, engineModelEffortBits, _retryFailedPendingSpawn, _removePendingSpawnCard, setSpawnCwdInputValue, setSpawnEngine, enterNewSessionMode, _showPendingSpawnRepoPathEditor, showOptimisticAgentIndicator, renderPendingCodexStats, spawnStatsEnabled, continuationParentIdForSid, _convCacheDb, _convDirectUrl, _convResourceTiming, timeAgo, _clientLog, _flushAfterConvTail, _continuationRowForSid, sessionIconEngine, _placeFirstPromptPin, _perfLongTaskMs, _perfListOverlapMs, _ensureLoadEarlierStyle, _showConvLoading, fmtStatMs, releaseClaudeSpawnPaintGate, conversationPaneForId, conversationBgPrimaryKeyForPane, renderConversationBackgroundPalette, renderTtsVoiceStepper, applyConversationBackgroundToPane, storedConversationBgForPane, setLiveBadgeVisible, clearStreamingBubble, handleSpawnEvents, _stopCompactRunTimer, conversationScrollViews, _lastWrittenAgo, updateTopbarTtsControl, fetchSessionTimeline, fetchSessionWorkspace, _convReplayRevealAllWordsInstantly, _convReplayTextContainer, _convReplayClearWordReveal, _convReplayResetHumanTyping, _orchReplayStep, _scrollConvReplayToBottom, _pollerSkip, _timePoller, _ultraFreshAccept, _kimiTidyToolGroups, openConvRow, continuationParentId, f2EffectiveParentSessionId, spawnParentVisibleId, firstSentenceOf, _dynAskUpdate, _railSeedLastAsk, filterConversations, _compactRunPaint, _compactRunPollAfter, _compactRefreshContextPill, codexTurnSteerable, devinTurnSteerable, splitTopLevelCommas, peerReportImagesHtml, _convPaneTabState, _convPaneRenderTabStrip, _kimiToolStatusOf, _webuiToolDisplayName, _kimiToolSummary, _kimiDiffHtml, _kimiNormToolName, _kimiTodoChecklistHtml, _kimiToolGlyph, _kimiNormBlockText, _kimiTurnCoveredBlocks, latestCompletedPresentationAnswer, mode3BootstrapAnswerKey, _compactRunIsForeground, _convPaneCloseSubagentTab, _convShouldLiveRevealNewText, _convLiveRevealContainersForEvent, _wrapReplayWordsInHtml, _convLiveRevealWords, updateLiveStripOffset, setOptimisticAgentThinking, _settleWebuiRunningTools, getSingleLiveToolInline, settleStaleOptimisticAgentIndicator, _codexRequestCardShowing, respondCodexApproval, respondClaudePermission, grabBackCodexSession, codexActiveItemLabel, codexTokenUsageText, _wireLiveInlineExpand, _kimiMoonHtml, cleanLiveActivityDetail, shortenLiveActivityDetail, liveActivityToolLabel, liveActivityTitle, liveQuestionDetailHtml, liveActivityDetailClass, wakeCodexSession, _optimisticAgeLabel, _removePriorWakeStatus, stopCodexWakeBreakdown, _stopOptimisticAgeTicker, _compactRunView, steerIsInFlight, queuedSteerCardCount, queuedSteerSource, sessionSupportsQueuedSteer, queuedSteerBlockedReason, syncQueuedFromLabel, applyQueuedSteerError, syncQueuedSteerAllControl, _conversationIsQuiet, _confirmSessionNotLiveThenRenderOutcomeBanner, _renderOutcomeBanner, attachConversationEndAffordance, _prevUserMessageTarget, _nextUserMessageTarget, _visibleSpeakButton, _syncSpeakFloatPlayback, _ttsScheduleCacheDebug, _syncSpeakFloatCache, _batchHasSpeakableReply, _disarmPhoneModeRead, readLastMessageAloud, _convReplayCollectItems, _convReplayTagWithTs, renderConvReplayControls, playNextConvReplayStep, clearTtsHighlight, clearTtsCaption, _ttsShowVoice, _ttsPerfFlush, _ttsEngineCancel, setTtsButtonsBusy, setTtsButtonsState, _setTtsDirectBtnState, _compactContextNow, _tickCompactRun, sessionIsActivelyWorking, injectToSession, beginOptimisticSteerMove, _sessionRowMatches, syncCodexWakeUsage, renderCodexWakeBreakdown, handleCodexWakeOutcome, tapbackLoad, tapbackSave, _cccPlayTurnEnd, _cccGlowCompletedConversation, _cccPlayDone, maybeCatchUpCodexConversationFromAppServer, maybeCatchUpAcpConversationFromWire, _rememberLiveOverlay, _liveOverlayFieldsFromRow, _scheduleSidebarRender, syncRelayedQuestionModal, markStaleStreamingBubbles, updateSilentInvestigateBar, f2RecordContinuationLineage, wtTransportStageLabel, _wtSetEchoNote, _wtFindLivePendingEcho, _wtNativeFallbackResend, micButtons, micButtonPaneId, stripTitle, stripGhIssueProjectTag, isContinuationBoilerplateTitle, continuationFallbackTitle, rowLocalTitle, _workerRoleFromPrompt, _uxFixesWorkerTicketsForRow, workerSelfTicketRef, workerTaskTicketRef, workerQueueOf, workerStateBucket, _ideaAvatarHtml, _repoSessionAvatarHtml, _waCategory, sessionEngineIconHtml, _procCheckedAgoLabel, _procCheckedClock, closeActivityLogModal, _loadActivityLogInto, codexDiagPanelEl, _codexDiagRow, _codexDiagPathHtml, _codexDiagAge, _codexDiagClock, launchTargetsForCurrentSession, actionButtonSnapshot, setActionButtonText, restoreActionButtonText, _ttsIsViewOnScreen, _ttsSpeakButtonData, isPendingSendEchoElement, buildTtsDataFromElements, _sanitizeTtsText, _ttsIsHebrew, _ttsHeadChunk, _ttsReadingOther, _ttsSelectPrefetchTarget, _ttsStartChain, _ttsFetchNeural, ttsVoiceForPane, _ttsCool, _ttsWatchCacheEntry, _ttsEvictCache, ttsButtons, ttsButtonPaneId, _ttsRefreshCacheCoverage, postCompactSession, _applyOptimisticTouchToRow, backgroundApiFetch, _handleKillEvents, _handlePrewarmEvents, _renderInterruptAsks, syncExternalSpawnPlaceholders, _scheduleTurnEndListRefresh, _ultraFreshSchedule, _ultraFreshWaitingAt, conversationGoalSourceKind, f2PaneRoot, _f2ContinuationEdges, _contextFieldsFromRow, f2EngineKey, f2DemoForceMatches, f2LaunchEngines, f2ModelsForEngine, f2EffortsForEngine, f2EffortLabel, f2EngineLabel, f2ModelLabel, f2ConfigHtml, _knownModelForEngine, _modelUnavailableReason, _knownModelForOtherEngine, _fitInputContextStrip, _autoHandoverCurrentState, commitAutoHandoverMode, closePlanUsagePopover, closeModelPicker, _buildClaudeModelMenuHtml, _reasoningSectionHtml, postInjectInput, railQuotaEngine, _monthlyClaudePlanUsd, _monthlyCodexPlanUsd, railQuotaCostPresentation, bugOpenModal, _isComposerElement, railUsageBreakdown, _claudeFriendlyModelName, railCostHeadline, railUsageBreakdownHtml, railQuotaCostHtml, _railTurnGraphHtml, _refreshQuotaCostCalibration, getEngineSvg, isBenignCodexErrorItem, isBenignCodexStderrLine, adoptPendingSpawnPid, _watchCodexSpawnRegistration, _watchPendingSpawnRegistration, chasePendingSpawn, _failPendingSpawnCard, persistSpawnCwdPickerValue, _showSpawnCwdTail, markNsAdvisorManual, syncSpawnEngineDependentUi, recordSpawnChoice, requestClaudePrewarm, syncNsModelOverrideSelects, renderNsAdvisor, resetRepoGuess, refreshJevRepoPromo, abortBackgroundApiReadsForSpawn, populateSpawnCwdPicker, ensureSpawnCwdOptionsLoaded, _wireNewSessionChooser, _renderNsExtensions, loadNsAdvisor, renderNsAdvisorEditor, renderNsModelPickerPills, cancelOptimisticAgentTurn, _startOptimisticAgeTicker, _armOptimisticAgentSafetyTimer, _convDirectProbe, conversationBgKeysForPane, updateConversationBackgroundPaletteState, _ttsSwitchVoice, setConversationPanePaletteVars, conversationPaletteVars, conversationBgPaletteItem, persistConversationBgForPane, readConversationBgPrefs, _effectiveThemeIsLight, flushScheduledStreamTextRenders, _ultraFreshSpawnFeed, ensureStreamingBubble, scheduleStreamTextRender, _replayRevealAllShells, _replayRevealRun, orchFlashPlaybook, orchPaneVisible, _convReplayViewForPane, _ultraFreshTime, _ultraFreshPaint, _ultraFreshParseState, _ultraFreshRow, _ultraFreshSendBarrier, manualSubsessionParentId, _f2OriginIndex, _continuationSuccessorIndex, _dynAskItems, _dynAskApply, _setEarlierAskLabel, _bridgeSearchNeedle, recencyCutoffSec, _uuidSearchNeedle, _sessionIdSearchRank, rowMatchesEffortQuery, _prioritizeNameMatches, _prioritizeSessionIdMatches, applyConvSort, _decorateWithHistoryMatches, _compactRunResultHtml, _compactRunStepsHtml, _compactUsageShape, _convPaneTabStrip, _convPaneApplyActiveTab, _convPaneRestoreTabScroll, _convShouldLiveRevealStickToBottom, formatCompactCount, liveQuestionDisplayOptions, queuedFromDescription, queuedSteerErrorKey, jumpPresentationToEnd, _jumpToPreviousUserMessage, _scrollToConversationUserMessage, _attachSpeakerTools, _makeSpeakBtnDraggable, _ttsReadSelectionIfAny, _topVisibleAnchor, _observeConvEventSizes, _convReadingTop, _convUserMessageTop, agentAnswerNodeBeforeResult, assistantTextElements, _ttsUpdateDiagnosticsQueue, _ttsRefreshCacheDebug, _ttsFreshSelection, _ttsEnginePause, _ttsEngineResume, _primeTtsEngine, selectedConversationTtsData, _ttsStartChunkedSpeech, _isConvReplayMeaningful, stepConvReplayBack, _convReplayResume, _convReplayJumpToLine, _convReplayIsTyped, _convReplayPrepareWordsForItem, _convReplayHumanStep, _convReplayRevealWords, _ttsClientTag, _ttsPriorityStop, _ttsSetStreaming, _compactRunSettleAcpTurn, showInjectError, _wakeStageQuietLabel, _wakeStageLabel, _codexWakeTransportLabel, _wakeInt, _cccBeep, _cccPaintCompletionGlow, _dashboardCoveredByApp, _pausePeriodicSidebarRender, closeRelayedQuestionInline, showRelayedQuestionInline, _dropStreamBubble, silentNudgeAttempt, nudgeSilentSession, investigateSilentSession, flowNodeKey, isFlowView, isGenericHandoffTitle, _withTicketPrefix, _uxFixesWorkerDisplayTitle, _uxFixesRowIdentityKeys, ideaTicketsOn, sessionIconPresentation, _avatarModelBadgeHtml, _hashHue, sessionRepoAvatarPath, repoAvatarHtml, repoInitials, _waCategoryIn, _renderReadableActivityLog, _codexDiagTilde, _ttsPlaybackElements, assistantNodeTextForCopy, _ttsBlockAncestor, _ttsParagraphBreak, _chunkTtsText, _ttsRestChunks, _ttsPrefetchClipCount, _ttsDebugJob, _ttsPrefetchRest, _ttsSetEnabled, _ttsStreamClip, _ttsVoiceMap, ttsVoiceDefault, _ttsTextCacheCoverage, _appEmbedSkips, _appEmbedSkippedResponse, _startupCriticalApiRead, _backgroundApiReadSkipsQueue, _startBackgroundApiRead, _drainBackgroundApiReads, _appendActivityLog, resolveInterruptAsk, _interruptAskSessionLabel, _pruneExternalSpawnSeen, _sessionRowExists, spawnSourceForEngine, _scheduleDashboardArchiveRefresh, _ultraFreshSync, f2AllLaunchEngines, f2SelectHtml, f2QuickPickHtml, _claudeModelMenuOptions, _monthlyPlanUsd, bugResetState, bugApplyMode, bugDiagSetStatus, bugRenderMeta, bugApplyDestinationUI, _refreshArchiveListIfCostMode, _ensureEngineSvgSprite, _engineSvgInline, _engineSvgSymbolId, bindAcceptedCodexSpawn, _pendingSpawnStillWaiting, refreshArchiveData, markPendingSpawnNotAcknowledged, deferSidebarRenderIfDragging, rebindCurrentSelectionToRealCard, resolvePlaceholderPanes, renderRepoGuessChips, isSpawnCwdMenuOpen, renderSpawnCwdMenu, renderSpawnCwdQuickChips, updateNewSessionCwdNotice, scheduleClaudePrewarm, refreshEngineMissingNotice, renderEngineMissingNotice, spawnSupportsWorktree, spawnModelCostTier, spawnModelCostSummary, formatModelNameForBadge, renderNsModelComparison, fetchModelPickerPicksFromServer, claudePrewarmSpec, nsAdvisorChoices, applyNsAdvisorChoice, getModelPillLabel, currentSpawnChoice, setRepoGuessPickerValue, renderSpawnCwdSummary, _archiveFolderOptions, verifySavedSpawnCwd, loadRepoList, refreshNewSessionCwdUi, _loadNsExtensionTemplates, nsAdvisorLocalTime, getTopSpawnPicks, selectSpawnPick, showNsManualModelCatalog, recentNsModelPicks, nsAdvisorRanksPicker, _tickOptimisticAgeNow, rowForConversationId, setTtsVoiceForPane, _restartTtsAtCurrentPosition, relLuminance, hexToRgb, readableTextRgb, mixRgb, contrastRatio, rgbToHex, conversationBgKeyIsPersistable, writeConversationBgPrefs, _convPaneEnsureSubagentTab, _replayRevealShellsForRun, orchPlaybookEl, _ultraFreshCurrent, rowOutcomeView, readyToCloseArchiveHtml, ticketSessionSection, syncRowQuickActions, _workersPaintTicketUpdate, preSendPreviewFor, _manualSubsessionEdges, _conversationNameMatchesQuery, _pinSortKey, _convTitleForSort, _historySyntheticRow, _prioritizeSearchResultBands, _compactStepIndexFor, _convPaneActivateTab, liveQuestionOptionParts, queuedFromSessionRow, renderPresentationCursor, _stepTtsRate, _ttsJumpToNextSentence, _ttsCycleVoice, _syncTtsRateUi, _ttsSyncEnabledControls, _ttsRenderDebugQueue, elementForSelectionNode, buildTtsDataFromRange, _ttsMacBridgeOk, _cccPlaySpeakerCue, _ttsSpeakNextChunk, _convReplayLooksInjected, _convReplayWrapWordsInHtml, _ttsPrioritySend, settleCompactRunUnconfirmed, _cccSoundsEnabled, _ensureAudioCtx, _cccGlowTargets, _readAloudThrottlesSidebar, shouldPausePeriodicUiWork, isConversationListScrollActive, _sidebarHasHoveredConvItem, closeRelayedQuestionModal, submitRelayedQuestionAnswers, f2ResolveSpawnCwd, openConversationInPane, workerTicketIssueTitle, _uxFixesIdentityKey, sessionCostTier, _readableLogGroups, _readableLogGroupHtml, _ttsCancelOffscreenPrefetch, _ttsStreamUrl, _startupApiPath, _startupPathMatches, _railAppsSaved, _bufferBackgroundApiResponse, _scheduleActivityLogRender, _queueDashboardArchiveRender, _workersLatestTicketCard, _ultraFreshPaintBatch, f2TopLaunchPicks, railMonthlyPlanUsd, bugResetMessages, bugClearShot, bugFetchVersion, bugEscape, bugRenderPreview, bugDestination, bugLoadDiagnostics, markSpawnRowPaint, _whenDashboardUncovered, _startArchiveProgressPoll, _archiveWindow, _archiveQuery, loadArchiveAll, _applyPendingDashboardConversationPatches, _mergeArchivePrSnapshot, _mergeIntoMasterRows, _resetArchiveUnknownPatchIds, _hydrateArchiveSideData, _stopArchiveProgressPoll, _markArchiveFirstLoaded, isSidebarDragInProgress, setSpawnCwdMenuOpen, spawnCwdQuickChipOptions, chooseSpawnCwdFolder, renderOrchPlaybooks, _emnLabel, installMissingEngine, spawnModelDescription, setSpawnDefaultModel, rankNsAdvisorChoices, _archiveFolderValue, _pathParentLeaf, spawnCwdKnownToExist, forgetMissingSpawnCwd, _isUnnamedSpawnModel, _namedSpawnModelForEngine, _replayRunId, sidebarSessionWorking, sessionAttentionStep, rowActionSelector, loadRowDecisionReply, rowQuickActionSource, checkRowInvestigation, currentRowQuickActionSource, paintRowQuickAction, syncRowPopouts, _uxqItemForRef, _uxqItemRef, _workersTicketContextHtml, _workersTicketState, _stripHistoryHtml, _historyTsSeconds, _isRecallHistoryMatch, _convPaneRememberTabScroll, _convPaneEnsureJsonlTaskLane, presentationPaneElement, ensurePresentationStage, _refreshTtsRateBtns, _ttsSeekNeuralTo, _ttsClampDebugQueue, _ttsMakeDebugQueueDraggable, _ttsContinuousOk, _ttsSpeakBrowser, _ttsNeuralUsable, _ttsSpeakChunkNeural, _ttsMacBridgeKick, _ttsPerfStart, _ttsSetPlay, highlightTtsWord, updateTtsCaption, _ttsBindChunkCompletion, claudeFastSpawnAwaitingPaint, spawningSelectionStillPending, attachAllPaneDropZones, _readableLogPresentation, _readableLogEpoch, _activityLogTimestampLocal, _readableLogTime, _renderActivityLogPanel, bugBuildReportMarkdown, _renderArchiveLoadingStages, _recoverArchiveRenderIfStuck, _mergeArchiveListDelta, _scheduleArchiveStaleRetry, _scheduleArchiveSidebarCache, _archiveRowStableKey, loadCrossRepoIssues, refreshArchivedGroupChats, refreshUxFixesQueueMeta, _renderArchiveIfLoaded, hideLoadingOverlay, _releaseStartupApiReads, spawnCwdOptionForPath, closeSpawnCwdMenu, openWebFolderPicker, useSpawnCwdSelection, webPickerFallbackNote, orchExecutor, orchTester, orchCritics, orchMoreOpen, orchExecLabel, rowHandoff, _attentionActionOwner, rowDecisionReplyText, rowInvestigationTranscriptIdle, _workersTicketContext, _workersTicketChoices, _workersIdeaTicket, _workersIdeaTicketState, _uxqTicketAttention, _workersActiveClaim, stepPresentationSlide, ensurePresentationLiveRegion, _ttsRestartWithBrowserVoice, _ttsSetCacheDebug, _ttsWordAtProgress, _ttsSpeakContinuous, _ttsChainOk, _ttsSpeakChain, _ttsEnsureClip, _ttsPriorityPlaying, _ttsEventLagMs, _ttsPerfSilence, _ttsPlayBlocked, attachDropZones, _logSessionName, _readableInjectParts, _dismissActivityLog, bugFullDescription, _archiveListStillShowsLoader, shouldPauseSidebarRender, _archiveListFetchInflight, _scheduleArchiveStuckRetry, _writeArchiveSidebarCache, _queueListFetch, _setUxFixesQueueMeta, _startupReplaysDirect, closeWebFolderPicker, folderPickerNavigate, _workersMeaningfulUpdate, _uxqProjectKey, attachPresentationLiveResize, syncPresentationLiveResizeAria, forwardPresentationProjectionEvent, dragHasConversationPayload, readConvIdFromDrop, showConvToast, loadAttentionList, bugDiagnosticsMarkdown, _archiveSidebarCacheRow, _archiveSidebarCacheKey, _queueListMerge, _uxFixesSeq, _uxFixesPlausibleSessionId, _uxFixesClosedAtMs, _uxFixesClaimedAtMs, folderPickerShowError, presentationLiveHeightPercent, applyPresentationLiveHeight, presentationLiveMinimumPercent, presentationElementPath, presentationResolvePath, readConvIdsFromDrop, _ipNyaDetailsOn, repoUrl };
+    return { stopSpeechRecognition, mountStatusRailForActivePane, saveSplitState, updatePaneHeader, setCopyableSessionId, fetchCodexDiagnostics, _codexDiagHidePanel, updateResumeButton, updateAnnounceButton, updateJumpButton, updateSplitToolbar, resetLocalhostPill, _applyStatusRailLayout, sendEscToTerminal, compactCurrentSession, syncAllPaneHasFlags, convScopeSignal, updateConvOverflowButton, startLiveStatusPolling, rowRepoPath, popoutRepoPath, isImeKey, syncConversationArchiveButton, liveStatusMatchesOpenConv, antigravityCanSend, renderConversationGoalStrip, f2RenderComposer, getSpawnCwd, activeConvRepoPath, spawnCwdLabel, _pathLeaf, getSpawnEngine, antigravityInputPlaceholder, _relayedQuestionInlineEl, devinSteerCapableNow, isCompactionCapableSource, hasPendingSendEchoBeforeCompact, _compactRunBlocksResend, modelOptionsForSpawnEngine, engineSupportsEffort, effortLevelsForEngine, renderEffortOptions, newSessionPaneId, positionConversationEndAffordance, getInputContextSlot, renderSessionWorkspaceIntoSticky, renderSessionUsageIntoStrip, syncInputContextVisibility, composerUploadIsPending, showOpToast, sidebarRowDisplayTitle, shortSessionId, sessionCompletionDetails, fetchSessionUsage, resolvedSpawnConversationId, isSpawnLogPlaceholderSource, loadCodexLog, stopCodexLogPoller, _pollerOff, _pollerTick, renderPendingSpawnConversation, _contEnsureSegments, _contNextParentForPane, convTailLines, convFirstOpenLines, _takePrefetchedConversationTail, _convCacheEligible, _convCacheGet, _fetchConvJsonTimed, _markConvCachePreview, noteAppEmbedDrawn, _perfEvent, _perfActiveElapsed, _flushAfterConvTailAfterPaint, _contSegmentTitle, _contSegmentConfig, _prependConversationEvents, _convCachePutSoon, _renderFirstPromptPin, _convOpenPhases, _convOpenAfterPaint, _insertLoadEarlierBanner, _scheduleConvOpenBackfill, restorePendingSendEchoes, optimisticPromptForSession, spawnStatsMark, markSpawnAssistantPaint, markClaudeFirstVisibleOutput, _closeWtLogPanel, refreshConversationBackgroundForPane, syncPaneLastUserMessage, abortConvScopedRequests, _prefetchConversationTail, stopSpawnStream, startSpawnStream, syncPendingSendsMapForConv, rememberRecentConv, getLastConvKey, _compactRunActive, discardCompactRun, rememberConvScroll, closeStatusRailFileViewer, _updateLastWrittenLine, updateTtsFloatingControl, syncMobileOriginalAsk, _afterConvTail, scheduleSessionMetadataFetches, exitConvReplayMode, stopPkoodTailPoller, loadPkoodTail, _gated, _ultraFreshFeed, resetTtsOnNewTurn, _kimiRegroupTools, _removeStaleProvisionalsForTurn, _isOriginalAskText, convRowForPane, originalAskTextForEvent, renderImageDescriptors, breadcrumbSpawnedByChipHtml, _dynAskSchedule, _updateStickyAskSlots, renderSessionTimelineIntoSticky, repoPathForIssueNumber, clearSessionSending, completeCompactRun, _compactRunAnchorTo, userMessageSteerHtml, formatPeerMessageHtml, _convPaneSeedTaskInfo, _kimiToolRowHtml, _imageGenerationBlockHtml, _kimiAppendAssistantEvent, attachPresentationArtifactToAssistant, _compactRunAdoptDevinSummary, _recordCacheMissLog, _convPaneMarkTaskCompleted, stampCurrentToolGroup, _convLiveRevealNewText, _kimiFlushRegroups, _convPaneSyncJsonlTaskTabs, updateLiveToolStrip, updateCodexStateBadge, clearOptimisticAgentIndicator, _compactRunClaimSummary, _compactRunMount, _compactRunAdoptBoundary, syncQueuedSteerTray, takeQueuedSendAcknowledgement, updateSessionOutcomeBanner, updateConversationEndAffordance, scrollConversationToEnd, _firePhoneModeReadIfDone, _ensureFirstUserPinned, _syncLiveQuestionDuplicateHide, syncUserMessageSteerButtons, _convReplaySweepNewItems, hideSlashCommandMenu, stopTextToSpeech, applyOptimisticConversationGoalAction, beginCompactRun, appendPendingSendEcho, markSessionSending, looksDormantNoProcess, startCodexWakeBreakdown, durableActionId, isClaudeSource, markPendingSendQueued, tapbackTakePending, fetchInjectWithRetry, tapbackRestorePending, _showTerminalSuspectedDialog, removePendingSendEcho, bindPendingSendDeliveryId, renderConvWakeOutcome, markPendingSendDelivered, refreshLiveStatus, scheduleFireAndWatchRefresh, applyClearSuccession, beginWtReceiptTracking, compactResponseIsComplete, adoptCompactRunResult, markCompactRunWorking, scheduleCompactUsageRefresh, handleCompactTimeout, formatInjectFailure, _isCompactTimeoutReason, failCompactRun, isCursorUsageLimitFailure, appendSendFailureNotice, renderInlineWakeError, isTouchPrimary, updateMicButtonsState, mountStatusRailForPaneId, getSplitStateKey, paneCategoryForRow, paneTitleForRow, continuationBackstopTitle, rowRawTitle, workerTitleForPane, workerRowFacts, _waAvatarHtml, paneEngineIconHtml, sourceLabelForPane, sessionDriverHtml, sidebarSessionIdChipHtml, workerOriginBadgeHtml, updateConvProcessIndicator, _renderRailSpawnedVia, openActivityLogModal, formatSize, railSessionIdLabel, paneIdForSessionId, _codexDiagStop, _codexDiagPaneIsCodex, _codexDiagMetadataTabActive, renderCodexDiagnostics, cancelCodexDesktopHandover, activeConvSession, jumpButtonsForActiveTab, allJumpButtons, launchButtonsForActiveTab, launchWrapsForActiveTab, allLaunchWraps, allLaunchButtons, renderLaunchChoiceMenu, launchTerminal, lastMessageTtsData, _ttsLog, isMobile, beginCompactProgress, postRunCompactForSession, _compactToastNeeded, compactRequestSuccessMessage, touchSessionOptimistically, offerManualCompact, syncPaneHasFlags, _convOverflowHasActions, _closeConvOverflow, refreshLiveSessionsActivity, refreshMsgTimestamps, _isAbsoluteLocalPath, _openConversationRow, sessionReadyToClose, _applyLiveOverlayToRow, sessionIsOptimisticallySending, syncSessionStateCloseActions, goalStatusUi, conversationGoalActionButtonsHtml, f2RailEl, f2PanelEl, f2InputEl, f2PaneKey, f2ContinuedIntoSessionId, f2ResumeGate, f2ManualGate, f2StateFor, f2ComposerText, f2FmtTokens, f2FmtAge, f2RoutesHtml, f2FitSheet, normalizeSpawnCwdPath, findSpawnCwdRepo, normalizeSpawnDefaultEngine, _compactRunFor, _normalizeModelId, _modelAllowedForEngine, latestModelsOnly, _engineSupportsCustomModel, _speakBtnSavedPos, _syncSpeakerTools, scheduleInputContextFit, claudeModelSupportsOneM, spawnEngineLabel, _getCtxLimitOverride, ff, _contextRingSvg, cycleAutoHandoverModeForPane, openPlanUsagePopover, openModelPicker, _rowSubscriptionCostUsd, _rowBadgeShowsCost, _formatRowCostUsd, bugErrorAction, stripLeadingPathOrUrl, capitalizeSessionTitleStart, stripSessionIdPrefix, _isComposerFocused, _sessionUsagePaneIsVisible, sessionUsageRefreshDecision, _renderRailTokens, markFireAndWatchSpawnFailed, renderAntigravityLogHtml, renderGeminiLogHtml, renderCursorLogHtml, renderCodexLogHtml, engineModelEffortBits, _retryFailedPendingSpawn, _removePendingSpawnCard, setSpawnCwdInputValue, setSpawnEngine, enterNewSessionMode, _showPendingSpawnRepoPathEditor, showOptimisticAgentIndicator, renderPendingCodexStats, spawnStatsEnabled, continuationParentIdForSid, _convCacheDb, _convDirectUrl, _convResourceTiming, timeAgo, _clientLog, _flushAfterConvTail, _continuationRowForSid, sessionIconEngine, _placeFirstPromptPin, _perfLongTaskMs, _perfListOverlapMs, _ensureLoadEarlierStyle, _showConvLoading, fmtStatMs, releaseClaudeSpawnPaintGate, conversationPaneForId, conversationBgPrimaryKeyForPane, renderConversationBackgroundPalette, renderTtsVoiceStepper, applyConversationBackgroundToPane, storedConversationBgForPane, setLiveBadgeVisible, clearStreamingBubble, handleSpawnEvents, _stopCompactRunTimer, conversationScrollViews, _lastWrittenAgo, updateTopbarTtsControl, fetchSessionTimeline, fetchSessionWorkspace, _convReplayRevealAllWordsInstantly, _convReplayTextContainer, _convReplayClearWordReveal, _convReplayResetHumanTyping, _orchReplayStep, _scrollConvReplayToBottom, _pollerSkip, _timePoller, _ultraFreshAccept, _kimiTidyToolGroups, openConvRow, continuationParentId, f2EffectiveParentSessionId, spawnParentVisibleId, firstSentenceOf, _dynAskUpdate, _railSeedLastAsk, filterConversations, _compactRunPaint, _compactRunPollAfter, _compactRefreshContextPill, codexTurnSteerable, devinTurnSteerable, splitTopLevelCommas, peerReportImagesHtml, _convPaneTabState, _convPaneRenderTabStrip, _kimiToolStatusOf, _webuiToolDisplayName, _kimiToolSummary, _kimiDiffHtml, _kimiNormToolName, _kimiTodoChecklistHtml, _kimiToolGlyph, _kimiNormBlockText, _kimiTurnCoveredBlocks, latestCompletedPresentationAnswer, mode3BootstrapAnswerKey, _compactRunIsForeground, _convPaneCloseSubagentTab, _convShouldLiveRevealNewText, _convLiveRevealContainersForEvent, _wrapReplayWordsInHtml, _convLiveRevealWords, updateLiveStripOffset, setOptimisticAgentThinking, _settleWebuiRunningTools, getSingleLiveToolInline, settleStaleOptimisticAgentIndicator, _codexRequestCardShowing, respondCodexApproval, respondClaudePermission, grabBackCodexSession, codexActiveItemLabel, codexTokenUsageText, _wireLiveInlineExpand, _kimiMoonHtml, cleanLiveActivityDetail, shortenLiveActivityDetail, liveActivityToolLabel, liveActivityTitle, liveQuestionDetailHtml, liveActivityDetailClass, wakeCodexSession, _optimisticAgeLabel, _removePriorWakeStatus, stopCodexWakeBreakdown, _stopOptimisticAgeTicker, _compactRunView, steerIsInFlight, queuedSteerCardCount, queuedSteerSource, sessionSupportsQueuedSteer, queuedSteerBlockedReason, syncQueuedFromLabel, applyQueuedSteerError, syncQueuedSteerAllControl, _conversationIsQuiet, _confirmSessionNotLiveThenRenderOutcomeBanner, _renderOutcomeBanner, attachConversationEndAffordance, _prevUserMessageTarget, _nextUserMessageTarget, _visibleSpeakButton, _syncSpeakFloatPlayback, _batchHasSpeakableReply, _disarmPhoneModeRead, readLastMessageAloud, _convReplayCollectItems, _convReplayTagWithTs, renderConvReplayControls, playNextConvReplayStep, clearTtsHighlight, clearTtsCaption, _ttsShowVoice, _ttsPerfFlush, _ttsEngineCancel, setTtsButtonsBusy, setTtsButtonsState, _setTtsDirectBtnState, _compactContextNow, _tickCompactRun, sessionIsActivelyWorking, injectToSession, beginOptimisticSteerMove, _sessionRowMatches, syncCodexWakeUsage, renderCodexWakeBreakdown, handleCodexWakeOutcome, tapbackLoad, tapbackSave, _cccPlayTurnEnd, _cccGlowCompletedConversation, _cccPlayDone, maybeCatchUpCodexConversationFromAppServer, maybeCatchUpAcpConversationFromWire, _rememberLiveOverlay, _liveOverlayFieldsFromRow, _scheduleSidebarRender, syncRelayedQuestionModal, markStaleStreamingBubbles, updateSilentInvestigateBar, f2RecordContinuationLineage, wtTransportStageLabel, _wtSetEchoNote, _wtFindLivePendingEcho, _wtNativeFallbackResend, micButtons, micButtonPaneId, stripTitle, stripGhIssueProjectTag, isContinuationBoilerplateTitle, continuationFallbackTitle, rowLocalTitle, _workerRoleFromPrompt, _uxFixesWorkerTicketsForRow, workerSelfTicketRef, workerTaskTicketRef, workerQueueOf, workerStateBucket, _ideaAvatarHtml, _repoSessionAvatarHtml, _waCategory, sessionEngineIconHtml, _procCheckedAgoLabel, _procCheckedClock, closeActivityLogModal, _loadActivityLogInto, codexDiagPanelEl, _codexDiagRow, _codexDiagPathHtml, _codexDiagAge, _codexDiagClock, launchTargetsForCurrentSession, actionButtonSnapshot, setActionButtonText, restoreActionButtonText, _ttsSpeakButtonData, isPendingSendEchoElement, buildTtsDataFromElements, _sanitizeTtsText, _ttsIsHebrew, ttsButtons, ttsButtonPaneId, postCompactSession, _applyOptimisticTouchToRow, backgroundApiFetch, _handleKillEvents, _handlePrewarmEvents, _renderInterruptAsks, syncExternalSpawnPlaceholders, _scheduleTurnEndListRefresh, _ultraFreshSchedule, _ultraFreshWaitingAt, conversationGoalSourceKind, f2PaneRoot, _f2ContinuationEdges, _contextFieldsFromRow, f2EngineKey, f2DemoForceMatches, f2LaunchEngines, f2ModelsForEngine, f2EffortsForEngine, f2EffortLabel, f2EngineLabel, f2ModelLabel, f2ConfigHtml, _knownModelForEngine, _modelUnavailableReason, _knownModelForOtherEngine, _fitInputContextStrip, _autoHandoverCurrentState, commitAutoHandoverMode, closePlanUsagePopover, closeModelPicker, _buildClaudeModelMenuHtml, _reasoningSectionHtml, postInjectInput, railQuotaEngine, _monthlyClaudePlanUsd, _monthlyCodexPlanUsd, railQuotaCostPresentation, bugOpenModal, _isComposerElement, railUsageBreakdown, _claudeFriendlyModelName, railCostHeadline, railUsageBreakdownHtml, railQuotaCostHtml, _railTurnGraphHtml, _refreshQuotaCostCalibration, getEngineSvg, isBenignCodexErrorItem, isBenignCodexStderrLine, adoptPendingSpawnPid, _watchCodexSpawnRegistration, _watchPendingSpawnRegistration, chasePendingSpawn, _failPendingSpawnCard, persistSpawnCwdPickerValue, _showSpawnCwdTail, markNsAdvisorManual, syncSpawnEngineDependentUi, recordSpawnChoice, requestClaudePrewarm, syncNsModelOverrideSelects, renderNsAdvisor, resetRepoGuess, refreshJevRepoPromo, abortBackgroundApiReadsForSpawn, populateSpawnCwdPicker, ensureSpawnCwdOptionsLoaded, _wireNewSessionChooser, _renderNsExtensions, loadNsAdvisor, renderNsAdvisorEditor, renderNsModelPickerPills, cancelOptimisticAgentTurn, _startOptimisticAgeTicker, _armOptimisticAgentSafetyTimer, _convDirectProbe, conversationBgKeysForPane, updateConversationBackgroundPaletteState, setConversationPanePaletteVars, conversationPaletteVars, conversationBgPaletteItem, persistConversationBgForPane, readConversationBgPrefs, _effectiveThemeIsLight, flushScheduledStreamTextRenders, _ultraFreshSpawnFeed, ensureStreamingBubble, scheduleStreamTextRender, _replayRevealAllShells, _replayRevealRun, orchFlashPlaybook, orchPaneVisible, _convReplayViewForPane, _ultraFreshTime, _ultraFreshPaint, _ultraFreshParseState, _ultraFreshRow, _ultraFreshSendBarrier, manualSubsessionParentId, _f2OriginIndex, _continuationSuccessorIndex, _dynAskItems, _dynAskApply, _setEarlierAskLabel, _bridgeSearchNeedle, recencyCutoffSec, _uuidSearchNeedle, _sessionIdSearchRank, rowMatchesEffortQuery, _prioritizeNameMatches, _prioritizeSessionIdMatches, applyConvSort, _decorateWithHistoryMatches, _compactRunResultHtml, _compactRunStepsHtml, _compactUsageShape, _convPaneTabStrip, _convPaneApplyActiveTab, _convPaneRestoreTabScroll, _convShouldLiveRevealStickToBottom, formatCompactCount, liveQuestionDisplayOptions, queuedFromDescription, queuedSteerErrorKey, jumpPresentationToEnd, _jumpToPreviousUserMessage, _scrollToConversationUserMessage, _attachSpeakerTools, _makeSpeakBtnDraggable, _ttsReadSelectionIfAny, _topVisibleAnchor, _observeConvEventSizes, _convReadingTop, _convUserMessageTop, agentAnswerNodeBeforeResult, assistantTextElements, _ttsFreshSelection, _ttsEnginePause, _ttsEngineResume, _primeTtsEngine, selectedConversationTtsData, _ttsStartChunkedSpeech, _isConvReplayMeaningful, stepConvReplayBack, _convReplayResume, _convReplayJumpToLine, _convReplayIsTyped, _convReplayPrepareWordsForItem, _convReplayHumanStep, _convReplayRevealWords, _ttsClientTag, _ttsSetStreaming, _compactRunSettleAcpTurn, showInjectError, _wakeStageQuietLabel, _wakeStageLabel, _codexWakeTransportLabel, _wakeInt, _cccBeep, _cccPaintCompletionGlow, _dashboardCoveredByApp, _pausePeriodicSidebarRender, closeRelayedQuestionInline, showRelayedQuestionInline, _dropStreamBubble, silentNudgeAttempt, nudgeSilentSession, investigateSilentSession, flowNodeKey, isFlowView, isGenericHandoffTitle, _withTicketPrefix, _uxFixesWorkerDisplayTitle, _uxFixesRowIdentityKeys, ideaTicketsOn, sessionIconPresentation, _avatarModelBadgeHtml, _hashHue, sessionRepoAvatarPath, repoAvatarHtml, repoInitials, _waCategoryIn, _renderReadableActivityLog, _codexDiagTilde, _ttsPlaybackElements, assistantNodeTextForCopy, _ttsBlockAncestor, _ttsParagraphBreak, _chunkTtsText, _ttsSetEnabled, _appEmbedSkips, _appEmbedSkippedResponse, _startupCriticalApiRead, _backgroundApiReadSkipsQueue, _startBackgroundApiRead, _drainBackgroundApiReads, _appendActivityLog, resolveInterruptAsk, _interruptAskSessionLabel, _pruneExternalSpawnSeen, _sessionRowExists, spawnSourceForEngine, _scheduleDashboardArchiveRefresh, _ultraFreshSync, f2AllLaunchEngines, f2SelectHtml, f2QuickPickHtml, _claudeModelMenuOptions, _monthlyPlanUsd, bugResetState, bugApplyMode, bugDiagSetStatus, bugRenderMeta, bugApplyDestinationUI, _refreshArchiveListIfCostMode, _ensureEngineSvgSprite, _engineSvgInline, _engineSvgSymbolId, bindAcceptedCodexSpawn, _pendingSpawnStillWaiting, refreshArchiveData, markPendingSpawnNotAcknowledged, deferSidebarRenderIfDragging, rebindCurrentSelectionToRealCard, resolvePlaceholderPanes, renderRepoGuessChips, isSpawnCwdMenuOpen, renderSpawnCwdMenu, renderSpawnCwdQuickChips, updateNewSessionCwdNotice, scheduleClaudePrewarm, refreshEngineMissingNotice, renderEngineMissingNotice, spawnSupportsWorktree, spawnModelCostTier, spawnModelCostSummary, formatModelNameForBadge, renderNsModelComparison, fetchModelPickerPicksFromServer, claudePrewarmSpec, nsAdvisorChoices, applyNsAdvisorChoice, getModelPillLabel, currentSpawnChoice, setRepoGuessPickerValue, renderSpawnCwdSummary, _archiveFolderOptions, verifySavedSpawnCwd, loadRepoList, refreshNewSessionCwdUi, _loadNsExtensionTemplates, nsAdvisorLocalTime, getTopSpawnPicks, selectSpawnPick, showNsManualModelCatalog, recentNsModelPicks, nsAdvisorRanksPicker, _tickOptimisticAgeNow, rowForConversationId, _restartTtsAtCurrentPosition, relLuminance, hexToRgb, readableTextRgb, mixRgb, contrastRatio, rgbToHex, conversationBgKeyIsPersistable, writeConversationBgPrefs, _convPaneEnsureSubagentTab, _replayRevealShellsForRun, orchPlaybookEl, _ultraFreshCurrent, rowOutcomeView, readyToCloseArchiveHtml, ticketSessionSection, syncRowQuickActions, _workersPaintTicketUpdate, preSendPreviewFor, _manualSubsessionEdges, _conversationNameMatchesQuery, _pinSortKey, _convTitleForSort, _historySyntheticRow, _prioritizeSearchResultBands, _compactStepIndexFor, _convPaneActivateTab, liveQuestionOptionParts, queuedFromSessionRow, renderPresentationCursor, _stepTtsRate, _ttsJumpToNextSentence, _ttsCycleVoice, _syncTtsRateUi, _ttsSyncEnabledControls, elementForSelectionNode, buildTtsDataFromRange, _cccPlaySpeakerCue, _ttsSpeakNextChunk, _convReplayLooksInjected, _convReplayWrapWordsInHtml, settleCompactRunUnconfirmed, _cccSoundsEnabled, _ensureAudioCtx, _cccGlowTargets, _readAloudThrottlesSidebar, shouldPausePeriodicUiWork, isConversationListScrollActive, _sidebarHasHoveredConvItem, closeRelayedQuestionModal, submitRelayedQuestionAnswers, f2ResolveSpawnCwd, openConversationInPane, workerTicketIssueTitle, _uxFixesIdentityKey, sessionCostTier, _readableLogGroups, _readableLogGroupHtml, _startupApiPath, _startupPathMatches, _railAppsSaved, _bufferBackgroundApiResponse, _scheduleActivityLogRender, _queueDashboardArchiveRender, _workersLatestTicketCard, _ultraFreshPaintBatch, f2TopLaunchPicks, railMonthlyPlanUsd, bugResetMessages, bugClearShot, bugFetchVersion, bugEscape, bugRenderPreview, bugDestination, bugLoadDiagnostics, markSpawnRowPaint, _whenDashboardUncovered, _startArchiveProgressPoll, _archiveWindow, _archiveQuery, loadArchiveAll, _applyPendingDashboardConversationPatches, _mergeArchivePrSnapshot, _mergeIntoMasterRows, _resetArchiveUnknownPatchIds, _hydrateArchiveSideData, _stopArchiveProgressPoll, _markArchiveFirstLoaded, isSidebarDragInProgress, setSpawnCwdMenuOpen, spawnCwdQuickChipOptions, chooseSpawnCwdFolder, renderOrchPlaybooks, _emnLabel, installMissingEngine, spawnModelDescription, setSpawnDefaultModel, rankNsAdvisorChoices, _archiveFolderValue, _pathParentLeaf, spawnCwdKnownToExist, forgetMissingSpawnCwd, _isUnnamedSpawnModel, _namedSpawnModelForEngine, _replayRunId, sidebarSessionWorking, sessionAttentionStep, rowActionSelector, loadRowDecisionReply, rowQuickActionSource, checkRowInvestigation, currentRowQuickActionSource, paintRowQuickAction, syncRowPopouts, _uxqItemForRef, _uxqItemRef, _workersTicketContextHtml, _workersTicketState, _stripHistoryHtml, _historyTsSeconds, _isRecallHistoryMatch, _convPaneRememberTabScroll, _convPaneEnsureJsonlTaskLane, presentationPaneElement, ensurePresentationStage, _refreshTtsRateBtns, _ttsSpeakBrowser, _ttsPerfStart, _ttsSetPlay, highlightTtsWord, updateTtsCaption, _ttsBindChunkCompletion, claudeFastSpawnAwaitingPaint, spawningSelectionStillPending, attachAllPaneDropZones, _readableLogPresentation, _readableLogEpoch, _activityLogTimestampLocal, _readableLogTime, _renderActivityLogPanel, bugBuildReportMarkdown, _renderArchiveLoadingStages, _recoverArchiveRenderIfStuck, _mergeArchiveListDelta, _scheduleArchiveStaleRetry, _scheduleArchiveSidebarCache, _archiveRowStableKey, loadCrossRepoIssues, refreshArchivedGroupChats, refreshUxFixesQueueMeta, _renderArchiveIfLoaded, hideLoadingOverlay, _releaseStartupApiReads, spawnCwdOptionForPath, closeSpawnCwdMenu, openWebFolderPicker, useSpawnCwdSelection, webPickerFallbackNote, orchExecutor, orchTester, orchCritics, orchMoreOpen, orchExecLabel, rowHandoff, _attentionActionOwner, rowDecisionReplyText, rowInvestigationTranscriptIdle, _workersTicketContext, _workersTicketChoices, _workersIdeaTicket, _workersIdeaTicketState, _uxqTicketAttention, _workersActiveClaim, stepPresentationSlide, ensurePresentationLiveRegion, _ttsWordAtProgress, attachDropZones, _logSessionName, _readableInjectParts, _dismissActivityLog, bugFullDescription, _archiveListStillShowsLoader, shouldPauseSidebarRender, _archiveListFetchInflight, _scheduleArchiveStuckRetry, _writeArchiveSidebarCache, _queueListFetch, _setUxFixesQueueMeta, _startupReplaysDirect, closeWebFolderPicker, folderPickerNavigate, _workersMeaningfulUpdate, _uxqProjectKey, attachPresentationLiveResize, syncPresentationLiveResizeAria, forwardPresentationProjectionEvent, dragHasConversationPayload, readConvIdFromDrop, showConvToast, loadAttentionList, bugDiagnosticsMarkdown, _archiveSidebarCacheRow, _archiveSidebarCacheKey, _queueListMerge, _uxFixesSeq, _uxFixesPlausibleSessionId, _uxFixesClosedAtMs, _uxFixesClaimedAtMs, folderPickerShowError, presentationLiveHeightPercent, applyPresentationLiveHeight, presentationLiveMinimumPercent, presentationElementPath, presentationResolvePath, readConvIdsFromDrop, _ipNyaDetailsOn, repoUrl };
   }
   root.CCCConversationCore = Object.freeze({ createController });
 })(typeof window === 'undefined' ? globalThis : window);

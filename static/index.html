@@ -2457,7 +2457,7 @@
     <div class="upd-backdrop" id="onboardingBackdrop"></div>
     <div class="onb-dialog">
       <button type="button" class="whats-new-close" id="onboardingCloseBtn" title="Skip onboarding" aria-label="Skip onboarding">&times;</button>
-      
+
       <div class="onb-steps-container">
         <!-- Step 1: Welcome -->
         <div class="onb-step onb-step-active" id="onbStepWelcome">
@@ -2491,11 +2491,11 @@
           <p class="onb-desc">
             Command Center runs sessions by driving your local CLI agents. Let's see which ones you have installed and signed in.
           </p>
-          
+
           <div class="onb-cli-list" id="onbCliList">
             <div class="onb-cli-loading">Scanning local environment...</div>
           </div>
-          
+
           <div class="onb-cli-footer-note">
             💡 <em>Need to sign up or install? Use the setup links or Log in button above, then click "Re-detect status".</em>
           </div>
@@ -2508,7 +2508,7 @@
           <p class="onb-desc">
             Ready to test? Select a CLI engine and a starter prompt to kick off a headless session in this workspace!
           </p>
-          
+
           <div class="onb-form-group">
             <label for="onbEngineSelect">Select Engine</label>
             <select id="onbEngineSelect" class="onb-select">
@@ -2518,7 +2518,7 @@
               ⚠️ None of the engines are currently logged in. Please install and login to your chosen CLI to run sessions.
             </div>
           </div>
-          
+
           <div class="onb-form-group" style="margin-top: 10px;">
             <label>Choose a Starter Prompt</label>
             <div class="onb-prompts-grid" id="onbPromptsGrid">
@@ -2888,22 +2888,6 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="tts speaker voice speech cache debug highlight ready">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Speaker cache debug</div>
-                <div class="settings-row-desc">Show colored lines beside conversation rows for this browser’s audio cache:
-                  <span class="tts-cache-debug-sent">amber = sent to TTS</span>,
-                  <span class="tts-cache-debug-ready">green = audio ready</span>, purple = cancelled before sending.
-                  Expand the TTS queue to see browser waiting positions.
-                  Requests already sent finish and stay cached. Markers disappear when clips are evicted or fail. Mixed states appear side by side on the same row.
-                  Prepared audio may still exist in the server’s disk cache after the browser releases it.</div>
-              </div>
-              <div class="settings-row-control">
-                <button type="button" class="settings-toggle" id="settingsTtsCacheDebugToggle" role="switch" aria-checked="false" aria-label="Speaker cache debug">
-                  <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
-                </button>
-              </div>
-            </div>
 
             <div class="settings-row" data-keywords="debug diagnostics activity stats traffic fleet pulse interrupt">
               <div class="settings-row-main">
@@ -2961,33 +2945,24 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="voice speak tts read aloud deepgram kokoro">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Default Speak voice</div>
-                <div class="settings-row-desc">Voice for reading replies aloud. Each session can override it from the right rail. A $ marks a voice that costs money.</div>
-              </div>
-              <div class="settings-row-control">
-                <select id="settingsTtsVoiceDefault" class="bug-input" style="width:auto;" aria-label="Default Speak voice"></select>
-              </div>
-            </div>
 
-            <div class="settings-row" data-keywords="voice speak tts read aloud phonon browser pilot english">
+            <div class="settings-row" data-keywords="voice speak tts read aloud phonon browser english">
               <div class="settings-row-main">
-                <div class="settings-row-label">Browser voice pilot</div>
-                <div class="settings-row-desc">Try Phonon for English read-aloud on this device. Downloads about 65 MB once. Uses your current voice while loading or if playback fails.</div>
-                <div class="settings-row-desc" id="settingsBrowserVoiceStatus" role="status">Off. Your current voice is used.</div>
+                <div class="settings-row-label">Browser voice</div>
+                <div class="settings-row-desc">Phonon reads English aloud on this device by default. Downloads about 65 MB once. Uses your current voice while loading or if playback fails.</div>
+                <div class="settings-row-desc" id="settingsBrowserVoiceStatus" role="status">Preparing browser voice…</div>
               </div>
               <div class="settings-row-control">
-                <button type="button" class="settings-toggle" id="settingsBrowserVoiceToggle" role="switch" aria-checked="false" aria-label="Browser voice pilot">
+                <button type="button" class="settings-toggle" id="settingsBrowserVoiceToggle" role="switch" aria-checked="true" aria-label="Browser voice">
                   <span class="settings-toggle-track"><span class="settings-toggle-thumb"></span></span>
                 </button>
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="tts speaker voice speech off disable stop kokoro cpu synthesis">
+            <div class="settings-row" data-keywords="tts speaker voice speech off disable stop">
               <div class="settings-row-main">
                 <div class="settings-row-label">Text-to-speech</div>
-                <div class="settings-row-desc">Enable voice read-aloud and background speaker preparation. Turn off to stop all TTS requests and unload the local voice process.</div>
+                <div class="settings-row-desc">Enable read-aloud in this browser. Turn off to stop playback and release the browser voice.</div>
               </div>
               <div class="settings-row-control">
                 <button type="button" class="settings-toggle is-on" id="settingsTtsEnabledToggle" role="switch" aria-checked="true" aria-label="Text-to-speech">
@@ -2996,15 +2971,6 @@
               </div>
             </div>
 
-            <div class="settings-row" data-keywords="voice speak offline kokoro install repair">
-              <div class="settings-row-main">
-                <div class="settings-row-label">Better offline voice</div>
-                <div class="settings-row-desc" id="localSpeechStatus" role="status" aria-live="polite">Optional download (~330 MB). Output availability has not been checked.</div>
-              </div>
-              <div class="settings-row-control">
-                <button type="button" id="localSpeechInstall" class="bug-input">Install better offline voice (~330 MB)</button>
-              </div>
-            </div>
 
             <div class="settings-row" data-keywords="github issues show hide gh view conversation list">
               <div class="settings-row-main">
@@ -3971,8 +3937,7 @@
         <div id="carModeDegradeNotice" class="car-mode-degrade">
           <strong>If a key is missing</strong> - Car Mode degrades instead of breaking:
           <ul style="margin:6px 0 0 18px;padding:0;">
-            <li>Local voice not installed → run <code>scripts/install_local_speech.sh</code>
-              once. Browser dictation and read-aloud have separate requirements; their availability is not tested here.</li>
+            <li>Browser dictation and read-aloud have separate requirements; their availability is not tested here.</li>
             <li>No Anthropic key → Car Mode can't start; it tells you what's needed
               instead of erroring.</li>
           </ul>
@@ -4292,7 +4257,6 @@
 <script src="/static/free-runtime.js"></script>
 <script src="/static/notify.js"></script>
 <script src="/static/router-detected.js" defer></script>
-<script src="/static/local-speech.js"></script>
 <script src="/static/browser-voice.js"></script>
 <script src="/static/settings-actions.js"></script>
 <script src="/static/settings-context.js"></script>

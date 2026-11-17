@@ -204,7 +204,7 @@ def test_detail_turn_count_and_empty_subagent_falls_back(tmp_path):
 
 def test_plain_folder_labels_are_not_redacted():
     for name in ("claude-command-center", "ccc-cloud-wt-instinct", "my_app_v2",
-                 "Kokoro-Local-Voice-2"):
+                 "Local-Utility-Voice-2"):
         assert cr.label_cap(name, cr.CAP_LABEL) == name
 
 

@@ -115,7 +115,6 @@ if ((0, sharedState.isTouchPrimary)()) {
   function applyConvFontScale() {
     if (sharedState.$conversationsView) sharedState.$conversationsView.style.zoom = sharedState.convFontScale;
     if (sharedState.$convPanelView) sharedState.$convPanelView.style.zoom = sharedState.convFontScale;
-    if (sharedState._ttsCacheDebug) (0, sharedState._ttsScheduleCacheDebug)();
   }
 
   function installConversationView2() {

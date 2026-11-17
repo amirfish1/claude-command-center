@@ -3923,21 +3923,10 @@
     -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
     mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px));
   }
-  .conv-scroll-speak-btn[data-tts-cache]::before {
-    display: block;
-    background: conic-gradient(
-      var(--green) calc(var(--tts-ring-f, 0) * 1turn),
-      #d29922 0 calc(var(--tts-ring-sent-f, 0) * 1turn),
-      #a855f7 0 calc(var(--tts-ring-cancelled-f, 0) * 1turn),
-      transparent 0);
-  }
   .conv-scroll-speak-btn.speaking::before {
     display: block;
     background: conic-gradient(
       var(--accent, var(--cyan)) calc(var(--tts-play, 0) * 1turn),
-      var(--green) 0 calc(max(var(--tts-play, 0), var(--tts-ring-f, 0)) * 1turn),
-      #d29922 0 calc(max(var(--tts-play, 0), var(--tts-ring-sent-f, 0)) * 1turn),
-      #a855f7 0 calc(max(var(--tts-play, 0), var(--tts-ring-cancelled-f, 0)) * 1turn),
       color-mix(in srgb, var(--text, #c9d1d9) 14%, transparent) 0);
   }
 
@@ -22283,10 +22272,6 @@ body.status-pos-right #convToolbar {
   pointer-events: none;
 }
 
-/* Cache-state swatches in settings. */
-.tts-cache-debug-sent { background-color: rgba(245, 158, 11, 0.32); }
-.tts-cache-debug-ready { background-color: rgba(34, 197, 94, 0.30); }
-
 /* TTS Word Highlighting */
 ::highlight(tts-highlight) {
   color: #eab308;
@@ -26041,7 +26026,7 @@ body.has-gc-reader .pwa-install-banner {
   text-overflow: ellipsis;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   box-sizing: content-box;
-  
+
   /* Animation states */
   opacity: 0;
   transform: translateX(-20px);
@@ -32629,28 +32614,10 @@ body[data-conv-view="verbose"] .conv-view-seg > [data-conv-view="verbose"] {
 /* Dark label: white on the bright accent fill was hard to read. */
 .conv-input-bar .tts-btn.speaking[data-tts-voice] { color: #0b1620; }
 
-/* Voiceover cache bar: slim bar along the top of the Speak button, as wide as the
-   share of the last message already generated. Amber while filling, green when done. */
-.tts-btn[data-tts-cache], .tts-btn.speaking { position: relative; }
-.tts-btn[data-tts-cache]::before,
-.assistant-message-action[data-tts-cache]::before {
-  content: ''; position: absolute; top: 2px; left: 9px; height: 3px; border-radius: 2px;
-  width: calc((100% - 18px) * var(--tts-cache-f, 1));
-  background: var(--green); transition: width 0.3s;
-}
-.tts-btn[data-tts-cache="partial"]::before,
-.assistant-message-action[data-tts-cache="partial"]::before { background: #d29922; }
-.assistant-message-action[data-tts-cache] { position: relative; }
-.assistant-message-action[data-tts-cache]::before { left: 2px; top: 0; width: calc((100% - 4px) * var(--tts-cache-f, 1)); }
-.tts-btn.speaking::before {
-  content: ''; position: absolute; top: 2px; left: 9px; height: 4px; border-radius: 2px;
-  width: calc(100% - 18px); transition: none;
-  /* dark = read, white = made ahead, dim dark = not made yet */
+/* Read-aloud progress. */
   background: linear-gradient(to right,
     #0b1620 calc(var(--tts-play, 0) * 100%),
-    #ffffff calc(var(--tts-play, 0) * 100%),
-    #ffffff calc(var(--tts-cache-f, 0) * 100%),
-    rgba(11,22,32,0.35) calc(var(--tts-cache-f, 0) * 100%));
+    rgba(11,22,32,0.35) calc(var(--tts-play, 0) * 100%));
 }
 
 /* Close button for the Continue-new config panel (the chip that opens it can
@@ -32805,7 +32772,6 @@ body.has-f2c-config #pwaInstallBanner { display: none !important; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.status-rail .rail-voice-stepper .rail-voice-paid { color: var(--text-muted); margin-left: 3px; }
 
 /* In-page folder viewer (CCC-62): opens when the server host has no desktop */
 .ffv-overlay { position: fixed; inset: 0; z-index: 10000; pointer-events: none; display: flex; align-items: center; justify-content: center; }
@@ -34203,31 +34169,6 @@ html.ccc-mobile-list-view .sh-more-filters > * { max-width: 100%; }
 .conv-repo-portrait > .conv-avatar-background img { object-fit:contain; background:var(--bg-secondary, #334155); opacity:1; filter:none; }
 .conv-repo-portrait > .conv-avatar-background .repo-avatar-initials { display:flex; font-size:13px; }
 .conv-pane-category .conv-idea-avatar { position:relative; display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; }
-
-/* Optional TTS scheduler inspector; kept outside transcript text and copying. */
-#ttsCacheDebugQueue {
-  position: fixed; top: 74px; left: 12px; z-index: 100100;
-  max-width: min(360px, calc(100vw - 24px)); color: #e6edf3;
-  background: #161b22; border: 1px solid #59636e; border-radius: 8px;
-  font-size: 12px; box-shadow: 0 2px 10px #0008;
-}
-#ttsCacheDebugQueue[hidden] { display: none; }
-#ttsCacheDebugQueue summary { padding: 7px 10px; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
-#ttsCacheDebugQueue.is-dragging summary { cursor: grabbing; }
-#ttsCacheDebugQueue .tts-queue-log { max-height: 32vh; overflow: auto; padding: 0 10px 8px; overflow-anchor: none; }
-#ttsCacheDebugQueue .tts-queue-positions { padding: 0 10px 8px; border-bottom: 1px solid #59636e; overflow-wrap: anywhere; }
-#ttsCacheDebugQueue p { margin: 4px 0 8px; }
-#ttsCacheDebugQueue [data-status] { padding: 5px; margin: 3px 0; overflow-wrap: anywhere; }
-#ttsCacheDebugQueue [data-status="processing"] { background: #f59e0b52; }
-#ttsCacheDebugQueue [data-status="ready"] { background: #22c55e4d; }
-#ttsCacheDebugQueue [data-status="cancelled"] { background: #a855f752; }
-
-/* TTS cache states occupy the gutter, leaving conversation text unpainted. */
-#ttsCacheDebugLines { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
-#ttsCacheDebugLines > i { position: absolute; width: 3px; border-radius: 2px; pointer-events: none; }
-#ttsCacheDebugLines [data-tts-state="sent"] { background: #f59e0b; }
-#ttsCacheDebugLines [data-tts-state="ready"] { background: #22c55e; }
-#ttsCacheDebugLines [data-tts-state="cancelled"] { background: #a855f7; }
 
 /* CCC-243: with smart repo on, the new-session folder picker collapses to
    one "Auto · repo · Change" line, matching the model line below it. */

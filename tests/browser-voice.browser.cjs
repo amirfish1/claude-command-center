@@ -5,7 +5,7 @@ const {once} = require('node:events');
 const puppeteer = require('../require-puppeteer.js');
 const {findChromePath} = require('../puppeteer-browser-config.js');
 
-test('default-off, audio-thread playback through page stalls, pause, cancellation and disabling', {timeout: 30000}, async () => {
+test('default-on, audio-thread playback through page stalls, pause, cancellation and disabling', {timeout: 30000}, async () => {
   const server = spawn('python3', ['tests/fixtures/browser_voice_server.py'], {
     env: {...process.env, CCC_BROWSER_VOICE_TEST_WORKER: '1'}, stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -19,9 +19,7 @@ test('default-off, audio-thread playback through page stalls, pause, cancellatio
     page.on('request', r => requests.push(r.url()));
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(url, {waitUntil: 'load'});
-    assert.equal(await page.evaluate(() => cccBrowserVoice.enabled), false);
-    assert.equal(requests.some(u => u.includes('/api/browser-voice/')), false, 'off makes no status/download requests');
-    await page.click('#settingsBrowserVoiceToggle');
+    assert.equal(await page.evaluate(() => cccBrowserVoice.enabled), true);
     await page.waitForFunction(() => cccBrowserVoice.ready);
     await page.evaluate(() => {
       window.events = [];
@@ -63,19 +61,19 @@ test('default-off, audio-thread playback through page stalls, pause, cancellatio
     await page.click('#settingsBrowserVoiceToggle');
     assert.equal(await page.evaluate(() => cccBrowserVoice.enabled), false);
     assert.equal(await page.evaluate(() => cccBrowserVoice.ready), false);
-    assert.equal(await page.evaluate(() => localStorage.getItem('ccc-browser-voice-pilot')), '0');
+    assert.equal(await page.evaluate(() => localStorage.getItem('ccc-browser-voice')), '0');
     assert.equal(await page.evaluate(n => events.slice(n).some(e => e.kind === 'end'), count), false, 'a cancelled read never reports completion');
     await page.click('#settingsBrowserVoiceToggle');
     await page.waitForFunction(() => cccBrowserVoice.ready);
     await page.evaluate(() => {
       window.slowError = null;
-      cccBrowserVoice.start('A slow producer must stop the pilot.', {rate: 1.25,
+      cccBrowserVoice.start('A slow producer must stop browser voice.', {rate: 1.25,
         onerror: e => { slowError = e.message; }, onend: () => { slowError = 'incorrect success'; }});
     });
     await page.waitForFunction(() => window.slowError !== null);
     assert.match(await page.evaluate(() => slowError), /cannot sustain playback/);
     assert.equal(await page.evaluate(() => cccBrowserVoice.enabled), false);
-    assert.equal(await page.evaluate(() => localStorage.getItem('ccc-browser-voice-pilot')), '0');
+    assert.equal(await page.evaluate(() => localStorage.getItem('ccc-browser-voice')), '0');
     assert.deepEqual(errors, []);
   } finally {
     await browser?.close();

@@ -79,7 +79,7 @@ function showSettingsSavedPulse(row){row.dataset.saved='true';}
 ${applyView}
 ${preference}
 $settingsModal.addEventListener('click',settingsPreferenceClick);
-const $conversationsView=document.querySelector('.conversations-view'),$convPanelView=null,_ttsCacheDebug=false;
+const $conversationsView=document.querySelector('.conversations-view'),$convPanelView=null;
 ${fonts}
 function applyTheme(value){document.documentElement.dataset.theme=value;}function applyFont(value){document.documentElement.dataset.font=value;}function applyVoiceMobileBtn(){}
 ${resets}
@@ -152,7 +152,7 @@ for(const width of [1440,390]){
   assert.equal(await page.$$eval('#settingsPane #repoAvatarSelect,#settingsPane #fontPlus,#settingsPane [data-chips-mode],#settingsPane #settingsGhIssuesToggle,#settingsPane #settingsSeparateTabsToggle,#settingsPane #settingsQueueRhsListToggle',els=>els.length),0);
   assert.equal(await page.evaluate(()=>Object.entries(window.__originals).every(([id,node])=>node===document.getElementById(id))),true);
   for(const id of ['repoAvatarSelect','fontPlus','settingsGhIssuesToggle','settingsQueueRhsListToggle'])assert.equal(await page.$$eval('#'+id,els=>els.length),1);
-  for(const id of ['settingsUiModeToggle','settingsDebugModeToggle','settingsTtsCacheDebugToggle'])assert.equal(await page.$eval('#'+id,el=>!!el.closest('#settingsPane')),true);
+  for(const id of ['settingsUiModeToggle','settingsDebugModeToggle'])assert.equal(await page.$eval('#'+id,el=>!!el.closest('#settingsPane')),true);
   // Settings never sends people elsewhere: opening it brings the repository
   // and text-size controls in. List and queue controls stay in their menus.
   const inPane='#settingsPane #repoAvatarSelect,#settingsPane #fontPlus';

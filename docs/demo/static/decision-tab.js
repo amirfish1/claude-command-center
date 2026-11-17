@@ -28,6 +28,10 @@
   }
   function position() {
     revealTab();
+    // A horizontally scrolled list shifts the host rect left, so the fixed
+    // iframe would start under the nav. Keep the list at 0 while a view is up.
+    const scroller = document.getElementById('convList');
+    if (scroller && scroller.scrollLeft && views.some(view => view.host && view.host.isConnected)) scroller.scrollLeft = 0;
     for (const view of views) {
       const {frame, host} = view;
       if (!frame) continue;
@@ -78,6 +82,9 @@
     if (event.origin !== location.origin || !event.data) return;
     const native = views.some(view => view.frame && event.source === view.frame.contentWindow);
     const mobile = document.getElementById('cccMobileAppFrame');
+    if (event.data.type === 'ccc:question-history' && (native || (mobile && event.source === mobile.contentWindow))) {
+      window.cccQuestionTags?.history(); return;
+    }
     if (event.data.type === 'ccc:open-ticket' && (native || (mobile && event.source === mobile.contentWindow))
         && typeof window.cccOpenTicket === 'function') {
       window.cccOpenTicket(event.data.ref); return;
@@ -89,5 +96,6 @@
   });
   const list = document.getElementById('convList');
   if (list) new MutationObserver(mount).observe(list, {childList:true});
+  if (list) list.addEventListener('scroll', () => { if (list.scrollLeft) position(); }, {passive:true});
   mount();
 })();

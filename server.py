@@ -16,7 +16,7 @@ Usage:
 
 from __future__ import annotations
 
-__version__ = "6.0.0"
+__version__ = "7.0.0"
 
 import sender_envelope as _attribution
 from ccc_server import session_driver as _driver
@@ -13022,7 +13022,7 @@ _SYS_WRAPPER_BASES = frozenset(("npm", "npx", "sh", "dash", "pnpm", "yarn"))
 # CCC itself, from any install. A second dashboard on the same machine used to
 # offer to kill the first one, and a worker's tree holds every running session.
 _SYS_CCC_PROCESS_RE = re.compile(
-    r"(?:^|[\s/])(?:ccc_worker\.py|local_tts_server\.py)(?:\s|$)"
+    r"(?:^|[\s/])ccc_worker\.py(?:\s|$)"
     r"|\bccc_server\.(?:bg_helper|conv_reader)\b"
     r"|claude-command-center/server\.py(?:\s|$)"
     r"|server\.py\s+--archive-refresh-worker\b"
@@ -13572,7 +13572,6 @@ def _build_system_processes_uncached():
     parent_pid = os.getppid()
     ccc_server_path = os.path.join(_CCC_SOURCE_DIR, "server.py")
     ccc_worker_path = os.path.join(_CCC_SOURCE_DIR, "ccc_worker.py")
-    ccc_tts_path = os.path.join(_CCC_SOURCE_DIR, "scripts", "local_tts_server.py")
     empty_files = {"cwd": None, "cwd_exists": True, "fd0": None, "fd0_type": None, "fd0_exists": True}
 
     # ── pass 1: parse + classify every row (no scoring yet) ──────────────
@@ -13612,7 +13611,6 @@ def _build_system_processes_uncached():
             pid in (my_pid, parent_pid)
             or ccc_server_path in cmd
             or ccc_worker_path in cmd
-            or ccc_tts_path in cmd
             or cmd_base == "ccc_worker.py"
             or "watchtower.cli" in cmd
             or (label or "").startswith(("com.github.claude-command-center", "ai.watchtower", "ccc.", "ccc-", "watchtower."))
@@ -19436,7 +19434,6 @@ def _queue_health_stats(rows, *, now=None):
         "queued_items": queued_items,
         "stale_queued_items": stale_items,
         "stale_queued_wait_s": round(stale_wait_s, 1),
-        "tts": _free_runtime.tts_queue_stats(),
     }
 
 
@@ -24156,14 +24153,14 @@ def _car_mode_effective_keys():
 
 
 def _car_mode_speech_engine():
-    """"local" (default: whisper.cpp + Kokoro, unmetered) or "deepgram" (opt-in
+    """"local" (default: whisper.cpp dictation + browser voice, unmetered) or "deepgram" (opt-in
     with CCC_VOICE_ENGINE=deepgram, metered)."""
     v = os.environ.get("CCC_VOICE_ENGINE", "").strip().lower()
     return "deepgram" if v == "deepgram" else "local"
 
 
 _CAR_MODE_ENGINE_LABELS = {
-    "local": "Kokoro + whisper.cpp (local, free)",
+    "local": "whisper.cpp + browser voice (local, free)",
     "deepgram": "Deepgram nova-3 + aura-2 (metered)",
 }
 
@@ -24175,8 +24172,6 @@ def _car_mode_status_mode(keys, engine=None):
         return "unavailable_no_anthropic"
     if engine == "deepgram" and not keys["deepgram"]:
         return "degraded_no_deepgram"  # dispatcher works, but no STT/TTS -> no hands-free voice
-    if engine == "local" and not _free_runtime.local_tts_installed():
-        return "degraded_no_local_speech"  # Kokoro voice files not installed yet
     return "voice"
 
 
@@ -31622,11 +31617,7 @@ def _car_mode_start() -> dict:
     if mode == "degraded_no_deepgram":
         return {"ok": False, "error": "CCC_VOICE_ENGINE=deepgram needs a Deepgram API key. "
                 "Add one in Car Mode settings, or unset CCC_VOICE_ENGINE to use the free "
-                "local voice (Kokoro + whisper.cpp).", "mode": mode, "running": False}
-    if mode == "degraded_no_local_speech":
-        return {"ok": False, "error": "The local voice isn't installed yet. Run "
-                "scripts/install_local_speech.sh in the CCC folder (one time, about 400 MB), "
-                "then press Start again.", "mode": mode, "running": False}
+                "local voice (whisper.cpp + browser voice).", "mode": mode, "running": False}
 
     launcher = _CAR_MODE_DIR / "run.sh"
     if not launcher.exists():
@@ -32969,42 +32960,6 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                     ).lower()
                 ]
             self.send_json(rows)
-        elif path == "/api/local-speech/status":
-            from ccc_server import local_speech
-            local_speech.handle_api(self)
-        elif path == "/api/free-runtime/tts-voices":
-            self.send_json({"ok": True, "voices": _free_runtime.tts_voice_options()})
-        elif path.startswith("/api/free-runtime/tts-session/"):
-            # Continuous read (CCC-144): <id> is one mp3 stream for the whole
-            # message, played by a plain <audio src>; <id>/marks says where
-            # each clip starts, for word highlighting. The unguessable id is
-            # the capability; sessions are created by a same-origin POST.
-            rest = path[len("/api/free-runtime/tts-session/"):]
-            sid, _, sub = rest.partition("/")
-            session = _free_runtime.tts_session_get(sid)
-            if session is None:
-                self.send_json({"ok": False, "error": "unknown session"}, 404)
-            elif sub == "marks":
-                self.send_json(dict(session.info(), ok=True))
-            elif sub:
-                self.send_json({"ok": False, "error": "not found"}, 404)
-            else:
-                try:
-                    self.send_response(200)
-                    self.send_header("Content-Type", "audio/mpeg")
-                    self.send_header("X-CCC-Voice", session.voice)
-                    # Length is unknown while it is made: close-delimited,
-                    # no ranges (Safari then plays it like a radio stream).
-                    self.send_header("Accept-Ranges", "none")
-                    self.send_header("Cache-Control", "no-store")
-                    self.send_header("Connection", "close")
-                    self.end_headers()
-                    self.close_connection = True
-                    for _buf in session.iter_bytes():
-                        self.wfile.write(_buf)
-                        self.wfile.flush()
-                except Exception:
-                    pass
         elif path == "/api/free-runtime/status":
             # $0 spawn runtime readiness for the UI's Free chip. Cheap: one
             # state-file read + one loopback TCP probe (400ms cap). Never
@@ -33027,7 +32982,6 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                 "ok": True,
                 "ready": all(v["ready"] for v in per_engine.values()),
                 "engines": per_engine,
-                "tts_queue": _free_runtime.tts_queue_stats(),
             })
         elif path == "/api/idea-tickets/activity":
             from ccc_server import session_activity
@@ -36925,166 +36879,6 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             result = codex_client_call(action, data)
             self.send_json(result, 200 if result.get("ok") else 409)
             return
-        if path == "/api/local-speech/install":
-            from ccc_server import local_speech
-            local_speech.handle_api(self, install=True)
-            return
-        if path == "/api/free-runtime/tts-playback":
-            # Same-origin is enforced by do_POST. This only renews an already
-            # enabled local trial; browser requests cannot enable CPU policy.
-            from ccc_server import tts_priority
-            try:
-                length = int(self.headers.get("Content-Length", "0") or 0)
-                if not 0 < length <= 1024:
-                    raise ValueError("invalid playback lease")
-                payload = json.loads(self.rfile.read(length))
-                if not isinstance(payload, dict):
-                    raise ValueError("expected object")
-                result = tts_priority.playback(payload)
-            except (ValueError, OSError):
-                self.send_json({"ok": False, "error": "invalid playback lease"}, 400)
-                return
-            self.send_json({"ok": True, **result})
-            return
-        if path == "/api/free-runtime/tts-log":
-            # Browser-side Speak decisions (which voice, and why the Mac voice)
-            # land in activity.log next to the server's own SPEAK lines.
-            try:
-                length = int(self.headers.get("Content-Length", "0") or 0)
-                payload = json.loads(self.rfile.read(length)) if 0 < length <= 4096 else {}
-            except (ValueError, OSError):
-                payload = {}
-            if isinstance(payload, dict):
-                _log_activity("tts", str(payload.get("verb") or "NOTE")[:9].upper(),
-                              str(payload.get("detail") or "")[:300])
-            self.send_json({"ok": True})
-            return
-        if path == "/api/free-runtime/tts-enabled":
-            try:
-                length = int(self.headers.get("Content-Length", "0") or 0)
-                payload = json.loads(self.rfile.read(length)) if 0 < length <= 4096 else None
-            except (ValueError, OSError):
-                payload = None
-            if not isinstance(payload, dict) or "enabled" not in payload:
-                self.send_json({"ok": False, "error": "bad request"}, 400)
-                return
-            enabled = _free_runtime.set_tts_enabled(bool(payload.get("enabled")))
-            _log_activity("tts", "TOGGLE", "enabled=%d" % int(enabled))
-            self.send_json({"ok": True, "enabled": enabled, "tts": _free_runtime.tts_queue_stats()})
-            return
-        if path == "/api/free-runtime/tts-session":
-            # Continuous read for browsers without MediaSource (CCC-144):
-            # {texts: [clip, ...], voice} -> {id}; GET .../<id> plays it.
-            try:
-                length = int(self.headers.get("Content-Length", "0") or 0)
-                payload = json.loads(self.rfile.read(length)) if 0 < length <= 256 * 1024 else None
-            except (ValueError, OSError):
-                payload = None
-            texts = payload.get("texts") if isinstance(payload, dict) else None
-            if not isinstance(texts, list):
-                self.send_json({"ok": False, "error": "bad request"}, 400)
-                return
-            if not _free_runtime.tts_enabled():
-                self.send_json({"ok": False, "disabled": True, "error": "tts disabled"}, 503)
-                return
-            sid = _free_runtime.tts_session_create(texts, str(payload.get("voice") or ""))
-            if not sid:
-                self.send_json({"ok": False, "error": "local voice cannot stream"}, 503)
-                return
-            _log_activity("tts", "SESSION", "clips=%d chars=%d voice=%s" % (
-                len(texts), sum(len(str(t or "")) for t in texts), str(payload.get("voice") or "-")))
-            self.send_json({"ok": True, "id": sid})
-            return
-        if path.startswith("/api/free-runtime/tts-session/") and path.endswith("/cancel"):
-            sid = path[len("/api/free-runtime/tts-session/"):-len("/cancel")]
-            self.send_json({"ok": _free_runtime.tts_session_cancel(sid)})
-            return
-        if path == "/api/free-runtime/tts":
-            # Speak button: text -> free neural voice via the router. The
-            # router key never leaves the server; the browser gets audio only.
-            try:
-                length = int(self.headers.get("Content-Length", "0") or 0)
-                payload = json.loads(self.rfile.read(length)) if 0 < length <= 64 * 1024 else None
-            except (ValueError, OSError):
-                payload = None
-            if not isinstance(payload, dict):
-                self.send_json({"ok": False, "error": "bad request"}, 400)
-                return
-            if not _free_runtime.tts_enabled():
-                self.send_json({"ok": False, "disabled": True, "error": "tts disabled"}, 503)
-                return
-            _t0 = time.time()
-            if payload.get("stream"):
-                # Relay mp3 as it is made: playback starts at the first bytes
-                # instead of after the whole clip. Deepgram only when explicitly
-                # enabled; otherwise local Kokoro, which streams per sentence.
-                _voice_in = str(payload.get("voice") or "")
-                # "bg" = prepare-ahead; the local voice serves "fg" reads first.
-                _prio = "bg" if payload.get("prio") == "bg" else "fg"
-                _resp, _label = _free_runtime.deepgram_open(
-                    payload.get("text"), _voice_in, "encoding=mp3")
-                if (_resp is None and _free_runtime.local_tts_installed()
-                        and _voice_in not in _free_runtime.TTS_VOICES):
-                    _resp, _label = _free_runtime.local_tts_open(payload.get("text"), _voice_in, _prio)
-                if _resp is not None:
-                    _sent = 0
-                    _first_ms = -1
-                    try:
-                        self.send_response(200)
-                        self.send_header("Content-Type", "audio/mpeg")
-                        self.send_header("X-CCC-Voice", _label)
-                        if _label.startswith("Kokoro"):
-                            self.send_header("X-CCC-Model", _free_runtime.local_tts_precision())
-                        self.send_header("X-CCC-Stream", "1")
-                        # Perf pane "speaker cache" column: was this clip
-                        # replayed from the clip cache or made just now?
-                        self.send_header("X-CCC-Cache", "hit" if isinstance(
-                            _resp, _free_runtime._CachedClip) else "miss")
-                        self.send_header("Cache-Control", "no-store")
-                        self.send_header("Connection", "close")
-                        self.end_headers()
-                        self.close_connection = True
-                        with _resp:
-                            while True:
-                                _buf = _resp.read(4096)
-                                if not _buf:
-                                    break
-                                if _first_ms < 0:
-                                    _first_ms = int((time.time() - _t0) * 1000)
-                                self.wfile.write(_buf)
-                                self.wfile.flush()
-                                _sent += len(_buf)
-                    except Exception:
-                        pass
-                    finally:
-                        try:
-                            if hasattr(_resp, "close"):
-                                _resp.close()
-                        except Exception:
-                            pass
-                    # first = ms until the first audio bytes (the wait before
-                    # sound); ms = until the whole clip was made.
-                    _log_activity("tts", "SPEAK", "chars=%d status=200 spoke=%s ms=%d first=%d bytes=%d stream=1 prio=%s" % (
-                        len(str(payload.get("text") or "")), _label,
-                        int((time.time() - _t0) * 1000), _first_ms, _sent, _prio))
-                    return
-            status, audio, ctype, voice = _free_runtime.tts(payload.get("text"), str(payload.get("voice") or ""))
-            _log_activity("tts", "SPEAK", "chars=%d status=%d spoke=%s ms=%d bytes=%d" % (
-                len(str(payload.get("text") or "")), status, voice or "-",
-                int((time.time() - _t0) * 1000), len(audio)))
-            if status != 200:
-                self.send_json({"ok": False, "error": "tts unavailable", "voice": voice}, status)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(audio)))
-            self.send_header("X-CCC-Voice", voice)
-            if voice.startswith("Kokoro"):
-                self.send_header("X-CCC-Model", _free_runtime.local_tts_precision())
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(audio)
-            return
         if path.startswith("/api/free-router"):
             # Free-model router lifecycle (install/start/stop). Same-origin
             # was already enforced at the top of do_POST.
@@ -37886,14 +37680,14 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                 body = self.rfile.read(content_len)
                 data = json.loads(body)
                 messages = data.get("messages", [])
-                
+
                 session_id = str(uuid.uuid4())
                 brain_dir = Path.home() / ".gemini" / "antigravity" / "brain" / session_id
                 logs_dir = brain_dir / ".system_generated" / "logs"
                 logs_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 transcript_path = logs_dir / "transcript.jsonl"
-                
+
                 with open(transcript_path, "w", encoding="utf-8") as f:
                     for i, msg in enumerate(messages):
                         role = msg.get("role", "USER_INPUT")
@@ -37908,7 +37702,7 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
                             "content": msg.get("content", "")
                         }
                         f.write(json.dumps(row) + "\n")
-                
+
                 self.send_json({"ok": True, "session_id": session_id})
                 return
             except Exception as e:
@@ -38318,22 +38112,11 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             # the handoff below succeeds: adopt/drain need a live worker, so
             # restarting it first would strand this dashboard's sessions.
             restart_all = path.endswith("/all")
-            # Routine restarts (`ccc restart` without --now) wait while a read
-            # is playing, so the stream is not cut and the retry does not hit
-            # a cold voice (CCC-144). Bounded (restart_hold); the button, the
-            # updater and `--now` send no "routine" flag and are never held.
             try:
                 _rlen = int(self.headers.get("Content-Length", "0") or 0)
                 _rbody = json.loads(self.rfile.read(_rlen)) if 0 < _rlen <= 4096 else {}
             except (ValueError, OSError):
                 _rbody = {}
-            if isinstance(_rbody, dict) and _rbody.get("routine"):
-                _hold = _free_runtime.restart_hold()
-                if _hold:
-                    _log_activity("restart", "HELD", "read-aloud playing: %s" % json.dumps(_hold))
-                    self.send_json({"ok": False, "error": "read-aloud is playing; restart deferred",
-                                    "read_aloud": _hold}, 409)
-                    return
             # The body was consumed above; only the explicit JSON boolean
             # permits interruption, as on the worker-only endpoint.
             allow_codex_interrupt = (
@@ -44203,7 +43986,7 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             display_name = (payload.get("display_name") or "").strip()
             if not display_name and session_id:
                 display_name = _group_chat_resolve_session_display_name(session_id)
-            
+
             if (not chat_path and not chat_uuid) or not session_id:
                 self.send_json({"ok": False, "error": "missing chat_id/chat_path or session_id"})
                 return
@@ -48274,7 +48057,7 @@ def _get_onboarding_status():
     import json
     import os
     from pathlib import Path
-    
+
     # 1. Check if onboarding is completed
     onboarding_file = COMMAND_CENTER_STATE_DIR / "onboarding.json"
     completed = False
@@ -48294,7 +48077,7 @@ def _get_onboarding_status():
     claude_bin = claude_info.get("bin")
     claude_logged_in = False
     claude_email = None
-    
+
     claude_config_file = Path.home() / ".claude.json"
     if claude_config_file.is_file():
         try:
@@ -48312,7 +48095,7 @@ def _get_onboarding_status():
     codex_available = codex_info.get("available", False)
     codex_bin = codex_info.get("bin")
     codex_logged_in = False
-    
+
     codex_auth_file = codex_home() / "auth.json"
     if codex_auth_file.is_file():
         try:
@@ -48329,7 +48112,7 @@ def _get_onboarding_status():
     antigravity_bin = antigravity_info.get("bin")
     antigravity_logged_in = False
     antigravity_email = None
-    
+
     # Check google_accounts.json
     gemini_accounts_file = Path.home() / ".gemini" / "google_accounts.json"
     if gemini_accounts_file.is_file():
@@ -48354,7 +48137,7 @@ def _get_onboarding_status():
     cursor_bin = cursor_info.get("bin")
     cursor_logged_in = False
     cursor_email = None
-    
+
     cursor_config_file = Path.home() / ".cursor" / "cli-config.json"
     if cursor_config_file.is_file():
         try:
@@ -48373,7 +48156,7 @@ def _get_onboarding_status():
     kimi_bin = kimi_info.get("bin")
     kimi_logged_in = False
     kimi_email = None
-    
+
     kimi_creds_file = Path.home() / ".kimi-code" / "credentials.json"
     if kimi_creds_file.is_file():
         try:
@@ -49229,11 +49012,11 @@ def _launch_login_terminal(engine):
     if not command_info.get("ok"):
         return command_info
     command = command_info["command"]
-        
+
     # AppleScript string needs the command embedded; escape backslashes and double quotes
     cmd_lit = command.replace("\\", "\\\\").replace('"', '\\"')
     target = _preferred_terminal_app()
-    
+
     if target == "iTerm2":
         script = f'''
         tell application "iTerm2"
@@ -49253,7 +49036,7 @@ def _launch_login_terminal(engine):
         end tell
         return "ok"
         '''
-        
+
     try:
         # Launch terminal in background
         subprocess.Popen(["osascript", "-e", script])
@@ -49753,11 +49536,6 @@ def main():
     # inline on the request thread (60s+ on a real corpus, MEMO-FIX-12);
     # warming here means that parse is already done, or well underway, by the
     # time any real request arrives. Cheap/no-op once already warm.
-    if not os.environ.get("CCC_EPHEMERAL"):
-        # Installed local voice: load it now and keep it up, so the first
-        # Speak doesn't wait ~30 s for the model.
-        threading.Thread(target=_free_runtime.local_tts_keepalive, daemon=True,
-                         name="local-tts-keepalive").start()
     if not os.environ.get("CCC_EPHEMERAL"):
         from ccc_server import session_fts as _session_fts_warm
         from ccc_server import ship_graph as _ship_graph_warm

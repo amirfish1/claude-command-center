@@ -136,11 +136,13 @@
     }
   }
   window.CCCSessionRecaps = { render, eligible, contents, rememberOpen };
-  document.addEventListener('DOMContentLoaded', () => {
+  function mount() {
     const list = document.getElementById('convList');
     if (list) new MutationObserver(scan).observe(list, { childList: true, subtree: true });
     scan();
-  });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
+  else mount();
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     // Returning to the page is a cheap observation event, not a new paid

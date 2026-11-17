@@ -5,6 +5,10 @@ import time
 from pathlib import Path
 
 import server
+from ccc_server.static_encoding import _encoder
+
+# Discover the asset encoder during setup, before process-free UI assertions.
+_encoder()
 import federation
 from ccc_server import cloud_relay, free_router, phone_access, realtime_voice as voice
 
@@ -76,7 +80,6 @@ class Handler(server.CommandCenterHandler):
         if route=='/api/features':return self.send_json({'preview':server._resolved_feature_flags(),'preview_meta':server._feature_flags_meta()})
         if route=='/api/free-router/status':return self.send_json({'installed':True,'running':(base/'router-on').exists(),'healthy':True,'state':'ready','node_ok':True,'keys':[]})
         if route=='/api/car-mode/status':return self.send_json({'ok':True,'running':(base/'operator-on').exists(),'mode':'setup','launcher_present':False,'speech_engine_label':'Local speech','anthropic_key_set':False,'deepgram_key_set':False})
-        if route=='/api/free-runtime/tts-voices':return self.send_json({'ok':True,'voices':[]})
         if route=='/api/free-settings/ping':return self.send_json({'configured':True})
         if route.startswith('/api/free-settings/') or route.startswith('/api/free-router/') or route=='/api/domestic-providers':return self.send_json({'ok':True,'keys':[],'providers':[],'summary':{},'strategy':{},'platforms':[]})
         if route=='/':body=(base/'fixture.html').read_bytes();mime='text/html; charset=utf-8'

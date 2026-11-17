@@ -369,3 +369,16 @@ class WaitDashboardBackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_ccc_sends_routine_flag_only_when_not_forced(monkeypatch):
+    """Keep CLI caller attribution independently of speech generation."""
+    cli = _load_ccc_cli()
+    sent = []
+    monkeypatch.setattr(cli, "_post_json", lambda base, path, payload, timeout=60:
+                        sent.append(payload) or (200, {"ok": True}))
+    cli._post_restart("http://example.test", "dashboard", routine=True)
+    cli._post_restart("http://example.test", "dashboard")
+    assert [payload.get("routine", False) for payload in sent] == [True, False]
+    assert all(payload["audit_caller"]["source"] == "ccc-cli"
+               and payload["audit_caller"]["pid"] > 0 for payload in sent)

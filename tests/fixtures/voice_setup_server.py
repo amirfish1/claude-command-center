@@ -23,12 +23,8 @@ class Handler(server.CommandCenterHandler):
             if (base/'fail-read').exists():return self.send_json({'ok':False,'error':'simulated read failure'},503)
             return super().do_GET()
         if self.path=='/api/car-mode/status':return self.send_json(json.loads((base/'operator.json').read_text()))
-        if self.path=='/api/local-speech/status':return self.send_json(json.loads((base/'offline.json').read_text()))
-        if self.path=='/api/free-runtime/tts-voices':
-            if (base/'fail-catalog').exists():return self.send_json({'ok':False},503)
-            return self.send_json({'ok':True,'voices':[{'id':'Kokoro: af_heart','label':'Local voice','paid':False},{'id':'Deepgram: demo','label':'Paid voice','paid':True}]})
         if self.path=='/':body=(base/'fixture.html').read_bytes();mime='text/html; charset=utf-8'
-        elif self.path in ('/static/app.css','/static/voice-setup.css','/static/voice-setup.js','/static/local-speech.js'):
+        elif self.path in ('/static/app.css','/static/voice-setup.css','/static/voice-setup.js'):
             body=(Path.cwd()/self.path.lstrip('/')).read_bytes();mime='text/css' if self.path.endswith('css') else 'application/javascript'
         else:return self.send_error(404)
         self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
@@ -40,7 +36,6 @@ class Handler(server.CommandCenterHandler):
         return self.send_error(405)
 
 (base/'operator.json').write_text(json.dumps({'ok':True,'running':False,'mode':'voice','launcher_present':False,'speech_engine_label':'Local speech','anthropic_key_set':True,'deepgram_key_set':False}))
-(base/'offline.json').write_text(json.dumps({'state':'not_installed','reason':'','progress':''}))
 httpd=server.http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
 print(json.dumps({'url':'http://127.0.0.1:'+str(httpd.server_address[1])}),flush=True)
 httpd.serve_forever()

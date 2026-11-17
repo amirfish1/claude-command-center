@@ -18,7 +18,7 @@ const prefs=between('  const VOICE_MOBILE_BTN_STORAGE_KEY =','  function applyTh
 const config=between('  function voiceModalError(', '  // -- wiring');
 const access=between("  const $voiceCallBtnToggle =",'  if ($voicePanelHideBtn)');
 const car=between('  // ── Car Mode (hands-free voice operator)', '  // ── Voice mode (Codex realtime)');
-const tts=between('  const TTS_VOICE_DEFAULT_KEY =','  renderAllConversationBackgroundPalettes();');
+const tts=between('  function renderTtsVoiceStepper(', '  renderAllConversationBackgroundPalettes();');
 const wiring=between('  if ($voiceSettingsBtn) $voiceSettingsBtn.addEventListener','  // Tab close/navigation:');
 const voiceMount=between('  window.cccVoiceSetup?.mount({','  window.cccEngineConnection?.mount({');
 const capMount=between('  window.cccSettingsCapabilities?.mount({','  window.cccSettingsContext?.mount({');
@@ -129,8 +129,8 @@ test('call stop is inline and viewing settings starts no call or microphone',asy
  assert.equal(await page.$eval('#voiceSetupStopCall',n=>!!n.getClientRects().length),true);
  assert.equal(await page.$eval('#settingsModal',n=>n.hidden),false);assert.equal(await page.$eval('#voicePanel',n=>n.hidden),true);assert.deepEqual(posts(requests),[]);assert.deepEqual(await page.evaluate(()=>window.__forbidden),[]);
 });
-test('voice legacy task hash reveals setup without activation or changes',async t=>{
- const {page,requests,before}=await open(t,390,{query:'#settings/voice-offline'});await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-offline');assert.equal(await page.$eval('[data-capability-body="voice"]',n=>n.hidden),false);assert.deepEqual(posts(requests),[]);assert.deepEqual(saved(),before);
+test('browser voice task hash reveals setup without activation or changes',async t=>{
+ const {page,requests,before}=await open(t,390,{query:'#settings/settingsBrowserVoiceToggle'});await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-reading');assert.equal(await page.$eval('[data-capability-body="voice"]',n=>n.hidden),false);assert.deepEqual(posts(requests),[]);assert.deepEqual(saved(),before);
 });
 test('native browser shortcut remains a visibility control and writes only its existing preference keys',async t=>{
  const {page,requests}=await open(t,390);await page.evaluate(()=>window.cccSettingsCapabilities.open('voice'));await page.waitForFunction(()=>document.activeElement.id==='voiceSetup-listening');

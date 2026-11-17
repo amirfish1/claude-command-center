@@ -945,7 +945,6 @@ class RestartMergedBodyTests(unittest.TestCase):
         with ExitStack() as stack:
             def patch(obj, name, **kwargs):
                 return stack.enter_context(mock.patch.object(obj, name, **kwargs))
-            patch(server._free_runtime, "restart_hold", return_value=hold)
             patch(server, "_log_activity")
             precheck = patch(server, "_safe_worker_restart_precheck",
                              return_value=(True, None, {}, protected))
@@ -974,14 +973,6 @@ class RestartMergedBodyTests(unittest.TestCase):
                 _, precheck, kick, _, _, _ = self._request("/api/restart/all", {"allow_codex_interrupt": value})
                 self.assertFalse(precheck.call_args.kwargs["allow_codex_interrupt"])
                 kick.assert_called_once_with(codex_final_check=True)
-
-    def test_routine_hold_precedes_precheck_even_with_override(self):
-        handler, precheck, kick, schedule, caller, _ = self._request(
-            "/api/restart/all", {"routine": True, "allow_codex_interrupt": True},
-            hold={"reason": "read-aloud playing"})
-        self.assertEqual(handler.send_json.call_args.args[1], 409)
-        for operation in (precheck, kick, schedule, caller):
-            operation.assert_not_called()
 
     def test_dashboard_only_does_not_freeze_or_kill_worker(self):
         _, precheck, kick, schedule, _, _ = self._request("/api/restart", {})

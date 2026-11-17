@@ -13,3 +13,26 @@
 @media(max-width:600px) { #settingsChanges dl { grid-template-columns:1fr; gap:4px; } #settingsChanges dd { margin-bottom:8px; } #settingsChanges button,#settingsChanges summary,.settings-changes-return { min-height:44px; box-sizing:border-box; } }
 
 @media(max-width:1200px) { [data-context-preferences] button.settings-changes-return { min-height:44px; max-width:calc(100% - 16px); box-sizing:border-box; white-space:normal; } }
+
+/* Condensed: one row per setting (name, where, now, default, Edit); no prose. */
+#settingsChanges > p:not([role="status"]), #settingsChanges li > p, #settingsChanges > details,
+#settingsConfigurationHistory > p:not([role="status"]), #settingsConfigurationHistory > details,
+#settingsHostProfileHelp, #settingsHostProfiles details, #settingsPreferencesProfileHelp,
+#settingsResetCoverage, #settingsSection-preferences [data-pref-supported] { display:none !important; }
+#settingsChanges { margin:8px 0 16px; padding-bottom:12px; }
+#settingsChanges h3 { font-size:15px; margin:0 0 8px; }
+#settingsChanges h4 { font-size:12px; margin:14px 0 2px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); }
+#settingsChanges li { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,.9fr) minmax(0,1fr) minmax(0,1fr) 56px; gap:0 12px; align-items:center; padding:5px 0; font-size:12.5px; }
+#settingsChanges li > div, #settingsChanges li > dl { display:contents; }
+#settingsChanges li > div > span { color:var(--text-muted); }
+#settingsChanges dt, #settingsChanges dd:nth-of-type(2) { display:none; }
+#settingsChanges dd { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#settingsChanges dd:nth-of-type(3) { order:1; }
+#settingsChanges dd:nth-of-type(1) { order:2; color:var(--text-muted); }
+#settingsChanges dd:nth-of-type(1)::before { content:'default '; opacity:.7; }
+#settingsChanges li > button { order:3; font-size:0; padding:2px 8px; min-height:0; justify-self:end; }
+#settingsChanges li > button::after { content:'Edit'; font-size:12px; }
+#settingsChanges summary { padding:6px 0; font-size:12.5px; }
+@media(max-width:600px) { #settingsChanges li { grid-template-columns:minmax(0,1fr) minmax(0,1fr) 56px; } #settingsChanges li > div > span, #settingsChanges dd:nth-of-type(1) { display:none; } #settingsChanges li > button { min-height:44px; } }
+#settingsChanges section > p { display:none; }
+#settingsChangesStatus, #settingsHistoryStatus { font-size:12px; color:var(--text-muted); margin:4px 0; }

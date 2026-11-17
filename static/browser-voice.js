@@ -1,9 +1,9 @@
-// Optional listener-side English voice. Off until this browser explicitly opts in.
+// Default English read-aloud, with an explicit per-browser off switch.
 (() => {
   'use strict';
-  const key = 'ccc-browser-voice-pilot';
-  let enabled = false;
-  try { enabled = localStorage.getItem(key) === '1'; } catch (_) {}
+  const key = 'ccc-browser-voice';
+  let enabled = true;
+  try { enabled = localStorage.getItem(key) !== '0'; } catch (_) {}
   let worker, context, loading, ready = false, epoch = 0, nextId = 0, active = null, voiceList = [];
   let message = enabled ? 'Preparing browser voice…' : 'Off. Your current voice is used.';
   const emit = detail => window.dispatchEvent(new CustomEvent('ccc:browser-voice', { detail }));

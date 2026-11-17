@@ -14,7 +14,7 @@
     if (className) element.className = className;
     return element;
   };
-  const visible = element => !element.disabled && element.getClientRects().length && !element.closest('[hidden]');
+  const visible = element => !element.disabled && element.getClientRects().length && !element.closest('[hidden]') && ![...element.closest('#sidebarMoreMenu')?.querySelectorAll('details:not([open])') || []].some(details => details.contains(element) && details.querySelector('summary') !== element);
   function closeMenu() {
     get('sidebarMoreMenu').hidden = true;
     get('sidebarMoreBtn').setAttribute('aria-expanded', 'false');
@@ -25,7 +25,7 @@
     if (menu.hidden) button.click();
     const details = get('settingsActionsHelp');
     if (help && details) details.open = true;
-    (help ? details?.querySelector('summary') : get('settingsCmdkBtn'))?.focus();
+    (help ? details?.querySelector('summary') : get('termToggleBtn'))?.focus();
   }
   function openSystem(focusId) {
     hooks.closeSettings(); closeMenu();
@@ -58,10 +58,13 @@
     if (!menu || !pane || !get('sysRowWorker') || !get('statsDialog')) return;
     hooks = integration; mounted = true;
     const style = node('style'); style.textContent = `
-      #sidebarMoreMenu {overflow-y:auto;overscroll-behavior:contain}
+      #sidebarMoreMenu {overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
       #sidebarMoreMenu .settings-actions-tools {display:contents}
-      #sidebarMoreMenu .settings-actions-tools > .sh-more-item {display:flex!important;width:100%;box-sizing:border-box;white-space:normal;min-height:36px;text-align:left}
-      #sidebarMoreMenu .settings-actions-help-title {padding:9px 12px;cursor:pointer;font-size:12px;color:var(--text)}
+      #sidebarMoreMenu .settings-actions-tools .sh-more-item {display:flex!important;width:100%;box-sizing:border-box;white-space:normal;min-height:36px;text-align:left;margin:0;justify-content:flex-start}
+      #sidebarMoreMenu .settings-actions-help-title {padding:9px 12px;cursor:pointer;font-size:12.5px;color:var(--text)}
+      #sidebarMoreMenu .settings-actions-help-title:hover {background:var(--surface-2)}
+      #sidebarMoreMenu details > .sh-more-item {padding-left:24px;box-sizing:border-box;white-space:normal}
+      @media(max-width:600px) {#sidebarMoreMenu .settings-actions-help-title {padding:14px 12px;font-size:16px}}
       #sidebarMoreMenu #settingsActionsHelp[open] {border-top:1px solid var(--border);margin-top:4px}
       #sidebarMoreMenu :is(button,a,summary,[role=menuitem]):focus-visible {outline:2px solid var(--accent);outline-offset:-2px}
       #sidebarMoreMenu .settings-actions-help-title:focus-visible {outline:2px solid var(--accent);outline-offset:-2px}
@@ -77,6 +80,7 @@
       #statsTitle {font-size:15px;margin:0;padding:14px 20px 0}
       @media(max-width:600px) {
         #sysDialog .sys-tabs {display:flex;flex-wrap:wrap}
+        #sysDialog .sys-tab {min-height:44px}
         #sysDialog .sys-name {flex-wrap:wrap;gap:4px}
       }
     `; document.head.append(style);
@@ -86,7 +90,7 @@
     tools.setAttribute('role', 'group'); tools.setAttribute('aria-label', 'Workspace tools');
     menu.prepend(tools);
     for (const [id, label] of [
-      ['settingsCmdkBtn', 'Session search…'], ['termToggleBtn'], ['historyStatusPill'],
+      ['termToggleBtn'], ['historyStatusPill'],
       ['kptWorktreesBtn'], ['statsBtn', 'Stats & usage…'], ['todayToggleBtn'],
       ['annotationNotesBtn'], ['fleetViewBtn', 'Fleet overview…'], ['settingsFleetPulseBtn', 'Fleet Pulse…'],
     ]) {
@@ -101,7 +105,7 @@
     }
     // Preserve the status LED while replacing the old proxy with its live node.
     const oldStatus = menu.querySelector('[data-proxy="cccServerStatusChip"]') || get('settingsAboutStrip')?.querySelector('[data-proxy="cccServerStatusChip"]');
-    const system = item(get('systemStatusBtn'), 'System status…');
+    const system = item(get('systemStatusBtn'), 'System Health & restart…');
     if (system) {
       const led = get('sidebarMoreStatusLed'); if (led) system.prepend(led);
       if (oldStatus) oldStatus.replaceWith(system); else tools.append(system);
@@ -119,10 +123,53 @@
     }
     const docs = pane.querySelector('#settingsSection-help a[href]');
     if (docs) help.append(item(docs, 'Documentation & setup help ↗'));
+    // Keep the first level short; move the original nodes so their handlers,
+    // status updates and responsive ownership remain intact.
+    function group(id, title, parent) {
+      const details = node('details'); details.id = id;
+      const heading = node('summary', title, 'settings-actions-help-title');
+      heading.setAttribute('role', 'menuitem'); details.append(heading); parent.append(details);
+      return details;
+    }
+    const filters = get('sidebarMoreFilters');
+    if (filters) {
+      const listOptions = group('settingsActionsList', 'List options', menu);
+      filters.before(listOptions); listOptions.append(filters);
+      const syncListVisibility = () => { listOptions.hidden = filters.hidden; };
+      new MutationObserver(syncListVisibility).observe(filters, {attributes:true, attributeFilter:['hidden']});
+      syncListVisibility();
+    }
+    const workspace = group('settingsActionsWorkspace', 'Workspace tools', tools);
+    for (const id of ['historyStatusPill', 'kptWorktreesBtn', 'todayToggleBtn', 'annotationNotesBtn', 'fleetViewBtn', 'settingsFleetPulseBtn']) {
+      const button = get(id); if (button) workspace.append(button);
+    }
+    const view = group('settingsActionsView', 'Group chats & view', menu);
+    for (const selector of ['[data-proxy="sidebarNewGroupChatBtn"]', '[data-proxy="sidebarGroupChatLiveBtn"]', '.sh-more-check']) {
+      const control = menu.querySelector(selector); if (control) view.append(control);
+    }
+    // Help also owns setup, release information and support.
+    for (const selector of ['#cccWhatsNewLink', '#cccCheckUpdatesLink', '[data-proxy="bugReportLink"]', 'a[href*="discord.gg"]', '.sh-more-info']) {
+      const control = menu.querySelector(selector); if (control) help.append(control);
+    }
+    menu.append(view, help);
+    menu.querySelectorAll(':scope > .sh-more-divider').forEach(divider => divider.remove());
+    // Voice setup registers after this module; route those late arrivals too.
+    const organizeSetup = () => {
+      for (const id of ['voiceSettingsBtn', 'carModeMenuBtn']) {
+        const control = get(id);
+        if (control?.parentElement === tools) help.append(control);
+      }
+    };
+    new MutationObserver(organizeSetup).observe(tools, {childList:true});
+    organizeSetup();
+
     // Take-the-tour is still called by the welcome flow. Keep its native ID and
     // listener as a hidden alias instead of the old consolidation deleting it.
     const aliases = node('div'); aliases.hidden = true; aliases.id = 'settingsActionsLegacy'; menu.append(aliases);
     if (get('takeTourBtn')) aliases.append(get('takeTourBtn'));
+    // Search already has its own field and keyboard shortcut. Preserve the
+    // legacy launcher without presenting another search action in More.
+    if (get('settingsCmdkBtn')) aliases.append(get('settingsCmdkBtn'));
 
     function relocateControls(rowId, ids) {
       const destination = get(rowId); if (!destination) return;

@@ -21,10 +21,17 @@
     return node;
   }
 
+  function clearValue(card) {
+    const input = card.querySelector('.credential-value');
+    input.value = '';
+    input.type = 'password';
+    card.querySelector('.credential-visibility input').checked = false;
+  }
+
   function clearCard(id) {
     const card = cards.get(id);
     if (!card) return;
-    card.querySelector('input[type=password]').value = '';
+    clearValue(card);
     card.remove();
     cards.delete(id);
   }
@@ -45,7 +52,7 @@
     const expiry = new Date(request.expires_at * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
     form.append(element('p', `Expires at ${expiry} · ${request.store_only ? 'Stored in the Vault' : 'Delivered once'}, outside chat.`, 'credential-note'));
     const label = element('label', request.kind === 'otp' ? 'One-time code' : 'Credential');
-    const input = element('input');
+    const input = element('input', '', 'credential-value');
     input.type = 'password';
     input.id = `credential-${request.id}`;
     input.autocomplete = 'new-password';
@@ -55,6 +62,15 @@
     input.setAttribute('autocapitalize', 'none');
     label.htmlFor = input.id;
     form.append(label, input);
+    const visibilityLabel = element('label', '', 'credential-visibility');
+    const visibility = element('input');
+    visibility.type = 'checkbox';
+    visibility.setAttribute('aria-controls', input.id);
+    visibility.addEventListener('change', () => {
+      input.type = visibility.checked ? 'text' : 'password';
+    });
+    visibilityLabel.append(visibility, document.createTextNode('View hidden'));
+    form.append(visibilityLabel);
     const remember = element('input');
     remember.type = 'checkbox';
     if (request.store_only) {
@@ -89,7 +105,7 @@
       let body = JSON.stringify(denied ? {id: request.id, deny: true} : {
         id: request.id, value: input.value, remember: remember.checked,
       });
-      input.value = '';
+      clearValue(form);
       try {
         const response = await fetch('/api/secrets/resolve', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -150,7 +166,7 @@
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       clearTimeout(timer);
-      for (const card of cards.values()) card.querySelector('input[type=password]').value = '';
+      for (const card of cards.values()) clearValue(card);
     } else poll();
   });
   window.addEventListener('pagehide', () => {

@@ -459,7 +459,6 @@ def test_real_post_handler_reports_unproven_outcome_without_legacy_kill(monkeypa
     handler._phone_pin_blocked = lambda _: False
     replies = []
     handler.send_json = lambda *args: replies.append(args)
-    monkeypatch.setattr(server._free_runtime, 'restart_hold', lambda: None)
     def forbidden(*args, **kwargs):
         raise AssertionError('legacy service kill must not run')
     monkeypatch.setattr(server, '_restart_worker_process', forbidden)
