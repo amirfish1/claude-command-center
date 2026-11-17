@@ -31,6 +31,25 @@ INVENTORY_FIELDS = (
 INVENTORY_VERSION = '1:'
 _INVENTORY_CACHE = ByteBudgetCache(max_bytes=64 << 20, max_entries=2)
 
+# The attention poll needs classification inputs, not parser/tool histories.
+# Keep the projection transactionally paired with the canonical row digest.
+ATTENTION_VERSION = '1:'
+ATTENTION_FIELDS = (
+    'archived', 'backlog_type', 'display_name', 'engine', 'first_message',
+    'folder_label', 'folder_path', 'gh_in_progress', 'gh_state', 'has_commit',
+    'has_edit', 'has_push', 'id', 'is_live', 'issue_labels', 'issue_number',
+    'jsonl_path', 'last_assistant_text', 'last_event_type', 'linked_issue',
+    'modified', 'mtime', 'needs_approval', 'needs_approval_message', 'pending_file',
+    'pending_tool', 'question_preamble', 'question_text', 'question_waiting',
+    'session_cwd', 'session_id', 'session_state', 'sidecar_in_flight',
+    'sidecar_status', 'source', 'stale_tool_age_s', 'stale_tool_call',
+    'subagent_in_flight_count', 'tail_issue_number', 'verified',
+)
+
+
+def attention_row(row):
+    return {name: row[name] for name in ATTENTION_FIELDS if name in row}
+
 
 def inventory_row(row):
     result = {name: row[name] for name in INVENTORY_FIELDS if name in row}
@@ -110,6 +129,15 @@ def _connect(cache_file, *, write=False):
                 digest TEXT NOT NULL, body TEXT NOT NULL,
                 PRIMARY KEY (variant, identity)
             );
+            CREATE TABLE IF NOT EXISTS session_attention (
+                variant TEXT NOT NULL, identity TEXT NOT NULL,
+                digest TEXT NOT NULL, body TEXT NOT NULL,
+                PRIMARY KEY (variant, identity)
+            );
+            CREATE TABLE IF NOT EXISTS attention_variants (
+                key TEXT PRIMARY KEY, cached_at REAL NOT NULL,
+                schema_version INTEGER, build_id TEXT, version TEXT NOT NULL
+            );
         ''')
         return con
     # Read-only connections never create an empty store that hides the JSON
@@ -140,6 +168,8 @@ def save(cache_file, snapshot, *, complete=False):
                 'SELECT identity,digest,position FROM rows WHERE variant=?', (key,))}
             inventory = {rid: digest for rid, digest in con.execute(
                 'SELECT identity,digest FROM session_inventory WHERE variant=?', (key,))}
+            attention = {rid: digest for rid, digest in con.execute(
+                'SELECT identity,digest FROM session_attention WHERE variant=?', (key,))}
             seen = set()
             for index, row in enumerate(entry.get('conversations') or []):
                 if not isinstance(row, dict):
@@ -148,6 +178,11 @@ def save(cache_file, snapshot, *, complete=False):
                 seen.add(rid)
                 body = json.dumps(row, separators=(',', ':'), sort_keys=True)
                 digest = hashlib.sha256(body.encode()).hexdigest()
+                attention_digest = ATTENTION_VERSION + digest
+                if attention.get(rid) != attention_digest:
+                    projected = json.dumps(attention_row(row), separators=(',', ':'), sort_keys=True)
+                    con.execute('INSERT OR REPLACE INTO session_attention VALUES(?,?,?,?)',
+                                (key, rid, attention_digest, projected))
                 inventory_digest = INVENTORY_VERSION + digest
                 if inventory.get(rid) != inventory_digest:
                     projected = json.dumps(inventory_row(row), separators=(',', ':'), sort_keys=True)
@@ -168,10 +203,14 @@ def save(cache_file, snapshot, *, complete=False):
                                 ((key, rid) for rid in existing.keys() - seen))
                 con.executemany('DELETE FROM session_inventory WHERE variant=? AND identity=?',
                                 ((key, rid) for rid in inventory.keys() - seen))
+                con.executemany('DELETE FROM session_attention WHERE variant=? AND identity=?',
+                                ((key, rid) for rid in attention.keys() - seen))
             metadata = {k: v for k, v in snapshot.items() if k != 'entries'}
             metadata['entry'] = {k: v for k, v in entry.items() if k != 'conversations'}
             con.execute('INSERT OR REPLACE INTO variants VALUES(?,?,?)',
                         (key, stamp, json.dumps(metadata, separators=(',', ':'))))
+            con.execute('INSERT OR REPLACE INTO attention_variants VALUES(?,?,?,?,?)',
+                        (key, stamp, new_version, snapshot.get('build_id'), ATTENTION_VERSION))
         con.commit()
     except BaseException:
         con.rollback()
@@ -179,6 +218,41 @@ def save(cache_file, snapshot, *, complete=False):
     finally:
         con.close()
     return changed
+
+
+def load_attention(cache_file, key, *, schema_version, build_id):
+    """Complete classifier inputs, or None until a normal publication upgrades.
+
+    Read the tiny header instead of the canonical metadata's corpus stat maps.
+    The digest join detects an older writer updating rows without projections.
+    """
+    if not database_path(cache_file).exists():
+        return None
+    con = _connect(cache_file)
+    try:
+        con.execute('BEGIN')
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE name='attention_variants'").fetchone():
+            return None
+        header = con.execute('SELECT cached_at,schema_version,build_id,version '
+                             'FROM attention_variants WHERE key=?', (key,)).fetchone()
+        if not header or header[1:] != (schema_version, build_id, ATTENTION_VERSION):
+            return None
+        current = con.execute('SELECT cached_at FROM variants WHERE key=?', (key,)).fetchone()
+        if not current or current[0] != header[0]:
+            return None
+        missing = con.execute('''SELECT 1 FROM rows r LEFT JOIN session_attention a
+            ON a.variant=r.variant AND a.identity=r.identity
+            WHERE r.variant=? AND (a.digest IS NULL OR a.digest!=?||r.digest) LIMIT 1''',
+                              (key, ATTENTION_VERSION)).fetchone()
+        if missing:
+            return None
+        rows = con.execute('''SELECT a.identity,a.body FROM rows r JOIN session_attention a
+            ON a.variant=r.variant AND a.identity=r.identity
+            WHERE r.variant=? ORDER BY r.position''', (key,))
+        return {'cached_at': header[0],
+                'rows': [(rid, json.loads(body)) for rid, body in rows]}
+    finally:
+        con.close()
 
 
 def load_inventory(cache_file, key, *, schema_version, build_id=None,

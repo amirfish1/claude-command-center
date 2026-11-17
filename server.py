@@ -47761,6 +47761,32 @@ def _attention_read_turns(jsonl_path, n=3):
     return turns[-n:]
 
 
+def _attention_archive_rows_cached(cache_options):
+    """Classify historical sessions without materializing parser histories."""
+    from ccc_server import archive_store
+    import sqlite3
+    key = _archive_response_cache_key(**cache_options)
+    try:
+        stored = archive_store.load_attention(
+            _ARCHIVE_RESPONSE_CACHE_FILE, key,
+            schema_version=_ARCHIVE_RESPONSE_CACHE_SCHEMA_VERSION,
+            build_id=_ARCHIVE_RESPONSE_CACHE_BUILD_ID)
+    except (OSError, ValueError, sqlite3.Error):
+        stored = None
+    if stored is None:
+        return _archive_all_rows_cached(cache_options)
+    hot, cached, _ = _archive_serve_hot_rows_versioned(key, cache_options, defer_cold=True)
+    with _ARCHIVE_RESPONSE_CACHE_LOCK:
+        hot_stamp = (_ARCHIVE_RESPONSE_CACHE.get(key) or {}).get('cached_at', 0)
+    if float(hot_stamp or 0) > float(stored['cached_at'] or 0):
+        rows = list(hot)
+    else:
+        current = {archive_store.identity(row): row for row in hot}
+        rows = [current.pop(rid, row) for rid, row in stored['rows']]
+        rows.extend(current.values())
+    return _overlay_conversation_lifecycle_flags(rows), cached
+
+
 def compute_attention_feed(*, recent_only=True, recent_window_secs=None,
                            exclude_kinds=None, limit=None, turn_cap=None):
     """Cross-repo attention feed — ONLY sessions that need the human.
@@ -47788,7 +47814,7 @@ def compute_attention_feed(*, recent_only=True, recent_window_secs=None,
     if exclude_kinds is None:
         exclude_kinds = _ATTENTION_FEED_DEFAULT_EXCLUDE if recent_only else frozenset()
     try:
-        convs, _from_cache = _archive_all_rows_cached({
+        convs, _from_cache = _attention_archive_rows_cached({
             "include_prs": False,
             "resolve_pr_states": False,
             "resolve_effective": False,
