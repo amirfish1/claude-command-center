@@ -419,11 +419,15 @@ def _usage_limit_row_for_session(sid, engine=None):
         (_core._archive_serve_lock, _core._archive_serve_cache, 'rows'),
         (_core._ARCHIVE_RESPONSE_CACHE_LOCK, _core._ARCHIVE_RESPONSE_CACHE, 'conversations'),
     ):
-        with lock:
+        if not lock.acquire(blocking=False):
+            continue  # a bulk publisher must not hold up one-session preflight
+        try:
             rows = (cache.get(key) or {}).get(field) or []
             for r in rows:
                 if str(r.get('session_id') or r.get('id') or '') in candidates:
                     return dict(r)
+        finally:
+            lock.release()
     from ccc_server import archive_store
     import sqlite3
     try:

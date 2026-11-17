@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import time
+import threading
 
 import pytest
 import server
@@ -71,6 +72,20 @@ def test_single_row_lookup_never_materializes_archive_or_ancestors(tmp_path, mon
     assert usage_limit._usage_limit_row_for_session('child')['latest_input_tokens'] == 4000
     assert not any('unrelated' in text for text in decoded)
     assert usage_limit._usage_limit_row_for_session('missing') is None
+    # Publishing a whole snapshot cannot queue this read behind its lock.
+    lock = threading.Lock()
+    lock.acquire()
+    monkeypatch.setattr(server, '_archive_serve_lock', lock)
+    found = []
+    reader = threading.Thread(target=lambda: found.append(usage_limit._usage_limit_row_for_session('child')))
+    reader.start()
+    try:
+        reader.join(2)
+        assert not reader.is_alive()
+        assert found[0]['latest_input_tokens'] == 4000
+    finally:
+        lock.release()
+        reader.join(5)
 
 
 def test_lightweight_brief_uses_indexed_identity_without_recall_enrichment(monkeypatch):
