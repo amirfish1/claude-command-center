@@ -1972,6 +1972,10 @@ html:not(.ccc-framed) .q2-topbar { padding-top: env(safe-area-inset-top, 0px); }
     border-top: 1px solid var(--border);
   }
   .q2-diagram { min-height: 0; max-height: 28vh; }
+  .q2-shell[data-mobile-panel="tickets"] .q2-col-tickets:has(.q2-history-chart) {
+    flex: 0 0 38%;
+  }
+  .q2-diagram:has(.q2-history-chart) { min-height: 140px; }
   .q2-diagram:has(.q2-diagram-mini) { max-height: none; }
   .q2-mobile-back {
     display: inline-flex;
