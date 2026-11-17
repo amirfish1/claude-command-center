@@ -95,6 +95,7 @@ def test_parent_carries_current_canonical_documents_and_agent_changes(tmp_path, 
     monkeypatch.setattr(server, '_INDEX_HTML_PATH', source)
     monkeypatch.setattr(server, 'STATIC_DIR', tmp_path)
     monkeypatch.setattr(server, 'USER_APPS_DIR', tmp_path)
+    monkeypatch.setattr(server, '_conversation_open_response', lambda *_a, **_kw: None)
     selected = {'id': 'demo', 'nav': '/view/demo'}
     for sid in ('first-agent', 'next-agent'):
         state.write_text(json.dumps({'agent': {'session_id': sid}}))
@@ -120,3 +121,53 @@ def test_document_json_does_not_turn_child_markup_into_parent_markup():
     html = application_document('<head></head><body></body>', 'cccAppStartupDocument', '/view/demo', document)
     assert '<img' not in html and html.count('</script>') == 1
     assert _document_payload(html, 'cccAppStartupDocument') == {'url': '/view/demo', 'html': document}
+
+
+def test_initial_tail_uses_current_canonical_read_and_escaped_payload(monkeypatch):
+    server = _server()
+    calls = []
+    current = {'events': [{'type': 'assistant', 'text': '</script><img id=escaped>&'}],
+               'last_line': 73, 'queued_inputs': [{'text': 'Held input'}]}
+    monkeypatch.setattr(server, '_load_index_html', lambda **_: '<head></head><body></body>')
+
+    def read(sid, query, accept, **options):
+        calls.append((sid, query, accept, options))
+        return {'body': json.dumps(current).encode(), 'encoding': None, 'cache': 'miss'}
+
+    monkeypatch.setattr(server, '_conversation_open_response', read)
+    for line in (73, 74):
+        current['last_line'] = line
+        html = server._load_app_conversation_document('session-test')
+        initial = _document_payload(html, 'cccAppInitialTail')
+        assert initial['url'] == '/api/conversations/session-test?tail=120'
+        assert json.loads(initial['text']) == current
+        assert '<img' not in html and html.count('</script>') == 1
+    assert calls == [('session-test', 'tail=120', '', {'in_reader': True, 'cached_only': True})] * 2
+    assert 'cccAppInitialTail' not in server._load_app_conversation_document('__new__')
+
+
+@pytest.mark.parametrize('result', [None, {'body': b'{"error":"missing"}'},
+    {'body': b'not JSON'}, {'body': b'{}'}, {'body': b'x' * (512 * 1024 + 1)}])
+def test_declined_invalid_or_large_tail_retains_regular_read(monkeypatch, result):
+    server = _server()
+    template = '<head></head><body>Canonical controls</body>'
+    monkeypatch.setattr(server, '_load_index_html', lambda **_: template)
+    monkeypatch.setattr(server, '_conversation_open_response', lambda *_a, **_kw: result)
+    assert server._load_app_conversation_document('session-test') == template
+
+
+def test_page_tail_cache_miss_never_parses_or_attaches(monkeypatch):
+    server = _server()
+    monkeypatch.setattr(server, '_session_acp_harness', lambda _: None)
+    monkeypatch.setattr(server, '_detect_session_engine', lambda _: 'claude')
+    monkeypatch.setattr(server, '_refresh_queued_view_if_file_changed', lambda _: None)
+    monkeypatch.setattr(server, '_conv_response_bytes_get', lambda *_a, **_kw: None)
+    def forbidden(*_a, **_kw):
+        pytest.fail('Page preparation parsed or attached a cold transcript')
+    monkeypatch.setattr(server, 'parse_conversation', forbidden)
+    monkeypatch.setattr(server, '_acp_maybe_attach_on_view', forbidden)
+    assert server._conversation_open_response('session-test', 'tail=120', '',
+                                              in_reader=True, cached_only=True) is None
+    monkeypatch.setattr(server, '_session_acp_harness', lambda _: 'kimi')
+    assert server._conversation_open_response('session-test', 'tail=120', '',
+                                              in_reader=True, cached_only=True) is None

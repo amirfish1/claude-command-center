@@ -124,7 +124,12 @@ def _json_element(element_id, data):
 
 def application_document(html, element_id, url, document):
     """Carry a current canonical child page in its no-store parent response."""
-    payload = _json_element(element_id, {"url": url, "html": document})
+    return application_json(html, element_id, {"url": url, "html": document})
+
+
+def application_json(html, element_id, data):
+    """Carry escaped, inert bootstrap data in a current application page."""
+    payload = _json_element(element_id, data)
     head = re.search(r"<head\b[^>]*>", html, re.I)
     if head:
         return html[:head.end()] + payload + html[head.end():]

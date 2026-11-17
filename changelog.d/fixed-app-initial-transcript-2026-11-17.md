@@ -1,0 +1,1 @@
+Carry eligible validated conversation reads with the app's initial document, preserving the shared renderer, composer initialization, live stream cursor and normal read fallback. Restore live transcript updates in the native entry by sharing file-cache invalidation with the dashboard.

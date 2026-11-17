@@ -13,7 +13,8 @@ function harness(search = '?ccc_popout=conversation&embed=app&conv=session-1') {
   const requests = [], messages = [], frames = [], timers = [];
   const window = { parent: {postMessage: data => messages.push(data)}, location: {origin: 'http://localhost'} };
   const context = vm.createContext({
-    window, location: {search}, URLSearchParams, console, Promise,
+    window, location: {search}, URLSearchParams, console, Promise, Response,
+    document: { getElementById: () => null },
     performance: {now: () => ++now},
     fetch: async url => {
       requests.push(url);
@@ -48,6 +49,35 @@ test('failed early read retries through the existing fetch path', async () => {
   const data = await vm.runInContext('_fetchConvJsonTimed("/api/conversations/session-1?tail=120")', h.context);
   assert.equal(data.events.length, 0);
   assert.equal(h.requests.length, 1);
+});
+
+test('canonical page tail is consumed once without another read', async () => {
+  const h = harness();
+  h.context.document.getElementById = () => ({remove() {}, textContent: JSON.stringify({
+    url: '/api/conversations/session-1?tail=120', cache: 'miss',
+    text: JSON.stringify({events: [{type: 'assistant', text: 'Current server read'}], last_line: 73}),
+  })});
+  vm.runInContext(boot + timedRead, h.context);
+  const data = await vm.runInContext('_fetchConvJsonTimed("/api/conversations/session-1?tail=120")', h.context);
+  assert.equal(h.requests.length, 0);
+  assert.equal(data.events[0].text, 'Current server read');
+  assert.equal(data.last_line, 73);
+  assert.equal(data.__perf.server_cache, 'page-miss');
+  assert.equal(data.__perf.server_ms, null, 'not misreported as a zero-duration network read');
+  await vm.runInContext('_fetchConvJsonTimed("/api/conversations/session-1?tail=120")', h.context);
+  assert.equal(h.requests.length, 1);
+});
+
+test('invalid, mismatched and failed page tails keep the real request path', async () => {
+  for (const initial of [null, '{broken', JSON.stringify({url: '/api/conversations/other?tail=120', text: '{"events":[]}'}),
+    JSON.stringify({url: '/api/conversations/session-1?tail=120', text: '{"error":"Read failed"}'})]) {
+    const h = harness();
+    h.context.document.getElementById = () => initial && ({textContent: initial});
+    vm.runInContext(boot + timedRead, h.context);
+    const data = await vm.runInContext('_fetchConvJsonTimed("/api/conversations/session-1?tail=120")', h.context);
+    assert.equal(data.events[0].type, 'assistant');
+    assert.equal(h.requests.length, 1);
+  }
 });
 
 test('boot never reads a missing/new/invalid target or a top-level page', () => {

@@ -28769,7 +28769,7 @@ def _conv_response_bytes_put(conversation_id, after_line, raw, gz, window=None):
 _CONV_OPEN_GZIP_MIN_BYTES = 1024
 
 
-def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False):
+def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False, *, cached_only=False):
     """Body for GET /api/conversations/<id> as {body, encoding, cache}.
 
     Shared by the dashboard handler and the conversation-reader process
@@ -28790,6 +28790,8 @@ def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False
     windowed = bool(tail) or (before is not None)
     acp_harness = _session_acp_harness(conv_id)
     is_acp_conv = acp_harness is not None
+    if cached_only and is_acp_conv:
+        return None
     if in_reader:
         if is_acp_conv:
             return None
@@ -28831,6 +28833,8 @@ def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False
         if want_gzip and cached_bytes.get("gzip"):
             return {"body": cached_bytes["gzip"], "encoding": "gzip", "cache": "hit"}
         return {"body": cached_bytes["raw"], "encoding": None, "cache": "hit"}
+    if cached_only:
+        return None
     result = parse_conversation(conv_id, after_line, tail=tail, before=before)
     # Advertise the detected engine so view paths that opened the
     # conversation without a row (e.g. a popout URL missing `source`)
@@ -31192,6 +31196,33 @@ _load_index_html(app_embed=True)
 _load_index_html(app_shell=True)
 
 
+def _load_app_conversation_document(agent_id):
+    html = _load_index_html(app_embed=True)
+    if agent_id == "__new__":
+        return html
+    try:
+        # Reuse only a currently validated canonical read, including queue
+        # invalidation and stream cursor. Never make HTML wait for a cold
+        # transcript parse; misses and reader-ineligible engines keep HTTP.
+        prepared = _conversation_open_response(agent_id, "tail=120", "", in_reader=True, cached_only=True)
+        if prepared and not prepared.get("encoding") and len(prepared["body"]) <= 512 * 1024:
+            text = prepared["body"].decode("utf-8")
+            data = json.loads(text)
+            if not isinstance(data, dict) or not isinstance(data.get("events"), list) or data.get("error"):
+                return html
+            from ccc_server.app_embed import application_json
+            html = application_json(html, "cccAppInitialTail", {
+                "url": "/api/conversations/" + urllib.parse.quote(agent_id, safe="") + "?tail=120",
+                "text": text,
+                "cache": prepared.get("cache", "miss"),
+            })
+    except Exception:
+        # A failed bootstrap is not readiness. The regular transcript request
+        # and its existing visible error/retry handling remain authoritative.
+        pass
+    return html
+
+
 def _load_application_html(name, *, conversation_document=False):
     """Canonical user-app wrapper for both foreground and isolated reads."""
     from ccc_server.app_embed import application_page
@@ -31212,7 +31243,7 @@ def _load_application_html(name, *, conversation_document=False):
             from ccc_server.app_embed import application_document
             url = "/?ccc_popout=conversation&embed=app&conv=" + urllib.parse.quote(agent_id, safe="")
             html = application_document(html, "cccAppConversationDocument", url,
-                                        _load_index_html(app_embed=True))
+                                        _load_app_conversation_document(agent_id))
         return html
     return None
 

@@ -19,19 +19,25 @@ with tempfile.TemporaryDirectory() as tmp:
     (app/'app.json').write_text('{}')
     (app/app_routines.STATE_NAME).write_text(json.dumps({'agent':{'session_id':'session-test'}}))
     (app/'index.html').write_text('<!doctype html><html><head></head><body><main data-ccc-content><h1>Canonical app</h1><textarea id="appDraft"></textarea></main><script src="/static/app-kit.js" data-app="document-test" defer></script></body></html>')
-    print(json.dumps({'shell':server._load_app_shell_html({'id':'document-test','nav':'/view/document-test','label':'Test app'}),'app':server._load_application_html('document-test'),'conversation':server._load_index_html(app_embed=True)}))
+    current={'events':[{'type':'user','text':'A real fixture request','line':1},{'type':'assistant','text':'A rendered fixture response','line':2}],'last_line':2}
+    server._conversation_open_response=lambda *_args,**_kwargs: {'body':json.dumps(current).encode(),'encoding':None,'cache':'miss'}
+    selected={'id':'document-test','nav':'/view/document-test','label':'Test app'}
+    pages={'shell':server._load_app_shell_html(selected),'app':server._load_application_html('document-test'),'conversation':server._load_index_html(app_embed=True)}
+    server._conversation_open_response=lambda *_args,**_kwargs: None
+    pages['failed_shell']=server._load_app_shell_html(selected)
+    print(json.dumps(pages))
 `], {cwd:root,maxBuffer:8*1024*1024,encoding:'utf8'}));
 const bundles = JSON.parse(execFileSync('python3', ['-c',
   'from pathlib import Path; from ccc_server.conversation_assets import BUNDLES, ConversationScript; import json; print(json.dumps({name:ConversationScript(Path("static"),name).read_bytes().decode() for name in BUNDLES}))'], {cwd:root,maxBuffer:8*1024*1024}));
 
 test('first response boots both canonical documents with URLs, controls and reload drafts intact', async () => {
   const requests=[],errors=[];
-  let failRead=false;
+  let failRead=false, streamEnabled=false;
   const server=http.createServer((request,response)=>{
     const url=new URL(request.url,'http://localhost');requests.push(url.pathname+url.search);
     response.setHeader('Content-Type','application/json');
     if(url.pathname==='/') {
-      response.setHeader('Content-Type','text/html');response.end(url.searchParams.has('ccc_app')?pages.shell:pages.conversation);
+      response.setHeader('Content-Type','text/html');response.end(url.searchParams.has('ccc_app')?(failRead?pages.failed_shell:pages.shell):pages.conversation);
     } else if(url.pathname==='/view/document-test') {
       response.setHeader('Content-Type','text/html');response.end(pages.app);
     } else if(bundles[url.pathname.slice('/static/'.length)]) {
@@ -41,6 +47,9 @@ test('first response boots both canonical documents with URLs, controls and relo
       const file=path.join(root,url.pathname);
       if(!file.startsWith(root+'/static/')||!fs.existsSync(file)){response.writeHead(404).end();return;}
       response.setHeader('Content-Type',file.endsWith('.js')?'application/javascript':'text/css');response.end(fs.readFileSync(file));
+    } else if(streamEnabled&&url.pathname==='/api/conversations/session-test/stream') {
+      response.setHeader('Content-Type','text/event-stream');
+      response.end('data: '+JSON.stringify({events:[{type:'assistant',text:'Live event after initial read',line:3}],last_line:3})+'\n\n');
     } else if(failRead&&url.pathname==='/api/conversations/session-test') {
       response.writeHead(500).end(JSON.stringify({error:'Fixture read failed'}));
     } else response.end(JSON.stringify(url.pathname==='/api/conversations/session-test'
@@ -64,8 +73,17 @@ test('first response boots both canonical documents with URLs, controls and relo
     assert.ok(app&&agent,'both canonical frame URLs remain observable');
     assert.equal(page.url(),base+'/?ccc_app=document-test');
     assert.equal(requests.filter(url=>url.startsWith('/view/')||url.includes('embed=app')).length,0,'no sequential child HTML requests');
+    assert.equal(requests.filter(url=>url.startsWith('/api/conversations/session-test?tail=')).length,0,'initial canonical tail arrives with the page');
     assert.equal(await agent.$$eval('#conversationsView .event',elements=>elements.length),2);
     assert.equal(await agent.$eval('#convInput',input=>input.disabled),false);
+    assert.equal(await agent.evaluate(()=>window.cccConversation.paneByPaneId('p1').lastLine),2,'live stream starts after the supplied read cursor');
+    streamEnabled=true;
+    await agent.evaluate(()=>window.cccConversation.startConvStream('p1'));
+    await agent.waitForFunction(()=>document.getElementById('conversationsView').textContent.includes('Live event after initial read'),{timeout:5000});
+    assert.ok(requests.some(url=>url==='/api/conversations/session-test/stream?after=2'));
+    assert.equal(await agent.evaluate(()=>window.cccConversation.paneByPaneId('p1').lastLine),3);
+    streamEnabled=false;
+    await agent.evaluate(()=>window.cccConversation.stopConvStream('p1'));
     assert.equal(await agent.evaluate(()=>location.origin),base);
     await agent.click('#convActionsBtn');
     assert.equal(await agent.$eval('#convActionsBtn',button=>button.getAttribute('aria-expanded')),'true');
