@@ -35474,8 +35474,8 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             # Cheap on-disk inventory of every engine CCC knows (spawnable
             # bin resolvers + read-only session stores). Backs the First
             # Flight tour welcome chips.
-            _q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            self.send_json(_engines_installed(fresh=(_q.get("fresh") or [""])[0] in ("1", "true")))
+            _qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            self.send_json(_engines_installed(fresh=(_qs.get("fresh") or [""])[0] in ("1", "true")))
         elif path == "/api/ci/setup":
             from ccc_server.local_ci import local_ci_setup
             self.send_json(local_ci_setup())
@@ -35531,19 +35531,19 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             # :8082, Ollama :11434, LM Studio :1234) plus OpenRouter keys in
             # BYOK. TTL-cached, parallel, never raises. ccc_server/router_detect.py.
             from ccc_server import router_detect as _router_detect
-            _q = urllib.parse.parse_qs(parsed.query)
-            _fresh = (_q.get("fresh") or [""])[0] in ("1", "true", "yes")
+            _qs = urllib.parse.parse_qs(parsed.query)
+            _fresh = (_qs.get("fresh") or [""])[0] in ("1", "true", "yes")
             self.send_json(_router_detect.detect_routers(fresh=_fresh))
         elif path == "/api/free-router/engine-config":
             # L20: masked preview of "engine X on the free router" — env var
             # names, generated config snippet, file it would write. No writes,
             # no secrets. ccc_server/free_engines.py.
             from ccc_server import free_engines as _free_engines
-            _q = urllib.parse.parse_qs(parsed.query)
+            _qs = urllib.parse.parse_qs(parsed.query)
             self.send_json(_free_engines.engine_config_preview(
-                (_q.get("engine") or [""])[0],
-                base_url=(_q.get("base_url") or [""])[0] or None,
-                model=(_q.get("model") or [""])[0] or None,
+                (_qs.get("engine") or [""])[0],
+                base_url=(_qs.get("base_url") or [""])[0] or None,
+                model=(_qs.get("model") or [""])[0] or None,
             ))
         elif path == "/api/vault":
             # Vault metadata + existing BYOK keys for Settings > Vault.
