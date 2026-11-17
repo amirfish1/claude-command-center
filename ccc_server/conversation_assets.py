@@ -2,6 +2,8 @@
 
 import hashlib
 
+from .asset_versions import STATIC_ASSET_VERSIONS
+
 
 SCRIPT_NAME = "conversation-app.js"
 SCRIPTS = tuple("conversation-" + name + ".js" for name in (
@@ -19,12 +21,10 @@ class ConversationScript:
         self.static_dir = static_dir
 
     def metadata(self):
-        versions = []
-        size = 0
-        for name in SCRIPTS:
-            info = (self.static_dir / name).stat()
-            versions.append((name, info.st_mtime_ns, info.st_ctime_ns, info.st_size))
-            size += info.st_size
+        versions = STATIC_ASSET_VERSIONS.read(self.static_dir, SCRIPTS)
+        if any(len(info) != 4 for info in versions):
+            raise FileNotFoundError("conversation controller source missing")
+        size = sum(info[3] for info in versions)
         version = hashlib.sha256(repr(versions).encode()).hexdigest()[:24]
         return version, (str(self.static_dir), SCRIPT_NAME, tuple(versions)), size
 

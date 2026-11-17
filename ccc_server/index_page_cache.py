@@ -1,10 +1,10 @@
 """Reuse index transforms and asset stamps without hiding filesystem edits."""
 
-import os
 import re
 import threading
 
 from .bounded_cache import ByteBudgetCache
+from .asset_versions import STATIC_ASSET_VERSIONS
 from .conversation_assets import SCRIPT_NAME, SCRIPTS
 
 _ASSET = re.compile(r'(?:src|href)="/static/([A-Za-z0-9_./-]+\.(?:js|css))"')
@@ -40,15 +40,9 @@ class IndexPageCache:
         # Stamp dependencies include assets introduced by the transform, not
         # only those in index.html. Check each time; there is no TTL window
         # during which an edited asset can retain its old immutable URL.
-        versions = []
         dependencies = {dependency for name in names
                         for dependency in (SCRIPTS if name == SCRIPT_NAME else (name,))}
-        for name in sorted(dependencies):
-            try:
-                info = os.stat(os.path.join(static_dir, name))
-                versions.append((name, info.st_mtime_ns, info.st_ctime_ns, info.st_size))
-            except OSError:
-                versions.append((name, None, None))
+        versions = STATIC_ASSET_VERSIONS.read(static_dir, dependencies)
         key = (template_key, str(static_dir), tuple(versions))
         page = self.pages.get(key)
         if page is None:
