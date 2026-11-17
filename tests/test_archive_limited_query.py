@@ -78,3 +78,20 @@ def test_short_history_appends_new_hot_rows_and_legacy_schema_falls_back(archive
     legacy = ([{'session_id':'legacy'}],True)
     monkeypatch.setattr(server, '_archive_all_rows_cached', lambda *a:legacy)
     assert server._archive_session_query_rows_cached(OPTS,{'limit':['20']}) == legacy
+
+
+def test_sessions_endpoint_uses_capped_reader_and_keeps_compatibility_alias(archive, monkeypatch):
+    from tests.test_static_asset_caching import _get
+    _,_,_,expected = archive
+    monkeypatch.setattr(server, '_archive_all_rows_cached', lambda *a:pytest.fail('uncapped endpoint read'))
+    monkeypatch.setattr(server, '_archive_spawned_coalesced', lambda:[])
+    monkeypatch.setattr(server, '_attach_usage_limit_resume_fields', lambda rows:None)
+    status,_,body = _get(server, '/api/sessions?all=1&limit=3&fields=session_id,display_name,state')
+    payload = json.loads(body)
+    assert status == 200
+    qs = {'limit':['3'],'fields':['session_id,display_name,state']}
+    assert payload['sessions'] == server._apply_session_query_params(expected,qs)
+    assert payload['conversations'] == payload['sessions']
+    assert payload['count'] == 3 and payload['spawned'] == []
+    _,_,body = _get(server, '/api/sessions?all=1&compact=1&limit=3&fields=session_id,display_name,state')
+    assert 'conversations' not in json.loads(body)
