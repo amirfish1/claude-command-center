@@ -55,3 +55,23 @@ def test_stale_data_can_draw_history_but_not_fresh_snapshots(monkeypatch):
     assert result["points"][0]["open"] == 1
     assert result["refreshing"] is True
     assert snapshots == []
+
+
+def test_current_hour_includes_observation_written_during_request(monkeypatch):
+    setup_history(monkeypatch, items=[{"status": "open"}], fresh=True)
+    start = history.time.time()
+    clock = iter([start, start + 0.002])
+    monkeypatch.setattr(history, "time", SimpleNamespace(time=lambda: next(clock)))
+    rows = []
+    monkeypatch.setattr(history, "_record_queue_snapshot_if_due", lambda items: rows.append({
+        "ts": start + 0.001, "status_counts_version": 1, "open": 1,
+        "needs_input": 0, "awaiting_worker": 1, "waiting_tickets": 0, "other": 0,
+    }))
+    monkeypatch.setattr(history, "_read_queue_history_rows", lambda: rows)
+    monkeypatch.setattr(history, "_backfill_queue_history", lambda *args: [])
+
+    result = history.compute_queue_history()
+
+    assert result["hourly_points"][-1]["open"] == 1
+    assert result["hourly_points"][-1]["awaiting_worker"] == 1
+    assert result["generated_at"] >= rows[0]["ts"]

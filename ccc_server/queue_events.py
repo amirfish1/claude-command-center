@@ -358,6 +358,10 @@ def compute_queue_history(days=7, bucket_hours=1):
                  and now - _core._wt_items_memo["at"] < _core._WT_ITEMS_SNAPSHOT_TTL_S)
     if fresh:
         _record_queue_snapshot_if_due(items)
+        # Include the observation just written by this request. Its timestamp
+        # is later than the request's initial clock reading, so using that
+        # reading as the hourly cutoff drops the newest point from the chart.
+        now = time.time()
 
     real_rows = _read_queue_history_rows()
     cutoff = now - days * 86400
