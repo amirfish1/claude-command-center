@@ -1,0 +1,1 @@
+- Ticket details and answers work again for every queue. A local variable in the dashboard's request handler hid the queue engine, so tickets showed as "not found" with a misleading GitHub message.
