@@ -375,6 +375,7 @@
     // These reads are coalesced by their caches; they must not wait behind
     // unrelated service probes or a slow live-activity response.
     return url.startsWith('/api/conversations/list')
+      || /^\/api\/system\/services(?:[?]|$)/.test(url)
       || /^\/api\/queue\/(status|list)(?:[?]|$)/.test(url);
   }
 
