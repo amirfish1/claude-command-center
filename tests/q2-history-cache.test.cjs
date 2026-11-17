@@ -10,7 +10,7 @@ const points = [{ts: 100, open: 4, closed: 6, needs_input: 1},
   {ts: 200, open: 5, closed: 7, needs_input: 2}];
 
 function harness(saved, fetcher) {
-  const storage = new Map(saved ? [['q2-history-7d-hourly-v1', JSON.stringify(saved)]] : []);
+  const storage = new Map(saved ? [['q2-history-7d-hourly-v2', JSON.stringify(saved)]] : []);
   const state = {queueHistory: null};
   const host = {innerHTML: ''};
   let calls = 0;
@@ -33,11 +33,11 @@ test('saved graph paints before a delayed request; fresh result replaces and per
   h.render();
   assert.equal(h.calls(), 1, 'one in-flight refresh');
   const fresh = [{ts: 300, open: 9}];
-  resolve({ok: true, json: async () => ({ok: true, points: fresh})});
+  resolve({ok: true, json: async () => ({ok: true, points: fresh, hourly_points: fresh})});
   await new Promise(setImmediate);
   assert.deepEqual(h.state.queueHistory, fresh);
   assert.doesNotMatch(h.host.innerHTML, /Saved history/);
-  assert.deepEqual(JSON.parse(h.storage.get('q2-history-7d-hourly-v1')).points, fresh);
+  assert.deepEqual(JSON.parse(h.storage.get('q2-history-7d-hourly-v2')).points, fresh);
   h.render();
   assert.equal(h.calls(), 1, 'successful requests retain five-minute cadence');
 });
@@ -72,5 +72,23 @@ test('empty refreshing server cannot erase saved graph or overwrite saved time',
   h.render();
   await new Promise(setImmediate);
   assert.match(h.host.innerHTML, /q2-history-svg/);
-  assert.deepEqual(JSON.parse(h.storage.get('q2-history-7d-hourly-v1')), saved);
+  assert.deepEqual(JSON.parse(h.storage.get('q2-history-7d-hourly-v2')), saved);
+});
+
+test('five separate charts label missing data and expose hourly observations', () => {
+  const h = harness({fetchedAt: Date.now(), points: [
+    {ts: 100, open: 4},
+    {ts: 3700, open: 5, needs_input: 0, awaiting_worker: 2, waiting_tickets: 1, other: 2}
+  ]}, () => new Promise(() => {}));
+  h.context.fetch = () => new Promise(() => {});
+  // Only render saved data in this synchronous check, without leaving timers.
+  h.context.historyFetchedAt = Date.now();
+  h.render();
+  assert.equal((h.host.innerHTML.match(/<section class="q2-history-series /g) || []).length, 5);
+  for (const label of ['Open', 'Needs input', 'Awaiting worker', 'Waiting on other tickets', 'Other status']) {
+    assert.ok(h.host.innerHTML.includes(label));
+  }
+  assert.match(h.host.innerHTML, /Gaps mean no recorded observation, not zero/);
+  assert.match(h.host.innerHTML, /<title>/, 'hour and count available on each measured point');
+  assert.doesNotMatch(h.host.innerHTML, /NaN/);
 });

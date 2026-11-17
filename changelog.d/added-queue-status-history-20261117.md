@@ -1,0 +1,1 @@
+The queue dashboard shows separate hourly graphs for Open, Needs input, Awaiting worker, Waiting on other tickets, and Other status over seven days. New snapshots retain status breakdowns; missing historical observations appear as gaps instead of invented zeros.

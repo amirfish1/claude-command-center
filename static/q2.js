@@ -1936,7 +1936,7 @@
   // polling here on a slower cadence than the rest of q2 is enough -- a
   // tighter poll would just re-fetch the same cached backend response.
   var HISTORY_POLL_MS = 5 * 60 * 1000;
-  var HISTORY_CACHE_KEY = 'q2-history-7d-hourly-v1';
+  var HISTORY_CACHE_KEY = 'q2-history-7d-hourly-v2';
   var HISTORY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
   var historyFetchedAt = 0;
   var historyFetching = false;
@@ -1974,11 +1974,12 @@
         // graph while its shared refresh runs, rather than replacing it with
         // a synthetic empty result. Retry on the normal dashboard cadence.
         if (!data.refreshing || data.points.length) {
-          state.queueHistory = data.points;
+          state.queueHistory = Array.isArray(data.hourly_points) ? data.hourly_points
+            : data.points.map(function (p) { return {ts: p.ts, open: p.open}; });
           if (!data.refreshing) {
             try {
               localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify({
-                fetchedAt: Date.now(), points: data.points
+                fetchedAt: Date.now(), points: state.queueHistory
               }));
             } catch (_) { /* Quota/private-mode failures must not hide the chart. */ }
           }
@@ -2004,56 +2005,53 @@
     if (!pts.length) { host.innerHTML = '<div class="q2-dg-empty">'
       + (historySaved ? 'Loading history…' : 'No history yet.') + '</div>'; return; }
 
-    var w = 720, h = 120, padL = 4, padR = 4, padT = 8, padB = 18;
+    var w = 360, h = 90, padL = 32, padR = 8, padT = 8, padB = 20;
     var innerW = w - padL - padR, innerH = h - padT - padB;
     var tMin = pts[0].ts, tMax = pts[pts.length - 1].ts;
-    var tSpan = Math.max(1, tMax - tMin);
-
-    function x(ts) { return padL + ((ts - tMin) / tSpan) * innerW; }
-
-    // closed is a monotonic cumulative total (thousands) while open/needs_input
-    // are small live counts -- one shared y-scale would flatten the latter two
-    // to a barely-visible line at the bottom. Each series gets its own y-scale
-    // so shape/trend is legible for all three; the legend numbers carry the
-    // real magnitude comparison.
-    function pathFor(field, requireNonNull) {
-      var vMax = 1;
+    var span = Math.max(3600, tMax - tMin);
+    function x(ts) { return padL + (ts - tMin) / span * innerW; }
+    function stamp(ts) { return new Date(ts * 1000).toLocaleString([], {
+      month: 'short', day: 'numeric', hour: 'numeric', timeZoneName: 'short'
+    }); }
+    var series = [
+      ['open', 'Open', 'All tickets that are not closed'],
+      ['needs_input', 'Needs input', 'Tickets waiting for your input'],
+      ['awaiting_worker', 'Awaiting worker', 'Ready, unclaimed tickets'],
+      ['waiting_tickets', 'Waiting on other tickets', 'Tickets with unfinished dependencies'],
+      ['other', 'Other status', 'Working, review, release, external waits and other active states']
+    ];
+    var charts = series.map(function (spec) {
+      var field = spec[0], known = pts.filter(function (p) { return Number.isFinite(p[field]); });
+      var last = known.length ? known[known.length - 1] : null;
+      var max = Math.max(1, ...known.map(function (p) { return p[field]; }));
+      function y(value) { return padT + innerH - value / max * innerH; }
+      var path = '', pen = false, dots = '';
       pts.forEach(function (p) {
-        var v = p[field];
-        if (v != null) vMax = Math.max(vMax, v);
-      });
-      function y(v) { return padT + innerH - (v / vMax) * innerH; }
-      var d = '', pen = false;
-      pts.forEach(function (p) {
-        var v = p[field];
-        if (requireNonNull && (v == null)) { pen = false; return; }
-        d += (pen ? ' L ' : ' M ') + x(p.ts).toFixed(1) + ' ' + y(v || 0).toFixed(1);
+        if (!Number.isFinite(p[field])) { pen = false; return; }
+        path += (pen ? ' L ' : ' M ') + x(p.ts).toFixed(1) + ' ' + y(p[field]).toFixed(1);
         pen = true;
+        dots += '<circle cx="' + x(p.ts).toFixed(1) + '" cy="' + y(p[field]).toFixed(1)
+          + '" r="2.5"><title>' + esc(stamp(p.ts) + ': ' + p[field]) + '</title></circle>';
       });
-      return d.trim();
-    }
-
-    var latest = pts[pts.length - 1];
-    var legend = [
-      ['open', 'Open', latest.open],
-      ['needs_input', 'Needs input', latest.needs_input],
-      ['closed', 'Closed', latest.closed],
-    ].map(function (row) {
-      return '<span class="q2-history-legend-item q2-history-legend-' + row[0] + '">'
-        + '<span class="q2-history-swatch"></span>' + row[1]
-        + (row[2] == null ? '' : ' <b>' + row[2] + '</b>') + '</span>';
+      var latest = pts[pts.length - 1];
+      var number = Number.isFinite(latest[field]) ? latest[field] : '—';
+      return '<section class="q2-history-series q2-history-series-' + field + '" aria-label="' + esc(spec[1]) + '">'
+        + '<div class="q2-history-head"><span title="' + esc(spec[2]) + '">' + spec[1] + '</span>'
+        + '<span class="q2-spacer"></span><b>' + number + '</b></div>'
+        + '<svg class="q2-history-svg" viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="'
+        + esc(spec[1] + ', hourly over the last seven days. ' + (last ? 'Last observation: ' + last[field] + ' at ' + stamp(last.ts) : 'No recorded observations yet.')) + '">'
+        + '<path class="q2-history-axis" d="M ' + padL + ' ' + padT + ' V ' + (padT + innerH) + ' H ' + (w - padR) + '"></path>'
+        + '<text x="0" y="14">' + max + '</text><text x="0" y="' + (padT + innerH) + '">0</text>'
+        + '<text x="' + padL + '" y="88">' + esc(new Date(tMin * 1000).toLocaleDateString([], {month:'short',day:'numeric'})) + '</text>'
+        + '<text x="' + (w - padR) + '" y="88" text-anchor="end">Now</text>'
+        + '<path class="q2-history-line" d="' + esc(path) + '"></path>' + dots + '</svg>'
+        + (!known.length ? '<p class="q2-history-note">No recorded observations yet.</p>' : '') + '</section>';
     }).join('');
-
-    host.innerHTML = '<div class="q2-history-head">'
-      + '<span class="q2-history-title">Last 7 days</span>'
-      + '<span class="q2-spacer"></span>' + legend + '</div>'
-      + (historyError ? '<div class="q2-history-head" role="status">Saved history · retrying…</div>'
-        : historySaved ? '<div class="q2-history-head" role="status">Saved history · updating…</div>' : '')
-      + '<svg class="q2-history-svg" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" aria-hidden="true">'
-      + '<path class="q2-history-line q2-history-line-open" d="' + esc(pathFor('open', false)) + '"></path>'
-      + '<path class="q2-history-line q2-history-line-needs_input" d="' + esc(pathFor('needs_input', true)) + '"></path>'
-      + '<path class="q2-history-line q2-history-line-closed" d="' + esc(pathFor('closed', false)) + '"></path>'
-      + '</svg>';
+    host.innerHTML = '<div class="q2-history-head"><span>Last 7 days · hourly</span></div>'
+      + (historyError ? '<p class="q2-history-note" role="status">Saved history · retrying…</p>'
+        : historySaved ? '<p class="q2-history-note" role="status">Saved history · updating…</p>' : '')
+      + '<p class="q2-history-note">Open is the total; the other graphs break it down. Gaps mean no recorded observation, not zero. Hover a point for its hour and count.</p>'
+      + '<div class="q2-history-series-grid">' + charts + '</div>';
   }
 
   function renderLiveWorkersStrip(host) {

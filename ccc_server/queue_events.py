@@ -200,7 +200,8 @@ def _record_queue_snapshot_if_due(items):
             if tail:
                 try:
                     last = json.loads(tail[-1])
-                    if now - float(last.get("ts", 0)) < _QUEUE_HISTORY_SNAPSHOT_MIN_GAP_S:
+                    if (last.get("status_counts_version") == 1
+                            and now - float(last.get("ts", 0)) < _QUEUE_HISTORY_SNAPSHOT_MIN_GAP_S):
                         return
                 except Exception:
                     pass
@@ -213,12 +214,61 @@ def _record_queue_snapshot_if_due(items):
         "needs_input": counts["needs_input"],
         "closed": counts["closed"],
     }
+    row.update(_queue_history_status_counts(items))
+    row["status_counts_version"] = 1
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a") as f:
             f.write(json.dumps(row) + "\n")
     except Exception:
         pass
+
+
+def _queue_history_status_counts(items):
+    """One active total and four exclusive subsets, using WT dependencies."""
+    counts = dict(open=0, needs_input=0, awaiting_worker=0, waiting_tickets=0, other=0)
+    for item in with_waiting_on(items):
+        status = item.get("status") or "open"
+        if status == "closed":
+            continue
+        counts["open"] += 1
+        wait = item.get("wait") or {}
+        if item.get("waiting_on"):
+            key = "waiting_tickets"
+        elif (status in ("blocked", "awaiting_answer") or item.get("needs_input")) and wait.get("on") != "external":
+            key = "needs_input"
+        elif (status == "open" and not item.get("claimed_by")
+              and item.get("claimable") is not False
+              and item.get("readiness") not in _UNCLAIMABLE_READINESS
+              and not item.get("duplicate_of")
+              and not item.get("deferred_until")):
+            key = "awaiting_worker"
+        else:
+            key = "other"
+        counts[key] += 1
+    return counts
+
+
+def _hourly_queue_history(points, now, days, bucket_hours):
+    """Last observation per hour; missing observations stay unknown, not zero."""
+    bucket_s = bucket_hours * 3600
+    end = int(now // bucket_s) * bucket_s
+    start = end - days * 86400
+    by_hour = {}
+    for point in sorted(points, key=lambda p: p["ts"]):
+        ts = float(point["ts"])
+        if start <= ts <= now:
+            by_hour[int(ts // bucket_s) * bucket_s] = point
+    fields = ("open", "needs_input", "awaiting_worker", "waiting_tickets", "other")
+    result = []
+    for hour in range(start, end + 1, bucket_s):
+        point = by_hour.get(hour, {})
+        row = {"ts": hour}
+        for field in fields:
+            # Older snapshots have no breakdown by the current wait model.
+            row[field] = point.get(field) if field == "open" or point.get("status_counts_version") == 1 else None
+        result.append(row)
+    return result
 
 
 def _read_queue_history_rows():
@@ -319,6 +369,7 @@ def compute_queue_history(days=7, bucket_hours=1):
 
     result = {
         "points": backfilled + real_rows,
+        "hourly_points": _hourly_queue_history(backfilled + real_rows, now, days, bucket_hours),
         "days": days,
         "bucket_hours": bucket_hours,
         "generated_at": now,

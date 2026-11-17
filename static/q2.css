@@ -1388,6 +1388,24 @@ body.q2-resizing-v .q2-col { pointer-events: none; }
 .q2-history-line-open { stroke: var(--cyan); }
 .q2-history-line-needs_input { stroke: var(--orange); stroke-dasharray: 3 2; }
 .q2-history-line-closed { stroke: var(--green); }
+.q2-history-series-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 10px; }
+.q2-history-series:first-child { grid-column: 1 / -1; }
+.q2-history-series { min-width: 0; color: var(--cyan); }
+.q2-history-series-needs_input { color: var(--orange); }
+.q2-history-series-awaiting_worker { color: var(--wip-blue); }
+.q2-history-series-waiting_tickets { color: var(--purple); }
+.q2-history-series-other { color: var(--green); }
+.q2-history-series .q2-history-head { gap: 4px; align-items: baseline; }
+.q2-history-series .q2-history-head b { color: var(--text); font-variant-numeric: tabular-nums; }
+.q2-history-series .q2-history-svg { height: auto; min-height: 62px; }
+.q2-history-series .q2-history-line { stroke: currentColor; }
+.q2-history-series circle { fill: currentColor; }
+.q2-history-axis { fill: none; stroke: var(--border); stroke-width: 1; }
+.q2-history-series text { fill: var(--text-muted); font: 11px var(--font-ui); }
+.q2-history-note { color: var(--text-muted); font-size: 11px; line-height: 1.5; margin-top: 4px; }
+@media (max-width: 700px) {
+  .q2-history-series-grid { grid-template-columns: minmax(0, 1fr); }
+}
 /* Only present with showQueue: true (the ALL view) -- a single-queue diagram
    never needs to say which queue a card belongs to, it's the whole column.
    Its own line rather than squeezed into the header row, which already
