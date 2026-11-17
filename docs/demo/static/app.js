@@ -8974,7 +8974,7 @@
   // Mid-read voice switch (CCC-221): remember the pick for the session, then
   // re-speak the rest of the read from the current word in the new voice. A
   // read otherwise keeps the voice it started with until it ends.
-  // Floating speaker's voice button: step through the free voices, starting
+  // Floating speaker's voice button: step through the browser voices, starting
   // from the one actually playing (a "Random voice" read has a concrete one).
 
   // Shared conversation-core.js: _ttsCycleVoice.
@@ -8984,12 +8984,7 @@
   // uses elsewhere in this file (no NLP) -- good enough for narration.
 
   // Shared conversation-core.js: _ttsJumpToNextSentence.
-  // Skip inside audio that is already made: seek in the playing clip, or jump to
-  // the clip holding the target, instead of re-requesting speech (a multi-second
-  // wait). The position is a character-proportional estimate. False = no neural
-  // audio to seek in, so the caller restarts from text.
-  // Restart at the current position with the browser voice reading the first
-  // piece while the free voice makes the next clip. False = unavailable.
+  // Seeking restarts the active browser or device voice at the target word.
   // The speaker rim, keyboard and fallback − / + buttons share 0.05 steps.
   // Clamp within [MIN, MAX]; persist, relabel, disable at the ends, and
   // restart playback (debounced) so an active read picks up the new speed.
