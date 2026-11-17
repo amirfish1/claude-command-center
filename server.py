@@ -20,6 +20,7 @@ __version__ = "6.0.0"
 
 import sender_envelope as _attribution
 from ccc_server import session_driver as _driver
+from ccc_server import archive_list_replay as _list_replay
 import ast
 import base64
 import traceback
@@ -17616,7 +17617,7 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
             diagnostics["reason"] = ("hit" if raw is not None else
                                      "version-miss" if snap_ver else "unversioned")
         if raw is None:
-            raw = json.dumps(build_payload()).encode()
+            raw = _list_replay.encode_payload(build_payload())
             etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
             # Level 1 halves compression time on the multi-MB 7d body
             # (~240ms -> ~120ms) for ~30% more bytes on a local poll.
@@ -17773,7 +17774,7 @@ def _archive_list_warm(cache_options, window, stale_ok):
             delta = None
 
     def _payload():
-        payload = _archive_list_payload(rows, window=window, cached=from_cache)
+        payload = _archive_list_replay_payload(rows, delta, window=window, cached=from_cache)
         if delta is not None:
             payload["delta_token"] = delta["token"]
         return payload
@@ -18653,7 +18654,7 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents):
     return window_rows
 
 
-def _archive_list_project_rows(rows, *, window="all", now=None, phases=None):
+def _archive_list_project_rows(rows, *, window="all", now=None, phases=None, _inputs=None):
     # Request-local diagnostics distinguish CPU work from GIL/lock waits on
     # the real corpus, without the per-call overhead of a Python profiler.
     phase_wall = time.perf_counter() if phases is not None else 0
@@ -18667,18 +18668,20 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None):
                             "cpu_ms": round((cpu - phase_cpu) * 1000, 1)}
             phase_wall, phase_cpu = wall, cpu
 
-    cutoff = _archive_list_window_cutoff(window, now=now)
-    resumes = _load_usage_limit_resumes()
-    parents = _session_graph.parent_snapshot()
-    # Experimental idea tickets: the list serves a persisted snapshot, so the
-    # ticket is stamped here from one mtime-cached read ({} when flag is off).
-    try:
-        idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
-    except Exception:
-        idea_tickets_by_sid = {}
+    if _inputs is None:
+        resumes = _load_usage_limit_resumes()
+        parents = _session_graph.parent_snapshot()
+        # One mtime-cached read, or {} when the plugin is disabled.
+        try:
+            idea_tickets_by_sid = _idea_tickets.idea_ticket_rows_map()
+        except Exception:
+            idea_tickets_by_sid = {}
+    else:
+        resumes, parents, idea_tickets_by_sid, selected = _inputs
 
     phase("inputs")
-    window_rows = _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents)
+    window_rows = (selected if _inputs is not None else _archive_list_window_rows(
+        rows, _archive_list_window_cutoff(window, now=now), idea_tickets_by_sid, parents))
     phase("window")
     projected = [
         _archive_list_project_row(row, resumes=resumes, parents=parents)
@@ -18700,6 +18703,13 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None):
     from ccc_server import continuation_topics
     continuation_topics.attach_topics(projected)
     phase("topics")
+    _archive_list_ticket_updates(projected, idea_tickets_by_sid)
+    phase("tickets")
+    return projected
+
+
+def _archive_list_ticket_updates(projected, idea_tickets_by_sid):
+    """Run live ticket processing even when the archive projection replays."""
     # Engines without a Stop hook (Codex etc.) get their ticket step here,
     # gated to pending UI spawns and children of ticketed sessions.
     try:
@@ -18726,14 +18736,16 @@ def _archive_list_project_rows(rows, *, window="all", now=None, phases=None):
         _idea_tickets.relabel_continued_once()
     except Exception:
         pass
+    changed = False
     if idea_tickets_by_sid:
         for out in projected:
             ticket = idea_tickets_by_sid.get(out.get("session_id") or out.get("id"))
             if ticket:
+                changed |= (out.get("idea_ticket") != ticket or
+                            out.get("explicitly_archived") is not bool(ticket.get("explicitly_archived")))
                 out["idea_ticket"] = dict(ticket)
                 out["explicitly_archived"] = bool(ticket.get("explicitly_archived"))
-    phase("tickets")
-    return projected
+    return changed
 
 
 def _archive_list_rows_cached(cache_options, *, window="all", now=None):
@@ -19438,9 +19450,9 @@ def _queue_health_stats(rows, *, now=None):
     }
 
 
-def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None):
+def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None, _inputs=None):
     window = _archive_list_window(window)
-    projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases)
+    projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases, _inputs=_inputs)
     if window == "all":
         _trace_row_flicker(projected, now=now)
     payload = {
@@ -19455,6 +19467,74 @@ def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=N
     if cached is not None:
         payload["cached"] = bool(cached)
     return payload
+
+
+# Full-body versions still include every live field. A timestamp-only overlay
+# change can reuse the immutable archive projection inside that new body.
+_ARCHIVE_LIST_PROJECTION_CACHE = ByteBudgetCache(
+    _cache_budget_bytes("CCC_LIST_PROJECTION_CACHE_MB", 64), 8)
+
+
+def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=None, phases=None):
+    if not delta or not delta.get("extra"):
+        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases)
+    window = _archive_list_window(window)
+    now = time.time() if now is None else now
+    try:
+        ideas = _idea_tickets.idea_ticket_rows_map()
+        resumes = _load_usage_limit_resumes()
+        resume_fields = {sid: usage_limit_resume_at_for_session(sid, resumes=resumes)
+                         for sid in resumes}
+    except Exception:
+        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases)
+    parents = _session_graph.parent_snapshot()
+    selected = _archive_list_window_rows(
+        rows, _archive_list_window_cutoff(window, now=now), ideas, parents)
+    ids = [_archive_row_sid(row) for row in selected]
+    extra = delta["extra"]
+    overlay_ids = [_archive_row_sid(row) for row in extra]
+    base_ids = {_archive_row_sid(row) for row in rows[:len(rows) - len(extra)]}
+    # Missing/duplicate identities cannot safely address replacement spans.
+    if (not all(ids) or len(set(ids)) != len(ids) or not all(overlay_ids)
+            or len(set(overlay_ids)) != len(overlay_ids) or base_ids.intersection(overlay_ids)):
+        return _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases)
+    # These two fields are copied by projection, not used by topic/driver
+    # resolution. Window membership is checked separately on every request.
+    # Keep presence in the guard, and every other overlay field unchanged.
+    overlay_guard = [({k: v for k, v in row.items() if k not in ("mtime", "modified")},
+                      [k for k in ("mtime", "modified") if k in row]) for row in extra]
+    guard = hashlib.sha1(json.dumps([overlay_guard, ids, ideas, resume_fields],
+                                   sort_keys=True, default=str).encode()).hexdigest()
+    from ccc_server import continuation_topics
+    key = (window, bool(cached), delta["ver"], delta["ctx"], guard,
+           _session_graph.projection_revision(), continuation_topics.revision())
+    entry = _ARCHIVE_LIST_PROJECTION_CACHE.get(key)
+    if entry is None:
+        payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
+                                       _inputs=(resumes, parents, ideas, selected))
+        raw, spans = _list_replay.encode_rows(payload["conversations"], set(overlay_ids))
+        _ARCHIVE_LIST_PROJECTION_CACHE.put(key, (raw, spans), len(raw) + 256 * len(spans) + 1024)
+    else:
+        wall, cpu = time.perf_counter(), time.thread_time()
+        projected = _list_replay.replay_rows(entry, dict(zip(overlay_ids, extra)))
+        changed = _archive_list_ticket_updates(projected, ideas)
+        if window == "all":
+            _trace_row_flicker(projected, now=now)
+        raw = (json.dumps(projected).encode() if changed
+               else _list_replay.encode_replay(entry, projected))
+        payload = {
+            "ok": True, "conversations": projected, "count": len(projected),
+            "total_count": sum(isinstance(row, dict) for row in (rows or [])),
+            "window": window, "fields": list(_ARCHIVE_LIST_FIELDS),
+            "queue_health": _queue_health_stats(rows, now=now),
+        }
+        if cached is not None:
+            payload["cached"] = bool(cached)
+        if phases is not None:
+            phases["projection_replay"] = {
+                "wall_ms": round((time.perf_counter() - wall) * 1000, 1),
+                "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
+    return _list_replay.EncodedListPayload(payload, raw)
 
 
 def _stamp_archive_state(rows):
@@ -36026,8 +36106,8 @@ class CommandCenterHandler(ResponseTimingMixin, http.server.BaseHTTPRequestHandl
             def _timed_payload():
                 _pt0 = time.perf_counter()
                 try:
-                    payload = _archive_list_payload(
-                        rows, window=window, cached=from_cache, phases=_payload_phases)
+                    payload = _archive_list_replay_payload(
+                        rows, _delta, window=window, cached=from_cache, phases=_payload_phases)
                     if _delta is not None:
                         payload["delta_token"] = _delta["token"]
                     return payload
