@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 
 from ccc_server.app_embed import application_page, application_shell_page, conversation_page
+from ccc_server.conversation_assets import BUNDLES
 
 
 SOURCE = (Path(__file__).resolve().parents[1] / "static/index.html").read_text()
@@ -37,10 +38,12 @@ def test_embed_preserves_all_shared_controls_and_conversation_extensions():
     shared_pane = SOURCE[SOURCE.index('  <div class="main">'):
                          SOURCE.index('  <!-- ── Split Kanban Layout')]
     assert shared_pane in conversation_page(SOURCE)
-    for name in ("conversation-app", "notify", "local-speech", "browser-voice", "codex-live-source",
+    delivered = {source for url in after.scripts
+                 for source in BUNDLES.get(url.removeprefix("/static/"), (url.removeprefix("/static/"),))}
+    for name in ("conversation-entry", "notify", "local-speech", "browser-voice", "codex-live-source",
                  "question-tags", "restart-transport", "restart-recovery", "session-recaps",
                  "free-runtime", "free-router", "queue-ticket-submit", "limit-failover"):
-        assert f"/static/{name}.js" in after.scripts
+        assert f"{name}.js" in delivered
     assert "/static/app.js" not in after.scripts
     assert "cccLoadingOverlay" not in after.ids
     assert len(after.scripts) < len(before.scripts) / 2

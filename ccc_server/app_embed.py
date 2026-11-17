@@ -5,7 +5,7 @@ import re
 from functools import lru_cache
 from html.parser import HTMLParser
 
-from .conversation_assets import SCRIPT_NAME, SCRIPTS
+from .conversation_assets import SCRIPT_NAME, SCRIPTS, EXTENSIONS, DEFERRED, STYLES
 
 
 # Keep the renderer, composer, speech, recovery and conversation extensions on
@@ -88,6 +88,26 @@ def conversation_page(html):
     html = _SCRIPT.sub(lambda match: "" if match[1] in SCRIPTS else match[0], html)
     html = html.replace('<script src="/static/app.js"></script>',
                         f'<script src="/static/{SCRIPT_NAME}"></script>')
+    # Coalesce the remaining controls without changing their execution phase
+    # or CSS cascade. Keep the early recovery transport and popup helper early.
+    def bundled_assets(pattern, names, bundle, tag):
+        seen = False
+        def replace(match):
+            nonlocal seen
+            if match[1] not in names:
+                return match[0]
+            if seen:
+                return ""
+            seen = True
+            return "\n" + tag.format(bundle=bundle)
+        return pattern.sub(replace, html)
+
+    html = bundled_assets(_SCRIPT, EXTENSIONS, "conversation-extensions.js",
+                          '<script src="/static/{bundle}"></script>')
+    html = bundled_assets(_SCRIPT, DEFERRED, "conversation-deferred.js",
+                          '<script src="/static/{bundle}" defer></script>')
+    html = bundled_assets(_STYLE, STYLES, "conversation-extensions.css",
+                          '<link rel="stylesheet" href="/static/{bundle}">')
     return html.replace('<body class="voice-call-btn-off">',
                         '<body class="voice-call-btn-off conversation-popout ccc-app-embed">', 1)
 

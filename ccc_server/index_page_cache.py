@@ -5,7 +5,7 @@ import threading
 
 from .bounded_cache import ByteBudgetCache
 from .asset_versions import STATIC_ASSET_VERSIONS
-from .conversation_assets import SCRIPT_NAME, SCRIPTS
+from .conversation_assets import BUNDLES
 
 _ASSET = re.compile(r'(?:src|href)="/static/([A-Za-z0-9_./-]+\.(?:js|css))"')
 
@@ -41,7 +41,7 @@ class IndexPageCache:
         # only those in index.html. Check each time; there is no TTL window
         # during which an edited asset can retain its old immutable URL.
         dependencies = {dependency for name in names
-                        for dependency in (SCRIPTS if name == SCRIPT_NAME else (name,))}
+                        for dependency in BUNDLES.get(name, (name,))}
         versions = STATIC_ASSET_VERSIONS.read(static_dir, dependencies)
         key = (template_key, str(static_dir), tuple(versions))
         page = self.pages.get(key)
