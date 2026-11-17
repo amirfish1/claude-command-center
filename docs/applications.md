@@ -423,6 +423,15 @@ that ID, the header-write start/completion, write duration, and handler
 completion. It records no URL, headers, body, or client identity. Requests
 without a valid measurement ID produce no measurement log.
 
+On Linux, a measured first GET with no request body also reports `socket_wait`
+in `Server-Timing` and `socket_wait_ms` in the log. This is a lower bound on
+how long incoming payload had already waited before the handler started,
+including the pre-accept backlog. It uses unprivileged `TCP_INFO` metadata
+and subtracts handler time; later incoming segments can reduce the bound.
+It excludes keepalive requests, whose idle time is not queueing. Unsupported
+platforms or sockets omit the field. A large value establishes server-side
+waiting; a small value does not rule it out.
+
 Compare these phases with the browser's network timing to separate handler
 work, backend writes, and later delivery. Handler completion is not proof of
 client receipt; calibrate clock differences before comparing different

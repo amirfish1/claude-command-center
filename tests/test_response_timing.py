@@ -4,7 +4,9 @@ import http.client
 import http.server
 import json
 import socket
+import sys
 import threading
+import time
 
 import pytest
 
@@ -77,3 +79,60 @@ def test_malformed_request_can_return_an_error_before_headers_exist(capsys):
         thread.join(timeout=5)
         httpd.server_close()
     assert "[response-timing]" not in capsys.readouterr().out
+
+
+@pytest.mark.skipif(sys.platform != "linux" or not hasattr(socket, "TCP_INFO"),
+                    reason="Linux socket metadata")
+def test_socket_wait_distinguishes_backlog_from_handler_and_keepalive(capsys):
+    class Handler(server.CommandCenterHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            time.sleep(.12)
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    connection = http.client.HTTPConnection(*httpd.server_address, timeout=5)
+    # Put a complete request in the kernel backlog before starting accept().
+    sent_epoch_ms = time.time() * 1000
+    connection.request("GET", "/", headers={"X-CCC-Timing": "0123456789abcdef"})
+    time.sleep(.15)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": .01})
+    thread.start()
+    try:
+        response = connection.getresponse()
+        assert response.read() == b""
+        assert "socket_wait;dur=" in response.getheader("Server-Timing")
+        # A measured keepalive request must not count idle time as backlog.
+        connection.request("GET", "/", headers={"X-CCC-Timing": "fedcba9876543210"})
+        response = connection.getresponse()
+        assert response.read() == b""
+        assert "socket_wait" not in response.getheader("Server-Timing")
+    finally:
+        connection.close()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=5)
+    records = [json.loads(line.split("[response-timing] ")[1])
+               for line in capsys.readouterr().out.splitlines()
+               if line.startswith("[response-timing] ")]
+    assert len(records) == 2
+    # The 120ms handler delay must not be included in the 150ms backlog age.
+    assert records[0]["socket_wait_ms"] >= 100
+    assert records[0]["socket_wait_ms"] <= records[0]["emit_epoch_ms"] - sent_epoch_ms - 100
+    assert "socket_wait_ms" not in records[1]
+
+
+def test_socket_metadata_unavailable_keeps_response_measurement_optional():
+    from ccc_server.response_timing import _queued_payload_ms
+
+    class Unavailable:
+        def getsockopt(self, *args):
+            raise OSError("unsupported")
+
+    assert _queued_payload_ms(Unavailable(), time.perf_counter()) is None
