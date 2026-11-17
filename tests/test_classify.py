@@ -1840,6 +1840,34 @@ class TestShellCommandPreview(unittest.TestCase):
     def setUpClass(cls):
         cls.server = _fresh_server()
 
+    def test_bash_description_is_headline_with_command_preserved(self):
+        command = "git log -5 --oneline"
+        headline = "Checking the latest changes"
+        inp = {"command": command, "description": headline}
+        ev = {"type": "assistant", "message": {"content": [{
+            "type": "tool_use", "id": "check-changes", "name": "Bash", "input": inp,
+        }]}}
+
+        block = self.server._parse_conversation_event(ev, 1)["blocks"][0]
+
+        self.assertEqual(block["detail"], headline)
+        self.assertEqual(block["command"], command)
+        self.assertEqual(self.server._tool_use_detail("Bash", inp), headline)
+
+    def test_bash_description_is_normalized_redacted_and_bounded(self):
+        inp = {"command": "echo ready", "description":
+               "Checking\n  sk-ant-test-XXXXXXXXXXXXXXXX " + "status " * 300}
+        label = self.server._tool_use_detail("Bash", inp, max_len=160)
+        self.assertNotIn("sk-ant-test-XXXXXXXXXXXXXXXX", label)
+        self.assertIn("[redacted]", label)
+        self.assertNotIn("\n", label)
+        self.assertLessEqual(len(label), 160)
+
+    def test_blank_or_invalid_bash_description_keeps_command_fallback(self):
+        for description in (None, "  ", {"text": "invalid"}):
+            inp = {"command": "echo ready", "description": description}
+            self.assertEqual(self.server._tool_use_detail("Bash", inp), "echo ready")
+
     def test_strips_shell_option_wrapper(self):
         cmd = (
             "true && unsetopt NO_EXTENDED_GLOB 2>/dev/null || true && "

@@ -29472,7 +29472,8 @@ def _tool_use_detail(name, tool_input, max_len=200):
     if name == "AskUserQuestion":
         return _ask_user_question_payload(tool_input).get("summary", "")
     if name == "Bash":
-        return _shell_command_preview(tool_input.get("command", ""), max_len=max_len)
+        return (_prompt_fragment(tool_input.get("description"), max_len)
+                or _shell_command_preview(tool_input.get("command", ""), max_len=max_len))
     detail = (
         tool_input.get("file_path")
         or tool_input.get("pattern")
@@ -30634,7 +30635,8 @@ def _parse_conversation_event_unattributed(ev, line_num):
                 name = block.get("name", "?")
                 raw_command = inp.get("command", "") if isinstance(inp, dict) and name == "Bash" else ""
                 if raw_command:
-                    detail = _shell_command_activity_label(raw_command, max_len=1200)
+                    detail = (_prompt_fragment(inp.get("description"), max_len=1200)
+                              or _shell_command_activity_label(raw_command, max_len=1200))
                 else:
                     detail_max = 1200 if name == "Bash" else 240
                     detail = _tool_use_detail(name, inp, max_len=detail_max)
