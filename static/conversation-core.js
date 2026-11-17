@@ -454,7 +454,7 @@
     const criticalPaths = [
       '/api/conversations/list', '/api/conversations', '/api/sessions',
       '/api/config', '/api/features', '/api/loading-status',
-      '/api/archive/loading-status',
+      '/api/archive/loading-status', '/api/system/services',
     ];
     return _startupPathMatches(req.pathname, criticalPaths);
   }
