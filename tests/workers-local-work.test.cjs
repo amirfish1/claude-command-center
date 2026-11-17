@@ -84,7 +84,8 @@ test('desktop and phone render only locally attributed work and retain ticket/se
         {ref:'OTHER-2',title:'Local work in another queue',status:'closed',history:[{event:'close',at:'2026-01-01T11:00:00Z',by:{worker:'local-worker'}}]},
         {ref:'FOREIGN-3',title:'Remote owner decision',status:'in_progress',needs_input:true,claimed_at:'2026-01-02T10:00:00Z',claimed_by:'foreign-worker'}
       ]};
-      const _uxqHealthCache = {worker_session_map:{'local-worker':'local-session'}};
+      const _uxqHealthCache = {worker_session_map:{'local-worker':'local-session'},
+        wt_workers:[{worker_id:'starting-worker',queue:'BUILD',alive:true,session_id:'starting-session',idle_seconds:2}]};
       const conversationsData = [{id:'local-session'}];
       const _uxqItemRef = item => item.ref;
       const _uxqItemForRef = ref => _uxqItemsCache.items.find(item=>item.ref===ref);
@@ -97,12 +98,15 @@ test('desktop and phone render only locally attributed work and retain ticket/se
       const selectConversation = id => picked.push(id);
       const _uxqOpenItemDetail = ref => opened.push(ref);
       const _uxqPickerPickTicket = ref => opened.push(ref);
-    `+slice('  function escapeHtml(s)','  function unescapeHtml(s)')+source
+    `+slice('  function workerSectionHeaderHtml(', '  // WORKER_ROW_FACTS_END')+slice('  function escapeHtml(s)','  function unescapeHtml(s)')+source
       +slice('  function _uxqRecentWorkHosts()','  function _uxqBindWorkingStrip(')+'\n_uxqRenderRecentWork();'});
     for (const width of [1100,390]) {
       await page.setViewport({width,height:760});
       const shown = await page.$$eval('[data-workers-ticket]',nodes=>nodes.map(n=>n.dataset.workersTicket));
       assert.deepEqual(shown,['OTHER-2','EXAMPLE-1']);
+      assert.equal(await page.$eval('.fq-recent-rows',el=>el.firstElementChild.className),'workers-pending-list',
+        'live workers without listed tickets appear before historical tickets');
+      assert.ok(await page.$eval('[data-workers-pending-id=starting-worker]',el=>el.checkVisibility()));
       assert.ok(await page.$eval('[data-workers-ticket="EXAMPLE-1"]',el=>el.checkVisibility()));
       await page.click('[data-workers-ticket="EXAMPLE-1"] .workers-ticket-title');
       await page.click('[data-workers-ticket="OTHER-2"] .workers-ticket-link');

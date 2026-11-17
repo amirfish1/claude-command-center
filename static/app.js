@@ -38973,7 +38973,7 @@
     }
     const idle = worker.idle_seconds == null ? NaN : Number(worker.idle_seconds);
     if (Number.isFinite(idle) && idle >= 0) return idle < 60
-      ? {label:'Active', css:'is-active', text:'Recent worker activity. Its session is not attached to a ticket shown above.'}
+      ? {label:'Active', css:'is-active', text:'Recent worker activity. Its session is not attached to a ticket in this list.'}
       : {label:'Standing by', css:'', text:'The worker process is running with no recent activity.'};
     return {label:'Session not listed', css:'', text:'The worker session is registered; activity details are unavailable.'};
   }
@@ -39124,7 +39124,7 @@
       _workersTicketRecentSignature = signature;
       _scheduleSidebarRender({ lifecycle: true });
     }
-    const html = rows.map((row, i) => {
+    const html = _workersPendingHtml(pending) + rows.map((row, i) => {
       const item = row.item;
       const ref = _uxqItemRef(item);
       const title = String(item.title || item.note || item.text || '').split('\n')[0]
@@ -39184,7 +39184,7 @@
         + '<div class="workers-ticket-session-body"' + (expanded ? '' : ' hidden') + '>' + sessions.html + '</div></div>';
 
 
-    }).join('') + _workersPendingHtml(pending)
+    }).join('')
       || '<div class="fq-recent-empty">No recorded work yet.</div>';
     hosts.forEach($el => {
       const $awaiting = $el.querySelector('[data-role="workers-awaiting"]');
