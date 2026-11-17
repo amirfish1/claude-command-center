@@ -16,8 +16,8 @@ test('worker header counts receipts, groups repos, labels plan coverage and ages
       window.ticks = [];
       window.setInterval = fn => { window.ticks.push(fn); };
       window.data = {sampled_at:Date.now()/1000,pending:false,workers:[
-        {worker_id:'one',repo_path:'/example/app',last_token_at:Date.now()/1000-10,plan:{done:1,total:2}},
-        {worker_id:'two',repo_path:'/example/app',last_token_at:Date.now()/1000-90},
+        {worker_id:'one',queue:'BUILD',repo_path:'/example/app',last_token_at:Date.now()/1000-10,plan:{done:1,total:2}},
+        {worker_id:'two',queue:'BUILD',repo_path:'/example/app',last_token_at:Date.now()/1000-90},
         {worker_id:'three',repo_path:'/example/tools',last_token_at:Date.now()/1000-299},
         {worker_id:'old',repo_path:'/example/app',last_token_at:Date.now()/1000-301},
         {worker_id:'unknown',repo_path:'/example/app',last_token_at:null},
@@ -30,8 +30,9 @@ test('worker header counts receipts, groups repos, labels plan coverage and ages
     let result = await page.evaluate(() => ({text:document.querySelector('.worker-activity-line').textContent,
       groups:[...document.querySelectorAll('.worker-activity-repo')].map(e=>({text:e.textContent,title:e.title})),
       title:document.querySelector('.worker-activity-line').title}));
-    assert.match(result.text,/1 now.*2 recent/);
-    assert.deepEqual(result.groups.map(g=>g.text),['app 2 · plan 50%','tools 1']);
+    assert.match(result.text,/Workers \(all queues\):.*1 now.*2 recent/);
+    assert.match(result.title,/ticket rows are not a worker count/);
+    assert.deepEqual(result.groups.map(g=>g.text),['BUILD 2 · plan 50%','tools 1']);
     assert.match(result.groups[0].title,/1\/2 workers report a plan/);
     assert.match(result.groups[1].title,/progress unavailable/);
     assert.match(result.title,/1 live workers have no measurable usage/);

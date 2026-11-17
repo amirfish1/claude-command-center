@@ -38824,7 +38824,8 @@
       .concat(_workersIdeaTicketRows(items))
       .map(row => ({...row, workerState:_workersTicketState(row.item)}))
       .sort((a, b) => a.workerState.rank - b.workerState.rank || b.ms - a.ms)
-      .filter((row, i) => i < 10 || _workersAssignedTicketRefs.has(_uxqItemRef(row.item)));
+      // Keep every working ticket; only history is bounded by the row cap.
+      .filter((row, i) => i < 10 || row.workerState.rank === 0 || _workersAssignedTicketRefs.has(_uxqItemRef(row.item)));
   }
   let _workersTicketSessions = conversationInitializers._workersTicketSessions();
   let _workersTicketRecentSignature = '';

@@ -113,3 +113,14 @@ test('desktop and phone render only locally attributed work and retain ticket/se
     assert.deepEqual(await page.evaluate(()=>opened),['OTHER-2','OTHER-2']);
   } finally {await browser.close();}
 });
+
+test('every actively working ticket survives the recent-history cap', () => {
+  const items = Array.from({length:14}, (_, i) => item('ACTIVE-'+i, {
+    status:'in_progress', closed_at:null, claimed_by:'local-worker',
+    claimed_at:new Date(1700000000000+i*1000).toISOString(),
+  }));
+  const ctx = fixture(items, {_uxqHealthCache:{wt_workers:[
+    {worker_id:'local-worker',queue:'EXAMPLE',alive:true,idle_seconds:2},
+  ]}});
+  assert.equal(refs(ctx).length, 14, 'active claims are never history-limited');
+});
