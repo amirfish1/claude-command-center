@@ -204,6 +204,16 @@ def _note_error():
 
 def forward(conv_id, query, accept):
     """{body, encoding, cache} from the reader, or None to build in-process."""
+    return _forward_binary({"conv_id": conv_id, "query": query or "", "accept": accept or ""})
+
+
+def forward_page(path, query, accept):
+    """Read-only app HTML uses the same private channel and local fallback."""
+    return _forward_binary({"op": "app_page", "path": path, "query": query or "",
+                            "accept": accept or ""}, timeout=0.75)
+
+
+def _forward_binary(request, timeout=None):
     with _lock:
         path = _state["sock"] if _state["ready"] else None
     if not path:
@@ -212,9 +222,8 @@ def forward(conv_id, query, accept):
     try:
         sock.settimeout(CONNECT_TIMEOUT_S)
         sock.connect(path)
-        sock.settimeout(READ_TIMEOUT_S)
-        sock.sendall(json.dumps({"conv_id": conv_id, "query": query or "",
-                                 "accept": accept or ""}).encode() + b"\n")
+        sock.settimeout(timeout or READ_TIMEOUT_S)
+        sock.sendall(json.dumps(request).encode() + b"\n")
         reader = sock.makefile("rb")
         header = json.loads(reader.readline() or b"{}")
         if not header.get("ok"):
@@ -283,12 +292,15 @@ def _handle(conn, server_mod):
         conn.settimeout(READ_TIMEOUT_S)
         reader = conn.makefile("rb")
         req = json.loads(reader.readline() or b"{}")
-        if req.get("op"):
+        if req.get("op") and req.get("op") != "app_page":
             conn.sendall(json.dumps(_handle_op(req)).encode() + b"\n")
             return
         conv_id = str(req.get("conv_id") or "")
         out = None
-        if conv_id:
+        if req.get("op") == "app_page":
+            out = server_mod._app_page_response(str(req.get("path") or ""),
+                                                req.get("query") or "", req.get("accept") or "")
+        elif conv_id:
             try:
                 out = server_mod._conversation_open_response(
                     conv_id, req.get("query") or "", req.get("accept") or "",

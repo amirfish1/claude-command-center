@@ -31192,6 +31192,67 @@ _load_index_html(app_embed=True)
 _load_index_html(app_shell=True)
 
 
+def _load_application_html(name):
+    """Canonical user-app wrapper for both foreground and isolated reads."""
+    from ccc_server.app_embed import application_page
+    from ccc_server import app_routines
+    for base in (USER_APPS_DIR, STATIC_DIR):
+        target = base / name / "index.html"
+        if not target.is_file():
+            continue
+        folder = app_routines.app_dir(name, USER_APPS_DIR)
+        agent_id = None
+        if folder is not None:
+            agent = app_routines.load_state(folder).get("agent")
+            agent_id = (agent.get("session_id") or "") if isinstance(agent, dict) else ""
+        return _stamp_static_urls(application_page(
+            target.read_text(encoding="utf-8"), app_id=name, agent_id=agent_id,
+            kit_url=_static_asset_url("app-kit.js")))
+    return None
+
+
+def _prepare_html_response(content, accept):
+    content = content.replace('<body>', '<body data-repo="">', 1)
+    body = content.encode()
+    if "gzip" not in (accept or "").lower() or len(body) < 1024:
+        return {"body": body, "encoding": None}
+    key = hashlib.sha256(body).digest()
+    compressed = _HTML_GZIP_CACHE.get(key)
+    hit = compressed is not None
+    if compressed is None:
+        try:
+            compressed = gzip.compress(body, compresslevel=5)
+            _HTML_GZIP_CACHE.put(key, compressed, len(compressed))
+        except Exception:
+            return {"body": body, "encoding": None}
+    return {"body": compressed, "encoding": "gzip", "cache": "html-hit" if hit else "html-miss"}
+
+
+def _app_page_response(path, query, accept):
+    """Only app shells, conversation embeds and local app pages are delegated.
+
+    This runs behind the dashboard's existing request checks and private
+    reader socket. It adds no direct HTTP surface to the reader process.
+    """
+    html = None
+    if path in ("", "/"):
+        params = urllib.parse.parse_qs(query)
+        embed = (params.get("embed") == ["app"] and
+                 (params.get("ccc_popout") == ["conversation"] or params.get("popout") == ["conversation"]))
+        app_id = params.get("ccc_app", [""])[0]
+        shell = bool(app_id and app_id not in ("sessions", "queues")
+                     and not params.get("ccc_popout") and not params.get("popout"))
+        if not embed and not shell:
+            return None
+        selected = next(iter(_resolve_apps(only_id=app_id)), None) if shell else None
+        html = _load_index_html(app_embed=embed, app_shell=shell, selected_app=selected)
+    elif re.fullmatch(r"/view/[a-z0-9_-]+", path):
+        html = _load_application_html(path[len("/view/"):])
+    if html is None:
+        return None
+    return _prepare_html_response(html, accept)
+
+
 # Voice-focus signal: a tiny remote-focus channel. An external controller (e.g. the
 # ccc-voice operator) POSTs the session it wants the dashboard to open; the browser
 # polls and selects that session. In-memory only (process-lifetime), O(1).
@@ -31659,6 +31720,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             app_id = query.get("ccc_app", [""])[0]
             app_shell = bool(app_id and app_id not in ("sessions", "queues")
                              and not query.get("ccc_popout") and not query.get("popout"))
+            if app_shell or app_embed:
+                prepared = _conv_reader.forward_page("/", parsed.query,
+                                                    self.headers.get("Accept-Encoding", ""))
+                if prepared is not None:
+                    self._send_prepared_html(prepared)
+                    return
             selected_app = (next(iter(_resolve_apps(only_id=app_id)), None)
                             if app_shell else None)
             self.send_html(_load_index_html(app_embed=app_embed, app_shell=app_shell,
@@ -34925,22 +34992,16 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             # that directory's index.html is served (its assets go through the
             # extension-allowlisted /static/ and /app-static/ routes).
             name = path[len("/view/"):]
-            for base in (USER_APPS_DIR, STATIC_DIR):
-                target = base / name / "index.html"
-                if target.is_file():
-                    from ccc_server.app_embed import application_page
-                    from ccc_server import app_routines
-                    folder = app_routines.app_dir(name, USER_APPS_DIR)
-                    agent_id = None
-                    if folder is not None:
-                        agent = app_routines.load_state(folder).get("agent")
-                        agent_id = (agent.get("session_id") or "") if isinstance(agent, dict) else ""
-                    self.send_html(_stamp_static_urls(application_page(
-                        target.read_text(encoding="utf-8"), app_id=name, agent_id=agent_id,
-                        kit_url=_static_asset_url("app-kit.js"))))
-                    break
-            else:
+            prepared = _conv_reader.forward_page(path, parsed.query,
+                                                self.headers.get("Accept-Encoding", ""))
+            if prepared is not None:
+                self._send_prepared_html(prepared)
+                return
+            html = _load_application_html(name)
+            if html is None:
                 self.send_json({"error": f"not found: {path}"}, 404)
+            else:
+                self.send_html(html)
         elif re.match(r"^/morning/goals/[A-Za-z0-9_-]+$", path):
             try:
                 self.send_html((MORNING_STATIC_DIR / "goal-detail.html").read_text(encoding="utf-8"))
@@ -46426,26 +46487,15 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def send_html(self, content):
-        # There is no server-wide repo. Keep the attribute for older JS paths,
-        # but make it explicitly empty so callers must use row/filter context.
-        content = content.replace('<body>', '<body data-repo="">', 1)
-        body = content.encode()
-        ct = "text/html; charset=utf-8"
-        accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding", "") or "").lower()
-        key = hashlib.sha256(body).digest() if accepts_gzip else None
-        cached = _HTML_GZIP_CACHE.get(key) if accepts_gzip else None
-        if cached is not None:
-            body, enc = cached, "gzip"
-        else:
-            body, enc = self._maybe_gzip(body, ct)
-            if enc:
-                _HTML_GZIP_CACHE.put(key, body, len(body))
+        self._send_prepared_html(_prepare_html_response(
+            content, self.headers.get("Accept-Encoding", "")))
+
+    def _send_prepared_html(self, prepared):
+        body, enc = prepared["body"], prepared.get("encoding")
         self.send_response(200)
-        self.send_header("Content-Type", ct)
-        self._send_server_timing()
-        # Never cache the single-page app in the browser. The server checks file
-        # versions on every request; this stops browsers serving a stale JS snapshot
-        # after edits (main cause of "I clicked the button and nothing happened").
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self._send_server_timing(cache=prepared.get("cache"))
+        # Page HTML always revalidates the current source and agent identity.
         self.send_header("Cache-Control", "no-store, must-revalidate")
         self.send_header("Content-Length", str(len(body)))
         if enc:

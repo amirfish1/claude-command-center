@@ -1,0 +1,1 @@
+Prepare app shells, app pages and their conversation embeds in the existing isolated reader so busy dashboard work does not contend with their HTML builders; retain the same templates and foreground fallback.

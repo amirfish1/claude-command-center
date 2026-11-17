@@ -27,6 +27,12 @@ class _FakeServer:
                 "encoding": "gzip" if "gzip" in accept else None,
                 "cache": "hit"}
 
+    def _app_page_response(self, path, query, accept):
+        self.calls.append((path, query, accept))
+        if path == "/missing":
+            return None
+        return {"body": b"<body>Shared app</body>", "encoding": None, "cache": "html-hit"}
+
 
 class ConvReaderProtocolTest(unittest.TestCase):
     def setUp(self):
@@ -59,6 +65,16 @@ class ConvReaderProtocolTest(unittest.TestCase):
             except OSError:
                 return
             conv_reader._handle(conn, self.fake)
+
+    def test_app_page_binary_reply_uses_existing_private_channel(self):
+        out = conv_reader.forward_page("/", "ccc_app=demo", "identity")
+        self.assertEqual(out, {"body": b"<body>Shared app</body>",
+                               "encoding": None, "cache": "reader-html-hit"})
+        self.assertEqual(self.fake.calls, [("/", "ccc_app=demo", "identity")])
+
+    def test_declined_page_keeps_foreground_fallback(self):
+        self.assertIsNone(conv_reader.forward_page("/missing", "", "gzip"))
+        self.assertEqual(conv_reader._state["errors"], 0)
 
     def test_forward_returns_child_body(self):
         out = conv_reader.forward("abc", "tail=120", "gzip, br")
