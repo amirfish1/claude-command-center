@@ -1,6 +1,8 @@
 """Complete list replay must preserve live data, ticket work and JSON bytes."""
 import copy
 import json
+import gzip
+import zlib
 
 import pytest
 import server
@@ -54,6 +56,9 @@ def read(rows, *, version=1, context='context', now=10000, window='7d', extra=No
         rows, delta, window=window, now=now, cached=True)
     payload['delta_token'] = f'{version}.{context}.{now}'
     assert replay.encode_payload(payload) == json.dumps(dict(payload)).encode()
+    compressed = replay.encode_gzip_payload(payload)
+    if compressed is not None:
+        assert gzip.decompress(compressed) == replay.encode_payload(payload)
     return payload
 
 
@@ -155,6 +160,44 @@ def test_offsets_cover_empty_interleaved_and_multibyte_runs():
         raw, spans = replay.encode_rows(rows, {'live', 'other'})
         assert raw == json.dumps(rows).encode()
         assert replay.encode_replay((raw, spans), rows) == raw
+
+
+def test_compressed_runs_preserve_json_and_fresh_overlay_and_envelope():
+    for rows in ([], [{'id': 'a'}], [{'id': 'live'}],
+                 [{'id': 'a'}, {'id': 'live', 'title': 'שלום'},
+                  {'id': 'b'}, {'id': 'other'}, {'id': 'c'}]):
+        raw, spans = replay.encode_rows(rows, {'live', 'other'})
+        entry = replay.compressed_entry(raw, spans)
+        changed = copy.deepcopy(rows)
+        for row in changed:
+            if row['id'] in {'live', 'other'}:
+                row['mtime'] = 12345
+                row['title'] = 'fresh ☃ "quoted"'
+        current = replay.encode_replay(entry, changed)
+        compressed = replay.compress_replay(entry, changed)
+        assert zlib.decompress(compressed + b'\x03\x00', wbits=-zlib.MAX_WBITS) == current
+        payload = replay.EncodedListPayload(
+            {'ok': True, 'conversations': changed, 'queue_health': {'queued': 3},
+             'delta_token': 'fresh-token'}, current, compressed)
+        encoded = replay.encode_gzip_payload(payload)
+        expected = json.dumps(dict(payload)).encode()
+        assert gzip.decompress(encoded) == expected
+        decoder = zlib.decompressobj(wbits=31)
+        assert decoder.decompress(encoded) == expected
+        assert decoder.eof and decoder.unused_data == b''  # exactly one member
+
+
+def test_plain_payload_and_changed_ticket_rows_keep_normal_gzip_fallback(inputs, monkeypatch):
+    assert replay.encode_gzip_payload({'conversations': []}) is None
+    rows = fixture_rows()
+    read(rows)
+    def changed(projected, ideas):
+        projected[0]['goal'] = {'text': 'new ticket data'}
+        return True
+    monkeypatch.setattr(server, '_archive_list_ticket_updates', changed)
+    actual = read(rows, now=10001)
+    assert actual['conversations'][0]['goal'] == {'text': 'new ticket data'}
+    assert replay.encode_gzip_payload(actual) is None
 
 
 def test_resume_defensive_expiry_invalidates_without_store_change(inputs, monkeypatch):

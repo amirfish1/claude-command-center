@@ -6,12 +6,47 @@ Entries contain only immutable bytes and offsets. Decoding on replay gives
 ticket processing its own mutable rows without reprojecting the archive.
 """
 import json
+import struct
+import zlib
 
 
 class EncodedListPayload(dict):
-    def __init__(self, payload, conversations_json):
+    def __init__(self, payload, conversations_json, conversations_deflate=None):
         super().__init__(payload)
         self.conversations_json = conversations_json
+        self.conversations_deflate = conversations_deflate
+
+
+def _deflate_fragment(raw):
+    # FULL_FLUSH leaves a byte-aligned, non-final block and resets the
+    # dictionary. A following independently compressed fragment needs no
+    # preceding bytes; only the very last block ends the DEFLATE stream.
+    encoder = zlib.compressobj(level=1, wbits=-zlib.MAX_WBITS)
+    return encoder.compress(raw) + encoder.flush(zlib.Z_FULL_FLUSH)
+
+
+def encode_gzip_payload(payload, raw=None):
+    """Wrap reusable DEFLATE fragments in one browser-compatible gzip member."""
+    if not isinstance(payload, EncodedListPayload) or payload.conversations_deflate is None:
+        return None
+    chunks, pending = [], [b'{']
+    for index, (key, value) in enumerate(payload.items()):
+        if index:
+            pending.append(b', ')
+        pending.extend((json.dumps(key).encode(), b': '))
+        if key == 'conversations':
+            chunks.extend((_deflate_fragment(b''.join(pending)),
+                           payload.conversations_deflate))
+            pending = []
+        else:
+            pending.append(json.dumps(value).encode())
+    pending.append(b'}')
+    chunks.append(_deflate_fragment(b''.join(pending)))
+    raw = encode_payload(payload) if raw is None else raw
+    # One gzip header, one final empty DEFLATE block, one CRC/size trailer.
+    # Concatenated gzip members are not decoded fully by browser fetch.
+    return b''.join((b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x04\xff', *chunks,
+                     b'\x03\x00', struct.pack('<II', zlib.crc32(raw), len(raw) & 0xffffffff)))
 
 
 def encode_payload(payload):
@@ -55,7 +90,7 @@ def encode_rows(rows, overlay_ids):
 
 
 def replay_rows(entry, overlays):
-    raw, spans = entry
+    raw, spans = entry[:2]
     rows = json.loads(raw)
     for index, _, _ in spans:
         row = rows[index]
@@ -69,10 +104,29 @@ def replay_rows(entry, overlays):
 
 
 def encode_replay(entry, rows):
-    raw, spans = entry
+    raw, spans = entry[:2]
     chunks, offset = [], 0
     for index, start, end in spans:
         chunks.extend((raw[offset:start], json.dumps(rows[index]).encode()))
         offset = end
     chunks.append(raw[offset:])
+    return b''.join(chunks)
+
+
+def compressed_entry(raw, spans):
+    """Keep immutable DEFLATE fragments for archive runs, not mutable rows."""
+    fixed, offset = [], 0
+    for _, start, end in spans:
+        fixed.append(_deflate_fragment(raw[offset:start]))
+        offset = end
+    fixed.append(_deflate_fragment(raw[offset:]))
+    return raw, spans, tuple(fixed)
+
+
+def compress_replay(entry, rows):
+    _, spans, fixed = entry
+    chunks = []
+    for slot, (index, _, _) in enumerate(spans):
+        chunks.extend((fixed[slot], _deflate_fragment(json.dumps(rows[index]).encode())))
+    chunks.append(fixed[-1])
     return b''.join(chunks)

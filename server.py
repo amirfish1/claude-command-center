@@ -17607,12 +17607,13 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
             diagnostics["reason"] = ("hit" if raw is not None else
                                      "version-miss" if snap_ver else "unversioned")
         if raw is None:
-            raw = _list_replay.encode_payload(build_payload())
+            payload = build_payload()
+            raw = _list_replay.encode_payload(payload)
             etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
             # Level 1 halves compression time on the multi-MB 7d body
             # (~240ms -> ~120ms) for ~30% more bytes on a local poll.
             gzip_body = (
-                gzip.compress(raw, compresslevel=1)
+                (_list_replay.encode_gzip_payload(payload, raw) or gzip.compress(raw, compresslevel=1))
                 if len(raw) >= _ARCHIVE_LIST_GZIP_MIN_BYTES else None
             )
             if snap_ver:
@@ -19503,7 +19504,10 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                        _inputs=(resumes, parents, ideas, selected))
         raw, spans = _list_replay.encode_rows(payload["conversations"], set(overlay_ids))
-        _ARCHIVE_LIST_PROJECTION_CACHE.put(key, (raw, spans), len(raw) + 256 * len(spans) + 1024)
+        entry = _list_replay.compressed_entry(raw, spans)
+        _ARCHIVE_LIST_PROJECTION_CACHE.put(
+            key, entry, len(raw) + sum(map(len, entry[2])) + 256 * len(spans) + 1024)
+        compressed = _list_replay.compress_replay(entry, payload["conversations"])
     else:
         wall, cpu = time.perf_counter(), time.thread_time()
         projected = _list_replay.replay_rows(entry, dict(zip(overlay_ids, extra)))
@@ -19512,6 +19516,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             _trace_row_flicker(projected, now=now)
         raw = (json.dumps(projected).encode() if changed
                else _list_replay.encode_replay(entry, projected))
+        compressed = None if changed else _list_replay.compress_replay(entry, projected)
         payload = {
             "ok": True, "conversations": projected, "count": len(projected),
             "total_count": sum(isinstance(row, dict) for row in (rows or [])),
@@ -19524,7 +19529,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             phases["projection_replay"] = {
                 "wall_ms": round((time.perf_counter() - wall) * 1000, 1),
                 "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
-    return _list_replay.EncodedListPayload(payload, raw)
+    return _list_replay.EncodedListPayload(payload, raw, compressed)
 
 
 def _stamp_archive_state(rows):
