@@ -35621,3 +35621,26 @@ body.ccc-app-embed.conversation-popout .main > .toolbar {
 .uxq-session-events table { min-width: 700px; }
 .uxq-session-events th:first-child, .uxq-session-events td:first-child { white-space: nowrap; }
 .uxq-session-events th:nth-child(3), .uxq-session-events td:nth-child(3) { white-space: nowrap; text-align: right; }
+
+  .sidebar-read-pause {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 6px 12px;
+    color: var(--text);
+    background: var(--surface-2);
+    font-size: 12px;
+  }
+  .sidebar-read-pause[hidden] { display: none; }
+  .sidebar-read-pause button {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  .sidebar-read-pause button:hover { background: var(--surface); }

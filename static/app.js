@@ -3593,7 +3593,7 @@
   // State is sampled each second: read_ms means active/unpaused, not audible
   // audio time. max_gap_ms exposes suspension and delayed sampling uncertainty.
   const _readPerf = {
-    last: performance.now(), reading: 0, read_ms: 0, max_gap_ms: 0,
+    last: performance.now(), reading: 0, reads: 0, read_ms: 0, max_gap_ms: 0,
     longtasks: 0, longtask_ms: 0, loafs: 0, sources: Object.create(null),
     seq: 0, sentAt: 0, sentMs: 0, sentCount: 0,
   };
@@ -3605,6 +3605,7 @@
       _readPerf.max_gap_ms = Math.max(_readPerf.max_gap_ms, gap);
     }
     const reading = _loafReadTag();
+    if (reading && !_readPerf.reading) _readPerf.reads++;
     const stopped = _readPerf.reading && !reading;
     _readPerf.reading = reading;
     _readPerf.last = now;
@@ -3618,6 +3619,7 @@
     const row = {
       boot_id: _cccBootId, build: script ? String(script.getAttribute('src')).slice(-64) : '',
       seq: ++_readPerf.seq, read_ms: Math.round(_readPerf.read_ms),
+      reads: _readPerf.reads, sidebar_pause: 1,
       max_gap_ms: Math.round(_readPerf.max_gap_ms),
       longtasks: _readPerf.longtasks, longtask_ms: Math.round(_readPerf.longtask_ms),
       loafs: _readPerf.loafs, sources: _readPerf.sources,
@@ -37151,7 +37153,7 @@
       ]);
       if (sig !== _evergreenQueuesSig || gotNewCards) {
         _evergreenQueuesSig = sig;
-        try { renderArchiveList(document.getElementById('convSearch')?.value || ''); } catch (_) {}
+        try { _scheduleSidebarRender({ lifecycle: !!gotNewCards }); } catch (_) {}
       }
     } catch (_) { /* keep stale cache */ }
   }
@@ -50848,10 +50850,7 @@
       if (typeof deferSidebarRenderIfDragging === 'function' && deferSidebarRenderIfDragging()) return;
       refreshArchiveData({ staleOk: true }).then(() => {
         try {
-          if (typeof renderArchiveList === 'function') {
-            const $s = document.getElementById('convSearch');
-            renderArchiveList($s ? $s.value : '');
-          }
+          _scheduleSidebarRender();
         } catch (_) {}
       }).catch(() => {});
     }), 90 * 1000);
@@ -50860,7 +50859,7 @@
       if (isInlineRenameInProgress() || conversationPaneLoading) return;
       if (typeof deferSidebarRenderIfDragging === 'function' && deferSidebarRenderIfDragging()) return;
       refreshArchiveData({ staleOk: true })
-        .then(() => renderArchiveList(_archiveQuery()))
+        .then(() => _scheduleSidebarRender())
         .catch(() => {});
     }), ARCHIVE_RECOVERY_INTERVAL_MS);
     setInterval(_gated('uxFixesQueueMeta', () => {

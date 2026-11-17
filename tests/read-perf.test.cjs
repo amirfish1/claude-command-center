@@ -51,6 +51,8 @@ test('exposure excludes idle and paused intervals and flushes short reads', () =
   const rows = h.rows();
   assert.deepEqual(rows.map(r => r.read_ms), [2000, 4000]);
   assert.equal(rows[1].seq, 2);
+  assert.equal(rows[1].reads, 2);
+  assert.equal(rows[1].sidebar_pause, 1);
   assert.equal(rows[1].build, 'app.js?v=test-build');
 });
 

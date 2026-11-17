@@ -8467,6 +8467,10 @@
   }
 
   function updateTtsFloatingControl() {
+    _readAloudThrottlesSidebar();
+    if (!sharedState._ttsActive || sharedState._ttsPaused) {
+      if (sharedState._sidebarRenderPendingWhilePaused) _scheduleSidebarRender();
+    }
     const el = document.getElementById('ttsFloatingControl');
     if (!el) return;
     const playing = !!(sharedState._ttsActive || sharedState._ttsPaused);
@@ -11343,9 +11347,17 @@
   }
 
   function _readAloudThrottlesSidebar() {
-    try {
-      return sharedState._ttsActive && !sharedState._ttsPaused && Date.now() - sharedState._lastPolledSidebarRenderAt < 30000;
-    } catch (_) { return false; }
+    const reading = !!(sharedState._ttsActive && !sharedState._ttsPaused);
+    const cue = document.getElementById('sidebarReadPause');
+    if (cue) {
+      if (cue.hidden === reading) cue.hidden = !reading;
+      const refresh = cue.querySelector('button');
+      if (refresh && !refresh.onclick) {
+        // One explicit refresh; subsequent automatic updates remain paused.
+        refresh.onclick = () => _scheduleSidebarRender({ lifecycle: true });
+      }
+    }
+    return reading;
   }
 
   function _pausePeriodicSidebarRender() {

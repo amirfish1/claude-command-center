@@ -14,7 +14,7 @@ function harness() {
   const frames = [], paints = [];
   const context = vm.createContext({
     Date: {now: () => now},
-    document: {getElementById: () => ({value: ''}), querySelector: () => null},
+    document: {getElementById: id => id === 'sidebarReadPause' ? null : ({value: ''}), querySelector: () => null},
     shouldPausePeriodicUiWork: () => false,
     appOpen: false, _dashboardCoveredByApp: () => context.appOpen,
     isConversationListScrollActive: () => false,
@@ -44,7 +44,7 @@ function harness() {
   }};
 }
 
-test('event refreshes and poll refreshes share one 30-second read cadence', () => {
+test('ordinary event and poll refreshes stay paused throughout playback', () => {
   const h = harness();
   for (let elapsed = 0; elapsed <= 60000; elapsed += 5000) {
     h.time(60000 + elapsed);
@@ -52,7 +52,7 @@ test('event refreshes and poll refreshes share one 30-second read cadence', () =
     h.context._scheduleSidebarRender();
     h.flush();
   }
-  assert.equal(h.paints.length, 3, 'only t=0, 30s and 60s may rebuild');
+  assert.equal(h.paints.length, 0, 'no periodic redraw even beyond the old 30s cadence');
 });
 
 test('passive promise results cannot opt into lifecycle priority', () => {
@@ -61,7 +61,7 @@ test('passive promise results cannot opt into lifecycle priority', () => {
   for (const result of [[], [{state: 'working'}], null, {lifecycle: 'true'}]) {
     h.context._queueDashboardArchiveRender(result); h.flush();
   }
-  assert.equal(h.paints.length, 1);
+  assert.equal(h.paints.length, 0);
 });
 
 test('a lifecycle event upgrades the queued frame and stays immediate during reads', () => {
@@ -81,10 +81,10 @@ for (const endRead of ['pauseRead', 'stopRead']) {
     h.context._queueDashboardArchiveRender(); h.flush();
     h.time(65000);
     h.context._queueDashboardArchiveRender(); h.flush();
-    assert.equal(h.paints.length, 1);
+    assert.equal(h.paints.length, 0);
     h.context[endRead]();
     h.context._flushDeferredSidebarRenderIfAny(); h.flush();
-    assert.equal(h.paints.length, 2);
+    assert.equal(h.paints.length, 1);
   });
 }
 
@@ -97,7 +97,7 @@ test('authoritative session state and conversation edits bypass passive read pau
   assert.equal(h.paints.at(-1).rows[0].question_waiting, true);
   h.context._applyDashboardConversationPatch({entity: {id: 'session-one'}, patch: {display_name: 'Renamed'}});
   h.flush();
-  assert.equal(h.paints.length, 3);
+  assert.equal(h.paints.length, 2);
   assert.equal(h.paints.at(-1).rows[0].display_name, 'Renamed');
 });
 
@@ -233,3 +233,33 @@ test('active composer typing holds even lifecycle sidebar rebuilds until typing 
 });
 
 
+
+test('the visible pause cue refreshes once and returns to automatic pause', () => {
+  const h = harness();
+  const button = {onclick: null};
+  const cue = {hidden: true, querySelector: () => button};
+  h.context.document.getElementById = id => id === 'sidebarReadPause' ? cue : {value: ''};
+  h.context._scheduleSidebarRender(); h.flush();
+  assert.equal(cue.hidden, false);
+  assert.equal(h.paints.length, 0);
+  button.onclick(); h.flush();
+  assert.equal(h.paints.length, 1);
+  assert.equal(h.paints[0].force, true);
+  h.time(300000);
+  h.context._scheduleSidebarRender(); h.flush();
+  assert.equal(h.paints.length, 1);
+  h.context.stopRead();
+  h.context._flushDeferredSidebarRenderIfAny(); h.flush();
+  assert.equal(cue.hidden, true);
+  assert.equal(h.paints.length, 2);
+});
+
+test('background archive timers and queue history use the passive scheduler', () => {
+  const start = app.indexOf("setInterval(_gated('archiveTimes'");
+  const end = app.indexOf("setInterval(_gated('uxFixesQueueMeta'", start);
+  const timers = app.slice(start, end);
+  assert.equal(timers.includes('renderArchiveList('), false);
+  assert.equal((timers.match(/_scheduleSidebarRender\(/g) || []).length, 2);
+  const queues = app.slice(app.indexOf('  async function _ensureEvergreenQueuesFresh('), app.indexOf('  // Watchtower activity log panel'));
+  assert.ok(queues.includes('_scheduleSidebarRender({ lifecycle: !!gotNewCards })'));
+});
