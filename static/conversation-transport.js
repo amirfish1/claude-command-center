@@ -142,7 +142,8 @@
     if (backlogCard || id.startsWith('backlog-')) {
       const c = backlogCard || (state.conversationsData || []).find(x => x.id === id);
       if (c) {
-        $view.innerHTML = _renderBacklogDetail(c);
+        const html = await _renderBacklogDetail(c);
+        if (state.currentConversation === id) $view.innerHTML = html;
         return;
       }
       // A backlog id whose row hasn't loaded yet (switch/load window). Defer to
@@ -155,7 +156,8 @@
     // Render an in-pane PR detail card; the ↗ chip on the row opens GitHub.
     const githubPrCard = (state.conversationsData || []).find(x => x.id === id && x.source === 'github_pr');
     if (githubPrCard) {
-      $view.innerHTML = _renderGithubPrDetail(githubPrCard);
+      const html = await _renderGithubPrDetail(githubPrCard);
+      if (state.currentConversation === id) $view.innerHTML = html;
       return;
     }
     // Pending spawn placeholders render the submitted prompt immediately.

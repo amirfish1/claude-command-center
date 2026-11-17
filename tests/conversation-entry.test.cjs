@@ -18,13 +18,32 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
   let failConversationRead = false;
   let detailsRequests = 0;
   let failDetailsRead = false;
+  let issueRequests = 0;
+  let failIssuesRead = false;
+  const issueActions = [];
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://localhost');
+    if (url.pathname === '/static/conversation-issues.js') {
+      issueRequests++;
+      if (failIssuesRead) {response.writeHead(503).end();return;}
+    }
     if (url.pathname === '/static/conversation-details.js') {
       detailsRequests++;
       if (failDetailsRead) {response.writeHead(503).end();return;}
     }
-    if (url.pathname === '/api/ux-fixes/item') {
+    if (url.pathname === '/api/issues/42/details') {
+      response.setHeader('Content-Type','application/json');
+      response.end(JSON.stringify({ok:true,issue:{title:'Shared issue controls',body:'Canonical issue body',state:'OPEN',comments:[]}}));
+    } else if (/^\/api\/issues\/42\/(close|reply|mark-in-progress)$/.test(url.pathname)
+        || url.pathname === '/api/sessions/spawn') {
+      let body = '';
+      request.on('data',chunk=>{body+=chunk;});
+      request.on('end',()=>{
+        issueActions.push({url:url.pathname,body:JSON.parse(body)});
+        response.setHeader('Content-Type','application/json');
+        response.end(JSON.stringify({ok:true,spawn_id:'fixture-spawn',pid:123,session_id:'fixture-new-session'}));
+      });
+    } else if (url.pathname === '/api/ux-fixes/item') {
       response.setHeader('Content-Type','application/json');
       response.end(JSON.stringify({ok:true,item:{ref:'TEST-1',id:'fixture-ticket',title:'A complete ticket',status:'open',description:'Full fixture ticket details'}}));
     } else if (url.pathname === '/api/inject-input') {
@@ -97,6 +116,7 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
     assert.ok(initial.resources.includes('/static/conversation-extensions.js'));
     assert.ok(initial.resources.includes('/static/conversation-deferred.js'));
     assert.equal(detailsRequests,0,'details are not an initial dependency');
+    assert.equal(issueRequests,0,'issue controls are not an initial dependency');
     assert.ok(!initial.resources.includes('/static/browser-voice.js'));
     await frame.click('#convActionsBtn');
     assert.equal(await frame.$eval('#convActionsBtn', element => element.getAttribute('aria-expanded')), 'true');
@@ -176,6 +196,47 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
     await frame.evaluate(()=>cccConversation.loadConversationList());
     assert.equal(await frame.$eval('#convInput',input=>input.value),'Keep this live draft');
     assert.equal(await frame.evaluate(()=>cccConversation.conversationsLoaded),true);
+    // The issue picker and composer retain their canonical actions, including
+    // retry after a failed module fetch. All writes go only to this fixture.
+    await frame.evaluate(()=>{
+      cccConversation.conversationsData.push({id:'backlog-issue-42',source:'backlog',issue_number:42,
+        display_name:'#42: Shared issue controls',repo_path:'/tmp/fixture-repo'});
+    });
+    failIssuesRead = true;
+    await frame.evaluate(()=>cccConversation.selectConversation('backlog-issue-42'));
+    await frame.waitForFunction(()=>document.body.textContent.includes('Could not load issue controls. Try again.'));
+    failIssuesRead = false;
+    await frame.evaluate(()=>cccConversation.selectConversation('backlog-issue-42'));
+    await frame.waitForFunction(()=>document.getElementById('conversationsView').textContent.includes('Canonical issue body'));
+    assert.equal(issueRequests,2);
+    for (const [action,text,endpoint] of [
+      ['not_planned','A reason','/api/issues/42/close'],
+      ['needs_attention','A question','/api/issues/42/reply'],
+      ['spawn','Implementation instructions','/api/sessions/spawn'],
+    ]) {
+      await frame.evaluate((action,text)=>{
+        document.getElementById('convInputIssueAction').value=action;
+        const input=document.getElementById('convInput');
+        input.value=text;input.dispatchEvent(new Event('input',{bubbles:true}));
+      },action,text);
+      const completed=page.waitForResponse(response=>new URL(response.url()).pathname===endpoint);
+      await frame.$eval('#convSendBtn',button=>button.click());
+      await completed;
+      await frame.waitForFunction(()=>document.getElementById('convInput').value===''&&!document.getElementById('convSendBtn').disabled);
+      assert.equal(issueActions.find(item=>item.url===endpoint).body.repo_path,'/tmp/fixture-repo');
+    }
+    assert.equal(issueActions.find(item=>item.url.endsWith('/close')).body.reason,'not planned');
+    assert.equal(issueActions.find(item=>item.url.endsWith('/reply')).body.action,'needs_attention');
+    assert.match(issueActions.find(item=>item.url==='/api/sessions/spawn').body.prompt,/Implementation instructions/);
+    await frame.evaluate(async()=>{
+      const c=cccConversation;
+      c.conversationsData.push({id:'backlog-todo',source:'backlog',display_name:'A todo',first_message:'Todo body'},
+        {id:'pr-fixture',source:'github_pr',display_name:'A pull request',pr_state:'MERGED'});
+      c.currentConversation='backlog-todo';await c.fetchConversationEvents();
+    });
+    assert.match(await frame.$eval('#conversationsView',view=>view.textContent),/Todo body/);
+    await frame.evaluate(async()=>{cccConversation.currentConversation='pr-fixture';await cccConversation.fetchConversationEvents();});
+    assert.match(await frame.$eval('#conversationsView',view=>view.textContent),/A pull request/);
     assert.deepEqual(errors, []);
     // A new browser has no saved tail: a failed read must stay an error,
     // never send the parent the usable-conversation readiness message.

@@ -84,6 +84,35 @@
         }
       };
     }
+    let issuesPromise;
+    async function ensureIssues() {
+      if (!root.CCCConversationIssues && !issuesPromise) {
+        const dependency = document.querySelector('[data-ccc-conversation-issues]');
+        issuesPromise = new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = dependency?.getAttribute('src') || '/static/conversation-issues.js';
+          script.onload = () => root.CCCConversationIssues
+            ? resolve() : reject(new Error('Conversation issues did not initialize'));
+          script.onerror = () => { script.remove(); reject(new Error('Conversation issues could not load')); };
+          document.head.appendChild(script);
+        }).catch(error => { issuesPromise = null; throw error; });
+      }
+      if (issuesPromise) await issuesPromise;
+      Object.assign(state, root.CCCConversationIssues.createController(adapters));
+    }
+    for (const name of ['spawnFromBacklogIssue', 'closeIssueFromInputBar',
+      'replyToIssueFromInputBar', 'renderIssueInConvPane', '_renderBacklogDetail',
+      '_renderGithubPrDetail']) {
+      state[name] = async (...args) => {
+        try {
+          await ensureIssues();
+          return state[name](...args);
+        } catch (error) {
+          state.showOpToast('Could not load issue controls. Try again.', 'error');
+          return name.startsWith('_render') ? '' : null;
+        }
+      };
+    }
     const initializers = root.CCCConversationDefaults.createInitializers(adapters);
     for (const [name, initialize] of Object.entries(initializers)) state[name] = initialize();
     for (const name of ['currentConversation', 'convLastLine', 'convEventSource',

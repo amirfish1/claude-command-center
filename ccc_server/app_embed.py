@@ -85,9 +85,10 @@ def conversation_page(html):
                         f'<link rel="preload" as="script" href="/static/{SCRIPT_NAME}">', 1)
     # Unknown script types retain the stamped dependency URL without loading
     # it. The app host loads the canonical details controller on an action.
-    html = html.replace('<script src="/static/conversation-details.js"></script>',
-                        '<script type="application/ccc-dependency" '
-                        'data-ccc-conversation-details src="/static/conversation-details.js"></script>')
+    for name in ("details", "issues"):
+        html = html.replace(f'<script src="/static/conversation-{name}.js"></script>',
+                            '<script type="application/ccc-dependency" '
+                            f'data-ccc-conversation-{name} src="/static/conversation-{name}.js"></script>')
     # The native modules stay canonical source files for both hosts. Combine
     # their delivery so a cold app does not queue twenty separate requests.
     html = _SCRIPT.sub(lambda match: "" if match[1] in SCRIPTS else match[0], html)

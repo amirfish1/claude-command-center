@@ -12,7 +12,8 @@ def test_bundle_manifest_follows_dashboard_controller_order():
     html = (Path(__file__).resolve().parents[1] / "static/index.html").read_text()
     import re
     names = re.findall(r'<script src="/static/(conversation-[^"]+\.js)">', html)
-    assert tuple(name for name in names if name != "conversation-details.js") == SCRIPTS[:-1]
+    assert tuple(name for name in names if name not in (
+        "conversation-details.js", "conversation-issues.js")) == SCRIPTS[:-1]
     assert SCRIPTS[-1] == "conversation-entry.js"
 
 
