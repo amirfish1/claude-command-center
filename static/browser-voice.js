@@ -4,7 +4,7 @@
   const key = 'ccc-browser-voice-pilot';
   let enabled = false;
   try { enabled = localStorage.getItem(key) === '1'; } catch (_) {}
-  let worker, context, loading, ready = false, epoch = 0, nextId = 0, active = null;
+  let worker, context, loading, ready = false, epoch = 0, nextId = 0, active = null, voiceList = [];
   let message = enabled ? 'Preparing browser voice…' : 'Off. Your current voice is used.';
   const emit = detail => window.dispatchEvent(new CustomEvent('ccc:browser-voice', { detail }));
   function paint() {
@@ -96,6 +96,8 @@
             const error = new Error(data.message);
             if (ready && (!data.id || data.id === active?.id)) fail(error);
             else reject(error);
+          } else if (data.type === 'voice-fallback') {
+            emit(data); // The picked speaker failed to load; this read uses the default voice.
           } else if ((data.type === 'generated' || data.type === 'first-pcm') && data.id === active?.id) {
             active.last = { ...active.last, ...data };
             emit(data);
@@ -104,6 +106,7 @@
         worker.postMessage({ type: 'init', manifest: status.manifest });
       });
       if (!enabled || epoch !== generation) return;
+      voiceList = Array.isArray(status.manifest.voices) ? status.manifest.voices : [];
       ready = true; message = 'Ready. English reads use the browser voice on this device.';
       paint(); emit({ type: 'ready', pack: status.manifest.pack, threads: 1 });
     })().catch(error => { if (enabled && epoch === generation) fail(error); })
@@ -149,7 +152,7 @@
       };
       node.port.postMessage({ type: 'connect', port: channel.port1 }, [channel.port1]);
       node.connect(ctx.destination);
-      worker.postMessage({ type: 'speak', id, text, port: channel.port2 }, [channel.port2]);
+      worker.postMessage({ type: 'speak', id, text, voice: options.voice || '', port: channel.port2 }, [channel.port2]);
       arm();
     }).catch(error => { if (!stale()) fail(error); });
     return {
@@ -180,6 +183,7 @@
   window.addEventListener('pagehide', cancel);
   window.cccBrowserVoice = { start, cancel, warm, setEnabled, suspend,
     get ready() { return ready && enabled; }, get enabled() { return enabled; },
+    get voices() { return voiceList; },
     get status() { return message; } };
   paint();
   if (enabled) warm();

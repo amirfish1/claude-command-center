@@ -8857,11 +8857,12 @@
       // browser read to the server as one oversized neural clip.
       _ttsStartChunkedSpeech(sharedState._ttsBoundUtteranceText.slice(offset), state.paneId, offset, sharedState._ttsPaused);
     };
+    const browserPick = state.paneId ? ttsBrowserVoiceForPane(state.paneId) : null;
     const playback = window.cccBrowserVoice?.start(chunk.text, {
-      rate: sharedState._ttsRate, paused: !!state.pauseOnStart,
+      rate: sharedState._ttsRate, paused: !!state.pauseOnStart, voice: browserPick ? browserPick.id : '',
       onstart(data) {
         if (stale()) return;
-        state.geminiVoice = 'Browser: Phonon 31M';
+        state.geminiVoice = 'Browser: Phonon' + (browserPick ? ' · ' + browserPick.label : '');
         _ttsPerfStart(state, { engine: 'browser', voice: state.geminiVoice, lagMs: data.lagMs });
         _ttsShowVoice(state.geminiVoice);
         _ttsSetStreaming(true);
@@ -9144,6 +9145,15 @@
 
   function _ttsCycleVoice(step) {
     const paneId = sharedState._ttsActivePaneId || (0, sharedState.activePaneId)();
+    const browserVoices = _ttsBrowserVoices();
+    if (browserVoices.length) {
+      const list = [{ id: '', label: 'Default voice' }].concat(browserVoices);
+      const pick = ttsBrowserVoiceForPane(paneId);
+      const i = list.findIndex(v => v.id === (pick ? pick.id : ''));
+      const next = list[(i + step + list.length * 2) % list.length];
+      _ttsSwitchBrowserVoice(paneId, next.id);
+      return next;
+    }
     const free = sharedState._ttsVoiceOptions.filter(o => !o.paid);
     if (!free.length) return null;
     const playing = (sharedState._ttsChunkState && sharedState._ttsChunkState.geminiVoice) || ttsVoiceForPane(paneId);
@@ -25245,11 +25255,61 @@
     try { localStorage.setItem(sharedState.TTS_VOICE_BY_SESSION_KEY, JSON.stringify(m)); } catch (_) {}
   }
 
+  // Browser voice pilot speakers are stored apart from server voices, so a server
+  // fallback never receives a browser-only voice id.
+  function _ttsBrowserVoices() {
+    const bv = window.cccBrowserVoice;
+    return bv && bv.ready && Array.isArray(bv.voices) ? bv.voices : [];
+  }
+  function ttsBrowserVoiceForPane(paneId) {
+    const key = conversationBgKeysForPane(paneId)[0];
+    let id = '';
+    try { id = (JSON.parse(localStorage.getItem('ccc-browser-voice-by-session') || '{}') || {})[key] || ''; } catch (_) {}
+    return _ttsBrowserVoices().find(v => v.id === id) || null;
+  }
+  function _ttsSwitchBrowserVoice(paneId, id) {
+    const key = conversationBgKeysForPane(paneId)[0];
+    if (!key) return false;
+    let m = {};
+    try { m = JSON.parse(localStorage.getItem('ccc-browser-voice-by-session') || '{}') || {}; } catch (_) {}
+    m[key] = id;
+    try { localStorage.setItem('ccc-browser-voice-by-session', JSON.stringify(m)); } catch (_) {}
+    document.querySelectorAll('.conv-pane').forEach(renderTtsVoiceStepper);
+    if (!sharedState._ttsActive && !sharedState._ttsPaused) return false;
+    if (sharedState._ttsActivePaneId && paneId && sharedState._ttsActivePaneId !== paneId) return false;
+    return _restartTtsAtCurrentPosition();
+  }
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('ccc:browser-voice', ev => {
+      const type = ev && ev.detail && ev.detail.type;
+      if (type === 'ready' || type === 'failure') document.querySelectorAll('.conv-pane').forEach(renderTtsVoiceStepper);
+    });
+  }
+
   function renderTtsVoiceStepper(paneOrId) {
     const pane = typeof paneOrId === 'string' ? conversationPaneForId(paneOrId) : paneOrId;
     const host = pane && pane.querySelector('[data-role="tts-voice-stepper"]');
     if (!host) return;
     const paneId = pane.getAttribute('data-pane-id') || (0, sharedState.activePaneId)();
+    const browserVoices = _ttsBrowserVoices();
+    if (browserVoices.length) {
+      const ids = [''].concat(browserVoices.map(v => v.id));
+      const pick = ttsBrowserVoiceForPane(paneId);
+      const cur = pick ? pick.id : '';
+      host.hidden = false;
+      host.innerHTML = '<button type="button" data-step="-1" aria-label="Previous browser voice">&lt;</button>'
+        + '<span class="rail-voice-name"></span>'
+        + '<button type="button" data-step="1" aria-label="Next browser voice">&gt;</button>';
+      const name = host.querySelector('.rail-voice-name');
+      name.textContent = pick ? pick.label : 'Default voice';
+      name.title = 'Browser voice (Phonon) on this device';
+      host.querySelectorAll('button').forEach(btn => btn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        const i = ids.indexOf(cur) + Number(btn.getAttribute('data-step'));
+        _ttsSwitchBrowserVoice(paneId, ids[(i + ids.length) % ids.length]);
+      }));
+      return;
+    }
     const ids = [''].concat(sharedState._ttsVoiceOptions.map(o => o.id));
     host.hidden = sharedState._ttsVoiceOptions.length === 0;
     const cur = ttsVoiceForPane(paneId);

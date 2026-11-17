@@ -7,8 +7,8 @@ let yieldResolve;
 yieldChannel.port1.onmessage = () => { const resolve = yieldResolve; yieldResolve = null; resolve?.(); };
 const yieldTask = () => new Promise(resolve => { yieldResolve = resolve; yieldChannel.port2.postMessage(0); });
 
-async function asset(file) {
-  const spec = manifest.files[file];
+async function asset(file, given) {
+  const spec = given || manifest.files[file];
   const url = new URL(spec.url, self.location.origin).href;
   let cache;
   try { cache = await caches.open(cacheName); } catch (_) {}
@@ -46,14 +46,30 @@ async function init(spec) {
   const config = await asset('config.json');
   model = await wasm.Model.load(weights, tokenizer, config, 'q8', 'en', undefined, [], 'cpu');
   voice = model.add_voice(await asset('default-voice.safetensors'));
+  voices.set('', voice);
   await model.flush();
   rate = model.sample_rate();
   frameSize = model.frame_size();
   self.postMessage({ type: 'ready', sampleRate: rate, frameSize, threads: 1, pack: spec.pack });
 }
 
+// Speaker voices load on first use and stay resident; '' is the pack's default voice.
+const voices = new Map();
+async function voiceFor(id) {
+  if (voices.has(id)) return voices.get(id);
+  const spec = (manifest.voices || []).find(v => v.id === id);
+  if (!spec) return voice;
+  const handle = model.add_voice(await asset(id + '.safetensors', spec));
+  voices.set(id, handle);
+  return handle;
+}
+
 async function generate(job) {
   current = job;
+  let speaker = voice;
+  try { speaker = await voiceFor(job.voice || ''); } catch (error) {
+    self.postMessage({ type: 'voice-fallback', id: job.id, voice: job.voice, message: String(error.message || error) });
+  }
   let produced = 0, first = null;
   const t0 = performance.now();
   job.port.onmessage = ({ data }) => {
@@ -65,7 +81,7 @@ async function generate(job) {
   };
   job.port.start();
   try {
-    model.start_generation(voice, job.text, 0.3, 4242424242424242n);
+    model.start_generation(speaker, job.text, 0.3, 4242424242424242n);
     outer: while (!job.cancelled) {
       if (model.next_chunk() === undefined) break;
       while (!job.cancelled) {

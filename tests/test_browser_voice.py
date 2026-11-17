@@ -94,3 +94,59 @@ def test_failed_install_never_publishes_partial_pack(tmp_path, monkeypatch):
     assert voice.status()["phase"] == "error"
     assert not voice._installed()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_speaker_voices_are_pinned_listed_and_fetched_once_on_demand(tmp_path, monkeypatch):
+    monkeypatch.setenv("CCC_BROWSER_VOICE_DIR", str(tmp_path))
+    monkeypatch.setattr(voice, "_installed", lambda: True)
+    listed = voice.manifest()["voices"]
+    assert len(listed) == len(voice.VOICES) >= 20
+    assert all(v["size"] == 256136 and len(v["sha256"]) == 64 for v in listed)
+    vid = voice.VOICES[0][0]
+    payload = b"v" * 4
+    monkeypatch.setattr(voice, "_VOICE_INDEX", {vid: (vid, "Test", "US", "female", 4, hashlib.sha256(payload).hexdigest())})
+    calls = []
+
+    class Handler:
+        def __init__(self, path):
+            self.path, self.wfile, self.headers = path, io.BytesIO(), {}
+        def send_json(self, data, status=200):
+            self.status = status
+        def send_response(self, status):
+            self.status = status
+        def send_header(self, key, value):
+            self.headers[key] = value
+        def end_headers(self):
+            pass
+
+    def fetch(req, **kwargs):
+        calls.append(req.full_url)
+        return io.BytesIO(payload)
+    route = f"/api/browser-voice/voices/{voice.VOICES_REVISION[:12]}/"
+    with patch.object(voice.urllib.request, "urlopen", side_effect=fetch):
+        for _ in range(2):
+            handler = Handler(route + vid + ".safetensors")
+            voice.handle(handler, "GET")
+            assert handler.status == 200 and handler.wfile.getvalue() == payload
+    assert calls == [voice.VOICES_BASE + vid + ".safetensors"], "second request is served from the cache"
+    for bad in ["../secret.safetensors", "unknown.safetensors", vid]:
+        handler = Handler(route + bad)
+        voice.handle(handler, "GET")
+        assert handler.status == 404
+
+
+def test_corrupt_speaker_voice_is_rejected_and_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setenv("CCC_BROWSER_VOICE_DIR", str(tmp_path))
+    monkeypatch.setattr(voice, "_installed", lambda: True)
+    vid = voice.VOICES[0][0]
+    monkeypatch.setattr(voice, "_VOICE_INDEX", {vid: (vid, "Test", "US", "female", 4, hashlib.sha256(b"good").hexdigest())})
+
+    class Handler:
+        path = f"/api/browser-voice/voices/{voice.VOICES_REVISION[:12]}/{vid}.safetensors"
+        def send_json(self, data, status=200):
+            self.status = status
+    handler = Handler()
+    with patch.object(voice.urllib.request, "urlopen", return_value=io.BytesIO(b"evil")):
+        voice.handle(handler, "GET")
+    assert handler.status == 502
+    assert not any(p.suffix == ".safetensors" for p in tmp_path.rglob("*"))
