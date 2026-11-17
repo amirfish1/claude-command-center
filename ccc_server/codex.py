@@ -4708,8 +4708,15 @@ def _wt_claimed_workers():
     and lit up wrong)."""
     claim_to_item = _wt_claim_map()
 
+    # Activity detection scans engine transcript directories. Reuse its last
+    # background result while checking process liveness from the small file.
+    health = _core._ux_fixes_health_snapshot.get("data") or {}
+    activity = {
+        str(w.get("worker_id") or ""): w
+        for w in health.get("wt_workers", []) if isinstance(w, dict)
+    }
     rows = []
-    for worker in _core._wt_read_workers():
+    for worker in _core._wt_read_workers(include_activity=False):
         worker_id = str(worker.get("worker_id") or "")
         session_id = str(worker.get("session_id") or "")
         item = claim_to_item.get(worker_id) or claim_to_item.get(session_id)
@@ -4717,7 +4724,7 @@ def _wt_claimed_workers():
             "queue": worker.get("queue"),
             "engine": worker.get("engine"),
             "session_id": session_id or None,
-            "idle_seconds": worker.get("idle_seconds"),
+            "idle_seconds": activity.get(worker_id, worker).get("idle_seconds"),
             "ticket_ref": item.get("ref") if item else None,
             "ticket_title": item.get("title") if item else None,
         })

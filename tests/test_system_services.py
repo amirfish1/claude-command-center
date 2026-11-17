@@ -403,13 +403,14 @@ class ClaimedWorkersMemoTest(unittest.TestCase):
                     "engine": "claude", "idle_seconds": 0}]
         with mock.patch.object(server, "_wt_list_items_for_requests", return_value=items) as cached, \
              mock.patch.object(server._q, "list_items", side_effect=AssertionError("live queue read")), \
-             mock.patch.object(server, "_wt_read_workers", return_value=workers):
+             mock.patch.object(server, "_wt_read_workers", return_value=workers) as read_workers:
             codex._WT_CLAIM_MAP_CACHE.clear()
             first = codex._wt_claimed_workers()
             self.assertEqual(first[0]["ticket_ref"], "CCC-1")
             self.assertEqual(codex._wt_claimed_workers(), first)
             cached.return_value = [dict(items[0], title="updated")]
             self.assertEqual(codex._wt_claimed_workers()[0]["ticket_title"], "updated")
+            read_workers.assert_called_with(include_activity=False)
         codex._WT_CLAIM_MAP_CACHE.clear()
 
     def test_cold_queue_rollup_refreshes_without_waiting(self):
