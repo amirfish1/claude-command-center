@@ -11101,7 +11101,7 @@ def _spawn_model_for_engine(engine, explicit_model=None):
     return _spawn_default_model_for_engine(engine)
 
 
-def _settings_launch_overview():
+def _settings_launch_overview(*, only_queue=None):
     """Read-only saved routing plus actual consumer facts, never a quota probe."""
     from ccc_server.launch_preview import snapshot
     from ccc_server.settings_insights import queue_overview, revision
@@ -11123,18 +11123,21 @@ def _settings_launch_overview():
         raw = {}
     defaults = _load_spawn_defaults(persist=False)
     config = _wt_read_config()
+    selected_config = ({name: conf for name, conf in config.items() if name == only_queue}
+                       if only_queue is not None else config)
     session_facts = {}
     try:
-        engine, model = _spawn_request_engine_and_model({}, defaults)
-        session_facts = {"verified": True, "engine": engine, "model": model,
-                         "effort": _spawn_request_reasoning_effort({}, engine, defaults)}
-        if engine == "codex":
-            canonical, error = _validate_codex_model(model, require_available=False)
-            if canonical != model and not error:
-                session_facts.update(model=canonical, model_source="consumer_validation",
-                                     model_explanation="Codex launch validation resolves this model alias.")
-            if error:
-                session_facts["warnings"] = ["Session launch would be rejected by model validation: " + error]
+        if only_queue is None:
+            engine, model = _spawn_request_engine_and_model({}, defaults)
+            session_facts = {"verified": True, "engine": engine, "model": model,
+                             "effort": _spawn_request_reasoning_effort({}, engine, defaults)}
+            if engine == "codex":
+                canonical, error = _validate_codex_model(model, require_available=False)
+                if canonical != model and not error:
+                    session_facts.update(model=canonical, model_source="consumer_validation",
+                                         model_explanation="Codex launch validation resolves this model alias.")
+                if error:
+                    session_facts["warnings"] = ["Session launch would be rejected by model validation: " + error]
     except Exception:
         session_facts = {"warnings": ["Session consumer resolution unavailable; showing configured values only."]}
 
@@ -11150,8 +11153,8 @@ def _settings_launch_overview():
             from watchtower import workers as consumer
             policy = native.worker_fallback_policy()
             chain = list(dict.fromkeys(engine for engine in native.fallback_chain() if engine))
-            for name in [None, *config]:
-                if name is not None and (not isinstance(config[name], dict) or config[name].get("archived")):
+            for name in ([only_queue] if only_queue is not None else [None, *config]):
+                if name is not None and (not isinstance(config.get(name), dict) or config[name].get("archived")):
                     continue
                 try:
                     engine, model, effort = native.engine(name), native.model(name), native.effort(name)
@@ -11187,14 +11190,14 @@ def _settings_launch_overview():
     # configuration changed during the read instead of presenting it as actual.
     if before != read_raw() or revision(config) != revision(_wt_read_config()):
         raise ValueError("Launch settings changed while reading. Refresh the preview.")
-    plans = snapshot(defaults, raw, config, session_facts, facts)
+    plans = snapshot(defaults, raw, selected_config, session_facts, facts)
     plans["observed_at"] = datetime.now(timezone.utc).isoformat()
     by_queue = {plan["id"][6:]: plan for plan in plans["plans"] if plan["id"].startswith("queue:")}
     def resolve(name):
         fields = by_queue[name]["fields"]
         return tuple(fields[key]["value"] or ("Unresolved" if key == "engine" else "Engine default")
                      for key in ("engine", "model", "effort"))
-    result = queue_overview(config, defaults, resolve)
+    result = queue_overview(selected_config, defaults, resolve)
     result["launch_preview"] = plans
     return result
 
@@ -11217,7 +11220,7 @@ def _queue_policy_action_unlocked(payload, *, source_check=None):
     rev = policy.state_revision(config, raw)
     key = policy.entry(config, payload.get("queue"))
     if action == "read":
-        overview = _settings_launch_overview()
+        overview = _settings_launch_overview(only_queue=key)
         if policy.state_revision(policy.read(path), policy.defaults_text(SPAWN_DEFAULTS_FILE)) != rev:
             raise policy.StalePreview("Queue settings changed while reading. Refresh again.")
         plan = next((p for p in overview["launch_preview"]["plans"] if p["id"] == "queue:" + key), None)
@@ -17605,12 +17608,13 @@ def _archive_list_body_get_or_build(cache_key, window, from_cache, build_payload
             diagnostics["reason"] = ("hit" if raw is not None else
                                      "version-miss" if snap_ver else "unversioned")
         if raw is None:
-            raw = _list_replay.encode_payload(build_payload())
+            payload = build_payload()
+            raw = _list_replay.encode_payload(payload)
             etag_val = '"' + hashlib.sha1(raw).hexdigest() + '"'
             # Level 1 halves compression time on the multi-MB 7d body
             # (~240ms -> ~120ms) for ~30% more bytes on a local poll.
             gzip_body = (
-                gzip.compress(raw, compresslevel=1)
+                (_list_replay.encode_gzip_payload(payload, raw) or gzip.compress(raw, compresslevel=1))
                 if len(raw) >= _ARCHIVE_LIST_GZIP_MIN_BYTES else None
             )
             if snap_ver:
@@ -19500,7 +19504,10 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
         payload = _archive_list_payload(rows, window=window, now=now, cached=cached, phases=phases,
                                        _inputs=(resumes, parents, ideas, selected))
         raw, spans = _list_replay.encode_rows(payload["conversations"], set(overlay_ids))
-        _ARCHIVE_LIST_PROJECTION_CACHE.put(key, (raw, spans), len(raw) + 256 * len(spans) + 1024)
+        entry = _list_replay.compressed_entry(raw, spans)
+        _ARCHIVE_LIST_PROJECTION_CACHE.put(
+            key, entry, len(raw) + sum(map(len, entry[2])) + 256 * len(spans) + 1024)
+        compressed = _list_replay.compress_replay(entry, payload["conversations"])
     else:
         wall, cpu = time.perf_counter(), time.thread_time()
         projected = _list_replay.replay_rows(entry, dict(zip(overlay_ids, extra)))
@@ -19509,6 +19516,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             _trace_row_flicker(projected, now=now)
         raw = (json.dumps(projected).encode() if changed
                else _list_replay.encode_replay(entry, projected))
+        compressed = None if changed else _list_replay.compress_replay(entry, projected)
         payload = {
             "ok": True, "conversations": projected, "count": len(projected),
             "total_count": sum(isinstance(row, dict) for row in (rows or [])),
@@ -19521,7 +19529,7 @@ def _archive_list_replay_payload(rows, delta, *, window="all", now=None, cached=
             phases["projection_replay"] = {
                 "wall_ms": round((time.perf_counter() - wall) * 1000, 1),
                 "cpu_ms": round((time.thread_time() - cpu) * 1000, 1)}
-    return _list_replay.EncodedListPayload(payload, raw)
+    return _list_replay.EncodedListPayload(payload, raw, compressed)
 
 
 def _stamp_archive_state(rows):
@@ -29107,7 +29115,10 @@ def _conversation_open_response(conv_id, query, accept_encoding, in_reader=False
 # URLs, and absolute Unix paths anchored to whitespace/quote/paren so
 # we don't pull tokens out of the middle of code identifiers.
 _FFC_URL_RE = re.compile(r"https?://[^\s<>\"'`)\]]+")
-_FFC_PATH_RE = re.compile(r"(?:^|(?<=[\s\"'`(\[]))(/[^\s\"'`<>)\]]+)")
+# Lead with the slash so the regex engine can skip ordinary transcript text.
+# Checking its predecessor afterward preserves both start-of-string paths
+# and the existing whitespace/quote/paren boundary without a per-byte branch.
+_FFC_PATH_RE = re.compile(r"(/(?<![^\s\"'`(\[]/)[^\s\"'`<>)\]]+)")
 _FFC_PATH_TRAIL_PUNCT = ".,;:!?)]}>'\""
 _FFC_MAX_ENTRIES = 500
 

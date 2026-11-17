@@ -1,0 +1,1 @@
+- Reuse compressed archive sections when only live timestamps change, while preserving fresh metadata and complete conversation rows.

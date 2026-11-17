@@ -104,6 +104,24 @@ def plans():
     return {row['id']: row for row in server._settings_launch_overview()['launch_preview']['plans']}
 
 
+def test_single_queue_read_matches_full_plan_without_resolving_other_queues(consumer, monkeypatch):
+    wt, _, state, queue_file, _ = consumer
+    expected = plans()['queue:PIN']
+    before = state.read_bytes(), queue_file.read_bytes()
+    for method in ('engine', 'model', 'effort', 'raw_model', 'model_pin_warning'):
+        native = getattr(wt, method)
+        def scoped(name=None, *args, _native=native, **kwargs):
+            assert name not in ('DEFAULT', 'MANUAL'), 'Unrelated queue was resolved'
+            return _native(name, *args, **kwargs)
+        monkeypatch.setattr(wt, method, scoped)
+    monkeypatch.setattr(server, '_spawn_request_engine_and_model',
+                        lambda *a: pytest.fail('Queue editor must not resolve a new-session launch'))
+    view = server._settings_launch_overview(only_queue='PIN')
+    actual = next(row for row in view['launch_preview']['plans'] if row['id'] == 'queue:PIN')
+    assert actual == expected
+    assert (state.read_bytes(), queue_file.read_bytes()) == before
+
+
 def test_session_and_worker_fields_match_native_consumers(consumer):
     wt, _, state, queue_file, _ = consumer
     before = {p: p.read_bytes() for p in (state, queue_file)}
