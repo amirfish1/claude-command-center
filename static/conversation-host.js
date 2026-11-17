@@ -49,6 +49,41 @@
         window.open('/?ccc_settings=appearance', '_blank', 'noopener');
       },
     });
+    let detailsPromise;
+    async function ensureDetails() {
+      if (root.CCCConversationDetails) {
+        Object.assign(state, root.CCCConversationDetails.createController({
+          ...adapters, functions: state,
+        }));
+        return;
+      }
+      if (!detailsPromise) {
+        const dependency = document.querySelector('[data-ccc-conversation-details]');
+        detailsPromise = new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = dependency?.getAttribute('src') || '/static/conversation-details.js';
+          script.onload = () => root.CCCConversationDetails
+            ? resolve() : reject(new Error('Conversation details did not initialize'));
+          script.onerror = () => { script.remove(); reject(new Error('Conversation details could not load')); };
+          document.head.appendChild(script);
+        }).catch(error => { detailsPromise = null; throw error; });
+      }
+      await detailsPromise;
+      Object.assign(state, root.CCCConversationDetails.createController({
+        ...adapters, functions: state,
+      }));
+    }
+    for (const name of ['loadConversationList', '_uxqOpenItemDetail']) {
+      state[name] = async (...args) => {
+        try {
+          await ensureDetails();
+          return state[name](...args);
+        } catch (error) {
+          state.showOpToast('Could not load conversation details. Try again.', 'error');
+          throw error;
+        }
+      };
+    }
     const initializers = root.CCCConversationDefaults.createInitializers(adapters);
     for (const [name, initialize] of Object.entries(initializers)) state[name] = initialize();
     for (const name of ['currentConversation', 'convLastLine', 'convEventSource',

@@ -1,6 +1,15 @@
 /* Shared conversation bootstrap with explicit live-state and host adapters. */
 (function (root) {
   function createController({ state: sharedState, helpers: hostServices }) {
+    const { popoutConversationIdForRow } = root.CCCConversationDetails
+      ? root.CCCConversationDetails.createController({
+          state: sharedState, helpers: hostServices,
+          functions: {
+
+          },
+        }, "conversation-bootstrap.js")
+      : {};
+
   function popoutTargetMatches(row) {
     if (!row || !sharedState.CONV_POPOUT_TARGET) return false;
     return row.id === sharedState.CONV_POPOUT_TARGET || row.session_id === sharedState.CONV_POPOUT_TARGET;
@@ -9,10 +18,6 @@
   function findPopoutConversationRow() {
     if (!sharedState.CONV_POPOUT_TARGET) return null;
     return (sharedState.conversationsData || []).find(popoutTargetMatches) || null;
-  }
-
-  function popoutConversationIdForRow(row) {
-    return (row && (row.id || row.session_id)) || sharedState.CONV_POPOUT_TARGET;
   }
 
   function setPopoutTitle(row) {

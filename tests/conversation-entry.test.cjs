@@ -16,9 +16,18 @@ const bundles = JSON.parse(execFileSync('python3', ['-c',
 test('embedded entry binds real controls before readiness and keeps drafts live', async () => {
   const injections = [];
   let failConversationRead = false;
+  let detailsRequests = 0;
+  let failDetailsRead = false;
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://localhost');
-    if (url.pathname === '/api/inject-input') {
+    if (url.pathname === '/static/conversation-details.js') {
+      detailsRequests++;
+      if (failDetailsRead) {response.writeHead(503).end();return;}
+    }
+    if (url.pathname === '/api/ux-fixes/item') {
+      response.setHeader('Content-Type','application/json');
+      response.end(JSON.stringify({ok:true,item:{ref:'TEST-1',id:'fixture-ticket',title:'A complete ticket',status:'open',description:'Full fixture ticket details'}}));
+    } else if (url.pathname === '/api/inject-input') {
       let body = '';
       request.on('data', chunk => {body += chunk;});
       request.on('end', () => {
@@ -87,6 +96,7 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
     assert.ok(!initial.resources.includes('/static/app.js'));
     assert.ok(initial.resources.includes('/static/conversation-extensions.js'));
     assert.ok(initial.resources.includes('/static/conversation-deferred.js'));
+    assert.equal(detailsRequests,0,'details are not an initial dependency');
     assert.ok(!initial.resources.includes('/static/browser-voice.js'));
     await frame.click('#convActionsBtn');
     assert.equal(await frame.$eval('#convActionsBtn', element => element.getAttribute('aria-expanded')), 'true');
@@ -145,6 +155,28 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
     assert.equal(await frame.$eval('#convInput',input=>input.value),'Existing draft dictated words');
     await frame.$eval('#convMicBtn',button=>button.click());
     assert.equal(await frame.$eval('#convMicBtn',button=>button.getAttribute('aria-pressed')),'false');
+    await frame.$eval('#convInput',input=>{input.value='Keep this live draft';input.dispatchEvent(new Event('input',{bubbles:true}));});
+    // This is the actual delegated transcript ticket control. Two clicks share
+    // one module fetch and the modal uses the same current conversation state.
+    failDetailsRead = true;
+    assert.equal(await frame.evaluate(async()=>{
+      try {await cccConversation._uxqOpenItemDetail('TEST-1');return false;}
+      catch (_) {return document.body.textContent.includes('Could not load conversation details. Try again.');}
+    }),true,'a failed module read is visible and retryable');
+    failDetailsRead = false;
+    await frame.evaluate(()=>{
+      const ticket=document.createElement('button');
+      ticket.className='conv-pane-ticket';ticket.dataset.workerTicket='TEST-1';
+      document.getElementById('conversationsView').appendChild(ticket);
+      ticket.click();ticket.click();
+    });
+    await frame.waitForFunction(()=>document.getElementById('uxqItemModal')?.textContent.includes('A complete ticket'));
+    assert.equal(detailsRequests,2);
+    assert.equal(await frame.$eval('#convInput',input=>input.value),'Keep this live draft');
+    assert.equal(await frame.evaluate(()=>cccConversation.currentSession.id),'session-test');
+    await frame.evaluate(()=>cccConversation.loadConversationList());
+    assert.equal(await frame.$eval('#convInput',input=>input.value),'Keep this live draft');
+    assert.equal(await frame.evaluate(()=>cccConversation.conversationsLoaded),true);
     assert.deepEqual(errors, []);
     // A new browser has no saved tail: a failed read must stay an error,
     // never send the parent the usable-conversation readiness message.

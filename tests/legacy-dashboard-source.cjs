@@ -6,8 +6,8 @@ const {functionSource, commentsBefore} = require('./conversation-source.cjs');
 const normalize = (source, legacy = false) => source
   .replace(legacy ? /\(0, (?:state|helpers)\.([\w$]+)\)(?=\s*\()/g : /$^/g, '$1')
   .replace(legacy ? /\b(?:state|helpers)\.([\w$]+)/g : /$^/g, '$1')
-  .replace(/\(0, (?:sharedState|hostServices)\.([\w$]+)\)(?=\s*\()/g, '$1')
-  .replace(/\b(?:sharedState|hostServices)\.([\w$]+)/g, '$1');
+  .replace(/\(0, (?:sharedState|hostServices|deferredServices)\.([\w$]+)\)(?=\s*\()/g, '$1')
+  .replace(/\b(?:sharedState|hostServices|deferredServices)\.([\w$]+)/g, '$1');
 const vm = require('node:vm');
 function variableSource(module, name) {
   const text = fs.readFileSync(require.resolve('../static/conversation-' + module + '.js'), 'utf8');
