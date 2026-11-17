@@ -15,6 +15,7 @@ const bundles = JSON.parse(execFileSync('python3', ['-c',
 
 test('embedded entry binds real controls before readiness and keeps drafts live', async () => {
   const injections = [];
+  let entrySource = 'codex';
   let failConversationRead = false;
   let detailsRequests = 0;
   let failDetailsRead = false;
@@ -58,7 +59,7 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
       });
     } else if (url.pathname === '/') {
       response.setHeader('Content-Type', 'text/html');
-      response.end(url.search ? html : '<script>window.receipts=[];addEventListener("message",e=>receipts.push(e.data))</script><iframe src="/?ccc_popout=conversation&embed=app&conv=session-test&source=codex"></iframe>');
+      response.end(url.search ? html : '<script>window.receipts=[];addEventListener("message",e=>receipts.push(e.data))</script><iframe src="/?ccc_popout=conversation&embed=app&conv=session-test&source=' + entrySource + '"></iframe>');
     } else if (bundles[url.pathname.slice('/static/'.length)]) {
       response.setHeader('Content-Type', url.pathname.endsWith('.css') ? 'text/css' : 'application/javascript');
       response.end(bundles[url.pathname.slice('/static/'.length)]);
@@ -74,7 +75,7 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
       }
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify(url.pathname === '/api/conversations/session-test'
-        ? {events:[{type:'user',text:'A test request',line:1},{type:'assistant',text:'A test response',line:2}],last_line:2}
+        ? {events:[{type:'user',text:'A test request',line:1},{type:'assistant',text:'A test response',blocks:[{kind:'text',text:'A test response'}],line:2,tokens_in:50000,tokens_cached:0}],last_line:2}
         : {}));
     }
   });
@@ -99,6 +100,21 @@ test('embedded entry binds real controls before readiness and keeps drafts live'
         abort() { this.onend?.(); }
       };
     });
+    // An uncached Claude turn must not need dashboard-only global setup.
+    entrySource = 'interactive';
+    const coldContext = await browser.createBrowserContext();
+    try {
+      const cold = await coldContext.newPage();
+      await cold.setRequestInterception(true);
+      cold.on('request', request => new URL(request.url()).origin === base
+        ? request.continue() : request.respond({status:200,body:'{}'}));
+      await cold.goto(base, {waitUntil:'domcontentloaded'});
+      await cold.waitForFunction(() => window.receipts.some(item => item.type === 'ccc:embed-ready'), {timeout:20000});
+      const agent = cold.frames().find(item => item.url().includes('embed=app'));
+      assert.equal(await agent.evaluate(() => window._ccCacheMissLog[0].tokens_uncached), 50000);
+      assert.equal(await agent.$eval('#convInput', input => input.disabled), false);
+      assert.match(await agent.$eval('#conversationsView', view => view.textContent), /A test response/);
+    } finally { await coldContext.close(); entrySource = 'codex'; }
     await page.goto(base, {waitUntil:'domcontentloaded'});
     await page.waitForFunction(() => window.receipts.some(item => item.type === 'ccc:embed-ready'), {timeout:20000});
     const frame = page.frames().find(item => item.url().includes('embed=app'));

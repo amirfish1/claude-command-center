@@ -17926,6 +17926,8 @@
         tokens_uncached: missed,
         tokens_out: Number(ev.tokens_out) || 0,
       };
+      // Standalone conversation hosts do not run the dashboard initializer.
+      window._ccCacheMissLog = window._ccCacheMissLog || [];
       window._ccCacheMissLog.push(entry);
       if (window._ccCacheMissLog.length > 500) window._ccCacheMissLog.shift();
       console.warn('[cache-miss]', entry);
