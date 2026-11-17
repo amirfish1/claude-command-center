@@ -1071,7 +1071,7 @@ class TestServerImports(unittest.TestCase):
             server._wt_items_memo["at"] = 0.0
             server._wt_items_memo["items"] = None
             try:
-                with mock.patch.object(server._q, "list_items", fake_list_items):
+                with mock.patch("ccc_server.wt_snapshot.fetch", fake_list_items):
                     first = server._wt_list_items_display_cached()
                     second = server._wt_list_items_display_cached()
                     # Drop the process memo: the on-disk snapshot alone must

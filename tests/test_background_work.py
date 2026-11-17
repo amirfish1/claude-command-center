@@ -58,7 +58,8 @@ def test_forced_ticket_prewarm_and_refresh_share_one_fetch(monkeypatch, tmp_path
         entered.set()
         assert release.wait(3)
         return items
-    monkeypatch.setattr(server._q, "list_items", fetch)
+    from ccc_server import wt_snapshot
+    monkeypatch.setattr(wt_snapshot, "fetch", lambda queue: fetch())
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(server._wt_list_items_refresh_background, 0)
         assert entered.wait(2)

@@ -3798,7 +3798,8 @@ def _wt_list_items_refresh(max_age):
             _wt_items_memo["items"] = snapshot_items
         return snapshot_items
     try:
-        items = _q.list_items() or []
+        from ccc_server.wt_snapshot import fetch
+        items = fetch(_q)
     except Exception:
         # Fall back to whatever we last saw, however old — a failed `gh` must
         # not blank out every worker row's title.
