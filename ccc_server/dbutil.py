@@ -15,6 +15,27 @@ from __future__ import annotations
 import sqlite3
 
 
+class ConnCloser:
+    """Close a thread-local sqlite connection when its thread's storage dies.
+
+    A bare `threading.local().conn = sqlite3.connect(...)` is NOT closed when
+    the thread exits (the connection lingers until a GC pass that may never
+    come); the dashboard's per-request threads leaked ~2 handles/min on
+    ship_graph.sqlite (OPS-1739). Park an instance next to the connection
+    (`_tls.closer = ConnCloser(conn)`): thread exit drops the only reference
+    to it, and `__del__` closes the connection.
+    """
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __del__(self):
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+
+
 def path_if_exists(p):
     """Return `p` if it points at an existing path, else None.
 

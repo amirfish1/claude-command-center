@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sqlite3
+from ccc_server.dbutil import ConnCloser as _ConnCloser
 import subprocess
 import sys
 import threading
@@ -759,6 +760,7 @@ def _get_connection() -> sqlite3.Connection:
         db_path = _get_db_path()
         db_path.parent.mkdir(parents=True, exist_ok=True)
         _tls.conn = _connect(db_path)
+        _tls.closer = _ConnCloser(_tls.conn)  # close on thread exit (OPS-1739)
     return _tls.conn
 
 
