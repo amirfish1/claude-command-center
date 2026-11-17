@@ -85,7 +85,7 @@ test('a large transcript render never searches for Settings controls',async t=>{
     await new Promise(r=>setTimeout(r));
     const during=searches;
     const late=document.createElement('button');late.id='fontPlus';document.body.append(late);
-    await new Promise(r=>setTimeout(r));
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
     Element.prototype.querySelector=real;view.remove();
     return {during,annotated:late.hasAttribute('aria-describedby')};
   });
@@ -108,4 +108,24 @@ for(const width of [1440,390])test('scope annotations have no disclosure or visi
   assert.equal(result.summaries,0);assert.equal(result.text,false);assert(result.notes.length>0);
   for(const note of result.notes)assert.deepEqual(note,{hidden:true,display:'none',rects:0});
   await page.screenshot({path:path.join(scratch,'network-no-annotations-'+width+'.png'),fullPage:true});
+});
+
+
+test('nested settings roots share a scan and mutation bursts share a frame',async t=>{
+  const page=await open(t);
+  const result=await page.evaluate(async()=>{
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    const outer=document.createElement('div');outer.dataset.contextPreferences='';
+    const nested=document.createElement('div');nested.dataset.contextPreferences='';
+    const button=document.createElement('button');button.dataset.convView='compact';
+    nested.append(button);outer.append(nested);document.body.append(outer);
+    const real=Element.prototype.querySelectorAll;let outerScans=0,nestedScans=0;
+    Element.prototype.querySelectorAll=function(...args){if(this===outer)outerScans++;if(this===nested)nestedScans++;return real.apply(this,args);};
+    for(let i=0;i<6;i++){button.classList.toggle('selected');await Promise.resolve();}
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    Element.prototype.querySelectorAll=real;
+    return {outerScans,nestedScans,scope:button.dataset.settingsScope,description:!!document.getElementById(button.getAttribute('aria-describedby'))};
+  });
+  assert.equal(result.outerScans,1);assert.equal(result.nestedScans,0);
+  assert.equal(result.scope,'reader-view');assert.equal(result.description,true);
 });

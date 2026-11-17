@@ -68,7 +68,11 @@
   function describe(node) { return families.find(spec => node?.matches(spec.selector)) || unknown; }
   function candidates() {
     const seen=new Set(),out=[];
+    const scanned=[];
     for(const root of document.querySelectorAll(roots)) {
+      // The outer root already supplied every descendant control.
+      if(scanned.some(parent=>parent.contains(root)))continue;
+      scanned.push(root);
       if(root.matches(controlSelector)&&!seen.has(root)&&!root.closest('[data-settings-scope-help]')){seen.add(root);out.push(root);}
       for(const n of root.querySelectorAll(controlSelector))if(!seen.has(n)&&!n.closest('[data-settings-scope-help]')){seen.add(n);out.push(n);}
     }
@@ -135,7 +139,7 @@
   // (most of a second on a full page) waits until the app closes.
   let deferred=false;
   const covered=()=>{if(document.body.classList.contains('ccc-mobile-app-open'))return true;const f=document.getElementById('cccMobileAppFrame');return !!(f&&f.dataset.early&&!f.hidden);};
-  function schedule(){if(covered()){deferred=true;return;}if(!scheduled){scheduled=true;queueMicrotask(mount);}}
+  function schedule(){if(covered()){deferred=true;return;}if(!scheduled){scheduled=true;requestAnimationFrame(mount);}}
   window.cccSettingsScope=Object.freeze({families,describe,mount,audit:()=>candidates().filter(n=>describe(n)===unknown||n.dataset.settingsScope!==describe(n).id||!(n.getAttribute('aria-describedby')||'').split(/\s+/).some(id=>id.startsWith('settings-scope-')&&document.getElementById(id))).map(n=>({tag:n.tagName,id:n.id||'',section:n.closest('.settings-section')?.dataset.sectionId||''}))});
   // Runs for every DOM change on the page, so it must stay cheap: searching the
   // subtree of each record's target made a transcript render quadratic (CCC-143:
