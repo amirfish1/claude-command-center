@@ -56,6 +56,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 
 from ccc_server import core as _core
@@ -121,7 +122,7 @@ _RELATIVE_ETA_GRACE = {
     "this month": 31,
 }
 
-_di_lock = threading.Lock()
+_di_lock = threading.RLock()
 _run_lock = threading.Lock()
 _running = {"since": None, "thread": None}
 _last_findings = {"governor": [], "at": None}
@@ -198,6 +199,15 @@ def _assign_decision_numbers(cards):
             changed = True
         seen.add(number)
     return changed
+
+
+def _serialize_card_updates(fn):
+    @wraps(fn)
+    def locked(*args, **kwargs):
+        # The whole read/modify/write must be atomic, including source dedupe.
+        with _di_lock:
+            return fn(*args, **kwargs)
+    return locked
 
 
 def load_numbered_cards():
@@ -1043,7 +1053,8 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
     now = time.time() if now is None else now
     run_id = "run_" + uuid.uuid4().hex[:8]
     started = time.time()
-    cards = load_cards() if cards is None else cards
+    live_store = cards is None
+    cards = load_cards() if live_store else cards
     if rows is None:
         rows = _server_rows()
     if live_ids is None:
@@ -1125,17 +1136,31 @@ def run_once(*, cfg=None, now=None, rows=None, live_ids=None, cards=None,
         meta["duration_s"] = round(time.time() - t0, 1)
         new_cards.append(analyst_card(cand, body, now=now, run_id=run_id, analyst_meta=meta))
 
-    for c in new_cards:
-        cards[c["id"]] = c
-    _assign_decision_numbers(cards)
-    for c in new_cards:
-        record["created"].append({k: c.get(k) for k in
-                                  ("id", "source_id", "title", "kind", "source", "created_at", "analyst", "decision_number")})
-    record["duration_s"] = round(time.time() - started, 1)
-    record["finished_at"] = _di_iso(time.time())
-    if persist:
-        save_cards(cards)
-        _append_run(record)
+    # Analysis can take minutes. Commit only its new cards against the latest
+    # inbox so reports and owner actions received during analysis survive.
+    with _di_lock:
+        if persist and live_store:
+            cards = load_cards()
+            record["expired"] = expire_ephemeral_cards(
+                cards, now=now, ttl_s=cfg.get("governor_card_ttl_s"))
+        blocked = blocked_source_ids(cards, now=now, dedupe_days=cfg.get("dedupe_days"))
+        admitted = []
+        for c in new_cards:
+            if c["source_id"] in blocked:
+                record["skipped_dedupe"] += 1
+                continue
+            cards[c["id"]] = c
+            blocked.add(c["source_id"])
+            admitted.append(c)
+        _assign_decision_numbers(cards)
+        for c in admitted:
+            record["created"].append({k: c.get(k) for k in
+                                      ("id", "source_id", "title", "kind", "source", "created_at", "analyst", "decision_number")})
+        record["duration_s"] = round(time.time() - started, 1)
+        record["finished_at"] = _di_iso(time.time())
+        if persist:
+            save_cards(cards)
+            _append_run(record)
     return record
 
 
@@ -1329,6 +1354,7 @@ def perform_action(action, *, title="", cfg=None, spawn=None, inject=None,
     return {"ok": False, "error": f"unknown action kind {kind!r}"}
 
 
+@_serialize_card_updates
 def decision_inbox_decide(card_id, option_index, *, cards=None, now=None, persist=True,
                           reason="", review_runner=None, **hooks):
     if str(card_id or "").startswith(_wt_review.CARD_ID_PREFIX):
@@ -1379,6 +1405,7 @@ def _decide_review_card(card_id, option_index, *, reason="", runner=None):
     return {"ok": bool(result.get("ok")), "result": result, "error": result.get("error")}
 
 
+@_serialize_card_updates
 def decision_inbox_dismiss(card_id, *, cards=None, now=None, persist=True):
     now = time.time() if now is None else now
     cards = load_cards() if cards is None else cards
@@ -1546,6 +1573,7 @@ def validate_external_card(payload):
     }, ""
 
 
+@_serialize_card_updates
 def decision_inbox_ingest(payload, *, cards=None, now=None, persist=True, cfg=None):
     """Create (or dedupe onto) an externally produced card.
 
