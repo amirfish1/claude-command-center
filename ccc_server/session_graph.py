@@ -2652,7 +2652,7 @@ _AUTO_TITLE_MAX_CONCURRENT = 2
 _auto_title_sem = threading.Semaphore(_AUTO_TITLE_MAX_CONCURRENT)
 
 
-_auto_titled_cache = {"key": None, "data": {}}
+_auto_titled_cache = {"key": None, "data": {}, "markers": {}}
 _auto_titled_lock = threading.Lock()
 
 
@@ -2670,30 +2670,48 @@ def _auto_titled_session_ids():
     with _auto_titled_lock:
         try:
             st = _core.SIDECAR_STATE_DIR.stat()
-            key = (st.st_mtime, st.st_size)
+            key = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
         except OSError:
             return {}
         if _auto_titled_cache["key"] == key:
             return _auto_titled_cache["data"]
         try:
             data = {}
+            markers = {}
+            previous = _auto_titled_cache.get("markers", {})
             for n in os.listdir(_core.SIDECAR_STATE_DIR):
                 if not n.endswith("_autotitled"):
                     continue
                 sid = n[: -len("_autotitled")]
                 title = ""
+                marker = _core.SIDECAR_STATE_DIR / n
                 try:
-                    blob = json.loads((_core.SIDECAR_STATE_DIR / n).read_text() or "{}")
+                    stat = marker.stat()
+                    signature = (stat.st_dev, stat.st_ino, stat.st_mtime_ns,
+                                 stat.st_ctime_ns, stat.st_size)
+                    cached = previous.get(n)
+                    if cached is not None and cached[0] == signature:
+                        data[sid] = cached[1]
+                        markers[n] = cached
+                        continue
+                    blob = json.loads(marker.read_text() or "{}")
                 except (OSError, ValueError):
                     blob = None
+                    signature = None
                 # Legacy markers hold a bare timestamp, not an object.
                 if isinstance(blob, dict):
                     title = str(blob.get("title") or "")
                 data[sid] = title
+                if signature is not None:
+                    markers[n] = (signature, title)
         except OSError:
             return {}
         _auto_titled_cache["key"] = key
         _auto_titled_cache["data"] = data
+        # Hooks update other files in this directory throughout a turn. Reuse
+        # unchanged marker contents while still discovering additions,
+        # replacements and removals on each directory change.
+        _auto_titled_cache["markers"] = markers
         return data
 
 

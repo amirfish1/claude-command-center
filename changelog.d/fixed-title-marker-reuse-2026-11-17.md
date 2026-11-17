@@ -1,0 +1,1 @@
+- Reuse unchanged saved session titles when unrelated status files change, reducing sidebar refresh work while preserving title additions, replacements, and removals.
