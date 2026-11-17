@@ -15,12 +15,13 @@ class BrowserVoicePlayer extends AudioWorkletProcessor {
     // Speed changes use WSOLA time-stretching at the source rate, so pitch is preserved.
     // 1x bypasses it entirely and keeps the original sample path.
     if (this.speed !== 1) {
-      this.frame = 960; this.hop = 480; this.delta = 192; // 40 ms frames, 20 ms hop, 8 ms search
+      this.frame = 960; this.hop = 480; this.delta = 360; // 40 ms frames, 20 ms hop, 15 ms search (covers pitch periods down to ~67 Hz)
       this.window = new Float32Array(this.frame);
       for (let k = 0; k < this.frame; k++) this.window[k] = 0.5 - 0.5 * Math.cos(2 * Math.PI * k / this.frame);
       this.acc = new Float32Array(this.frame);
+      this.scratch = new Float32Array(2 * this.delta + this.frame); this.refBuf = new Float32Array(this.frame);
       this.fifo = new Float32Array(4096); this.fifoRead = 0; this.fifoCount = 0;
-      this.pos = 0; this.prev = -1; this.stretchDone = false;
+      this.pos = 0; this.ref = 0; this.primed = false; this.stretchDone = false;
     }
     this.port.onmessage = ({ data }) => {
       if (data.type === 'connect') {
@@ -48,7 +49,7 @@ class BrowserVoicePlayer extends AudioWorkletProcessor {
     if (n <= 0) return;
     this.read = (this.read + n) % this.ring.length;
     this.count -= n; this.consumed += n; this.credit += n;
-    this.pos -= n; if (this.prev >= 0) this.prev -= n;
+    this.pos -= n; this.ref -= n;
   }
   // Produce one WSOLA hop into the FIFO if enough input is buffered. Returns false when it must wait.
   stretchStep() {
@@ -61,24 +62,31 @@ class BrowserVoicePlayer extends AudioWorkletProcessor {
     }
     if (!this.ended && nominal + D + N > this.count) return false;
     let start = nominal;
-    if (this.prev >= 0) {
+    if (this.primed) {
       // Pick the offset whose start best continues the previous frame's natural waveform.
-      const ref = this.prev + H, L = N - H;
-      let best = -Infinity;
-      for (let d = -D; d <= D; d++) {
-        const c = nominal + d;
-        if (c < 0) continue;
+      // Copy the search span into linear scratch, then search coarse (every 4th lag and
+      // sample) and refine around the winner, keeping each hop well inside a render quantum.
+      const L = N - H, lo = Math.max(0, nominal - D), hi = nominal + D, span = hi - lo + L;
+      const x = this.scratch, r = this.refBuf;
+      for (let k = 0; k < span; k++) x[k] = this.at(lo + k);
+      for (let k = 0; k < L; k++) r[k] = this.at(this.ref + k);
+      const score = (c, step) => {
         let dot = 0, energy = 1e-9;
-        for (let k = 0; k < L; k += 2) { const x = this.at(c + k); dot += x * this.at(ref + k); energy += x * x; }
-        const score = dot / Math.sqrt(energy);
-        if (score > best) { best = score; start = c; }
+        for (let k = 0, o = c - lo; k < L; k += step) { const v = x[o + k]; dot += v * r[k]; energy += v * v; }
+        return dot / Math.sqrt(energy);
+      };
+      let best = -Infinity, coarse = nominal;
+      for (let c = lo; c <= hi; c += 4) { const value = score(c, 4); if (value > best) { best = value; coarse = c; } }
+      best = -Infinity;
+      for (let c = Math.max(lo, coarse - 4); c <= Math.min(hi, coarse + 4); c++) {
+        const value = score(c, 1); if (value > best) { best = value; start = c; }
       }
     }
     for (let k = 0; k < N; k++) this.acc[k] += this.window[k] * this.at(start + k);
     for (let k = 0; k < H; k++) this.push(this.acc[k]);
     this.acc.copyWithin(0, H); this.acc.fill(0, N - H);
-    this.prev = start; this.pos += H * this.speed;
-    this.release(Math.min(this.prev + H, Math.floor(this.pos) - D));
+    this.ref = start + H; this.primed = true; this.pos += H * this.speed;
+    this.release(Math.min(this.ref, Math.floor(this.pos) - D));
     return true;
   }
   push(sample) { this.fifo[(this.fifoRead + this.fifoCount) % this.fifo.length] = sample; this.fifoCount++; }

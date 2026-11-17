@@ -118,3 +118,43 @@ test('stretched playback handles empty and short final audio', () => {
     assert.equal(h.events.some(e => e.type === 'ended'), true);
   }
 });
+
+test('stretching aligns frames so a gliding voiced tone keeps one clear pitch (no doubling)', () => {
+  // Buzzy 100->160 Hz glide, like a low speaking voice. Misaligned overlap-add makes two
+  // pitches sound at once and collapses periodicity; aligned WSOLA keeps it.
+  const n = 24000;
+  const pcm = new Float32Array(n);
+  let phase = 0;
+  for (let i = 0; i < n; i++) {
+    phase += 2 * Math.PI * (100 + 60 * i / n) / 24000;
+    for (let h = 1; h <= 8; h++) pcm[i] += 0.3 / h * Math.sin(h * phase);
+  }
+  const periodicity = x => {
+    const N = 1920, vals = [];
+    for (let s = 4800; s + N + 1000 < x.length - 4800; s += 1920) {
+      let best = 0;
+      for (let lag = 240; lag <= 1000; lag += 2) {
+        let d = 0, e1 = 0, e2 = 0;
+        for (let k = 0; k < N; k += 2) { const a = x[s + k], b = x[s + k + lag]; d += a * b; e1 += a * a; e2 += b * b; }
+        best = Math.max(best, d / Math.sqrt(e1 * e2 + 1e-12));
+      }
+      vals.push(best);
+    }
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  };
+  const play = rate => {
+    const h = harness(rate);
+    h.p.receive({type: 'pcm', pcm: pcm.slice(0, 20000)});
+    const out = [];
+    for (let i = 0; i < 4000; i++) {
+      if (h.p.count < 4000 && !h.p.ended) { h.p.receive({type: 'pcm', pcm: pcm.slice(20000)}); h.p.receive({type: 'end', samples: n}); }
+      const [block] = h.tick(); out.push(...block.samples); if (!block.running) break;
+    }
+    return Float32Array.from(out);
+  };
+  const ref = periodicity(play(1));
+  for (const rate of [1.5, 2]) {
+    const out = periodicity(play(rate));
+    assert.ok(out > ref - 0.06, `rate ${rate}: periodicity ${out.toFixed(3)} vs 1x ${ref.toFixed(3)}`);
+  }
+});
