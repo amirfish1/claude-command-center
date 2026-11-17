@@ -8,6 +8,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from contextlib import contextmanager
 import functools
+import json
 import os
 from pathlib import Path
 import re
@@ -271,18 +272,46 @@ class _Batch:
         global _CACHE_GEN
         if not self.pending:
             return
-        for sid, value in self.pending.items():
-            previous = self.conn.execute(
-                'SELECT origin, root_sid, topic_title, user_named FROM continuation_topics WHERE sid=?',
-                (sid,)).fetchone()
-            self.conn.execute('''INSERT INTO continuation_topics VALUES (?,?,?,?,?)
-                ON CONFLICT(sid) DO UPDATE SET origin=excluded.origin,
-                root_sid=excluded.root_sid, topic_title=excluded.topic_title,
-                user_named=excluded.user_named''', (sid, *value))
+        items = list(self.pending.items())
+        revisions = 0
+        upsert = '''INSERT INTO continuation_topics VALUES (?,?,?,?,?)
+            ON CONFLICT(sid) DO UPDATE SET origin=excluded.origin,
+            root_sid=excluded.root_sid, topic_title=excluded.topic_title,
+            user_named=excluded.user_named'''
+        # A cold archive can establish thousands of roots. Keep both reads
+        # and writes bounded, without a Python/GIL handoff for each row.
+        for offset in range(0, len(items), 500):
+            chunk = items[offset:offset + 500]
+            marks = ','.join('?' for _ in chunk)
+            previous = dict((row[0], row[1:]) for row in _sqlite_fetch_rows(
+                self.conn,
+                'SELECT sid, root_sid, topic_title, user_named FROM continuation_topics '
+                f'WHERE sid IN ({marks})', [sid for sid, _ in chunk],
+                ('sid', 'root_sid', 'topic_title', 'user_named')))
             # New rows already change the archive snapshot. Established root
-            # corrections must invalidate cached projections in other processes.
-            if previous and previous[1:] != value[1:]:
-                self.conn.execute('INSERT INTO continuation_topic_meta VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET revision=revision+1')
+            # corrections invalidate cached projections in other processes.
+            revisions += sum(sid in previous and previous[sid] != value[1:]
+                             for sid, value in chunk)
+            values = [(sid, *value) for sid, value in chunk]
+            try:
+                self.conn.execute('''INSERT INTO continuation_topics
+                    SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
+                           json_extract(value, '$[2]'), json_extract(value, '$[3]'),
+                           json_extract(value, '$[4]')
+                    FROM json_each(?) WHERE 1
+                    ON CONFLICT(sid) DO UPDATE SET origin=excluded.origin,
+                    root_sid=excluded.root_sid, topic_title=excluded.topic_title,
+                    user_named=excluded.user_named''', (json.dumps(values),))
+            except sqlite3.OperationalError as exc:
+                message = str(exc).lower()
+                if not (('no such function:' in message or 'no such table:' in message)
+                        and 'json_' in message):
+                    raise
+                self.conn.executemany(upsert, values)
+        if revisions:
+            self.conn.execute('''INSERT INTO continuation_topic_meta VALUES (1, ?)
+                ON CONFLICT(id) DO UPDATE SET revision=revision+excluded.revision''',
+                (revisions,))
         with _CACHE_LOCK:
             _CACHE_GEN += 1
             _CONN_CHANGES[id(self.conn)] = self.conn.total_changes

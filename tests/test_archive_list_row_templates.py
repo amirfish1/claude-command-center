@@ -7,12 +7,12 @@ def test_template_reuse_preserves_live_inputs_and_current_containers(monkeypatch
     row = {'session_id': 'child', 'display_name': 'Before', 'last_assistant_text': 'Old reply',
            'cost_breakdown_usd': {'input': 1}, 'session_state': {'todos': [{'text': 'first'}]}}
     first = server._archive_list_project_row(row, resumes={}, parents={})
-    template = server._ARCHIVE_LIST_ROW_TEMPLATES.get(id(row))
+    template = server._ARCHIVE_LIST_ROW_TEMPLATES.get((row.get('source'), row['session_id']))
     row['cost_breakdown_usd']['input'] = 2
     row['session_state']['todos'][0]['text'] = 'second'
     second = server._archive_list_project_row(row, resumes={'child': {'resume_at': 9999999999}},
                                              parents={'child': 'parent'})
-    assert server._ARCHIVE_LIST_ROW_TEMPLATES.get(id(row)) is template
+    assert server._ARCHIVE_LIST_ROW_TEMPLATES.get((row.get('source'), row['session_id'])) is template
     assert second['parent_session_id'] == 'parent'
     assert second['usage_limit_resume_at'] == 9999999999
     assert second['cost_breakdown_usd'] == {'input': 2}
@@ -56,3 +56,32 @@ def test_oversized_rows_still_project_without_retaining_them(monkeypatch):
     assert out['first_message'] == row['first_message']
     assert out['session_state'] == {'ok': True}
     assert not len(cache)
+
+
+def test_new_snapshot_reuses_template_but_copies_current_containers(monkeypatch):
+    cache = server.ByteBudgetCache(1 << 20, 20)
+    monkeypatch.setattr(server, '_ARCHIVE_LIST_ROW_TEMPLATES', cache)
+    first = {'session_id': 'same', 'source': 'codex', 'display_name': 'Before',
+             'question_options': ['one'], 'session_state': {'todos': ['original']}}
+    server._archive_list_project_row(first, resumes={}, parents={})
+    key = ('codex', 'same')
+    template = cache.get(key)
+    replacement = server.copy.deepcopy(first)
+    # An unchanged snapshot must not pay the miss-only serialization cost.
+    def no_serialize(*args, **kwargs):
+        raise AssertionError('unchanged snapshot rebuilt the template')
+    with monkeypatch.context() as scoped:
+        scoped.setattr(server.json, 'dumps', no_serialize)
+        out = server._archive_list_project_row(replacement, resumes={}, parents={})
+    assert cache.get(key) is template
+    assert len(cache) == 1
+    out['session_state']['todos'].append('caller edit')
+    assert replacement['session_state']['todos'] == ['original']
+    assert first['session_state']['todos'] == ['original']
+    replacement['display_name'] = 'After'
+    replacement['question_options'] = ['two']
+    out = server._archive_list_project_row(replacement, resumes={}, parents={})
+    assert out['display_name'] == 'After'
+    assert out['question_options'] == ['two']
+    assert cache.get(key) is not template
+    assert len(cache) == 1

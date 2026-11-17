@@ -18526,12 +18526,15 @@ _ARCHIVE_LIST_ROW_TEMPLATES = ByteBudgetCache(
 def _archive_list_row_template(row):
     """Reuse scalar projection work while copying current containers per call.
 
-    Published snapshots reuse unchanged row dictionaries. A shallow source
-    guard also catches scalar edits made in place by lifecycle overlays.
+    Snapshot refreshes replace row dictionaries even when their contents did
+    not change. Reuse by session identity; the source guard catches changes
+    across snapshots and scalar edits made in place by lifecycle overlays.
     Containers deliberately stay out of the template: their contents may
     change in place, and callers must always receive isolated copies.
     """
-    hit = _ARCHIVE_LIST_ROW_TEMPLATES.get(id(row))
+    sid = row.get("session_id") or row.get("id")
+    cache_key = (row.get("source"), sid) if sid else id(row)
+    hit = _ARCHIVE_LIST_ROW_TEMPLATES.get(cache_key)
     if hit is not None and hit[0] == row:
         return hit[1], hit[2]
     scalars, containers = {}, []
@@ -18551,7 +18554,7 @@ def _archive_list_row_template(row):
     # Estimate retained JSON metadata with room for Python containers. Only
     # misses serialize; warm rows never walk nested parser metadata again.
     weight = 4 * len(json.dumps(source, default=str).encode()) + 2 * sys.getsizeof(source)
-    _ARCHIVE_LIST_ROW_TEMPLATES.put(id(row), (source, scalars, containers), weight)
+    _ARCHIVE_LIST_ROW_TEMPLATES.put(cache_key, (source, scalars, containers), weight)
     return scalars, containers
 
 

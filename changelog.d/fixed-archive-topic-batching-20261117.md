@@ -1,0 +1,1 @@
+- Reduce archive refresh stalls by reusing unchanged row templates across snapshots and batching continuation topic persistence.
