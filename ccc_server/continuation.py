@@ -41,7 +41,7 @@ from ccc_server import report_routes as _report_routes
 from ccc_server import ship_graph as _sg
 from ccc_server import test_isolation_active
 from ccc_server import usage_limit as _usage_limit
-from ccc_server.session_brief import _transcript_path, brief as _brief
+from ccc_server.session_brief import _transcript_path, continuation_brief as _brief
 
 DEFAULT_LARGE_TOKENS = 150_000
 DEFAULT_STALE_SECONDS = 60 * 60
@@ -146,7 +146,11 @@ def session_context(query):
     if not info.get("found"):
         return None
     sid = info["session_id"]
+    conn = _sg._get_connection()
     latest = info.get("latest") or sid
+    manual = manual_forward_target(latest)
+    if manual != latest:
+        latest = _lineage.latest_successor(conn, manual)
     if latest != sid:
         latest_info = _brief(latest)
         if latest_info.get("found"):
@@ -164,6 +168,18 @@ def session_context(query):
     row = _usage_limit._usage_limit_row_for_session(latest, engine=engine) or {}
     context_tokens = _usage_limit._usage_limit_context_tokens(engine, path, row)
     mtime = row.get("mtime")
+    from ccc_server import continuation_usage
+    usage = continuation_usage.snapshot(engine, path)
+    context_known = context_tokens > 0 and bool(mtime)
+    if usage:
+        # The indexed row can lag an entire session or compaction. Actual
+        # transcript usage and activity time supersede the archive snapshot.
+        mtime = usage['mtime']
+        if usage['tokens'] is not None:
+            context_tokens = usage['tokens']
+            context_known = True
+        elif float(row.get('mtime') or 0) < mtime:
+            context_known = False
     idle_seconds = max(0.0, time.time() - mtime) if mtime else 0.0
     report_to = _lineage.report_to_of(sid) or _lineage.report_to_of(latest)
     return {
@@ -176,8 +192,9 @@ def session_context(query):
         "transcript_path": path,
         "capture_path": capture_path,
         "context_tokens": context_tokens,
+        "context_known": context_known,
         "idle_seconds": idle_seconds,
-        "model": row.get("model") or None,
+        "model": row.get("model") or (usage or {}).get('model') or None,
         "effort": row.get("reasoning_effort") or None,
         "report_to": report_to,
     }
@@ -437,12 +454,27 @@ def decide_send_path(query, large_threshold=DEFAULT_LARGE_TOKENS,
     continuation instead? "new" only when BOTH large (context tokens at or
     above `large_threshold`) AND stale (idle at or above `stale_seconds`, the
     prompt-cache TTL -- so a resume would be a full cache miss anyway)."""
-    ctx = session_context(query)
+    try:
+        ctx = session_context(query)
+    except (OSError, sqlite3.Error):
+        return {
+            'path': 'normal', 'reason': 'Context metadata is unavailable; conditional send was not approved.',
+            'context_known': False, 'context_tokens': 0, 'idle_seconds': 0,
+            'resolved_session_id': None, 'latest_session_id': None,
+        }
     if ctx is None:
         return {
             "path": "normal", "reason": f"no session found for {query!r}",
             "context_tokens": 0, "idle_seconds": 0,
+            "context_known": False,
             "resolved_session_id": None, "latest_session_id": None,
+        }
+    if ctx.get('context_known') is False:
+        return {
+            'path': 'normal', 'reason': 'Context usage is unknown; conditional send was not approved.',
+            'context_tokens': ctx['context_tokens'], 'idle_seconds': ctx['idle_seconds'],
+            'context_known': False, 'resolved_session_id': ctx['session_id'],
+            'latest_session_id': ctx['latest'],
         }
     large = ctx["context_tokens"] >= large_threshold
     stale = ctx["idle_seconds"] >= stale_seconds
@@ -462,6 +494,7 @@ def decide_send_path(query, large_threshold=DEFAULT_LARGE_TOKENS,
         "path": path,
         "reason": reason,
         "context_tokens": ctx["context_tokens"],
+        "context_known": True,
         "idle_seconds": ctx["idle_seconds"],
         "resolved_session_id": ctx["session_id"],
         "latest_session_id": ctx["latest"],

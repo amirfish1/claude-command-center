@@ -405,24 +405,33 @@ _USAGE_LIMIT_ENGINE_LOCATE = {
 
 def _usage_limit_row_for_session(sid, engine=None):
     """One-shot conversation-row lookup by session id, from the same cached
-    archive rows every other view reads (no fresh scan). Rare call -- once
-    per newly-detected exhaustion stop, not a hot path. Kimi rows carry
+    archive rows every other view reads (no fresh scan). Conditional-send
+    preflight also uses this lookup, so cold history stays on disk. Kimi rows carry
     CCC's own "session_" display prefix on session_id (see CCC-861's
     lookup-side normalization fix); codex/claude ids never do -- try both
     so this works regardless of engine."""
-    try:
-        rows, _ = _core._archive_all_rows_cached({})
-    except Exception:
-        return None
     sid = str(sid or "")
     candidates = {sid, "session_" + sid}
-    for r in rows or []:
-        if not isinstance(r, dict):
-            continue
-        rid = str(r.get("session_id") or r.get("id") or "")
-        if rid in candidates:
-            return r
-    return None
+    key = _core._archive_response_cache_key()
+    # Never materialize the full cold archive to answer one session's
+    # preflight. Peek at already-published rows, then use the sid index.
+    for lock, cache, field in (
+        (_core._archive_serve_lock, _core._archive_serve_cache, 'rows'),
+        (_core._ARCHIVE_RESPONSE_CACHE_LOCK, _core._ARCHIVE_RESPONSE_CACHE, 'conversations'),
+    ):
+        with lock:
+            rows = (cache.get(key) or {}).get(field) or []
+            for r in rows:
+                if str(r.get('session_id') or r.get('id') or '') in candidates:
+                    return dict(r)
+    from ccc_server import archive_store
+    import sqlite3
+    try:
+        rows = archive_store.lookup(_core._ARCHIVE_RESPONSE_CACHE_FILE, key, candidates,
+                                    include_ancestors=False)
+        return rows[0] if rows else None
+    except (OSError, ValueError, sqlite3.Error):
+        return None
 
 
 def _usage_limit_context_tokens(engine, path, row):

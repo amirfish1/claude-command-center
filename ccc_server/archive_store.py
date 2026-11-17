@@ -427,7 +427,7 @@ def load(cache_file, *, hot=False, key=None, now=None):
         con.close()
 
 
-def lookup(cache_file, key, sids, *, schema_version=None):
+def lookup(cache_file, key, sids, *, schema_version=None, include_ancestors=True):
     """Fetch newly pinned/moved sessions and their ancestors without a cold scan."""
     sids = sorted(set(str(sid) for sid in sids if sid))
     if not sids or not database_path(cache_file).exists():
@@ -442,7 +442,13 @@ def lookup(cache_file, key, sids, *, schema_version=None):
                   WHERE r.variant=? AND r.sid=s.parent AND s.parent!=''
         ) SELECT r.body FROM selected s CROSS JOIN rows r
           WHERE r.variant=? AND r.identity=s.identity ORDER BY r.position"""
-        rows = [json.loads(raw) for (raw,) in con.execute(query, (key, *sids, key, key))]
+        if include_ancestors:
+            bodies = con.execute(query, (key, *sids, key, key))
+        else:
+            bodies = con.execute(
+                f'SELECT body FROM rows WHERE variant=? AND sid IN ({placeholders}) ORDER BY position',
+                (key, *sids))
+        rows = [json.loads(raw) for (raw,) in bodies]
         if schema_version is not None:
             meta = con.execute('SELECT metadata FROM variants WHERE key=?', (key,)).fetchone()
             if meta:

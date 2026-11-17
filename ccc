@@ -664,6 +664,12 @@ def cmd_send(args):
         except OSError as e:  # URLError, plus raw TimeoutError from mid-read stalls
             print(f"ccc: cannot reach CCC at {base} ({e}) — is CCC running?", file=sys.stderr)
             return 1
+        if decision.get('context_known') is False:
+            if args.json:
+                print(json.dumps(decision, indent=2))
+            else:
+                print(f"ccc: {decision['reason']}", file=sys.stderr)
+            return 1
         if not args.json:
             ctx_k = decision.get("context_tokens") or 0
             idle_s = int(decision.get("idle_seconds") or 0)

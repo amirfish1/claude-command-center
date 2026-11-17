@@ -29,6 +29,12 @@ ccc spawn --continue-from <old session> "keep going"       # new session, not a 
 ccc send <old session> "keep going" --new-if-large-and-stale # spawns a continuation only when warranted
 ```
 
+Conditional sends use indexed routing metadata and a bounded transcript tail
+to check current context and activity. If usage is unavailable, the command
+reports unknown context and exits without submitting a message or spawning a
+session. JSON preflight responses expose this as `context_known: false`;
+clients must check that field before acting on the proposed path.
+
 ## Find the running server
 
 `ccc` reads `~/.claude/command-center/port.txt`, which holds a full base URL,
