@@ -105,6 +105,7 @@ const foldCode = slice('  function _continuationFoldMaps(', '  let _f2Continuati
 const budgetCode = slice('  function _sidebarBudgetIdeaLane(', '  // What an empty list says');
 function lanes(rows, { ticketView = true, f2 = {} } = {}) {
   const context = { Map, Set, currentConversation: '',
+    _workerRoleFromPrompt: () => '',
     workerSelfTicketRef: () => '', workerRowFacts: () => ({ isHelper: false, ticketRef: '' }),
     f2EffectiveParentSessionId: (id, parent) => f2[id] || parent || '',
     continuationParentId: row => row.continued_from_session_id || '',

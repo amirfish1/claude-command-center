@@ -11,6 +11,7 @@ function setup(rows, {engine = '', cutoff = 0, f2 = {}, workerIds = [], ticketVi
   const context = {
     Map, Set, currentConversation: '',
     workerSelfTicketRef: row => row.selfTicket || '',
+    _workerRoleFromPrompt: row => row.promptRole || '',
     workerRowFacts: row => ({isHelper: !!row.helperTicket, ticketRef: row.helperTicket}),
     f2EffectiveParentSessionId: (id, parent) => f2[id] || parent || '',
     continuationParentId: row => row.continued_from_session_id || '',
@@ -191,4 +192,32 @@ test('automatic checks stay in Other despite inherited tickets and family member
   assert.equal(context._isOtherUtilityRow(row('ordinary', {model: 'claude-haiku-test'})), false);
   assert.equal(context._isOtherUtilityRow(row('titled', {display_name: 'te-side-check'})), false);
   assert.equal(context._isOtherUtilityRow(row('moved', {session_cwd: '/tmp/te-side-check', all_lane_override: 'coding'})), false);
+});
+
+
+test('helper parent classification skips full facts for ordinary rows and preserves helper roles', () => {
+  const owner = row('owner', {selfTicket: 'TEST-1', spawned_lane: 'workers'});
+  const ordinary = row('ordinary');
+  const explicitWorker = row('worker', {worker_origin: {role: 'worker'}});
+  const explicitHelper = row('explicit-helper', {worker_origin: {role: 'verifier'}, helperTicket: 'TEST-1'});
+  const promptHelper = row('prompt-helper', {promptRole: 'planner', helperTicket: 'TEST-1'});
+  const fallbackHelper = row('fallback-helper', {worker_origin: {role: 'worker'}, promptRole: 'critic', helperTicket: 'TEST-1'});
+  const {model, context} = setup([owner, ordinary, explicitWorker, explicitHelper, promptHelper, fallbackHelper]);
+  const facts = context.workerRowFacts;
+  const lookedUp = [];
+  context.workerRowFacts = c => { lookedUp.push(c.session_id); return facts(c); };
+  assert.equal(model.parentId(ordinary), '');
+  assert.equal(model.parentId(explicitWorker), '');
+  assert.deepEqual(lookedUp, [], 'ordinary sessions need no ticket-history or title lookup');
+  for (const helper of [explicitHelper, promptHelper, fallbackHelper]) {
+    assert.equal(model.parentId(helper), 'owner');
+    assert.equal(model.laneFor(helper), 'workers');
+  }
+  assert.ok(lookedUp.includes('explicit-helper'));
+  assert.ok(lookedUp.includes('prompt-helper'));
+  assert.ok(lookedUp.includes('fallback-helper'));
+  // New origin metadata is read on the next classification, without a stale cache.
+  ordinary.worker_origin = {role: 'assessor'};
+  ordinary.helperTicket = 'TEST-1';
+  assert.equal(context._sidebarLaneModel([owner, ordinary]).parentId(ordinary), 'owner');
 });

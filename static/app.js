@@ -26595,6 +26595,10 @@
       }
     });
     const _wkHelperParentId = (c) => {
+      // Most archive rows cannot be helpers. Match workerRowFacts' role rules
+      // before paying for its ticket history, cleaned title and status fields.
+      const role = String((c && c.worker_origin && c.worker_origin.role) || '').trim();
+      if ((!role || role === 'worker') && !_workerRoleFromPrompt(c)) return '';
       const facts = workerRowFacts(c);
       if (!facts.isHelper || !facts.ticketRef) return '';
       const owner = _wkTicketOwnerSid.get(facts.ticketRef) || '';
