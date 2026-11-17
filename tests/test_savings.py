@@ -188,6 +188,33 @@ class TestPayload:
 class TestPerfBudget:
     """Perf-gate mirrors test_perf_budget.py: counts WORK, not just output."""
 
+    def test_existing_ledger_adds_file_claim_lookup_without_rebuilding(self, tmp_path):
+        root = tmp_path / "projects"
+        _write_transcript(root, "p", "a.jsonl", [
+            _assistant("m1", "claude-sonnet-4-6", inp=1_000_000),
+        ])
+        _payload(tmp_path)
+        ledger = tmp_path / "savings.sqlite3"
+        conn = savings._connect_ledger(ledger)
+        # Simulate an existing ledger written before the file lookup index.
+        conn.execute("DROP INDEX IF EXISTS idx_claims_file")
+        conn.commit()
+        tables = ("files", "events", "claims", "rollup")
+        before = {t: [tuple(r) for r in conn.execute(f"SELECT * FROM {t}")]
+                  for t in tables}
+        conn.close()
+        conn = savings._connect_ledger(ledger)
+        try:
+            assert {t: [tuple(r) for r in conn.execute(f"SELECT * FROM {t}")]
+                    for t in tables} == before
+            plan = conn.execute(
+                "EXPLAIN QUERY PLAN DELETE FROM claims WHERE file_path=?",
+                ("a.jsonl",),
+            ).fetchall()
+            assert any("SEARCH claims USING INDEX idx_claims_file" in r[3] for r in plan)
+        finally:
+            conn.close()
+
     def test_unchanged_transcripts_are_never_reparsed(self, tmp_path, monkeypatch):
         root = tmp_path / "projects"
         for i in range(6):

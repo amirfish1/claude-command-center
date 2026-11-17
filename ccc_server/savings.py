@@ -211,6 +211,8 @@ CREATE TABLE IF NOT EXISTS claims (
     dedupe_key  TEXT PRIMARY KEY,
     file_path   TEXT NOT NULL
 );
+-- Replacing or removing a transcript releases its claims by file, not key.
+CREATE INDEX IF NOT EXISTS idx_claims_file ON claims(file_path);
 -- Pre-aggregated CONTRIBUTING token sums, maintained at ingest so request
 -- time never scans the event log. Keyed by (day, model, session_id) with ""
 -- standing in for NULL so UNIQUE treats missing values as one bucket.
