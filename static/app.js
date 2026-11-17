@@ -26932,7 +26932,41 @@
     if (e.target?.closest?.('[data-first-run-new-session]')) document.getElementById('sidebarNewBtn')?.click();
   });
 
+  // Aggregate observer counts identify jank but not the renderer phase that
+  // caused it. Keep slow read-aloud renders attributable without a CPU trace.
+  function _readSidebarTiming() {
+    if (!_loafReadTag()) return null;
+    const start = performance.now();
+    let last = start;
+    const phases = {};
+    return {
+      result: 'early',
+      mark(name) {
+        const now = performance.now();
+        phases[name] = Math.round(now - last);
+        last = now;
+      },
+      finish() {
+        try {
+          const total = performance.now() - start;
+          if (total < 200) return;
+          this.mark('rest');
+          const script = document.querySelector('script[src*="app.js"]');
+          // This is a sampled slow-render diagnostic, not an exposure or task
+          // counter: the existing client-log sink deduplicates for five seconds.
+          _clientLog('[READ-RENDER] ' + JSON.stringify({
+            boot_id: _cccBootId,
+            build: script ? String(script.getAttribute('src')).slice(-64) : '',
+            ms: Math.round(total), result: this.result, phases,
+          }));
+        } catch (_) { /* Diagnostics must never interrupt rendering. */ }
+      },
+    };
+  }
+
   function renderConversationList(convs) {
+    const _readTiming = _readSidebarTiming();
+    try {
     refreshSessionDriverHeaders(convs);
     if (window.__cccTourActive) return; // FIRST FLIGHT tour owns the list DOM
     convs = filterGhIssues(convs);
@@ -32175,6 +32209,7 @@
     // unchanged, only the clocks moved, so patch just those spans in place (no
     // teardown, no flicker) and bail. Any real change alters the structural sig
     // and falls through to a normal rebuild.
+    _readTiming?.mark('html');
     const _structSig = _convListHtml
       .replace(_VOLATILE_TIME_RE, '$1$3')
       .replace(_VOLATILE_STATUS_RE, '$1$3')
@@ -32186,11 +32221,13 @@
     try { updateSubagentsPanel(currentConversation); } catch (_) {}
     try { if (typeof updateOrchestrationPane === 'function') updateOrchestrationPane(currentConversation); } catch (_) {}
     if (_convListRenderSig === _structSig && $convList.childElementCount > 0) {
+      if (_readTiming) _readTiming.result = 'patch';
       _patchVolatileTimes(_convListHtml);
       if (_allTabView === 'workers') _uxqRenderRecentWork();
       return;
     }
     _convListRenderSig = _structSig;
+    if (_readTiming) _readTiming.result = 'rebuild';
     //
     // FLIP-style reorder animation: capture each existing row's top
     // BEFORE the innerHTML reset, then on the new DOM, translate
@@ -32248,7 +32285,9 @@
     const _currentSessionsScrollTop = _currentSessionsScrollBefore ? _currentSessionsScrollBefore.scrollTop : 0;
     const _projectTreeScrollTop = _projectTreeScrollBefore ? _projectTreeScrollBefore.scrollTop : 0;
     _parkSharedQueuePanelForSidebarRender();
+    _readTiming?.mark('before_dom');
     $convList.innerHTML = _convListHtml;
+    _readTiming?.mark('dom');
     try { if (typeof _dedupeFamilyNestRows === 'function') _dedupeFamilyNestRows($convList); } catch (_) {}
     _convListRenderVersion++;
     // Re-apply decorator overlays in the SAME task, before the first paint of
@@ -32263,11 +32302,13 @@
     // made the FLIP below compare overlay-painted old tops with bare new
     // tops, sliding rows that never moved.
     try { _ultraFreshPaintBatch(_ultraFresh.entries.keys(), true); } catch (_) {}
+    _readTiming?.mark('actions');
     _updateConvTabBarHeightVar($convList);
     _mountSharedQueuePanel();
     // Jobs tab: refill the fresh host from cached data (no flicker, no fetch).
     try { if (_sidebarTab === 'jobs' && window.CCCJobsTab) window.CCCJobsTab.mount(); } catch (_) {}
     try { if (window.CCCDecisionTab) window.CCCDecisionTab.mount(); } catch (_) {}
+    _readTiming?.mark('mount');
     // The Workers lane emits the activity containers empty (see CCC-1061 above)
     // so their live contents stay out of the structural signature. Fill them
     // here, immediately after the reset, or the block flashes blank until the
@@ -34688,6 +34729,9 @@
       });
     });
     wireConvListRowSwipe($convList);
+    } finally {
+      _readTiming?.finish();
+    }
   }
 
   // ── Drag-to-pop-out + drag-to-reorder ──

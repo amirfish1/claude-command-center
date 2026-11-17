@@ -1,0 +1,1 @@
+- Read-aloud diagnostics now identify the phases of slow sidebar renders, including DOM replacement and action updates.

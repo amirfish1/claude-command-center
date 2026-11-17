@@ -1,4 +1,5 @@
 from pathlib import Path
+from tests.conversation_source import conversation_function
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,9 +19,7 @@ def test_sidebar_render_has_a_progressive_row_budget():
 
 
 def test_render_list_uses_bounded_rows_and_offers_more_on_demand():
-    start = SOURCE.index("function renderConversationList")
-    end = SOURCE.index("function renderSidebar", start)
-    source = SOURCE[start:end]
+    source = conversation_function("renderConversationList")
 
     assert "_boundSidebarRowsForRender(convs, _sidebarRenderRowLimit" in source
     assert 'data-role="sidebar-show-more"' in source
