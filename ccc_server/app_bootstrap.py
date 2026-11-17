@@ -2,9 +2,10 @@
 
 import re
 
-_NAMES = frozenset(('app-shell-boot.js', 'app-embed-boot.js'))
+_NAMES = frozenset(('app-shell-boot.js', 'app-embed-boot.js', 'app-read-boot.js'))
 _SCRIPT = re.compile(r'<script data-ccc-inline-bootstrap src="(/static/('
-                     r'app-shell-boot\.js|app-embed-boot\.js)(?:\?[^"<>]*)?)"></script>')
+                     + '|'.join(re.escape(name) for name in sorted(_NAMES))
+                     + r')(?:\?[^"<>]*)?)"></script>')
 
 
 def mark(html, name):

@@ -169,6 +169,35 @@ window.addEventListener('ccc:app-changed', e => {
 Only files directly in the app folder count. CCC's `ccc-state.json` and the
 page's own saves under `data/` do not fire it.
 
+### Initial JSON reads
+
+An app can name the small reads needed for its first render in `app.json`:
+
+```json
+{"startup_reads":{"files":["items.json"],"data":["selected-items"]}}
+```
+
+CCC includes current values in the app's no-store HTML. Use the explicit read
+adapter where the page normally reads JSON; older servers keep the normal
+fetch path:
+
+```js
+async function readJSON(url) {
+  if (window.CCCAppReads) return window.CCCAppReads.json(url);
+  const response = await fetch(url, {cache: 'no-store'});
+  if (!response.ok) throw new Error('HTTP ' + response.status);
+  return response.json();
+}
+```
+
+`files` names top-level JSON files in this app; `data` names keys from
+`/api/apps/data`. Each supplied URL is consumed once. The adapter releases
+unused values when the app reports content readiness, so subsequent refreshes
+and unopened sections use the current network APIs. It never changes when the
+app or its conversation reports readiness. Only valid local JSON is included,
+with at most 16 declared reads, 64 KiB per value and 128 KiB total; ineligible
+reads retain their normal network and error behavior.
+
 ### Load time: one second to fully ready
 
 An app page is **fully ready** when its own content is drawn and, if it has an

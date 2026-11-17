@@ -31320,9 +31320,11 @@ def _load_application_html(name, *, conversation_document=False):
         if folder is not None:
             agent = app_routines.load_state(folder).get("agent")
             agent_id = (agent.get("session_id") or "") if isinstance(agent, dict) else ""
-        html = _stamp_static_urls(application_page(
+        from ccc_server import app_initial_reads
+        html = application_page(
             target.read_text(encoding="utf-8"), app_id=name, agent_id=agent_id,
-            kit_url=_static_asset_url("app-kit.js")))
+            kit_url=_static_asset_url("app-kit.js"))
+        html = _stamp_static_urls(app_initial_reads.application_page(html, name, USER_APPS_DIR))
         if conversation_document and agent_id and re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", agent_id):
             from ccc_server.app_embed import application_document
             url = "/?ccc_popout=conversation&embed=app&conv=" + urllib.parse.quote(agent_id, safe="")

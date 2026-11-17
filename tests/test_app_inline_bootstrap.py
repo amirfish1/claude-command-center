@@ -6,7 +6,7 @@ from ccc_server.app_bootstrap import inline, mark
 from ccc_server.index_page_cache import IndexPageCache
 
 
-@pytest.mark.parametrize('name', ['app-shell-boot.js','app-embed-boot.js'])
+@pytest.mark.parametrize('name', ['app-shell-boot.js','app-embed-boot.js','app-read-boot.js'])
 def test_inline_keeps_canonical_source_and_static_dependency_stamp(tmp_path, monkeypatch, name):
     source = tmp_path / name
     source.write_text('window.bridge = 1;')

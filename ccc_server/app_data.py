@@ -41,13 +41,20 @@ def _path(app_id, key, apps_dir):
     return folder / "data" / (key + ".json"), None
 
 
-def read(app_id, key, apps_dir=None):
+def read(app_id, key, apps_dir=None, *, max_bytes=None):
     path, err = _path(app_id, key, apps_dir)
     if err:
         return err
     try:
-        with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
+        if max_bytes is None:
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh)
+        else:
+            with open(path, "rb") as fh:
+                text = fh.read(max_bytes + 1)
+            if len(text) > max_bytes:
+                return {"ok": False, "error": "could not read"}, 500
+            doc = json.loads(text.decode("utf-8"))
         return {"ok": True, "value": doc.get("value"), "updated": doc.get("updated")}, 200
     except FileNotFoundError:
         return {"ok": True, "value": None, "updated": None}, 200

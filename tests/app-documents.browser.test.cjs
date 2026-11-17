@@ -16,9 +16,18 @@ from ccc_server import app_routines
 with tempfile.TemporaryDirectory() as tmp:
     server.USER_APPS_DIR=Path(tmp)
     app=Path(tmp)/'document-test';app.mkdir()
-    (app/'app.json').write_text('{}')
+    (app/'app.json').write_text(json.dumps({'startup_reads':{'files':['items.json'],'data':['choice']}}))
+    (app/'items.json').write_text('{"items":["Current startup item"]}')
+    (app/'data').mkdir()
+    (app/'data'/'choice.json').write_text('{"value":"Current startup choice","updated":1}')
     (app/app_routines.STATE_NAME).write_text(json.dumps({'agent':{'session_id':'session-test'}}))
-    (app/'index.html').write_text('<!doctype html><html><head></head><body><main data-ccc-content><h1>Canonical app</h1><textarea id="appDraft"></textarea></main><script src="/static/app-kit.js" data-app="document-test" defer></script></body></html>')
+    (app/'index.html').write_text('''<!doctype html><html><head></head><body><main data-ccc-content><h1>Canonical app</h1><textarea id="appDraft"></textarea><p id="appReads"></p></main><script>
+    Promise.all([window.CCCAppReads.json('/app-static/document-test/items.json'),window.CCCAppReads.json('/api/apps/data?app=document-test&key=choice')]).then(values=>{
+      document.getElementById('appReads').textContent=values[0].items[0]+' '+values[1].value;
+      window.cccAppContentReady={ms:performance.now()};
+      window.dispatchEvent(new CustomEvent('ccc:app-ready',{detail:window.cccAppContentReady}));
+    });
+    </script><script src="/static/app-kit.js" data-app="document-test" data-ready="event" defer></script></body></html>''')
     current={'events':[{'type':'user','text':'A real fixture request','line':1},{'type':'assistant','text':'A rendered fixture response','line':2}],'last_line':2}
     server._conversation_open_response=lambda *_args,**_kwargs: {'body':json.dumps(current).encode(),'encoding':None,'cache':'miss'}
     selected={'id':'document-test','nav':'/view/document-test','label':'Test app'}
@@ -40,6 +49,10 @@ test('first response boots both canonical documents with URLs, controls and relo
       response.setHeader('Content-Type','text/html');response.end(url.searchParams.has('ccc_app')?(failRead?pages.failed_shell:pages.shell):pages.conversation);
     } else if(url.pathname==='/view/document-test') {
       response.setHeader('Content-Type','text/html');response.end(pages.app);
+    } else if(url.pathname==='/app-static/document-test/items.json') {
+      response.end(JSON.stringify({items:['Updated network item']}));
+    } else if(url.pathname==='/api/apps/data') {
+      response.end(JSON.stringify({ok:true,value:'Updated network choice',updated:2}));
     } else if(bundles[url.pathname.slice('/static/'.length)]) {
       response.setHeader('Content-Type',url.pathname.endsWith('.css')?'text/css':'application/javascript');
       response.end(bundles[url.pathname.slice('/static/'.length)]);
@@ -70,9 +83,19 @@ test('first response boots both canonical documents with URLs, controls and relo
     await page.waitForFunction(()=>document.getElementById('cccMobileAppFrame')?.contentWindow?.cccAppReady,{timeout:20000});
     const app=page.frames().find(frame=>frame.url().includes('/view/document-test'));
     const agent=page.frames().find(frame=>frame.url().includes('embed=app'));
-    assert.ok(!requests.some(url=>/\/static\/app-(?:shell|embed)-boot\.js/.test(url)),
+    assert.ok(!requests.some(url=>/\/static\/app-(?:shell|embed|read)-boot\.js/.test(url)),
       'both canonical startup bridges arrive with their owning document');
     assert.ok(app&&agent,'both canonical frame URLs remain observable');
+    assert.equal(await app.$eval('#appReads',node=>node.textContent),'Current startup item Current startup choice');
+    assert.equal(requests.filter(url=>url.startsWith('/app-static/document-test/')||url.startsWith('/api/apps/data?')).length,0,
+      'initial content and canonical data values arrive with HTML');
+    const refreshed=await app.evaluate(async()=>[await window.CCCAppReads.json('/app-static/document-test/items.json'),
+      await window.CCCAppReads.json('/api/apps/data?app=document-test&key=choice')]);
+    assert.equal(refreshed[0].items[0],'Updated network item');
+    assert.equal(refreshed[1].value,'Updated network choice');
+    assert.equal(requests.filter(url=>url.startsWith('/app-static/document-test/')||url.startsWith('/api/apps/data?')).length,2,
+      'later refreshes return current canonical network values');
+
     assert.equal(page.url(),base+'/?ccc_app=document-test');
     assert.equal(requests.filter(url=>url.startsWith('/view/')||url.includes('embed=app')).length,0,'no sequential child HTML requests');
     assert.equal(requests.filter(url=>url.startsWith('/api/conversations/session-test?tail=')).length,0,'initial canonical tail arrives with the page');
