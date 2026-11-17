@@ -79,11 +79,18 @@
       await new Promise((resolve, reject) => {
         worker = new Worker('/static/browser-voice-worker.js', { type: 'module' });
         const initWorker = worker;
-        const timer = setTimeout(() => reject(new Error('Voice model initialization timed out')), 60000);
+        // Each phase gets its own budget: a 65 MB first download over a remote link can take
+        // minutes, while loading the model from bytes already in memory should take seconds.
+        let timer;
+        const arm = ms => { clearTimeout(timer); timer = setTimeout(() => reject(new Error('Voice model initialization timed out')), ms); };
+        arm(60000);
         worker.onerror = event => { clearTimeout(timer); const error = new Error(event.message || 'Voice worker failed'); reject(error); if (ready) fail(error); };
         worker.onmessage = ({ data }) => {
           if (worker !== initWorker || epoch !== generation) return;
           if (data.type === 'ready') { clearTimeout(timer); resolve(); }
+          else if (data.type === 'downloading' && !ready) {
+            arm(600000); message = 'Downloading browser voice to this device (~65 MB, once). Your current voice is available.'; paint();
+          } else if (data.type === 'progress' && !ready) arm(60000);
           else if (data.type === 'error') {
             clearTimeout(timer);
             const error = new Error(data.message);

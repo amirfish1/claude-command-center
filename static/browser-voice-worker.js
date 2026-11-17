@@ -14,7 +14,7 @@ async function asset(file) {
   try { cache = await caches.open(cacheName); } catch (_) {}
   let response = await cache?.match(url);
   let cached = !!response;
-  if (!response) response = await fetch(url);
+  if (!response) { self.postMessage({ type: 'downloading', file }); response = await fetch(url); }
   if (!response.ok) throw new Error('Voice asset unavailable: ' + file);
   let bytes = await response.arrayBuffer();
   const valid = async value => value.byteLength === spec.size
