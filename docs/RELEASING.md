@@ -268,3 +268,15 @@ key — they'll have to download a fresh DMG with a new `SUPublicEDKey`.
   gh release delete vX.Y.Z --yes   # if the release was already created
   ```
 - **Forgot a CHANGELOG entry:** amend the release commit before pushing the tag. Once the tag is pushed, don't amend — ship a follow-up patch.
+
+### Read-only scheduled publication check
+
+On a Linux user-service host, `python3 scripts/release_daily_watch.py --since
+2026-01-01T00:00:00Z --required-commit <full-fix-SHA>` emits a permanent-watch
+JSON receipt. It only reads systemd properties, the daily release log, and
+GitHub release/tag ancestry. It never starts the publisher or clears failures.
+A pre-fix run, waiver, running service, missing evidence, or unmatched timer
+stays pending. A completed post-fix unit failure reports fail. Pass requires
+a successful natural timer run and a matching non-draft published release
+containing the fix. Use `--log-dir`, `--unit`, and `--repo` for other installs.
+The host must log release timestamps in UTC. No server restart is required.
