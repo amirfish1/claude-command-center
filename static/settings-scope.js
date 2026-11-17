@@ -66,13 +66,22 @@
   const labels = {browser:'This browser',host:'This CCC host',repository:'Selected repository · this host',queue:'Selected queue',session:'Selected session', 'one-off':'Action / inspection', 'externally-managed':'Managed by the named service or application',mixed:'Scope shown by the selected entry'};
   const unknown = Object.freeze({id:'unverified',title:'Unclassified control',scope:'unknown',owner:'Not verified by this scope inventory',impact:'Do not assume this is browser-only or host-wide. Read the native control’s help before changing it; this build has no verified scope annotation for this control.',restart:'Restart impact not verified.',source:''});
   function describe(node) { return families.find(spec => node?.matches(spec.selector)) || unknown; }
-  function candidates() { return [...document.querySelectorAll(roots)].flatMap(root => [...(root.matches(controlSelector)?[root]:[]),...root.querySelectorAll(controlSelector)]).filter((n,i,a)=>a.indexOf(n)===i&&!n.closest('[data-settings-scope-help]')); }
+  function candidates() {
+    const seen=new Set(),out=[];
+    for(const root of document.querySelectorAll(roots)) {
+      if(root.matches(controlSelector)&&!seen.has(root)&&!root.closest('[data-settings-scope-help]')){seen.add(root);out.push(root);}
+      for(const n of root.querySelectorAll(controlSelector))if(!seen.has(n)&&!n.closest('[data-settings-scope-help]')){seen.add(n);out.push(n);}
+    }
+    return out;
+  }
   let sequence=0, scheduled=false;
   const groups = new WeakMap();
   function mount() {
     scheduled=false;
+    const controls=candidates();
+    if(!controls.length)return;
     const activeGroups=new Map();
-    for(const control of candidates()) {
+    for(const control of controls) {
       const spec=describe(control),reader=['reader-size','reader-view','reader-background','voice-session'].includes(spec.id)||!!control.closest('[data-role="conv-rowstyle-palette"]');
       const group=(reader?document.getElementById('settingsModalFontSlot'):null)||control.closest(groupSelector);
       if(!group&&spec.scope==='one-off') {
@@ -141,7 +150,7 @@
     if(covered()){deferred=true;return;}
     if(deferred){deferred=false;schedule();return;}
     const targets=new Set();
-    const skip=node=>node.nodeType!==1||!!node.closest(transcript)||!!node.closest('[data-settings-scope-help]');
+    const skip=node=>node.nodeType!==1||!!node.closest(transcript)||!!node.closest('#convList')||!!node.closest('[data-settings-scope-help]');
     const inRoot=node=>!skip(node)&&!!node.closest(roots);
     const added=node=>!skip(node)&&!!(node.closest(roots)||node.querySelector(roots));
     for(const record of records) {

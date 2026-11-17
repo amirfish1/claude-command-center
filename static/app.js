@@ -2377,6 +2377,7 @@
       set _sidebarRenderPendingWhilePaused(value) { _sidebarRenderPendingWhilePaused = value; },
       get _dashboardCoveredByApp() { return _dashboardCoveredByApp; },
       get _sidebarLifecycleRenderPending() { return _sidebarLifecycleRenderPending; },
+      get _lastTextKeyTs() { return _lastTextKeyTs; },
       get _pausePeriodicSidebarRender() { return _pausePeriodicSidebarRender; },
       get _scheduleSidebarRender() { return _scheduleSidebarRender; },
       get _statusRailActiveRow() { return _statusRailActiveRow; },
@@ -5932,13 +5933,65 @@
   // user's cursor sat in its composer, CCC-110). Pause only while the user
   // is ACTIVELY typing: within 1.5s of a real keystroke in a text control.
   let _lastTextKeyTs = conversationInitializers._lastTextKeyTs();
-  document.addEventListener('keydown', (ev) => {
-    if (isImeKey(ev)) return;
-    const t = ev.target;
+  let _textTypingFlushTimer = 0;
+  let _queuePanelRenderDeferredForTyping = false;
+  function _isActivelyTypingInComposer() {
+    const ae = typeof document !== 'undefined' && document && document.activeElement;
+    if (!ae || !ae.tagName) return false;
+    if (typeof ae.closest === 'function' && ae.closest('#queuePanel')) return false;
+    const isComposerText = ae.tagName === 'TEXTAREA'
+      || (ae.tagName === 'INPUT' && ae.id !== 'convSearch' && ae.id !== 'queueSearchInput'
+        && /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text'));
+    if (!isComposerText) return false;
+    return typeof _lastTextKeyTs === 'number' && (Date.now() - _lastTextKeyTs) < 1500;
+  }
+  function _flushAfterTextTypingPause() {
+    try { _flushDeferredSidebarRenderIfAny(); } catch (_) {}
+    try {
+      if (_queuePanelRenderDeferredForTyping && !_isActivelyTypingInComposer()) {
+        _queuePanelRenderDeferredForTyping = false;
+        if (typeof _queuePanelIsVisible === 'function' && _queuePanelIsVisible() && typeof _renderQueuePanel === 'function') {
+          _renderQueuePanel({ allowStale: true });
+        }
+      }
+    } catch (_) {}
+    try {
+      const deferred = _dashboardEventState && _dashboardEventState.deferredTypingResources;
+      if (deferred && deferred.size && !_isActivelyTypingInComposer()) {
+        const items = Array.from(deferred);
+        deferred.clear();
+        for (const res of items) scheduleDashboardInvalidation(res);
+      }
+    } catch (_) {}
+  }
+  function _noteActiveTextTyping(t) {
     if (!t || !t.tagName) return;
     const isText = t.tagName === 'TEXTAREA'
       || (t.tagName === 'INPUT' && /^(text|search|email|url|tel|password)$/.test((t.type || 'text').toLowerCase()));
-    if (isText) _lastTextKeyTs = Date.now();
+    if (!isText) return;
+    _lastTextKeyTs = Date.now();
+    if (_textTypingFlushTimer) clearTimeout(_textTypingFlushTimer);
+    _textTypingFlushTimer = setTimeout(() => {
+      _textTypingFlushTimer = 0;
+      _flushAfterTextTypingPause();
+    }, 1520);
+  }
+  document.addEventListener('keydown', (ev) => {
+    if (isImeKey(ev)) return;
+    if (ev.key === 'Escape' || (ev.key === 'Enter' && !ev.shiftKey)) return;
+    _noteActiveTextTyping(ev.target);
+  }, true);
+  document.addEventListener('input', (ev) => {
+    if (!ev.isTrusted) return;
+    _noteActiveTextTyping(ev.target);
+  }, true);
+  document.addEventListener('focusout', (ev) => {
+    const t = ev.target;
+    if (!t || !t.tagName) return;
+    if (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT') {
+      if (_textTypingFlushTimer) { clearTimeout(_textTypingFlushTimer); _textTypingFlushTimer = 0; }
+      setTimeout(() => { _flushAfterTextTypingPause(); }, 0);
+    }
   }, true);
   // Shared conversation-core.js: shouldPausePeriodicUiWork.
 
@@ -31444,7 +31497,6 @@
           claimed_at: new Date(_allTabClusterMtime(cluster) * 1000 || Date.now()).toISOString()});
       }
       const recentRefs = new Set(_workersActivityRows().map(r => _uxqItemRef(r.item)));
-      _workersTicketRecentSignature = [...recentRefs].join('|');
       const partition = _workersPartitionTicketClusters(_allTabClusters, recentRefs, _wkTicketRefOf);
       for (const [ref, clusters] of partition.matched) {
         const cards = clusters.flatMap(c => c.rows.map(r => r.card));
@@ -31458,6 +31510,10 @@
             !_wkIdeaLaneCard(c.rows[0].card))).join(''),
         });
       }
+      // Compute the activity signature AFTER populating _workersTicketSessions
+      // so working-session rank promotion matches _uxqRenderRecentWork() and
+      // does not re-schedule a lifecycle sidebar render on every animation frame.
+      _workersTicketRecentSignature = _workersActivitySignature(_workersActivityRows());
       _allTabClusters = partition.remaining;
     }
     const _arcHasFolderChips = _allTabMainConvs.concat(_allTabTrashConvs).some(c => c.folder_label_chip);
@@ -36911,8 +36967,12 @@
       const changed = sig !== _wtWarmSig;
       _wtWarmSig = sig;
       if (changed && typeof renderArchiveList === 'function') {
-        const $s = document.getElementById('convSearch');
-        renderArchiveList(($s && $s.value) || '', { force: true });
+        if (_isActivelyTypingInComposer() && typeof _scheduleSidebarRender === 'function') {
+          _scheduleSidebarRender({ lifecycle: true });
+        } else {
+          const $s = document.getElementById('convSearch');
+          renderArchiveList(($s && $s.value) || '', { force: true });
+        }
       }
     }).catch(() => {}).then(() => { _wtWarmInFlight = false; });
   }
@@ -39029,6 +39089,9 @@
   function _uxqRecentWorkHosts() {
     return document.querySelectorAll('[data-role="workers-recent-work"], #queueRecentWork');
   }
+  function _workersActivitySignature(rows) {
+    return [...new Set(rows.map(r => _uxqItemRef(r.item)))].join('|');
+  }
   let _workersPendingRefreshTimer = null;
   function _uxqRenderRecentWork() {
     clearTimeout(_workersPendingRefreshTimer);
@@ -39048,8 +39111,14 @@
     const pending = _workersPendingWorkers(rows);
     const deadlines = pending.map(w => _workersPendingState(w).refreshIn).filter(ms => ms > 0);
     if (deadlines.length) _workersPendingRefreshTimer = setTimeout(_uxqRenderRecentWork, Math.min(...deadlines) + 1);
-    const signature = rows.map(r => _uxqItemRef(r.item)).join('|');
-    if (_workersTicketRecentSignature !== signature) _scheduleSidebarRender({ lifecycle: true });
+    const signature = _workersActivitySignature(rows);
+    const workersLaneActive = (typeof _allTabView === 'undefined'
+        || (_allTabView === 'workers' && (typeof _ipSearchActive === 'undefined' || !_ipSearchActive)))
+      && Array.from(hosts).some(h => h.getAttribute && h.getAttribute('data-role') === 'workers-recent-work');
+    if (workersLaneActive && _workersTicketRecentSignature !== signature) {
+      _workersTicketRecentSignature = signature;
+      _scheduleSidebarRender({ lifecycle: true });
+    }
     const html = rows.map((row, i) => {
       const item = row.item;
       const ref = _uxqItemRef(item);
@@ -40144,6 +40213,10 @@
     }
     _uxqRenderWrapToggle();
     return _fetchUxqItems(allowStale).then(async items => {
+      if (typeof _isActivelyTypingInComposer === 'function' && _isActivelyTypingInComposer()) {
+        _queuePanelRenderDeferredForTyping = true;
+        return;
+      }
       const renderVersion = _uxqItemsVersion;
       // Families first: everything below (scope resolution, the picker, the
       // in-scope filter) asks _UXQ_FAMILY_ROOTS whether a sub-queue rolls up.
@@ -40163,6 +40236,10 @@
       // cache, so this is normally a no-op await, not a fetch.
       await _fetchUxqHealth(allowStale);
       if (renderVersion !== _uxqItemsVersion) return _renderQueuePanel({ allowStale: true });
+      if (typeof _isActivelyTypingInComposer === 'function' && _isActivelyTypingInComposer()) {
+        _queuePanelRenderDeferredForTyping = true;
+        return;
+      }
       const noSubs = proj && _uxqGetNoSubs(proj);
       const inScope = proj
         ? items.filter(it => noSubs
@@ -48903,6 +48980,26 @@
     const pending = Array.from(_dashboardEventState.invalidations.values());
     _dashboardEventState.invalidations.clear();
     const resources = new Set(pending.map(item => item.resource));
+    const ae = typeof document !== 'undefined' && document && document.activeElement;
+    const typingInComposer = !!ae
+      && !(typeof ae.closest === 'function' && ae.closest('#queuePanel'))
+      && (ae.tagName === 'TEXTAREA'
+        || (ae.tagName === 'INPUT' && ae.id !== 'convSearch' && ae.id !== 'queueSearchInput'
+          && /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text')))
+      && typeof _lastTextKeyTs === 'number'
+      && Date.now() - _lastTextKeyTs < 1500;
+    if (typingInComposer) {
+      if (resources.has('queue') || resources.has('workers')) {
+        if (resources.has('queue')) _uxqItemsCache.ts = 0;
+        _uxqHealthCache.ts = 0;
+        _wtWorkersCache.ts = 0;
+        resources.add('archive');
+      }
+      const deferred = _dashboardEventState.deferredTypingResources
+        || (_dashboardEventState.deferredTypingResources = new Set());
+      for (const r of resources) deferred.add(r);
+      return;
+    }
     if (resources.has('queue') || resources.has('workers')) {
       // 'workers' = only workers.json changed (worker heartbeats): refresh
       // worker health, never the ticket list (CCC-142).
@@ -50779,13 +50876,28 @@
         if (!workersOnly) _uxqItemsCache.ts = 0;
         _uxqHealthCache.ts = 0;
         _wtWorkersCache.ts = 0;
-        if (invalidateTimer) return;
-        invalidateTimer = setTimeout(() => {
-          invalidateTimer = null;
-          if (_queuePanelIsVisible() && typeof _renderQueuePanel === 'function') {
-            _renderQueuePanel();
-          }
-        }, 750);
+        const scheduleRepaint = (delayMs) => {
+          if (invalidateTimer) return;
+          invalidateTimer = setTimeout(() => {
+            invalidateTimer = null;
+            const ae = typeof document !== 'undefined' && document && document.activeElement;
+            const typingInComposer = !!ae
+              && !(typeof ae.closest === 'function' && ae.closest('#queuePanel'))
+              && (ae.tagName === 'TEXTAREA'
+                || (ae.tagName === 'INPUT' && ae.id !== 'convSearch' && ae.id !== 'queueSearchInput'
+                  && /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text')))
+              && typeof _lastTextKeyTs === 'number'
+              && Date.now() - _lastTextKeyTs < 1500;
+            if (typingInComposer) {
+              scheduleRepaint(Math.max(120, 1520 - (Date.now() - _lastTextKeyTs)));
+              return;
+            }
+            if (_queuePanelIsVisible() && typeof _renderQueuePanel === 'function') {
+              _renderQueuePanel();
+            }
+          }, delayMs);
+        };
+        scheduleRepaint(750);
       };
       const schedule = () => {
         if (_dashboardEventStreamHealthy) return;

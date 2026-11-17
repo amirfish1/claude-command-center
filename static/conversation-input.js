@@ -775,7 +775,10 @@
     if (!el || el.tagName !== 'TEXTAREA') return;
     // iMessage-style composer on phones: CSS shows the mic in Send's slot
     // until the first character is typed (.has-text on the bar).
-    if (barEl) barEl.classList.toggle('has-text', !!el.value);
+    if (barEl) {
+      const hasText = !!el.value;
+      if (barEl.classList.contains('has-text') !== hasText) barEl.classList.toggle('has-text', hasText);
+    }
     // Deferred to the next animation frame. The 'auto' write + scrollHeight
     // read is a forced synchronous reflow; doing it inline on every keystroke
     // re-lays-out the whole (large) page mid-keystroke — cheap in Blink, but
@@ -786,6 +789,21 @@
     if (el._autosizeRaf) return;
     el._autosizeRaf = requestAnimationFrame(() => {
       el._autosizeRaf = 0;
+      const val = el.value || '';
+      const mode = (barEl && barEl.dataset.composerMode) || 'regular';
+      const prevHeight = el.style.height;
+      // Fast path for single-line typing: a 1-row textarea cannot shrink below
+      // its baseline height, and if typing wraps onto row 2 `scrollHeight`
+      // exceeds the 1-row box without writing `height: 'auto'` first. Skipping
+      // the collapse/restore write avoids re-laying-out the flex pane and
+      // transcript on every character.
+      if (val && !val.includes('\n') && el._autosizeBaseHeight > 0
+          && prevHeight === el._autosizeBaseHeight + 'px'
+          && el.clientWidth > 0 && el.clientWidth === el._autosizeWidth
+          && mode === el._autosizeMode
+          && el.scrollHeight <= el._autosizeBaseHeight + 1) {
+        return;
+      }
       // The 'auto' write briefly collapses a multi-line draft, so the
       // conversation above grows and the browser clamps its scrollTop down
       // by the lost rows; once the height is restored the transcript sits
@@ -795,16 +813,20 @@
       const view = pane && pane.querySelector('.conversations-view');
       const viewTop = view ? view.scrollTop : 0;
       el.style.height = 'auto';
-      const mode = (barEl && barEl.dataset.composerMode) || 'regular';
       const max = mode === 'expand' ? Math.round(window.innerHeight * 0.7)
         : 240;  // ~10 rows at our current font/line-height
       el.style.height = Math.min(el.scrollHeight, max) + 'px';
+      if (!val && el.clientWidth > 0) {
+        el._autosizeBaseHeight = parseFloat(el.style.height) || 0;
+        el._autosizeWidth = el.clientWidth;
+        el._autosizeMode = mode;
+      }
       if (view && view.scrollTop !== viewTop) view.scrollTop = viewTop;
-      if (view) (0, helpers.positionConversationEndAffordance)(view);
+      if (view && el.style.height !== prevHeight) (0, helpers.positionConversationEndAffordance)(view);
       // A long paste can leave the caret below the capped box (iOS does not
       // re-scroll after the height changes). Typing/pasting at the end is the
       // common case: pin the scroll to the bottom so the caret stays visible.
-      if (document.activeElement === el && el.selectionEnd === el.value.length) {
+      if (document.activeElement === el && el.selectionEnd === val.length) {
         el.scrollTop = el.scrollHeight;
       }
     });

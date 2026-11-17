@@ -186,3 +186,50 @@ test('the toolbar check is batched per frame and the queue digest skips a covere
   assert.ok(fn('shouldPauseSidebarRender').includes('if (_dashboardCoveredByApp()) return true;'));
 });
 
+test('active composer typing holds even lifecycle sidebar rebuilds until typing pauses or blurs, without blocking #convSearch', () => {
+  const h = harness();
+  vm.runInContext('var _lastTextKeyTs = 0;', h.context);
+  const composer = {tagName: 'TEXTAREA', id: 'convInput'};
+  h.context.document.activeElement = composer;
+  h.time(60000);
+  vm.runInContext('_lastTextKeyTs = 59800;', h.context);
+
+  // Authoritative lifecycle events during active typing wait instead of running a 500ms+ rebuild mid-keystroke.
+  h.context._applyDashboardSessionPatch({entity: {id: 'session-one'}, patch: {state: 'waiting', question_waiting: true}});
+  h.context._scheduleSidebarRender({lifecycle: true});
+  h.flush();
+  assert.equal(h.paints.length, 0, 'lifecycle sidebar rebuild is held while typing in composer');
+  h.context._flushDeferredSidebarRenderIfAny();
+  h.flush();
+  assert.equal(h.paints.length, 0, 'still within 1.5s typing window');
+
+  // Once the 1.5s typing recency window expires, the held render flushes with its lifecycle force upgrade intact.
+  h.time(61500);
+  h.context._flushDeferredSidebarRenderIfAny();
+  h.flush();
+  assert.deepEqual(h.paints.map(p => p.force), [true]);
+
+  // A keystroke landing after rAF was queued but before the frame runs also defers the frame.
+  vm.runInContext('_lastTextKeyTs = 0;', h.context);
+  h.context._scheduleSidebarRender({lifecycle: true});
+  assert.equal(h.frames.length, 1);
+  vm.runInContext('_lastTextKeyTs = 61400;', h.context);
+  h.flush();
+  assert.equal(h.paints.length, 1, 'mid-frame keystroke prevents sidebar rebuild on the typing frame');
+
+  // Blurring the composer lets the held lifecycle render flush immediately.
+  h.context.document.activeElement = null;
+  h.context._flushDeferredSidebarRenderIfAny();
+  h.flush();
+  assert.equal(h.paints.length, 2);
+  assert.equal(h.paints[1].force, true);
+
+  // Typing in #convSearch must never be blocked so search filtering stays live.
+  h.context.document.activeElement = {tagName: 'INPUT', type: 'search', id: 'convSearch'};
+  vm.runInContext('_lastTextKeyTs = 61450;', h.context);
+  h.context._scheduleSidebarRender({lifecycle: true});
+  h.flush();
+  assert.equal(h.paints.length, 3);
+});
+
+

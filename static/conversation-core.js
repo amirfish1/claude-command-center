@@ -11360,14 +11360,27 @@
       sharedState._sidebarRenderPendingWhilePaused = true;
       return;
     }
-    if (!sharedState._sidebarLifecycleRenderPending && _pausePeriodicSidebarRender()) {
+    // Hold background and lifecycle sidebar rebuilds while the user is actively
+    // typing in a composer/text field (except #convSearch), preserving any
+    // pending lifecycle upgrade until typing pauses or blurs.
+    const ae = typeof document !== 'undefined' && document && document.activeElement;
+    const typingInComposer = !!ae && (ae.tagName === 'TEXTAREA'
+      || (ae.tagName === 'INPUT' && ae.id !== 'convSearch' && /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text')))
+      && typeof sharedState._lastTextKeyTs === 'number'
+      && Date.now() - sharedState._lastTextKeyTs < 1500;
+    if (typingInComposer || (!sharedState._sidebarLifecycleRenderPending && _pausePeriodicSidebarRender())) {
       sharedState._sidebarRenderPendingWhilePaused = true;
       return;
     }
     if (sharedState._sidebarRenderRaf) return;
     sharedState._sidebarRenderRaf = requestAnimationFrame(() => {
       sharedState._sidebarRenderRaf = 0;
-      if (_dashboardCoveredByApp()) {
+      const activeEl = typeof document !== 'undefined' && document && document.activeElement;
+      const stillTyping = !!activeEl && (activeEl.tagName === 'TEXTAREA'
+        || (activeEl.tagName === 'INPUT' && activeEl.id !== 'convSearch' && /^(text|search|email|url|tel|password)$/i.test(activeEl.type || 'text')))
+        && typeof sharedState._lastTextKeyTs === 'number'
+        && Date.now() - sharedState._lastTextKeyTs < 1500;
+      if (_dashboardCoveredByApp() || stillTyping) {
         sharedState._sidebarRenderPendingWhilePaused = true;
         return;
       }
@@ -21332,14 +21345,29 @@
 
   function _scheduleDashboardArchiveRefresh() {
     if (sharedState._dashboardArchiveRefreshTimer) return;
-    sharedState._dashboardArchiveRefreshTimer = setTimeout(() => {
-      sharedState._dashboardArchiveRefreshTimer = null;
-      if (sharedState._archiveRefreshPromise) {
-        sharedState._archiveRefreshAfterInflight = true;
-        return;
-      }
-      refreshArchiveData({ staleOk: true }).then(_queueDashboardArchiveRender).catch(() => {});
-    }, sharedState.DASHBOARD_ARCHIVE_INVALIDATION_DEBOUNCE_MS);
+    const runOrDefer = (delayMs) => {
+      sharedState._dashboardArchiveRefreshTimer = setTimeout(() => {
+        sharedState._dashboardArchiveRefreshTimer = null;
+        const ae = typeof document !== 'undefined' && document && document.activeElement;
+        const typingInComposer = !!ae
+          && !(typeof ae.closest === 'function' && ae.closest('#queuePanel'))
+          && (ae.tagName === 'TEXTAREA'
+            || (ae.tagName === 'INPUT' && ae.id !== 'convSearch' && ae.id !== 'queueSearchInput'
+              && /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text')))
+          && typeof sharedState._lastTextKeyTs === 'number'
+          && Date.now() - sharedState._lastTextKeyTs < 1500;
+        if (typingInComposer) {
+          runOrDefer(Math.max(120, 1520 - (Date.now() - sharedState._lastTextKeyTs)));
+          return;
+        }
+        if (sharedState._archiveRefreshPromise) {
+          sharedState._archiveRefreshAfterInflight = true;
+          return;
+        }
+        refreshArchiveData({ staleOk: true }).then(_queueDashboardArchiveRender).catch(() => {});
+      }, delayMs);
+    };
+    runOrDefer(sharedState.DASHBOARD_ARCHIVE_INVALIDATION_DEBOUNCE_MS);
   }
 
   function _uxFixesIdentityKey(value) {
@@ -21892,15 +21920,19 @@
       const saved = new Set();
       for (const row of ordered) {
         if (entries.length >= sharedState.ARCHIVE_SIDEBAR_CACHE_MAX_ROWS) break;
+        const firstId = idOf(row);
+        if (!firstId || saved.has(firstId)) continue;
         // Admit a child with its loaded ancestors as one bounded batch. A
         // busy fleet must not evict the parent and leave an unexplained lane.
-        const batch = [], seen = new Set(saved);
+        const batch = [], batchSeen = new Set();
         let candidate = row;
-        while (candidate && !seen.has(idOf(candidate))) {
-          seen.add(idOf(candidate));
+        while (candidate) {
+          const cid = idOf(candidate);
+          if (!cid || saved.has(cid) || batchSeen.has(cid)) break;
+          batchSeen.add(cid);
           const projected = _archiveSidebarCacheRow(candidate);
           if (!projected) break;
-          batch.push({ id: idOf(candidate), text: JSON.stringify(projected) });
+          batch.push({ id: cid, text: JSON.stringify(projected) });
           candidate = byId.get(candidate.parent_session_id || candidate.hermes_parent_session_id
             || candidate.continued_from_session_id);
         }
@@ -21921,7 +21953,24 @@
     sharedState._archiveSidebarCachePending = { rows, windowName };
     if (sharedState._archiveSidebarCacheScheduled) return;
     sharedState._archiveSidebarCacheScheduled = true;
+    const arm = () => {
+      if (window.requestIdleCallback) window.requestIdleCallback(save, { timeout: 2000 });
+      else setTimeout(save, 0);
+    };
     const save = () => {
+      const ae = typeof document !== 'undefined' && document && document.activeElement;
+      const typingInComposer = !!ae && (ae.tagName === 'TEXTAREA'
+        || (ae.tagName === 'INPUT' && ae.id !== 'convSearch' && /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text')))
+        && typeof sharedState._lastTextKeyTs === 'number'
+        && Date.now() - sharedState._lastTextKeyTs < 1500;
+      if (typingInComposer) {
+        if (typeof setTimeout === 'function') {
+          setTimeout(arm, Math.max(120, 1520 - (Date.now() - sharedState._lastTextKeyTs)));
+        } else {
+          arm();
+        }
+        return;
+      }
       sharedState._archiveSidebarCacheScheduled = false;
       const pending = sharedState._archiveSidebarCachePending;
       sharedState._archiveSidebarCachePending = null;
@@ -21929,8 +21978,7 @@
         _writeArchiveSidebarCache(pending.rows, pending.windowName);
       }
     };
-    if (window.requestIdleCallback) window.requestIdleCallback(save, { timeout: 2000 });
-    else setTimeout(save, 0);
+    arm();
   }
 
   function _mergeArchiveListDelta(prev, d) {

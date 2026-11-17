@@ -208,6 +208,12 @@ document.addEventListener('click', (ev) => {
   function _flushDeferredSidebarRenderIfAny() {
     if (!sharedState._sidebarRenderPendingWhilePaused) return;
     if ((0, sharedState._dashboardCoveredByApp)()) return;
+    const ae = typeof document !== 'undefined' && document && document.activeElement;
+    const typingInComposer = !!ae && (ae.tagName === 'TEXTAREA'
+      || (ae.tagName === 'INPUT' && ae.id !== 'convSearch' && /^(text|search|email|url|tel|password)$/i.test(ae.type || 'text')))
+      && typeof sharedState._lastTextKeyTs === 'number'
+      && Date.now() - sharedState._lastTextKeyTs < 1500;
+    if (typingInComposer) return;
     if (!sharedState._sidebarLifecycleRenderPending && (0, sharedState._pausePeriodicSidebarRender)()) return;
     sharedState._sidebarRenderPendingWhilePaused = false;
     (0, sharedState._scheduleSidebarRender)();
@@ -356,12 +362,23 @@ document.addEventListener('mouseover', (ev) => {
   function syncBodyHasFlags(records) {
     const cl = document.body && document.body.classList;
     if (!cl) return;
-    // Class/hidden flips elsewhere (scroll affordances, row chips) cannot
-    // change a flag; skip the scan unless a watched element flipped or nodes
-    // were added/removed.
-    if (Array.isArray(records) && records.every((r) => r.type === 'attributes'
-        && r.target.id !== 'settingsModal'
-        && !sharedState._BODY_HAS_ATTR_TARGET.test(typeof r.target.className === 'string' ? r.target.className : ''))) return;
+    const nodeSel = '.f2c-config, .img-lightbox, #settingsModal, #cccStartView, .upd-overlay, .mobile-nav-menu, .conv-input-context';
+    const relevantNode = (n) => n && n.nodeType === 1
+      && ((typeof n.matches === 'function' && n.matches(nodeSel))
+          || (typeof n.querySelector === 'function' && !!n.querySelector(nodeSel)));
+    // Class/hidden flips and unrelated text/subtree mutations elsewhere cannot
+    // change a flag; skip scanning live HTMLCollections across a 50k-node page
+    // unless a watched element flipped or was added/removed.
+    if (Array.isArray(records) && records.every((r) => {
+      if (r.type === 'attributes') {
+        return r.target.id !== 'settingsModal'
+          && !sharedState._BODY_HAS_ATTR_TARGET.test(typeof r.target.className === 'string' ? r.target.className : '');
+      }
+      if (r.target && (r.target.id === 'convList' || (r.target.closest && r.target.closest('#convList')))) return true;
+      for (let i = 0; i < r.addedNodes.length; i++) if (relevantNode(r.addedNodes[i])) return false;
+      for (let i = 0; i < r.removedNodes.length; i++) if (relevantNode(r.removedNodes[i])) return false;
+      return true;
+    })) return;
     for (const [flag, test] of sharedState._BODY_HAS_FLAGS) {
       const on = test();
       if (cl.contains(flag) !== on) cl.toggle(flag, on);

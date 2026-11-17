@@ -251,3 +251,73 @@ test('active workers lead resolved activity and a parked claim is not Working', 
   vm.runInContext(`_workersTicketSessions.clear()`, ctx);
   assert.equal(ctx._workersTicketState(items[1]).label, 'Claimed');
 });
+
+test('Workers recent-work signature matches post-attach session state and does not trigger an infinite rAF loop', () => {
+  const renderBlock = app.slice(
+    app.indexOf('    _workersTicketSessions = new Map();'),
+    app.indexOf('    const _arcHasFolderChips =', app.indexOf('    _workersTicketSessions = new Map();')),
+  );
+  assert.ok(
+    renderBlock.indexOf('_workersTicketRecentSignature = _workersActivitySignature(_workersActivityRows());')
+      > renderBlock.indexOf('_workersTicketSessions.set(ref,'),
+    'renderConversationList must compute _workersTicketRecentSignature after populating _workersTicketSessions',
+  );
+
+  const start = app.indexOf('  function _uxqWithMachine(');
+  const end = app.indexOf('  function _uxqBindWorkingStrip(', start);
+  const items = [
+    {ref:'TEST-1', claimed_by:'local-worker', status:'closed', closed_at:'2026-01-01T12:00:00Z'},
+    {ref:'TEST-2', claimed_by:'local-worker', status:'in_progress', claimed_at:'2026-01-01T10:00:00Z'},
+    {ref:'TEST-3', claimed_by:'local-worker', status:'in_progress', needs_input:true, claimed_at:'2026-01-01T11:00:00Z'},
+  ];
+  const renders = [];
+  let hostRole = 'workers-recent-work';
+  const hostEl = {
+    innerHTML: '', dataset: {}, addEventListener: () => {}, querySelector: () => null,
+    getAttribute: name => name === 'data-role' ? hostRole : null,
+  };
+  const ctx = {
+    _allTabView: 'workers', _ipSearchActive: false,
+    _uxqTicketAttention: () => null, _uxqItemsCache: {items}, _uxqItemRef: item => item.ref,
+    _ultraFreshCurrent: c => c, _applyLiveOverlayToRow: c => c,
+    workerStateBucket: c => c.bucket, rowOutcomeView: c => c.outcome,
+    _uxqHealthCache: {worker_session_map: {'local-worker': 'local-session'}, pending_workers: []},
+    _scheduleSidebarRender: opts => renders.push(opts),
+    escapeHtml: s => String(s ?? ''), escapeAttr: s => String(s ?? ''),
+    wipAgeChipHtml: () => '', capitalizeSessionTitleStart: s => s,
+    _uxqRelTime: () => '1m ago',
+    sessionQuickActions: () => [],
+    window: {},
+    document: {querySelectorAll: () => [hostEl]},
+    setTimeout: () => 1, clearTimeout: () => {},
+  };
+  vm.createContext(ctx);
+  vm.runInContext(app.slice(start, end), ctx);
+
+  // Simulate renderConversationList populating _workersTicketSessions (promoting TEST-2 to Working)
+  // and then recording _workersTicketRecentSignature before _uxqRenderRecentWork() runs.
+  vm.runInContext(`
+    _workersTicketSessions.set('TEST-2', {cards:[{id:'s2', bucket:'working', outcome:{kind:'working', text:'Typing test'}}], count:1, lanes:1, roots:[{id:'s2'}], html:''});
+    _workersTicketSessions.set('TEST-3', {cards:[{id:'s3', bucket:'idle', outcome:{kind:'next'}}], count:1, lanes:1, roots:[{id:'s3'}], html:''});
+    _workersTicketRecentSignature = _workersActivitySignature(_workersActivityRows());
+  `, ctx);
+  ctx._uxqRenderRecentWork();
+  assert.equal(renders.length, 0, 'matching post-attach signature must not schedule another sidebar rebuild');
+
+  // Rendering #queueRecentWork on a non-Workers tab must not trigger lifecycle sidebar rebuilds.
+  ctx._allTabView = 'alltickets';
+  hostRole = null;
+  vm.runInContext(`_workersTicketSessions.get('TEST-2').cards[0].outcome = {kind:'update'};`, ctx);
+  ctx._uxqRenderRecentWork();
+  assert.equal(renders.length, 0, 'non-Workers tab must not schedule Workers regrouping');
+
+  // Returning to Workers with a genuine rank change schedules exactly one lifecycle render, not a loop.
+  ctx._allTabView = 'workers';
+  hostRole = 'workers-recent-work';
+  ctx._uxqRenderRecentWork();
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0].lifecycle, true);
+  ctx._uxqRenderRecentWork();
+  assert.equal(renders.length, 1, 'repeat recent-work ticks with unchanged order do not re-schedule');
+});
+
