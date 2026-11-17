@@ -6,6 +6,24 @@
   const id = params.get('ccc_app');
   if (!id || id === 'sessions' || id === 'queues'
       || params.has('ccc_popout') || params.has('popout')) return;
+  // These are the same no-store pages as their normal routes. Writing an
+  // initial same-origin document preserves its own browsing context, URL,
+  // storage and normal parser execution without two successive HTML reads.
+  // Reloads and any unavailable/mismatched document use the original route.
+  window.__cccOpenAppDocument = function (frame, destination, supplied) {
+    try {
+      const url = new URL(destination, location.href);
+      if (!supplied || typeof supplied.html !== 'string' || supplied.url !== url.pathname + url.search
+          || url.origin !== location.origin || !frame.isConnected || frame.hasAttribute('src')) return false;
+      const doc = frame.contentDocument;
+      doc.open();
+      frame.contentWindow.history.replaceState(null, '', url.href);
+      doc.write(supplied.html);
+      doc.close();
+      frame.dataset.appDocumentUrl = url.pathname + url.search;
+      return true;
+    } catch (_) { return false; }
+  };
   let finish;
   window.__cccAppFrameReady = new Promise(resolve => { finish = resolve; });
   const originalFetch = window.fetch;
@@ -62,10 +80,13 @@
     });
     frame.addEventListener('error', finish, {once:true});
     document.documentElement.classList.add('ccc-mobile-app-open');
-    frame.src = frame.dataset.appUrl;
     // The body may not exist yet. Keep this frame on its original parent:
     // moving an iframe into the body would restart its browsing context.
     (document.body || document.documentElement).appendChild(frame);
+    let supplied;
+    try { supplied = JSON.parse(document.getElementById('cccAppStartupDocument')?.textContent || 'null'); }
+    catch (_) {}
+    if (!window.__cccOpenAppDocument(frame, frame.dataset.appUrl, supplied)) frame.src = frame.dataset.appUrl;
   }
   let provided;
   try { provided = JSON.parse(document.getElementById('cccAppStartup')?.textContent || 'null'); }

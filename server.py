@@ -31192,7 +31192,7 @@ _load_index_html(app_embed=True)
 _load_index_html(app_shell=True)
 
 
-def _load_application_html(name):
+def _load_application_html(name, *, conversation_document=False):
     """Canonical user-app wrapper for both foreground and isolated reads."""
     from ccc_server.app_embed import application_page
     from ccc_server import app_routines
@@ -31205,10 +31205,33 @@ def _load_application_html(name):
         if folder is not None:
             agent = app_routines.load_state(folder).get("agent")
             agent_id = (agent.get("session_id") or "") if isinstance(agent, dict) else ""
-        return _stamp_static_urls(application_page(
+        html = _stamp_static_urls(application_page(
             target.read_text(encoding="utf-8"), app_id=name, agent_id=agent_id,
             kit_url=_static_asset_url("app-kit.js")))
+        if conversation_document and agent_id and re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", agent_id):
+            from ccc_server.app_embed import application_document
+            url = "/?ccc_popout=conversation&embed=app&conv=" + urllib.parse.quote(agent_id, safe="")
+            html = application_document(html, "cccAppConversationDocument", url,
+                                        _load_index_html(app_embed=True))
+        return html
     return None
+
+
+def _load_app_shell_html(selected_app):
+    html = _load_index_html(app_shell=True, selected_app=selected_app)
+    if not selected_app:
+        return html
+    # Only the standard local app route is eligible. External and custom
+    # applications keep their existing navigation and request semantics.
+    name = selected_app.get("id", "")
+    url = selected_app.get("nav") or selected_app.get("url") or ""
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9_-]+", name) or url != "/view/" + name:
+        return html
+    document = _load_application_html(name, conversation_document=True)
+    if document is not None:
+        from ccc_server.app_embed import application_document
+        html = application_document(html, "cccAppStartupDocument", url, document)
+    return html
 
 
 def _prepare_html_response(content, accept):
@@ -31245,7 +31268,7 @@ def _app_page_response(path, query, accept):
         if not embed and not shell:
             return None
         selected = next(iter(_resolve_apps(only_id=app_id)), None) if shell else None
-        html = _load_index_html(app_embed=embed, app_shell=shell, selected_app=selected)
+        html = (_load_app_shell_html(selected) if shell else _load_index_html(app_embed=embed))
     elif re.fullmatch(r"/view/[a-z0-9_-]+", path):
         html = _load_application_html(path[len("/view/"):])
     if html is None:
@@ -31728,8 +31751,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     return
             selected_app = (next(iter(_resolve_apps(only_id=app_id)), None)
                             if app_shell else None)
-            self.send_html(_load_index_html(app_embed=app_embed, app_shell=app_shell,
-                                           selected_app=selected_app))
+            self.send_html(_load_app_shell_html(selected_app) if app_shell else
+                           _load_index_html(app_embed=app_embed))
         elif path == "/api/control-plane/status":
             self.send_json(_control_plane_request("health"))
         elif path == "/api/model-picker/picks":

@@ -301,8 +301,16 @@
       f.title = 'Agent session';
       // embed=app: the dashboard page boots lean there, with no chrome of its
       // own and no reads for panels this pane never shows.
-      f.src = '/?ccc_popout=conversation&embed=app&conv=' + encodeURIComponent(id);
+      var url = '/?ccc_popout=conversation&embed=app&conv=' + encodeURIComponent(id);
       frames.appendChild(f);
+      var supplied, opened = false;
+      try {
+        supplied = JSON.parse(document.getElementById('cccAppConversationDocument')?.textContent || 'null');
+        if (window.parent !== window && typeof window.parent.__cccOpenAppDocument === 'function') {
+          opened = window.parent.__cccOpenAppDocument(f, url, supplied);
+        }
+      } catch (_) {}
+      if (!opened) f.src = url;
     }
     Object.keys(frameFor).forEach(function (k) { frameFor[k].hidden = k !== id; });
     hero.hidden = true;

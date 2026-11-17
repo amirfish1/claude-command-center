@@ -122,6 +122,15 @@ def _json_element(element_id, data):
     return f'<script type="application/json" id="{element_id}">{text}</script>'
 
 
+def application_document(html, element_id, url, document):
+    """Carry a current canonical child page in its no-store parent response."""
+    payload = _json_element(element_id, {"url": url, "html": document})
+    head = re.search(r"<head\b[^>]*>", html, re.I)
+    if head:
+        return html[:head.end()] + payload + html[head.end():]
+    return payload + html
+
+
 def application_page(html, app_id, agent_id=None, kit_url="/static/app-kit.js"):
     """Give the shared kit its current agent without another network read."""
     if agent_id is None:
