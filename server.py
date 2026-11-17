@@ -23764,6 +23764,26 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     request_queue_size = 128
 
+    def __init__(self, *args, **kwargs):
+        self._request_accept_times = {}
+        self._request_accept_lock = threading.Lock()
+        super().__init__(*args, **kwargs)
+
+    def get_request(self):
+        request, address = super().get_request()
+        accepted_at = time.perf_counter()
+        with self._request_accept_lock:
+            self._request_accept_times[request] = accepted_at
+        return request, address
+
+    def take_request_accept_time(self, request):
+        with self._request_accept_lock:
+            return self._request_accept_times.pop(request, None)
+
+    def shutdown_request(self, request):
+        self.take_request_accept_time(request)
+        return super().shutdown_request(request)
+
     def _handle_request_noblock(self):
         # Exec preserves this backlog for the successor. Service-manager
         # stops cannot pass the listener; the browser retries safe reads.
@@ -46790,6 +46810,9 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             val = "app;dur=%.0f, cpu;dur=%.0f, t0;desc=\"%.0f\"" % (
                 (time.time() - _st0) * 1000.0,
                 (time.thread_time() - _sc0) * 1000.0, _st0 * 1000.0)
+            accept_wait = getattr(self, "_ccc_accept_wait_ms", None)
+            if accept_wait is not None:
+                val += ', req_wait;dur=%.0f;desc="socket accept to first handler"' % accept_wait
             if cache:
                 val += ', cache;desc="%s"' % cache
             self.send_header("Server-Timing", val)
@@ -46912,6 +46935,12 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
         _c0 = time.thread_time()
         self._ccc_req_t0 = _t0
         self._ccc_req_cpu0 = _c0
+        # Consume once per connection: keep-alive idle time is not dispatch
+        # delay. This measures neither the network nor the pre-accept backlog.
+        take_accept_time = getattr(getattr(self, "server", None), "take_request_accept_time", None)
+        accepted_at = take_accept_time(self.request) if take_accept_time else None
+        self._ccc_accept_wait_ms = (max(0.0, (time.perf_counter() - accepted_at) * 1000.0)
+                                    if accepted_at is not None else None)
         self._ccc_list_t0 = None
         self._ccc_response_started = False
         # A keep-alive connection's final call only waits for a request that

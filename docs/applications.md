@@ -210,6 +210,12 @@ timing it by hand. Each sample's `shell_lead_ms` is the part spent before the
 app page itself began; `content_ms` and `agent_ms` stay on the app page's
 clock.
 
+For responses with `Server-Timing`, `app` measures handler wall time and
+`cpu` measures its CPU time. On the first request of a dashboard connection,
+`req_wait` measures socket acceptance to handler start. It excludes network
+travel and the socket backlog before acceptance; later keep-alive requests
+omit it so idle connection time is never counted as dispatch delay.
+
 - **Read it.** `ccc app speed` prints loads, typical, slow (p95) and worst
   times per app for the last 24 hours against the budget (`ccc app speed <id>`
   for one app, `--hours N` for a longer window, `--check` to exit 2 when any
