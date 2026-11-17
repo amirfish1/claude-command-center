@@ -18641,7 +18641,20 @@ def _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents):
     return window_rows
 
 
-def _archive_list_project_rows(rows, *, window="all", now=None):
+def _archive_list_project_rows(rows, *, window="all", now=None, phases=None):
+    # Request-local diagnostics distinguish CPU work from GIL/lock waits on
+    # the real corpus, without the per-call overhead of a Python profiler.
+    phase_wall = time.perf_counter() if phases is not None else 0
+    phase_cpu = time.thread_time() if phases is not None else 0
+
+    def phase(name):
+        nonlocal phase_wall, phase_cpu
+        if phases is not None:
+            wall, cpu = time.perf_counter(), time.thread_time()
+            phases[name] = {"wall_ms": round((wall - phase_wall) * 1000, 1),
+                            "cpu_ms": round((cpu - phase_cpu) * 1000, 1)}
+            phase_wall, phase_cpu = wall, cpu
+
     cutoff = _archive_list_window_cutoff(window, now=now)
     resumes = _load_usage_limit_resumes()
     parents = _session_graph.parent_snapshot()
@@ -18652,11 +18665,14 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
     except Exception:
         idea_tickets_by_sid = {}
 
+    phase("inputs")
     window_rows = _archive_list_window_rows(rows, cutoff, idea_tickets_by_sid, parents)
+    phase("window")
     projected = [
         _archive_list_project_row(row, resumes=resumes, parents=parents)
         for row in window_rows
     ]
+    phase("rows")
     # Persisted row snapshots may predate the title or this projection field.
     # One cached snapshot for the batch; never scan history to refresh names.
     titles = _archive_list_title_overlays()
@@ -18666,10 +18682,12 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
         if sid in drivers:
             out.update(_driver.fields(out, sid, observed=drivers[sid]))
         out.update(titles.get(out.get("session_id") or out.get("id"), {}))
+    phase("titles_drivers")
     # Resolve topic identity independently of which ancestors are loaded in
     # this response, after applying the current explicit title overrides.
     from ccc_server import continuation_topics
     continuation_topics.attach_topics(projected)
+    phase("topics")
     # Engines without a Stop hook (Codex etc.) get their ticket step here,
     # gated to pending UI spawns and children of ticketed sessions.
     try:
@@ -18702,6 +18720,7 @@ def _archive_list_project_rows(rows, *, window="all", now=None):
             if ticket:
                 out["idea_ticket"] = dict(ticket)
                 out["explicitly_archived"] = bool(ticket.get("explicitly_archived"))
+    phase("tickets")
     return projected
 
 
@@ -19407,9 +19426,9 @@ def _queue_health_stats(rows, *, now=None):
     }
 
 
-def _archive_list_payload(rows, *, window="all", now=None, cached=None):
+def _archive_list_payload(rows, *, window="all", now=None, cached=None, phases=None):
     window = _archive_list_window(window)
-    projected = _archive_list_project_rows(rows, window=window, now=now)
+    projected = _archive_list_project_rows(rows, window=window, now=now, phases=phases)
     if window == "all":
         _trace_row_flicker(projected, now=now)
     payload = {
@@ -35939,6 +35958,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             )
             _lt1 = time.perf_counter()
             _payload_ms = []
+            _payload_phases = {}
+            _delta_cpu0 = time.thread_time()
             # CCC-142: ?since=<delta_token> asks for only the rows that changed
             # after the client's last body. Anything the token can't vouch for
             # (restart, projection inputs moved, history trimmed) gets a full
@@ -35949,6 +35970,10 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                     _delta = _archive_list_delta_state(list_cache_key, rows, window, from_cache)
                 except Exception:
                     _delta = None
+            _delta_phase = {
+                "wall_ms": round((time.perf_counter() - _lt1) * 1000, 1),
+                "cpu_ms": round((time.thread_time() - _delta_cpu0) * 1000, 1),
+            }
             _status = None
             # CCC-201: why a client holding a token still got a full body.
             if not since:
@@ -35981,7 +36006,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
             def _timed_payload():
                 _pt0 = time.perf_counter()
                 try:
-                    payload = _archive_list_payload(rows, window=window, cached=from_cache)
+                    payload = _archive_list_payload(
+                        rows, window=window, cached=from_cache, phases=_payload_phases)
                     if _delta is not None:
                         payload["delta_token"] = _delta["token"]
                     return payload
@@ -36011,6 +36037,8 @@ class CommandCenterHandler(http.server.BaseHTTPRequestHandler):
                 "stale_ok": stale_ok,
                 "refreshing": bool(_archive_serve_refreshing),
                 "src": _src_phases,
+                "projection": _payload_phases,
+                "delta_state": _delta_phase,
             })
         elif path == "/api/conversations/all":
             # Server-agnostic conversation archive: every JSONL across every

@@ -36,6 +36,10 @@ def test_concurrent_polls_of_one_snapshot_build_the_body_once(monkeypatch, tmp_p
         lambda *a, **kw: ([{'session_id': 'one'}], True, 11),
     )
     builds = []
+    diagnostics = []
+    monkeypatch.setattr(server, 'record_diag',
+                        lambda kind, ms, detail: diagnostics.append(detail)
+                        if kind == 'list_server' else None)
     real_payload = server._archive_list_payload
 
     def slow_payload(*a, **kw):
@@ -66,6 +70,28 @@ def test_concurrent_polls_of_one_snapshot_build_the_body_once(monkeypatch, tmp_p
         thread.join(timeout=5)
     assert len(etags) == 4 and len(set(etags)) == 1
     assert len(builds) == 1
+    assert len(diagnostics) == 4
+    projected = [d['projection'] for d in diagnostics if d['projection']]
+    assert len(projected) == 1
+    assert set(projected[0]) == {'inputs', 'window', 'rows', 'titles_drivers', 'topics', 'tickets'}
+    for detail in diagnostics:
+        for phase in [detail['delta_state'], *detail['projection'].values()]:
+            assert set(phase) == {'wall_ms', 'cpu_ms'}
+            assert phase['wall_ms'] >= 0 and phase['cpu_ms'] >= 0
+
+
+def test_projection_diagnostics_do_not_change_the_payload():
+    server = importlib.import_module('server')
+    rows = [{'session_id': 'diagnostic-row', 'display_name': 'Title',
+             'modified': 1000, 'session_state': {'todos': [{'text': 'work'}]}}]
+    before = json.loads(json.dumps(rows))
+    expected = server._archive_list_payload(rows, now=2000, cached=True)
+    phases = {}
+    actual = server._archive_list_payload(rows, now=2000, cached=True, phases=phases)
+    assert actual == expected
+    assert rows == before
+    assert 'projection' not in actual and 'phases' not in actual
+    assert 'rows' in phases and 'topics' in phases
 
 
 def test_list_and_live_paths_do_not_wait_on_a_held_acp_lock():
