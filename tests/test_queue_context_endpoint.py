@@ -5,6 +5,7 @@ the Wren thread a digest ticket describes) by matching user-configured
 extract regexes against the ticket body and running the configured command.
 """
 
+from tests.dashboard_source import dashboard_source
 import importlib
 import json
 import pathlib
@@ -130,13 +131,13 @@ class TestTicketProseWiring(unittest.TestCase):
             self.assertIn("/static/ticket-prose.css", html, page)
 
     def test_both_views_prefer_full_github_body(self):
-        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(PROJECT_ROOT / "static" / "app.js")
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
         self.assertIn("item._github_body || item.text", app_js)
         self.assertIn("item._github_body || item.text", q2_js)
 
     def test_both_views_render_via_shared_prose_renderer(self):
-        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(PROJECT_ROOT / "static" / "app.js")
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
         self.assertIn("CCCTicketProse.render(", app_js)
         self.assertIn("CCCTicketProse.render(", q2_js)

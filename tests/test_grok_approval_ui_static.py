@@ -1,11 +1,10 @@
 """Static regression coverage for actionable Grok ACP approvals."""
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 
 
-APP_JS = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(
-    encoding="utf-8",
-)
+APP_JS = dashboard_source(Path(__file__).resolve().parents[1] / "static" / "app.js")
 SERVER_PY = (Path(__file__).resolve().parents[1] / "server.py").read_text(
     encoding="utf-8",
 )

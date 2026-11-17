@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests.dashboard_source import dashboard_source
 import threading
 import unittest
 from unittest import mock
@@ -59,7 +60,7 @@ class TestAnnotationQueueDedupe(unittest.TestCase):
         self.assertTrue(first_result[0]["ok"])
 
     def test_preview_disables_submit_until_the_queue_request_settles(self):
-        app_js = (server.CCC_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(server.CCC_ROOT / "static" / "app.js")
         start = app_js.index("function annShowUxFixesPreview(ann, onSubmit)")
         body = app_js[start:app_js.index("async function annOpenUxFixesQueue", start)]
 

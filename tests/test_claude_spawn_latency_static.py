@@ -1,5 +1,6 @@
 """Browser contracts for the optimistic Claude spawn fast path."""
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 
 
@@ -13,7 +14,7 @@ BENCHMARK_JS = (
 
 def _function_source(name, window=9000):
     owner = APP_JS.with_name("conversation-selection.js") if name == "selectConversation" else APP_JS
-    source = owner.read_text(encoding="utf-8")
+    source = dashboard_source()
     start = source.index(f"function {name}(")
     return source[start : start + window]
 
@@ -79,13 +80,13 @@ def test_spawn_stream_accepts_selected_pending_placeholder_and_replays():
     rebind = _function_source("rebindCurrentSelectionToRealCard", 4000)
     assert "claudeSpawnAwaitingFirstPaint.has(sid)" in rebind
     assert "{ replay: true }" in rebind
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     assert source.count("claudeSpawnAwaitingFirstPaint.has(") >= 2
 
 
 def test_placeholder_rebind_keeps_the_owned_first_response_stream():
     rebind = _function_source("rebindCurrentSelectionToRealCard", 2800)
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
 
     assert "const keepFirstResponseStream" in rebind
     assert "_spawnLiveSid === sid" in rebind
@@ -115,7 +116,7 @@ def test_tool_first_output_marks_first_visible_paint_and_terminal_releases_gate(
 
 
 def test_sidebar_refresh_is_frozen_from_placeholder_until_first_paint():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     refresh = _function_source("refreshConversationList", 1200)
     events = _function_source("handleSpawnEvents", 9000)
 
@@ -144,7 +145,7 @@ def test_late_boot_restore_cannot_replace_new_session_user_intent():
 
 
 def test_spawn_stats_are_engine_aware():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
 
     assert "CLAUDE_SPAWN_STAT_ROWS" in source
     assert "claude_first_text_delta" in source
@@ -153,7 +154,7 @@ def test_spawn_stats_are_engine_aware():
 
 
 def test_critical_spawn_can_preempt_background_api_reads():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
 
     assert "function abortBackgroundApiReadsForSpawn()" in source
     assert "function backgroundApiFetch(" in source
@@ -172,7 +173,7 @@ def test_critical_spawn_can_preempt_background_api_reads():
 
 
 def test_claude_composer_prewarms_and_claims_the_reserved_process():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     spawn = _function_source("spawnFromInlineInput", 12000)
 
     assert "/api/sessions/prewarm-claude" in source
@@ -184,7 +185,7 @@ def test_claude_composer_prewarms_and_claims_the_reserved_process():
 
 
 def test_cold_spawn_fallback_offers_a_worker_restart_action():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     spawn = _function_source("spawnFromInlineInput", 12000)
 
     assert "data.prewarm_fallback" in spawn

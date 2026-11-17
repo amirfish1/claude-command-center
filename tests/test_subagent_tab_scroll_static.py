@@ -1,5 +1,6 @@
 """Contracts for preserving transcript position across subagent tab switches."""
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -10,7 +11,7 @@ APP_JS = PROJECT_ROOT / "static" / "app.js"
 
 class TestSubagentTabScrollStatic(unittest.TestCase):
     def test_tab_switch_remembers_and_restores_each_lane_scroll(self):
-        source = APP_JS.read_text(encoding="utf-8")
+        source = dashboard_source(APP_JS)
         state_start = source.index("function _convPaneTabState(view)")
         state_end = source.index("\n  function _convPaneTabStrip", state_start)
         state_fn = source[state_start:state_end]
@@ -33,7 +34,7 @@ class TestSubagentTabScrollStatic(unittest.TestCase):
         )
 
     def test_tail_pinned_master_restores_to_true_end_after_layout(self):
-        source = APP_JS.read_text(encoding="utf-8")
+        source = dashboard_source(APP_JS)
         self.assertIn("function _convPaneRestoreTabScroll(", source)
         helper_start = source.index("function _convPaneRestoreTabScroll(")
         helper_end = source.index("\n  function _convPaneActivateTab", helper_start)
@@ -46,7 +47,7 @@ class TestSubagentTabScrollStatic(unittest.TestCase):
         self.assertIn("restoreVersion !== state.scrollRestoreVersion", helper)
 
     def test_inactive_task_close_never_restores_the_active_master(self):
-        source = APP_JS.read_text(encoding="utf-8")
+        source = dashboard_source(APP_JS)
         close_start = source.index("function _convPaneCloseSubagentTab(")
         close_end = source.index("\n  function _convPaneMarkTaskCompleted", close_start)
         close_fn = source[close_start:close_end]
@@ -59,7 +60,7 @@ class TestSubagentTabScrollStatic(unittest.TestCase):
         self.assertIn(restore, close_fn[restore_guard_start:restore_guard_end])
 
     def test_pending_restore_is_not_resaved_during_rapid_switches(self):
-        source = APP_JS.read_text(encoding="utf-8")
+        source = dashboard_source(APP_JS)
         remember_start = source.index("function _convPaneRememberTabScroll(")
         remember_end = source.index("\n  function _convPaneRestoreTabScroll", remember_start)
         remember = source[remember_start:remember_end]

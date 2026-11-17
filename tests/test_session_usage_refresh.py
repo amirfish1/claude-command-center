@@ -1,5 +1,6 @@
 """Behavior coverage for low-work, stable session-usage refreshes."""
 
+from tests.dashboard_source import dashboard_source
 import json
 import pathlib
 import subprocess
@@ -12,7 +13,7 @@ HELPER_END = "// SESSION_USAGE_REFRESH_POLICY_END"
 
 
 def _helper_source():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     assert HELPER_START in source, "session usage refresh policy is missing"
     assert HELPER_END in source, "session usage refresh policy terminator is missing"
     start = source.index(HELPER_START) + len(HELPER_START)
@@ -89,7 +90,7 @@ def test_usage_refresh_policy_clears_only_visible_switch_or_explicit_reset():
 
 
 def test_usage_refresh_rechecks_visibility_before_rendering():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
 
     assert "function _sessionUsagePaneIsVisible" in source
     assert "_usageRequestByPane" in source

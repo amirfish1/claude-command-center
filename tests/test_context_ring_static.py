@@ -4,6 +4,7 @@ Extracts _contextRingSvg from static/app.js and executes it in node with a
 tiny escapeHtml-free harness, asserting the SVG contract: arc math (offset =
 C*(1-pct/100)), pct clamping, and the warm/hot threshold classes.
 """
+from tests.dashboard_source import dashboard_source
 import json
 import pathlib
 import subprocess
@@ -14,7 +15,7 @@ APP_JS = ROOT / "static" / "app.js"
 
 
 def _ring_source():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     marker = "function _contextRingSvg(pct) {"
     start = source.index(marker)
     end = source.index("\n  }", start) + len("\n  }")

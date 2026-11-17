@@ -1,3 +1,4 @@
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -21,7 +22,7 @@ class TestSplitPaneIsolationStatic(unittest.TestCase):
 
     def test_split_clone_does_not_keep_a_second_rhs_rail(self):
         """Only the active pane may host the singleton status rail."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         build_start = app_js.index("function buildPaneElement(paneId)")
         build_end = app_js.index("\n  // Toggle the split layout", build_start)
         build_fn = app_js[build_start:build_end]
@@ -32,7 +33,7 @@ class TestSplitPaneIsolationStatic(unittest.TestCase):
 
     def test_split_clone_binds_image_paste_to_its_own_composer(self):
         """A cloned right-hand composer must retain image-paste support."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         build_start = app_js.index("function buildPaneElement(paneId)")
         build_end = app_js.index("\n  // Toggle the split layout", build_start)
         build_fn = app_js[build_start:build_end]

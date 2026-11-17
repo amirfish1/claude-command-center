@@ -4,6 +4,7 @@ Static-source guard: all three segments render in one control, persisted under
 'ccc-conv-view', Verbose stays the only mode that expands tools, and the
 compact CSS beats the conv-bg themes' !important padding.
 """
+from tests.dashboard_source import dashboard_source
 import os
 import re
 import unittest
@@ -12,6 +13,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _read(rel):
+    if rel == "static/app.js":
+        return dashboard_source()
     with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
         return fh.read()
 

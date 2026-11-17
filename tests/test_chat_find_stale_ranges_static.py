@@ -5,6 +5,7 @@ moves the range onto the parent and collapses it. The counter kept advancing
 while nothing highlighted or scrolled.
 """
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -13,7 +14,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class TestChatFindStaleRanges(unittest.TestCase):
     def setUp(self):
-        self.js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        self.js = dashboard_source(ROOT / "static" / "app.js")
 
     def test_staleness_checks_range_content_not_just_connection(self):
         start = self.js.index("function chatFindRangesStale(root)")

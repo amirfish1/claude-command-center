@@ -17,6 +17,7 @@ These are static source invariants (no DOM / browser harness needed — same
 spirit as tests/test_perf_budget.py's call-count guards). If one fails, the
 dual-control bug class is creeping back. Keep the window honest: one key.
 """
+from tests.dashboard_source import dashboard_source
 import os
 import re
 import inspect
@@ -46,7 +47,7 @@ APP_JS = os.path.join(os.path.dirname(__file__), "..", "static", "app.js")
 @pytest.fixture(scope="module")
 def app_js():
     with open(APP_JS, "r", encoding="utf-8") as fh:
-        return fh.read()
+        return dashboard_source(APP_JS)
 
 
 def test_archive_window_defaults_to_seven_days(app_js):

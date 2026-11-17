@@ -1,4 +1,5 @@
 """CCC-529: the session-row kebab opens a real dropdown, not an overlay on the row."""
+from tests.dashboard_source import dashboard_source
 import re
 import unittest
 from pathlib import Path
@@ -27,7 +28,7 @@ class RowActionsMenuTest(unittest.TestCase):
             "  .conv-item.is-actions-open .conv-row-end .conv-kebab-btn {\n    opacity: 0;", css)
 
     def test_js_anchors_menu_to_kebab_and_closes_on_scroll(self):
-        js = (STATIC / "app.js").read_text()
+        js = dashboard_source(STATIC / "app.js")
         self.assertIn("setProperty('--ca-top'", js)
         self.assertIn("setProperty('--ca-right'", js)
         # Rect is read before the row flips to the open state.

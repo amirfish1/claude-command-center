@@ -1,4 +1,5 @@
 """Queue ticket placement (mac / cloud / any): the ticket panel can edit it."""
+from tests.dashboard_source import dashboard_source
 import re
 from pathlib import Path
 
@@ -12,7 +13,7 @@ def test_ux_fixes_update_allows_placement():
 
 
 def test_ticket_panel_has_runs_on_setting():
-    js = (ROOT / "static" / "app.js").read_text()
+    js = dashboard_source(ROOT / "static" / "app.js")
     assert "_propSel('Runs on', 'placement'" in js
     for v in ("'mac'", "'cloud'", "'any'"):
         assert v in js.split("_propSel('Runs on'", 1)[1][:200]

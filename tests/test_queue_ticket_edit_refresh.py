@@ -1,3 +1,4 @@
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -8,7 +9,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 class TestQueueTicketEditRefresh(unittest.TestCase):
     def test_edit_response_replaces_the_cached_row_before_repaint(self):
         """Saving a ticket field must repaint its row from the edit response."""
-        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(PROJECT_ROOT / "static" / "app.js")
 
         helper_start = app_js.index("function _uxqReplaceCachedItem(item)")
         helper_end = app_js.index("async function _uxqOpenItemDetail", helper_start)

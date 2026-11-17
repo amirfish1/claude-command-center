@@ -1,5 +1,6 @@
 """Behavior checks for the compact transcript session-state card."""
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 import subprocess
 import unittest
@@ -9,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def render_session_state(body: str, app_path: Path) -> str:
-    source = app_path.read_text(encoding="utf-8")
+    source = dashboard_source(app_path)
     assessment_start = source.index("  function sessionCompletionDetails(")
     assessment_end = source.index("\n  }\n", assessment_start) + 5
     function_source = source[assessment_start:assessment_end]

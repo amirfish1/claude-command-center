@@ -1,4 +1,5 @@
 """Large /api/media images get a <=150kB JPEG preview (CCC-298)."""
+from tests.dashboard_source import dashboard_source
 import os
 import shutil
 import subprocess
@@ -73,7 +74,7 @@ class PreviewPathTest(unittest.TestCase):
 
 class ClientWiringTest(unittest.TestCase):
     def test_lightbox_and_folder_viewer_request_the_preview(self):
-        js = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text()
+        js = dashboard_source(Path(__file__).resolve().parent.parent / "static" / "app.js")
         self.assertIn("function _mediaPreviewUrl(href)", js)
         self.assertIn("if (isImage && !(opts && opts.noPreview)) src = _mediaPreviewUrl(src) || src;", js)
         self.assertIn("_mediaPreviewUrl(url) || url", js)

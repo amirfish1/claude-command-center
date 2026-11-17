@@ -1,5 +1,6 @@
 """Behavioral guardrails for group-chat background activity."""
 
+from tests.dashboard_source import dashboard_source
 import server
 from pathlib import Path
 
@@ -122,7 +123,7 @@ def test_active_chat_route_uses_lightweight_active_summary():
 
 
 def test_browser_starts_group_chat_timer_only_after_an_active_chat_exists():
-    source = Path("static/app.js").read_text(encoding="utf-8")
+    source = dashboard_source(Path("static/app.js"))
     start = source.index("function pollGcActive()")
     end = source.index("if ($gcActiveBtn)", start)
     poller = source[start:end]
@@ -135,7 +136,7 @@ def test_browser_starts_group_chat_timer_only_after_an_active_chat_exists():
 
 
 def test_opening_group_chat_replaces_stale_session_rail_context():
-    source = Path("static/app.js").read_text(encoding="utf-8")
+    source = dashboard_source(Path("static/app.js"))
     start = source.index("function openGroupChatReader(")
     end = source.index("const gcAddPartBtn", start)
     reader = source[start:end]
@@ -146,7 +147,7 @@ def test_opening_group_chat_replaces_stale_session_rail_context():
 
 
 def test_empty_group_chat_rows_do_not_reserve_participant_toggle_space():
-    source = Path("static/app.js").read_text(encoding="utf-8")
+    source = dashboard_source(Path("static/app.js"))
     start = source.index("const _gcCollapseBtn =")
     end = source.index("const _renderChatHtml", start)
     collapse_control = source[start:end]
@@ -157,7 +158,7 @@ def test_empty_group_chat_rows_do_not_reserve_participant_toggle_space():
 
 def test_group_chat_participants_are_not_hidden_as_historical_workers():
     """A session in a chat remains reachable even if WT previously used it."""
-    source = Path("static/app.js").read_text(encoding="utf-8")
+    source = dashboard_source(Path("static/app.js"))
     start = source.index("const _currentSessionSource = _ipSearchActive")
     end = source.index("const _currentSessionWindowed = _ipSearchActive", start)
     current_sessions = source[start:end]

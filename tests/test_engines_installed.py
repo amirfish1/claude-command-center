@@ -5,6 +5,7 @@ monkeypatched env (COPILOT_HOME / GROK_HOME / CCC_VSCODE_USER_DIRS point at
 tmp dirs; PATH emptied to simulate a missing spawn binary). No real CLIs.
 All fixture data is obviously fake.
 """
+from tests.dashboard_source import dashboard_source
 import pathlib
 
 import server
@@ -101,7 +102,7 @@ def test_engines_setup_is_not_part_of_the_tour():
         assert "/api/onboarding/" + endpoint not in source
     assert "cli-setup" not in source
     assert "Ensure agent CLIs" not in source
-    app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app = dashboard_source(ROOT / "static" / "app.js")
     assert "ccc-engines-first-run-done" in app
     # engine-connection.test.cjs exercises the first-run setup and its return
     # path in the browser; introductory wording is not part of that contract.
@@ -204,13 +205,13 @@ def test_engine_not_installed_code_only_on_matching_failures():
 
 
 def test_composer_notice_is_wired_to_error_code():
-    js = (ROOT / "static" / "app.js").read_text()
+    js = dashboard_source(ROOT / "static" / "app.js")
     assert "engine_not_installed" in js and "engineMissingNotice" in js
     assert "/api/engines/installed" in js
 
 
 def test_first_run_has_optional_tailscale_step_and_defaults_row():
-    js = (ROOT / "static" / "app.js").read_text()
+    js = dashboard_source(ROOT / "static" / "app.js")
     html = (ROOT / "static" / "index.html").read_text()
     assert "/api/phone-access/tailscale" in js and "ccc-tailscale-step-done" in js
     assert 'id="engTailscaleStep"' in html and 'id="engFirstRunDefaults"' in html

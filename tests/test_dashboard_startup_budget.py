@@ -1,9 +1,10 @@
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+SOURCE = dashboard_source(ROOT / "static" / "app.js")
 
 
 def _function(name, next_marker, *, start_at=0):

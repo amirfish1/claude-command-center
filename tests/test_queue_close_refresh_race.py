@@ -1,5 +1,6 @@
 """Regression coverage for close vs. stale Queue-list responses."""
 
+from tests.dashboard_source import dashboard_source
 import json
 import pathlib
 import subprocess
@@ -12,7 +13,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 class TestQueueCloseRefreshRace(unittest.TestCase):
     def test_stale_queue_render_restarts_from_the_canonical_cache(self):
         """A renderer paused on health data cannot paint an older ticket snapshot."""
-        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(PROJECT_ROOT / "static" / "app.js")
         render_start = app_js.index("function _renderQueuePanel(options)")
         render_end = app_js.index("// Jump the conversation pane", render_start)
         render = app_js[render_start:render_end]
@@ -25,7 +26,7 @@ class TestQueueCloseRefreshRace(unittest.TestCase):
 
     def test_close_response_wins_over_an_older_inflight_list_response(self):
         """An acknowledged close must not be reverted by a pre-close list read."""
-        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(PROJECT_ROOT / "static" / "app.js")
         self.assertIn("let _uxqItemsVersion = 0;", app_js)
 
         close_start = app_js.index("const doMarkClosed = async () =>")

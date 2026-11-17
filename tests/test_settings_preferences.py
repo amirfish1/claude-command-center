@@ -1,4 +1,5 @@
 """Behavioral contract for the isolated, nonsecret preference ledger."""
+from tests.dashboard_source import dashboard_source
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
@@ -24,7 +25,7 @@ def change(store, **values):
 
 def test_registry_matches_real_backing_keys_and_factory_defaults():
     root = Path(__file__).resolve().parents[1]
-    browser = (root / 'static/app.js').read_text() + (root / 'static/index.html').read_text()
+    browser = dashboard_source(root / 'static/app.js') + (root / 'static/index.html').read_text()
     server = (root / 'server.py').read_text()
     registry = prefs.registry()
     for key, spec in registry.items():

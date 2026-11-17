@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests.dashboard_source import dashboard_source
 import os
 import unittest
 from unittest import mock
@@ -77,7 +78,7 @@ class TestTicketDetailFiledBy(unittest.TestCase):
     """The ticket-detail modal renders who opened the ticket."""
 
     def test_origin_section_has_a_filed_by_row(self):
-        app_js = (server.CCC_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(server.CCC_ROOT / "static" / "app.js")
         start = app_js.index("function _uxqOpenItemModal(item)")
         end = app_js.index("// Answer section", start)
         modal = app_js[start:end]
@@ -88,7 +89,7 @@ class TestTicketDetailFiledBy(unittest.TestCase):
         self.assertIn("item.github_author", modal)
 
     def test_filed_timeline_event_names_the_filer(self):
-        app_js = (server.CCC_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(server.CCC_ROOT / "static" / "app.js")
         start = app_js.index("function _uxqOpenItemModal(item)")
         end = app_js.index("// Answer section", start)
         modal = app_js[start:end]

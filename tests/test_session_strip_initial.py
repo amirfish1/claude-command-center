@@ -1,4 +1,5 @@
 """The conversation strip paints without waiting for detail requests."""
+from tests.dashboard_source import dashboard_source
 import pathlib
 import subprocess
 
@@ -6,7 +7,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def test_strip_switch_seeds_row_and_retains_same_session_details():
-    source = (ROOT / 'static/app.js').read_text()
+    source = dashboard_source(ROOT / 'static/app.js')
     helper = source[source.index('  const _sessionStripCache = new Map();'):source.index('  function scheduleSessionMetadataFetches')]
     program = '''
 const assert = require('node:assert/strict');
@@ -52,7 +53,7 @@ assert.equal(_usageDataByPane.p2.model, 'model-c');
 
 
 def test_workspace_enrichment_keeps_seed_visible_and_ignores_other_session():
-    source = (ROOT / 'static/app.js').read_text()
+    source = dashboard_source(ROOT / 'static/app.js')
     helper = source[source.index('  async function fetchSessionWorkspace'):source.index('  function renderSessionWorkspaceIntoSticky')]
     program = '''
 const assert = require('node:assert/strict');

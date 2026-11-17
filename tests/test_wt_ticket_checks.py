@@ -6,6 +6,7 @@ ticket modal renders them through `_uxqChecksHtml`; this runs the real
 function under node against fixture tickets.
 """
 
+from tests.dashboard_source import dashboard_source
 import json
 import pathlib
 import re
@@ -31,7 +32,7 @@ def _extract(src, name):
 
 
 def _render(item):
-    src = (ROOT / "static" / "app.js").read_text()
+    src = dashboard_source(ROOT / "static" / "app.js")
     code = STUBS + "".join(_extract(src, n) for n in ("_uxqWorkerSid", "_uxqGateName", "_uxqChecksHtml"))
     code += "process.stdout.write(_uxqChecksHtml(" + json.dumps(item) + "));"
     res = subprocess.run(["node", "-e", code], capture_output=True, text=True, timeout=30)

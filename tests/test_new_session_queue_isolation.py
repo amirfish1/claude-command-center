@@ -1,3 +1,4 @@
+from tests.dashboard_source import dashboard_source
 import unittest
 from pathlib import Path
 
@@ -17,7 +18,7 @@ class NewSessionQueueIsolationTests(unittest.TestCase):
         self.assertIn("title.textContent.trim() === 'New session'", source)
 
     def test_new_session_entry_removes_active_pane_queued_tray(self):
-        source = (ROOT / "static/app.js").read_text()
+        source = dashboard_source(ROOT / "static/app.js")
         start = source.index("function enterNewSessionMode()")
         end = source.index("\n  async function", start)
         function_source = source[start:end]

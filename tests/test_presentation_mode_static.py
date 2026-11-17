@@ -1,5 +1,6 @@
 """Contracts for the client-only conversation presentation modes."""
 
+from tests.dashboard_source import dashboard_source
 import json
 import pathlib
 import subprocess
@@ -13,7 +14,7 @@ APP_CSS = PROJECT_ROOT / "static" / "app.css"
 
 
 def _javascript_function_source(name):
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     marker = f"function {name}("
     start = source.find(marker)
     if start < 0:
@@ -118,7 +119,7 @@ class TestPresentationModeStatic(unittest.TestCase):
     def test_presentation_is_an_opt_in_preview_feature(self):
         # The feature-flag registry moved out of server.py into ccc_server.
         server_source = (PROJECT_ROOT / "ccc_server" / "log_parse.py").read_text(encoding="utf-8")
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
 
         self.assertIn('"presentation": {', server_source)
         self.assertIn('"default": False', server_source)
@@ -191,7 +192,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertNotIn("conv-live-tool-inline", roots_after_answer)
 
     def test_mode_click_delegation_does_not_match_pane_state(self):
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         handler_start = app_js.index("const modeButton = ev.target")
         handler_end = app_js.index("const navButton = ev.target", handler_start)
         handler = app_js[handler_start:handler_end]
@@ -233,7 +234,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         )
 
     def test_compact_numbered_items_share_a_page(self):
-        source = APP_JS.read_text(encoding="utf-8")
+        source = dashboard_source(APP_JS)
         self.assertIn("function presentationItemGroups(items)", source)
         self.assertIn("function paginatePresentationGroups(groups, fits", source)
 
@@ -253,7 +254,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         )
 
     def test_overflow_moves_a_whole_semantic_group(self):
-        source = APP_JS.read_text(encoding="utf-8")
+        source = dashboard_source(APP_JS)
         self.assertIn("function presentationItemGroups(items)", source)
         self.assertIn("function paginatePresentationGroups(groups, fits", source)
 
@@ -293,7 +294,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         )
 
     def test_mode_two_uses_layout_active_measurement_surface(self):
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         css = APP_CSS.read_text(encoding="utf-8")
 
         self.assertIn("function ensurePresentationMeasureSurface(stage)", app_js)
@@ -309,7 +310,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("pointer-events: none", css)
 
     def test_mode_three_uses_safe_authored_layouts_with_present_fallback(self):
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         renderer = _javascript_function_source("buildMode3Slide")
         build_deck = _javascript_function_source("buildPresentationDeck")
 
@@ -385,7 +386,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         )
 
     def test_repagination_preserves_the_current_semantic_item(self):
-        source = APP_JS.read_text(encoding="utf-8")
+        source = dashboard_source(APP_JS)
         self.assertIn("function presentationCursorIndex(deck, previousSlide, fallback)", source)
         deck = [
             {
@@ -414,7 +415,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         )
 
     def test_mode_two_repaginates_after_meaningful_slot_resize(self):
-        source = APP_JS.read_text(encoding="utf-8")
+        source = dashboard_source(APP_JS)
         self.assertIn("function ensurePresentationResizeObserver(view, paneId)", source)
         observer = _javascript_function_source("ensurePresentationResizeObserver")
 
@@ -427,7 +428,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("disconnectPresentationResizeObserver(view)", source)
 
     def test_projection_observes_every_canonical_mutation_and_cleans_up(self):
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         css = APP_CSS.read_text(encoding="utf-8")
         ensure = _javascript_function_source("ensurePresentationProjection")
         flush = _javascript_function_source("flushPresentationProjection")
@@ -463,7 +464,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("disconnectPresentationProjection(view)", refresh)
 
     def test_live_updates_region_has_persistent_drag_resize(self):
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         css = APP_CSS.read_text(encoding="utf-8")
         live_region = _javascript_function_source("ensurePresentationLiveRegion")
         resize = _javascript_function_source("attachPresentationLiveResize")
@@ -521,7 +522,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("true", live_region)
 
     def test_mode_state_is_session_scoped_and_versioned(self):
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         setter = _javascript_function_source("setPresentationMode")
         session_id = _javascript_function_source("presentationSessionIdForPane")
         mode_for_session = _javascript_function_source("presentationModeForSession")
@@ -545,7 +546,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("scrollConversationToEnd(view)", setter)
 
     def test_mode_three_bootstrap_is_hidden_retryable_and_answer_scoped(self):
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         request = _javascript_function_source("requestMode3Bootstrap")
         state = _javascript_function_source("renderMode3BootstrapState")
 
@@ -570,7 +571,7 @@ class TestPresentationModeStatic(unittest.TestCase):
             )
             self.assertIn(call, source)
     def test_escape_exits_either_presentation_mode_even_from_the_composer(self):
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         scheduler = _javascript_function_source("schedulePresentationEscape")
 
         self.assertIn("if (!ev || ev.key !== 'Escape') return false", scheduler)
@@ -619,7 +620,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         render_cursor = _javascript_function_source("renderPresentationCursor")
 
         self.assertIn("jumpPresentationToEnd(targetView)", attach)
-        self.assertIn("function jumpPresentationToEnd(view)", APP_JS.read_text(encoding="utf-8"))
+        self.assertIn("function jumpPresentationToEnd(view)", dashboard_source(APP_JS))
         self.assertIn("presentationDeck.length - 1", update)
         self.assertIn("updateConversationEndAffordance(view)", render_cursor)
 
@@ -628,10 +629,10 @@ class TestPresentationModeStatic(unittest.TestCase):
 
         self.assertIn("button.addEventListener('click'", ensure_stage)
         self.assertIn("stepPresentationSlide(pane.dataset.paneId", ensure_stage)
-        self.assertNotIn("function ensurePresentationDock", APP_JS.read_text(encoding="utf-8"))
+        self.assertNotIn("function ensurePresentationDock", dashboard_source(APP_JS))
 
     def test_durable_and_streaming_renders_refresh_the_active_deck(self):
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         durable = APP_JS.with_name("conversation-events.js").read_text(encoding="utf-8")
         streaming_start = app_js.index(
             "function handleSpawnEvents(events, paneId, convId, streamSid)"
@@ -642,7 +643,7 @@ class TestPresentationModeStatic(unittest.TestCase):
         self.assertIn("refreshPresentationForPane(paneId", app_js[streaming_start:streaming_end])
 
     def test_present_splits_lists_and_uses_generic_live_projection(self):
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         css = APP_CSS.read_text(encoding="utf-8")
 
         self.assertIn("function presentationListItems(list)", app_js)

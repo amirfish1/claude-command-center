@@ -26,7 +26,7 @@ const expressions = new Map([...defaults.matchAll(/^      ([\w$]+)\(\) \{\n     
   .map(match => [match[1], normalize(match[2])]));
 module.exports = fs.readFileSync(require.resolve('../static/app.js'), 'utf8')
   .replace(/^  \/\/ Shared conversation-([\w-]+)\.js: (variable )?([\w$]+)\.$/gm,
-    (reference, module, variable, name) => reference + '\n' + normalize(variable ? variableSource(module, name) : functionSource(name, true), ["selection","events","composer","transport","panes","input"].includes(module)))
+    (reference, module, variable, name) => reference + '\n' + normalize(variable ? variableSource(module, name) : functionSource(name, true), ["selection","events","composer","transport","panes","input","issues"].includes(module)))
   .replace(/^  (initConversationBindings\d+|installConversationInteraction\d+|installConversationView\d+)\(\);$/gm, (_, name) => {
     const declaration = normalize(functionSource(name));
     return declaration.slice(declaration.indexOf('{') + 1, declaration.lastIndexOf('}')).replace(/^(\s*\n)(?=\S)/, '$1  ');

@@ -3,11 +3,12 @@
 Same shape as tests/test_dashboard_startup_budget.py: slice a function out of
 the app source and assert the guard that keeps the open path cheap is present.
 """
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+SOURCE = dashboard_source(ROOT / "static" / "app.js")
 
 
 def _function(name, next_marker, *, start_at=0):

@@ -2,9 +2,10 @@
 from the ACTIVE pane's sticky header, not the first one in the document
 (always the left pane's), and other panes' headers are not purged."""
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 
-APP = Path(__file__).resolve().parent.parent.joinpath("static", "app.js").read_text()
+APP = dashboard_source(Path(__file__).resolve().parent.parent.joinpath("static", "app.js"))
 
 
 def _body():

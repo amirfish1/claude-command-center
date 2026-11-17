@@ -16,7 +16,7 @@ class TestF2CacheWarningThreshold(unittest.TestCase):
         program = textwrap.dedent(
             r"""
             const fs = require('fs');
-            const source = fs.readFileSync('static/app.js', 'utf8');
+            const source = require('./tests/legacy-dashboard-source.cjs');
             const pick = (startMarker, endMarker) => {
               const start = source.indexOf(startMarker);
               const end = source.indexOf(endMarker, start);

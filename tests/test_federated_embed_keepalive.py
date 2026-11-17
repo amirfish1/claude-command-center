@@ -1,6 +1,7 @@
 """Kept-alive peer embeds: the popout switches conversations in place when its
 embedding CCC asks, and only honors that from trusted dashboard origins."""
 
+from tests.dashboard_source import dashboard_source
 import json
 import re
 import subprocess
@@ -8,7 +9,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_JS = (ROOT / "static" / "app.js").read_text()
+APP_JS = dashboard_source(ROOT / "static" / "app.js")
 SIDEBAR_JS = (ROOT / "static" / "federated-sidebar.js").read_text()
 
 

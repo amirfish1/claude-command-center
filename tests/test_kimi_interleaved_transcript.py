@@ -9,6 +9,7 @@ reference.md); no subprocess, no network.
 
 from __future__ import annotations
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 
 import pytest
@@ -293,7 +294,7 @@ def test_kimi_tool_row_renders_inline_output_peek():
     """A collapsed `.kimi-tool` row shows the first output lines + "(N more
     lines)" like the Kimi TUI, and the peek hides once the row is opened."""
     root = pathlib.Path(__file__).resolve().parent.parent
-    app_js = (root / "static" / "app.js").read_text()
+    app_js = dashboard_source(root / "static" / "app.js")
     app_js += (root / "static" / "conversation-content.js").read_text()
     app_js += (root / "static" / "conversation-events.js").read_text()
     app_css = (root / "static" / "app.css").read_text()

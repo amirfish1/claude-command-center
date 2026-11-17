@@ -1,5 +1,6 @@
 """Static regression coverage for the WatchTower ticket detail modal."""
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 
 
@@ -7,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_ticket_detail_shows_structured_repo_path_in_origin():
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = dashboard_source(ROOT / "static" / "app.js")
     start = app_js.index("function _uxqOpenItemModal(item)")
     end = app_js.index("// Answer section", start)
     modal = app_js[start:end]
@@ -17,7 +18,7 @@ def test_ticket_detail_shows_structured_repo_path_in_origin():
 
 
 def test_ticket_detail_emphasizes_only_the_first_sentence_of_a_long_note():
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = dashboard_source(ROOT / "static" / "app.js")
     app_css = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
     start = app_js.index("function _uxqOpenItemModal(item)")
     end = app_js.index("function _renderQueuePanel", start)
@@ -36,7 +37,7 @@ def test_ticket_detail_emphasizes_only_the_first_sentence_of_a_long_note():
 
 def test_ticket_detail_offers_the_existing_queued_run_action_for_open_tickets():
     """The detail modal gates Run now with its own claim metadata."""
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = dashboard_source(ROOT / "static" / "app.js")
     start = app_js.index("function _uxqOpenItemModal(item)")
     end = app_js.index("function _renderQueuePanel", start)
     modal = app_js[start:end]

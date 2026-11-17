@@ -1,3 +1,4 @@
+from tests.dashboard_source import dashboard_source
 import types
 import unittest
 from pathlib import Path
@@ -72,7 +73,7 @@ class CodexStuckSummaryTests(unittest.TestCase):
 
 class CodexStuckMonitorUiTests(unittest.TestCase):
     def test_footer_polls_cached_stuck_summary_and_labels_the_heuristic(self):
-        app_js = (ROOT / "static" / "app.js").read_text()
+        app_js = dashboard_source(ROOT / "static" / "app.js")
         self.assertIn("cccStuckPill", app_js)
         self.assertIn("/api/codex/stuck-summary", app_js)
         self.assertIn("sessions currently labeled Stuck", app_js)

@@ -5,6 +5,7 @@ queue's WatchTower config entry (session_id), so agents, a task panel and other
 browsers can find a session's queue; offer_workers drives a one-time
 "start N workers?" prompt once the first tickets land.
 """
+from tests.dashboard_source import dashboard_source
 import json
 import threading
 import urllib.error
@@ -124,7 +125,7 @@ def test_offer_decline_and_start(api):
 
 
 def test_ui_uses_server_link_and_skill_instructions():
-    app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app = dashboard_source(ROOT / "static" / "app.js")
     assert "String(q.config.session_id || '') === sessionId" in app
     assert "promptModal('Name the queue for this session', suggested)" in app
     assert "--accept" in app and "--after <REF>" in app

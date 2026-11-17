@@ -6,9 +6,10 @@ half the New Session screen rendered in the left pane. Verified end-to-end
 with puppeteer at fix time; this pins the wiring.
 """
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 
-APP = Path(__file__).resolve().parent.parent.joinpath("static", "app.js").read_text()
+APP = dashboard_source(Path(__file__).resolve().parent.parent.joinpath("static", "app.js"))
 
 
 def _body(name):

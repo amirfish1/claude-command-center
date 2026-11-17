@@ -1,3 +1,4 @@
+from tests.dashboard_source import dashboard_source
 import importlib
 import json
 import pathlib
@@ -220,7 +221,7 @@ class TestQueuePanelLayout(unittest.TestCase):
         """The ticket detail's Session row must keep resolving after the
         worker exits: past_workers and the durable worker_session_map
         (CCC-1179)."""
-        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(PROJECT_ROOT / "static" / "app.js")
         self.assertIn("_uxqHealthCache.past_workers", app_js)
         self.assertIn("worker_session_map", app_js)
         q2_js = (PROJECT_ROOT / "static" / "q2.js").read_text(encoding="utf-8")
@@ -230,7 +231,7 @@ class TestQueuePanelLayout(unittest.TestCase):
     def test_ticket_detail_session_link_survives_wt_block(self):
         """`wt block` nulls claimed_by/claimed_session_id and keeps the session
         under `parked`; the Assignment panel must still link to it."""
-        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(PROJECT_ROOT / "static" / "app.js")
         block = app_js[
             app_js.index('<div class="uxq-td-pg-label">Assignment</div>'):
             app_js.index("open in CCC ↗")]
@@ -242,7 +243,7 @@ class TestQueuePanelLayout(unittest.TestCase):
         """The Workers lane's 'starting…' pending row must retire once the
         worker's session row lands — for devin workers that means matching
         devincli-<slug>, not just WT's raw session_id (CCC-1180)."""
-        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(PROJECT_ROOT / "static" / "app.js")
         block = app_js[
             app_js.index("function _workersPendingWorkers("):app_js.index("function _workersPendingState(")]
         self.assertIn("'devincli-'", block)
@@ -251,7 +252,7 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("_workersPendingWorkers()", app_js)
 
     def test_main_sidebar_replaces_merge_with_shared_queues_tab(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
 
         tab_block = app_js[
             app_js.index("const _sidebarTab = (() => {"):
@@ -272,7 +273,7 @@ class TestQueuePanelLayout(unittest.TestCase):
 
     def test_queue_panel_has_one_node_and_two_mount_points(self):
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
 
         self.assertEqual(index_html.count('id="queuePanel"'), 1)
         self.assertEqual(index_html.count('id="statusRailQueueHost"'), 1)
@@ -280,10 +281,9 @@ class TestQueuePanelLayout(unittest.TestCase):
         self.assertIn("function _setSharedQueuePanelHost(hostName)", app_js)
         self.assertIn("function _parkSharedQueuePanelForSidebarRender()", app_js)
         self.assertIn("function _mountSharedQueuePanel()", app_js)
-        self.assertIn(
-            "_parkSharedQueuePanelForSidebarRender();\n    $convList.innerHTML = _convListHtml;",
-            app_js,
-        )
+        # Timing marks may sit between parking and replacing the sidebar.
+        self.assertLess(app_js.index("_parkSharedQueuePanelForSidebarRender();"),
+                        app_js.index("$convList.innerHTML = _convListHtml;"))
         # Order matters (park, rebuild, re-mount); decorator calls may sit between.
         self.assertRegex(
             app_js,
@@ -298,7 +298,7 @@ class TestQueuePanelLayout(unittest.TestCase):
     def test_queue_splitter_exposes_watchtower_log_without_starting_a_drag(self):
         """The Queue tab should expose the existing activity log at its section boundary."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
 
         health_pos = index_html.index('id="queueHealthStrip"')
         log_pos = index_html.index('id="queueHealthLogBtn"')
@@ -350,7 +350,7 @@ class TestQueuePanelLayout(unittest.TestCase):
 
     def test_queue_panel_note_text_expands_with_rail_width(self):
         """Queue rows should not pre-truncate notes before CSS can size them."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         queue_js = app_js[
@@ -372,7 +372,7 @@ class TestQueuePanelLayout(unittest.TestCase):
 
     def test_queue_rows_compact_metadata_and_move_play_to_status_dot(self):
         """Issue names keep room by compacting row-only metadata and actions."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         queue_js = app_js[
@@ -392,7 +392,7 @@ class TestQueuePanelLayout(unittest.TestCase):
 
     def test_queue_panel_empty_state_explains_project_scope(self):
         """An empty scoped Queue tab should say why it is empty."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         queue_js = app_js[
@@ -413,7 +413,7 @@ class TestQueuePanelLayout(unittest.TestCase):
         trigger pill shows the resolved queue name directly — no "Auto" label.
         The override/resolve logic (_uxqGetScopeOverride) is unchanged.
         """
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         scope_render = app_js[
             app_js.index("function _uxqRenderScopeSelect(items, currentScope)"):
             app_js.index("function _uxqSetScopeLoading(", app_js.index("function _uxqRenderScopeSelect(items, currentScope)"))
@@ -433,7 +433,7 @@ class TestQueuePanelLayout(unittest.TestCase):
 
     def test_claimed_queue_items_do_not_render_as_open_green(self):
         """Claim metadata should force the row out of the open/green state."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         queue_js = app_js[
             app_js.index("function _renderQueuePanel(options)"):
             app_js.index("// Jump the conversation pane", app_js.index("function _renderQueuePanel(options)"))
@@ -461,7 +461,7 @@ class TestQueuePanelLayout(unittest.TestCase):
 
     def test_live_queue_refreshes_when_mounted_in_sidebar_tab(self):
         """A worker claim refreshes sidebar rows and ends the Play spinner."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         visible = app_js[
@@ -497,7 +497,7 @@ class TestQueuePanelLayout(unittest.TestCase):
 
     def test_play_handler_sets_busy_state_after_it_reads_the_ticket_ref(self):
         """The busy marker must be set inside, not before, the click handler."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         queue_clicks = app_js[
             app_js.index("const $queueList = document.getElementById('sidebarQueueList')"):
             app_js.index("// Priority bump button", app_js.index("const $queueList = document.getElementById('sidebarQueueList')"))
@@ -517,7 +517,7 @@ class TestQueuePanelLayout(unittest.TestCase):
     def test_queue_panel_can_filter_tickets_by_type(self):
         """Type controls keep bugs and features independently scannable."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
 
         self.assertIn('id="queueTypeFilterToggle"', index_html)
         self.assertIn('data-uxq-type-filter="all"', index_html)
@@ -531,7 +531,7 @@ class TestQueuePanelLayout(unittest.TestCase):
 
     def test_all_queue_status_and_type_filters_cover_every_combination(self):
         """All-queue filtering must intersect status and type on every rerender."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         self.assertIn("function _uxqFilterItems(items, statusFilter, typeFilter)", app_js)
         helper_start = app_js.index("function _uxqFilterItems(items, statusFilter, typeFilter)")
         helper_end = app_js.index("\n  }\n", helper_start) + len("\n  }\n")
@@ -567,7 +567,7 @@ for (const [key, expected] of Object.entries(cases)) {
 
     def test_wrap_mode_pins_queue_age_and_status_to_the_right_rail(self):
         """Wrapping a title must not let it displace the row's right-edge signals."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         start = app_css.index(".files-queue-panel.queue-wrap-titles .fq-row {")
         end = app_css.index("/* Status as a compact colored dot", start)
@@ -581,7 +581,7 @@ for (const [key, expected] of Object.entries(cases)) {
 
     def test_queue_health_rows_include_live_and_recent_worker_sessions(self):
         """Queue health should carry Triggered Workers' live and Past 24h sessions inline."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         health_js = app_js[
             app_js.index("async function _renderQueueHealthStrip"):
@@ -632,7 +632,7 @@ for (const [key, expected] of Object.entries(cases)) {
 
     def test_all_queue_rows_show_the_queue_name(self):
         """Rows whose queue isn't implied by the panel scope carry its name."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         app_css = pathlib.Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
 
         queue_js = app_js[

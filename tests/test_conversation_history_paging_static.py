@@ -1,3 +1,4 @@
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -8,7 +9,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 class TestConversationHistoryPagingStatic(unittest.TestCase):
     def test_boot_prefetches_saved_conversation_tails_before_loading_sidebar(self):
         """Restored transcripts should warm before the archive render blocks the main thread."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         init_start = app_js.index("  } else {\n    restoreSplitState();")
         init_js = app_js[init_start:app_js.index("  attachAllPaneDropZones();", init_start)]
         fetch_js = pathlib.Path(PROJECT_ROOT, "static", "conversation-transport.js").read_text(encoding="utf-8")
@@ -21,7 +22,7 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
 
     def test_archive_boot_shapes_saved_row_and_restores_before_full_render(self):
         """Metadata-safe one-row shaping should precede the expensive full archive render."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         mode_start = app_js.index("async function setArchiveMode()")
         mode_js = app_js[mode_start:app_js.index("(function wireArchiveMode()", mode_start)]
 
@@ -43,7 +44,7 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
 
     def test_restore_finds_saved_conversation_outside_the_visible_all_lane(self):
         """A saved Coding session must restore while the All sidebar shows Workers."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         restore_start = app_js.index("async function restoreLastConversation()")
         restore_js = app_js[restore_start:app_js.index("// CCC-129: conversations open in a split pane", restore_start)]
 
@@ -52,7 +53,7 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
 
     def test_hover_prefetch_uses_tail_window(self):
         """Hover warming must not full-parse huge transcripts."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         prefetch_js = app_js[
             app_js.index("function _prefetchConversationTail(id, user)"):
             app_js.index("function _convPrefetchCancel(id)", app_js.index("function _prefetchConversationTail(id, user)"))
@@ -68,14 +69,14 @@ class TestConversationHistoryPagingStatic(unittest.TestCase):
 
     def test_non_streamed_hermes_sessions_do_not_consume_cached_tail(self):
         """Hermes has no follow-up SSE to reconcile a stale prefetched snapshot."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         fetch_js = pathlib.Path(PROJECT_ROOT, "static", "conversation-transport.js").read_text(encoding="utf-8")
 
         self.assertIn("_prefetchSource !== 'hermes'", fetch_js)
 
     def test_load_earlier_fetches_previous_window_not_full_transcript(self):
         """Loading earlier history should prepend one bounded window."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         load_js = app_js[
             app_js.index("async function loadEarlierPage()"):
             app_js.index("banner.addEventListener('click', loadEarlier);", app_js.index("async function loadEarlierPage()"))

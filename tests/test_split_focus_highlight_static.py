@@ -1,9 +1,10 @@
 """CCC-129: split-view focus cues and the left-docked ticket composer."""
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-APP_JS = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+APP_JS = dashboard_source(ROOT / "static" / "app.js")
 APP_CSS = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
 
 

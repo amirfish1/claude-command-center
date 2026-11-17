@@ -1,5 +1,7 @@
 """Behavioral guards for the session-composer attachment flow."""
 
+from tests.dashboard_source import dashboard_source
+from tests.conversation_source import conversation_function
 import json
 import pathlib
 import subprocess
@@ -14,7 +16,7 @@ def _run_upload_helpers(expression):
     program = textwrap.dedent(
         """
         const fs = require('fs');
-        const source = fs.readFileSync(process.argv[1], 'utf8');
+        const source = require('./tests/legacy-dashboard-source.cjs');
         const extract = (name) => {
           const start = source.indexOf('function ' + name + '(');
           if (start < 0) throw new Error('missing helper: ' + name);
@@ -64,7 +66,7 @@ def test_only_previewable_images_use_the_pasted_image_upload_path():
 
 
 def test_send_handler_refuses_to_clear_a_composer_with_uploads_in_flight():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     send_handler = APP_JS.with_name("conversation-composer.js").read_text(encoding="utf-8")
 
     assert "if (!guardComposerSend($input)) return;" in send_handler
@@ -86,7 +88,7 @@ def test_send_guard_blocks_a_pending_composer_without_consuming_its_text():
 
 
 def test_clipboard_and_split_pane_paths_share_the_upload_send_guards():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     paste_start = source.index("function attachImagePaste")
     paste_end = source.index("[document.getElementById('nsmBody')", paste_start)
     paste_handler = source[paste_start:paste_end]
@@ -101,7 +103,7 @@ def test_clipboard_and_split_pane_paths_share_the_upload_send_guards():
 
 
 def test_every_attachment_enabled_submitter_checks_the_shared_upload_guard():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
 
     def section(start_marker, end_marker):
         start = source.index(start_marker)
@@ -120,12 +122,12 @@ def test_every_attachment_enabled_submitter_checks_the_shared_upload_guard():
         "function annShowUxFixesPreview", "async function annOpenUxFixesQueue"
     )
 
-    annotation_saves = source.count("if (!guardComposerSend(noteEl)) return null;")
-    assert annotation_saves == 2
+    for submitter in ("annShowEditor", "annOpenScreenNote"):
+        assert "if (!guardComposerSend(noteEl)) return null;" in conversation_function(submitter)
 
 
 def test_group_chat_keeps_the_attachment_cleanup_value_hook():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     start = source.index("if (gcHumanInput) {")
     end = source.index("_autosizeGc();", start)
     group_chat_setup = source[start:end]
@@ -144,7 +146,7 @@ def test_upload_placeholders_do_not_emit_input_or_persist_as_drafts():
 
 
 def test_kanban_handoff_and_f2_continuation_wait_for_attachment_uploads():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     assert source.count("insertAtCursor(el, placeholder, false);") == 2
 
     handoff_start = source.index("function routeToNewSession")
@@ -166,7 +168,7 @@ def test_unnamed_clipboard_image_attachments_keep_a_usable_extension():
 
 
 def test_clipboard_upload_failure_notifies_the_composer_after_replacing_placeholder():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     start = source.index("function attachImagePaste")
     end = source.index("[document.getElementById('nsmBody')", start)
     paste_handler = source[start:end]

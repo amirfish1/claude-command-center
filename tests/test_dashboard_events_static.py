@@ -1,8 +1,9 @@
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+SOURCE = dashboard_source(ROOT / "static" / "app.js")
 
 
 def _dashboard_event_source():

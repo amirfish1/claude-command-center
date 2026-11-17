@@ -1,3 +1,4 @@
+from tests.dashboard_source import dashboard_source
 import json
 import subprocess
 import unittest
@@ -17,7 +18,7 @@ def function_block(source, name, next_name):
 class TtsResilienceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = APP_JS.read_text(encoding="utf-8")
+        cls.source = dashboard_source(APP_JS)
 
     def run_node(self, javascript):
         result = subprocess.run(

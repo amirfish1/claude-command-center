@@ -1,9 +1,10 @@
 """Static markers for peer-message rendering in the single-file app."""
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-APP_JS = (ROOT / "static" / "app.js").read_text()
+APP_JS = dashboard_source(ROOT / "static" / "app.js")
 APP_CSS = (ROOT / "static" / "app.css").read_text()
 
 

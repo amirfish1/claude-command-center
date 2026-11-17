@@ -1,3 +1,4 @@
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -9,7 +10,7 @@ class TestSearchUiStatic(unittest.TestCase):
     def test_conversation_search_remembers_last_ten_queries(self):
         """Search should offer the last ten committed conversation queries."""
         index_html = pathlib.Path(PROJECT_ROOT, "static", "index.html").read_text(encoding="utf-8")
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
 
         search_input = index_html.split('id="convSearch"', 1)[1].split('>', 1)[0]
         self.assertNotIn('list=', search_input)
@@ -35,7 +36,7 @@ class TestSearchUiStatic(unittest.TestCase):
         self.assertIn("Matched by local history index", html)
 
     def test_recall_matches_are_prioritized_after_title_matches(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
 
         self.assertIn("function _historySourceRank(source) {", app_js)
         self.assertIn("if (source === 'recall') return 3;", app_js)
@@ -53,7 +54,7 @@ class TestSearchUiStatic(unittest.TestCase):
         )
 
     def test_objects_grouping_search_uses_ranked_results_as_top_band(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
 
         self.assertIn(
             "const _currentSessionSource = _ipSearchActive\n"
@@ -85,7 +86,7 @@ class TestSearchUiStatic(unittest.TestCase):
         )
 
     def test_recall_results_repaint_without_waiting_for_history(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
 
         self.assertIn("const recallDone = recallReq.then((recallData) => {", app_js)
         self.assertIn(
@@ -106,7 +107,7 @@ class TestSearchUiStatic(unittest.TestCase):
 
     def test_archive_search_keeps_name_matches_above_recall_results(self):
         """A late recall-search repaint must preserve the search-result bands."""
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         start = app_js.index("function renderArchiveList(filter, opts) {")
         end = app_js.index("async function setArchiveMode", start)
         body = app_js[start:end]
@@ -117,7 +118,7 @@ class TestSearchUiStatic(unittest.TestCase):
         )
 
     def test_add_queue_action_is_after_queue_health_rows_not_tickets(self):
-        app_js = pathlib.Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(pathlib.Path(PROJECT_ROOT, "static", "app.js"))
         health_start = app_js.index("async function _renderQueueHealthStrip")
         health_end = app_js.index("// Repo-basename", health_start)
         health_body = app_js[health_start:health_end]

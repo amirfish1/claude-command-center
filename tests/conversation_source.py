@@ -5,17 +5,13 @@ fixtures. Static assertions can ignore live adapter qualification when checking
 an existing algorithm after it moves from the dashboard to a shared controller.
 """
 from functools import lru_cache
-from pathlib import Path
 import re
 
 
 @lru_cache(maxsize=1)
 def conversation_source():
-    static = Path(__file__).resolve().parents[1] / "static"
-    files = [static / "app.js", *sorted(static.glob("conversation-*.js"))]
-    source = "\n".join(item.read_text(encoding="utf-8") for item in files[1:])
-    source = re.sub(r"\(0, (?:sharedState|hostServices)\.([A-Za-z_$][\w$]*)\)", r"\1", source)
-    return files[0].read_text(encoding="utf-8") + "\n" + re.sub(r"\b(?:sharedState|hostServices)\.([A-Za-z_$][\w$]*)", r"\1", source)
+    from tests.dashboard_source import dashboard_source
+    return dashboard_source()
 
 
 def conversation_function(name):

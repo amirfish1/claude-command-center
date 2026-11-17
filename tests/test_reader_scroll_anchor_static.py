@@ -1,5 +1,6 @@
 """The conversation reader must keep its position when content above grows (iOS has no CSS scroll anchoring)."""
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -8,7 +9,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class TestReaderScrollAnchorStatic(unittest.TestCase):
     def test_reader_compensates_growth_above_viewport(self):
-        js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        js = dashboard_source(ROOT / "static" / "app.js")
         start = js.index("function _observeConvEventSizes(view, mutations)")
         body = js[start:js.index("function _topVisibleAnchor", start)]
         self.assertIn("new ResizeObserver", body)

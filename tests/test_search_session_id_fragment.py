@@ -1,5 +1,6 @@
 """Sidebar search finds a session from a fragment of its id, at any age."""
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 import sqlite3
 
@@ -57,14 +58,14 @@ def test_other_callers_do_not_get_id_hits(index):
 
 
 def test_client_checks_the_id_before_any_filter_and_ranks_it_top():
-    app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app = dashboard_source(ROOT / "static" / "app.js")
     body = app[app.index("function filterConversations(q)"):]
     assert body.index("_sessionIdSearchRank(c, idNeedle)") < body.index("Recent-only filter")
     assert "if (source === 'id') return 4;" in app
 
 
 def test_sidebar_list_shows_id_hits_that_are_not_loaded():
-    app = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app = dashboard_source(ROOT / "static" / "app.js")
     body = app[app.index("function renderArchiveList(filter, opts)"):]
     union = body[body.index("if (q && _historyState.query === q && _historyState.map.size)"):]
     assert "hit.source === 'id'" in union[:900]

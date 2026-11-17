@@ -1,5 +1,6 @@
 """Regression coverage for stream-json to durable transcript handoff."""
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 import shutil
 import subprocess
@@ -66,7 +67,7 @@ def test_matching_stream_bubble_handoff_skips_live_word_reveal():
 
 def test_result_cleanup_cannot_forget_that_message_text_already_streamed():
     """A result may remove the bubble before the durable poll catches up."""
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     start = source.index("function ensureStreamingBubble(")
     end = source.index("\n  function handleSpawnEvents(", start)
     ensure_body = source[start:end]

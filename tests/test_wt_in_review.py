@@ -7,6 +7,7 @@ Decision Inbox card whose Accept / Reject run `wt accept` / `wt reject`.
 No subprocess: the wt runner is injected.
 """
 
+from tests.dashboard_source import dashboard_source
 import importlib
 import pathlib
 import unittest
@@ -139,7 +140,7 @@ class FrontendWiringTest(unittest.TestCase):
         self.assertIn("'/api/ux-fixes/reject'", src)
 
     def test_queue_panel(self):
-        src = (ROOT / "static" / "app.js").read_text()
+        src = dashboard_source(ROOT / "static" / "app.js")
         self.assertIn("function _uxqReviewLabel(it)", src)
         # Review shares the top attention bucket with owner decisions (CCC-244
         # sank non-owner waits below them).

@@ -1,5 +1,6 @@
 """Regression coverage for F2 Continue New Codex handoff."""
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 import subprocess
 import unittest
@@ -11,7 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 class TestF2ContinueReconciliation(unittest.TestCase):
     def test_continue_uses_the_parent_display_name_for_its_spawn_title(self):
         """Continuation rows should identify the conversation, not its opaque id."""
-        app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(ROOT / "static" / "app.js")
         f2_start = app_js.index("async function f2RunContinue")
         f2_end = app_js.index("// One delegated listener", f2_start)
         f2_block = app_js[f2_start:f2_end]

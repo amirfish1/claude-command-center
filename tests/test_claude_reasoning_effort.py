@@ -1,5 +1,6 @@
 """Regression coverage for Claude's model-picker reasoning effort."""
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 
 import server
@@ -18,7 +19,7 @@ def test_claude_accepts_max_reasoning_effort(monkeypatch):
 
 
 def test_claude_picker_uses_effort_only_requests_and_resume_flag():
-    app_js = Path("static/app.js").read_text(encoding="utf-8")
+    app_js = dashboard_source(Path("static/app.js"))
     server_source = (
         Path("server.py").read_text(encoding="utf-8")
         + Path("ccc_server/watchtower_msg.py").read_text(encoding="utf-8")
@@ -32,7 +33,7 @@ def test_claude_picker_uses_effort_only_requests_and_resume_flag():
 
 
 def test_codex_picker_marks_reasoning_updates_as_effort_only():
-    app_js = Path("static/app.js").read_text(encoding="utf-8")
+    app_js = dashboard_source(Path("static/app.js"))
     handler = app_js[
         app_js.index("pop.querySelectorAll('.mp-reasoning-row[data-reasoning]')"):
         app_js.index("const otherInput =", app_js.index("pop.querySelectorAll('.mp-reasoning-row[data-reasoning]')"))

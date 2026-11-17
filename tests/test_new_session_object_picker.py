@@ -1,5 +1,6 @@
 """Regression guards for new-session object picker behavior."""
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -9,7 +10,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class NewSessionObjectPickerTest(unittest.TestCase):
     def test_picker_opens_unfiltered_and_prioritizes_selected_repo(self):
-        app_js = (PROJECT_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(PROJECT_ROOT / "static" / "app.js")
 
         self.assertIn("function newSessionObjectRepoMatchIds", app_js)
         self.assertIn("repoMatched: repoMatchIds.has(o.id)", app_js)

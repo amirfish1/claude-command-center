@@ -9,6 +9,7 @@ The dashboard keeps body flag classes in sync instead (syncBodyHasFlags in
 static/app.js). Static-source guard, like tests/test_conv_view_toggle.py.
 """
 import glob
+from tests.dashboard_source import dashboard_source
 import os
 import re
 import unittest
@@ -21,6 +22,8 @@ _ANCHORED_HAS = re.compile(
 
 
 def _read(rel):
+    if rel == "static/app.js":
+        return dashboard_source()
     with open(os.path.join(ROOT, rel), encoding="utf-8") as fh:
         return fh.read()
 

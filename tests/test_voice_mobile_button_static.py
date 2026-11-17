@@ -1,5 +1,6 @@
 """Tests for the mobile voice call button toggle option."""
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -9,7 +10,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def read(name):
-    return (ROOT / "static" / name).read_text(encoding="utf-8")
+    return dashboard_source(ROOT / "static" / name)
 
 
 class TestVoiceMobileButtonStatic(unittest.TestCase):

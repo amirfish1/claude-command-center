@@ -11045,49 +11045,41 @@ class TestRepoContextHelpers(unittest.TestCase):
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        # Exercise HTTP response aliases against an available snapshot. Cold
+        # population is asynchronous and covered by the archive cache tests.
         try:
             with mock.patch.object(
                 self.server,
-                "_build_archive_conversations",
-                return_value=[{"session_id": "codex-1", "engine": "codex"}],
+                "_archive_all_rows_cached",
+                return_value=([{"session_id": "codex-1", "engine": "codex"}], True),
             ), mock.patch.object(
                 self.server,
-                "list_spawned_sessions",
+                "_archive_spawned_coalesced",
                 return_value=[{"spawn_id": "123", "engine": "codex"}],
-            ), mock.patch.object(
-                # The persisted response cache is signature-gated by the real
-                # transcript corpus. On a machine with no transcripts (CI) an
-                # earlier test's empty entry matches this test's signature and
-                # is served instead of the stubbed build; force the build.
-                self.server, "_archive_response_cache_get", return_value=None,
-            ), mock.patch.object(
-                self.server, "_archive_response_cache_put",
-            ), mock.patch.object(
-                self.server, "_save_conv_meta_cache",
             ):
                 with urllib.request.urlopen(base + "/api/sessions?all=1&engine=codex", timeout=5) as res:
                     body = json.loads(res.read().decode("utf-8"))
-            self.assertTrue(body["ok"])
-            self.assertEqual(body["count"], 1)
-            self.assertEqual(body["sessions"][0]["engine"], "codex")
-            self.assertEqual(body["conversations"], body["sessions"])
-            self.assertEqual(body["spawned"][0]["spawn_id"], "123")
+                self.assertTrue(body["ok"])
+                self.assertEqual(body["count"], 1)
+                self.assertEqual(body["sessions"][0]["engine"], "codex")
+                self.assertEqual(body["conversations"], body["sessions"])
+                self.assertEqual(body["spawned"][0]["spawn_id"], "123")
 
-            with urllib.request.urlopen(
-                base + "/api/sessions?all=1&engine=codex&compact=1",
-                timeout=5,
-            ) as res:
-                compact_sessions = json.loads(res.read().decode("utf-8"))
-            self.assertEqual(compact_sessions["sessions"], body["sessions"])
-            self.assertNotIn("conversations", compact_sessions)
+                with urllib.request.urlopen(
+                    base + "/api/sessions?all=1&engine=codex&compact=1",
+                    timeout=5,
+                ) as res:
+                    compact_sessions = json.loads(res.read().decode("utf-8"))
+                self.assertEqual(compact_sessions["sessions"], body["sessions"])
+                self.assertNotIn("conversations", compact_sessions)
 
-            with urllib.request.urlopen(
-                base + "/api/conversations?all=1&engine=codex&compact=1",
-                timeout=5,
-            ) as res:
-                compact_conversations = json.loads(res.read().decode("utf-8"))
-            self.assertEqual(compact_conversations["conversations"], body["sessions"])
-            self.assertNotIn("sessions", compact_conversations)
+                with urllib.request.urlopen(
+                    base + "/api/conversations?all=1&engine=codex&compact=1",
+                    timeout=5,
+                ) as res:
+                    compact_conversations = json.loads(res.read().decode("utf-8"))
+                self.assertEqual(compact_conversations["conversations"], body["sessions"])
+                self.assertNotIn("sessions", compact_conversations)
         finally:
             httpd.shutdown()
             httpd.server_close()

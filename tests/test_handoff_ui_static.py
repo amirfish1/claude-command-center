@@ -6,6 +6,7 @@ renaming of the modal entry point, its handoff API bindings, the overflow
 menu action, and the modal markup / CSS.
 """
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -14,7 +15,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def _read(*parts):
-    return pathlib.Path(PROJECT_ROOT, *parts).read_text(encoding="utf-8")
+    return dashboard_source(pathlib.Path(PROJECT_ROOT, *parts))
 
 
 class TestHandoffUiStatic(unittest.TestCase):

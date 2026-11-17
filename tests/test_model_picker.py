@@ -1,5 +1,6 @@
 """Tests for the quick model picker above the composer."""
 
+from tests.dashboard_source import dashboard_source
 import json
 import pathlib
 import tempfile
@@ -48,7 +49,7 @@ class TestModelPickerContracts(unittest.TestCase):
         self.assertIn('.conv-model-picker-strip', app_css)
         self.assertIn('.conv-pane > .conv-model-picker-strip', app_css)
 
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         self.assertIn('fetchModelPickerPicksFromServer', app_js)
         self.assertIn('/api/model-picker/picks', app_js)
         self.assertIn('/api/model-picker/record', app_js)
@@ -58,7 +59,7 @@ class TestModelPickerContracts(unittest.TestCase):
         self.assertIn("opus-5-5", server._ENGINE_KNOWN_MODELS["claude"])
         self.assertTrue(server._claude_model_supports_1m("claude-opus-5-5"))
         self.assertIn("claude-opus-5-5", {model["id"] for model in server._CLAUDE_ANTHROPIC_MODELS})
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         self.assertIn("{ id: 'opus-5-5'", app_js)
         self.assertIn("label: 'Opus 5.5'", app_js)
 
@@ -72,7 +73,7 @@ class TestModelPickerContracts(unittest.TestCase):
             server._antigravity_model_settings_label("gemini-4-carbon"),
             "Gemini 4 Carbon (High)",
         )
-        app_js = APP_JS.read_text(encoding="utf-8")
+        app_js = dashboard_source(APP_JS)
         self.assertIn("{ id: 'Gemini 4 Carbon (High)', label: 'Gemini 4 Carbon (High)' }", app_js)
         self.assertIn("{ id: 'Gemini 4 Carbon (Medium)', label: 'Gemini 4 Carbon (Medium)' }", app_js)
         self.assertIn("{ id: 'Gemini 4 Carbon (Low)', label: 'Gemini 4 Carbon (Low)' }", app_js)

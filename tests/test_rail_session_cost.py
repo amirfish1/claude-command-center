@@ -1,5 +1,6 @@
 """Behavior coverage for cross-engine status-rail cost presentation."""
 
+from tests.dashboard_source import dashboard_source
 import json
 import pathlib
 import subprocess
@@ -14,7 +15,7 @@ HELPER_END = "// RAIL_SESSION_COST_PRESENTATION_END"
 
 
 def _helper_source():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     assert HELPER_START in source, "rail session-cost helper block is missing"
     assert HELPER_END in source, "rail session-cost helper terminator is missing"
     start = source.index(HELPER_START) + len(HELPER_START)
@@ -147,7 +148,7 @@ def test_visible_cost_text_and_tooltip_execute_production_formatter():
 
 
 def test_status_rail_renders_the_selected_cost_basis():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
 
     # The rail headline was redesigned (allocated subscription cost first,
     # API list-price equivalent as the caption) and now renders through

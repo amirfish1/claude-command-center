@@ -1,3 +1,4 @@
+from tests.dashboard_source import dashboard_source
 import json
 import pathlib
 import subprocess
@@ -11,7 +12,7 @@ HELPER_END = "// SESSION_ICON_PRESENTATION_END"
 
 
 def _helper_source():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
     assert HELPER_START in source, "session icon presentation helper block is missing"
     assert HELPER_END in source, "session icon presentation helper block terminator is missing"
     start = source.index(HELPER_START) + len(HELPER_START)
@@ -122,7 +123,7 @@ def test_canonical_engine_field_wins_over_generic_source():
 
 
 def test_sidebar_and_pane_header_use_shared_session_icon_renderer():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = dashboard_source(APP_JS)
 
     assert "function sessionEngineIconHtml(row, options)" in source
     assert "sessionEngineIconHtml(c, { context: 'sidebar' })" in source

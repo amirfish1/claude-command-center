@@ -1,5 +1,6 @@
 """Regression contracts for keeping conversation opens ahead of background UI work."""
 
+from tests.dashboard_source import dashboard_source
 import concurrent.futures
 import inspect
 import threading
@@ -10,7 +11,7 @@ import server
 
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_JS = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+APP_JS = dashboard_source(ROOT / "static" / "app.js")
 
 
 def test_background_api_reads_have_a_global_concurrency_ceiling():

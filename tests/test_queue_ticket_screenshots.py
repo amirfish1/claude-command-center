@@ -1,5 +1,6 @@
 """Regression coverage for screenshot URLs in Queue ticket details."""
 
+from tests.dashboard_source import dashboard_source
 import json
 from pathlib import Path
 import subprocess
@@ -10,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _extract_images(text):
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = dashboard_source(ROOT / "static" / "app.js")
     start = app_js.index("function _uxqExtractImages(text)")
     end = app_js.index("function _uxqOpenItemModal(item)", start)
     helper = app_js[start:end]

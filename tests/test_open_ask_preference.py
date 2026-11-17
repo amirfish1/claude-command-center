@@ -1,5 +1,6 @@
 """Static regression coverage for removing the Open asks UI."""
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 import unittest
 
@@ -10,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class TestOpenAskRemoval(unittest.TestCase):
     def test_open_asks_are_not_rendered_or_configurable(self):
         html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-        app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(ROOT / "static" / "app.js")
 
         self.assertNotIn('id="settingsOpenAskToggle"', html)
         self.assertNotIn('data-view-openask-toggle', html)
@@ -21,7 +22,7 @@ class TestOpenAskRemoval(unittest.TestCase):
         self.assertNotIn("const _openAskHtml", app_js)
 
     def test_original_ask_panel_can_be_dismissed_on_mobile(self):
-        app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(ROOT / "static" / "app.js")
         app_css = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
 
         self.assertIn("sticky.hidden = true;", app_js)

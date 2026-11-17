@@ -14,7 +14,7 @@ import re
 import subprocess
 import threading
 
-_FILED_RE = re.compile(r"^FILED:\s+(\S+)", re.M)
+_FILED_RE = re.compile(r"^FILED:\s+([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-\d+)(?=[:\s]|$)", re.M)
 STAFF_TIMEOUT = 900
 REF_RE = re.compile(r"\b([A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*-\d+)\b")
 MINOR_CLASS = "code-change-revertable"
@@ -105,6 +105,8 @@ class WT:
                 self._staff(self.argv() + [str(a) for a in args], self._env)
             except OSError:
                 pass  # WatchTower's own next pass staffs the queue
+        # Named CLI refs include a display slug; stores and API joins use the
+        # stable numeric identity, which also works with older CLI versions.
         return m.group(1)
 
     def blocked(self, queue):
@@ -207,8 +209,11 @@ class WT:
         rows = []
         for line in out.splitlines():
             parts = line.split("\t")
-            if len(parts) >= 2 and REF_RE.fullmatch(parts[0].strip()):
-                rows.append({"ref": parts[0].strip(), "state": parts[1].strip(),
+            label = parts[0].strip()
+            identity = REF_RE.match(label)
+            if (len(parts) >= 2 and identity
+                    and (identity.end() == len(label) or label[identity.end()] == ":")):
+                rows.append({"ref": identity.group(1), "state": parts[1].strip(),
                              "reason": parts[2].strip() if len(parts) > 2 else ""})
         return rows
 

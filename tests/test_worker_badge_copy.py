@@ -1,3 +1,4 @@
+from tests.dashboard_source import dashboard_source
 import json
 import os
 import subprocess
@@ -11,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class WorkerBadgeCopyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        cls.app_js = dashboard_source(ROOT / "static" / "app.js")
         cls.app_css = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
 
     def render_badge(self, data):

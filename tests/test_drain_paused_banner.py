@@ -5,6 +5,7 @@ unmissable from any view, so these assertions pin the wiring: the element
 exists page-globally, the 20s control-plane poll feeds it, and both the
 "dispatching" and "not dispatching" renderer paths drive it."""
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 import unittest
 
@@ -15,7 +16,7 @@ class TestDrainPausedBanner(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-        cls.js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        cls.js = dashboard_source(ROOT / "static" / "app.js")
         cls.css = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
 
     def test_banner_element_is_page_global(self):

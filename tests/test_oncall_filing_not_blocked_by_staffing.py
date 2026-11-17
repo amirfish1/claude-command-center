@@ -78,3 +78,24 @@ def test_a_slow_answer_is_not_reported_as_ccc_not_running(error):
     with pytest.raises(cli.Stop) as stop:
         cli.Client("http://127.0.0.1:1", None, refused).post("report", {"text": "x"})
     assert str(stop.value) == cli.NOT_RUNNING
+
+
+@pytest.mark.parametrize("printed", ["SHOP-7", "SHOP-7:checkout-fails"])
+def test_filed_ref_uses_stable_identity(printed):
+    def run(argv, **kwargs):
+        import subprocess
+        return subprocess.CompletedProcess(argv, 0, "FILED: " + printed + "\n", "")
+
+    wt = wtmod.WT(["wt"], run=run, dispatch=False)
+    assert wt.add("SHOP", title="Checkout fails", text="It fails.") == "SHOP-7"
+
+
+@pytest.mark.parametrize("printed", ["SHOP-7", "SHOP-7:checkout-fails"])
+def test_decisions_use_stable_identity(printed):
+    def run(argv, **kwargs):
+        import subprocess
+        return subprocess.CompletedProcess(argv, 0, printed + "\tauto_decision\tApproved\n", "")
+
+    wt = wtmod.WT(["wt"], run=run, dispatch=False)
+    assert wt.decisions("SHOP") == [
+        {"ref": "SHOP-7", "state": "auto_decision", "reason": "Approved"}]

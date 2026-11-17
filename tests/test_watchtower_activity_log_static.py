@@ -1,5 +1,6 @@
 """Static regression coverage for WatchTower activity-log ticket references."""
 
+from tests.dashboard_source import dashboard_source
 from pathlib import Path
 import unittest
 
@@ -14,14 +15,14 @@ class TestWatchtowerActivityLogStatic(unittest.TestCase):
         self.assertIn(".wl-ref-col { flex: 0 1 auto; max-width: 124px;", app_css)
 
     def test_activity_log_groups_its_first_four_fields_in_one_metadata_column(self):
-        app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(ROOT / "static" / "app.js")
         app_css = (ROOT / "static" / "app.css").read_text(encoding="utf-8")
 
         self.assertIn("'<span class=\"wl-meta\">'", app_js)
         self.assertIn(".wl-meta {", app_css)
 
     def test_activity_log_timestamps_are_formatted_in_the_browser_timezone(self):
-        app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(ROOT / "static" / "app.js")
 
         self.assertIn("function _activityLogTimestampLocal", app_js)
         self.assertIn("replace(' UTC', 'Z').replace(' ', 'T')", app_js)

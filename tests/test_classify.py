@@ -15,6 +15,7 @@ transcript and assert the parser surfaces it correctly.
 
 stdlib-only — `unittest` / `unittest.mock`, no pytest.
 """
+from tests.dashboard_source import dashboard_source
 import importlib
 import json
 import os
@@ -1608,7 +1609,7 @@ class TestCodexConversationAdapter(unittest.TestCase):
             "text": "The user has the in-app browser open with 4 tabs.",
         })
 
-        app_js = Path(PROJECT_ROOT, "static", "app.js").read_text(encoding="utf-8")
+        app_js = dashboard_source(Path(PROJECT_ROOT, "static", "app.js"))
         app_css = Path(PROJECT_ROOT, "static", "app.css").read_text(encoding="utf-8")
         self.assertIn("function ambientContextHtml(context)", app_js)
         self.assertIn("ambientContextHtml(ev.ambient_context)", app_js)

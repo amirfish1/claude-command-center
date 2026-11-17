@@ -5,6 +5,7 @@ event carrying its original text; the frontend matches that exact text and
 renders a "Session interrupted" marker instead of a user bubble.
 """
 
+from tests.dashboard_source import dashboard_source
 import pathlib
 
 import server
@@ -18,7 +19,7 @@ def _assert_surfaced_with_original_text(event, line, text):
     assert parsed["type"] == "user_text"
     assert parsed["text"] == text
     # The renderer turns this text into the interrupted marker, not a bubble.
-    src = APP_JS.read_text(encoding="utf-8")
+    src = dashboard_source(APP_JS)
     assert "/^\\[Request interrupted by user/.test(_rawText)" in src
     assert "session-interrupted-event" in src
 

@@ -1,4 +1,5 @@
 """Grok ACP harness registration and spawn wiring."""
+from tests.dashboard_source import dashboard_source
 import pathlib
 from types import SimpleNamespace
 from unittest import mock
@@ -319,7 +320,7 @@ def test_grok_live_status_projects_pending_permission(monkeypatch):
 def test_ui_and_api_pins():
     server_py = (ROOT / "server.py").read_text(encoding="utf-8")
     engines_py = (ROOT / "ccc_server" / "engines.py").read_text(encoding="utf-8")
-    app_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+    app_js = dashboard_source(ROOT / "static" / "app.js")
     index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     assert '"/api/sessions/spawn-grok"' in server_py
     assert "def spawn_session_grok(" in engines_py

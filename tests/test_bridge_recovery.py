@@ -1,5 +1,6 @@
 """Regression coverage for guarded Codex/Kimi bridge recovery."""
 
+from tests.dashboard_source import dashboard_source
 import importlib
 import pathlib
 import tempfile
@@ -195,7 +196,7 @@ class BridgeRecoveryTests(unittest.TestCase):
     def test_recovery_ui_is_wired_to_transport_pill(self):
         root = pathlib.Path(__file__).resolve().parents[1]
         html = (root / "static" / "index.html").read_text(encoding="utf-8")
-        js = (root / "static" / "app.js").read_text(encoding="utf-8")
+        js = dashboard_source(root / "static" / "app.js")
         css = (root / "static" / "app.css").read_text(encoding="utf-8")
         self.assertIn('id="bridgeRecoveryBackdrop"', html)
         self.assertIn("data-bridge-recovery", js)
