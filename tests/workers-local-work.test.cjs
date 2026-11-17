@@ -76,7 +76,7 @@ test('desktop and phone render only locally attributed work and retain ticket/se
   const slice = (from,to) => app.slice(app.indexOf(from),app.indexOf(to,app.indexOf(from)));
   try {
     const page = await browser.newPage();
-    await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><div id="convList" class="workers-view"><div data-role="workers-recent-work"><div data-role="workers-awaiting" hidden></div><div class="fq-recent-rows"></div></div></div>');
+    await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><div id="convList" class="workers-view"><div class="conv-workers-activity"><div class="fq-recent-work" data-role="workers-recent-work"><div data-role="workers-awaiting" hidden></div><div class="fq-recent-rows"></div></div></div></div>');
     await page.addStyleTag({content:fs.readFileSync('static/app.css','utf8')+'\nbody{display:block!important;margin:16px}#convList{width:100%;max-width:850px}'});
     await page.addScriptTag({content:`
       const _uxqItemsCache = {items:[
@@ -115,6 +115,24 @@ test('desktop and phone render only locally attributed work and retain ticket/se
     }
     assert.deepEqual(await page.evaluate(()=>picked),['local-session','local-session']);
     assert.deepEqual(await page.evaluate(()=>opened),['OTHER-2','OTHER-2']);
+    await page.evaluate(() => {
+      _uxqHealthCache.wt_workers.push(
+        {worker_id:'local-worker',session_id:'local-session',queue:'EXAMPLE',alive:true,idle_seconds:2},
+        {worker_id:'third-worker',session_id:'third-session',queue:'BUILD',alive:true,idle_seconds:2});
+      Object.assign(_uxqItemsCache.items[0], {status:'in_progress',closed_at:null,claimed_at:'2026-01-01T10:00:00Z'});
+      _uxqRenderRecentWork();
+    });
+    for (const width of [1100,390]) {
+      await page.setViewport({width,height:760});
+      assert.deepEqual(await page.$$eval('[data-workers-pending-id]',nodes=>nodes.map(n=>n.dataset.workersPendingId)),
+        ['starting-worker','local-worker','third-worker'], 'every live worker has a row, including the ticket claimant');
+      assert.match(await page.$eval('[data-workers-pending-id=local-worker]',el=>el.innerText), /EXAMPLE-1/);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+      if (process.env.WORKERS_LOCAL_SCREENSHOT) await page.screenshot({path:process.env.WORKERS_LOCAL_SCREENSHOT+'-roster-'+width+'.png'});
+    }
+    await page.click('[data-workers-pending-session="local-session"]');
+    assert.equal(await page.evaluate(()=>picked.at(-1)), 'local-session');
+
   } finally {await browser.close();}
 });
 

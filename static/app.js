@@ -38930,10 +38930,15 @@
 
   function _workersAwaitingTickets(items) {
     const seen = new Set();
+    const queues = (typeof _uxqHealthCache === 'undefined' ? null : _uxqHealthCache)?.queues || [];
     return (items || []).filter(item => {
       const ref = _uxqItemRef(item);
       if (!ref || seen.has(ref) || item.status !== 'open' || item.closed_at || item._sessionOnly
           || /^(?:IDEAS|SMALL-BUGS)-\d+$/.test(ref)) return false;
+      // Archived queues are absent from health. Missing configuration is not
+      // evidence that the scheduler is about to assign this ticket.
+      const queue = queues.find(q => String(q.queue).toUpperCase() === String(item.project || ref.replace(/-\d+$/, '')).toUpperCase());
+      if (!queue || queue.configured === false || queue.archived) return false;
       // Historical answer delivery does not determine current eligibility.
       const attention = _uxqTicketAttention({...item, pending_answer:null, history:[]});
       if (!attention || attention.key !== 'ready') return false;
@@ -38945,22 +38950,32 @@
         || _uxqItemRef(a).localeCompare(_uxqItemRef(b), undefined, {numeric:true});
     });
   }
-  function _workersPendingWorkers(rows = _workersActivityRows()) {
+  function _workersPendingWorkers(rows = _workersActivityRows(), includeRepresented = false) {
     const health = (typeof _uxqHealthCache === 'undefined' ? null : _uxqHealthCache) || {};
     const represented = new Set();
+    const tickets = new Map();
+    const record = (id, ref) => {
+      if (!id) return;
+      represented.add(id);
+      if (!tickets.has(id)) tickets.set(id, new Set());
+      tickets.get(id).add(ref);
+    };
     for (const row of rows) {
       if (row.item.status !== 'in_progress' || row.item.closed_at) continue;
-      [row.item.claimed_by, row.item.claimed_session_id].filter(Boolean).forEach(id => represented.add(id));
-      const sessions = _workersTicketSessions.get(_uxqItemRef(row.item));
+      const ref = _uxqItemRef(row.item);
+      [row.item.claimed_by, row.item.claimed_session_id].forEach(id => record(id, ref));
+      const sessions = _workersTicketSessions.get(ref);
       for (const card of (sessions && sessions.cards) || []) {
         const sid = card.session_id || card.id;
-        if (sid) represented.add(sid);
+        record(sid, ref);
       }
     }
     return (health.wt_workers || []).filter(w => w && w.alive === true && !w.released_at)
       .map(w => ({...w, session_id:w.session_id || (health.worker_session_map || {})[w.worker_id] || ''}))
-      .filter(w => !represented.has(w.worker_id) && !(w.session_id && represented.has(w.session_id))
-        && !represented.has('devincli-' + w.session_id));
+      .filter(w => includeRepresented || (!represented.has(w.worker_id) && !(w.session_id && represented.has(w.session_id))
+        && !represented.has('devincli-' + w.session_id)))
+      .map(w => ({...w, ticket_refs:[...new Set([w.worker_id, w.session_id, 'devincli-' + w.session_id]
+        .flatMap(id => [...(tickets.get(id) || [])]))]}));
   }
   function _workersPendingState(worker, now = Date.now()) {
     const started = Date.parse(worker.started_at || '');
@@ -38979,8 +38994,8 @@
   }
   function _workersPendingHtml(workers) {
     if (!workers.length) return '';
-    return '<section class="workers-pending-list" aria-label="Workers without listed tickets">'
-      + workerSectionHeaderHtml('unlisted', workers.length, 'Other workers')
+    return '<section class="workers-pending-list" aria-label="Live workers on this machine">'
+      + workerSectionHeaderHtml('unlisted', workers.length, 'Live workers')
       + workers.map(w => {
         const state = _workersPendingState(w);
         const started = Date.parse(w.started_at || '');
@@ -38989,9 +39004,10 @@
           ? ' · last activity ' + Math.max(0, Math.floor(Number(w.idle_seconds))) + 's ago' : '';
         return '<div class="workers-pending-entry" data-workers-pending-id="' + escapeAttr(w.worker_id || '') + '">'
           + '<div class="workers-pending-heading"><strong>' + escapeHtml(w.queue || 'Worker') + '</strong>'
-          + '<span class="workers-pending-state ' + state.css + '">' + escapeHtml(state.label) + '</span></div>'
-          + '<div class="workers-pending-meta">' + escapeHtml((w.worker_id || 'Worker') + age + activity) + '</div>'
-          + '<p>' + escapeHtml(state.text) + '</p>'
+          + '<span class="workers-pending-state ' + state.css + '" title="' + escapeAttr(w.ticket_refs?.length ? 'Session activity; see its tickets below.' : state.text) + '">' + escapeHtml(state.label) + '</span></div>'
+          + '<div class="workers-pending-meta" title="' + escapeAttr(age + activity) + '">' + escapeHtml((w.worker_id || 'Worker')
+            + (w.ticket_refs?.length ? ' · ' + w.ticket_refs.join(' · ') : ' · no listed ticket')) + '</div>'
+          + (!w.session_id ? '<p>' + escapeHtml(state.text) + '</p>' : '')
           + (w.session_id ? '<button type="button" class="workers-pending-session" data-workers-pending-session="'
             + escapeAttr(w.session_id) + '" title="' + escapeAttr('Open session ' + w.session_id) + '">Open session</button>' : '')
           + '</div>';
@@ -39105,15 +39121,18 @@
     if (!hosts.length) return;
     const rows = _workersActivityRows();
     const awaiting = _workersAwaitingTickets(_uxqItemsCache.items);
-    const awaitingHtml = awaiting.length ? '<div class="workers-awaiting-label">Awaiting worker <span>' + awaiting.length + '</span></div>'
+    const awaitingHtml = awaiting.length ? '<div class="workers-awaiting-label" title="Ready tickets wait for a worker slot in their own queue. Each queue has its own concurrency limit.">Queued <span>' + awaiting.length + '</span></div>'
       + '<div class="workers-awaiting-chips" role="group" aria-label="Tickets ready for a worker">' + awaiting.map(item => {
         const ref = _uxqItemRef(item);
         const title = String(item.title || item.note || item.text || '').split('\n')[0];
+        const queue = (_uxqHealthCache.queues || []).find(q => q.queue === item.project);
+        const staffing = queue ? '\n' + queue.queue + ': ' + Number(queue.workers || 0) + ' live workers; target ' + Number(queue.desired_workers ?? 1)
+          + '. Tickets wait for an available slot; each ticket does not create a new worker.' : '';
         return '<button type="button" class="workers-awaiting-chip" data-uxq-recent-ref="' + escapeAttr(ref)
-          + '" title="' + escapeAttr(title || ref) + '" aria-label="' + escapeAttr('Open ' + ref + (title ? ': ' + title : '')) + '">'
+          + '" title="' + escapeAttr((title || ref) + staffing) + '" aria-label="' + escapeAttr('Open ' + ref + (title ? ': ' + title : '')) + '">'
           + escapeHtml(ref) + '</button>';
       }).join('') + '</div>' : '';
-    const pending = _workersPendingWorkers(rows);
+    const pending = _workersPendingWorkers(rows, true);
     const deadlines = pending.map(w => _workersPendingState(w).refreshIn).filter(ms => ms > 0);
     if (deadlines.length) _workersPendingRefreshTimer = setTimeout(_uxqRenderRecentWork, Math.min(...deadlines) + 1);
     const signature = _workersActivitySignature(rows);

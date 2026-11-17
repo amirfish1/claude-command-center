@@ -1,0 +1,1 @@
+Keep a separate row for every live worker even when its session is grouped under a ticket. Label waiting tickets as queued, show queue staffing in their tooltips, and exclude archived or unconfigured queues from assignment expectations.

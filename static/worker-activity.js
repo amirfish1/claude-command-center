@@ -65,7 +65,7 @@
     if (!rows.length) parts.push(span('worker-activity-muted', 'No measured usage in 5m'));
     line.replaceChildren(...parts);
     const unmeasured = (snapshot.workers || []).filter(w => !Number.isFinite(w.last_token_at)).length;
-    line.title = 'All queues on this machine. The Workers tab groups sessions by ticket; ticket rows are not a worker count. Measured token receipts: now = last 60s; recent = 1–5m. Refreshed every 10s. Tool output and process uptime do not count.'
+    line.title = 'All queues on this machine. The Workers tab lists every live worker, including those without recent token usage; ticket rows are not a worker count. Measured token receipts: now = last 60s; recent = 1–5m. Refreshed every 10s. Tool output and process uptime do not count.'
       + (unmeasured ? '\n' + unmeasured + ' live workers have no measurable usage in the bounded transcript tail; excluded from counts.' : '');
   }
   async function refresh() {

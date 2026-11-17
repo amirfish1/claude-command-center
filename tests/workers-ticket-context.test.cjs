@@ -7,6 +7,7 @@ const app = fs.readFileSync(require.resolve('../static/conversation-text.js'), '
 const slice = (start,end) => app.slice(app.indexOf(start), app.indexOf(end,app.indexOf(start)));
 function setup(extra = {}) {
   const ctx = {window:{QueueAttention:QA}, _workersTicketSessions:new Map(),
+    _uxqHealthCache:{queues:[{queue:'TEST',auto_drain:true,configured:true}]},
     _uxqItemRef:item=>item.ref, _uxqTicketAttention:item=>QA.project(item,{explain:true}),
     _applyLiveOverlayToRow:c=>c, _ultraFreshCurrent:c=>c,
     _ultraFreshTime:value=>Number(value) > 1e12 ? Number(value) : Number(value || 0)*1000,
@@ -79,7 +80,7 @@ test('Starting expires after ten seconds and registered sessions never look like
 test('awaiting-worker chips include only currently runnable open tickets', () => {
   const ctx = setup();
   const ready = {ref:'TEST-1',status:'open',priority:'p2'};
-  const items = [ready,{...ready}, {...ready,ref:'TEST-2',priority:'p1'},
+  const items = [{...ready,ref:'ARCHIVED-1',project:'ARCHIVED'},ready,{...ready}, {...ready,ref:'TEST-2',priority:'p1'},
     {...ready,ref:'TEST-3',status:'in_progress'}, {...ready,ref:'TEST-4',needs_input:true},
     {...ready,ref:'TEST-5',waiting_on:['TEST-9']}, {...ready,ref:'TEST-6',claimable:false},
     {...ready,ref:'TEST-7',deferred_until:'2099-01-01T00:00:00Z'},
@@ -100,6 +101,9 @@ test('unlisted worker rows exclude dead, released, and already represented proce
   const item = {ref:'TEST-1',status:'in_progress',claimed_by:'worker-1'};
   assert.equal(ctx._workersPendingWorkers([]).length,1);
   assert.equal(ctx._workersPendingWorkers([{item}]).length,0);
+  const roster = ctx._workersPendingWorkers([{item}], true);
+  assert.equal(roster.length,1, 'claimed workers retain their own roster row');
+  assert.deepEqual(Array.from(roster[0].ticket_refs),['TEST-1']);
   assert.equal(ctx._workersPendingWorkers([{item:{...item,status:'closed'}}]).length,1);
   ctx._uxqHealthCache.worker_session_map = {'worker-1':'canonical-session'};
   ctx._uxqHealthCache.wt_workers = [{...worker,session_id:''}];

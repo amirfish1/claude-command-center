@@ -40,7 +40,7 @@ const ITEMS = [
     block_question:'[Q3:scope] Choose: keep narrow or expand scope.'},
   {ref:'EXAMPLE-LONG-REFERENCE-5', title:'Resolved work', status:'closed', closed_at:'2026-01-01T11:00:00Z'},
 ];
-const AWAITING = Array.from({length:12}, (_, i) => ({ref:'READY-' + (i + 1), title:'Ready ticket ' + i, status:'open', priority:'p2'}));
+const AWAITING = Array.from({length:12}, (_, i) => ({project:'READY',ref:'READY-' + (i + 1), title:'Ready ticket ' + i, status:'open', priority:'p2'}));
 
 async function renderList(page, touch) {
   await page.setViewport({width:380, height:900, isMobile:touch, hasTouch:touch});
@@ -55,7 +55,7 @@ async function renderList(page, touch) {
     const ITEMS = ${JSON.stringify(ITEMS)};
     const WORKERS_RECENT_DETAILED = 0;
     const _uxqItemsCache = {items:${JSON.stringify(AWAITING)}};
-    const _uxqHealthCache = {wt_workers:[]};
+    const _uxqHealthCache = {wt_workers:[],queues:[{queue:'READY',auto_drain:true,desired_workers:1,workers:1}]};
     const _workersTicketSessions = new Map([
       ['EXAMPLE-1', {count:1, lanes:0, cards:[{id:'solo', outcome:{kind:'working', text:'Running the focused tests.'}}], html:''}],
       ['EXAMPLE-4', {count:3, lanes:2, cards:[{id:'a'}, {id:'b'}, {id:'c'}], html:'<div>lanes</div>'}],
