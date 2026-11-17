@@ -1,0 +1,1 @@
+- Place the conversation-list collapse arrow next to the sidebar divider.

@@ -962,7 +962,6 @@
           <datalist id="convSearchHistoryList"></datalist>
           <button type="button" id="convSearchClear" class="conv-search-clear" title="Clear search" aria-label="Clear search">&times;</button>
         </div>
-        <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
         <!-- Real dropdown, not a row-reveal. The buttons it drives still live
              in #sidebarHeaderActions / #newSessionSecondaryRow (kept collapsed)
              so every existing id and click handler stays untouched; each item
@@ -1018,6 +1017,7 @@
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarGroupChatLiveBtn" title="Open the standalone group chat live view" aria-label="Group chat live view"><span aria-hidden="true">&#9654;</span></button>
         <button class="new-session-btn new-session-btn-secondary new-session-icon-btn" id="sidebarManageGroupChatsBtn" title="Manage existing group chats - pause / unpause orchestration" aria-label="Manage group chats">&#8801;</button>
       </div>
+      <button type="button" id="convListCollapseBtn" class="conv-list-collapse-btn" title="Collapse conversation list" aria-label="Collapse conversation list" aria-expanded="true">&laquo;</button>
     </div>
     <div id="convSearchStatus" class="conv-search-status" data-role="conv-search-status" hidden aria-live="polite">SEARCHING...</div>
     <div id="gcManageModal" class="upd-overlay" role="dialog" aria-modal="true" aria-labelledby="gcManageTitle" hidden>

@@ -144,14 +144,14 @@
   }
   body.resizing { cursor: col-resize; user-select: none; }
   body.resizing * { pointer-events: none; }
-  /* Conversation-list collapse (CCC-132). The « button (left of search) hides
+  /* Conversation-list collapse (CCC-132). The « button beside the divider hides
      the whole list/sidebar so the reader gets full width; a floating »
      restore button brings it back. Desktop only — on mobile the list IS the
      screen (handled by the mobile @media block), so these rules are scoped to
      wide viewports. */
   .conv-list-collapse-btn {
     flex: 0 0 auto;
-    width: 28px; height: 28px; padding: 0;
+    width: 30px; height: 30px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
     background: transparent; border: 1px solid var(--border); border-radius: 6px;
     color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer;
@@ -29733,10 +29733,6 @@ html:not(.ccc-debug-mode) #statsModal {
 .new-session-primary-row .conv-search-input:focus {
   border-color: rgba(224,163,74,0.45);
 }
-.new-session-primary-row .conv-list-collapse-btn {
-  width: 30px;
-  height: 30px;
-}
 
 /* §5 — Footer "needs you N". Amber, mono, and absent at zero so the line
    stays quiet when nothing is blocked. */
@@ -34518,6 +34514,11 @@ body.has-mobile-bottom-nav .pwa-install-banner {
     min-width: 0;
   }
   .sidebar .new-session-primary-row.is-search-open .conv-search-input { width: 100%; }
+}
+
+/* Keep the sidebar toggle beside its divider, outside the wrapping actions. */
+@media (min-width: 1201px) {
+  .sidebar > .new-session-panel:has(> .conv-list-collapse-btn) { padding-right: 4px; }
 }
 
 /* Settings: readable hierarchy, grouped navigation and inspectable routing. */
