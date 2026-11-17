@@ -2359,13 +2359,17 @@ def _record_titler_target(titler_sid, target_sid, target_mtime):
 
 
 _IMAGE_TAG_RE = re.compile(r"<image\b[^>]*>(?:\s*</image>)?", re.IGNORECASE)
-_IMAGE_PATH_RE = re.compile(r"\S*/pasted-images/\S+\.(?:png|jpe?g|gif|webp)", re.IGNORECASE)
+_IMAGE_PATH_MARKER_RE = re.compile(r"/pasted-images/", re.IGNORECASE)
+# A path starts at its whitespace-delimited token. Without this anchor a
+# failed match retries the same long token from every character.
+_IMAGE_PATH_RE = re.compile(r"(?<!\S)\S*/pasted-images/\S+\.(?:png|jpe?g|gif|webp)", re.IGNORECASE)
 
 
 def _strip_image_markup(text):
     """Drop <image ...> tags and pasted-image paths; collapse whitespace."""
     t = _IMAGE_TAG_RE.sub(" ", str(text or ""))
-    t = _IMAGE_PATH_RE.sub(" ", t)
+    if _IMAGE_PATH_MARKER_RE.search(t):
+        t = _IMAGE_PATH_RE.sub(" ", t)
     return re.sub(r"\s+", " ", t).strip()
 
 

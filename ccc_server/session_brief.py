@@ -285,7 +285,7 @@ def _resume_command(engine: str, sid: str, cwd: str) -> str:
     return f"ccc sessions  # find {sid[:8]} and reattach from the dashboard ({engine})"
 
 
-def resolve_session(query: str) -> dict:
+def resolve_session(query: str, *, sync=True) -> dict:
     """{'session_id': str | None, 'alternates': [str, ...]}. `query` is
     tried, in order, as: an exact session id, an unambiguous id-prefix
     (LIKE match, no query words), then a recall-style search — the same
@@ -296,7 +296,8 @@ def resolve_session(query: str) -> dict:
         return {"session_id": None, "alternates": []}
 
     conn = _sg._get_connection()
-    _sg._sync_all(conn, force=False)
+    if sync:
+        _sg._sync_all(conn, force=False)
 
     row = conn.execute("SELECT sid FROM session_meta WHERE sid = ?", (q,)).fetchone()
     if row:
@@ -315,11 +316,39 @@ def resolve_session(query: str) -> dict:
             sids = [r[0] for r in rows]
             return {"session_id": sids[0], "alternates": sids[1:6]}
 
+    if not sync and re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', q):
+        # A missing exact UUID is an index miss, not prose for recall to
+        # search (and synchronize) across unrelated sessions.
+        return {"session_id": None, "alternates": []}
     hits = _sg.search_sessions(q, limit=6)
     sids = [h["session_id"] for h in hits if h.get("session_id")]
     if not sids:
         return {"session_id": None, "alternates": []}
     return {"session_id": sids[0], "alternates": sids[1:6]}
+
+
+def continuation_brief(query: str) -> dict:
+    """Indexed routing metadata without recall/artifact enrichment or sync."""
+    resolved = resolve_session(query, sync=False)
+    sid = resolved['session_id']
+    if not sid:
+        return dict(resolved, found=False)
+    conn = _sg._get_connection()
+    row = conn.execute('SELECT repo,cwd FROM session_meta WHERE sid=?', (sid,)).fetchone()
+    path = _transcript_path(conn, sid)
+    # Only the title is needed; the potentially large prompts/reports and
+    # commit-origin subprocesses belong to the full recall brief.
+    title = ''
+    try:
+        fconn = _sfts._get_connection()
+        item = fconn.execute(
+            f'SELECT title FROM sdoc WHERE {_sfts.sdoc_rowids_sql(1)}', (sid,)).fetchone()
+        title = item[0] if item else ''
+    except Exception:
+        pass
+    return dict(resolved, found=True, title=title or '', repo=row[0] if row else '',
+                cwd=row[1] if row else '', engine=_engine_of_path(path),
+                latest=_lineage.latest_successor(conn, sid))
 
 
 def brief(query: str) -> dict:

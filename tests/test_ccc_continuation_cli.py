@@ -51,6 +51,20 @@ class ContinuationCliTests(unittest.TestCase):
     def setUpClass(cls):
         cls.ccc = _load_ccc_cli()
 
+    def test_unknown_preflight_never_submits_or_spawns(self):
+        ccc = self.ccc
+        unknown = {'path': 'normal', 'reason': 'Context usage is unknown',
+                   'context_known': False, 'context_tokens': 0}
+        with mock.patch.object(ccc, '_resolve_server', return_value='http://127.0.0.1:8099'), \
+             mock.patch.object(ccc, '_resolve_target', return_value=('old-sid', None)), \
+             mock.patch.object(ccc, '_get_json', return_value=unknown), \
+             mock.patch.object(ccc, '_post_json') as post, \
+             mock.patch.object(ccc, '_spawn_continue_from') as spawn, \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            assert ccc.cmd_send(_send_args(new_if_large_and_stale=True, json=True)) == 1
+            post.assert_not_called()
+            spawn.assert_not_called()
+
     def test_spawn_continue_from_posts_expected_payload(self):
         ccc = self.ccc
         posted = {}
