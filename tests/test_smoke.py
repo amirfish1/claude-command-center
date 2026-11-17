@@ -2524,9 +2524,10 @@ class TestServerImports(unittest.TestCase):
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-content.js").read_text(encoding="utf-8")
         app_js += pathlib.Path(PROJECT_ROOT, "static", "conversation-events.js").read_text(encoding="utf-8")
 
-        self.assertIn("function toolCallCarriesConversationContext(toolCall)", app_js)
-        self.assertIn("key === 'ask_user_question' || key === 'sidekick'", app_js)
-        self.assertIn("|| key === 'run_subagent' || key.startsWith('kanban_');", app_js)
+        context = conversation_function("toolCallCarriesConversationContext")
+        for tool in ("ask_user_question", "askuserquestion", "sidekick", "run_subagent"):
+            self.assertIn(f"key === '{tool}'", context)
+        self.assertIn("key.startsWith('kanban_')", context)
         self.assertIn("if (!on && toolGroupCarriesConversationContext(g)) return;", app_js)
         self.assertIn('if (toolGroupCarriesConversationContext(state._currentToolGroup))', app_js)
 
