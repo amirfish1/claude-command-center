@@ -3180,73 +3180,74 @@ def _extract_codex_timeline(session_id):
     path = _core._resolve_codex_rollout_path(session_id)
     if not path:
         return {"events": [], "total_turns": 0}
+    from ccc_server.timeline_cache import read_timeline
+    return read_timeline(path, _read_codex_timeline, namespace="codex", errors="replace")
+
+
+def _read_codex_timeline(f):
     events = []
     pending_by_id = {}
     turn = 0
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
-                ts = _core._codex_event_timestamp(ev)
-                if ev.get("type") == "event_msg" and payload.get("type") == "agent_message":
-                    turn += 1
-                    continue
-                if ev.get("type") != "response_item":
-                    continue
-                if payload.get("type") == "function_call":
-                    name = payload.get("name") or ""
-                    args = _core._codex_args(payload.get("arguments"))
-                    cmd = _core._codex_tool_command(name, args)
-                    if not cmd:
-                        continue
-                    kind = None
-                    subject = ""
-                    if _core._TIMELINE_PR_CREATE_RE.search(cmd):
-                        kind = "pr"
-                        m = _core._TIMELINE_PR_TITLE_RE.search(cmd)
-                        if m:
-                            subject = m.group(1)
-                    elif _core._TIMELINE_PUSH_RE.search(cmd):
-                        kind = "push"
-                    elif _core._TIMELINE_COMMIT_RE.search(cmd):
-                        kind = "commit"
-                        m = _core._TIMELINE_COMMIT_MSG_RE.search(cmd)
-                        if m:
-                            subject = m.group(1)
-                    if not kind:
-                        continue
-                    events.append({
-                        "kind": kind,
-                        "turn": max(turn, 1),
-                        "ts": ts,
-                        "subject": subject,
-                        "success": None,
-                    })
-                    call_id = payload.get("call_id") or ""
-                    if call_id:
-                        pending_by_id[call_id] = len(events) - 1
-                elif payload.get("type") == "function_call_output":
-                    call_id = payload.get("call_id") or ""
-                    if call_id not in pending_by_id:
-                        continue
-                    idx = pending_by_id.pop(call_id)
-                    entry = events[idx]
-                    entry["success"] = True
-                    text = payload.get("output") or ""
-                    if entry["kind"] == "commit":
-                        m = _core._TIMELINE_COMMIT_RESULT_RE.search(text)
-                        if m:
-                            entry["sha"] = m.group(1)
-                            if not entry.get("subject"):
-                                entry["subject"] = m.group(2).strip()[:200]
-                    elif entry["kind"] == "pr":
-                        m = _core._TIMELINE_PR_NUMBER_FROM_URL_RE.search(text)
-                        if m:
-                            entry["pr_number"] = int(m.group(1))
-    except OSError:
-        return {"events": [], "total_turns": 0}
+    for line in f:
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+        ts = _core._codex_event_timestamp(ev)
+        if ev.get("type") == "event_msg" and payload.get("type") == "agent_message":
+            turn += 1
+            continue
+        if ev.get("type") != "response_item":
+            continue
+        if payload.get("type") == "function_call":
+            name = payload.get("name") or ""
+            args = _core._codex_args(payload.get("arguments"))
+            cmd = _core._codex_tool_command(name, args)
+            if not cmd:
+                continue
+            kind = None
+            subject = ""
+            if _core._TIMELINE_PR_CREATE_RE.search(cmd):
+                kind = "pr"
+                m = _core._TIMELINE_PR_TITLE_RE.search(cmd)
+                if m:
+                    subject = m.group(1)
+            elif _core._TIMELINE_PUSH_RE.search(cmd):
+                kind = "push"
+            elif _core._TIMELINE_COMMIT_RE.search(cmd):
+                kind = "commit"
+                m = _core._TIMELINE_COMMIT_MSG_RE.search(cmd)
+                if m:
+                    subject = m.group(1)
+            if not kind:
+                continue
+            events.append({
+                "kind": kind,
+                "turn": max(turn, 1),
+                "ts": ts,
+                "subject": subject,
+                "success": None,
+            })
+            call_id = payload.get("call_id") or ""
+            if call_id:
+                pending_by_id[call_id] = len(events) - 1
+        elif payload.get("type") == "function_call_output":
+            call_id = payload.get("call_id") or ""
+            if call_id not in pending_by_id:
+                continue
+            idx = pending_by_id.pop(call_id)
+            entry = events[idx]
+            entry["success"] = True
+            text = payload.get("output") or ""
+            if entry["kind"] == "commit":
+                m = _core._TIMELINE_COMMIT_RESULT_RE.search(text)
+                if m:
+                    entry["sha"] = m.group(1)
+                    if not entry.get("subject"):
+                        entry["subject"] = m.group(2).strip()[:200]
+            elif entry["kind"] == "pr":
+                m = _core._TIMELINE_PR_NUMBER_FROM_URL_RE.search(text)
+                if m:
+                    entry["pr_number"] = int(m.group(1))
     return {"events": events, "total_turns": turn}
