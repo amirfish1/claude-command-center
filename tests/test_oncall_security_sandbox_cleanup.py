@@ -5,6 +5,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -26,10 +27,18 @@ def test_timeout_reaps_proof_process_group(tmp_path):
             scope['run']([sys.executable, '-c', program, str(marker)], timeout=1)
         assert marker.exists(), 'fixture child did not start'
         stat = Path('/proc') / marker.read_text() / 'stat'
-        try:
-            state = stat.read_text().split(') ', 1)[1].split()[0]
-        except (FileNotFoundError, ProcessLookupError):
-            state = None  # The child was reaped before /proc could be read.
+        # SIGKILL is asynchronous: inherited pipes can close before the last
+        # group member finishes its exit on a busy host. Observe termination
+        # within a fixed deadline instead of racing a single /proc read.
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                state = stat.read_text().split(') ', 1)[1].split()[0]
+            except (FileNotFoundError, ProcessLookupError):
+                state = None
+            if state in (None, 'Z', 'X') or time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
         assert state in (None, 'Z', 'X')
     finally:
         if marker.exists():
