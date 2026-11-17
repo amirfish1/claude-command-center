@@ -298,27 +298,35 @@ def compute_queue_history(days=7, bucket_hours=1):
         if c["result"] is not None and c["key"] == key and now - c["ts"] < _QUEUE_HISTORY_CACHE_TTL_S:
             return c["result"]
 
-    try:
-        items = _core._q.list_items() or []
-    except Exception:
-        items = []
-    _record_queue_snapshot_if_due(items)
+    # History is a display, not an authoritative queue operation. Reuse the
+    # shared stale-while-refreshing snapshot instead of fetching every remote
+    # queue on the HTTP thread. Only fresh data may become a durable sample.
+    items = _core._wt_list_items_for_requests()
+    with _core._wt_items_memo_lock:
+        available = _core._wt_items_memo["items"] is not None or bool(items)
+        fresh = (items is _core._wt_items_memo["items"]
+                 and now - _core._wt_items_memo["at"] < _core._WT_ITEMS_SNAPSHOT_TTL_S)
+    if fresh:
+        _record_queue_snapshot_if_due(items)
 
     real_rows = _read_queue_history_rows()
     cutoff = now - days * 86400
     real_rows = [r for r in real_rows if float(r.get("ts", 0)) >= cutoff]
     real_rows.sort(key=lambda r: r.get("ts", 0))
     before_ts = real_rows[0]["ts"] if real_rows else now
-    backfilled = _backfill_queue_history(days, bucket_hours, items, before_ts)
+    backfilled = (_backfill_queue_history(days, bucket_hours, items, before_ts)
+                  if available else [])
 
     result = {
         "points": backfilled + real_rows,
         "days": days,
         "bucket_hours": bucket_hours,
         "generated_at": now,
+        "refreshing": not fresh,
     }
     with _queue_history_cache_lock:
-        _queue_history_cache.update({"ts": now, "key": key, "result": result})
+        if fresh:
+            _queue_history_cache.update({"ts": now, "key": key, "result": result})
     return result
 
 

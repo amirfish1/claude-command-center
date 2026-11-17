@@ -1,0 +1,1 @@
+Queue history reuses the shared queue snapshot and shows a saved graph immediately on reload while refreshing in the background. Failed refreshes preserve the graph and retry instead of leaving an indefinite loading message.

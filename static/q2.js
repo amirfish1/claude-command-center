@@ -1936,31 +1936,73 @@
   // polling here on a slower cadence than the rest of q2 is enough -- a
   // tighter poll would just re-fetch the same cached backend response.
   var HISTORY_POLL_MS = 5 * 60 * 1000;
+  var HISTORY_CACHE_KEY = 'q2-history-7d-hourly-v1';
+  var HISTORY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
   var historyFetchedAt = 0;
   var historyFetching = false;
+  var historyRestored = false;
+  var historySaved = false;
+  var historyError = false;
+
+  function restoreQueueHistory() {
+    if (historyRestored) return;
+    historyRestored = true;
+    try {
+      var saved = JSON.parse(localStorage.getItem(HISTORY_CACHE_KEY));
+      var age = saved && Date.now() - saved.fetchedAt;
+      if (!saved || !Number.isFinite(age) || age < 0 || age > HISTORY_CACHE_MAX_AGE_MS
+          || !Array.isArray(saved.points) || saved.points.length > 2000
+          || !saved.points.every(function (p) { return p && Number.isFinite(p.ts); })) return;
+      state.queueHistory = saved.points;
+      historySaved = true;
+    } catch (_) { /* Storage is optional; fetching still works. */ }
+  }
 
   function fetchQueueHistoryIfStale() {
+    restoreQueueHistory();
     if (historyFetching || Date.now() - historyFetchedAt < HISTORY_POLL_MS) return;
     historyFetching = true;
-    fetch('/api/wt/queue/history?days=7&bucket_hours=1')
-      .then(function (r) { return r.json(); })
+    var controller = new AbortController();
+    var deadline = setTimeout(function () { controller.abort(); }, 15000);
+    fetch('/api/wt/queue/history?days=7&bucket_hours=1', { signal: controller.signal })
+      .then(function (r) { if (!r.ok) throw new Error('History request failed'); return r.json(); })
       .then(function (data) {
-        historyFetchedAt = Date.now();
-        if (data && data.ok) {
-          state.queueHistory = data.points || [];
-          renderDiagram();
+        if (!data || !data.ok || !Array.isArray(data.points)) throw new Error('Invalid history');
+        historyError = false;
+        historySaved = !!data.refreshing;
+        // A cold server may not have a queue snapshot yet. Keep the saved
+        // graph while its shared refresh runs, rather than replacing it with
+        // a synthetic empty result. Retry on the normal dashboard cadence.
+        if (!data.refreshing || data.points.length) {
+          state.queueHistory = data.points;
+          if (!data.refreshing) {
+            try {
+              localStorage.setItem(HISTORY_CACHE_KEY, JSON.stringify({
+                fetchedAt: Date.now(), points: data.points
+              }));
+            } catch (_) { /* Quota/private-mode failures must not hide the chart. */ }
+          }
         }
+        if (!data.refreshing) historyFetchedAt = Date.now();
       })
-      .catch(function () {})
-      .then(function () { historyFetching = false; });
+      .catch(function () { historyError = true; })
+      .then(function () {
+        clearTimeout(deadline);
+        // Keep the in-flight guard during repaint: rendering calls this
+        // function again and must not create an immediate retry loop.
+        renderDiagram();
+        historyFetching = false;
+      });
   }
 
   function renderQueueHistoryChart(host) {
     if (!host) return;
     fetchQueueHistoryIfStale();
     var pts = state.queueHistory;
-    if (pts == null) { host.innerHTML = '<div class="q2-dg-empty">Loading history…</div>'; return; }
-    if (!pts.length) { host.innerHTML = '<div class="q2-dg-empty">No history yet.</div>'; return; }
+    if (pts == null) { host.innerHTML = '<div class="q2-dg-empty">'
+      + (historyError ? 'Couldn’t load history. Retrying…' : 'Loading history…') + '</div>'; return; }
+    if (!pts.length) { host.innerHTML = '<div class="q2-dg-empty">'
+      + (historySaved ? 'Loading history…' : 'No history yet.') + '</div>'; return; }
 
     var w = 720, h = 120, padL = 4, padR = 4, padT = 8, padB = 18;
     var innerW = w - padL - padR, innerH = h - padT - padB;
@@ -2005,6 +2047,8 @@
     host.innerHTML = '<div class="q2-history-head">'
       + '<span class="q2-history-title">Last 7 days</span>'
       + '<span class="q2-spacer"></span>' + legend + '</div>'
+      + (historyError ? '<div class="q2-history-head" role="status">Saved history · retrying…</div>'
+        : historySaved ? '<div class="q2-history-head" role="status">Saved history · updating…</div>' : '')
       + '<svg class="q2-history-svg" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" aria-hidden="true">'
       + '<path class="q2-history-line q2-history-line-open" d="' + esc(pathFor('open', false)) + '"></path>'
       + '<path class="q2-history-line q2-history-line-needs_input" d="' + esc(pathFor('needs_input', true)) + '"></path>'
@@ -2013,6 +2057,7 @@
   }
 
   function renderLiveWorkersStrip(host) {
+    if (state.loaded === false) { host.innerHTML = '<div class="q2-dg-empty">Loading workers…</div>'; return; }
     var workers = state.workers || [];
     var working = [], blocked = [];
     (state.items || []).forEach(function (it) {
@@ -2511,6 +2556,10 @@
     if (!(opts && opts.force) && isTicketsListTouchActive()) return;
 
     $('q2TicketsTitle').textContent = state.viewAll ? 'All queues' : (state.queue || 'Tickets');
+    if (state.viewAll && state.loaded === false) {
+      host.innerHTML = '<div class="q2-empty">Loading tickets…</div>';
+      return;
+    }
     var closedBtn = $('q2ClosedBtn');
     var newTicketBtn = $('q2NewTicketBtn');
     var settingsBtn = $('q2QueueSettingsBtn');
@@ -4654,6 +4703,10 @@
 
   // ── boot ─────────────────────────────────────────────────────────────────
   renderQueues();  // "Loading queues…" until the first fetch lands
+  // The global history view does not need the queue census to paint a saved
+  // graph. Restore it before unrelated queue/status requests finish.
+  try { state.viewAll = localStorage.getItem(LS_VIEW_ALL) === '1'; } catch (_) {}
+  if (state.viewAll) renderDiagram();
   refresh();
   setInterval(function () {
     if (document.hidden) return;
